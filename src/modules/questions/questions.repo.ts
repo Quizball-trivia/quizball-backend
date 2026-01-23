@@ -1,0 +1,169 @@
+import { sql } from '../../db/index.js';
+import type { Question, QuestionWithPayload, I18nField, Json } from '../../db/types.js';
+
+export interface CreateQuestionData {
+  categoryId: string;
+  type: string;
+  difficulty: string;
+  status?: string;
+  prompt: I18nField;
+  explanation?: I18nField | null;
+  payload?: Json;
+}
+
+export interface UpdateQuestionData {
+  categoryId?: string;
+  type?: string;
+  difficulty?: string;
+  status?: string;
+  prompt?: I18nField;
+  explanation?: I18nField | null;
+  payload?: Json;
+}
+
+export interface ListQuestionsFilter {
+  categoryId?: string;
+  status?: string;
+  difficulty?: string;
+  type?: string;
+  search?: string;
+}
+
+export interface ListQuestionsResult {
+  questions: QuestionWithPayload[];
+  total: number;
+}
+
+export const questionsRepo = {
+  async list(
+    filter?: ListQuestionsFilter,
+    page = 1,
+    limit = 20
+  ): Promise<ListQuestionsResult> {
+    const offset = (page - 1) * limit;
+
+    // Use tagged template with conditional fragments
+    const categoryFilter = filter?.categoryId ? sql`AND q.category_id = ${filter.categoryId}` : sql``;
+    const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
+    const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
+    const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
+    const searchFilter = filter?.search
+      ? sql`AND (q.prompt->>'en' ILIKE ${'%' + filter.search + '%'} OR q.prompt->>'ka' ILIKE ${'%' + filter.search + '%'})`
+      : sql``;
+
+    // Get total count
+    const countResult = await sql<{ count: string }[]>`
+      SELECT COUNT(*) as count
+      FROM questions q
+      WHERE 1=1
+      ${categoryFilter}
+      ${statusFilter}
+      ${difficultyFilter}
+      ${typeFilter}
+      ${searchFilter}
+    `;
+    const total = parseInt(countResult[0]?.count ?? '0', 10);
+
+    // Get paginated results with payload
+    const questions = await sql<QuestionWithPayload[]>`
+      SELECT q.*, qp.payload
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE 1=1
+      ${categoryFilter}
+      ${statusFilter}
+      ${difficultyFilter}
+      ${typeFilter}
+      ${searchFilter}
+      ORDER BY q.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+
+    return { questions, total };
+  },
+
+  async getById(id: string): Promise<QuestionWithPayload | null> {
+    const [question] = await sql<QuestionWithPayload[]>`
+      SELECT q.*, qp.payload
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.id = ${id}
+    `;
+    return question ?? null;
+  },
+
+  async create(data: CreateQuestionData): Promise<Question> {
+    const [question] = await sql<Question[]>`
+      INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
+      VALUES (
+        ${data.categoryId},
+        ${data.type},
+        ${data.difficulty},
+        ${data.status ?? 'draft'},
+        ${sql.json(data.prompt as unknown as Json)},
+        ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}
+      )
+      RETURNING *
+    `;
+    return question;
+  },
+
+  async createPayload(questionId: string, payload: Json): Promise<void> {
+    await sql`
+      INSERT INTO question_payloads (question_id, payload)
+      VALUES (${questionId}, ${sql.json(payload)})
+    `;
+  },
+
+  async update(id: string, data: UpdateQuestionData): Promise<Question | null> {
+    const [question] = await sql<Question[]>`
+      UPDATE questions
+      SET
+        category_id = CASE WHEN ${data.categoryId !== undefined} THEN ${data.categoryId ?? ''} ELSE category_id END,
+        type = CASE WHEN ${data.type !== undefined} THEN ${data.type ?? ''} ELSE type END,
+        difficulty = CASE WHEN ${data.difficulty !== undefined} THEN ${data.difficulty ?? ''} ELSE difficulty END,
+        status = CASE WHEN ${data.status !== undefined} THEN ${data.status ?? ''} ELSE status END,
+        prompt = CASE WHEN ${data.prompt !== undefined} THEN ${sql.json(data.prompt as unknown as Json)}::jsonb ELSE prompt END,
+        explanation = CASE WHEN ${data.explanation !== undefined} THEN ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}::jsonb ELSE explanation END,
+        updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING *
+    `;
+    return question ?? null;
+  },
+
+  async updatePayload(questionId: string, payload: Json): Promise<void> {
+    // Upsert - insert if not exists, update if exists
+    await sql`
+      INSERT INTO question_payloads (question_id, payload)
+      VALUES (${questionId}, ${sql.json(payload)})
+      ON CONFLICT (question_id)
+      DO UPDATE SET payload = ${sql.json(payload)}, updated_at = NOW()
+    `;
+  },
+
+  async updateStatus(id: string, status: string): Promise<Question | null> {
+    const [question] = await sql<Question[]>`
+      UPDATE questions
+      SET status = ${status}, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING *
+    `;
+    return question ?? null;
+  },
+
+  async delete(id: string): Promise<boolean> {
+    // Payload will be deleted via CASCADE
+    const result = await sql`
+      DELETE FROM questions WHERE id = ${id}
+    `;
+    return result.count > 0;
+  },
+
+  async exists(id: string): Promise<boolean> {
+    const [result] = await sql<{ exists: boolean }[]>`
+      SELECT EXISTS(SELECT 1 FROM questions WHERE id = ${id}) as exists
+    `;
+    return result?.exists ?? false;
+  },
+};

@@ -1,0 +1,3 @@
+  docker exec -it supabase_db_backend-node psql -U postgres                                                                                 
+
+  

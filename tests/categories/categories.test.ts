@@ -43,7 +43,6 @@ const mockCategory = {
   description: { en: 'Test description' },
   icon: 'test-icon',
   image_url: 'https://example.com/image.png',
-  background_img_url: null,
   is_active: true,
   created_at: '2024-01-01T00:00:00.000Z',
   updated_at: '2024-01-01T00:00:00.000Z',

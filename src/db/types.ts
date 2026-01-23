@@ -29,6 +29,14 @@ export type QuestionPayloadUpdate = Database['public']['Tables']['question_paylo
 // Question with payload joined
 export type QuestionWithPayload = Question & { payload: Json | null };
 
+// Featured category types
+export type FeaturedCategory = Database['public']['Tables']['featured_categories']['Row'];
+export type FeaturedCategoryInsert = Database['public']['Tables']['featured_categories']['Insert'];
+export type FeaturedCategoryUpdate = Database['public']['Tables']['featured_categories']['Update'];
+
+// Featured category with category joined
+export type FeaturedCategoryWithCategory = FeaturedCategory & { category: Category };
+
 // i18n type for JSONB fields
 export type I18nField = Record<string, string>;
 

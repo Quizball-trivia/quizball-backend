@@ -4,6 +4,7 @@ import { authRoutes } from './auth.routes.js';
 import { usersRoutes } from './users.routes.js';
 import { categoriesRoutes } from './categories.routes.js';
 import { questionsRoutes } from './questions.routes.js';
+import { featuredCategoriesRoutes } from './featured-categories.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 
 const router = Router();
@@ -19,5 +20,6 @@ router.use('/api/v1/auth', authRoutes);
 router.use('/api/v1/users', usersRoutes);
 router.use('/api/v1/categories', categoriesRoutes);
 router.use('/api/v1/questions', questionsRoutes);
+router.use('/api/v1/featured-categories', featuredCategoriesRoutes);
 
 export const routes = router;

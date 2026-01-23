@@ -8,7 +8,6 @@ export interface CreateCategoryData {
   description?: I18nField | null;
   icon?: string | null;
   imageUrl?: string | null;
-  backgroundImgUrl?: string | null;
   isActive?: boolean;
 }
 
@@ -19,7 +18,6 @@ export interface UpdateCategoryData {
   description?: I18nField | null;
   icon?: string | null;
   imageUrl?: string | null;
-  backgroundImgUrl?: string | null;
   isActive?: boolean;
 }
 
@@ -76,7 +74,7 @@ export const categoriesRepo = {
 
   async create(data: CreateCategoryData): Promise<Category> {
     const [category] = await sql<Category[]>`
-      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, background_img_url, is_active)
+      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, is_active)
       VALUES (
         ${data.slug},
         ${data.parentId ?? null},
@@ -84,7 +82,6 @@ export const categoriesRepo = {
         ${data.description ? sql.json(data.description as unknown as Json) : null},
         ${data.icon ?? null},
         ${data.imageUrl ?? null},
-        ${data.backgroundImgUrl ?? null},
         ${data.isActive ?? true}
       )
       RETURNING *
@@ -102,7 +99,6 @@ export const categoriesRepo = {
         description = CASE WHEN ${data.description !== undefined} THEN ${data.description ? sql.json(data.description as unknown as Json) : null}::jsonb ELSE description END,
         icon = CASE WHEN ${data.icon !== undefined} THEN ${data.icon ?? null} ELSE icon END,
         image_url = CASE WHEN ${data.imageUrl !== undefined} THEN ${data.imageUrl ?? null} ELSE image_url END,
-        background_img_url = CASE WHEN ${data.backgroundImgUrl !== undefined} THEN ${data.backgroundImgUrl ?? null} ELSE background_img_url END,
         is_active = CASE WHEN ${data.isActive !== undefined} THEN ${data.isActive ?? true} ELSE is_active END,
         updated_at = NOW()
       WHERE id = ${id}

@@ -17,7 +17,6 @@ export const categoryResponseSchema = z.object({
   description: i18nFieldSchema.nullable(),
   icon: z.string().nullable(),
   image_url: z.string().nullable(),
-  background_img_url: z.string().nullable(),
   is_active: z.boolean(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
@@ -52,7 +51,6 @@ export const createCategorySchema = z.object({
   description: i18nFieldSchema.nullable().optional(),
   icon: z.string().max(100).nullable().optional(),
   image_url: z.string().url().nullable().optional(),
-  background_img_url: z.string().url().nullable().optional(),
   is_active: z.boolean().optional().default(true),
 });
 
@@ -73,7 +71,6 @@ export const updateCategorySchema = z.object({
   description: i18nFieldSchema.nullable().optional(),
   icon: z.string().max(100).nullable().optional(),
   image_url: z.string().url().nullable().optional(),
-  background_img_url: z.string().url().nullable().optional(),
   is_active: z.boolean().optional(),
 });
 
@@ -100,7 +97,6 @@ export function toCategoryResponse(category: Category): CategoryResponse {
     description: (category.description as I18nField | null) ?? null,
     icon: category.icon,
     image_url: category.image_url,
-    background_img_url: category.background_img_url,
     is_active: category.is_active,
     created_at: category.created_at,
     updated_at: category.updated_at,

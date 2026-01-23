@@ -55,7 +55,6 @@ export const categoriesController = {
       description: data.description,
       icon: data.icon,
       imageUrl: data.image_url,
-      backgroundImgUrl: data.background_img_url,
       isActive: data.is_active,
     });
 
@@ -77,7 +76,6 @@ export const categoriesController = {
       description: data.description,
       icon: data.icon,
       imageUrl: data.image_url,
-      backgroundImgUrl: data.background_img_url,
       isActive: data.is_active,
     });
 

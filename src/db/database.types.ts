@@ -36,7 +36,6 @@ export type Database = {
     Tables: {
       categories: {
         Row: {
-          background_img_url: string | null
           created_at: string
           description: Json | null
           icon: string | null
@@ -49,7 +48,6 @@ export type Database = {
           updated_at: string
         }
         Insert: {
-          background_img_url?: string | null
           created_at?: string
           description?: Json | null
           icon?: string | null
@@ -62,7 +60,6 @@ export type Database = {
           updated_at?: string
         }
         Update: {
-          background_img_url?: string | null
           created_at?: string
           description?: Json | null
           icon?: string | null

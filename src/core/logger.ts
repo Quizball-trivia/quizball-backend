@@ -6,8 +6,11 @@ import { getRequestId } from './request-context.js';
  * Determine if pretty printing should be enabled:
  * 1. Explicit LOG_PRETTY=true takes precedence
  * 2. Otherwise, enable in local/development environments only
+ * 3. Never use in containerized/production environments
  */
-const usePrettyPrint = config.LOG_PRETTY || config.NODE_ENV === 'local';
+const isProduction = config.NODE_ENV === 'prod' || config.NODE_ENV === 'staging';
+const isDocker = process.env.RAILWAY_ENVIRONMENT || process.env.DOCKER || process.env.KUBERNETES_SERVICE_HOST;
+const usePrettyPrint = !isProduction && !isDocker && (config.LOG_PRETTY || config.NODE_ENV === 'local');
 
 /**
  * Base logger options shared between pretty and JSON modes

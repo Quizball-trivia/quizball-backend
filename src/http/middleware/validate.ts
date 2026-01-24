@@ -9,6 +9,7 @@ interface ValidationSchema {
   body?: ZodSchema;
   query?: ZodSchema;
   params?: ZodSchema;
+  headers?: ZodSchema;
 }
 
 /**
@@ -18,6 +19,7 @@ interface ValidatedData {
   body?: unknown;
   query?: unknown;
   params?: unknown;
+  headers?: unknown;
 }
 
 /**
@@ -54,6 +56,14 @@ export function validate(schema: ValidationSchema) {
           throw new ValidationError('Invalid path parameters', formatZodError(result.error));
         }
         validated.params = result.data;
+      }
+
+      if (schema.headers) {
+        const result = schema.headers.safeParse(req.headers);
+        if (!result.success) {
+          throw new ValidationError('Invalid request headers', formatZodError(result.error));
+        }
+        validated.headers = result.data;
       }
 
       // Attach validated data to request

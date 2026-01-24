@@ -15,6 +15,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     list: vi.fn(),
     getById: vi.fn(),
     create: vi.fn(),
+    createWithPayload: vi.fn(),
     createPayload: vi.fn(),
     update: vi.fn(),
     updatePayload: vi.fn(),
@@ -34,14 +35,32 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 // Mock the auth middleware
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
-    req.user = { id: 'test-user-id' };
+    req.user = { id: 'test-user-id', role: 'admin' };
     req.identity = { provider: 'test', subject: 'test-sub' };
+    next();
+  }),
+}));
+
+// Mock the requireRole middleware (passes through since we set admin role above)
+vi.mock('../../src/http/middleware/require-role.js', () => ({
+  requireRole: vi.fn(() => (req: any, _res: any, next: any) => {
+    // In tests, we assume the user has admin role
     next();
   }),
 }));
 
 import { questionsRepo } from '../../src/modules/questions/questions.repo.js';
 import { categoriesRepo } from '../../src/modules/categories/categories.repo.js';
+
+const mockMcqPayload = {
+  type: 'mcq_single' as const,
+  options: [
+    { id: '11111111-1111-1111-1111-111111111111', text: { en: '2' }, is_correct: false },
+    { id: '22222222-2222-2222-2222-222222222222', text: { en: '3' }, is_correct: false },
+    { id: '33333333-3333-3333-3333-333333333333', text: { en: '4' }, is_correct: true },
+    { id: '44444444-4444-4444-4444-444444444444', text: { en: '5' }, is_correct: false },
+  ],
+};
 
 const mockQuestion = {
   id: '123e4567-e89b-12d3-a456-426614174000',
@@ -51,7 +70,7 @@ const mockQuestion = {
   status: 'draft',
   prompt: { en: 'What is 2+2?', ka: 'რა არის 2+2?' },
   explanation: { en: 'Basic math' },
-  payload: { options: ['2', '3', '4', '5'], correct: 2 },
+  payload: mockMcqPayload,
   created_at: '2024-01-01T00:00:00.000Z',
   updated_at: '2024-01-01T00:00:00.000Z',
 };
@@ -243,12 +262,7 @@ describe('Questions API', () => {
   describe('POST /api/v1/questions', () => {
     it('should create question with payload', async () => {
       (categoriesRepo.exists as Mock).mockResolvedValue(true);
-      (questionsRepo.create as Mock).mockResolvedValue({
-        ...mockQuestion,
-        payload: undefined,
-      });
-      (questionsRepo.createPayload as Mock).mockResolvedValue(undefined);
-      (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
+      (questionsRepo.createWithPayload as Mock).mockResolvedValue(mockQuestion);
 
       const response = await request(app)
         .post('/api/v1/questions')
@@ -257,7 +271,7 @@ describe('Questions API', () => {
           type: 'mcq_single',
           difficulty: 'medium',
           prompt: { en: 'Test question' },
-          payload: { options: ['a', 'b'], correct: 0 },
+          payload: mockMcqPayload,
         });
 
       expect(response.status).toBe(201);
@@ -274,6 +288,7 @@ describe('Questions API', () => {
           type: 'mcq_single',
           difficulty: 'easy',
           prompt: { en: 'Test' },
+          payload: mockMcqPayload,
         });
 
       expect(response.status).toBe(400);
@@ -288,6 +303,7 @@ describe('Questions API', () => {
           type: 'mcq_single',
           difficulty: 'invalid',
           prompt: { en: 'Test' },
+          payload: mockMcqPayload,
         });
 
       expect(response.status).toBe(422);
@@ -302,6 +318,7 @@ describe('Questions API', () => {
           type: 'invalid_type',
           difficulty: 'easy',
           prompt: { en: 'Test' },
+          payload: mockMcqPayload,
         });
 
       expect(response.status).toBe(422);
@@ -310,11 +327,7 @@ describe('Questions API', () => {
 
     it('should default status to draft', async () => {
       (categoriesRepo.exists as Mock).mockResolvedValue(true);
-      (questionsRepo.create as Mock).mockResolvedValue({
-        ...mockQuestion,
-        status: 'draft',
-      });
-      (questionsRepo.getById as Mock).mockResolvedValue({
+      (questionsRepo.createWithPayload as Mock).mockResolvedValue({
         ...mockQuestion,
         status: 'draft',
       });
@@ -326,6 +339,7 @@ describe('Questions API', () => {
           type: 'mcq_single',
           difficulty: 'easy',
           prompt: { en: 'Test' },
+          payload: mockMcqPayload,
         });
 
       expect(response.status).toBe(201);

@@ -12,6 +12,7 @@ import { logger } from '../../core/logger.js';
 /**
  * Central error handler middleware.
  * Converts all errors to standard ErrorResponse format.
+ * Note: X-Request-ID header is already set by requestIdMiddleware.
  */
 export function errorHandler(
   err: Error,
@@ -20,11 +21,6 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const requestId = getRequestId();
-
-  // Ensure X-Request-ID header is set (may have been set by middleware already)
-  if (requestId) {
-    res.setHeader('X-Request-ID', requestId);
-  }
 
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
@@ -74,13 +70,10 @@ export function errorHandler(
 
 /**
  * 404 Not Found handler for unmatched routes.
+ * Note: X-Request-ID header is already set by requestIdMiddleware.
  */
 export function notFoundHandler(req: Request, res: Response): void {
   const requestId = getRequestId();
-
-  if (requestId) {
-    res.setHeader('X-Request-ID', requestId);
-  }
 
   const response: ErrorResponse = {
     code: ErrorCode.NOT_FOUND,

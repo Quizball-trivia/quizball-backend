@@ -1,4 +1,28 @@
 import { z } from 'zod';
+import { ALLOWED_REDIRECT_DOMAINS } from '../../core/constants.js';
+
+// =============================================================================
+// Shared Schemas
+// =============================================================================
+
+/**
+ * Redirect URL schema with domain validation.
+ * Prevents open redirect vulnerabilities.
+ */
+const redirectUrlSchema = z
+  .string()
+  .url()
+  .refine(
+    (url) => {
+      try {
+        const parsed = new URL(url);
+        return ALLOWED_REDIRECT_DOMAINS.includes(parsed.host);
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Redirect URL must be to an allowed domain' }
+  );
 
 // =============================================================================
 // Request Schemas
@@ -23,19 +47,23 @@ export type RefreshRequest = z.infer<typeof refreshSchema>;
 
 export const forgotPasswordSchema = z.object({
   email: z.string().email(),
-  redirect_to: z.string().url().optional(),
+  redirect_to: redirectUrlSchema.optional(),
 });
 export type ForgotPasswordRequest = z.infer<typeof forgotPasswordSchema>;
 
 export const resetPasswordSchema = z.object({
-  access_token: z.string().min(1),
   new_password: z.string().min(8),
 });
 export type ResetPasswordRequest = z.infer<typeof resetPasswordSchema>;
 
+export const resetPasswordHeadersSchema = z.object({
+  authorization: z.string().regex(/^Bearer\s+\S+/i, 'Authorization header must be Bearer token'),
+});
+export type ResetPasswordHeaders = z.infer<typeof resetPasswordHeadersSchema>;
+
 export const socialLoginSchema = z.object({
   provider: z.enum(['google', 'apple', 'facebook', 'github']),
-  redirect_to: z.string().url(),
+  redirect_to: redirectUrlSchema,
   scopes: z.union([z.string(), z.array(z.string())]).optional(),
 });
 export type SocialLoginRequest = z.infer<typeof socialLoginSchema>;

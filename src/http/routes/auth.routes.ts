@@ -7,6 +7,7 @@ import {
   refreshSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resetPasswordHeadersSchema,
   socialLoginSchema,
 } from '../../modules/auth/index.js';
 
@@ -50,11 +51,11 @@ router.post(
 
 /**
  * POST /api/v1/auth/reset-password
- * Reset password using access token.
+ * Reset password using access token from Authorization header.
  */
 router.post(
   '/reset-password',
-  validate({ body: resetPasswordSchema }),
+  validate({ body: resetPasswordSchema, headers: resetPasswordHeadersSchema }),
   authController.resetPassword
 );
 

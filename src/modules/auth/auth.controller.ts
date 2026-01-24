@@ -7,6 +7,7 @@ import {
   type RefreshRequest,
   type ForgotPasswordRequest,
   type ResetPasswordRequest,
+  type ResetPasswordHeaders,
   type SocialLoginRequest,
 } from './auth.schemas.js';
 
@@ -70,14 +71,17 @@ export const authController = {
 
   /**
    * POST /api/v1/auth/reset-password
-   * Reset password using access token.
+   * Reset password using access token from Authorization header.
    */
   async resetPassword(req: Request, res: Response): Promise<void> {
-    const { access_token, new_password } = req.validated
-      .body as ResetPasswordRequest;
+    const { authorization } = req.validated.headers as ResetPasswordHeaders;
+    // Extract token after "Bearer " (validation ensures format is correct)
+    const accessToken = authorization.replace(/^Bearer\s+/i, '');
+
+    const { new_password } = req.validated.body as ResetPasswordRequest;
     const authClient = getAuthClient();
 
-    await authClient.resetPassword(access_token, new_password);
+    await authClient.resetPassword(accessToken, new_password);
 
     res.json({ message: 'Password reset successfully' });
   },

@@ -43,6 +43,7 @@ export const questionsService = {
 
   /**
    * Create a new question with optional payload.
+   * Uses transaction to ensure atomicity.
    * Validates category existence.
    */
   async create(data: CreateQuestionData & { payload?: Json }): Promise<QuestionWithPayload> {
@@ -52,21 +53,15 @@ export const questionsService = {
       throw new BadRequestError('Category not found');
     }
 
-    // Create question
-    const question = await questionsRepo.create(data);
-
-    // Create payload if provided
-    if (data.payload) {
-      await questionsRepo.createPayload(question.id, data.payload);
-    }
+    // Create question with payload atomically
+    const question = await questionsRepo.createWithPayload(data, data.payload);
 
     logger.info(
       { questionId: question.id, categoryId: data.categoryId, type: data.type },
       'Created new question'
     );
 
-    // Return with payload
-    return questionsRepo.getById(question.id) as Promise<QuestionWithPayload>;
+    return question;
   },
 
   /**
@@ -91,22 +86,36 @@ export const questionsService = {
       }
     }
 
-    // Update question
-    const question = await questionsRepo.update(id, data);
-
-    if (!question) {
-      throw new NotFoundError('Question not found');
+    if (data.payload !== undefined) {
+      const payloadType = (data.payload as { type?: string } | null)?.type;
+      const expectedType = data.type ?? existing.type;
+      if (payloadType && payloadType !== expectedType) {
+        throw new BadRequestError('Payload type must match question type');
+      }
     }
 
-    // Update payload if provided
+    let updatedQuestion: QuestionWithPayload | null;
+
+    // Use atomic update when payload is provided
     if (data.payload !== undefined) {
-      await questionsRepo.updatePayload(id, data.payload);
+      updatedQuestion = await questionsRepo.updateWithPayload(id, data, data.payload);
+    } else {
+      // No payload update - just update question fields
+      const question = await questionsRepo.update(id, data);
+      if (!question) {
+        throw new NotFoundError('Question not found');
+      }
+      // Fetch with payload for consistent return type
+      updatedQuestion = await questionsRepo.getById(id);
+    }
+
+    if (!updatedQuestion) {
+      throw new NotFoundError('Question not found');
     }
 
     logger.debug({ questionId: id }, 'Updated question');
 
-    // Return with payload
-    return questionsRepo.getById(id) as Promise<QuestionWithPayload>;
+    return updatedQuestion;
   },
 
   /**

@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { requireRole } from '../middleware/require-role.js';
 import { categoriesController } from '../../modules/categories/index.js';
 import {
   listCategoriesQuerySchema,
   createCategorySchema,
   updateCategorySchema,
   uuidParamSchema,
+  deleteCategoryQuerySchema,
 } from '../../modules/categories/index.js';
 
 const router = Router();
@@ -34,13 +36,25 @@ router.get(
 );
 
 /**
+ * GET /api/v1/categories/:id/dependencies
+ * Get category dependencies (children, questions, featured status).
+ * Public endpoint.
+ */
+router.get(
+  '/:id/dependencies',
+  validate({ params: uuidParamSchema }),
+  categoriesController.getDependencies
+);
+
+/**
  * POST /api/v1/categories
  * Create a new category.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.post(
   '/',
   authMiddleware,
+  requireRole('admin'),
   validate({ body: createCategorySchema }),
   categoriesController.create
 );
@@ -48,11 +62,12 @@ router.post(
 /**
  * PUT /api/v1/categories/:id
  * Update a category.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.put(
   '/:id',
   authMiddleware,
+  requireRole('admin'),
   validate({ params: uuidParamSchema, body: updateCategorySchema }),
   categoriesController.update
 );
@@ -60,12 +75,14 @@ router.put(
 /**
  * DELETE /api/v1/categories/:id
  * Delete a category.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
+ * Query params: cascade=true to delete associated questions.
  */
 router.delete(
   '/:id',
   authMiddleware,
-  validate({ params: uuidParamSchema }),
+  requireRole('admin'),
+  validate({ params: uuidParamSchema, query: deleteCategoryQuerySchema }),
   categoriesController.delete
 );
 

@@ -1,18 +1,24 @@
-import pino from 'pino';
+import pino, { type LoggerOptions } from 'pino';
 import { config } from './config.js';
 import { getRequestId } from './request-context.js';
 
 /**
- * Pino logger with request_id injection via mixin.
- * The mixin() function is called on every log call and reads request_id from AsyncLocalStorage.
+ * Determine if pretty printing should be enabled:
+ * 1. Explicit LOG_PRETTY=true takes precedence
+ * 2. Otherwise, enable in local/development environments only
  */
-export const logger = pino({
+const usePrettyPrint = config.LOG_PRETTY || config.NODE_ENV === 'local';
+
+/**
+ * Base logger options shared between pretty and JSON modes
+ */
+const baseOptions: LoggerOptions = {
   level: config.LOG_LEVEL,
 
   // Mixin runs on EVERY log call, injecting request_id from AsyncLocalStorage
   mixin() {
     return {
-      request_id: getRequestId() ?? 'no-request-id',
+      request_id: getRequestId() ?? undefined,
     };
   },
 
@@ -26,19 +32,26 @@ export const logger = pino({
     ],
     censor: '[REDACTED]',
   },
+};
 
-  // Prettier output in local environment
-  transport:
-    config.NODE_ENV === 'local'
-      ? {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            translateTime: 'SYS:standard',
-            ignore: 'pid,hostname',
-          },
-        }
-      : undefined,
-});
+/**
+ * Pino logger with request_id injection via mixin.
+ * - In local/dev: Uses pino-pretty for human-readable output
+ * - In production: Uses structured JSON for log aggregation tools
+ */
+export const logger = usePrettyPrint
+  ? pino({
+      ...baseOptions,
+      transport: {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'SYS:yyyy-mm-dd HH:MM:ss.l',
+          ignore: 'pid,hostname',
+          singleLine: true,
+        },
+      },
+    })
+  : pino(baseOptions);
 
 export type Logger = typeof logger;

@@ -17,11 +17,14 @@ export const featuredCategoryResponseSchema = z.object({
   category: z.object({
     id: z.string().uuid(),
     slug: z.string(),
+    parent_id: z.string().uuid().nullable(),
     name: i18nFieldSchema,
     description: i18nFieldSchema.nullable(),
     icon: z.string().nullable(),
     image_url: z.string().nullable(),
     is_active: z.boolean(),
+    created_at: z.string().datetime(),
+    updated_at: z.string().datetime(),
   }),
 });
 
@@ -84,11 +87,14 @@ export function toFeaturedCategoryResponse(
     category: {
       id: category.id,
       slug: category.slug,
+      parent_id: category.parent_id,
       name: (category.name as I18nField) ?? {},
       description: (category.description as I18nField | null) ?? null,
       icon: category.icon,
       image_url: category.image_url,
       is_active: category.is_active,
+      created_at: category.created_at,
+      updated_at: category.updated_at,
     },
   };
 }

@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { config } from '../../core/config.js';
 import type { Category, I18nField, Json } from '../../db/types.js';
 
 export interface CreateCategoryData {
@@ -26,36 +27,44 @@ export interface ListCategoriesFilter {
   isActive?: boolean;
 }
 
+export interface ListCategoriesResult {
+  categories: Category[];
+  total: number;
+}
+
 export const categoriesRepo = {
-  async list(filter?: ListCategoriesFilter): Promise<Category[]> {
-    if (filter?.parentId !== undefined && filter?.isActive !== undefined) {
-      return sql<Category[]>`
-        SELECT * FROM categories
-        WHERE parent_id = ${filter.parentId} AND is_active = ${filter.isActive}
-        ORDER BY name->>'en' ASC
-      `;
-    }
+  async list(
+    filter?: ListCategoriesFilter,
+    page = 1,
+    limit = 50,
+    locale = config.DEFAULT_LOCALE
+  ): Promise<ListCategoriesResult> {
+    const offset = (page - 1) * limit;
+    const normalizedLocale = locale.trim() || config.DEFAULT_LOCALE;
 
-    if (filter?.parentId !== undefined) {
-      return sql<Category[]>`
-        SELECT * FROM categories
-        WHERE parent_id = ${filter.parentId}
-        ORDER BY name->>'en' ASC
-      `;
-    }
+    // Build conditional filters
+    const parentIdFilter =
+      filter?.parentId !== undefined
+        ? sql`AND parent_id = ${filter.parentId}`
+        : sql``;
+    const isActiveFilter =
+      filter?.isActive !== undefined
+        ? sql`AND is_active = ${filter.isActive}`
+        : sql``;
 
-    if (filter?.isActive !== undefined) {
-      return sql<Category[]>`
-        SELECT * FROM categories
-        WHERE is_active = ${filter.isActive}
-        ORDER BY name->>'en' ASC
-      `;
-    }
-
-    return sql<Category[]>`
-      SELECT * FROM categories
-      ORDER BY name->>'en' ASC
+    // Get paginated results with total count in single query
+    const results = await sql<(Category & { total_count: string })[]>`
+      SELECT *, COUNT(*) OVER() as total_count
+      FROM categories
+      WHERE 1=1 ${parentIdFilter} ${isActiveFilter}
+      ORDER BY COALESCE(name->>${normalizedLocale}, name->>${config.DEFAULT_LOCALE}) ASC
+      LIMIT ${limit} OFFSET ${offset}
     `;
+
+    const total = results.length > 0 ? parseInt(results[0].total_count, 10) : 0;
+    const categories = results.map(({ total_count: _, ...c }) => c);
+
+    return { categories, total };
   },
 
   async getById(id: string): Promise<Category | null> {
@@ -133,5 +142,12 @@ export const categoriesRepo = {
       SELECT EXISTS(SELECT 1 FROM categories WHERE id = ${id}) as exists
     `;
     return result?.exists ?? false;
+  },
+
+  async getChildren(parentId: string): Promise<Pick<Category, 'id' | 'name' | 'slug'>[]> {
+    return sql<Pick<Category, 'id' | 'name' | 'slug'>[]>`
+      SELECT id, name, slug FROM categories WHERE parent_id = ${parentId}
+      ORDER BY name->>'en' ASC
+    `;
   },
 };

@@ -4,6 +4,9 @@
   "description": "QuizBall Backend - Express + TypeScript",
   "main": "dist/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc",
@@ -40,6 +43,7 @@
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "jose": "^5.9.0",
+    "lru-cache": "^11.2.4",
     "pino": "^9.4.0",
     "pino-http": "^10.3.0",
     "postgres": "^3.4.8",

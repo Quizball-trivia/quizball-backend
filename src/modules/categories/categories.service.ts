@@ -1,12 +1,21 @@
-import type { Category } from '../../db/types.js';
+import type { Category, I18nField } from '../../db/types.js';
 import {
   categoriesRepo,
   type CreateCategoryData,
   type UpdateCategoryData,
   type ListCategoriesFilter,
+  type ListCategoriesResult,
 } from './categories.repo.js';
+import { questionsRepo } from '../questions/questions.repo.js';
+import { featuredCategoriesRepo } from '../featured-categories/featured-categories.repo.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+
+export interface CategoryDependencies {
+  children: { id: string; name: I18nField; slug: string }[];
+  questions: { id: string; prompt: I18nField; type: string; difficulty: string }[];
+  featured: boolean;
+}
 
 /**
  * Categories service.
@@ -15,10 +24,15 @@ import { logger } from '../../core/logger.js';
  */
 export const categoriesService = {
   /**
-   * List all categories with optional filters.
+   * List categories with pagination and optional filters.
    */
-  async list(filter?: ListCategoriesFilter): Promise<Category[]> {
-    return categoriesRepo.list(filter);
+  async list(
+    filter?: ListCategoriesFilter,
+    page = 1,
+    limit = 50,
+    locale?: string
+  ): Promise<ListCategoriesResult> {
+    return categoriesRepo.list(filter, page, limit, locale);
   },
 
   /**
@@ -80,6 +94,9 @@ export const categoriesService = {
       }
     }
 
+    // Debug: log what we received
+    logger.debug({ categoryId: id, updateData: data }, 'Updating category');
+
     // Prevent self-referencing parent
     if (data.parentId === id) {
       throw new BadRequestError('Category cannot be its own parent');
@@ -99,36 +116,76 @@ export const categoriesService = {
       throw new NotFoundError('Category not found');
     }
 
-    logger.debug({ categoryId: id }, 'Updated category');
+    logger.info({ categoryId: id, newParentId: category.parent_id }, 'Updated category');
 
     return category;
   },
 
   /**
-   * Delete a category.
-   * Prevents deletion if category has children or questions.
+   * Get dependencies for a category.
+   * Returns children, questions, and featured status.
    */
-  async delete(id: string): Promise<void> {
+  async getDependencies(id: string): Promise<CategoryDependencies> {
+    const category = await categoriesRepo.getById(id);
+    if (!category) {
+      throw new NotFoundError('Category not found');
+    }
+
+    const [children, questions, featuredEntry] = await Promise.all([
+      categoriesRepo.getChildren(id),
+      questionsRepo.getByCategoryId(id),
+      featuredCategoriesRepo.getByCategoryId(id),
+    ]);
+
+    return {
+      children: children.map((c) => ({
+        id: c.id,
+        name: c.name as I18nField,
+        slug: c.slug,
+      })),
+      questions: questions.map((q) => ({
+        id: q.id,
+        prompt: q.prompt as I18nField,
+        type: q.type,
+        difficulty: q.difficulty,
+      })),
+      featured: featuredEntry !== null,
+    };
+  },
+
+  /**
+   * Delete a category.
+   * Prevents deletion if category has children or questions (unless cascade is true).
+   */
+  async delete(id: string, options?: { cascade?: boolean }): Promise<void> {
     // Check category exists
     const existing = await categoriesRepo.getById(id);
     if (!existing) {
       throw new NotFoundError('Category not found');
     }
 
-    // Check for children
+    // Check for children - always blocked, even with cascade
     const hasChildren = await categoriesRepo.hasChildren(id);
     if (hasChildren) {
       throw new ConflictError('Cannot delete category with child categories');
     }
 
-    // Check for questions
-    const hasQuestions = await categoriesRepo.hasQuestions(id);
-    if (hasQuestions) {
-      throw new ConflictError('Cannot delete category with questions');
+    // Handle cascade delete of questions
+    if (options?.cascade) {
+      const deletedCount = await questionsRepo.deleteByCategoryId(id);
+      if (deletedCount > 0) {
+        logger.info({ categoryId: id, questionsDeleted: deletedCount }, 'Cascade deleted questions');
+      }
+    } else {
+      // Check for questions only when not cascading
+      const hasQuestions = await categoriesRepo.hasQuestions(id);
+      if (hasQuestions) {
+        throw new ConflictError('Cannot delete category with questions');
+      }
     }
 
     await categoriesRepo.delete(id);
 
-    logger.info({ categoryId: id }, 'Deleted category');
+    logger.info({ categoryId: id, cascade: options?.cascade ?? false }, 'Deleted category');
   },
 };

@@ -369,6 +369,29 @@ const categoryResponseSchema = z
 registry.register('I18nField', i18nFieldSchema);
 registry.register('CategoryResponse', categoryResponseSchema);
 
+const categoryDependenciesResponseSchema = z
+  .object({
+    children: z.array(
+      z.object({
+        id: z.string().uuid(),
+        name: i18nFieldSchema,
+        slug: z.string(),
+      })
+    ),
+    questions: z.array(
+      z.object({
+        id: z.string().uuid(),
+        prompt: i18nFieldSchema,
+        type: z.string(),
+        difficulty: z.string(),
+      })
+    ),
+    featured: z.boolean(),
+  })
+  .openapi('CategoryDependenciesResponse');
+
+registry.register('CategoryDependenciesResponse', categoryDependenciesResponseSchema);
+
 // =============================================================================
 // Question Schemas
 // =============================================================================
@@ -445,9 +468,31 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/v1/categories/{id}/dependencies',
+  summary: 'Get category dependencies',
+  description: 'Returns child categories, associated questions, and featured status',
+  tags: ['Categories'],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: 'Category dependencies',
+      content: { 'application/json': { schema: categoryDependenciesResponseSchema } },
+    },
+    404: {
+      description: 'Category not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
   method: 'post',
   path: '/api/v1/categories',
   summary: 'Create a new category',
+  description: 'Requires admin role',
   tags: ['Categories'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -476,6 +521,10 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
     409: {
       description: 'Slug already exists',
       content: { 'application/json': { schema: errorResponseSchema } },
@@ -487,6 +536,7 @@ registry.registerPath({
   method: 'put',
   path: '/api/v1/categories/{id}',
   summary: 'Update a category',
+  description: 'Requires admin role',
   tags: ['Categories'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -516,6 +566,10 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
     404: {
       description: 'Category not found',
       content: { 'application/json': { schema: errorResponseSchema } },
@@ -531,10 +585,17 @@ registry.registerPath({
   method: 'delete',
   path: '/api/v1/categories/{id}',
   summary: 'Delete a category',
+  description: 'Delete a category. Use cascade=true to also delete associated questions. Requires admin role.',
   tags: ['Categories'],
   security: [{ bearerAuth: [] }],
   request: {
     params: z.object({ id: z.string().uuid() }),
+    query: z.object({
+      cascade: z.string().optional().openapi({
+        description: 'Set to "true" to delete associated questions before deleting the category',
+        example: 'true',
+      }),
+    }),
   },
   responses: {
     204: {
@@ -544,12 +605,223 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
     404: {
       description: 'Category not found',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
     409: {
-      description: 'Category has children or questions',
+      description: 'Category has children or questions (when cascade=false)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Featured Categories Schemas
+// =============================================================================
+
+const featuredCategoryResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+    category_id: z.string().uuid(),
+    sort_order: z.number().int(),
+    created_at: z.string().datetime(),
+    category: categoryResponseSchema,
+  })
+  .openapi('FeaturedCategoryResponse');
+
+registry.register('FeaturedCategoryResponse', featuredCategoryResponseSchema);
+
+// =============================================================================
+// Featured Categories Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/featured-categories',
+  summary: 'List all featured categories',
+  tags: ['Featured Categories'],
+  responses: {
+    200: {
+      description: 'List of featured categories with joined category data',
+      content: { 'application/json': { schema: z.array(featuredCategoryResponseSchema) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/featured-categories/{id}',
+  summary: 'Get featured category by ID',
+  tags: ['Featured Categories'],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: 'Featured category found',
+      content: { 'application/json': { schema: featuredCategoryResponseSchema } },
+    },
+    404: {
+      description: 'Featured category not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/featured-categories',
+  summary: 'Add a category to featured',
+  description: 'Requires admin role',
+  tags: ['Featured Categories'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            category_id: z.string().uuid(),
+            sort_order: z.number().int().min(0).optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Category added to featured',
+      content: { 'application/json': { schema: featuredCategoryResponseSchema } },
+    },
+    400: {
+      description: 'Invalid category ID',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    409: {
+      description: 'Category already featured',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/v1/featured-categories/reorder',
+  summary: 'Bulk reorder featured categories',
+  description: 'Requires admin role',
+  tags: ['Featured Categories'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            items: z.array(
+              z.object({
+                id: z.string().uuid(),
+                sort_order: z.number().int().min(0),
+              })
+            ).min(1),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Featured categories reordered',
+      content: { 'application/json': { schema: z.array(featuredCategoryResponseSchema) } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'One or more featured category IDs not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/v1/featured-categories/{id}',
+  summary: 'Update featured category sort order',
+  description: 'Requires admin role',
+  tags: ['Featured Categories'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            sort_order: z.number().int().min(0),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Featured category updated',
+      content: { 'application/json': { schema: featuredCategoryResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Featured category not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/featured-categories/{id}',
+  summary: 'Remove category from featured',
+  description: 'Requires admin role',
+  tags: ['Featured Categories'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    204: {
+      description: 'Category removed from featured',
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Featured category not found',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },
@@ -607,6 +879,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/v1/questions',
   summary: 'Create a new question with payload',
+  description: 'Requires admin role',
   tags: ['Questions'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -639,6 +912,10 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
   },
 });
 
@@ -646,6 +923,7 @@ registry.registerPath({
   method: 'put',
   path: '/api/v1/questions/{id}',
   summary: 'Update a question with payload',
+  description: 'Requires admin role',
   tags: ['Questions'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -679,6 +957,10 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
     404: {
       description: 'Question not found',
       content: { 'application/json': { schema: errorResponseSchema } },
@@ -690,6 +972,7 @@ registry.registerPath({
   method: 'delete',
   path: '/api/v1/questions/{id}',
   summary: 'Delete a question',
+  description: 'Requires admin role',
   tags: ['Questions'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -703,6 +986,10 @@ registry.registerPath({
       description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
     404: {
       description: 'Question not found',
       content: { 'application/json': { schema: errorResponseSchema } },
@@ -714,6 +1001,7 @@ registry.registerPath({
   method: 'patch',
   path: '/api/v1/questions/{id}/status',
   summary: 'Update question status',
+  description: 'Requires admin role',
   tags: ['Questions'],
   security: [{ bearerAuth: [] }],
   request: {
@@ -735,6 +1023,10 @@ registry.registerPath({
     },
     401: {
       description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
     404: {

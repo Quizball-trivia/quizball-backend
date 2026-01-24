@@ -4,6 +4,7 @@ import { identitiesRepo } from './identities.repo.js';
 import { NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
+import { getCachedUser, setCachedUser, updateCachedUser } from './user-cache.js';
 
 /**
  * Users service.
@@ -16,12 +17,23 @@ export const usersService = {
    * This is the main entry point after JWT verification.
    *
    * Flow:
-   * 1. Look up UserIdentity by (provider, subject)
-   * 2. If exists → return associated User
-   * 3. If not → create User + UserIdentity, return User
+   * 1. Check cache for user
+   * 2. Look up UserIdentity by (provider, subject)
+   * 3. If exists → cache and return associated User
+   * 4. If not → create User + UserIdentity atomically, cache and return User
    */
   async getOrCreateFromIdentity(identity: AuthIdentity): Promise<User> {
-    // 1. Look up existing identity
+    // 1. Check cache first
+    const cached = getCachedUser(identity.provider, identity.subject);
+    if (cached) {
+      logger.debug(
+        { userId: cached.id, provider: identity.provider },
+        'User found in cache'
+      );
+      return cached;
+    }
+
+    // 2. Look up existing identity
     const existingIdentity = await identitiesRepo.getByProviderSubject(
       identity.provider,
       identity.subject
@@ -32,32 +44,31 @@ export const usersService = {
         { userId: existingIdentity.user.id, provider: identity.provider },
         'Found existing user for identity'
       );
+      setCachedUser(identity.provider, identity.subject, existingIdentity.user);
       return existingIdentity.user;
     }
 
-    // 2. Create new user
+    // 3. Create new user with identity in a single transaction
     logger.info(
       { provider: identity.provider, subject: identity.subject },
       'Creating new user for identity'
     );
 
-    const newUser = await usersRepo.create({
-      email: identity.email,
-    });
-
-    // 3. Create identity mapping
-    await identitiesRepo.create({
-      userId: newUser.id,
-      provider: identity.provider,
-      subject: identity.subject,
-      email: identity.email,
-    });
+    const newUser = await usersRepo.createWithIdentity(
+      { email: identity.email },
+      {
+        provider: identity.provider,
+        subject: identity.subject,
+        email: identity.email,
+      }
+    );
 
     logger.info(
       { userId: newUser.id, provider: identity.provider },
       'Created new user and identity'
     );
 
+    setCachedUser(identity.provider, identity.subject, newUser);
     return newUser;
   },
 
@@ -89,6 +100,9 @@ export const usersService = {
       throw new NotFoundError('User not found');
     }
 
+    // Update cache with new user data
+    updateCachedUser(id, user);
+
     logger.debug({ userId: id }, 'Updated user profile');
     return user;
   },
@@ -102,6 +116,9 @@ export const usersService = {
     if (!user) {
       throw new NotFoundError('User not found');
     }
+
+    // Update cache with new user data
+    updateCachedUser(id, user);
 
     logger.info({ userId: id }, 'User completed onboarding');
     return user;

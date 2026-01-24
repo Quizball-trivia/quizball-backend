@@ -1,8 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { User } from '../../db/types.js';
 import { AuthenticationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import type { AuthIdentity } from '../../core/types.js';
 import { getAuthProvider } from '../../modules/auth/index.js';
 import { usersService } from '../../modules/users/index.js';
 
@@ -63,16 +61,5 @@ export async function authMiddleware(
     next();
   } catch (error) {
     next(error);
-  }
-}
-
-// Extend Express Request type
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace Express {
-    interface Request {
-      identity?: AuthIdentity;
-      user?: User;
-    }
   }
 }

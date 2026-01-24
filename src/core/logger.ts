@@ -4,7 +4,7 @@ import { getRequestId } from './request-context.js';
 
 /**
  * Pino logger with request_id injection via mixin.
- * The mixin() function is called on every log call and reads request_id from AsyncLocalStorage.
+ * Always uses pretty printing for readable logs.
  */
 export const logger = pino({
   level: config.LOG_LEVEL,
@@ -27,18 +27,17 @@ export const logger = pino({
     censor: '[REDACTED]',
   },
 
-  // Prettier output in local environment
-  transport:
-    config.NODE_ENV === 'local'
-      ? {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            translateTime: 'SYS:standard',
-            ignore: 'pid,hostname',
-          },
-        }
-      : undefined,
+  // Always use pretty printing for readable logs
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+      translateTime: 'HH:MM:ss',
+      ignore: 'pid,hostname,request_id',
+      messageFormat: '{msg}',
+      singleLine: true,
+    },
+  },
 });
 
 export type Logger = typeof logger;

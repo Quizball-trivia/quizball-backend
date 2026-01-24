@@ -13,8 +13,8 @@ export interface CreateIdentityData {
 export const identitiesRepo = {
   async create(data: CreateIdentityData): Promise<UserIdentity> {
     const [identity] = await sql<UserIdentity[]>`
-      INSERT INTO user_identities (user_id, provider, subject, email)
-      VALUES (${data.userId}, ${data.provider}, ${data.subject}, ${data.email ?? null})
+      INSERT INTO user_identities (id, user_id, provider, subject, email)
+      VALUES (gen_random_uuid(), ${data.userId}, ${data.provider}, ${data.subject}, ${data.email ?? null})
       RETURNING *
     `;
     return identity;

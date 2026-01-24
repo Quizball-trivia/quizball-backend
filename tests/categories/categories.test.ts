@@ -21,19 +21,45 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
     hasChildren: vi.fn(),
     hasQuestions: vi.fn(),
     exists: vi.fn(),
+    getChildren: vi.fn(),
+  },
+}));
+
+// Mock the questions repo
+vi.mock('../../src/modules/questions/questions.repo.js', () => ({
+  questionsRepo: {
+    getByCategoryId: vi.fn(),
+    deleteByCategoryId: vi.fn(),
+  },
+}));
+
+// Mock the featured categories repo
+vi.mock('../../src/modules/featured-categories/featured-categories.repo.js', () => ({
+  featuredCategoriesRepo: {
+    getByCategoryId: vi.fn(),
   },
 }));
 
 // Mock the auth middleware to allow testing protected routes
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
-    req.user = { id: 'test-user-id' };
+    req.user = { id: 'test-user-id', role: 'admin' };
     req.identity = { provider: 'test', subject: 'test-sub' };
     next();
   }),
 }));
 
+// Mock the requireRole middleware (passes through since we set admin role above)
+vi.mock('../../src/http/middleware/require-role.js', () => ({
+  requireRole: vi.fn(() => (req: any, _res: any, next: any) => {
+    // In tests, we assume the user has admin role
+    next();
+  }),
+}));
+
 import { categoriesRepo } from '../../src/modules/categories/categories.repo.js';
+import { questionsRepo } from '../../src/modules/questions/questions.repo.js';
+import { featuredCategoriesRepo } from '../../src/modules/featured-categories/featured-categories.repo.js';
 
 const mockCategory = {
   id: '123e4567-e89b-12d3-a456-426614174000',
@@ -65,51 +91,85 @@ describe('Categories API', () => {
 
   describe('GET /api/v1/categories', () => {
     it('should return empty array when no categories', async () => {
-      (categoriesRepo.list as Mock).mockResolvedValue([]);
+      (categoriesRepo.list as Mock).mockResolvedValue({ categories: [], total: 0 });
 
       const response = await request(app).get('/api/v1/categories');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual([]);
+      expect(response.body.data).toEqual([]);
+      expect(response.body.total).toBe(0);
     });
 
-    it('should return all categories', async () => {
-      (categoriesRepo.list as Mock).mockResolvedValue([mockCategory]);
+    it('should return all categories with pagination', async () => {
+      (categoriesRepo.list as Mock).mockResolvedValue({ categories: [mockCategory], total: 1 });
 
       const response = await request(app).get('/api/v1/categories');
 
       expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-      expect(response.body[0].slug).toBe('test-category');
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0].slug).toBe('test-category');
+      expect(response.body.page).toBe(1);
+      expect(response.body.limit).toBe(50);
+      expect(response.body.total).toBe(1);
+      expect(response.body.total_pages).toBe(1);
     });
 
     it('should filter by parent_id', async () => {
       const parentId = '123e4567-e89b-12d3-a456-426614174001';
-      (categoriesRepo.list as Mock).mockResolvedValue([mockCategory]);
+      (categoriesRepo.list as Mock).mockResolvedValue({ categories: [mockCategory], total: 1 });
 
       const response = await request(app)
         .get('/api/v1/categories')
         .query({ parent_id: parentId });
 
       expect(response.status).toBe(200);
-      expect(categoriesRepo.list).toHaveBeenCalledWith({
-        parentId: parentId,
-        isActive: undefined,
-      });
+      expect(categoriesRepo.list).toHaveBeenCalledWith(
+        {
+          parentId: parentId,
+          isActive: undefined,
+        },
+        1,
+        50
+      );
     });
 
     it('should filter by is_active', async () => {
-      (categoriesRepo.list as Mock).mockResolvedValue([mockCategory]);
+      (categoriesRepo.list as Mock).mockResolvedValue({ categories: [mockCategory], total: 1 });
 
       const response = await request(app)
         .get('/api/v1/categories')
         .query({ is_active: 'true' });
 
       expect(response.status).toBe(200);
-      expect(categoriesRepo.list).toHaveBeenCalledWith({
-        parentId: undefined,
-        isActive: true,
-      });
+      expect(categoriesRepo.list).toHaveBeenCalledWith(
+        {
+          parentId: undefined,
+          isActive: true,
+        },
+        1,
+        50
+      );
+    });
+
+    it('should support custom page and limit', async () => {
+      (categoriesRepo.list as Mock).mockResolvedValue({ categories: [mockCategory], total: 100 });
+
+      const response = await request(app)
+        .get('/api/v1/categories')
+        .query({ page: 2, limit: 10 });
+
+      expect(response.status).toBe(200);
+      expect(categoriesRepo.list).toHaveBeenCalledWith(
+        {
+          parentId: undefined,
+          isActive: undefined,
+        },
+        2,
+        10
+      );
+      expect(response.body.page).toBe(2);
+      expect(response.body.limit).toBe(10);
+      expect(response.body.total_pages).toBe(10);
     });
   });
 
@@ -339,6 +399,120 @@ describe('Categories API', () => {
 
       expect(response.status).toBe(409);
       expect(response.body.code).toBe('CONFLICT');
+    });
+
+    it('should delete questions and category when cascade=true', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.hasChildren as Mock).mockResolvedValue(false);
+      (questionsRepo.deleteByCategoryId as Mock).mockResolvedValue(3);
+      (categoriesRepo.delete as Mock).mockResolvedValue(true);
+
+      const response = await request(app)
+        .delete(`/api/v1/categories/${mockCategory.id}?cascade=true`);
+
+      expect(response.status).toBe(204);
+      expect(questionsRepo.deleteByCategoryId).toHaveBeenCalledWith(mockCategory.id);
+      expect(categoriesRepo.delete).toHaveBeenCalledWith(mockCategory.id);
+    });
+
+    it('should still block deletion with children even with cascade=true', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.hasChildren as Mock).mockResolvedValue(true);
+
+      const response = await request(app)
+        .delete(`/api/v1/categories/${mockCategory.id}?cascade=true`);
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('CONFLICT');
+      expect(response.body.message).toContain('child categories');
+    });
+  });
+
+  describe('GET /api/v1/categories/:id/dependencies', () => {
+    it('should return empty arrays when category has no dependencies', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.getChildren as Mock).mockResolvedValue([]);
+      (questionsRepo.getByCategoryId as Mock).mockResolvedValue([]);
+      (featuredCategoriesRepo.getByCategoryId as Mock).mockResolvedValue(null);
+
+      const response = await request(app).get(
+        `/api/v1/categories/${mockCategory.id}/dependencies`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        children: [],
+        questions: [],
+        featured: false,
+      });
+    });
+
+    it('should return children when category has child categories', async () => {
+      const mockChildren = [
+        { id: 'child-1', name: { en: 'Child 1' }, slug: 'child-1' },
+        { id: 'child-2', name: { en: 'Child 2' }, slug: 'child-2' },
+      ];
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.getChildren as Mock).mockResolvedValue(mockChildren);
+      (questionsRepo.getByCategoryId as Mock).mockResolvedValue([]);
+      (featuredCategoriesRepo.getByCategoryId as Mock).mockResolvedValue(null);
+
+      const response = await request(app).get(
+        `/api/v1/categories/${mockCategory.id}/dependencies`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.children).toHaveLength(2);
+      expect(response.body.children[0].slug).toBe('child-1');
+    });
+
+    it('should return questions when category has questions', async () => {
+      const mockQuestions = [
+        { id: 'q-1', prompt: { en: 'Question 1' }, type: 'mcq_single', difficulty: 'easy' },
+        { id: 'q-2', prompt: { en: 'Question 2' }, type: 'input_text', difficulty: 'hard' },
+      ];
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.getChildren as Mock).mockResolvedValue([]);
+      (questionsRepo.getByCategoryId as Mock).mockResolvedValue(mockQuestions);
+      (featuredCategoriesRepo.getByCategoryId as Mock).mockResolvedValue(null);
+
+      const response = await request(app).get(
+        `/api/v1/categories/${mockCategory.id}/dependencies`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.questions).toHaveLength(2);
+      expect(response.body.questions[0].type).toBe('mcq_single');
+    });
+
+    it('should return featured: true when category is featured', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.getChildren as Mock).mockResolvedValue([]);
+      (questionsRepo.getByCategoryId as Mock).mockResolvedValue([]);
+      (featuredCategoriesRepo.getByCategoryId as Mock).mockResolvedValue({
+        id: 'fc-1',
+        category_id: mockCategory.id,
+        sort_order: 0,
+        created_at: '2024-01-01T00:00:00.000Z',
+      });
+
+      const response = await request(app).get(
+        `/api/v1/categories/${mockCategory.id}/dependencies`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.featured).toBe(true);
+    });
+
+    it('should return 404 when category does not exist', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(null);
+
+      const response = await request(app).get(
+        '/api/v1/categories/123e4567-e89b-12d3-a456-426614174999/dependencies'
+      );
+
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('NOT_FOUND');
     });
   });
 });

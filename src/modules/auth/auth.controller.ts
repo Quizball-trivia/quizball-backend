@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { AuthenticationError } from '../../core/errors.js';
 import { getAuthClient } from './supabase-auth-client.js';
 import {
   toAuthResponse,
@@ -70,14 +71,21 @@ export const authController = {
 
   /**
    * POST /api/v1/auth/reset-password
-   * Reset password using access token.
+   * Reset password using access token from Authorization header.
    */
   async resetPassword(req: Request, res: Response): Promise<void> {
-    const { access_token, new_password } = req.validated
-      .body as ResetPasswordRequest;
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      throw new AuthenticationError(
+        'Missing Authorization header with Bearer token'
+      );
+    }
+
+    const accessToken = authHeader.substring(7);
+    const { new_password } = req.validated.body as ResetPasswordRequest;
     const authClient = getAuthClient();
 
-    await authClient.resetPassword(access_token, new_password);
+    await authClient.resetPassword(accessToken, new_password);
 
     res.json({ message: 'Password reset successfully' });
   },

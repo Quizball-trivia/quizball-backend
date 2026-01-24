@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { requireRole } from '../middleware/require-role.js';
 import { featuredCategoriesController } from '../../modules/featured-categories/index.js';
 import {
   createFeaturedCategorySchema,
@@ -32,11 +33,12 @@ router.get(
 /**
  * POST /api/v1/featured-categories
  * Add a category to featured.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.post(
   '/',
   authMiddleware,
+  requireRole('admin'),
   validate({ body: createFeaturedCategorySchema }),
   featuredCategoriesController.create
 );
@@ -44,12 +46,13 @@ router.post(
 /**
  * PUT /api/v1/featured-categories/reorder
  * Bulk reorder featured categories.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  * NOTE: This route must be defined before /:id to avoid conflict.
  */
 router.put(
   '/reorder',
   authMiddleware,
+  requireRole('admin'),
   validate({ body: reorderFeaturedCategoriesSchema }),
   featuredCategoriesController.reorder
 );
@@ -57,11 +60,12 @@ router.put(
 /**
  * PUT /api/v1/featured-categories/:id
  * Update a featured category's sort_order.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.put(
   '/:id',
   authMiddleware,
+  requireRole('admin'),
   validate({ params: uuidParamSchema, body: updateFeaturedCategorySchema }),
   featuredCategoriesController.update
 );
@@ -69,11 +73,12 @@ router.put(
 /**
  * DELETE /api/v1/featured-categories/:id
  * Remove a category from featured.
- * Protected endpoint.
+ * Protected endpoint - requires admin role.
  */
 router.delete(
   '/:id',
   authMiddleware,
+  requireRole('admin'),
   validate({ params: uuidParamSchema }),
   featuredCategoriesController.delete
 );

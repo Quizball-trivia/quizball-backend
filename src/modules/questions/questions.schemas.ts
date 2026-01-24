@@ -24,6 +24,72 @@ export type Difficulty = z.infer<typeof difficultyEnum>;
 export const statusEnum = z.enum(['draft', 'published', 'archived']);
 export type Status = z.infer<typeof statusEnum>;
 
+// =============================================================================
+// Payload Schemas
+// =============================================================================
+
+/**
+ * MCQ Option schema - single answer option with i18n text
+ */
+export const mcqOptionSchema = z.object({
+  id: z.string().uuid(),
+  text: i18nFieldSchema,
+  is_correct: z.boolean(),
+});
+
+export type McqOption = z.infer<typeof mcqOptionSchema>;
+
+/**
+ * MCQ Payload base schema - multiple choice with single correct answer
+ */
+const mcqPayloadBaseSchema = z.object({
+  type: z.literal('mcq_single'),
+  options: z.array(mcqOptionSchema).length(4),
+});
+
+/**
+ * Text Input Payload schema - user types answer
+ */
+const textInputPayloadBaseSchema = z.object({
+  type: z.literal('input_text'),
+  accepted_answers: z.array(i18nFieldSchema).min(1),
+  case_sensitive: z.boolean(),
+});
+
+/**
+ * Union of all payload types - discriminated by 'type' field
+ * Additional validation (unique IDs, exactly 1 correct) applied via superRefine
+ */
+export const questionPayloadSchema = z
+  .discriminatedUnion('type', [mcqPayloadBaseSchema, textInputPayloadBaseSchema])
+  .superRefine((data, ctx) => {
+    if (data.type === 'mcq_single') {
+      // Check exactly one correct answer
+      const correctCount = data.options.filter((o) => o.is_correct).length;
+      if (correctCount !== 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Exactly one option must be marked as correct',
+          path: ['options'],
+        });
+      }
+
+      // Check unique IDs
+      const ids = data.options.map((o) => o.id);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Option IDs must be unique',
+          path: ['options'],
+        });
+      }
+    }
+  });
+
+export type McqPayload = z.infer<typeof mcqPayloadBaseSchema>;
+export type TextInputPayload = z.infer<typeof textInputPayloadBaseSchema>;
+export type QuestionPayload = z.infer<typeof questionPayloadSchema>;
+
 /**
  * Question response schema.
  */
@@ -88,32 +154,55 @@ export const listQuestionsQuerySchema = z.object({
 export type ListQuestionsQuery = z.infer<typeof listQuestionsQuerySchema>;
 
 /**
- * Create question request schema.
+ * Base create question schema (before payload type validation)
  */
-export const createQuestionSchema = z.object({
+const createQuestionBaseSchema = z.object({
   category_id: z.string().uuid(),
   type: questionTypeEnum,
   difficulty: difficultyEnum,
   status: statusEnum.optional().default('draft'),
   prompt: i18nFieldSchema,
   explanation: i18nFieldSchema.nullable().optional(),
-  payload: z.unknown().optional(),
+  payload: questionPayloadSchema,
 });
+
+/**
+ * Create question request schema.
+ * - Payload is required
+ * - Payload type must match question type
+ */
+export const createQuestionSchema = createQuestionBaseSchema.refine(
+  (data) => data.payload.type === data.type,
+  { message: 'Payload type must match question type', path: ['payload', 'type'] }
+);
 
 export type CreateQuestionRequest = z.infer<typeof createQuestionSchema>;
 
 /**
  * Update question request schema.
+ * - All fields optional
+ * - If both type and payload provided, they must match
  */
-export const updateQuestionSchema = z.object({
-  category_id: z.string().uuid().optional(),
-  type: questionTypeEnum.optional(),
-  difficulty: difficultyEnum.optional(),
-  status: statusEnum.optional(),
-  prompt: i18nFieldSchema.optional(),
-  explanation: i18nFieldSchema.nullable().optional(),
-  payload: z.unknown().optional(),
-});
+export const updateQuestionSchema = z
+  .object({
+    category_id: z.string().uuid().optional(),
+    type: questionTypeEnum.optional(),
+    difficulty: difficultyEnum.optional(),
+    status: statusEnum.optional(),
+    prompt: i18nFieldSchema.optional(),
+    explanation: i18nFieldSchema.nullable().optional(),
+    payload: questionPayloadSchema.optional(),
+  })
+  .refine(
+    (data) => {
+      // If both type and payload are provided, they must match
+      if (data.type && data.payload) {
+        return data.payload.type === data.type;
+      }
+      return true;
+    },
+    { message: 'Payload type must match question type', path: ['payload', 'type'] }
+  );
 
 export type UpdateQuestionRequest = z.infer<typeof updateQuestionSchema>;
 

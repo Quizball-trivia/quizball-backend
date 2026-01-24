@@ -8,6 +8,12 @@ export interface CreateUserData {
   avatarUrl?: string | null;
 }
 
+export interface CreateIdentityData {
+  provider: string;
+  subject: string;
+  email?: string | null;
+}
+
 export interface UpdateUserData {
   nickname?: string | null;
   country?: string | null;
@@ -18,11 +24,43 @@ export interface UpdateUserData {
 export const usersRepo = {
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (email, nickname, country, avatar_url)
-      VALUES (${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null})
+      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, false)
       RETURNING *
     `;
     return user;
+  },
+
+  /**
+   * Create user with identity in a single transaction.
+   * Prevents orphaned users if identity creation fails.
+   */
+  async createWithIdentity(
+    userData: CreateUserData,
+    identityData: CreateIdentityData
+  ): Promise<User> {
+    return sql.begin(async (tx) => {
+      const result = await tx.unsafe<User[]>(
+        `INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, false)
+         RETURNING *`,
+        [
+          userData.email ?? null,
+          userData.nickname ?? null,
+          userData.country ?? null,
+          userData.avatarUrl ?? null,
+        ]
+      );
+      const user = result[0];
+
+      await tx.unsafe(
+        `INSERT INTO user_identities (id, user_id, provider, subject, email)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+        [user.id, identityData.provider, identityData.subject, identityData.email ?? null]
+      );
+
+      return user;
+    });
   },
 
   async getById(id: string): Promise<User | null> {

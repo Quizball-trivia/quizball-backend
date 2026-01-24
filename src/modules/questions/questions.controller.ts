@@ -10,6 +10,7 @@ import {
   type UuidParam,
 } from './questions.schemas.js';
 import type { Json } from '../../db/types.js';
+import { logger } from '../../core/logger.js';
 
 /**
  * Questions controller.
@@ -54,6 +55,13 @@ export const questionsController = {
     const { id } = req.validated.params as UuidParam;
 
     const question = await questionsService.getById(id);
+    
+    logger.debug({
+      msg: `GET /questions/${id}`,
+      payloadType: typeof question.payload,
+      payloadIsString: typeof question.payload === 'string',
+      payload: question.payload,
+    });
 
     res.json(toQuestionResponse(question));
   },

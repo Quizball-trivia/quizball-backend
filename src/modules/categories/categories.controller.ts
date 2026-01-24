@@ -2,10 +2,12 @@ import type { Request, Response } from 'express';
 import { categoriesService } from './categories.service.js';
 import {
   toCategoryResponse,
+  toDependenciesResponse,
   type CreateCategoryRequest,
   type UpdateCategoryRequest,
   type ListCategoriesQuery,
   type UuidParam,
+  type DeleteCategoryQuery,
 } from './categories.schemas.js';
 
 /**
@@ -16,17 +18,27 @@ import {
 export const categoriesController = {
   /**
    * GET /api/v1/categories
-   * List all categories with optional filters.
+   * List categories with pagination and optional filters.
    */
   async list(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as ListCategoriesQuery;
 
-    const categories = await categoriesService.list({
-      parentId: query.parent_id,
-      isActive: query.is_active,
-    });
+    const result = await categoriesService.list(
+      {
+        parentId: query.parent_id,
+        isActive: query.is_active,
+      },
+      query.page,
+      query.limit
+    );
 
-    res.json(categories.map(toCategoryResponse));
+    res.json({
+      data: result.categories.map(toCategoryResponse),
+      page: query.page,
+      limit: query.limit,
+      total: result.total,
+      total_pages: Math.ceil(result.total / query.limit),
+    });
   },
 
   /**
@@ -83,13 +95,26 @@ export const categoriesController = {
   },
 
   /**
+   * GET /api/v1/categories/:id/dependencies
+   * Get category dependencies (children, questions, featured status).
+   */
+  async getDependencies(req: Request, res: Response): Promise<void> {
+    const { id } = req.validated.params as UuidParam;
+
+    const dependencies = await categoriesService.getDependencies(id);
+
+    res.json(toDependenciesResponse(dependencies));
+  },
+
+  /**
    * DELETE /api/v1/categories/:id
    * Delete a category.
    */
   async delete(req: Request, res: Response): Promise<void> {
     const { id } = req.validated.params as UuidParam;
+    const query = req.validated.query as DeleteCategoryQuery | undefined;
 
-    await categoriesService.delete(id);
+    await categoriesService.delete(id, { cascade: query?.cascade });
 
     res.status(204).send();
   },

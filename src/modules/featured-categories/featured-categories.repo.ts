@@ -115,18 +115,14 @@ export const featuredCategoriesRepo = {
    * Create a new featured category.
    */
   async create(data: CreateFeaturedCategoryData): Promise<FeaturedCategory> {
-    // If sort_order not provided, get max + 1
-    let sortOrder = data.sortOrder;
-    if (sortOrder === undefined) {
-      const [maxResult] = await sql<{ max_order: number | null }[]>`
-        SELECT MAX(sort_order) as max_order FROM featured_categories
-      `;
-      sortOrder = (maxResult?.max_order ?? -1) + 1;
-    }
+    const sortOrderExpr =
+      data.sortOrder === undefined
+        ? sql`(SELECT COALESCE(MAX(sort_order), -1) + 1 FROM featured_categories)`
+        : sql`${data.sortOrder}`;
 
     const [featured] = await sql<FeaturedCategory[]>`
       INSERT INTO featured_categories (category_id, sort_order)
-      VALUES (${data.categoryId}, ${sortOrder})
+      VALUES (${data.categoryId}, ${sortOrderExpr})
       RETURNING *
     `;
     return featured;
@@ -166,26 +162,40 @@ export const featuredCategoriesRepo = {
   },
 
   /**
-   * Bulk update sort_order for multiple featured categories.
+   * Find which IDs from the provided list do not exist in the database.
+   * Returns array of missing IDs (empty if all exist).
    */
-  async reorder(items: ReorderItem[]): Promise<void> {
-    // Update each item individually
-    for (const item of items) {
-      await sql`
-        UPDATE featured_categories
-        SET sort_order = ${item.sortOrder}
-        WHERE id = ${item.id}
-      `;
+  async findMissingIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) {
+      return [];
     }
+
+    const results = await sql<{ id: string }[]>`
+      SELECT id FROM featured_categories WHERE id = ANY(${ids})
+    `;
+
+    const foundIds = new Set(results.map((row) => row.id));
+    return ids.filter((id) => !foundIds.has(id));
   },
 
   /**
-   * Get the count of featured categories.
+   * Bulk update sort_order for multiple featured categories.
+   * Uses single UPDATE with unnest for efficiency.
    */
-  async count(): Promise<number> {
-    const [result] = await sql<{ count: string }[]>`
-      SELECT COUNT(*) as count FROM featured_categories
+  async reorder(items: ReorderItem[]): Promise<void> {
+    if (items.length === 0) return;
+
+    const ids = items.map((i) => i.id);
+    const sortOrders = items.map((i) => i.sortOrder);
+
+    await sql`
+      UPDATE featured_categories fc
+      SET sort_order = v.sort_order, updated_at = NOW()
+      FROM (
+        SELECT unnest(${ids}::uuid[]) as id,
+               unnest(${sortOrders}::int[]) as sort_order
+      ) as v
+      WHERE fc.id = v.id
     `;
-    return parseInt(result?.count ?? '0', 10);
   },
 };

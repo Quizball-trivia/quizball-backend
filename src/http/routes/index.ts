@@ -6,14 +6,17 @@ import { categoriesRoutes } from './categories.routes.js';
 import { questionsRoutes } from './questions.routes.js';
 import { featuredCategoriesRoutes } from './featured-categories.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
+import { config } from '../../core/config.js';
 
 const router = Router();
 
 // Health check (not versioned)
 router.use(healthRoutes);
 
-// API documentation
-router.use(swaggerRoutes);
+// API documentation (disabled in production)
+if (config.NODE_ENV !== 'prod') {
+  router.use(swaggerRoutes);
+}
 
 // API v1 routes
 router.use('/api/v1/auth', authRoutes);

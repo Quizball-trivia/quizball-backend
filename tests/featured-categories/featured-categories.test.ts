@@ -19,6 +19,7 @@ vi.mock('../../src/modules/featured-categories/featured-categories.repo.js', () 
     update: vi.fn(),
     delete: vi.fn(),
     exists: vi.fn(),
+    findMissingIds: vi.fn(),
     reorder: vi.fn(),
     count: vi.fn(),
   },
@@ -34,8 +35,16 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 // Mock the auth middleware to allow testing protected routes
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
-    req.user = { id: 'test-user-id' };
+    req.user = { id: 'test-user-id', role: 'admin' };
     req.identity = { provider: 'test', subject: 'test-sub' };
+    next();
+  }),
+}));
+
+// Mock the requireRole middleware (passes through since we set admin role above)
+vi.mock('../../src/http/middleware/require-role.js', () => ({
+  requireRole: vi.fn(() => (req: any, _res: any, next: any) => {
+    // In tests, we assume the user has admin role
     next();
   }),
 }));
@@ -47,7 +56,7 @@ const mockCategory = {
   id: '123e4567-e89b-12d3-a456-426614174001',
   slug: 'test-category',
   parent_id: null,
-  name: { en: 'Test Category', ka: 'ტესტ კατეგორია' },
+  name: { en: 'Test Category', ka: 'ტესტ კატეგორია' },
   description: { en: 'Test description' },
   icon: 'test-icon',
   image_url: 'https://example.com/image.png',
@@ -317,7 +326,7 @@ describe('Featured Categories API', () => {
         { id: '123e4567-e89b-12d3-a456-426614174002', sort_order: 0 },
       ];
 
-      (featuredCategoriesRepo.exists as Mock).mockResolvedValue(true);
+      (featuredCategoriesRepo.findMissingIds as Mock).mockResolvedValue([]);
       (featuredCategoriesRepo.reorder as Mock).mockResolvedValue(undefined);
       (featuredCategoriesRepo.list as Mock).mockResolvedValue([
         mockFeaturedWithCategory,
@@ -342,9 +351,8 @@ describe('Featured Categories API', () => {
     });
 
     it('should return 404 if any item id does not exist', async () => {
-      (featuredCategoriesRepo.exists as Mock)
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false);
+      const missingId = '123e4567-e89b-12d3-a456-426614174999';
+      (featuredCategoriesRepo.findMissingIds as Mock).mockResolvedValue([missingId]);
 
       const response = await request(app)
         .put('/api/v1/featured-categories/reorder')

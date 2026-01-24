@@ -116,12 +116,16 @@ export const featuredCategoriesService = {
       throw new BadRequestError('Items array cannot be empty');
     }
 
-    // Validate all featured category IDs exist
-    for (const item of items) {
-      const exists = await featuredCategoriesRepo.exists(item.id);
-      if (!exists) {
-        throw new NotFoundError(`Featured category not found: ${item.id}`);
-      }
+    if (items.length > 100) {
+      throw new BadRequestError('Cannot reorder more than 100 items at once');
+    }
+
+    // Validate all featured category IDs exist (single batched query)
+    const ids = items.map((item) => item.id);
+    const missingIds = await featuredCategoriesRepo.findMissingIds(ids);
+
+    if (missingIds.length > 0) {
+      throw new NotFoundError(`Featured categories not found: ${missingIds.join(', ')}`);
     }
 
     await featuredCategoriesRepo.reorder(items);

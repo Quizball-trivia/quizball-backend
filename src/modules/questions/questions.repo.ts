@@ -51,22 +51,9 @@ export const questionsRepo = {
       ? sql`AND (q.prompt->>'en' ILIKE ${'%' + filter.search + '%'} OR q.prompt->>'ka' ILIKE ${'%' + filter.search + '%'})`
       : sql``;
 
-    // Get total count
-    const countResult = await sql<{ count: string }[]>`
-      SELECT COUNT(*) as count
-      FROM questions q
-      WHERE 1=1
-      ${categoryFilter}
-      ${statusFilter}
-      ${difficultyFilter}
-      ${typeFilter}
-      ${searchFilter}
-    `;
-    const total = parseInt(countResult[0]?.count ?? '0', 10);
-
-    // Get paginated results with payload
-    const questions = await sql<QuestionWithPayload[]>`
-      SELECT q.*, qp.payload
+    // Get paginated results with payload and total count in single query
+    const results = await sql<(QuestionWithPayload & { total_count: string })[]>`
+      SELECT q.*, qp.payload, COUNT(*) OVER() as total_count
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
       WHERE 1=1
@@ -78,6 +65,9 @@ export const questionsRepo = {
       ORDER BY q.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
+
+    const total = results.length > 0 ? parseInt(results[0].total_count, 10) : 0;
+    const questions = results.map(({ total_count: _, ...q }) => q);
 
     return { questions, total };
   },
@@ -106,6 +96,45 @@ export const questionsRepo = {
       RETURNING *
     `;
     return question;
+  },
+
+  /**
+   * Create question with payload in a single transaction.
+   * Prevents orphaned questions if payload creation fails.
+   */
+  async createWithPayload(
+    data: CreateQuestionData,
+    payload?: Json
+  ): Promise<QuestionWithPayload> {
+    return sql.begin(async (tx) => {
+      const questionResult = await tx.unsafe<Question[]>(
+        `INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+         RETURNING *`,
+        [
+          data.categoryId,
+          data.type,
+          data.difficulty,
+          data.status ?? 'draft',
+          JSON.stringify(data.prompt),
+          data.explanation ? JSON.stringify(data.explanation) : null,
+        ]
+      );
+      const question = questionResult[0];
+
+      let questionPayload: Json | null = null;
+      if (payload) {
+        const payloadResult = await tx.unsafe<{ payload: Json }[]>(
+          `INSERT INTO question_payloads (question_id, payload)
+           VALUES ($1, $2::jsonb)
+           RETURNING payload`,
+          [question.id, JSON.stringify(payload)]
+        );
+        questionPayload = payloadResult[0].payload;
+      }
+
+      return { ...question, payload: questionPayload };
+    });
   },
 
   async createPayload(questionId: string, payload: Json): Promise<void> {
@@ -165,5 +194,19 @@ export const questionsRepo = {
       SELECT EXISTS(SELECT 1 FROM questions WHERE id = ${id}) as exists
     `;
     return result?.exists ?? false;
+  },
+
+  async getByCategoryId(categoryId: string): Promise<Pick<Question, 'id' | 'prompt' | 'type' | 'difficulty'>[]> {
+    return sql<Pick<Question, 'id' | 'prompt' | 'type' | 'difficulty'>[]>`
+      SELECT id, prompt, type, difficulty FROM questions WHERE category_id = ${categoryId}
+      ORDER BY created_at DESC
+    `;
+  },
+
+  async deleteByCategoryId(categoryId: string): Promise<number> {
+    const result = await sql`
+      DELETE FROM questions WHERE category_id = ${categoryId}
+    `;
+    return result.count;
   },
 };

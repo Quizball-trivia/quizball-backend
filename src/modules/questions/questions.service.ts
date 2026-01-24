@@ -43,6 +43,7 @@ export const questionsService = {
 
   /**
    * Create a new question with optional payload.
+   * Uses transaction to ensure atomicity.
    * Validates category existence.
    */
   async create(data: CreateQuestionData & { payload?: Json }): Promise<QuestionWithPayload> {
@@ -52,21 +53,15 @@ export const questionsService = {
       throw new BadRequestError('Category not found');
     }
 
-    // Create question
-    const question = await questionsRepo.create(data);
-
-    // Create payload if provided
-    if (data.payload) {
-      await questionsRepo.createPayload(question.id, data.payload);
-    }
+    // Create question with payload atomically
+    const question = await questionsRepo.createWithPayload(data, data.payload);
 
     logger.info(
       { questionId: question.id, categoryId: data.categoryId, type: data.type },
       'Created new question'
     );
 
-    // Return with payload
-    return questionsRepo.getById(question.id) as Promise<QuestionWithPayload>;
+    return question;
   },
 
   /**

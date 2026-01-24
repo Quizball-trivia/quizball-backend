@@ -24,10 +24,18 @@ export function createApp(): Express {
   // Security headers
   app.use(helmet());
 
-  // CORS
+  // CORS with multi-origin support
+  const allowedOrigins = config.CORS_ORIGINS.split(',').map((o) => o.trim());
   app.use(
     cors({
-      origin: config.CORS_ORIGIN,
+      origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
       credentials: true,
     })
   );
@@ -41,10 +49,40 @@ export function createApp(): Express {
     autoLogging: {
       ignore: (req: IncomingMessage) => req.url === '/health',
     },
+    // Cleaner log messages: "POST /api/v1/auth/login 200 (123ms)"
+    customSuccessMessage: (req, res, responseTime) => {
+      return `${req.method} ${req.url} ${res.statusCode} (${Math.round(responseTime as number)}ms)`;
+    },
+    customErrorMessage: (req, res, err) => {
+      return `${req.method} ${req.url} ${res.statusCode} - ${err.message}`;
+    },
+    // Don't include req/res/responseTime objects in logs - already in message
+    serializers: {
+      req: () => undefined,
+      res: () => undefined,
+    },
+    customAttributeKeys: {
+      responseTime: undefined as unknown as string,
+    },
   };
   app.use(pinoHttp(httpLoggerOptions));
 
-  // Rate Limiting (only for /api/v1/auth/*)
+  // General API Rate Limiting
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 300, // 300 requests per window per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many requests, please try again later',
+      details: null,
+      request_id: null,
+    },
+  });
+  app.use('/api/v1', apiLimiter);
+
+  // Stricter Rate Limiting for auth routes
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // 100 requests per window per IP
@@ -52,12 +90,15 @@ export function createApp(): Express {
     legacyHeaders: false,
     message: {
       code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many requests, please try again later',
+      message: 'Too many auth requests, please try again later',
       details: null,
-      request_id: null, // Will be set by error handler
+      request_id: null,
     },
   });
   app.use('/api/v1/auth', authLimiter);
+
+  // Disable ETag caching for development (forces fresh responses)
+  app.set('etag', false);
 
   // Body Parsing
   app.use(express.json());

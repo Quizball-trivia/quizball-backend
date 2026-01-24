@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import type { QuestionWithPayload, I18nField } from '../../db/types.js';
+import {
+  paginatedResponseSchema,
+  type PaginatedResponse,
+} from '../../http/schemas/shared.js';
 
 /**
  * i18n field schema - object with language codes as keys
@@ -108,25 +112,8 @@ export const questionResponseSchema = z.object({
 
 export type QuestionResponse = z.infer<typeof questionResponseSchema>;
 
-/**
- * Paginated response schema.
- */
-export const paginatedResponseSchema = <T extends z.ZodTypeAny>(itemSchema: T) =>
-  z.object({
-    data: z.array(itemSchema),
-    page: z.number().int().positive(),
-    limit: z.number().int().positive(),
-    total: z.number().int().nonnegative(),
-    total_pages: z.number().int().nonnegative(),
-  });
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  page: number;
-  limit: number;
-  total: number;
-  total_pages: number;
-}
+// Re-export shared pagination types for module consumers
+export { paginatedResponseSchema, type PaginatedResponse };
 
 /**
  * List questions query params schema.

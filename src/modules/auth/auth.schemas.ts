@@ -56,6 +56,11 @@ export const resetPasswordSchema = z.object({
 });
 export type ResetPasswordRequest = z.infer<typeof resetPasswordSchema>;
 
+export const resetPasswordHeadersSchema = z.object({
+  authorization: z.string().regex(/^Bearer\s+\S+/i, 'Authorization header must be Bearer token'),
+});
+export type ResetPasswordHeaders = z.infer<typeof resetPasswordHeadersSchema>;
+
 export const socialLoginSchema = z.object({
   provider: z.enum(['google', 'apple', 'facebook', 'github']),
   redirect_to: redirectUrlSchema,

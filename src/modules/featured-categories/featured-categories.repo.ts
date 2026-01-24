@@ -190,7 +190,7 @@ export const featuredCategoriesRepo = {
 
     await sql`
       UPDATE featured_categories fc
-      SET sort_order = v.sort_order, updated_at = NOW()
+      SET sort_order = v.sort_order
       FROM (
         SELECT unnest(${ids}::uuid[]) as id,
                unnest(${sortOrders}::int[]) as sort_order

@@ -3,6 +3,7 @@ import {
   socialLoginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resetPasswordHeadersSchema,
   registerSchema,
   loginSchema,
 } from '../../src/modules/auth/auth.schemas.js';
@@ -211,6 +212,70 @@ describe('Auth Schemas', () => {
       if (result.success) {
         expect(result.data).not.toHaveProperty('access_token');
       }
+    });
+  });
+
+  describe('resetPasswordHeadersSchema', () => {
+    it('should accept valid Bearer token', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept Bearer token case-insensitively', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'bearer some-token-value',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept BEARER token (uppercase)', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'BEARER some-token-value',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject missing authorization header', () => {
+      const result = resetPasswordHeadersSchema.safeParse({});
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject empty authorization header', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: '',
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject authorization without Bearer prefix', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'Basic dXNlcjpwYXNz',
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject Bearer without token', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'Bearer ',
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject Bearer with only whitespace', () => {
+      const result = resetPasswordHeadersSchema.safeParse({
+        authorization: 'Bearer    ',
+      });
+
+      expect(result.success).toBe(false);
     });
   });
 

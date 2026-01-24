@@ -4,6 +4,9 @@
   "description": "QuizBall Backend - Express + TypeScript",
   "main": "dist/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc",

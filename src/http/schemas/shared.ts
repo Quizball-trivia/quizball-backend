@@ -17,10 +17,10 @@ export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export const paginatedResponseSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
   z.object({
     data: z.array(dataSchema),
-    page: z.number(),
-    limit: z.number(),
-    total: z.number(),
-    total_pages: z.number(),
+    page: z.number().int().positive(),
+    limit: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+    total_pages: z.number().int().nonnegative(),
   });
 
 /**

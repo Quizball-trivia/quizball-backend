@@ -4,7 +4,7 @@ import { identitiesRepo } from './identities.repo.js';
 import { NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
-import { getCachedUser, setCachedUser } from './user-cache.js';
+import { getCachedUser, setCachedUser, updateCachedUser } from './user-cache.js';
 
 /**
  * Users service.
@@ -100,6 +100,9 @@ export const usersService = {
       throw new NotFoundError('User not found');
     }
 
+    // Update cache with new user data
+    updateCachedUser(id, user);
+
     logger.debug({ userId: id }, 'Updated user profile');
     return user;
   },
@@ -113,6 +116,9 @@ export const usersService = {
     if (!user) {
       throw new NotFoundError('User not found');
     }
+
+    // Update cache with new user data
+    updateCachedUser(id, user);
 
     logger.info({ userId: id }, 'User completed onboarding');
     return user;

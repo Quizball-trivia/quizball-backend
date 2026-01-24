@@ -190,6 +190,91 @@ describe('Shared Schemas', () => {
 
       expect(result.data[0].role).toBe('admin');
     });
+
+    it('should reject float values for page', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: 1.5,
+        limit: 20,
+        total: 0,
+        total_pages: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject float values for limit', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: 1,
+        limit: 20.5,
+        total: 0,
+        total_pages: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject float values for total', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: 1,
+        limit: 20,
+        total: 5.5,
+        total_pages: 1,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject negative page', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: -1,
+        limit: 20,
+        total: 0,
+        total_pages: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject zero page (must be positive)', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: 0,
+        limit: 20,
+        total: 0,
+        total_pages: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject negative total', () => {
+      const result = responseSchema.safeParse({
+        data: [],
+        page: 1,
+        limit: 20,
+        total: -1,
+        total_pages: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should allow zero for total and total_pages (nonnegative)', () => {
+      const result = responseSchema.parse({
+        data: [],
+        page: 1,
+        limit: 20,
+        total: 0,
+        total_pages: 0,
+      });
+
+      expect(result.total).toBe(0);
+      expect(result.total_pages).toBe(0);
+    });
   });
 
   describe('Schema integration with query strings', () => {

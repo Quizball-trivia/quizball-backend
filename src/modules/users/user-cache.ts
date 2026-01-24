@@ -36,6 +36,31 @@ export function invalidateUser(provider: string, subject: string): void {
   cache.delete(getCacheKey(provider, subject));
 }
 
+/**
+ * Invalidate all cache entries for a given user ID.
+ * Used when user data is mutated (profile update, onboarding completion).
+ * Iterates through cache entries - acceptable since cache is bounded and mutations are infrequent.
+ */
+export function invalidateByUserId(userId: string): void {
+  for (const [key, user] of cache.entries()) {
+    if (user.id === userId) {
+      cache.delete(key);
+    }
+  }
+}
+
+/**
+ * Update cache entry for a user if it exists.
+ * Used to refresh cached data after mutations.
+ */
+export function updateCachedUser(userId: string, updatedUser: User): void {
+  for (const [key, user] of cache.entries()) {
+    if (user.id === userId) {
+      cache.set(key, updatedUser);
+    }
+  }
+}
+
 export function clearCache(): void {
   cache.clear();
 }

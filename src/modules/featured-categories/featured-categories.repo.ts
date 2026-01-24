@@ -115,14 +115,18 @@ export const featuredCategoriesRepo = {
    * Create a new featured category.
    */
   async create(data: CreateFeaturedCategoryData): Promise<FeaturedCategory> {
-    const sortOrderExpr =
-      data.sortOrder === undefined
-        ? sql`(SELECT COALESCE(MAX(sort_order), -1) + 1 FROM featured_categories)`
-        : sql`${data.sortOrder}`;
+    if (data.sortOrder === undefined) {
+      const [featured] = await sql<FeaturedCategory[]>`
+        INSERT INTO featured_categories (category_id)
+        VALUES (${data.categoryId})
+        RETURNING *
+      `;
+      return featured;
+    }
 
     const [featured] = await sql<FeaturedCategory[]>`
       INSERT INTO featured_categories (category_id, sort_order)
-      VALUES (${data.categoryId}, ${sortOrderExpr})
+      VALUES (${data.categoryId}, ${data.sortOrder})
       RETURNING *
     `;
     return featured;

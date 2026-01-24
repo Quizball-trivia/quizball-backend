@@ -86,6 +86,14 @@ export const questionsService = {
       }
     }
 
+    if (data.payload !== undefined) {
+      const payloadType = (data.payload as { type?: string } | null)?.type;
+      const expectedType = data.type ?? existing.type;
+      if (payloadType && payloadType !== expectedType) {
+        throw new BadRequestError('Payload type must match question type');
+      }
+    }
+
     let updatedQuestion: QuestionWithPayload | null;
 
     // Use atomic update when payload is provided

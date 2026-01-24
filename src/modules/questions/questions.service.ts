@@ -86,22 +86,28 @@ export const questionsService = {
       }
     }
 
-    // Update question
-    const question = await questionsRepo.update(id, data);
+    let updatedQuestion: QuestionWithPayload | null;
 
-    if (!question) {
-      throw new NotFoundError('Question not found');
+    // Use atomic update when payload is provided
+    if (data.payload !== undefined) {
+      updatedQuestion = await questionsRepo.updateWithPayload(id, data, data.payload);
+    } else {
+      // No payload update - just update question fields
+      const question = await questionsRepo.update(id, data);
+      if (!question) {
+        throw new NotFoundError('Question not found');
+      }
+      // Fetch with payload for consistent return type
+      updatedQuestion = await questionsRepo.getById(id);
     }
 
-    // Update payload if provided
-    if (data.payload !== undefined) {
-      await questionsRepo.updatePayload(id, data.payload);
+    if (!updatedQuestion) {
+      throw new NotFoundError('Question not found');
     }
 
     logger.debug({ questionId: id }, 'Updated question');
 
-    // Return with payload
-    return questionsRepo.getById(id) as Promise<QuestionWithPayload>;
+    return updatedQuestion;
   },
 
   /**

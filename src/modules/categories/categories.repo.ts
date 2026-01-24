@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { config } from '../../core/config.js';
 import type { Category, I18nField, Json } from '../../db/types.js';
 
 export interface CreateCategoryData {
@@ -35,9 +36,11 @@ export const categoriesRepo = {
   async list(
     filter?: ListCategoriesFilter,
     page = 1,
-    limit = 50
+    limit = 50,
+    locale = config.DEFAULT_LOCALE
   ): Promise<ListCategoriesResult> {
     const offset = (page - 1) * limit;
+    const normalizedLocale = locale.trim() || config.DEFAULT_LOCALE;
 
     // Build conditional filters
     const parentIdFilter =
@@ -54,7 +57,7 @@ export const categoriesRepo = {
       SELECT *, COUNT(*) OVER() as total_count
       FROM categories
       WHERE 1=1 ${parentIdFilter} ${isActiveFilter}
-      ORDER BY name->>'en' ASC
+      ORDER BY COALESCE(name->>${normalizedLocale}, name->>${config.DEFAULT_LOCALE}) ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
 

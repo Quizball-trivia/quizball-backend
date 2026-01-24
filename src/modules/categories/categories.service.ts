@@ -29,9 +29,10 @@ export const categoriesService = {
   async list(
     filter?: ListCategoriesFilter,
     page = 1,
-    limit = 50
+    limit = 50,
+    locale?: string
   ): Promise<ListCategoriesResult> {
-    return categoriesRepo.list(filter, page, limit);
+    return categoriesRepo.list(filter, page, limit, locale);
   },
 
   /**
@@ -94,7 +95,7 @@ export const categoriesService = {
     }
 
     // Debug: log what we received
-    logger.info({ categoryId: id, updateData: data }, 'Updating category');
+    logger.debug({ categoryId: id, updateData: data }, 'Updating category');
 
     // Prevent self-referencing parent
     if (data.parentId === id) {

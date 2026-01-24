@@ -25,7 +25,10 @@ export function createApp(): Express {
   app.use(helmet());
 
   // CORS with multi-origin support
-  const allowedOrigins = config.CORS_ORIGINS.split(',').map((o) => o.trim());
+  const allowedOrigins = (config.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -61,8 +64,9 @@ export function createApp(): Express {
       req: () => undefined,
       res: () => undefined,
     },
+    // Suppress responseTime attribute - we include it in the log message instead
     customAttributeKeys: {
-      responseTime: undefined as unknown as string,
+      responseTime: undefined,
     },
   };
   app.use(pinoHttp(httpLoggerOptions));
@@ -97,8 +101,10 @@ export function createApp(): Express {
   });
   app.use('/api/v1/auth', authLimiter);
 
-  // Disable ETag caching for development (forces fresh responses)
-  app.set('etag', false);
+  // Disable ETag caching in development (forces fresh responses)
+  if (process.env.NODE_ENV === 'development') {
+    app.set('etag', false);
+  }
 
   // Body Parsing
   app.use(express.json());

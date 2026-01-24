@@ -630,18 +630,7 @@ const featuredCategoryResponseSchema = z
     category_id: z.string().uuid(),
     sort_order: z.number().int(),
     created_at: z.string().datetime(),
-    category: z.object({
-      id: z.string().uuid(),
-      slug: z.string(),
-      parent_id: z.string().uuid().nullable(),
-      name: i18nFieldSchema,
-      description: i18nFieldSchema.nullable(),
-      icon: z.string().nullable(),
-      image_url: z.string().url().nullable(),
-      is_active: z.boolean(),
-      created_at: z.string().datetime(),
-      updated_at: z.string().datetime(),
-    }),
+    category: categoryResponseSchema,
   })
   .openapi('FeaturedCategoryResponse');
 

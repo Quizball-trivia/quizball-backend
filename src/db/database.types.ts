@@ -6,6 +6,8 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+type Role = "admin" | "user"
+
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
@@ -210,7 +212,7 @@ export type Database = {
           id: string
           nickname: string | null
           onboarding_complete: boolean
-          role: string
+          role: Role
           updated_at: string
         }
         Insert: {
@@ -221,7 +223,7 @@ export type Database = {
           id: string
           nickname?: string | null
           onboarding_complete: boolean
-          role?: string
+          role?: Role
           updated_at?: string
         }
         Update: {
@@ -232,7 +234,7 @@ export type Database = {
           id?: string
           nickname?: string | null
           onboarding_complete?: boolean
-          role?: string
+          role?: Role
           updated_at?: string
         }
         Relationships: []

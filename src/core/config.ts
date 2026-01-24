@@ -8,7 +8,12 @@ const configSchema = z.object({
   NODE_ENV: z.enum(['local', 'staging', 'prod']).default('local'),
   PORT: z.coerce.number().default(8000),
   LOG_LEVEL: z.string().default('info'),
+  LOG_PRETTY: z
+    .enum(['true', 'false', '1', '0', ''])
+    .default('')
+    .transform((val) => val === 'true' || val === '1'),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
+  DEFAULT_LOCALE: z.string().default('en'),
 
   // Database
   DATABASE_URL: z.string().optional(),

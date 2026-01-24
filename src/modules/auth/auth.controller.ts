@@ -82,6 +82,9 @@ export const authController = {
     }
 
     const accessToken = authHeader.substring(7);
+    if (!accessToken.trim()) {
+      throw new AuthenticationError('Missing Bearer token');
+    }
     const { new_password } = req.validated.body as ResetPasswordRequest;
     const authClient = getAuthClient();
 

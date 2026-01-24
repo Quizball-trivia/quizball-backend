@@ -55,12 +55,19 @@ export const questionsController = {
     const { id } = req.validated.params as UuidParam;
 
     const question = await questionsService.getById(id);
-    
+
+    const payloadSummary =
+      typeof question.payload === 'string'
+        ? `string:${question.payload.length}`
+        : question.payload === null || question.payload === undefined
+          ? 'null'
+          : `json:${JSON.stringify(question.payload).length}`;
+
     logger.debug({
       msg: `GET /questions/${id}`,
       payloadType: typeof question.payload,
       payloadIsString: typeof question.payload === 'string',
-      payload: question.payload,
+      payloadSummary,
     });
 
     res.json(toQuestionResponse(question));

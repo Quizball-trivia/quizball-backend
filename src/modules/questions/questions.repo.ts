@@ -171,6 +171,67 @@ export const questionsRepo = {
     `;
   },
 
+  /**
+   * Update question with payload in a single transaction.
+   * Ensures atomicity - both succeed or both fail.
+   * Returns null if question not found.
+   */
+  async updateWithPayload(
+    id: string,
+    data: UpdateQuestionData,
+    payload: Json
+  ): Promise<QuestionWithPayload | null> {
+    return sql.begin(async (tx) => {
+      // Update question
+      const questionResult = await tx.unsafe<Question[]>(
+        `UPDATE questions
+         SET
+           category_id = CASE WHEN $2 THEN $3 ELSE category_id END,
+           type = CASE WHEN $4 THEN $5 ELSE type END,
+           difficulty = CASE WHEN $6 THEN $7 ELSE difficulty END,
+           status = CASE WHEN $8 THEN $9 ELSE status END,
+           prompt = CASE WHEN $10 THEN $11::jsonb ELSE prompt END,
+           explanation = CASE WHEN $12 THEN $13::jsonb ELSE explanation END,
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          id,
+          data.categoryId !== undefined,
+          data.categoryId ?? '',
+          data.type !== undefined,
+          data.type ?? '',
+          data.difficulty !== undefined,
+          data.difficulty ?? '',
+          data.status !== undefined,
+          data.status ?? '',
+          data.prompt !== undefined,
+          data.prompt ? JSON.stringify(data.prompt) : null,
+          data.explanation !== undefined,
+          data.explanation ? JSON.stringify(data.explanation) : null,
+        ]
+      );
+
+      if (questionResult.length === 0) {
+        return null;
+      }
+
+      const question = questionResult[0];
+
+      // Upsert payload
+      const payloadResult = await tx.unsafe<{ payload: Json }[]>(
+        `INSERT INTO question_payloads (question_id, payload)
+         VALUES ($1, $2::jsonb)
+         ON CONFLICT (question_id)
+         DO UPDATE SET payload = $2::jsonb, updated_at = NOW()
+         RETURNING payload`,
+        [id, JSON.stringify(payload)]
+      );
+
+      return { ...question, payload: payloadResult[0].payload };
+    });
+  },
+
   async updateStatus(id: string, status: string): Promise<Question | null> {
     const [question] = await sql<Question[]>`
       UPDATE questions

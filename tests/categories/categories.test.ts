@@ -129,7 +129,8 @@ describe('Categories API', () => {
           isActive: undefined,
         },
         1,
-        50
+        50,
+        undefined
       );
     });
 
@@ -147,7 +148,8 @@ describe('Categories API', () => {
           isActive: true,
         },
         1,
-        50
+        50,
+        undefined
       );
     });
 
@@ -165,7 +167,8 @@ describe('Categories API', () => {
           isActive: undefined,
         },
         2,
-        10
+        10,
+        undefined
       );
       expect(response.body.page).toBe(2);
       expect(response.body.limit).toBe(10);

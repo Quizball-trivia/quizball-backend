@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import { requireRole } from '../../src/http/middleware/require-role.js';
+import { AuthorizationError } from '../../src/core/errors.js';
 import '../setup.js';
 
 describe('requireRole Middleware', () => {
@@ -30,9 +31,15 @@ describe('requireRole Middleware', () => {
 
     const middleware = requireRole('admin');
 
-    expect(() => {
+    let caught: unknown;
+    try {
       middleware(mockRequest, mockResponse, mockNext);
-    }).toThrow('Insufficient permissions');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AuthorizationError);
+    expect((caught as AuthorizationError).message).toBe('Insufficient permissions');
 
     expect(mockNext).not.toHaveBeenCalled();
   });
@@ -44,9 +51,15 @@ describe('requireRole Middleware', () => {
 
     const middleware = requireRole('admin');
 
-    expect(() => {
+    let caught: unknown;
+    try {
       middleware(mockRequest, mockResponse, mockNext);
-    }).toThrow('Insufficient permissions');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AuthorizationError);
+    expect((caught as AuthorizationError).message).toBe('Insufficient permissions');
 
     expect(mockNext).not.toHaveBeenCalled();
   });
@@ -56,9 +69,15 @@ describe('requireRole Middleware', () => {
 
     const middleware = requireRole('admin');
 
-    expect(() => {
+    let caught: unknown;
+    try {
       middleware(mockRequest, mockResponse, mockNext);
-    }).toThrow('Insufficient permissions');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AuthorizationError);
+    expect((caught as AuthorizationError).message).toBe('Insufficient permissions');
 
     expect(mockNext).not.toHaveBeenCalled();
   });
@@ -82,10 +101,35 @@ describe('requireRole Middleware', () => {
 
     const middleware = requireRole('admin', 'editor');
 
-    expect(() => {
+    let caught: unknown;
+    try {
       middleware(mockRequest, mockResponse, mockNext);
-    }).toThrow('Insufficient permissions');
+    } catch (error) {
+      caught = error;
+    }
 
+    expect(caught).toBeInstanceOf(AuthorizationError);
+    expect((caught as AuthorizationError).message).toBe('Insufficient permissions');
+
+    expect(mockNext).not.toHaveBeenCalled();
+  });
+
+  it('should deny access when no roles are configured', () => {
+    const mockRequest = {
+      user: { id: 'test-id', role: 'admin' },
+    } as unknown as Request;
+
+    const middleware = requireRole();
+
+    let caught: unknown;
+    try {
+      middleware(mockRequest, mockResponse, mockNext);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AuthorizationError);
+    expect((caught as AuthorizationError).message).toBe('Insufficient permissions');
     expect(mockNext).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import type { IncomingMessage } from 'node:http';
 
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
+import { AuthorizationError } from './core/errors.js';
 import {
   requestIdMiddleware,
   errorHandler,
@@ -36,7 +37,7 @@ export function createApp(): Express {
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
-          callback(new Error('Not allowed by CORS'));
+          callback(new AuthorizationError('CORS origin not allowed'));
         }
       },
       credentials: true,

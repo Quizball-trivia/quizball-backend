@@ -22,6 +22,10 @@ import { routes } from './http/routes/index.js';
 export function createApp(): Express {
   const app = express();
 
+  // Trust proxy - required for Railway/Railway behind reverse proxy
+  // Allows rate limiting to work correctly with X-Forwarded-For headers
+  app.set('trust proxy', true);
+
   // Security headers
   app.use(helmet());
 

@@ -82,6 +82,8 @@ export function createApp(): Express {
     max: 300, // 300 requests per window per IP
     standardHeaders: true,
     legacyHeaders: false,
+    // Skip validation - we intentionally trust Railway's proxy
+    validate: false,
     message: {
       code: 'RATE_LIMIT_EXCEEDED',
       message: 'Too many requests, please try again later',
@@ -97,6 +99,8 @@ export function createApp(): Express {
     max: 100, // 100 requests per window per IP
     standardHeaders: true,
     legacyHeaders: false,
+    // Skip validation - we intentionally trust Railway's proxy
+    validate: false,
     message: {
       code: 'RATE_LIMIT_EXCEEDED',
       message: 'Too many auth requests, please try again later',

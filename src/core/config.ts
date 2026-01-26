@@ -31,9 +31,21 @@ const configSchema = z.object({
     .string()
     .min(32, 'JWT secret must be at least 32 characters')
     .optional(),
+
+  // API Docs (Swagger) - Basic Auth protection
+  DOCS_ENABLED: z.enum(['true', 'false', '1', '0', '']).optional(),
+  DOCS_USERNAME: z.string().optional(),
+  DOCS_PASSWORD: z.string().optional(),
+
+  // API Server URL (for OpenAPI documentation)
+  API_BASE_URL: z.string().url().optional(),
 });
 
-export type Config = z.infer<typeof configSchema>;
+type ConfigSchema = z.infer<typeof configSchema>;
+
+export interface Config extends Omit<ConfigSchema, 'DOCS_ENABLED'> {
+  DOCS_ENABLED: boolean;
+}
 
 function loadConfig(): Config {
   const result = configSchema.safeParse(process.env);
@@ -43,7 +55,27 @@ function loadConfig(): Config {
     process.exit(1);
   }
 
-  return result.data;
+  // Auto-disable docs in production unless explicitly enabled
+  // Parse DOCS_ENABLED: true/1 = enabled, false/0 = disabled, undefined = auto (enabled except prod)
+  const docsEnabled = result.data.DOCS_ENABLED === undefined
+    ? result.data.NODE_ENV !== 'prod'
+    : result.data.DOCS_ENABLED === 'true' || result.data.DOCS_ENABLED === '1';
+
+  if (docsEnabled && result.data.NODE_ENV !== 'local') {
+    const hasDocsUsername = !!result.data.DOCS_USERNAME?.trim();
+    const hasDocsPassword = !!result.data.DOCS_PASSWORD?.trim();
+    if (!hasDocsUsername || !hasDocsPassword) {
+      console.error(
+        'Invalid configuration: DOCS_USERNAME and DOCS_PASSWORD are required when DOCS_ENABLED is true outside local environment.'
+      );
+      process.exit(1);
+    }
+  }
+
+  return {
+    ...result.data,
+    DOCS_ENABLED: docsEnabled,
+  };
 }
 
 export const config = loadConfig();

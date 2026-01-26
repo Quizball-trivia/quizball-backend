@@ -1,14 +1,13 @@
 import { z } from 'zod';
-import type { QuestionWithPayload, I18nField } from '../../db/types.js';
+import type { QuestionWithPayload } from '../../db/types.js';
 import {
+  i18nFieldSchema,
   paginatedResponseSchema,
   type PaginatedResponse,
 } from '../../http/schemas/shared.js';
-
-/**
- * i18n field schema - object with language codes as keys
- */
-export const i18nFieldSchema = z.record(z.string(), z.string());
+import { logger } from '../../core/logger.js';
+import { InternalError } from '../../core/errors.js';
+import { createHash } from 'crypto';
 
 /**
  * Question type enum
@@ -143,7 +142,7 @@ export type ListQuestionsQuery = z.infer<typeof listQuestionsQuerySchema>;
 /**
  * Base create question schema (before payload type validation)
  */
-const createQuestionBaseSchema = z.object({
+export const createQuestionBaseSchema = z.object({
   category_id: z.string().uuid(),
   type: questionTypeEnum,
   difficulty: difficultyEnum,
@@ -215,15 +214,98 @@ export type UuidParam = z.infer<typeof uuidParamSchema>;
  * Convert database Question with payload to API response format.
  */
 export function toQuestionResponse(question: QuestionWithPayload): QuestionResponse {
+  // Parse JSON strings to objects (postgres.js may return JSON as strings)
+  const parseJsonField = (field: any, fieldName: string, isRequired: boolean): any => {
+    // Only treat null/undefined as null (not empty strings or other falsy values)
+    if (field == null) {
+      if (isRequired) {
+        throw new InternalError(
+          `Data integrity error: missing ${fieldName} field for question ${question.id}`
+        );
+      }
+      return null;
+    }
+    if (typeof field === 'string') {
+      try {
+        return JSON.parse(field);
+      } catch (error) {
+        const fieldLength = field.length;
+        const fieldPreview = field.replace(/\s+/g, '').slice(0, 3) || null;
+        const fieldHash = createHash('sha256').update(field).digest('hex');
+        logger.error(
+          {
+            questionId: question.id,
+            fieldName,
+            fieldLength,
+            fieldPreview,
+            fieldHash,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          },
+          'Failed to parse JSON field'
+        );
+
+        if (isRequired) {
+          // Critical field - data corruption detected
+          throw new InternalError(
+            `Data integrity error: corrupted ${fieldName} field for question ${question.id}`
+          );
+        }
+
+        // Optional field - return null to maintain API contract
+        return null;
+      }
+    }
+    return field;
+  };
+
+  // Validate enum values from database (catch data integrity issues)
+  const typeResult = questionTypeEnum.safeParse(question.type);
+  const difficultyResult = difficultyEnum.safeParse(question.difficulty);
+  const statusResult = statusEnum.safeParse(question.status);
+
+  if (!typeResult.success) {
+    logger.error(
+      { questionId: question.id, type: question.type, error: typeResult.error },
+      'Invalid question type in database'
+    );
+    throw new InternalError('Data integrity error: invalid question type');
+  }
+
+  if (!difficultyResult.success) {
+    logger.error(
+      { questionId: question.id, difficulty: question.difficulty },
+      'Invalid difficulty in database'
+    );
+    throw new InternalError('Data integrity error: invalid difficulty');
+  }
+
+  if (!statusResult.success) {
+    logger.error(
+      { questionId: question.id, status: question.status },
+      'Invalid status in database'
+    );
+    throw new InternalError('Data integrity error: invalid status');
+  }
+
+  const prompt = parseJsonField(question.prompt, 'prompt', true);
+  const explanation = parseJsonField(question.explanation, 'explanation', false);
+  const payload = parseJsonField(question.payload, 'payload', false);
+
+  if (prompt == null) {
+    throw new InternalError(
+      `Data integrity error: missing prompt field for question ${question.id}`
+    );
+  }
+
   return {
     id: question.id,
     category_id: question.category_id,
-    type: question.type as QuestionType,
-    difficulty: question.difficulty as Difficulty,
-    status: question.status as Status,
-    prompt: (question.prompt as I18nField) ?? {},
-    explanation: (question.explanation as I18nField | null) ?? null,
-    payload: question.payload,
+    type: typeResult.data,
+    difficulty: difficultyResult.data,
+    status: statusResult.data,
+    prompt,
+    explanation,
+    payload,
     created_at: question.created_at,
     updated_at: question.updated_at,
   };
@@ -246,3 +328,160 @@ export function toPaginatedResponse<T>(
     total_pages: Math.ceil(total / limit),
   };
 }
+
+// =============================================================================
+// Bulk Create Schemas
+// =============================================================================
+
+/**
+ * Bulk create questions request schema.
+ * - category_id: Required, all questions will be assigned to this category
+ * - questions: Array of 1-100 questions to create (without category_id)
+ */
+export const bulkCreateQuestionsSchema = z.object({
+  category_id: z.string().uuid(),
+  questions: z
+    .array(
+      createQuestionBaseSchema.omit({ category_id: true }).refine(
+        (data) => data.payload.type === data.type,
+        { message: 'Payload type must match question type', path: ['payload', 'type'] }
+      )
+    )
+    .min(1, 'At least one question required')
+    .max(100, 'Maximum 100 questions per upload'),
+});
+
+export type BulkCreateQuestionsRequest = z.infer<typeof bulkCreateQuestionsSchema>;
+
+/**
+ * Error detail for a single failed question in bulk upload.
+ */
+export const bulkCreateErrorSchema = z.object({
+  index: z.number(),
+  question: z.unknown(),
+  error: z.string(),
+});
+
+export type BulkCreateError = z.infer<typeof bulkCreateErrorSchema>;
+
+/**
+ * Bulk create response schema.
+ * - total: Total number of questions attempted
+ * - successful: Number of questions created successfully
+ * - failed: Number of questions that failed to create
+ * - created: Array of successfully created questions
+ * - errors: Array of error details for failed questions
+ */
+export const bulkCreateResponseSchema = z.object({
+  total: z.number(),
+  successful: z.number(),
+  failed: z.number(),
+  created: z.array(questionResponseSchema),
+  errors: z.array(bulkCreateErrorSchema),
+});
+
+export type BulkCreateResponse = z.infer<typeof bulkCreateResponseSchema>;
+
+// =============================================================================
+// Duplicate Detection Schemas
+// =============================================================================
+
+/**
+ * Duplicate type enum - identifies whether duplicates are in same or different categories
+ */
+export const duplicateTypeEnum = z.enum(['cross_category', 'same_category']);
+export type DuplicateType = z.infer<typeof duplicateTypeEnum>;
+
+/**
+ * Category summary for duplicate groups
+ */
+export const categorySummarySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+});
+
+export type CategorySummary = z.infer<typeof categorySummarySchema>;
+
+/**
+ * Duplicate group schema - represents a group of questions with identical prompts
+ */
+export const duplicateGroupSchema = z.object({
+  id: z.string(),
+  type: duplicateTypeEnum,
+  prompt: z.string(),
+  count: z.number(),
+  questions: z.array(questionResponseSchema),
+  categories: z.array(categorySummarySchema),
+});
+
+export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
+
+/**
+ * Find duplicates query params schema
+ */
+export const findDuplicatesQuerySchema = z.object({
+  type: duplicateTypeEnum.or(z.literal('all')).optional().default('all'),
+  category_id: z.string().uuid().optional(),
+  include_drafts: z
+    .string()
+    .transform((val) => val === 'true')
+    .pipe(z.boolean())
+    .optional()
+    .default('true'),
+});
+
+export type FindDuplicatesQuery = z.infer<typeof findDuplicatesQuerySchema>;
+
+/**
+ * Duplicates response schema
+ */
+export const duplicatesResponseSchema = z.object({
+  total_groups: z.number(),
+  groups: z.array(duplicateGroupSchema),
+});
+
+export type DuplicatesResponse = z.infer<typeof duplicatesResponseSchema>;
+
+// =============================================================================
+// Check Duplicates Schemas (for bulk upload preview)
+// =============================================================================
+
+/**
+ * Check duplicates request schema - used to check if prompts already exist before upload
+ */
+export const checkDuplicatesSchema = z.object({
+  locale: z
+    .string()
+    .regex(/^[a-z]{2,5}$/i, 'Locale must be 2-5 letters')
+    .default('en'),
+  prompts: z.array(i18nFieldSchema).min(1).max(100),
+});
+
+export type CheckDuplicatesRequest = z.infer<typeof checkDuplicatesSchema>;
+
+/**
+ * Existing question info for duplicate check
+ */
+export const duplicateQuestionInfoSchema = z.object({
+  id: z.string().uuid(),
+  category_id: z.string().uuid(),
+  category_name: i18nFieldSchema,
+  created_at: z.string().datetime(),
+});
+
+export type DuplicateQuestionInfo = z.infer<typeof duplicateQuestionInfoSchema>;
+
+/**
+ * Check duplicates response schema
+ */
+export const checkDuplicatesResponseSchema = z.object({
+  duplicates: z.array(
+    z.object({
+      index: z.number(),
+      prompt: i18nFieldSchema,
+      existingQuestions: z.array(duplicateQuestionInfoSchema),
+    })
+  ),
+});
+
+export type CheckDuplicatesResponse = z.infer<typeof checkDuplicatesResponseSchema>;

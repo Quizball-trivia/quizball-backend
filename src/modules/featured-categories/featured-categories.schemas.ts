@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import type { FeaturedCategory, Category, I18nField } from '../../db/types.js';
-
-/**
- * i18n field schema - object with language codes as keys
- */
-export const i18nFieldSchema = z.record(z.string(), z.string());
+import { i18nFieldSchema } from '../../http/schemas/shared.js';
 
 /**
  * Featured category response schema (with joined category data).

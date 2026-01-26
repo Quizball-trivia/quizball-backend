@@ -89,6 +89,12 @@ export class ExternalServiceError extends AppError {
   }
 }
 
+export class InternalError extends AppError {
+  constructor(message = 'Internal server error', details: unknown = null) {
+    super(message, 500, ErrorCode.INTERNAL_ERROR, details);
+  }
+}
+
 /**
  * Standard error response shape.
  */

@@ -14,6 +14,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
   questionsRepo: {
     list: vi.fn(),
     getById: vi.fn(),
+    getByIds: vi.fn(),
     create: vi.fn(),
     createWithPayload: vi.fn(),
     createPayload: vi.fn(),
@@ -22,6 +23,8 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     updateStatus: vi.fn(),
     delete: vi.fn(),
     exists: vi.fn(),
+    findByPrompts: vi.fn(),
+    findDuplicateGroups: vi.fn(),
   },
 }));
 
@@ -29,6 +32,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
 vi.mock('../../src/modules/categories/categories.repo.js', () => ({
   categoriesRepo: {
     exists: vi.fn(),
+    listByIds: vi.fn(),
   },
 }));
 
@@ -43,7 +47,7 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
 
 // Mock the requireRole middleware (passes through since we set admin role above)
 vi.mock('../../src/http/middleware/require-role.js', () => ({
-  requireRole: vi.fn(() => (req: any, _res: any, next: any) => {
+  requireRole: vi.fn(() => (_req: any, _res: any, next: any) => {
     // In tests, we assume the user has admin role
     next();
   }),
@@ -460,6 +464,480 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('POST /api/v1/questions/bulk', () => {
+    const bulkQuestions = [
+      {
+        type: 'mcq_single' as const,
+        difficulty: 'easy' as const,
+        prompt: { en: 'Question 1' },
+        payload: mockMcqPayload,
+      },
+      {
+        type: 'mcq_single' as const,
+        difficulty: 'medium' as const,
+        prompt: { en: 'Question 2' },
+        payload: mockMcqPayload,
+      },
+    ];
+
+    it('should create multiple questions successfully', async () => {
+      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (questionsRepo.createWithPayload as Mock)
+        .mockResolvedValueOnce({
+          ...mockQuestion,
+          id: '11111111-1111-1111-1111-111111111111',
+        })
+        .mockResolvedValueOnce({
+          ...mockQuestion,
+          id: '22222222-2222-2222-2222-222222222222',
+        });
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: bulkQuestions,
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.total).toBe(2);
+      expect(response.body.successful).toBe(2);
+      expect(response.body.failed).toBe(0);
+      expect(response.body.created).toHaveLength(2);
+      expect(response.body.errors).toHaveLength(0);
+    });
+
+    it('should handle partial failures', async () => {
+      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (questionsRepo.createWithPayload as Mock)
+        .mockResolvedValueOnce({
+          ...mockQuestion,
+          id: '11111111-1111-1111-1111-111111111111',
+        })
+        .mockRejectedValueOnce(new Error('Database error'));
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: bulkQuestions,
+        });
+
+      expect(response.status).toBe(207);
+      expect(response.body.total).toBe(2);
+      expect(response.body.successful).toBe(1);
+      expect(response.body.failed).toBe(1);
+      expect(response.body.created).toHaveLength(1);
+      expect(response.body.errors).toHaveLength(1);
+      expect(response.body.errors[0].index).toBe(1);
+      expect(response.body.errors[0].error).toBe('Database error');
+    });
+
+    it('should handle complete failure', async () => {
+      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (questionsRepo.createWithPayload as Mock)
+        .mockRejectedValueOnce(new Error('Database error'))
+        .mockRejectedValueOnce(new Error('Database error'));
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: bulkQuestions,
+        });
+
+      expect(response.status).toBe(207);
+      expect(response.body.successful).toBe(0);
+      expect(response.body.failed).toBe(bulkQuestions.length);
+      expect(response.body.created).toHaveLength(0);
+      expect(response.body.errors).toHaveLength(bulkQuestions.length);
+    });
+
+    it('should return 400 for invalid category', async () => {
+      (categoriesRepo.exists as Mock).mockResolvedValue(false);
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: '123e4567-e89b-12d3-a456-426614174999',
+          questions: bulkQuestions,
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('BAD_REQUEST');
+    });
+
+    it('should validate minimum 1 question', async () => {
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: [],
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should validate maximum 100 questions', async () => {
+      const tooManyQuestions = Array(101).fill(bulkQuestions[0]);
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: tooManyQuestions,
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should validate payload matches type', async () => {
+      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+
+      const response = await request(app)
+        .post('/api/v1/questions/bulk')
+        .send({
+          category_id: mockQuestion.category_id,
+          questions: [
+            {
+              type: 'input_text',
+              difficulty: 'easy',
+              prompt: { en: 'Test' },
+              payload: mockMcqPayload, // Wrong type!
+            },
+          ],
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('GET /api/v1/questions/duplicates', () => {
+    const mockDuplicateGroups = [
+      {
+        normalized_prompt: 'what is paris?',
+        question_ids: [
+          '11111111-1111-1111-1111-111111111111',
+          '22222222-2222-2222-2222-222222222222',
+          '33333333-3333-3333-3333-333333333333',
+        ],
+        category_ids: [
+          '99999999-9999-9999-9999-999999999999',
+          '88888888-8888-8888-8888-888888888888',
+        ],
+        count: 3,
+      },
+    ];
+
+    const mockCategory = {
+      id: '99999999-9999-9999-9999-999999999999',
+      name: { en: 'Geography' },
+    };
+
+    it('should return duplicate groups', async () => {
+      (questionsRepo.findDuplicateGroups as Mock).mockResolvedValue(mockDuplicateGroups);
+      (questionsRepo.getByIds as Mock).mockResolvedValue(
+        new Map([
+          [
+            '11111111-1111-1111-1111-111111111111',
+            {
+              ...mockQuestion,
+              id: '11111111-1111-1111-1111-111111111111',
+              category_id: '99999999-9999-9999-9999-999999999999',
+            },
+          ],
+          [
+            '22222222-2222-2222-2222-222222222222',
+            {
+              ...mockQuestion,
+              id: '22222222-2222-2222-2222-222222222222',
+              category_id: '88888888-8888-8888-8888-888888888888',
+            },
+          ],
+          [
+            '33333333-3333-3333-3333-333333333333',
+            {
+              ...mockQuestion,
+              id: '33333333-3333-3333-3333-333333333333',
+              category_id: '99999999-9999-9999-9999-999999999999',
+            },
+          ],
+        ])
+      );
+      (categoriesRepo.listByIds as Mock).mockResolvedValue([mockCategory]);
+
+      const response = await request(app).get('/api/v1/questions/duplicates');
+
+      expect(response.status).toBe(200);
+      expect(response.body.total_groups).toBe(1);
+      expect(response.body.groups).toBeDefined();
+      expect(Array.isArray(response.body.groups)).toBe(true);
+    });
+
+    it('should filter by type', async () => {
+      // Mock returns both same-category and cross-category groups
+      const mixedGroups = [
+        {
+          normalized_prompt: 'same category question',
+          question_ids: [
+            '11111111-1111-1111-1111-111111111111',
+            '22222222-2222-2222-2222-222222222222',
+          ],
+          category_ids: [
+            '99999999-9999-9999-9999-999999999999',
+            '99999999-9999-9999-9999-999999999999',
+          ], // Same category
+          count: 2,
+        },
+        {
+          normalized_prompt: 'cross category question',
+          question_ids: [
+            '33333333-3333-3333-3333-333333333333',
+            '44444444-4444-4444-4444-444444444444',
+          ],
+          category_ids: [
+            '99999999-9999-9999-9999-999999999999',
+            '88888888-8888-8888-8888-888888888888',
+          ], // Different categories
+          count: 2,
+        },
+      ];
+
+      (questionsRepo.findDuplicateGroups as Mock).mockResolvedValue(mixedGroups);
+      (questionsRepo.getByIds as Mock).mockResolvedValue(
+        new Map([
+          [
+            '11111111-1111-1111-1111-111111111111',
+            {
+              ...mockQuestion,
+              id: '11111111-1111-1111-1111-111111111111',
+              category_id: '99999999-9999-9999-9999-999999999999',
+            },
+          ],
+          [
+            '22222222-2222-2222-2222-222222222222',
+            {
+              ...mockQuestion,
+              id: '22222222-2222-2222-2222-222222222222',
+              category_id: '99999999-9999-9999-9999-999999999999',
+            },
+          ],
+          [
+            '33333333-3333-3333-3333-333333333333',
+            {
+              ...mockQuestion,
+              id: '33333333-3333-3333-3333-333333333333',
+              category_id: '99999999-9999-9999-9999-999999999999',
+            },
+          ],
+          [
+            '44444444-4444-4444-4444-444444444444',
+            {
+              ...mockQuestion,
+              id: '44444444-4444-4444-4444-444444444444',
+              category_id: '88888888-8888-8888-8888-888888888888',
+            },
+          ],
+        ])
+      );
+      (categoriesRepo.listByIds as Mock).mockResolvedValue([mockCategory]);
+
+      const response = await request(app)
+        .get('/api/v1/questions/duplicates')
+        .query({ type: 'same_category' });
+
+      expect(response.status).toBe(200);
+      expect(questionsRepo.findDuplicateGroups).toHaveBeenCalled();
+
+      // Assert only same_category groups in response
+      expect(response.body.groups.every((g: any) => g.type === 'same_category')).toBe(true);
+      expect(response.body.groups.some((g: any) => g.type === 'cross_category')).toBe(false);
+    });
+
+    it('should filter by category_id', async () => {
+      (questionsRepo.findDuplicateGroups as Mock).mockResolvedValue([]);
+      (questionsRepo.getByIds as Mock).mockResolvedValue(new Map());
+      (categoriesRepo.listByIds as Mock).mockResolvedValue([]);
+
+      const response = await request(app)
+        .get('/api/v1/questions/duplicates')
+        .query({ category_id: mockQuestion.category_id });
+
+      expect(response.status).toBe(200);
+      expect(questionsRepo.findDuplicateGroups).toHaveBeenCalledWith(
+        expect.objectContaining({ categoryId: mockQuestion.category_id })
+      );
+    });
+
+    it('should include/exclude drafts', async () => {
+      (questionsRepo.findDuplicateGroups as Mock).mockResolvedValue([]);
+      (questionsRepo.getByIds as Mock).mockResolvedValue(new Map());
+      (categoriesRepo.listByIds as Mock).mockResolvedValue([]);
+
+      const response = await request(app)
+        .get('/api/v1/questions/duplicates')
+        .query({ include_drafts: 'false' });
+
+      expect(response.status).toBe(200);
+      expect(questionsRepo.findDuplicateGroups).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'published' })
+      );
+    });
+
+    it('should handle empty duplicate groups', async () => {
+      (questionsRepo.findDuplicateGroups as Mock).mockResolvedValue([]);
+      (questionsRepo.getByIds as Mock).mockResolvedValue(new Map());
+      (categoriesRepo.listByIds as Mock).mockResolvedValue([]);
+
+      const response = await request(app).get('/api/v1/questions/duplicates');
+
+      expect(response.status).toBe(200);
+      expect(response.body.total_groups).toBe(0);
+      expect(response.body.groups).toHaveLength(0);
+    });
+
+    it('should validate type enum', async () => {
+      const response = await request(app)
+        .get('/api/v1/questions/duplicates')
+        .query({ type: 'invalid_type' });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('POST /api/v1/questions/check-duplicates', () => {
+    const mockPrompts = [
+      { en: 'What is Paris?' },
+      { en: 'What is London?' },
+      { en: 'What is Rome?' },
+    ];
+
+    it('should check for duplicate prompts', async () => {
+      const mockExistingQuestions = [
+        {
+          id: '11111111-1111-1111-1111-111111111111',
+          prompt: { en: 'What is Paris?' },
+          category_id: '99999999-9999-9999-9999-999999999999',
+          category_name: { en: 'Geography' },
+          created_at: '2024-01-01T00:00:00.000Z',
+        },
+      ];
+
+      (questionsRepo.findByPrompts as Mock).mockResolvedValue(mockExistingQuestions);
+
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: mockPrompts });
+
+      expect(response.status).toBe(200);
+      expect(response.body.duplicates).toBeDefined();
+      expect(Array.isArray(response.body.duplicates)).toBe(true);
+    });
+
+    it('should return empty array when no duplicates', async () => {
+      (questionsRepo.findByPrompts as Mock).mockResolvedValue([]);
+
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: mockPrompts });
+
+      expect(response.status).toBe(200);
+      expect(response.body.duplicates).toHaveLength(0);
+    });
+
+    it('should include existing question details', async () => {
+      const mockExistingQuestions = [
+        {
+          id: '11111111-1111-1111-1111-111111111111',
+          prompt: { en: 'What is Paris?' },
+          category_id: '99999999-9999-9999-9999-999999999999',
+          category_name: { en: 'Geography' },
+          created_at: '2024-01-01T00:00:00.000Z',
+        },
+      ];
+
+      (questionsRepo.findByPrompts as Mock).mockResolvedValue(mockExistingQuestions);
+
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: mockPrompts });
+
+      expect(response.status).toBe(200);
+      expect(response.body.duplicates).toHaveLength(1);
+      const duplicate = response.body.duplicates[0];
+      expect(duplicate).toHaveProperty('index');
+      expect(duplicate).toHaveProperty('prompt');
+      expect(duplicate).toHaveProperty('existingQuestions');
+      expect(duplicate.existingQuestions).toHaveLength(1);
+      expect(duplicate.existingQuestions[0]).toHaveProperty('id');
+      expect(duplicate.existingQuestions[0]).toHaveProperty('category_id');
+      expect(duplicate.existingQuestions[0]).toHaveProperty('category_name');
+      expect(duplicate.existingQuestions[0]).toHaveProperty('created_at');
+    });
+
+    it('should validate minimum 1 prompt', async () => {
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: [] });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should validate maximum 100 prompts', async () => {
+      const tooManyPrompts = Array(101).fill({ en: 'Test' });
+
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: tooManyPrompts });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should validate prompt structure', async () => {
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: ['invalid', 'structure'] });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('should handle multiple duplicates for same prompt', async () => {
+      const mockExistingQuestions = [
+        {
+          id: '11111111-1111-1111-1111-111111111111',
+          prompt: { en: 'What is Paris?' },
+          category_id: '99999999-9999-9999-9999-999999999999',
+          category_name: { en: 'Geography' },
+          created_at: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: '22222222-2222-2222-2222-222222222222',
+          prompt: { en: 'What is Paris?' },
+          category_id: '88888888-8888-8888-8888-888888888888',
+          category_name: { en: 'History' },
+          created_at: '2024-01-02T00:00:00.000Z',
+        },
+      ];
+
+      (questionsRepo.findByPrompts as Mock).mockResolvedValue(mockExistingQuestions);
+
+      const response = await request(app)
+        .post('/api/v1/questions/check-duplicates')
+        .send({ locale: 'en', prompts: [{ en: 'What is Paris?' }] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.duplicates).toHaveLength(1);
+      expect(response.body.duplicates[0].existingQuestions).toHaveLength(2);
     });
   });
 });

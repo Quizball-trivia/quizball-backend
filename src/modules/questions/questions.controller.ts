@@ -8,6 +8,9 @@ import {
   type UpdateStatusRequest,
   type ListQuestionsQuery,
   type UuidParam,
+  type BulkCreateQuestionsRequest,
+  type FindDuplicatesQuery,
+  type CheckDuplicatesRequest,
 } from './questions.schemas.js';
 import type { Json } from '../../db/types.js';
 import { logger } from '../../core/logger.js';
@@ -137,5 +140,50 @@ export const questionsController = {
     const question = await questionsService.updateStatus(id, status);
 
     res.json(toQuestionResponse(question));
+  },
+
+  /**
+   * POST /api/v1/questions/bulk
+   * Bulk create multiple questions in a single category.
+   */
+  async bulkCreate(req: Request, res: Response): Promise<void> {
+    const data = req.validated.body as BulkCreateQuestionsRequest;
+
+    const result = await questionsService.bulkCreate(
+      data.category_id,
+      data.questions
+    );
+
+    // Return 207 for partial failures, 201 for full success
+    const status = result.failed > 0 ? 207 : 201;
+    res.status(status).json(result);
+  },
+
+  /**
+   * GET /api/v1/questions/duplicates
+   * Find duplicate questions based on identical prompts.
+   */
+  async findDuplicates(req: Request, res: Response): Promise<void> {
+    const query = req.validated.query as FindDuplicatesQuery;
+
+    const result = await questionsService.findDuplicates({
+      type: query.type === 'all' ? undefined : query.type,
+      categoryId: query.category_id,
+      includeDrafts: query.include_drafts,
+    });
+
+    res.json(result);
+  },
+
+  /**
+   * POST /api/v1/questions/check-duplicates
+   * Check if prompts already exist in database (for bulk upload preview).
+   */
+  async checkDuplicates(req: Request, res: Response): Promise<void> {
+    const { prompts, locale } = req.validated.body as CheckDuplicatesRequest;
+
+    const result = await questionsService.checkDuplicates(prompts, locale);
+
+    res.status(200).json(result);
   },
 };

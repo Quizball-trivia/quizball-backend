@@ -1,6 +1,32 @@
 import { z } from 'zod';
 
 /**
+ * i18n field schema - object with ISO 639-1 language codes as keys.
+ * Used for multilingual content (e.g., { en: 'Hello', ka: 'გამარჯობა' }).
+ *
+ * Validation rules:
+ * - Keys: 2-character lowercase language codes (ISO 639-1 format)
+ * - Values: Non-empty strings
+ * - At least one translation required
+ *
+ * Examples:
+ * - Valid: { en: "Hello" }, { en: "Hello", ka: "გამარჯობა" }
+ * - Invalid: {}, { en: "" }, { english: "Hello" }, { EN: "Hello" }
+ */
+export const i18nFieldSchema = z
+  .record(
+    z.string().length(2).regex(/^[a-z]{2}$/, {
+      message: 'Language code must be 2 lowercase letters (ISO 639-1)',
+    }),
+    z.string().min(1, { message: 'Translation cannot be empty' })
+  )
+  .refine((obj) => Object.keys(obj).length > 0, {
+    message: 'At least one translation is required',
+  });
+
+export type I18nField = z.infer<typeof i18nFieldSchema>;
+
+/**
  * Shared pagination query schema.
  * Use with .merge() in module-specific schemas.
  */

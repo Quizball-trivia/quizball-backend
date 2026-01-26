@@ -4,6 +4,8 @@ import {
   extendZodWithOpenApi,
 } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
+import { i18nFieldSchema as baseI18nFieldSchema } from '../schemas/shared.js';
+import { config } from '../../core/config.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -349,7 +351,8 @@ registry.registerPath({
 // Category Schemas
 // =============================================================================
 
-const i18nFieldSchema = z.record(z.string(), z.string()).openapi('I18nField');
+// Extend shared i18nFieldSchema with OpenAPI metadata
+const i18nFieldSchema = baseI18nFieldSchema.openapi('I18nField');
 
 const categoryResponseSchema = z
   .object({
@@ -919,6 +922,91 @@ registry.registerPath({
   },
 });
 
+const bulkCreateResponseSchema = z
+  .object({
+    total: z.number().int(),
+    successful: z.number().int(),
+    failed: z.number().int(),
+    created: z.array(questionResponseSchema),
+    errors: z.array(
+      z.object({
+        index: z.number().int(),
+        question: z.unknown(),
+        error: z.string(),
+      })
+    ),
+  })
+  .openapi('BulkCreateResponse');
+
+registry.register('BulkCreateResponse', bulkCreateResponseSchema);
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/questions/bulk',
+  summary: 'Bulk create questions',
+  description: 'Create multiple questions in a single request. Maximum 100 questions per upload. Requires admin role.',
+  tags: ['Questions'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            category_id: z.string().uuid(),
+            questions: z
+              .array(
+                z.object({
+                  type: z.enum(['mcq_single', 'input_text']),
+                  difficulty: z.enum(['easy', 'medium', 'hard']),
+                  status: z.enum(['draft', 'published', 'archived']).optional(),
+                  prompt: i18nFieldSchema,
+                  explanation: i18nFieldSchema.nullable().optional(),
+                  payload: z.any(),
+                })
+              )
+              .min(1)
+              .max(100),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    207: {
+      description: 'Questions created (may include partial failures)',
+      content: {
+        'application/json': {
+          schema: bulkCreateResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request or category not found',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
 registry.registerPath({
   method: 'put',
   path: '/api/v1/questions/{id}',
@@ -1037,8 +1125,209 @@ registry.registerPath({
 });
 
 // =============================================================================
+// Duplicate Detection Schemas
+// =============================================================================
+
+const categorySummarySchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string(),
+  })
+  .openapi('CategorySummary');
+
+const duplicateGroupSchema = z
+  .object({
+    id: z.string(),
+    type: z.enum(['cross_category', 'same_category']),
+    prompt: z.string(),
+    count: z.number().int(),
+    questions: z.array(questionResponseSchema),
+    categories: z.array(categorySummarySchema),
+  })
+  .openapi('DuplicateGroup');
+
+const duplicatesResponseSchema = z
+  .object({
+    total_groups: z.number().int(),
+    groups: z.array(duplicateGroupSchema),
+  })
+  .openapi('DuplicatesResponse');
+
+const duplicateQuestionInfoSchema = z
+  .object({
+    id: z.string().uuid(),
+    category_id: z.string().uuid(),
+    category_name: i18nFieldSchema,
+    created_at: z.string().datetime(),
+  })
+  .openapi('DuplicateQuestionInfo');
+
+const checkDuplicatesResponseSchema = z
+  .object({
+    duplicates: z.array(
+      z.object({
+        index: z.number().int(),
+        prompt: i18nFieldSchema,
+        existingQuestions: z.array(duplicateQuestionInfoSchema),
+      })
+    ),
+  })
+  .openapi('CheckDuplicatesResponse');
+
+registry.register('CategorySummary', categorySummarySchema);
+registry.register('DuplicateGroup', duplicateGroupSchema);
+registry.register('DuplicatesResponse', duplicatesResponseSchema);
+registry.register('DuplicateQuestionInfo', duplicateQuestionInfoSchema);
+registry.register('CheckDuplicatesResponse', checkDuplicatesResponseSchema);
+
+// =============================================================================
+// Duplicate Detection Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/questions/duplicates',
+  summary: 'Find duplicate questions',
+  description: 'Detect questions with identical prompt text. Returns groups of questions with the same prompt, either within the same category or across different categories. Requires admin role.',
+  tags: ['Questions'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      type: z.enum(['cross_category', 'same_category', 'all']).optional().openapi({
+        description: 'Filter by duplicate type',
+        example: 'all',
+      }),
+      category_id: z.string().uuid().optional().openapi({
+        description: 'Limit search to specific category',
+      }),
+      include_drafts: z.string().optional().openapi({
+        description: 'Include draft questions in search (default: true)',
+        example: 'true',
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Duplicate groups found successfully',
+      content: {
+        'application/json': {
+          schema: duplicatesResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/questions/check-duplicates',
+  summary: 'Check for duplicate prompts before bulk upload',
+  description: 'Check if question prompts already exist in the database. Used during bulk upload preview to show users which questions are duplicates. Requires admin role.',
+  tags: ['Questions'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            prompts: z.array(i18nFieldSchema).min(1).max(100).openapi({
+              description: 'Array of question prompts to check',
+              example: [
+                { en: 'What is the capital of France?' },
+                { en: 'What is 2+2?' },
+              ],
+            }),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Duplicate check completed successfully',
+      content: {
+        'application/json': {
+          schema: checkDuplicatesResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: 'Invalid request (e.g., too many prompts)',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description: 'Insufficient permissions (admin role required)',
+      content: {
+        'application/json': {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+// =============================================================================
 // Generate OpenAPI Document
 // =============================================================================
+
+/**
+ * Build OpenAPI servers array based on environment configuration.
+ * Supports multiple environments (local, staging, production).
+ */
+function buildOpenApiServers(): Array<{ url: string; description: string }> {
+  const servers: Array<{ url: string; description: string }> = [];
+
+  // Add environment-specific URL if provided (e.g., staging/production)
+  if (config.API_BASE_URL) {
+    const envDescriptions: Record<string, string> = {
+      local: 'Development Server',
+      staging: 'Staging Server',
+      prod: 'Production Server',
+    };
+
+    servers.push({
+      url: config.API_BASE_URL,
+      description: envDescriptions[config.NODE_ENV] || 'API Server',
+    });
+  }
+
+  // Always include localhost for local development
+  // Useful for developers even in staging/prod environments
+  servers.push({
+    url: `http://localhost:${config.PORT}`,
+    description: 'Local development',
+  });
+
+  return servers;
+}
 
 export function generateOpenApiDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);
@@ -1050,8 +1339,6 @@ export function generateOpenApiDocument() {
       version: '1.0.0',
       description: 'QuizBall Backend API',
     },
-    servers: [
-      { url: 'http://localhost:8001', description: 'Local development' },
-    ],
+    servers: buildOpenApiServers(),
   });
 }

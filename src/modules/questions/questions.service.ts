@@ -9,6 +9,18 @@ import {
 import { categoriesRepo } from '../categories/categories.repo.js';
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import type {
+  BulkCreateResponse,
+  CreateQuestionRequest,
+  DuplicatesResponse,
+  DuplicateGroup,
+  DuplicateType,
+  CategorySummary,
+  Status,
+} from './questions.schemas.js';
+import { toQuestionResponse } from './questions.schemas.js';
+import { createHash } from 'crypto';
+import { getLocalizedString } from '../../lib/localization.js';
 
 /**
  * Questions service.
@@ -86,6 +98,19 @@ export const questionsService = {
       }
     }
 
+    // If type is being changed without updating payload, validate compatibility
+    if (data.type && data.type !== existing.type && data.payload === undefined) {
+      const existingPayloadType = (existing.payload as { type?: string } | null)?.type;
+
+      if (existingPayloadType && existingPayloadType !== data.type) {
+        throw new BadRequestError(
+          `Cannot change question type from ${existing.type} to ${data.type} without updating payload. ` +
+          `Existing payload is type ${existingPayloadType}.`
+        );
+      }
+    }
+
+    // Validate new payload matches type
     if (data.payload !== undefined) {
       const payloadType = (data.payload as { type?: string } | null)?.type;
       const expectedType = data.type ?? existing.type;
@@ -121,7 +146,7 @@ export const questionsService = {
   /**
    * Update question status only.
    */
-  async updateStatus(id: string, status: string): Promise<QuestionWithPayload> {
+  async updateStatus(id: string, status: Status): Promise<QuestionWithPayload> {
     // Check question exists
     const existing = await questionsRepo.exists(id);
     if (!existing) {
@@ -133,7 +158,13 @@ export const questionsService = {
     logger.info({ questionId: id, status }, 'Updated question status');
 
     // Return with payload
-    return questionsRepo.getById(id) as Promise<QuestionWithPayload>;
+    const updated = await questionsRepo.getById(id);
+    if (!updated) {
+      logger.error({ questionId: id }, 'Question not found after status update - possible race condition');
+      throw new NotFoundError('Question not found after status update');
+    }
+
+    return updated;
   },
 
   /**
@@ -150,5 +181,309 @@ export const questionsService = {
     await questionsRepo.delete(id);
 
     logger.info({ questionId: id }, 'Deleted question');
+  },
+
+  /**
+   * Bulk create multiple questions in a single category.
+   * Validates category once, then creates each question sequentially.
+   * Handles partial failures - continues processing even if some questions fail.
+   * Returns detailed results with success/failure counts and error details.
+   *
+   * Note: Processes questions sequentially (not batched) for:
+   * - Better error reporting (per-question failures)
+   * - Simpler transaction handling
+   * - Acceptable performance for max 100 questions (~5-10s)
+   * For higher throughput, consider batched SQL INSERT (see fixes-v3.md Issue #4).
+   */
+  async bulkCreate(
+    categoryId: string,
+    questions: Omit<CreateQuestionRequest, 'category_id'>[]
+  ): Promise<BulkCreateResponse> {
+    // Validate category exists once
+    const categoryExists = await categoriesRepo.exists(categoryId);
+    if (!categoryExists) {
+      throw new BadRequestError('Category not found');
+    }
+
+    const results: BulkCreateResponse = {
+      total: questions.length,
+      successful: 0,
+      failed: 0,
+      created: [],
+      errors: [],
+    };
+
+    // Process each question sequentially
+    for (let i = 0; i < questions.length; i++) {
+      try {
+        const questionData: CreateQuestionData = {
+          categoryId,
+          type: questions[i].type,
+          difficulty: questions[i].difficulty,
+          status: questions[i].status || 'draft',
+          prompt: questions[i].prompt,
+          explanation: questions[i].explanation,
+        };
+
+        const question = await questionsRepo.createWithPayload(
+          questionData,
+          questions[i].payload as Json
+        );
+
+        results.created.push(toQuestionResponse(question));
+        results.successful++;
+
+        logger.debug(
+          {
+            questionId: question.id,
+            categoryId,
+            index: i,
+          },
+          'Question created in bulk upload'
+        );
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          index: i,
+          question: questions[i],
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+
+        logger.error(
+          {
+            error,
+            index: i,
+            categoryId,
+          },
+          'Failed to create question in bulk upload'
+        );
+      }
+    }
+
+    logger.info(
+      {
+        total: results.total,
+        successful: results.successful,
+        failed: results.failed,
+        categoryId,
+      },
+      'Bulk question upload completed'
+    );
+
+    return results;
+  },
+
+  /**
+   * Find duplicate questions based on identical prompts.
+   * Uses SQL GROUP BY for efficient duplicate detection (scales to 100k+ questions).
+   * Groups questions by normalized prompt text (case-insensitive, trimmed).
+   * Returns groups of duplicates categorized by type:
+   * - same_category: Same prompt in same category (likely copy/paste errors)
+   * - cross_category: Same prompt across different categories
+   */
+  async findDuplicates(filters?: {
+    type?: 'cross_category' | 'same_category' | 'all';
+    categoryId?: string;
+    includeDrafts?: boolean;
+  }): Promise<DuplicatesResponse> {
+    // Use SQL GROUP BY aggregation (efficient for large datasets)
+    const listFilter: ListQuestionsFilter = {
+      categoryId: filters?.categoryId,
+      status: filters?.includeDrafts === false ? 'published' : undefined,
+    };
+
+    const duplicateGroups = await questionsRepo.findDuplicateGroups(listFilter);
+
+    // Fetch full question details only for duplicates (not all questions)
+    const allQuestionIds = duplicateGroups.flatMap(g => g.question_ids);
+
+    // Batch fetch all duplicate questions in a single query (avoids N+1)
+    // Returns Map for O(1) lookup by ID
+    const questionMap = await questionsRepo.getByIds(allQuestionIds);
+
+    // Build duplicate groups with full question data
+    const groups: DuplicateGroup[] = [];
+
+    for (const group of duplicateGroups) {
+      const duplicateQuestions = group.question_ids
+        .map(id => questionMap.get(id))
+        .filter((q): q is QuestionWithPayload => q != null); // != null checks both null and undefined
+
+      if (duplicateQuestions.length <= 1) continue;
+
+      const categoryIds = [...new Set(group.category_ids)];
+      const type: DuplicateType =
+        categoryIds.length > 1 ? 'cross_category' : 'same_category';
+
+      // Apply type filter
+      if (filters?.type && filters.type !== 'all' && filters.type !== type) {
+        continue;
+      }
+
+      // Generate unique ID for this duplicate group (hash of normalized prompt)
+      const groupId = createHash('md5').update(group.normalized_prompt).digest('hex');
+
+      // Use original prompt from first question for UI display (not the normalized lowercase version)
+      const firstPromptObj = duplicateQuestions[0]?.prompt as { en?: string; [key: string]: string | undefined };
+      const displayPrompt = firstPromptObj?.en || group.normalized_prompt;
+
+      groups.push({
+        id: groupId,
+        type,
+        prompt: displayPrompt,
+        count: duplicateQuestions.length,
+        questions: duplicateQuestions.map((q) => toQuestionResponse(q)),
+        categories: [], // Will be enriched next
+      });
+    }
+
+    // Enrich with category names
+    const allCategoryIds = [...new Set(groups.flatMap((g) => g.questions.map((q) => q.category_id)))];
+    const categories = await categoriesRepo.listByIds(allCategoryIds);
+    const categoryMap = new Map(
+      categories.map((c) => [c.id, c])
+    );
+
+    for (const group of groups) {
+      const uniqueCategoryIds = [...new Set(group.questions.map((q) => q.category_id))];
+      const categoryNames: CategorySummary[] = uniqueCategoryIds
+        .map((id) => {
+          const category = categoryMap.get(id);
+          return category
+            ? {
+                id: category.id,
+                name: getLocalizedString(category.name),
+              }
+            : null;
+        })
+        .filter((c): c is CategorySummary => c !== null);
+
+      group.categories = categoryNames;
+    }
+
+    // Sort by priority: same_category first (highest priority), then by count
+    groups.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'same_category' ? -1 : 1;
+      }
+      return b.count - a.count;
+    });
+
+    logger.info(
+      {
+        total_groups: groups.length,
+        filters,
+      },
+      'Found duplicate questions'
+    );
+
+    return {
+      total_groups: groups.length,
+      groups,
+    };
+  },
+
+  /**
+   * Check if prompts already exist in the database (for bulk upload preview).
+   * Used to detect duplicates before uploading questions.
+   * Returns which prompts already exist, along with existing question details.
+   */
+  async checkDuplicates(
+    prompts: Json[],
+    locale = 'en'
+  ): Promise<{
+    duplicates: Array<{
+      index: number;
+      prompt: Json;
+      existingQuestions: Array<{
+        id: string;
+        category_id: string;
+        category_name: Json;
+        created_at: string;
+      }>;
+    }>;
+  }> {
+    const hashText = (value: string): string =>
+      createHash('sha256').update(value).digest('hex').slice(0, 12);
+
+    logger.debug({ promptCount: prompts.length }, 'Checking duplicates for prompts');
+
+    const getPromptValue = (promptObj: { [key: string]: string | undefined }) => {
+      const preferred = promptObj[locale];
+      if (preferred && preferred.trim()) return preferred;
+      const fallback = Object.values(promptObj).find((value) => value && value.trim());
+      return fallback ?? '';
+    };
+
+    // Log first few prompts for debugging (no raw content)
+    const samplePrompts = prompts.slice(0, 3).map((p, i) => {
+      const promptObj = p as { [key: string]: string | undefined };
+      const normalized = getPromptValue(promptObj).toLowerCase().trim();
+      return {
+        index: i,
+        promptLength: normalized.length,
+        promptHash: normalized ? hashText(normalized) : null,
+      };
+    });
+    logger.debug({ samplePrompts }, 'Sample prompts to check');
+
+    const existingQuestions = await questionsRepo.findByPrompts(prompts, locale);
+
+    logger.debug({
+      existingQuestionsCount: existingQuestions.length,
+      sampleExisting: existingQuestions.slice(0, 3).map(q => {
+        const promptObj = q.prompt as { [key: string]: string | undefined };
+        const normalized = getPromptValue(promptObj).toLowerCase().trim();
+        return {
+          id: q.id,
+          promptLength: normalized.length,
+          promptHash: normalized ? hashText(normalized) : null,
+        };
+      }),
+    }, 'Found existing questions from database');
+
+    // Group by normalized prompt
+    const duplicateMap = new Map<string, typeof existingQuestions>();
+
+    existingQuestions.forEach(q => {
+      const promptObj = q.prompt as { [key: string]: string | undefined };
+      const raw = getPromptValue(promptObj);
+      const normalized = raw.toLowerCase().trim();
+      if (!normalized) return;
+      if (!duplicateMap.has(normalized)) {
+        duplicateMap.set(normalized, []);
+      }
+      duplicateMap.get(normalized)!.push(q);
+    });
+
+    logger.debug({ duplicateMapSize: duplicateMap.size }, 'Built duplicate map');
+
+    // Build response
+    const duplicates = prompts
+      .map((prompt, index) => {
+        const promptObj = prompt as { [key: string]: string | undefined };
+        const normalized = getPromptValue(promptObj).toLowerCase().trim();
+        if (!normalized) return null;
+        const existing = duplicateMap.get(normalized) || [];
+
+        if (existing.length === 0) return null;
+
+        return {
+          index,
+          prompt,
+          existingQuestions: existing.map(q => ({
+            id: q.id,
+            category_id: q.category_id,
+            // Intentionally return raw i18n JSON for CMS-side localization handling.
+            category_name: q.category_name,
+            created_at: q.created_at,
+          })),
+        };
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+
+    logger.debug({ duplicatesFound: duplicates.length }, 'Returning duplicate results');
+
+    return { duplicates };
   },
 };

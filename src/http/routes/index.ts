@@ -13,8 +13,8 @@ const router = Router();
 // Health check (not versioned)
 router.use(healthRoutes);
 
-// API documentation (disabled in production)
-if (config.NODE_ENV !== 'prod') {
+// API documentation (controlled by DOCS_ENABLED env var)
+if (config.DOCS_ENABLED) {
   router.use(swaggerRoutes);
 }
 

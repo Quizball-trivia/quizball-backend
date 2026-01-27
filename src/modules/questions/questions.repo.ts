@@ -1,5 +1,6 @@
 import { sql } from '../../db/index.js';
 import type { Question, QuestionWithPayload, I18nField, Json } from '../../db/types.js';
+import { logger } from '../../core/logger.js';
 
 export interface CreateQuestionData {
   categoryId: string;
@@ -27,6 +28,10 @@ export interface ListQuestionsFilter {
   difficulty?: string;
   type?: string;
   search?: string;
+}
+
+export interface QuestionWithCategory extends Question {
+  category_name: I18nField;
 }
 
 export interface ListQuestionsResult {
@@ -82,6 +87,25 @@ export const questionsRepo = {
     return question ?? null;
   },
 
+  /**
+   * Batch fetch questions by IDs with payloads.
+   * More efficient than calling getById in a loop (avoids N+1 queries).
+   * Returns a Map for O(1) lookup by ID (unordered).
+   */
+  async getByIds(ids: string[]): Promise<Map<string, QuestionWithPayload>> {
+    if (ids.length === 0) return new Map();
+
+    const results = await sql<QuestionWithPayload[]>`
+      SELECT q.*, qp.payload
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.id = ANY(${sql.array(ids)}::uuid[])
+    `;
+
+    // Build Map for O(1) lookup
+    return new Map(results.map(q => [q.id, q]));
+  },
+
   async create(data: CreateQuestionData): Promise<Question> {
     const [question] = await sql<Question[]>`
       INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
@@ -101,6 +125,7 @@ export const questionsRepo = {
   /**
    * Create question with payload in a single transaction.
    * Prevents orphaned questions if payload creation fails.
+   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    */
   async createWithPayload(
     data: CreateQuestionData,
@@ -174,6 +199,7 @@ export const questionsRepo = {
   /**
    * Update question with payload in a single transaction.
    * Ensures atomicity - both succeed or both fail.
+   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    * Returns null if question not found.
    */
   async updateWithPayload(
@@ -250,6 +276,56 @@ export const questionsRepo = {
     return result.count > 0;
   },
 
+  /**
+   * Find questions by an array of prompts (for duplicate checking).
+   * Uses normalized prompt comparison (case-insensitive, trimmed).
+   * Uses the provided locale key for prompt matching.
+   * Returns questions with category information.
+   */
+  async findByPrompts(prompts: Json[], locale = 'en'): Promise<QuestionWithCategory[]> {
+    // Normalize prompts for comparison (lowercase, trim)
+    const normalizedPrompts = prompts.map(p => {
+      const promptObj = p as I18nField;
+      const text = promptObj[locale] || '';
+      return text.toLowerCase().trim();
+    }).filter(Boolean);
+
+    if (normalizedPrompts.length === 0) return [];
+
+    logger.debug(
+      {
+        promptCount: prompts.length,
+        normalizedCount: normalizedPrompts.length,
+        samplePromptLengths: normalizedPrompts.slice(0, 3).map((p) => p.length),
+      },
+      'findByPrompts: checking for duplicate prompts'
+    );
+
+    // Query database for matching questions with category names
+    const results = await sql<QuestionWithCategory[]>`
+      SELECT
+        q.*,
+        c.name as category_name
+      FROM questions q
+      JOIN categories c ON q.category_id = c.id
+      WHERE q.prompt->>${locale} IS NOT NULL
+        AND LOWER(TRIM(q.prompt->>${locale})) = ANY(${sql.array(normalizedPrompts)})
+    `;
+
+    logger.debug(
+      {
+        resultCount: results.length,
+        sampleResults: results.slice(0, 3).map(r => ({
+          id: r.id,
+          prompt: r.prompt,
+        })),
+      },
+      'findByPrompts: completed'
+    );
+
+    return results;
+  },
+
   async exists(id: string): Promise<boolean> {
     const [result] = await sql<{ exists: boolean }[]>`
       SELECT EXISTS(SELECT 1 FROM questions WHERE id = ${id}) as exists
@@ -269,5 +345,66 @@ export const questionsRepo = {
       DELETE FROM questions WHERE category_id = ${categoryId}
     `;
     return result.count;
+  },
+
+  /**
+   * Find duplicate questions using SQL GROUP BY aggregation.
+   * More efficient than in-memory processing - scales to 100k+ questions.
+   * Groups questions by normalized English prompt text (case-insensitive, trimmed).
+   * Only detects duplicates for questions with English ('en') prompts.
+   * Returns groups with metadata for further processing in service layer.
+   */
+  async findDuplicateGroups(
+    filter?: Pick<ListQuestionsFilter, 'categoryId' | 'status'>
+  ): Promise<{
+    normalized_prompt: string;
+    question_ids: string[];
+    category_ids: string[];
+    count: number;
+  }[]> {
+    const categoryFilter = filter?.categoryId
+      ? sql`AND q.category_id = ${filter.categoryId}`
+      : sql``;
+    const statusFilter = filter?.status
+      ? sql`AND q.status = ${filter.status}`
+      : sql``;
+
+    logger.debug(
+      {
+        filters: filter,
+      },
+      'findDuplicateGroups: starting SQL-based duplicate detection'
+    );
+
+    const results = await sql<{
+      normalized_prompt: string;
+      question_ids: string[];
+      category_ids: string[];
+      count: number;
+    }[]>`
+      SELECT
+        LOWER(TRIM(q.prompt->>'en')) as normalized_prompt,
+        array_agg(q.id ORDER BY q.created_at) as question_ids,
+        array_agg(q.category_id ORDER BY q.created_at) as category_ids,
+        COUNT(*)::int as count
+      FROM questions q
+      WHERE q.prompt->>'en' IS NOT NULL
+        AND TRIM(q.prompt->>'en') != ''
+        ${categoryFilter}
+        ${statusFilter}
+      GROUP BY LOWER(TRIM(q.prompt->>'en'))
+      HAVING COUNT(*) > 1
+      ORDER BY COUNT(*) DESC, normalized_prompt
+    `;
+
+    logger.debug(
+      {
+        groupCount: results.length,
+        totalDuplicates: results.reduce((sum, r) => sum + r.count, 0),
+      },
+      'findDuplicateGroups: completed'
+    );
+
+    return results;
   },
 };

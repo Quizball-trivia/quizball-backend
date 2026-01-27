@@ -1,0 +1,2290 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "QuizBall API",
+    "version": "1.0.0",
+    "description": "QuizBall Backend API"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8001",
+      "description": "Local development"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "VALIDATION_ERROR"
+          },
+          "message": {
+            "type": "string",
+            "example": "Validation failed"
+          },
+          "details": {
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "uuid-here"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ]
+      },
+      "AuthUser": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "nullable": true,
+            "format": "email"
+          },
+          "provider_sub": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "provider_sub"
+        ]
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "refresh_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_in": {
+            "type": "number",
+            "nullable": true
+          },
+          "token_type": {
+            "type": "string"
+          },
+          "user": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthUser"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_in",
+          "token_type",
+          "user",
+          "provider"
+        ]
+      },
+      "MessageResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "SocialLoginResponse": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "UserResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true,
+            "format": "email"
+          },
+          "nickname": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_url": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "onboarding_complete": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "nickname",
+          "country",
+          "avatar_url",
+          "onboarding_complete",
+          "created_at"
+        ]
+      },
+      "I18nField": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "CategoryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "name": {
+            "$ref": "#/components/schemas/I18nField"
+          },
+          "description": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "icon": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "parent_id",
+          "name",
+          "description",
+          "icon",
+          "image_url",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CategoryDependenciesResponse": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "$ref": "#/components/schemas/I18nField"
+                },
+                "slug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "slug"
+              ]
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "prompt": {
+                  "$ref": "#/components/schemas/I18nField"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "difficulty": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "prompt",
+                "type",
+                "difficulty"
+              ]
+            }
+          },
+          "featured": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "children",
+          "questions",
+          "featured"
+        ]
+      },
+      "QuestionResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "mcq_single",
+              "input_text"
+            ]
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "easy",
+              "medium",
+              "hard"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ]
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/I18nField"
+          },
+          "explanation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "payload": {
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "category_id",
+          "type",
+          "difficulty",
+          "status",
+          "prompt",
+          "explanation",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PaginatedQuestionsResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionResponse"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "data",
+          "page",
+          "limit",
+          "total",
+          "total_pages"
+        ]
+      },
+      "FeaturedCategoryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "slug": {
+                "type": "string"
+              },
+              "parent_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "name": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "description": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/I18nField"
+                  },
+                  {
+                    "nullable": true
+                  }
+                ]
+              },
+              "icon": {
+                "type": "string",
+                "nullable": true
+              },
+              "image_url": {
+                "type": "string",
+                "nullable": true,
+                "format": "uri"
+              },
+              "is_active": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "slug",
+              "parent_id",
+              "name",
+              "description",
+              "icon",
+              "image_url",
+              "is_active",
+              "created_at",
+              "updated_at"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "category_id",
+          "sort_order",
+          "created_at",
+          "category"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "summary": "Register new user",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "summary": "Sign in with email and password",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "summary": "Refresh access token",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "refresh_token": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "refresh_token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid refresh token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "summary": "Send password reset email",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "redirect_to": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reset email sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "summary": "Reset password",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "access_token": {
+                    "type": "string"
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "minLength": 8
+                  }
+                },
+                "required": [
+                  "access_token",
+                  "new_password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/social-login": {
+      "post": {
+        "summary": "Get OAuth authorization URL",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "google",
+                      "apple",
+                      "facebook",
+                      "github"
+                    ]
+                  },
+                  "redirect_to": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "scopes": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "provider",
+                  "redirect_to"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth URL returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocialLoginResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "summary": "Logout",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "summary": "Get current user profile",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update current user profile",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nickname": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 50
+                  },
+                  "country": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 100
+                  },
+                  "avatar_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/complete-onboarding": {
+      "post": {
+        "summary": "Mark onboarding as complete",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Onboarding completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/categories": {
+      "get": {
+        "summary": "List all categories",
+        "tags": [
+          "Categories"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "parent_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "is_active",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of categories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new category",
+        "description": "Requires admin role",
+        "tags": [
+          "Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "parent_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "$ref": "#/components/schemas/I18nField"
+                  },
+                  "description": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/I18nField"
+                      },
+                      {
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "icon": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 100
+                  },
+                  "image_url": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uri"
+                  },
+                  "is_active": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "slug",
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Category created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/categories/{id}": {
+      "get": {
+        "summary": "Get category by ID",
+        "tags": [
+          "Categories"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Category found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update a category",
+        "description": "Requires admin role",
+        "tags": [
+          "Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "parent_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "$ref": "#/components/schemas/I18nField"
+                  },
+                  "description": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/I18nField"
+                      },
+                      {
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "icon": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 100
+                  },
+                  "image_url": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uri"
+                  },
+                  "is_active": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Category updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a category",
+        "description": "Delete a category. Use cascade=true to also delete associated questions. Requires admin role.",
+        "tags": [
+          "Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Set to \"true\" to delete associated questions before deleting the category",
+              "example": "true"
+            },
+            "required": false,
+            "name": "cascade",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Category deleted"
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Category has children or questions (when cascade=false)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/categories/{id}/dependencies": {
+      "get": {
+        "summary": "Get category dependencies",
+        "description": "Returns child categories, associated questions, and featured status",
+        "tags": [
+          "Categories"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Category dependencies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryDependenciesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/featured-categories": {
+      "get": {
+        "summary": "List all featured categories",
+        "tags": [
+          "Featured Categories"
+        ],
+        "responses": {
+          "200": {
+            "description": "List of featured categories with joined category data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeaturedCategoryResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a category to featured",
+        "description": "Requires admin role",
+        "tags": [
+          "Featured Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "category_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "sort_order": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "category_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Category added to featured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedCategoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Category already featured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/featured-categories/{id}": {
+      "get": {
+        "summary": "Get featured category by ID",
+        "tags": [
+          "Featured Categories"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Featured category found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedCategoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Featured category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update featured category sort order",
+        "description": "Requires admin role",
+        "tags": [
+          "Featured Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sort_order": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "sort_order"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Featured category updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedCategoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Featured category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove category from featured",
+        "description": "Requires admin role",
+        "tags": [
+          "Featured Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Category removed from featured"
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Featured category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/featured-categories/reorder": {
+      "put": {
+        "summary": "Bulk reorder featured categories",
+        "description": "Requires admin role",
+        "tags": [
+          "Featured Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "sort_order": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sort_order"
+                      ]
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "items"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Featured categories reordered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeaturedCategoryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "One or more featured category IDs not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions": {
+      "get": {
+        "summary": "List questions with pagination and filters",
+        "tags": [
+          "Questions"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "category_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "published",
+                "archived"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "easy",
+                "medium",
+                "hard"
+              ]
+            },
+            "required": false,
+            "name": "difficulty",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mcq_single",
+                "input_text"
+              ]
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of questions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedQuestionsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new question with payload",
+        "description": "Requires admin role",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "category_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "mcq_single",
+                      "input_text"
+                    ]
+                  },
+                  "difficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "published",
+                      "archived"
+                    ]
+                  },
+                  "prompt": {
+                    "$ref": "#/components/schemas/I18nField"
+                  },
+                  "explanation": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/I18nField"
+                      },
+                      {
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "payload": {
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "category_id",
+                  "type",
+                  "difficulty",
+                  "prompt"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Question created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions/{id}": {
+      "get": {
+        "summary": "Get question by ID with payload",
+        "tags": [
+          "Questions"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Question found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Question not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update a question with payload",
+        "description": "Requires admin role",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "category_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "mcq_single",
+                      "input_text"
+                    ]
+                  },
+                  "difficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "published",
+                      "archived"
+                    ]
+                  },
+                  "prompt": {
+                    "$ref": "#/components/schemas/I18nField"
+                  },
+                  "explanation": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/I18nField"
+                      },
+                      {
+                        "nullable": true
+                      }
+                    ]
+                  },
+                  "payload": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Question updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Question not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a question",
+        "description": "Requires admin role",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Question deleted"
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Question not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions/{id}/status": {
+      "patch": {
+        "summary": "Update question status",
+        "description": "Requires admin role",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "published",
+                      "archived"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Question not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

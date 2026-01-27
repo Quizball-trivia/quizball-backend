@@ -9,6 +9,9 @@ import {
   updateQuestionSchema,
   updateStatusSchema,
   uuidParamSchema,
+  bulkCreateQuestionsSchema,
+  findDuplicatesQuerySchema,
+  checkDuplicatesSchema,
 } from '../../modules/questions/index.js';
 
 const router = Router();
@@ -25,6 +28,20 @@ router.get(
 );
 
 /**
+ * GET /api/v1/questions/duplicates
+ * Find duplicate questions based on identical prompts.
+ * Protected endpoint - requires admin role.
+ * NOTE: Must be before GET /:id to avoid path conflict.
+ */
+router.get(
+  '/duplicates',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ query: findDuplicatesQuerySchema }),
+  questionsController.findDuplicates
+);
+
+/**
  * GET /api/v1/questions/:id
  * Get a single question by ID with payload.
  * Public endpoint.
@@ -33,6 +50,33 @@ router.get(
   '/:id',
   validate({ params: uuidParamSchema }),
   questionsController.getById
+);
+
+/**
+ * POST /api/v1/questions/bulk
+ * Bulk create multiple questions in a single category.
+ * Protected endpoint - requires admin role.
+ * NOTE: /bulk is distinct from / and does not conflict.
+ */
+router.post(
+  '/bulk',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: bulkCreateQuestionsSchema }),
+  questionsController.bulkCreate
+);
+
+/**
+ * POST /api/v1/questions/check-duplicates
+ * Check if prompts already exist in database (for bulk upload preview).
+ * Protected endpoint - requires admin role.
+ */
+router.post(
+  '/check-duplicates',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: checkDuplicatesSchema }),
+  questionsController.checkDuplicates
 );
 
 /**

@@ -150,4 +150,12 @@ export const categoriesRepo = {
       ORDER BY name->>'en' ASC
     `;
   },
+
+  async listByIds(ids: string[]): Promise<Category[]> {
+    if (ids.length === 0) return [];
+
+    return sql<Category[]>`
+      SELECT * FROM categories WHERE id = ANY(${sql.array(ids)}::uuid[])
+    `;
+  },
 };

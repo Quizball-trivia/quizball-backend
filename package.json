@@ -29,7 +29,8 @@
     "db:types:remote": "supabase gen types typescript --linked > src/db/database.types.ts",
     "docker:start": "./scripts/docker-start.sh",
     "docker:stop": "./scripts/docker-stop.sh",
-    "docker:logs": "docker compose logs -f api"
+    "docker:logs": "docker compose logs -f api",
+    "api:export": "tsx scripts/export-openapi.ts"
   },
   "keywords": [],
   "author": "",

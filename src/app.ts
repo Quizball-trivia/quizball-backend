@@ -76,39 +76,42 @@ export function createApp(): Express {
   };
   app.use(pinoHttp(httpLoggerOptions));
 
-  // General API Rate Limiting
-  const apiLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 300, // 300 requests per window per IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Skip validation - we intentionally trust Railway's proxy
-    validate: false,
-    message: {
-      code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many requests, please try again later',
-      details: null,
-      request_id: null,
-    },
-  });
-  app.use('/api/v1', apiLimiter);
+  // Rate Limiting (disabled in development)
+  if (process.env.NODE_ENV !== 'development') {
+    // General API Rate Limiting
+    const apiLimiter = rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 300, // 300 requests per window per IP
+      standardHeaders: true,
+      legacyHeaders: false,
+      // Skip validation - we intentionally trust Railway's proxy
+      validate: false,
+      message: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests, please try again later',
+        details: null,
+        request_id: null,
+      },
+    });
+    app.use('/api/v1', apiLimiter);
 
-  // Stricter Rate Limiting for auth routes
-  const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // 100 requests per window per IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Skip validation - we intentionally trust Railway's proxy
-    validate: false,
-    message: {
-      code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many auth requests, please try again later',
-      details: null,
-      request_id: null,
-    },
-  });
-  app.use('/api/v1/auth', authLimiter);
+    // Stricter Rate Limiting for auth routes
+    const authLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100, // 100 requests per window per IP
+      standardHeaders: true,
+      legacyHeaders: false,
+      // Skip validation - we intentionally trust Railway's proxy
+      validate: false,
+      message: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many auth requests, please try again later',
+        details: null,
+        request_id: null,
+      },
+    });
+    app.use('/api/v1/auth', authLimiter);
+  }
 
   // Disable ETag caching in development (forces fresh responses)
   if (process.env.NODE_ENV === 'development') {

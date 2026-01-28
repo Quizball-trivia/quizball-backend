@@ -108,6 +108,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -137,6 +138,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -166,6 +168,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -194,6 +197,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -219,6 +223,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -244,6 +249,7 @@ registry.registerPath({
   tags: ['Auth'],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -306,6 +312,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -369,8 +376,19 @@ const categoryResponseSchema = z
   })
   .openapi('CategoryResponse');
 
+const paginatedCategoriesResponseSchema = z
+  .object({
+    data: z.array(categoryResponseSchema),
+    page: z.number().int().positive(),
+    limit: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+    total_pages: z.number().int().nonnegative(),
+  })
+  .openapi('PaginatedCategoriesResponse');
+
 registry.register('I18nField', i18nFieldSchema);
 registry.register('CategoryResponse', categoryResponseSchema);
+registry.register('PaginatedCategoriesResponse', paginatedCategoriesResponseSchema);
 
 const categoryDependenciesResponseSchema = z
   .object({
@@ -440,12 +458,14 @@ registry.registerPath({
     query: z.object({
       parent_id: z.string().uuid().optional(),
       is_active: z.string().optional(),
+      page: z.coerce.number().int().min(1).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
   },
   responses: {
     200: {
       description: 'List of categories',
-      content: { 'application/json': { schema: z.array(categoryResponseSchema) } },
+      content: { 'application/json': { schema: paginatedCategoriesResponseSchema } },
     },
   },
 });
@@ -500,6 +520,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -545,6 +566,7 @@ registry.registerPath({
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -685,6 +707,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -728,6 +751,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -772,6 +796,7 @@ registry.registerPath({
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -887,6 +912,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -949,6 +975,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -1017,6 +1044,7 @@ registry.registerPath({
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -1095,6 +1123,7 @@ registry.registerPath({
   request: {
     params: z.object({ id: z.string().uuid() }),
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({
@@ -1243,6 +1272,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     body: {
+      required: true,
       content: {
         'application/json': {
           schema: z.object({

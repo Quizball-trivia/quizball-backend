@@ -25,6 +25,6 @@ ALTER TABLE public.featured_categories
 
 SELECT setval(
   'public.featured_categories_sort_order_seq',
-  COALESCE((SELECT MAX(sort_order) FROM public.featured_categories), 0),
+  GREATEST(COALESCE((SELECT MAX(sort_order) FROM public.featured_categories), 0), 1),
   true
 );

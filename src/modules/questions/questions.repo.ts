@@ -125,12 +125,17 @@ export const questionsRepo = {
   /**
    * Create question with payload in a single transaction.
    * Prevents orphaned questions if payload creation fails.
-   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    */
   async createWithPayload(
     data: CreateQuestionData,
     payload?: Json
   ): Promise<QuestionWithPayload> {
+    // Helper to safely stringify - avoids double-encoding if already a string
+    const toJsonString = (val: unknown): string => {
+      if (typeof val === 'string') return val;
+      return JSON.stringify(val);
+    };
+
     return sql.begin(async (tx) => {
       const questionResult = await tx.unsafe<Question[]>(
         `INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
@@ -141,8 +146,8 @@ export const questionsRepo = {
           data.type,
           data.difficulty,
           data.status ?? 'draft',
-          JSON.stringify(data.prompt),
-          data.explanation ? JSON.stringify(data.explanation) : null,
+          toJsonString(data.prompt),
+          data.explanation ? toJsonString(data.explanation) : null,
         ]
       );
       const question = questionResult[0];
@@ -153,7 +158,7 @@ export const questionsRepo = {
           `INSERT INTO question_payloads (question_id, payload)
            VALUES ($1, $2::jsonb)
            RETURNING payload`,
-          [question.id, JSON.stringify(payload)]
+          [question.id, toJsonString(payload)]
         );
         questionPayload = payloadResult[0].payload;
       }
@@ -199,7 +204,6 @@ export const questionsRepo = {
   /**
    * Update question with payload in a single transaction.
    * Ensures atomicity - both succeed or both fail.
-   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    * Returns null if question not found.
    */
   async updateWithPayload(
@@ -207,6 +211,12 @@ export const questionsRepo = {
     data: UpdateQuestionData,
     payload: Json
   ): Promise<QuestionWithPayload | null> {
+    // Helper to safely stringify - avoids double-encoding if already a string
+    const toJsonString = (val: unknown): string => {
+      if (typeof val === 'string') return val;
+      return JSON.stringify(val);
+    };
+
     return sql.begin(async (tx) => {
       // Update question
       const questionResult = await tx.unsafe<Question[]>(
@@ -232,9 +242,9 @@ export const questionsRepo = {
           data.status !== undefined,
           data.status ?? '',
           data.prompt !== undefined,
-          data.prompt ? JSON.stringify(data.prompt) : null,
+          data.prompt ? toJsonString(data.prompt) : null,
           data.explanation !== undefined,
-          data.explanation ? JSON.stringify(data.explanation) : null,
+          data.explanation ? toJsonString(data.explanation) : null,
         ]
       );
 
@@ -251,7 +261,7 @@ export const questionsRepo = {
          ON CONFLICT (question_id)
          DO UPDATE SET payload = $2::jsonb, updated_at = NOW()
          RETURNING payload`,
-        [id, JSON.stringify(payload)]
+        [id, toJsonString(payload)]
       );
 
       return { ...question, payload: payloadResult[0].payload };
@@ -302,15 +312,18 @@ export const questionsRepo = {
     );
 
     // Query database for matching questions with category names
-    const results = await sql<QuestionWithCategory[]>`
-      SELECT
+    // Note: Using sql.unsafe for locale because JSON accessor ->> requires literal string, not parameter
+    const localeAccessor = locale === 'ka' ? `q.prompt->>'ka'` : `q.prompt->>'en'`;
+    const results = await sql.unsafe<QuestionWithCategory[]>(
+      `SELECT
         q.*,
         c.name as category_name
       FROM questions q
       JOIN categories c ON q.category_id = c.id
-      WHERE q.prompt->>${locale} IS NOT NULL
-        AND LOWER(TRIM(q.prompt->>${locale})) = ANY(${sql.array(normalizedPrompts)})
-    `;
+      WHERE ${localeAccessor} IS NOT NULL
+        AND LOWER(TRIM(${localeAccessor})) = ANY($1)`,
+      [normalizedPrompts]
+    );
 
     logger.debug(
       {

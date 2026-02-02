@@ -30,7 +30,7 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
   );
 }
 
-async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
+export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
 

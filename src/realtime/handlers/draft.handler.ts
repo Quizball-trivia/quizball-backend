@@ -4,6 +4,7 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { sendMatchQuestion } from '../match-flow.js';
+import { startDraft } from './lobby.handler.js';
 import { logger } from '../../core/logger.js';
 
 async function startMatchFromDraft(

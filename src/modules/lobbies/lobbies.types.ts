@@ -1,0 +1,45 @@
+export interface LobbyRow {
+  id: string;
+  invite_code: string | null;
+  mode: 'friendly' | 'ranked';
+  host_user_id: string;
+  status: 'waiting' | 'active' | 'closed';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LobbyMemberRow {
+  lobby_id: string;
+  user_id: string;
+  is_ready: boolean;
+  joined_at: string;
+}
+
+export interface LobbyCategoryRow {
+  lobby_id: string;
+  slot: number;
+  category_id: string;
+}
+
+export interface LobbyCategoryBanRow {
+  lobby_id: string;
+  user_id: string;
+  category_id: string;
+  banned_at: string;
+}
+
+export interface LobbyMemberWithUser {
+  lobby_id: string;
+  user_id: string;
+  is_ready: boolean;
+  joined_at: string;
+  nickname: string | null;
+  avatar_url: string | null;
+}
+
+export interface LobbyCategoryWithDetails {
+  category_id: string;
+  slot: number;
+  name: Record<string, string>;
+  icon: string | null;
+}

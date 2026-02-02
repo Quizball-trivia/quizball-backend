@@ -1,50 +1,26 @@
 services:
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  redis:
+    image: redis:7-alpine
     ports:
-      - "8000:8000"
-    environment:
-      - NODE_ENV=local
-      - PORT=8000
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/quizball
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - SUPABASE_JWKS_URL=${SUPABASE_JWKS_URL}
-      - SUPABASE_JWT_ISSUER=${SUPABASE_JWT_ISSUER}
-      - SUPABASE_JWT_AUDIENCE=${SUPABASE_JWT_AUDIENCE}
-      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - quizball-network
-
-  db:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=quizball
-    ports:
-      - "5433:5432"
+      - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 5
-    networks:
-      - quizball-network
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
-  postgres_data:
-
-networks:
-  quizball-network:
-    driver: bridge
+  redis_data:

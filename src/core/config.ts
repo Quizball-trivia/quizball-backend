@@ -18,6 +18,9 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
 
+  // Redis
+  REDIS_URL: z.string().url().optional(),
+
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),

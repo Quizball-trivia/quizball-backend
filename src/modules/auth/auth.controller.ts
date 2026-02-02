@@ -10,6 +10,7 @@ import {
   type ResetPasswordHeaders,
   type SocialLoginRequest,
 } from './auth.schemas.js';
+import { usersService } from '../users/index.js';
 
 /**
  * Auth controller.
@@ -26,6 +27,14 @@ export const authController = {
     const authClient = getAuthClient();
 
     const session = await authClient.signUp(email, password);
+    if (session.user?.providerSub) {
+      await usersService.getOrCreateFromIdentity({
+        provider: session.provider,
+        subject: session.user.providerSub,
+        email: session.user.email ?? undefined,
+        claims: {},
+      });
+    }
 
     res.status(201).json(toAuthResponse(session));
   },

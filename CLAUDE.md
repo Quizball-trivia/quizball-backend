@@ -69,3 +69,23 @@ Routes → Controllers → Services → Repositories/Providers
 - Strict TypeScript (`noImplicitAny`, `strictNullChecks`)
 - No `any` unless absolutely necessary
 - All untrusted input validated with Zod
+
+## API Type Synchronization
+
+Frontend apps (CMS, Web) use auto-generated TypeScript types from the OpenAPI spec.
+
+```bash
+# Export OpenAPI spec (for CI/CD)
+npm run api:export
+
+# Frontend: Regenerate types after API changes
+cd ../cms && npm run api:sync:local
+cd ../web && npm run api:sync:local
+```
+
+**After changing API schemas:**
+1. Update Zod schemas in `src/http/openapi/registry.ts`
+2. Frontends run `npm run api:sync:local` to regenerate types
+3. TypeScript catches any mismatches at compile time
+
+See `docs/API_TYPE_SYNC.md` for full documentation.

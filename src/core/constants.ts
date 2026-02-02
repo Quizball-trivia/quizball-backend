@@ -8,7 +8,7 @@ import { config } from './config.js';
  * Prevents open redirect vulnerabilities.
  */
 const DEV_DOMAINS = ['localhost:3000', 'localhost:8000'];
-const PROD_DOMAINS = ['quizball.app', 'www.quizball.app'];
+const PROD_DOMAINS = ['quizball.io', 'www.quizball.io', 'quizball.app', 'www.quizball.app'];
 const isProd = config.NODE_ENV === 'prod' || config.NODE_ENV === 'staging';
 
 export const ALLOWED_REDIRECT_DOMAINS = isProd

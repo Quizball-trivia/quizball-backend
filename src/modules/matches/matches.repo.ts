@@ -47,6 +47,14 @@ export const matchesRepo = {
     `;
   },
 
+  async getPlayerTotalPoints(matchId: string, userId: string): Promise<number> {
+    const [row] = await sql<{ total_points: number }[]>`
+      SELECT total_points FROM match_players
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+    return row?.total_points ?? 0;
+  },
+
   async insertMatchQuestions(matchId: string, questions: Array<{ qIndex: number; questionId: string; categoryId: string; correctIndex: number }>): Promise<MatchQuestionRow[]> {
     if (questions.length === 0) return [];
     const rows = questions.map((q) => [matchId, q.qIndex, q.questionId, q.categoryId, q.correctIndex]);
@@ -55,6 +63,32 @@ export const matchesRepo = {
       INSERT INTO match_questions (match_id, q_index, question_id, category_id, correct_index)
       VALUES ${sql(rows)}
       RETURNING *
+    `;
+  },
+
+  async getRandomQuestionsForCategory(
+    categoryId: string,
+    limit: number
+  ): Promise<Array<{
+    id: string;
+    prompt: Record<string, string>;
+    difficulty: string;
+    category_id: string;
+    payload: unknown;
+  }>> {
+    return sql<{
+      id: string;
+      prompt: Record<string, string>;
+      difficulty: string;
+      category_id: string;
+      payload: unknown;
+    }[]>`
+      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.category_id = ${categoryId} AND q.status = 'published' AND q.type = 'mcq_single'
+      ORDER BY RANDOM()
+      LIMIT ${limit}
     `;
   },
 
@@ -75,7 +109,7 @@ export const matchesRepo = {
   async setQuestionTiming(matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date): Promise<void> {
     await sql`
       UPDATE match_questions
-      SET shown_at = ${shownAt.toISOString()}, deadline_at = ${deadlineAt.toISOString()}
+      SET shown_at = ${shownAt}, deadline_at = ${deadlineAt}
       WHERE match_id = ${matchId} AND q_index = ${qIndex}
     `;
   },
@@ -148,6 +182,15 @@ export const matchesRepo = {
       UPDATE match_players
       SET avg_time_ms = ${avgTimeMs}
       WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+  },
+
+  async getAverageTimes(matchId: string): Promise<Array<{ user_id: string; avg_time_ms: number | null }>> {
+    return sql<{ user_id: string; avg_time_ms: number | null }[]>`
+      SELECT user_id, AVG(time_ms)::int as avg_time_ms
+      FROM match_answers
+      WHERE match_id = ${matchId}
+      GROUP BY user_id
     `;
   },
 

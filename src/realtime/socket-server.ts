@@ -19,11 +19,19 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
       credentials: true,
     },
-    pingTimeout: 20000,
-    pingInterval: 25000,
+    pingTimeout: 20000,   // How long to wait for pong response
+    pingInterval: 10000,  // How often to send ping (must be < pingTimeout)
   });
 
   const { pubClient, subClient } = await initRedisClients();
+
+  pubClient.on('error', (err) => {
+    logger.error({ err }, 'Redis pub client error');
+  });
+  subClient.on('error', (err) => {
+    logger.error({ err }, 'Redis sub client error');
+  });
+
   io.adapter(createAdapter(pubClient, subClient));
 
   io.use(socketAuthMiddleware);

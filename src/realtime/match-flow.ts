@@ -18,23 +18,30 @@ export async function sendMatchQuestion(
   matchId: string,
   qIndex: number
 ): Promise<{ correctIndex: number } | null> {
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match) {
+    logger.warn({ matchId, qIndex }, 'Match not found for question');
+    return null;
+  }
+
   const payload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
   if (!payload) {
     logger.warn({ matchId, qIndex }, 'Unable to build match question payload');
     return null;
   }
 
+  const totalQuestions = match.total_questions ?? 10;
   const deadlineAt = new Date(Date.now() + QUESTION_TIME_MS);
   await matchesRepo.setQuestionTiming(matchId, qIndex, new Date(), deadlineAt);
 
   io.to(`match:${matchId}`).emit('match:question', {
     matchId,
     qIndex,
-    total: 10,
+    total: totalQuestions,
     question: payload.question,
     deadlineAt: deadlineAt.toISOString(),
   });
-  logger.info({ matchId, qIndex, total: 10 }, 'Match question sent');
+  logger.info({ matchId, qIndex, total: totalQuestions }, 'Match question sent');
 
   const key = timerKey(matchId, qIndex);
   const existing = questionTimers.get(key);
@@ -59,8 +66,8 @@ export async function resolveRound(
   fromTimeout = false
 ): Promise<void> {
   const lockKey = `lock:match:${matchId}:${qIndex}`;
-  const locked = await acquireLock(lockKey, 3000);
-  if (!locked) return;
+  const lock = await acquireLock(lockKey, 3000);
+  if (!lock.acquired || !lock.token) return;
 
   try {
     const match = await matchesRepo.getMatch(matchId);
@@ -188,7 +195,7 @@ export async function resolveRound(
       'Match final results broadcast'
     );
   } finally {
-    await releaseLock(lockKey);
+    await releaseLock(lockKey, lock.token);
     const key = timerKey(matchId, qIndex);
     const timer = questionTimers.get(key);
     if (timer) {

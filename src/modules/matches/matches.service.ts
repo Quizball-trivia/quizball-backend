@@ -1,6 +1,6 @@
-import { sql } from '../../db/index.js';
 import { matchesRepo } from './matches.repo.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
+import { logger, pickI18nText } from '../../core/index.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import type { GameQuestionDTO } from '../../realtime/socket.types.js';
 import type {
@@ -10,13 +10,6 @@ import type {
 
 const TOTAL_QUESTIONS = 10;
 const QUESTIONS_PER_CATEGORY = 5;
-
-function pickI18nText(field: Record<string, string> | null | undefined): string {
-  if (!field) return '';
-  if (typeof field.en === 'string') return field.en;
-  const first = Object.values(field)[0];
-  return typeof first === 'string' ? first : '';
-}
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
@@ -54,8 +47,23 @@ export const matchesService = {
 
     const [categoryAId, categoryBId] = params.categoryIds;
 
-    const seat1 = params.hostUserId;
-    const seat2 = memberIds.find((id) => id !== seat1) ?? memberIds[1];
+    const hostIndex = memberIds.indexOf(params.hostUserId);
+    let seat1: string;
+    let seat2: string;
+
+    if (hostIndex !== -1) {
+      // Host is in the lobby - host gets seat 1
+      seat1 = params.hostUserId;
+      seat2 = memberIds.find((id) => id !== seat1)!;
+    } else {
+      // Host not found (edge case) - use first two members
+      logger.warn(
+        { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds },
+        'Host not found in lobby members, using first two members'
+      );
+      seat1 = memberIds[0];
+      seat2 = memberIds[1];
+    }
 
     const selections = await this.pickQuestions([categoryAId, categoryBId]);
     const shuffled = shuffle(selections);
@@ -93,25 +101,15 @@ export const matchesService = {
     const selections: MatchQuestionSelection[] = [];
 
     for (const categoryId of categoryIds) {
-      const rows = await sql<{
-        id: string;
-        prompt: Record<string, string>;
-        difficulty: string;
-        category_id: string;
-        payload: unknown;
-      }[]>`
-        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-        FROM questions q
-        JOIN question_payloads qp ON qp.question_id = q.id
-        WHERE q.category_id = ${categoryId} AND q.status = 'published' AND q.type = 'mcq_single'
-        ORDER BY RANDOM()
-        LIMIT ${QUESTIONS_PER_CATEGORY}
-      `;
-
+      const rows = await matchesRepo.getRandomQuestionsForCategory(
+        categoryId,
+        QUESTIONS_PER_CATEGORY * 3
+      );
       if (rows.length < QUESTIONS_PER_CATEGORY) {
         throw new Error('Not enough questions to start match');
       }
 
+      const categorySelections: MatchQuestionSelection[] = [];
       for (const row of rows) {
         const parsed = questionPayloadSchema.safeParse(row.payload);
         if (!parsed.success || parsed.data.type !== 'mcq_single') {
@@ -121,12 +119,20 @@ export const matchesService = {
         if (correctIndex < 0) {
           continue;
         }
-        selections.push({
+        categorySelections.push({
           questionId: row.id,
           categoryId: row.category_id,
           correctIndex,
         });
+        if (categorySelections.length >= QUESTIONS_PER_CATEGORY) {
+          break;
+        }
       }
+
+      if (categorySelections.length < QUESTIONS_PER_CATEGORY) {
+        throw new Error('Not enough valid questions to start match');
+      }
+      selections.push(...categorySelections);
     }
 
     if (selections.length < TOTAL_QUESTIONS) {
@@ -185,13 +191,7 @@ export const matchesService = {
   },
 
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
-    const rows = await sql<{ user_id: string; avg_time_ms: number | null }[]>`
-      SELECT user_id, AVG(time_ms)::int as avg_time_ms
-      FROM match_answers
-      WHERE match_id = ${matchId}
-      GROUP BY user_id
-    `;
-
+    const rows = await matchesRepo.getAverageTimes(matchId);
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));
   },
 };

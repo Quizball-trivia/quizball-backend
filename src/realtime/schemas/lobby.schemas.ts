@@ -5,7 +5,11 @@ export const lobbyCreateSchema = z.object({
 });
 
 export const lobbyJoinByCodeSchema = z.object({
-  inviteCode: z.string().min(3).max(12),
+  inviteCode: z
+    .string()
+    .min(3)
+    .max(12)
+    .regex(/^[A-Za-z0-9]+$/, 'Invite code must be alphanumeric'),
 });
 
 export const lobbyReadySchema = z.object({

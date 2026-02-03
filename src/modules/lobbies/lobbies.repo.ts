@@ -64,12 +64,14 @@ export const lobbiesRepo = {
     `;
   },
 
-  async updateMemberReady(lobbyId: string, userId: string, isReady: boolean): Promise<void> {
-    await sql`
+  async updateMemberReady(lobbyId: string, userId: string, isReady: boolean): Promise<boolean> {
+    const [row] = await sql<LobbyMemberRow[]>`
       UPDATE lobby_members
       SET is_ready = ${isReady}
       WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+      RETURNING *
     `;
+    return row !== undefined;
   },
 
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
@@ -110,6 +112,25 @@ export const lobbiesRepo = {
     `;
 
     return inserted;
+  },
+
+  async selectRandomActiveCategories(
+    minQuestions: number,
+    limit: number
+  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null }>> {
+    return sql<{ id: string; name: Record<string, string>; icon: string | null }[]>`
+      SELECT c.id, c.name, c.icon
+      FROM categories c
+      JOIN questions q ON q.category_id = c.id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
+      GROUP BY c.id, c.name, c.icon
+      HAVING COUNT(*) >= ${minQuestions}
+      ORDER BY RANDOM()
+      LIMIT ${limit}
+    `;
   },
 
   async clearLobbyCategories(lobbyId: string): Promise<void> {

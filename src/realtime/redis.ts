@@ -16,12 +16,21 @@ export async function initRedisClients(): Promise<{
 
   if (!commandClient) {
     commandClient = createClient({ url: config.REDIS_URL });
+    commandClient.on('error', (err) => {
+      logger.error({ err, client: 'command' }, 'Redis command client error');
+    });
   }
   if (!pubClient) {
     pubClient = createClient({ url: config.REDIS_URL });
+    pubClient.on('error', (err) => {
+      logger.error({ err, client: 'pub' }, 'Redis pub client error');
+    });
   }
   if (!subClient) {
     subClient = pubClient.duplicate();
+    subClient.on('error', (err) => {
+      logger.error({ err, client: 'sub' }, 'Redis sub client error');
+    });
   }
 
   const toConnect = [commandClient, pubClient, subClient].filter(
@@ -37,4 +46,20 @@ export async function initRedisClients(): Promise<{
 
 export function getRedisClient(): RedisClientType | null {
   return commandClient;
+}
+
+export async function closeRedisClients(): Promise<void> {
+  const clients = [commandClient, pubClient, subClient].filter(
+    (client): client is RedisClientType => !!client && client.isOpen
+  );
+
+  if (clients.length === 0) return;
+
+  await Promise.allSettled(clients.map((client) => client.quit()));
+
+  commandClient = null;
+  pubClient = null;
+  subClient = null;
+
+  logger.info('Redis clients disconnected');
 }

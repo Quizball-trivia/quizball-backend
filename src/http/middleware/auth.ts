@@ -20,6 +20,11 @@ function extractBearerToken(authHeader: string | undefined): string | null {
   return parts[1];
 }
 
+function extractCookieToken(cookieToken: unknown): string | null {
+  if (typeof cookieToken !== 'string') return null;
+  return cookieToken.trim() || null;
+}
+
 /**
  * Auth middleware.
  * Verifies JWT and attaches user + identity to request.
@@ -36,10 +41,11 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
-    // 1. Extract token from Authorization header
-    const token = extractBearerToken(req.headers.authorization);
+    // 1. Extract token from cookies or Authorization header
+    const cookieToken = extractCookieToken(req.cookies?.qb_access_token);
+    const token = cookieToken ?? extractBearerToken(req.headers.authorization);
     if (!token) {
-      throw new AuthenticationError('Missing authorization header');
+      throw new AuthenticationError('Missing auth token');
     }
 
     // 2. Verify JWT → get AuthIdentity

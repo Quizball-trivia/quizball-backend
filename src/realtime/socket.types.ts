@@ -82,7 +82,6 @@ export interface MatchAnswerAckPayload {
   isCorrect: boolean;
   correctIndex: number;
   myTotalPoints: number;
-  oppTotalPoints: number;
   oppAnswered: boolean;
 }
 
@@ -123,7 +122,13 @@ export interface ClientToServerEvents {
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
 }
 
+export interface ErrorPayload {
+  code: string;
+  message: string;
+}
+
 export interface ServerToClientEvents {
+  'error': (data: ErrorPayload) => void;
   'lobby:state': (data: LobbyState) => void;
   'draft:start': (data: DraftState) => void;
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;

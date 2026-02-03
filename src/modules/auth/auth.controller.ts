@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
 import { getAuthClient } from './supabase-auth-client.js';
+import { authService } from './auth.service.js';
+import { config } from '../../core/config.js';
 import {
   toAuthResponse,
   type RegisterRequest,
@@ -10,7 +12,39 @@ import {
   type ResetPasswordHeaders,
   type SocialLoginRequest,
 } from './auth.schemas.js';
-import { usersService } from '../users/index.js';
+
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: config.NODE_ENV === 'prod',
+  sameSite: (config.NODE_ENV === 'prod' ? 'none' : 'lax') as
+    | 'lax'
+    | 'strict'
+    | 'none',
+  path: '/',
+};
+
+function setAuthCookies(
+  res: Response,
+  session: { accessToken: string | null; refreshToken: string | null; expiresIn: number | null }
+): void {
+  if (session.accessToken) {
+    res.cookie('qb_access_token', session.accessToken, {
+      ...COOKIE_OPTIONS,
+      maxAge: (session.expiresIn ?? 3600) * 1000,
+    });
+  }
+  if (session.refreshToken) {
+    res.cookie('qb_refresh_token', session.refreshToken, {
+      ...COOKIE_OPTIONS,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+  }
+}
+
+function clearAuthCookies(res: Response): void {
+  res.clearCookie('qb_access_token', COOKIE_OPTIONS);
+  res.clearCookie('qb_refresh_token', COOKIE_OPTIONS);
+}
 
 /**
  * Auth controller.
@@ -24,18 +58,9 @@ export const authController = {
    */
   async register(req: Request, res: Response): Promise<void> {
     const { email, password } = req.validated.body as RegisterRequest;
-    const authClient = getAuthClient();
+    const session = await authService.register({ email, password });
 
-    const session = await authClient.signUp(email, password);
-    if (session.user?.providerSub) {
-      await usersService.getOrCreateFromIdentity({
-        provider: session.provider,
-        subject: session.user.providerSub,
-        email: session.user.email ?? undefined,
-        claims: {},
-      });
-    }
-
+    setAuthCookies(res, session);
     res.status(201).json(toAuthResponse(session));
   },
 
@@ -45,10 +70,9 @@ export const authController = {
    */
   async login(req: Request, res: Response): Promise<void> {
     const { email, password } = req.validated.body as LoginRequest;
-    const authClient = getAuthClient();
+    const session = await authService.login({ email, password });
 
-    const session = await authClient.signIn(email, password);
-
+    setAuthCookies(res, session);
     res.json(toAuthResponse(session));
   },
 
@@ -62,6 +86,7 @@ export const authController = {
 
     const session = await authClient.refresh(refresh_token);
 
+    setAuthCookies(res, session);
     res.json(toAuthResponse(session));
   },
 
@@ -116,6 +141,7 @@ export const authController = {
    * Backend doesn't track sessions - just returns success.
    */
   async logout(_req: Request, res: Response): Promise<void> {
+    clearAuthCookies(res);
     res.json({ message: 'Logged out successfully' });
   },
 };

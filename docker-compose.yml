@@ -1,23 +1,31 @@
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme}
     volumes:
       - redis_data:/data
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  # Development only - Redis management UI (do not use in production)
   redis-commander:
-    image: rediscommander/redis-commander:latest
+    image: rediscommander/redis-commander:0.8.1
+    profiles:
+      - dev
     ports:
       - "8081:8081"
     environment:
-      REDIS_HOSTS: local:redis:6379
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-changeme}
+      HTTP_USER: admin
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-devpassword}
     depends_on:
       redis:
         condition: service_healthy

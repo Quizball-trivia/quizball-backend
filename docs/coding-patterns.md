@@ -44,6 +44,17 @@ We use a layered approach:
 Rule: dependencies flow inward.
 Routes → Controllers → Services → Repositories/Providers.
 
+### Realtime (WebSocket) Architecture
+
+We follow the same layering for Socket.IO:
+
+- **Socket Handlers**: validate payloads (Zod) and delegate to realtime services. No business logic.
+- **Realtime Services**: socket-specific use-cases. Orchestrate domain logic, call repos/services, emit socket events.
+- **Repositories/Providers**: unchanged (DB + external integrations).
+
+Rule: dependencies flow inward.
+Handlers → Realtime Services → Repositories/Providers.
+
 ---
 
 ## 3) Naming Conventions

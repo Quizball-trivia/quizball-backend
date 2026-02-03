@@ -4,6 +4,7 @@ import { config } from './core/config.js';
 import { logger } from './core/logger.js';
 import { disconnectDb } from './db/index.js';
 import { initSocketServer } from './realtime/socket-server.js';
+import { closeRedisClients } from './realtime/redis.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -24,6 +25,7 @@ const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   io.close();
   server.close(async () => {
+    await closeRedisClients();
     await disconnectDb();
     logger.info('Server closed');
     process.exit(0);

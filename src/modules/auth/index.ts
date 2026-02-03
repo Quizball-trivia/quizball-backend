@@ -3,6 +3,7 @@ export { getAuthClient } from './supabase-auth-client.js';
 export type { AuthProvider } from './auth.provider.js';
 export { getAuthProvider } from './supabase-auth-provider.js';
 export { authController } from './auth.controller.js';
+export { authService } from './auth.service.js';
 export {
   registerSchema,
   loginSchema,

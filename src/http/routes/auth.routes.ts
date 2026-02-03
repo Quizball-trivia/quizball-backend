@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
+import { injectRefreshTokenFromCookie } from '../middleware/refresh-token-cookie.js';
 import { authController } from '../../modules/auth/index.js';
 import {
   registerSchema,
@@ -35,6 +36,7 @@ router.post('/login', validate({ body: loginSchema }), authController.login);
  */
 router.post(
   '/refresh',
+  injectRefreshTokenFromCookie,
   validate({ body: refreshSchema }),
   authController.refresh
 );

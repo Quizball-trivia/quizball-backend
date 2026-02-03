@@ -17,6 +17,19 @@ function extractToken(socket: Socket): string | null {
   if (typeof authToken === 'string' && authToken.trim()) {
     return authToken;
   }
+  const cookieHeader = socket.handshake.headers?.cookie;
+  if (typeof cookieHeader === 'string') {
+    const cookies = Object.fromEntries(
+      cookieHeader.split(';').map((part) => {
+        const [rawKey, ...rawValue] = part.trim().split('=');
+        return [rawKey, decodeURIComponent(rawValue.join('='))];
+      })
+    );
+    const cookieToken = cookies.qb_access_token;
+    if (typeof cookieToken === 'string' && cookieToken.trim()) {
+      return cookieToken.trim();
+    }
+  }
   const header = socket.handshake.headers?.authorization;
   if (typeof header === 'string') {
     return header.replace(/^Bearer\s+/i, '').trim() || null;

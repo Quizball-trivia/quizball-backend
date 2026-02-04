@@ -16,7 +16,7 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
     } catch (error) {
       logger.error(
         {
-          err: error instanceof Error ? error.message : error,
+          err: error,
           userId: socket.data.user?.id,
           matchId: parsed.data.matchId,
           qIndex: parsed.data.qIndex,

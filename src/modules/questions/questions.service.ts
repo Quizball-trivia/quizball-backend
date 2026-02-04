@@ -37,7 +37,7 @@ const normalizePayload = (payload: Json | undefined, context: string): Json | un
   const first = parseJson(payload);
   const normalized = typeof first === 'string' ? parseJson(first) : first;
 
-  if (typeof normalized !== 'object' || normalized === null) {
+  if (typeof normalized !== 'object' || normalized === null || Array.isArray(normalized)) {
     throw new BadRequestError(`Payload must be a JSON object in ${context}`);
   }
 

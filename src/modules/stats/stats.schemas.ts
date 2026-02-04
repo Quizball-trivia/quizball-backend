@@ -3,7 +3,13 @@ import { z } from 'zod';
 export const headToHeadQuerySchema = z.object({
   userA: z.string().uuid(),
   userB: z.string().uuid(),
-});
+}).refine(
+  (data) => data.userA !== data.userB,
+  {
+    message: 'userA and userB must be different',
+    path: ['userB'], // Point error to userB field
+  }
+);
 
 export type HeadToHeadQuery = z.infer<typeof headToHeadQuerySchema>;
 

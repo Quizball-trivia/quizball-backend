@@ -1,4 +1,5 @@
 import { statsRepo } from './stats.repo.js';
+import { BadRequestError } from '../../core/errors.js';
 
 export interface HeadToHeadSummary {
   userAId: string;
@@ -12,6 +13,10 @@ export interface HeadToHeadSummary {
 
 export const statsService = {
   async getHeadToHead(userAId: string, userBId: string): Promise<HeadToHeadSummary> {
+    if (userAId === userBId) {
+      throw new BadRequestError('userA and userB must be different');
+    }
+
     const row = await statsRepo.getHeadToHead(userAId, userBId);
     return {
       userAId,

@@ -218,31 +218,6 @@ registry.registerPath({
   },
 });
 
-// =============================================================================
-// Stats Routes
-// =============================================================================
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/stats/head-to-head',
-  summary: 'Get head-to-head summary for two users',
-  tags: ['Stats'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    query: headToHeadQuerySchema,
-  },
-  responses: {
-    200: {
-      description: 'Head-to-head summary',
-      content: { 'application/json': { schema: headToHeadResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
 registry.registerPath({
   method: 'post',
   path: '/api/v1/auth/reset-password',
@@ -305,6 +280,31 @@ registry.registerPath({
     200: {
       description: 'Logged out',
       content: { 'application/json': { schema: messageResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Stats Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/stats/head-to-head',
+  summary: 'Get head-to-head summary for two users',
+  tags: ['Stats'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: headToHeadQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Head-to-head summary',
+      content: { 'application/json': { schema: headToHeadResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
     },
   },
 });

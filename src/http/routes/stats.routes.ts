@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { statsController } from '../../modules/stats/index.js';
-import { headToHeadQuerySchema } from '../../modules/stats/index.js';
+import { statsController, headToHeadQuerySchema } from '../../modules/stats/index.js';
 
 const router = Router();
 

@@ -127,7 +127,19 @@ export const draftRealtimeService = {
 
     const bannedIds = new Set(updatedBans.map((ban) => ban.category_id));
     const remaining = categories.filter((category) => !bannedIds.has(category.id));
-    if (remaining.length < 2) return;
+    if (remaining.length < 2) {
+      logger.warn(
+        {
+          lobbyId,
+          totalCategories: categories.length,
+          bannedCount: updatedBans.length,
+          remainingCount: remaining.length,
+          bannedCategoryIds: Array.from(bannedIds),
+        },
+        'Insufficient categories remaining after bans in draft'
+      );
+      return;
+    }
 
     const allowed: [string, string] = [remaining[0].id, remaining[1].id];
 

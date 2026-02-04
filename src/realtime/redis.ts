@@ -6,6 +6,19 @@ let commandClient: RedisClientType | null = null;
 let pubClient: RedisClientType | null = null;
 let subClient: RedisClientType | null = null;
 
+// Named error handlers for Redis clients
+const handleCommandError = (err: Error) => {
+  logger.error({ err, client: 'command' }, 'Redis command client error');
+};
+
+const handlePubError = (err: Error) => {
+  logger.error({ err, client: 'pub' }, 'Redis pub client error');
+};
+
+const handleSubError = (err: Error) => {
+  logger.error({ err, client: 'sub' }, 'Redis sub client error');
+};
+
 export async function initRedisClients(): Promise<{
   pubClient: RedisClientType;
   subClient: RedisClientType;
@@ -24,21 +37,15 @@ export async function initRedisClients(): Promise<{
     subClient = pubClient.duplicate();
   }
 
-  // Attach error handlers (remove existing first to avoid duplicates on re-init)
-  commandClient.removeAllListeners('error');
-  commandClient.on('error', (err) => {
-    logger.error({ err, client: 'command' }, 'Redis command client error');
-  });
+  // Attach error handlers (remove specific handler first to avoid duplicates on re-init)
+  commandClient.removeListener('error', handleCommandError);
+  commandClient.on('error', handleCommandError);
 
-  pubClient.removeAllListeners('error');
-  pubClient.on('error', (err) => {
-    logger.error({ err, client: 'pub' }, 'Redis pub client error');
-  });
+  pubClient.removeListener('error', handlePubError);
+  pubClient.on('error', handlePubError);
 
-  subClient.removeAllListeners('error');
-  subClient.on('error', (err) => {
-    logger.error({ err, client: 'sub' }, 'Redis sub client error');
-  });
+  subClient.removeListener('error', handleSubError);
+  subClient.on('error', handleSubError);
 
   const toConnect = [commandClient, pubClient, subClient].filter(
     (client) => !client.isOpen
@@ -62,7 +69,17 @@ export async function closeRedisClients(): Promise<void> {
 
   if (clients.length === 0) return;
 
-  await Promise.allSettled(clients.map((client) => client.quit()));
+  const results = await Promise.allSettled(clients.map((client) => client.quit()));
+
+  // Log any quit failures but continue with cleanup
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      logger.error(
+        { err: result.reason, clientIndex: index },
+        'Redis client quit failed'
+      );
+    }
+  });
 
   commandClient = null;
   pubClient = null;

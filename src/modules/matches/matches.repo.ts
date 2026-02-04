@@ -78,8 +78,26 @@ export const matchesRepo = {
   }>> {
     const [{ count }] = await sql<{ count: number }[]>`
       SELECT COUNT(*)::int as count
-      FROM questions
-      WHERE category_id = ${categoryId} AND status = 'published' AND type = 'mcq_single'
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.category_id = ${categoryId} AND q.status = 'published' AND q.type = 'mcq_single'
+        AND qp.payload ? 'options'
+        AND jsonb_typeof(qp.payload->'options') = 'array'
+        AND jsonb_array_length(qp.payload->'options') > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE jsonb_typeof(opt) <> 'object'
+             OR NOT (opt ? 'text')
+             OR jsonb_typeof(opt->'text') <> 'object'
+             OR NOT (opt ? 'is_correct')
+             OR (opt->>'is_correct') NOT IN ('true', 'false')
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE opt->>'is_correct' = 'true'
+        )
     `;
 
     if (!count) return [];

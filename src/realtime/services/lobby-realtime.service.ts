@@ -12,8 +12,10 @@ import { beginMatchForLobby } from './match-realtime.service.js';
 const RANKED_QUEUE_KEY = 'ranked:queue';
 const RANKED_INQUEUE_PREFIX = 'ranked:inqueue:';
 const RANKED_INQUEUE_TTL_SEC = 60;
+const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
+const DRAFT_START_GUARD_TTL_SEC = 15;
 
-// Guard against duplicate startDraft calls when both players ready simultaneously
+// Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
 
 function generateInviteCode(length = 6): string {
@@ -44,6 +46,50 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
     },
     'Lobby state broadcast'
   );
+}
+
+async function tryAcquireDraftStartGuard(lobbyId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (redis) {
+    const key = `${DRAFT_START_GUARD_PREFIX}${lobbyId}`;
+    const result = await redis.set(key, '1', { NX: true, EX: DRAFT_START_GUARD_TTL_SEC });
+    return result === 'OK';
+  }
+
+  if (draftStartingSet.has(lobbyId)) return false;
+  draftStartingSet.add(lobbyId);
+  return true;
+}
+
+async function releaseDraftStartGuard(lobbyId: string): Promise<void> {
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.del(`${DRAFT_START_GUARD_PREFIX}${lobbyId}`);
+  }
+  draftStartingSet.delete(lobbyId);
+}
+
+async function popRankedPair(redis: NonNullable<ReturnType<typeof getRedisClient>>): Promise<string[]> {
+  const script = `
+    local key = KEYS[1]
+    local count = tonumber(ARGV[1])
+    local items = redis.call('LPOP', key, count)
+    if not items then return {} end
+    if type(items) == 'string' then items = {items} end
+    if #items < count then
+      for i = #items, 1, -1 do
+        redis.call('LPUSH', key, items[i])
+      end
+      return items
+    end
+    return items
+  `;
+
+  const result = await redis.eval(script, {
+    keys: [RANKED_QUEUE_KEY],
+    arguments: ['2'],
+  });
+  return Array.isArray(result) ? result.map(String) : [];
 }
 
 export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
@@ -118,12 +164,9 @@ async function enqueueRanked(io: QuizballServer, userId: string): Promise<void> 
   logger.info({ userId, queueLength }, 'Ranked queue: enqueued');
   if (queueLength < 2) return;
 
-  // Atomically pop up to 2 users to avoid race conditions
-  const popped = await redis.lPopCount(RANKED_QUEUE_KEY, 2);
-  if (!popped || popped.length < 2) {
-    // Not enough users - restore any popped user back to the queue
-    if (popped && popped.length === 1) {
-      await redis.lPush(RANKED_QUEUE_KEY, popped[0]);
+  const popped = await popRankedPair(redis);
+  if (popped.length < 2) {
+    if (popped.length === 1) {
       logger.debug({ userId: popped[0] }, 'Ranked queue: restored single user after failed match');
     }
     return;
@@ -266,27 +309,42 @@ export const lobbyRealtimeService = {
     );
     await emitLobbyState(io, lobbyId);
 
-    const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
-    const memberCount = await lobbiesRepo.countMembers(lobbyId);
+    const lockKey = `lock:lobby:${lobbyId}`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ lobbyId }, 'Lobby ready check skipped: lock not acquired');
+      return;
+    }
 
-    if (memberCount === 2 && readyCount === 2) {
-      if (lobby.mode === 'friendly' && lobby.game_mode === 'friendly') {
-        logger.info({ lobbyId }, 'Lobby ready -> waiting for host start (friendly)');
-        return;
+    let shouldStartDraft = false;
+    try {
+      const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+      const memberCount = await lobbiesRepo.countMembers(lobbyId);
+
+      if (memberCount === 2 && readyCount === 2) {
+        if (lobby.mode === 'friendly' && lobby.game_mode === 'friendly') {
+          logger.info({ lobbyId }, 'Lobby ready -> waiting for host start (friendly)');
+          return;
+        }
+
+        const acquiredGuard = await tryAcquireDraftStartGuard(lobbyId);
+        if (!acquiredGuard) {
+          logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
+          return;
+        }
+
+        shouldStartDraft = true;
       }
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
 
-      // Guard against duplicate startDraft when both players ready simultaneously
-      if (draftStartingSet.has(lobbyId)) {
-        logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
-        return;
-      }
-      draftStartingSet.add(lobbyId);
-
+    if (shouldStartDraft) {
       try {
         logger.info({ lobbyId }, 'Lobby ready -> starting draft');
         await startDraft(io, lobbyId);
       } finally {
-        draftStartingSet.delete(lobbyId);
+        await releaseDraftStartGuard(lobbyId);
       }
     }
   },
@@ -324,21 +382,25 @@ export const lobbyRealtimeService = {
       return;
     }
 
-    const memberCount = await lobbiesRepo.countMembers(lobbyId);
-    const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
-    if (memberCount > 0 && readyCount === memberCount) {
-      socket.emit('error', { code: 'LOBBY_READY_LOCKED', message: 'Cannot edit settings after both players are ready' });
-      return;
-    }
-
     const lockKey = `lock:lobby:${lobbyId}`;
     const lock = await acquireLock(lockKey, 3000);
     if (!lock.acquired || !lock.token) {
       logger.warn({ lobbyId }, 'Lobby settings update skipped: lock not acquired');
+      socket.emit('error', {
+        code: 'LOBBY_SETTINGS_LOCKED',
+        message: 'Lobby settings update is busy. Please retry.',
+      });
       return;
     }
 
     try {
+      const memberCount = await lobbiesRepo.countMembers(lobbyId);
+      const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+      if (memberCount > 0 && readyCount === memberCount) {
+        socket.emit('error', { code: 'LOBBY_READY_LOCKED', message: 'Cannot edit settings after both players are ready' });
+        return;
+      }
+
       const currentSettings = {
         gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
         friendlyRandom: lobby.friendly_random ?? true,
@@ -444,6 +506,10 @@ export const lobbyRealtimeService = {
     const lock = await acquireLock(lockKey, 3000);
     if (!lock.acquired || !lock.token) {
       logger.warn({ lobbyId }, 'Friendly match start skipped: lock not acquired');
+      socket.emit('error', {
+        code: 'MATCH_START_LOCKED',
+        message: 'Match start is busy. Please retry.',
+      });
       return;
     }
 

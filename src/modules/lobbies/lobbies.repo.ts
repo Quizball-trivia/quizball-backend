@@ -65,6 +65,19 @@ export const lobbiesRepo = {
     return row ?? null;
   },
 
+  async findWaitingLobbyForUser(userId: string): Promise<LobbyRow | null> {
+    const [row] = await sql<LobbyRow[]>`
+      SELECT l.*
+      FROM lobbies l
+      JOIN lobby_members lm ON lm.lobby_id = l.id
+      WHERE lm.user_id = ${userId}
+        AND l.status = 'waiting'
+      ORDER BY lm.joined_at DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
   async setLobbyStatus(lobbyId: string, status: LobbyRow['status']): Promise<void> {
     await sql`
       UPDATE lobbies
@@ -150,12 +163,13 @@ export const lobbiesRepo = {
   },
 
   async setAllReady(lobbyId: string, isReady: boolean): Promise<number> {
-    const result = await sql`
+    const rows = await sql<{ updated: number }[]>`
       UPDATE lobby_members
       SET is_ready = ${isReady}
       WHERE lobby_id = ${lobbyId}
+      RETURNING 1 as updated
     `;
-    return result.count;
+    return rows.length;
   },
 
   async insertLobbyCategories(lobbyId: string, categories: Array<{ slot: number; categoryId: string }>): Promise<LobbyCategoryRow[]> {

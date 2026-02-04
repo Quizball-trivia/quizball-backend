@@ -18,6 +18,8 @@ export interface AuthIdentity {
   provider: string;
   subject: string;
   email?: string;
+  name?: string;
+  avatarUrl?: string;
   claims: Record<string, unknown>;
 }
 

@@ -44,6 +44,51 @@ We use a layered approach:
 Rule: dependencies flow inward.
 Routes → Controllers → Services → Repositories/Providers.
 
+### Realtime (WebSocket) Architecture
+
+We follow the same layering for Socket.IO:
+
+- **Socket Handlers**: validate payloads (Zod) and delegate to realtime services. No business logic.
+- **Realtime Services**: socket-specific use-cases. Orchestrate domain logic, call repositories and domain services (e.g., UsersService) to reuse business logic across HTTP and WebSocket layers, and emit socket events.
+- **Repositories/Providers**: unchanged (DB + external integrations).
+
+Rule: dependencies flow inward.
+Handlers → Realtime Services → Repositories/Providers.
+
+#### Socket-Specific Guidelines
+
+- **Authentication & Authorization**
+  - Validate tokens during the socket handshake via middleware (see `socket-auth.ts`).
+  - Attach user identity to `socket.data` so handlers can access it without re-validating.
+
+- **Error Handling & Logging**
+  - Realtime services should throw typed errors or return error objects; never swallow failures silently.
+  - Handlers catch errors and emit standardized `error` events: `socket.emit('error', { code, message })`.
+  - Log socket events with context (`userId`, `lobbyId`, `socketId`) for traceability.
+
+- **Testing Strategies**
+  - Unit test realtime services by mocking repositories and the `io` server object.
+  - Integration test full socket flows using a test client (e.g., `socket.io-client`) against a real server instance.
+  - Stub external providers (Redis, Supabase) to isolate socket logic.
+
+---
+
+## Frontend Game Stage Router Pattern (Reference)
+
+When the game UI needs to switch between “stages” (matchmaking → draft → playing → results),
+use a **stage router** component to orchestrate the flow. This keeps screens dumb and reusable.
+
+Recommended structure:
+- **Stage Router (container)**: reads store state, coordinates transitions, and selects which screen to render.
+- **Stage Transitions Hook**: encapsulates side effects (socket events, stage changes) in a dedicated hook.
+- **Screen Components (presentational)**: accept typed props only, no store access, no socket logic.
+
+Guidelines:
+- Keep routing logic in one place (`GameStageRouter`), not inside each screen.
+- Use hooks for side effects (`useGameStageTransitions`) to keep the router readable.
+- Use stable “view models” or computed props to avoid passing raw store data everywhere.
+- Prefer `GameQuestion` (domain type) throughout; avoid legacy conversions when possible.
+
 ---
 
 ## 3) Naming Conventions

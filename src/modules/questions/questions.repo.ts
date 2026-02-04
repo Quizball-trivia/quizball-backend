@@ -2,6 +2,37 @@ import { sql } from '../../db/index.js';
 import type { Question, QuestionWithPayload, I18nField, Json } from '../../db/types.js';
 import { logger } from '../../core/logger.js';
 
+/**
+ * Allowed locales for SQL query construction.
+ * SECURITY: Only these pre-defined SQL fragments can be used in queries.
+ * This prevents SQL injection when using sql.unsafe() with locale-based accessors.
+ */
+const ALLOWED_LOCALES = ['en', 'ka'] as const;
+type AllowedLocale = typeof ALLOWED_LOCALES[number];
+
+const LOCALE_PROMPT_ACCESSORS: Record<AllowedLocale, string> = {
+  en: `q.prompt->>'en'`,
+  ka: `q.prompt->>'ka'`,
+};
+
+function getLocaleAccessor(locale: string): string {
+  if (ALLOWED_LOCALES.includes(locale as AllowedLocale)) {
+    return LOCALE_PROMPT_ACCESSORS[locale as AllowedLocale];
+  }
+  // Default to 'en' for unsupported locales
+  logger.warn({ locale }, 'Unsupported locale requested, defaulting to en');
+  return LOCALE_PROMPT_ACCESSORS.en;
+}
+
+/**
+ * Helper to safely stringify JSON values.
+ * Avoids double-encoding if the value is already a string.
+ */
+const toJsonString = (val: unknown): string => {
+  if (typeof val === 'string') return val;
+  return JSON.stringify(val);
+};
+
 export interface CreateQuestionData {
   categoryId: string;
   type: string;
@@ -125,7 +156,6 @@ export const questionsRepo = {
   /**
    * Create question with payload in a single transaction.
    * Prevents orphaned questions if payload creation fails.
-   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    */
   async createWithPayload(
     data: CreateQuestionData,
@@ -141,8 +171,8 @@ export const questionsRepo = {
           data.type,
           data.difficulty,
           data.status ?? 'draft',
-          JSON.stringify(data.prompt),
-          data.explanation ? JSON.stringify(data.explanation) : null,
+          toJsonString(data.prompt),
+          data.explanation ? toJsonString(data.explanation) : null,
         ]
       );
       const question = questionResult[0];
@@ -153,7 +183,7 @@ export const questionsRepo = {
           `INSERT INTO question_payloads (question_id, payload)
            VALUES ($1, $2::jsonb)
            RETURNING payload`,
-          [question.id, JSON.stringify(payload)]
+          [question.id, toJsonString(payload)]
         );
         questionPayload = payloadResult[0].payload;
       }
@@ -199,7 +229,6 @@ export const questionsRepo = {
   /**
    * Update question with payload in a single transaction.
    * Ensures atomicity - both succeed or both fail.
-   * Uses JSON.stringify for JSONB fields to ensure proper serialization.
    * Returns null if question not found.
    */
   async updateWithPayload(
@@ -232,9 +261,9 @@ export const questionsRepo = {
           data.status !== undefined,
           data.status ?? '',
           data.prompt !== undefined,
-          data.prompt ? JSON.stringify(data.prompt) : null,
+          data.prompt ? toJsonString(data.prompt) : null,
           data.explanation !== undefined,
-          data.explanation ? JSON.stringify(data.explanation) : null,
+          data.explanation ? toJsonString(data.explanation) : null,
         ]
       );
 
@@ -251,7 +280,7 @@ export const questionsRepo = {
          ON CONFLICT (question_id)
          DO UPDATE SET payload = $2::jsonb, updated_at = NOW()
          RETURNING payload`,
-        [id, JSON.stringify(payload)]
+        [id, toJsonString(payload)]
       );
 
       return { ...question, payload: payloadResult[0].payload };
@@ -302,15 +331,19 @@ export const questionsRepo = {
     );
 
     // Query database for matching questions with category names
-    const results = await sql<QuestionWithCategory[]>`
-      SELECT
+    // Note: Using sql.unsafe for locale because JSON accessor ->> requires literal string, not parameter
+    // SECURITY: localeAccessor comes from hardcoded allowlist, not user input
+    const localeAccessor = getLocaleAccessor(locale);
+    const results = await sql.unsafe<QuestionWithCategory[]>(
+      `SELECT
         q.*,
         c.name as category_name
       FROM questions q
       JOIN categories c ON q.category_id = c.id
-      WHERE q.prompt->>${locale} IS NOT NULL
-        AND LOWER(TRIM(q.prompt->>${locale})) = ANY(${sql.array(normalizedPrompts)})
-    `;
+      WHERE ${localeAccessor} IS NOT NULL
+        AND LOWER(TRIM(${localeAccessor})) = ANY($1)`,
+      [normalizedPrompts]
+    );
 
     logger.debug(
       {
@@ -350,57 +383,76 @@ export const questionsRepo = {
   /**
    * Find duplicate questions using SQL GROUP BY aggregation.
    * More efficient than in-memory processing - scales to 100k+ questions.
-   * Groups questions by normalized English prompt text (case-insensitive, trimmed).
-   * Only detects duplicates for questions with English ('en') prompts.
+   * Groups questions by normalized prompt text (case-insensitive, trimmed).
    * Returns groups with metadata for further processing in service layer.
+   * @param filter - Optional filters for category and status
+   * @param locale - Locale to check for duplicates (default: 'en')
    */
   async findDuplicateGroups(
-    filter?: Pick<ListQuestionsFilter, 'categoryId' | 'status'>
+    filter?: Pick<ListQuestionsFilter, 'categoryId' | 'status'>,
+    locale: string = 'en'
   ): Promise<{
     normalized_prompt: string;
     question_ids: string[];
     category_ids: string[];
     count: number;
   }[]> {
-    const categoryFilter = filter?.categoryId
-      ? sql`AND q.category_id = ${filter.categoryId}`
-      : sql``;
-    const statusFilter = filter?.status
-      ? sql`AND q.status = ${filter.status}`
-      : sql``;
-
     logger.debug(
       {
         filters: filter,
+        locale,
       },
       'findDuplicateGroups: starting SQL-based duplicate detection'
     );
 
-    const results = await sql<{
+    // SECURITY: localeAccessor comes from hardcoded allowlist
+    const localeAccessor = getLocaleAccessor(locale);
+
+    // Build optional filter clauses
+    // IMPORTANT: Positional parameter indexing - new filters must:
+    //   1. Push values into params array in order
+    //   2. Use $${params.length} AFTER pushing to get correct index
+    // The sql.unsafe call passes params array, so indices must match clause order.
+    const params: string[] = [];
+    let categoryClause = '';
+    let statusClause = '';
+
+    if (filter?.categoryId) {
+      params.push(filter.categoryId);
+      categoryClause = `AND q.category_id = $${params.length}`;
+    }
+    if (filter?.status) {
+      params.push(filter.status);
+      statusClause = `AND q.status = $${params.length}`;
+    }
+
+    const results = await sql.unsafe<{
       normalized_prompt: string;
       question_ids: string[];
       category_ids: string[];
       count: number;
-    }[]>`
-      SELECT
-        LOWER(TRIM(q.prompt->>'en')) as normalized_prompt,
+    }[]>(
+      `SELECT
+        LOWER(TRIM(${localeAccessor})) as normalized_prompt,
         array_agg(q.id ORDER BY q.created_at) as question_ids,
         array_agg(q.category_id ORDER BY q.created_at) as category_ids,
         COUNT(*)::int as count
       FROM questions q
-      WHERE q.prompt->>'en' IS NOT NULL
-        AND TRIM(q.prompt->>'en') != ''
-        ${categoryFilter}
-        ${statusFilter}
-      GROUP BY LOWER(TRIM(q.prompt->>'en'))
+      WHERE ${localeAccessor} IS NOT NULL
+        AND TRIM(${localeAccessor}) != ''
+        ${categoryClause}
+        ${statusClause}
+      GROUP BY LOWER(TRIM(${localeAccessor}))
       HAVING COUNT(*) > 1
-      ORDER BY COUNT(*) DESC, normalized_prompt
-    `;
+      ORDER BY COUNT(*) DESC, normalized_prompt`,
+      params
+    );
 
     logger.debug(
       {
         groupCount: results.length,
         totalDuplicates: results.reduce((sum, r) => sum + r.count, 0),
+        locale,
       },
       'findDuplicateGroups: completed'
     );

@@ -18,6 +18,9 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
 
+  // Redis
+  REDIS_URL: z.string().url().optional(),
+
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
@@ -31,6 +34,10 @@ const configSchema = z.object({
     .string()
     .min(32, 'JWT secret must be at least 32 characters')
     .optional(),
+
+  // Token Lifetimes
+  // Refresh token cookie max age in milliseconds (default: 7 days)
+  REFRESH_TOKEN_MAX_AGE_MS: z.coerce.number().positive().optional(),
 
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(['true', 'false', '1', '0', '']).optional(),

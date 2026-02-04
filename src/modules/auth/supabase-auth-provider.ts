@@ -122,10 +122,21 @@ export class SupabaseAuthProvider implements AuthProvider {
       throw new AuthenticationError('Invalid token: no subject claim');
     }
 
+    const userMetadata = payload.user_metadata as Record<string, unknown> | undefined;
+    const name =
+      (userMetadata?.full_name as string | undefined) ||
+      (userMetadata?.name as string | undefined) ||
+      (userMetadata?.preferred_username as string | undefined);
+    const avatarUrl =
+      (userMetadata?.avatar_url as string | undefined) ||
+      (userMetadata?.picture as string | undefined);
+
     return {
       provider: 'supabase',
       subject: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
+      name,
+      avatarUrl,
       claims: payload as Record<string, unknown>,
     };
   }

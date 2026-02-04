@@ -5,6 +5,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { pinoHttp, type Options } from 'pino-http';
 import type { IncomingMessage } from 'node:http';
+import cookieParser from 'cookie-parser';
 
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
@@ -47,6 +48,9 @@ export function createApp(): Express {
       credentials: true,
     })
   );
+
+  // Cookie parsing (for httpOnly auth cookies)
+  app.use(cookieParser());
 
   app.use(requestIdMiddleware);
 

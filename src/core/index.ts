@@ -20,3 +20,4 @@ export {
   getRequestContext,
 } from './request-context.js';
 export type { ValidatedRequest, AuthIdentity, User } from './types.js';
+export { pickI18nText } from './i18n.js';

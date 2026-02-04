@@ -55,7 +55,11 @@ export const usersService = {
     );
 
     const newUser = await usersRepo.createWithIdentity(
-      { email: identity.email },
+      {
+        email: identity.email,
+        nickname: identity.name,
+        avatarUrl: identity.avatarUrl,
+      },
       {
         provider: identity.provider,
         subject: identity.subject,

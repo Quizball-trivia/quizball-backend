@@ -24,6 +24,12 @@ export const lobbiesService = {
       status: lobby.status,
       inviteCode: lobby.invite_code,
       hostUserId: lobby.host_user_id,
+      settings: {
+        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
+        friendlyRandom: lobby.friendly_random ?? true,
+        friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
+        friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
+      },
       members: members.map((m) => toLobbyMember(m, lobby.host_user_id)),
     };
   },

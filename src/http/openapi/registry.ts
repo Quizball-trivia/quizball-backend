@@ -6,6 +6,7 @@ import {
 import { z } from 'zod';
 import { i18nFieldSchema as baseI18nFieldSchema } from '../schemas/shared.js';
 import { config } from '../../core/config.js';
+import { headToHeadQuerySchema, headToHeadResponseSchema } from '../../modules/stats/stats.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -86,6 +87,7 @@ const userResponseSchema = z
   .openapi('UserResponse');
 
 registry.register('UserResponse', userResponseSchema);
+registry.register('HeadToHeadResponse', headToHeadResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -212,6 +214,31 @@ registry.registerPath({
     200: {
       description: 'Reset email sent',
       content: { 'application/json': { schema: messageResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Stats Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/stats/head-to-head',
+  summary: 'Get head-to-head summary for two users',
+  tags: ['Stats'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: headToHeadQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Head-to-head summary',
+      content: { 'application/json': { schema: headToHeadResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
     },
   },
 });

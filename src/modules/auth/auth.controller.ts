@@ -23,6 +23,8 @@ const COOKIE_OPTIONS = {
   path: '/',
 };
 
+const REFRESH_TOKEN_MAX_AGE_MS_DEFAULT = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 function setAuthCookies(
   res: Response,
   session: { accessToken: string | null; refreshToken: string | null; expiresIn: number | null }
@@ -36,7 +38,7 @@ function setAuthCookies(
   if (session.refreshToken) {
     res.cookie('qb_refresh_token', session.refreshToken, {
       ...COOKIE_OPTIONS,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: config.REFRESH_TOKEN_MAX_AGE_MS ?? REFRESH_TOKEN_MAX_AGE_MS_DEFAULT,
     });
   }
 }

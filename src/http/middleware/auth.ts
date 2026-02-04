@@ -29,8 +29,12 @@ function extractCookieToken(cookieToken: unknown): string | null {
  * Auth middleware.
  * Verifies JWT and attaches user + identity to request.
  *
+ * Token extraction supports cookies and Authorization header:
+ * - extractCookieToken(req.cookies?.qb_access_token) — preferred
+ * - extractBearerToken(req.headers.authorization) — fallback
+ *
  * Flow:
- * 1. Extract token from Authorization header
+ * 1. Extract token from cookies (preferred) or Authorization header
  * 2. Verify JWT → get AuthIdentity
  * 3. Resolve internal user via getOrCreateFromIdentity()
  * 4. Attach req.user and req.identity

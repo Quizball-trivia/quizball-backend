@@ -11,6 +11,22 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
       return;
     }
 
-    await matchRealtimeService.handleAnswer(io, socket, parsed.data);
+    try {
+      await matchRealtimeService.handleAnswer(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error instanceof Error ? error.message : error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:answer'
+      );
+      socket.emit('error', {
+        code: 'MATCH_ANSWER_ERROR',
+        message: 'Failed to process answer',
+      });
+    }
   });
 }

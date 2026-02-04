@@ -16,22 +16,29 @@ export async function initRedisClients(): Promise<{
 
   if (!commandClient) {
     commandClient = createClient({ url: config.REDIS_URL });
-    commandClient.on('error', (err) => {
-      logger.error({ err, client: 'command' }, 'Redis command client error');
-    });
   }
   if (!pubClient) {
     pubClient = createClient({ url: config.REDIS_URL });
-    pubClient.on('error', (err) => {
-      logger.error({ err, client: 'pub' }, 'Redis pub client error');
-    });
   }
   if (!subClient) {
     subClient = pubClient.duplicate();
-    subClient.on('error', (err) => {
-      logger.error({ err, client: 'sub' }, 'Redis sub client error');
-    });
   }
+
+  // Attach error handlers (remove existing first to avoid duplicates on re-init)
+  commandClient.removeAllListeners('error');
+  commandClient.on('error', (err) => {
+    logger.error({ err, client: 'command' }, 'Redis command client error');
+  });
+
+  pubClient.removeAllListeners('error');
+  pubClient.on('error', (err) => {
+    logger.error({ err, client: 'pub' }, 'Redis pub client error');
+  });
+
+  subClient.removeAllListeners('error');
+  subClient.on('error', (err) => {
+    logger.error({ err, client: 'sub' }, 'Redis sub client error');
+  });
 
   const toConnect = [commandClient, pubClient, subClient].filter(
     (client) => !client.isOpen

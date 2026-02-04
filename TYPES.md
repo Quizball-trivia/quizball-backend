@@ -150,6 +150,15 @@ z.string().optional()  // string | undefined
 z.string().nullable().optional()  // string | null | undefined
 ```
 
+## Auth Transport (Browser Clients)
+
+Browser clients authenticate via **httpOnly cookies** (access + refresh).  
+Bearer `Authorization` headers are still supported for non-browser clients.
+
+Implications:
+- CORS must allow credentials.
+- Frontend requests must set `credentials: "include"`.
+
 ## Troubleshooting
 
 ### Frontend says field doesn't exist

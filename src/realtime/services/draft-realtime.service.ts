@@ -2,7 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
-import { sendMatchQuestion } from '../match-flow.js';
+import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
 
@@ -39,44 +39,23 @@ async function startMatchFromDraft(
     { lobbyId, matchId, mode: lobby.mode, categoryIds: allowedCategoryIds },
     'Match created from draft'
   );
-
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    socket.join(`match:${matchId}`);
-    socket.data.matchId = matchId;
-  });
-
-  const memberA = members[0];
-  const memberB = members[1];
-
-  io.to(`user:${memberA.user_id}`).emit('match:start', {
-    matchId,
-    opponent: {
-      id: memberB.user_id,
-      username: memberB.nickname ?? 'Player',
-      avatarUrl: memberB.avatar_url,
-    },
-  });
-
-  io.to(`user:${memberB.user_id}`).emit('match:start', {
-    matchId,
-    opponent: {
-      id: memberA.user_id,
-      username: memberA.nickname ?? 'Player',
-      avatarUrl: memberA.avatar_url,
-    },
-  });
-
-  await sendMatchQuestion(io, matchId, 0);
+  await beginMatchForLobby(io, lobbyId, matchId);
 }
 
+/**
+ * Determine who should act next in the draft.
+ * Expects bans from listLobbyCategoryBans, ordered by banned_at ASC (oldest first).
+ * The most recent ban is at bans[bans.length - 1].
+ */
 function getNextActorId(
   members: Array<{ user_id: string }>,
   bans: Array<{ user_id: string }>,
   hostUserId: string
 ): string {
   if (bans.length === 0) return hostUserId;
-  const lastActor = bans[0]?.user_id;
+
+  // Most recent ban is last in the array (ordered by banned_at ASC)
+  const lastActor = bans[bans.length - 1]?.user_id;
   const other = members.find((member) => member.user_id !== lastActor)?.user_id;
   return other ?? hostUserId;
 }
@@ -88,15 +67,29 @@ export const draftRealtimeService = {
     categoryId: string
   ): Promise<void> {
     const lobbyId = socket.data.lobbyId;
-    if (!lobbyId) return;
+    if (!lobbyId) {
+      logger.warn({ userId: socket.data.user.id }, 'Draft ban failed: no lobbyId on socket');
+      socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });
+      return;
+    }
 
     const lobby = await lobbiesRepo.getById(lobbyId);
-    if (!lobby || lobby.status !== 'active') return;
+    if (!lobby) {
+      logger.warn({ lobbyId }, 'Draft ban failed: lobby not found');
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+    if (lobby.status !== 'active') {
+      logger.warn({ lobbyId, status: lobby.status }, 'Draft ban failed: lobby not active');
+      socket.emit('error', { code: 'LOBBY_NOT_ACTIVE', message: 'Draft has not started yet' });
+      return;
+    }
 
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const categoryIds = new Set(categories.map((c) => c.id));
     if (!categoryIds.has(categoryId)) {
       logger.warn({ lobbyId, categoryId }, 'Category not in lobby pool');
+      socket.emit('error', { code: 'INVALID_CATEGORY', message: 'Category not available for banning' });
       return;
     }
 
@@ -105,7 +98,11 @@ export const draftRealtimeService = {
 
     const expectedUserId = getNextActorId(members, bans, lobby.host_user_id);
     if (socket.data.user.id !== expectedUserId) {
-      logger.warn({ lobbyId, userId: socket.data.user.id }, 'Draft ban out of turn');
+      logger.warn(
+        { lobbyId, userId: socket.data.user.id, expectedUserId },
+        'Draft ban out of turn'
+      );
+      socket.emit('error', { code: 'NOT_YOUR_TURN', message: 'It is not your turn to ban' });
       return;
     }
 

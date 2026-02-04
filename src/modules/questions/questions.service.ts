@@ -22,6 +22,28 @@ import { toQuestionResponse } from './questions.schemas.js';
 import { createHash } from 'crypto';
 import { getLocalizedString } from '../../lib/localization.js';
 
+const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
+  if (payload == null) return payload;
+  if (typeof payload !== 'string') return payload;
+
+  const parseJson = (value: string): unknown => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      throw new BadRequestError(`Invalid payload JSON in ${context}`);
+    }
+  };
+
+  const first = parseJson(payload);
+  const normalized = typeof first === 'string' ? parseJson(first) : first;
+
+  if (typeof normalized !== 'object' || normalized === null) {
+    throw new BadRequestError(`Payload must be a JSON object in ${context}`);
+  }
+
+  return normalized as Json;
+};
+
 /**
  * Questions service.
  * Contains ALL business logic for question operations.
@@ -65,8 +87,10 @@ export const questionsService = {
       throw new BadRequestError('Category not found');
     }
 
+    const normalizedPayload = normalizePayload(data.payload, 'create');
+
     // Create question with payload atomically
-    const question = await questionsRepo.createWithPayload(data, data.payload);
+    const question = await questionsRepo.createWithPayload(data, normalizedPayload);
 
     logger.info(
       { questionId: question.id, categoryId: data.categoryId, type: data.type },
@@ -110,9 +134,13 @@ export const questionsService = {
       }
     }
 
+    const normalizedPayload = data.payload !== undefined
+      ? normalizePayload(data.payload, 'update')
+      : undefined;
+
     // Validate new payload matches type
-    if (data.payload !== undefined) {
-      const payloadType = (data.payload as { type?: string } | null)?.type;
+    if (normalizedPayload !== undefined) {
+      const payloadType = (normalizedPayload as { type?: string } | null)?.type;
       const expectedType = data.type ?? existing.type;
       if (payloadType && payloadType !== expectedType) {
         throw new BadRequestError('Payload type must match question type');
@@ -122,8 +150,8 @@ export const questionsService = {
     let updatedQuestion: QuestionWithPayload | null;
 
     // Use atomic update when payload is provided
-    if (data.payload !== undefined) {
-      updatedQuestion = await questionsRepo.updateWithPayload(id, data, data.payload);
+    if (normalizedPayload !== undefined) {
+      updatedQuestion = await questionsRepo.updateWithPayload(id, data, normalizedPayload);
     } else {
       // No payload update - just update question fields
       const question = await questionsRepo.update(id, data);
@@ -216,6 +244,10 @@ export const questionsService = {
     // Process each question sequentially
     for (let i = 0; i < questions.length; i++) {
       try {
+        const normalizedPayload = normalizePayload(
+          questions[i].payload as Json | undefined,
+          `bulkCreate index ${i}`
+        );
         const questionData: CreateQuestionData = {
           categoryId,
           type: questions[i].type,
@@ -227,7 +259,7 @@ export const questionsService = {
 
         const question = await questionsRepo.createWithPayload(
           questionData,
-          questions[i].payload as Json
+          normalizedPayload
         );
 
         results.created.push(toQuestionResponse(question));

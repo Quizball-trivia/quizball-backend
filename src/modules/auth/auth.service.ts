@@ -8,7 +8,13 @@ import type { AuthSession, RegisterRequest, LoginRequest } from './auth.schemas.
  * Called after successful auth to ensure user record exists.
  */
 async function provisionIdentity(session: AuthSession): Promise<void> {
-  if (!session.user?.providerSub) return;
+  if (!session.provider || !session.user?.providerSub) {
+    logger.warn(
+      { provider: session.provider, providerSub: session.user?.providerSub },
+      'Missing provider or providerSub, skipping identity provisioning'
+    );
+    return;
+  }
 
   try {
     await usersService.getOrCreateFromIdentity({
@@ -21,7 +27,7 @@ async function provisionIdentity(session: AuthSession): Promise<void> {
     // Log but don't fail the auth flow - user can still use the app
     // Identity will be created on next login or WebSocket connect
     logger.warn(
-      { error: error instanceof Error ? error.message : error, userId: session.user.providerSub },
+      { error: error instanceof Error ? error.message : error, provider: session.provider, userId: session.user.providerSub },
       'Failed to provision identity during auth'
     );
   }

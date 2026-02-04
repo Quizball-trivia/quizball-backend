@@ -12,13 +12,39 @@ export interface CreateLobbyData {
   mode: 'friendly' | 'ranked';
   hostUserId: string;
   inviteCode: string | null;
+  gameMode?: 'friendly' | 'ranked_sim';
+  friendlyRandom?: boolean;
+  friendlyCategoryAId?: string | null;
+  friendlyCategoryBId?: string | null;
 }
 
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
+    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly');
+    const friendlyRandom = data.friendlyRandom ?? true;
     const [row] = await sql<LobbyRow[]>`
-      INSERT INTO lobbies (id, invite_code, mode, host_user_id, status)
-      VALUES (gen_random_uuid(), ${data.inviteCode}, ${data.mode}, ${data.hostUserId}, 'waiting')
+      INSERT INTO lobbies (
+        id,
+        invite_code,
+        mode,
+        game_mode,
+        friendly_random,
+        friendly_category_a_id,
+        friendly_category_b_id,
+        host_user_id,
+        status
+      )
+      VALUES (
+        gen_random_uuid(),
+        ${data.inviteCode},
+        ${data.mode},
+        ${gameMode},
+        ${friendlyRandom},
+        ${data.friendlyCategoryAId ?? null},
+        ${data.friendlyCategoryBId ?? null},
+        ${data.hostUserId},
+        'waiting'
+      )
       RETURNING *
     `;
     return row;
@@ -45,6 +71,29 @@ export const lobbiesRepo = {
       SET status = ${status}, updated_at = NOW()
       WHERE id = ${lobbyId}
     `;
+  },
+
+  async updateLobbySettings(
+    lobbyId: string,
+    settings: {
+      gameMode: LobbyRow['game_mode'];
+      friendlyRandom: boolean;
+      friendlyCategoryAId: string | null;
+      friendlyCategoryBId: string | null;
+    }
+  ): Promise<LobbyRow | null> {
+    const [row] = await sql<LobbyRow[]>`
+      UPDATE lobbies
+      SET
+        game_mode = ${settings.gameMode},
+        friendly_random = ${settings.friendlyRandom},
+        friendly_category_a_id = ${settings.friendlyCategoryAId},
+        friendly_category_b_id = ${settings.friendlyCategoryBId},
+        updated_at = NOW()
+      WHERE id = ${lobbyId}
+      RETURNING *
+    `;
+    return row ?? null;
   },
 
   async addMember(lobbyId: string, userId: string, isReady: boolean): Promise<LobbyMemberRow> {
@@ -100,6 +149,15 @@ export const lobbiesRepo = {
     return row?.count ?? 0;
   },
 
+  async setAllReady(lobbyId: string, isReady: boolean): Promise<number> {
+    const result = await sql`
+      UPDATE lobby_members
+      SET is_ready = ${isReady}
+      WHERE lobby_id = ${lobbyId}
+    `;
+    return result.count;
+  },
+
   async insertLobbyCategories(lobbyId: string, categories: Array<{ slot: number; categoryId: string }>): Promise<LobbyCategoryRow[]> {
     if (categories.length === 0) return [];
 
@@ -126,6 +184,23 @@ export const lobbiesRepo = {
       WHERE c.is_active = true
         AND q.status = 'published'
         AND q.type = 'mcq_single'
+        AND qp.payload ? 'options'
+        AND jsonb_typeof(qp.payload->'options') = 'array'
+        AND jsonb_array_length(qp.payload->'options') > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE jsonb_typeof(opt) <> 'object'
+             OR NOT (opt ? 'text')
+             OR jsonb_typeof(opt->'text') <> 'object'
+             OR NOT (opt ? 'is_correct')
+             OR (opt->>'is_correct') NOT IN ('true', 'false')
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE opt->>'is_correct' = 'true'
+        )
       GROUP BY c.id, c.name, c.icon
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()

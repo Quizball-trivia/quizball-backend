@@ -1,5 +1,11 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { lobbyCreateSchema, lobbyJoinByCodeSchema, lobbyReadySchema } from '../schemas/lobby.schemas.js';
+import {
+  lobbyCreateSchema,
+  lobbyJoinByCodeSchema,
+  lobbyReadySchema,
+  lobbyStartSchema,
+  lobbyUpdateSettingsSchema,
+} from '../schemas/lobby.schemas.js';
 import { logger } from '../../core/logger.js';
 import { lobbyRealtimeService } from '../services/lobby-realtime.service.js';
 
@@ -32,6 +38,26 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     await lobbyRealtimeService.setReady(io, socket, parsed.data.ready);
+  });
+
+  socket.on('lobby:update_settings', async (payload) => {
+    const parsed = lobbyUpdateSettingsSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:update_settings payload');
+      return;
+    }
+
+    await lobbyRealtimeService.updateSettings(io, socket, parsed.data);
+  });
+
+  socket.on('lobby:start', async (payload) => {
+    const parsed = lobbyStartSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:start payload');
+      return;
+    }
+
+    await lobbyRealtimeService.startFriendlyMatch(io, socket, parsed.data.lobbyId);
   });
 
   socket.on('lobby:leave', async () => {

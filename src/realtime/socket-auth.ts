@@ -12,6 +12,14 @@ export interface SocketAuthData {
   matchId?: string;
 }
 
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function extractToken(socket: Socket): string | null {
   const authToken = socket.handshake.auth?.token;
   if (typeof authToken === 'string' && authToken.trim()) {
@@ -22,7 +30,7 @@ function extractToken(socket: Socket): string | null {
     const cookies = Object.fromEntries(
       cookieHeader.split(';').map((part) => {
         const [rawKey, ...rawValue] = part.trim().split('=');
-        return [rawKey, decodeURIComponent(rawValue.join('='))];
+        return [rawKey, safeDecode(rawValue.join('='))];
       })
     );
     const cookieToken = cookies.qb_access_token;

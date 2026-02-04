@@ -1,21 +1,32 @@
+import crypto from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import { categoriesRepo } from '../../modules/categories/categories.repo.js';
+import { matchesService } from '../../modules/matches/matches.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
+import { beginMatchForLobby } from './match-realtime.service.js';
 
 const RANKED_QUEUE_KEY = 'ranked:queue';
 const RANKED_INQUEUE_PREFIX = 'ranked:inqueue:';
 const RANKED_INQUEUE_TTL_SEC = 60;
 
+// Guard against duplicate startDraft calls when both players ready simultaneously
+const draftStartingSet = new Set<string>();
+
 function generateInviteCode(length = 6): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < length; i += 1) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[crypto.randomInt(chars.length)];
   }
   return code;
+}
+
+function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | undefined {
+  return lobbyId ?? socket.data.lobbyId;
 }
 
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
@@ -24,7 +35,13 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
   const state = await lobbiesService.buildLobbyState(lobby);
   io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
   logger.debug(
-    { lobbyId, status: lobby.status, memberCount: state.members.length, mode: lobby.mode },
+    {
+      lobbyId,
+      status: lobby.status,
+      memberCount: state.members.length,
+      mode: lobby.mode,
+      gameMode: lobby.game_mode,
+    },
     'Lobby state broadcast'
   );
 }
@@ -47,9 +64,11 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         { lobbyId, categoryCount: categories.length },
         'Draft start failed: insufficient categories with questions'
       );
+      await lobbiesRepo.setAllReady(lobbyId, false);
+      await emitLobbyState(io, lobbyId);
       io.to(`lobby:${lobbyId}`).emit('error', {
         code: 'INSUFFICIENT_CATEGORIES',
-        message: 'Not enough categories available to start the game',
+        message: 'Not enough categories with questions to start the game',
       });
       return;
     }
@@ -99,10 +118,18 @@ async function enqueueRanked(io: QuizballServer, userId: string): Promise<void> 
   logger.info({ userId, queueLength }, 'Ranked queue: enqueued');
   if (queueLength < 2) return;
 
-  const userA = await redis.lPop(RANKED_QUEUE_KEY);
-  const userB = await redis.lPop(RANKED_QUEUE_KEY);
-  if (!userA || !userB) return;
+  // Atomically pop up to 2 users to avoid race conditions
+  const popped = await redis.lPopCount(RANKED_QUEUE_KEY, 2);
+  if (!popped || popped.length < 2) {
+    // Not enough users - restore any popped user back to the queue
+    if (popped && popped.length === 1) {
+      await redis.lPush(RANKED_QUEUE_KEY, popped[0]);
+      logger.debug({ userId: popped[0] }, 'Ranked queue: restored single user after failed match');
+    }
+    return;
+  }
 
+  const [userA, userB] = popped;
   await redis.del([`${RANKED_INQUEUE_PREFIX}${userA}`, `${RANKED_INQUEUE_PREFIX}${userB}`]);
 
   const lobby = await lobbiesRepo.createLobby({
@@ -135,6 +162,16 @@ export const lobbyRealtimeService = {
   async createLobby(io: QuizballServer, socket: QuizballSocket, mode: 'friendly' | 'ranked'): Promise<void> {
     const userId = socket.data.user.id;
 
+    // Prevent creating a new lobby if already in one
+    if (socket.data.lobbyId) {
+      logger.warn(
+        { userId, existingLobbyId: socket.data.lobbyId },
+        'Lobby create ignored: user already in a lobby'
+      );
+      socket.emit('error', { code: 'ALREADY_IN_LOBBY', message: 'You are already in a lobby' });
+      return;
+    }
+
     if (mode === 'ranked') {
       logger.info({ userId }, 'Lobby create (ranked) requested');
       await enqueueRanked(io, userId);
@@ -161,6 +198,18 @@ export const lobbyRealtimeService = {
   },
 
   async joinByCode(io: QuizballServer, socket: QuizballSocket, inviteCode: string): Promise<void> {
+    const userId = socket.data.user.id;
+
+    // Prevent joining if already in a lobby
+    if (socket.data.lobbyId) {
+      logger.warn(
+        { userId, existingLobbyId: socket.data.lobbyId },
+        'Lobby join ignored: user already in a lobby'
+      );
+      socket.emit('error', { code: 'ALREADY_IN_LOBBY', message: 'You are already in a lobby' });
+      return;
+    }
+
     const lobby = await lobbiesRepo.getByInviteCode(inviteCode);
     if (!lobby) {
       logger.warn({ inviteCode: `${inviteCode.slice(0, 2)}***` }, 'Lobby not found for invite');
@@ -168,19 +217,26 @@ export const lobbyRealtimeService = {
       return;
     }
 
-    const memberCount = await lobbiesRepo.countMembers(lobby.id);
-    if (memberCount >= 2) {
+    const members = await lobbiesRepo.listMembersWithUser(lobby.id);
+    const alreadyMember = members.some((m) => m.user_id === userId);
+    if (alreadyMember) {
+      logger.warn({ lobbyId: lobby.id, userId }, 'User already a member of lobby');
+      socket.emit('error', { code: 'ALREADY_MEMBER', message: 'You are already in this lobby' });
+      return;
+    }
+
+    if (members.length >= 2) {
       logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
       socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
       return;
     }
 
-    await lobbiesRepo.addMember(lobby.id, socket.data.user.id, false);
+    await lobbiesRepo.addMember(lobby.id, userId, false);
     socket.join(`lobby:${lobby.id}`);
     socket.data.lobbyId = lobby.id;
 
     logger.info(
-      { lobbyId: lobby.id, userId: socket.data.user.id },
+      { lobbyId: lobby.id, userId },
       'Lobby joined by code'
     );
     await emitLobbyState(io, lobby.id);
@@ -189,6 +245,12 @@ export const lobbyRealtimeService = {
   async setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean): Promise<void> {
     const lobbyId = socket.data.lobbyId;
     if (!lobbyId) return;
+
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby) {
+      logger.warn({ lobbyId }, 'Lobby ready update ignored: lobby not found');
+      return;
+    }
 
     const updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready);
     if (!updated) {
@@ -208,8 +270,257 @@ export const lobbyRealtimeService = {
     const memberCount = await lobbiesRepo.countMembers(lobbyId);
 
     if (memberCount === 2 && readyCount === 2) {
-      logger.info({ lobbyId }, 'Lobby ready -> starting draft');
-      await startDraft(io, lobbyId);
+      if (lobby.mode === 'friendly' && lobby.game_mode === 'friendly') {
+        logger.info({ lobbyId }, 'Lobby ready -> waiting for host start (friendly)');
+        return;
+      }
+
+      // Guard against duplicate startDraft when both players ready simultaneously
+      if (draftStartingSet.has(lobbyId)) {
+        logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
+        return;
+      }
+      draftStartingSet.add(lobbyId);
+
+      try {
+        logger.info({ lobbyId }, 'Lobby ready -> starting draft');
+        await startDraft(io, lobbyId);
+      } finally {
+        draftStartingSet.delete(lobbyId);
+      }
+    }
+  },
+
+  async updateSettings(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    payload: {
+      lobbyId?: string;
+      gameMode: 'friendly' | 'ranked_sim';
+      friendlyRandom?: boolean;
+      friendlyCategoryAId?: string | null;
+      friendlyCategoryBId?: string | null;
+    }
+  ): Promise<void> {
+    const lobbyId = resolveLobbyId(socket, payload.lobbyId);
+    if (!lobbyId) {
+      socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });
+      return;
+    }
+
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+
+    if (socket.data.user.id !== lobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can update settings' });
+      return;
+    }
+
+    if (lobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby settings are locked' });
+      return;
+    }
+
+    const memberCount = await lobbiesRepo.countMembers(lobbyId);
+    const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+    if (memberCount > 0 && readyCount === memberCount) {
+      socket.emit('error', { code: 'LOBBY_READY_LOCKED', message: 'Cannot edit settings after both players are ready' });
+      return;
+    }
+
+    const lockKey = `lock:lobby:${lobbyId}`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ lobbyId }, 'Lobby settings update skipped: lock not acquired');
+      return;
+    }
+
+    try {
+      const currentSettings = {
+        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
+        friendlyRandom: lobby.friendly_random ?? true,
+        friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
+        friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
+      };
+
+      const nextSettings = {
+        ...currentSettings,
+        gameMode: payload.gameMode ?? currentSettings.gameMode,
+        friendlyRandom:
+          payload.friendlyRandom !== undefined
+            ? payload.friendlyRandom
+            : currentSettings.friendlyRandom,
+        friendlyCategoryAId:
+          payload.friendlyCategoryAId !== undefined
+            ? payload.friendlyCategoryAId
+            : currentSettings.friendlyCategoryAId,
+        friendlyCategoryBId:
+          payload.friendlyCategoryBId !== undefined
+            ? payload.friendlyCategoryBId
+            : currentSettings.friendlyCategoryBId,
+      };
+
+      if (nextSettings.gameMode === 'ranked_sim') {
+        nextSettings.friendlyRandom = true;
+        nextSettings.friendlyCategoryAId = null;
+        nextSettings.friendlyCategoryBId = null;
+      } else if (nextSettings.friendlyRandom) {
+        nextSettings.friendlyCategoryAId = null;
+        nextSettings.friendlyCategoryBId = null;
+      } else {
+        if (!nextSettings.friendlyCategoryAId || !nextSettings.friendlyCategoryBId) {
+          socket.emit('error', {
+            code: 'INVALID_SETTINGS',
+            message: 'Two categories are required when random is disabled',
+          });
+          return;
+        }
+        if (nextSettings.friendlyCategoryAId === nextSettings.friendlyCategoryBId) {
+          socket.emit('error', {
+            code: 'INVALID_SETTINGS',
+            message: 'Selected categories must be different',
+          });
+          return;
+        }
+      }
+
+      await lobbiesRepo.updateLobbySettings(lobbyId, {
+        gameMode: nextSettings.gameMode,
+        friendlyRandom: nextSettings.friendlyRandom,
+        friendlyCategoryAId: nextSettings.friendlyCategoryAId,
+        friendlyCategoryBId: nextSettings.friendlyCategoryBId,
+      });
+
+      logger.info({ lobbyId, gameMode: nextSettings.gameMode }, 'Lobby settings updated');
+      await emitLobbyState(io, lobbyId);
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
+  },
+
+  async startFriendlyMatch(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    lobbyIdOverride?: string
+  ): Promise<void> {
+    const lobbyId = resolveLobbyId(socket, lobbyIdOverride);
+    if (!lobbyId) {
+      socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });
+      return;
+    }
+
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+
+    if (socket.data.user.id !== lobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can start the match' });
+      return;
+    }
+
+    if (lobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby is not ready to start' });
+      return;
+    }
+
+    if (lobby.game_mode !== 'friendly') {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Match start is only available for friendly mode' });
+      return;
+    }
+
+    const memberCount = await lobbiesRepo.countMembers(lobbyId);
+    const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+    if (memberCount !== 2 || readyCount !== 2) {
+      socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'Both players must be ready' });
+      return;
+    }
+
+    const lockKey = `lock:lobby:${lobbyId}`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ lobbyId }, 'Friendly match start skipped: lock not acquired');
+      return;
+    }
+
+    try {
+      let categoryIds: [string, string];
+
+      if (lobby.friendly_random) {
+        const categories = await lobbiesService.selectRandomCategories(2);
+        if (categories.length < 2) {
+          logger.warn(
+            { lobbyId, categoryCount: categories.length },
+            'Friendly match start failed: insufficient categories'
+          );
+          await lobbiesRepo.setAllReady(lobbyId, false);
+          await emitLobbyState(io, lobbyId);
+          socket.emit('error', {
+            code: 'INSUFFICIENT_CATEGORIES',
+            message: 'Not enough categories with questions to start the game',
+          });
+          return;
+        }
+        categoryIds = [categories[0].id, categories[1].id];
+      } else {
+        const categoryA = lobby.friendly_category_a_id;
+        const categoryB = lobby.friendly_category_b_id;
+        if (!categoryA || !categoryB || categoryA === categoryB) {
+          socket.emit('error', {
+            code: 'INVALID_SETTINGS',
+            message: 'Please select two different categories',
+          });
+          return;
+        }
+
+        const categories = await categoriesRepo.listByIds([categoryA, categoryB]);
+        if (categories.length !== 2) {
+          socket.emit('error', {
+            code: 'INVALID_SETTINGS',
+            message: 'Selected categories are invalid',
+          });
+          return;
+        }
+
+        categoryIds = [categoryA, categoryB];
+      }
+
+      let result;
+      try {
+        result = await matchesService.createMatchFromLobby({
+          lobbyId,
+          mode: lobby.mode,
+          hostUserId: lobby.host_user_id,
+          categoryIds,
+        });
+      } catch (error) {
+        logger.warn(
+          { lobbyId, error: error instanceof Error ? error.message : error },
+          'Failed to create friendly match'
+        );
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        socket.emit('error', {
+          code: 'MATCH_CREATE_FAILED',
+          message: 'Unable to start match with the selected categories',
+        });
+        return;
+      }
+
+      await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+
+      logger.info(
+        { lobbyId, matchId: result.match.id, mode: lobby.mode, categoryIds },
+        'Friendly match created'
+      );
+
+      await beginMatchForLobby(io, lobbyId, result.match.id);
+    } finally {
+      await releaseLock(lockKey, lock.token);
     }
   },
 

@@ -54,7 +54,19 @@ export const matchesService = {
     if (hostIndex !== -1) {
       // Host is in the lobby - host gets seat 1
       seat1 = params.hostUserId;
-      seat2 = memberIds.find((id) => id !== seat1)!;
+      const candidateSeat2 = memberIds.find((id) => id !== seat1);
+
+      if (!candidateSeat2 || candidateSeat2 === seat1) {
+        logger.error(
+          { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds, candidateSeat2 },
+          'Invalid lobby state: could not determine second player'
+        );
+        // Fall back to using first two members as a safe default
+        seat1 = memberIds[0];
+        seat2 = memberIds[1];
+      } else {
+        seat2 = candidateSeat2;
+      }
     } else {
       // Host not found (edge case) - use first two members
       logger.warn(

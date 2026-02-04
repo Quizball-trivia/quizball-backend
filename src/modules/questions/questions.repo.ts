@@ -409,6 +409,10 @@ export const questionsRepo = {
     const localeAccessor = getLocaleAccessor(locale);
 
     // Build optional filter clauses
+    // IMPORTANT: Positional parameter indexing - new filters must:
+    //   1. Push values into params array in order
+    //   2. Use $${params.length} AFTER pushing to get correct index
+    // The sql.unsafe call passes params array, so indices must match clause order.
     const params: string[] = [];
     let categoryClause = '';
     let statusClause = '';

@@ -2,6 +2,10 @@ export interface LobbyRow {
   id: string;
   invite_code: string | null;
   mode: 'friendly' | 'ranked';
+  game_mode: 'friendly' | 'ranked_sim';
+  friendly_random: boolean;
+  friendly_category_a_id: string | null;
+  friendly_category_b_id: string | null;
   host_user_id: string;
   status: 'waiting' | 'active' | 'closed';
   created_at: string;

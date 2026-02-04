@@ -76,6 +76,16 @@ export const matchesRepo = {
     category_id: string;
     payload: unknown;
   }>> {
+    const [{ count }] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int as count
+      FROM questions
+      WHERE category_id = ${categoryId} AND status = 'published' AND type = 'mcq_single'
+    `;
+
+    if (!count) return [];
+
+    const SMALL_SET_THRESHOLD = limit * 5;
+    if (count <= SMALL_SET_THRESHOLD) {
     return sql<{
       id: string;
       prompt: Record<string, string>;
@@ -87,9 +97,109 @@ export const matchesRepo = {
       FROM questions q
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE q.category_id = ${categoryId} AND q.status = 'published' AND q.type = 'mcq_single'
+        AND qp.payload ? 'options'
+        AND jsonb_typeof(qp.payload->'options') = 'array'
+        AND jsonb_array_length(qp.payload->'options') > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE jsonb_typeof(opt) <> 'object'
+             OR NOT (opt ? 'text')
+             OR jsonb_typeof(opt->'text') <> 'object'
+             OR NOT (opt ? 'is_correct')
+             OR (opt->>'is_correct') NOT IN ('true', 'false')
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE opt->>'is_correct' = 'true'
+        )
       ORDER BY RANDOM()
       LIMIT ${limit}
     `;
+    }
+
+    const basePercent = Math.ceil((limit * 100) / count);
+    const samplePercent = Math.min(10, Math.max(1, basePercent * 2));
+    const sampleLimit = Math.max(limit, limit * 3);
+
+    const sampled = await sql.unsafe<{
+      id: string;
+      prompt: Record<string, string>;
+      difficulty: string;
+      category_id: string;
+      payload: unknown;
+    }[]>(
+      `
+      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+      FROM (
+        SELECT * FROM questions TABLESAMPLE SYSTEM (${samplePercent})
+      ) AS q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+        AND qp.payload ? 'options'
+        AND jsonb_typeof(qp.payload->'options') = 'array'
+        AND jsonb_array_length(qp.payload->'options') > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE jsonb_typeof(opt) <> 'object'
+             OR NOT (opt ? 'text')
+             OR jsonb_typeof(opt->'text') <> 'object'
+             OR NOT (opt ? 'is_correct')
+             OR (opt->>'is_correct') NOT IN ('true', 'false')
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE opt->>'is_correct' = 'true'
+        )
+      ORDER BY RANDOM()
+      LIMIT $2
+      `,
+      [categoryId, sampleLimit]
+    );
+
+    if (sampled.length >= limit) {
+      return sampled.slice(0, limit);
+    }
+
+    const remaining = limit - sampled.length;
+    const excludeIds = sampled.map((row) => row.id);
+    const fallback = await sql<{
+      id: string;
+      prompt: Record<string, string>;
+      difficulty: string;
+      category_id: string;
+      payload: unknown;
+    }[]>`
+      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.category_id = ${categoryId} AND q.status = 'published' AND q.type = 'mcq_single'
+        AND qp.payload ? 'options'
+        AND jsonb_typeof(qp.payload->'options') = 'array'
+        AND jsonb_array_length(qp.payload->'options') > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE jsonb_typeof(opt) <> 'object'
+             OR NOT (opt ? 'text')
+             OR jsonb_typeof(opt->'text') <> 'object'
+             OR NOT (opt ? 'is_correct')
+             OR (opt->>'is_correct') NOT IN ('true', 'false')
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(qp.payload->'options') opt
+          WHERE opt->>'is_correct' = 'true'
+        )
+      ${excludeIds.length > 0 ? sql`AND q.id NOT IN (${sql(excludeIds)})` : sql``}
+      ORDER BY q.created_at DESC
+      LIMIT ${remaining}
+    `;
+
+    return [...sampled, ...fallback];
   },
 
   async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {
@@ -164,7 +274,7 @@ export const matchesRepo = {
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
       UPDATE matches
-      SET current_q_index = ${qIndex}, updated_at = NOW()
+      SET current_q_index = ${qIndex}
       WHERE id = ${matchId}
     `;
   },
@@ -172,7 +282,7 @@ export const matchesRepo = {
   async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
     await sql`
       UPDATE matches
-      SET status = 'completed', winner_user_id = ${winnerId}, ended_at = NOW(), updated_at = NOW()
+      SET status = 'completed', winner_user_id = ${winnerId}, ended_at = NOW()
       WHERE id = ${matchId}
     `;
   },

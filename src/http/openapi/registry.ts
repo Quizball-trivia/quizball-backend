@@ -7,6 +7,10 @@ import { z } from 'zod';
 import { i18nFieldSchema as baseI18nFieldSchema } from '../schemas/shared.js';
 import { config } from '../../core/config.js';
 import { headToHeadQuerySchema, headToHeadResponseSchema } from '../../modules/stats/stats.schemas.js';
+import {
+  listPublicLobbiesQuerySchema,
+  listPublicLobbiesResponseSchema,
+} from '../../modules/lobbies/lobbies.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -301,6 +305,31 @@ registry.registerPath({
     200: {
       description: 'Head-to-head summary',
       content: { 'application/json': { schema: headToHeadResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Lobbies Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/lobbies/public',
+  summary: 'List public lobbies',
+  tags: ['Lobbies'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: listPublicLobbiesQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Public lobby list',
+      content: { 'application/json': { schema: listPublicLobbiesResponseSchema } },
     },
     401: {
       description: 'Authentication required',

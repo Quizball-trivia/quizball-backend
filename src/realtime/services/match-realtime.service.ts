@@ -17,6 +17,10 @@ export async function beginMatchForLobby(
     return;
   }
 
+  // Lobby is no longer needed for membership tracking once match starts.
+  await lobbiesRepo.setLobbyStatus(lobbyId, 'closed');
+  await Promise.all(members.map((member) => lobbiesRepo.removeMember(lobbyId, member.user_id)));
+
   const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
   sockets.forEach((socket) => {
     socket.leave(`lobby:${lobbyId}`);

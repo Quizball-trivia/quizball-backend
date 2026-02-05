@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const lobbyCreateSchema = z.object({
   mode: z.enum(['friendly', 'ranked']),
+  isPublic: z.boolean().optional(),
 });
 
 export const lobbyJoinByCodeSchema = z.object({

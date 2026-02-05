@@ -289,4 +289,14 @@ export const matchesRepo = {
     `;
     return row ?? null;
   },
+
+  async getActiveMatchForLobby(lobbyId: string): Promise<MatchRow | null> {
+    const [row] = await sql<MatchRow[]>`
+      SELECT * FROM matches
+      WHERE lobby_id = ${lobbyId} AND status = 'active'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
 };

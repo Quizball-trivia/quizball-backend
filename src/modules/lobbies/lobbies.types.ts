@@ -6,10 +6,16 @@ export interface LobbyRow {
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;
+  is_public: boolean;
+  display_name: string;
   host_user_id: string;
   status: 'waiting' | 'active' | 'closed';
   created_at: string;
   updated_at: string;
+}
+
+export interface LobbyWithJoinedAt extends LobbyRow {
+  joined_at: string;
 }
 
 export interface LobbyMemberRow {

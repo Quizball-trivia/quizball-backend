@@ -9,8 +9,7 @@ import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
 import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
-import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
-import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
+import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -48,14 +47,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     );
 
     try {
-      const lobby = await lobbiesRepo.findWaitingLobbyForUser(user.id);
-      if (lobby) {
-        socket.join(`lobby:${lobby.id}`);
-        socket.data.lobbyId = lobby.id;
-        const state = await lobbiesService.buildLobbyState(lobby);
-        socket.emit('lobby:state', state);
-        logger.info({ userId: user.id, lobbyId: lobby.id }, 'Socket rejoined waiting lobby');
-      }
+      await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
     } catch (error) {
       logger.warn({ error, userId: user.id }, 'Failed to rejoin waiting lobby on connect');
     }
@@ -66,6 +58,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
     });
   });
 

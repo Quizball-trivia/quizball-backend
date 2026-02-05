@@ -1,6 +1,7 @@
 import { sql } from '../../db/index.js';
 import type {
   LobbyRow,
+  LobbyWithJoinedAt,
   LobbyMemberRow,
   LobbyMemberWithUser,
   LobbyCategoryRow,
@@ -16,12 +17,16 @@ export interface CreateLobbyData {
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;
+  isPublic?: boolean;
+  displayName?: string;
 }
 
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
     const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly');
     const friendlyRandom = data.friendlyRandom ?? true;
+    const isPublic = data.isPublic ?? false;
+    const displayName = data.displayName ?? '';
     const [row] = await sql<LobbyRow[]>`
       INSERT INTO lobbies (
         id,
@@ -31,6 +36,8 @@ export const lobbiesRepo = {
         friendly_random,
         friendly_category_a_id,
         friendly_category_b_id,
+        is_public,
+        display_name,
         host_user_id,
         status
       )
@@ -42,6 +49,8 @@ export const lobbiesRepo = {
         ${friendlyRandom},
         ${data.friendlyCategoryAId ?? null},
         ${data.friendlyCategoryBId ?? null},
+        ${isPublic},
+        ${displayName},
         ${data.hostUserId},
         'waiting'
       )
@@ -78,11 +87,49 @@ export const lobbiesRepo = {
     return row ?? null;
   },
 
+  async findOpenLobbyForUser(userId: string): Promise<LobbyRow | null> {
+    const [row] = await sql<LobbyRow[]>`
+      SELECT l.*
+      FROM lobbies l
+      JOIN lobby_members lm ON lm.lobby_id = l.id
+      WHERE lm.user_id = ${userId}
+        AND l.status IN ('waiting', 'active')
+      ORDER BY lm.joined_at DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async listOpenLobbiesForUser(userId: string): Promise<LobbyWithJoinedAt[]> {
+    return sql<LobbyWithJoinedAt[]>`
+      SELECT l.*, lm.joined_at
+      FROM lobbies l
+      JOIN lobby_members lm ON lm.lobby_id = l.id
+      WHERE lm.user_id = ${userId}
+        AND l.status IN ('waiting', 'active')
+      ORDER BY lm.joined_at DESC
+    `;
+  },
+
   async setLobbyStatus(lobbyId: string, status: LobbyRow['status']): Promise<void> {
     await sql`
       UPDATE lobbies
       SET status = ${status}, updated_at = NOW()
       WHERE id = ${lobbyId}
+    `;
+  },
+
+  async setHostUser(lobbyId: string, userId: string): Promise<void> {
+    await sql`
+      UPDATE lobbies
+      SET host_user_id = ${userId}, updated_at = NOW()
+      WHERE id = ${lobbyId}
+    `;
+  },
+
+  async deleteLobby(lobbyId: string): Promise<void> {
+    await sql`
+      DELETE FROM lobbies WHERE id = ${lobbyId}
     `;
   },
 
@@ -170,6 +217,57 @@ export const lobbiesRepo = {
       RETURNING 1 as updated
     `;
     return rows.length;
+  },
+
+  async listPublicLobbies(params: {
+    limit: number;
+    joinableOnly: boolean;
+  }): Promise<Array<{
+    lobby_id: string;
+    invite_code: string;
+    display_name: string;
+    game_mode: LobbyRow['game_mode'];
+    is_public: boolean;
+    created_at: string;
+    host_user_id: string;
+    host_nickname: string | null;
+    host_avatar_url: string | null;
+    member_count: number;
+  }>> {
+    return sql<Array<{
+      lobby_id: string;
+      invite_code: string;
+      display_name: string;
+      game_mode: LobbyRow['game_mode'];
+      is_public: boolean;
+      created_at: string;
+      host_user_id: string;
+      host_nickname: string | null;
+      host_avatar_url: string | null;
+      member_count: number;
+    }>>`
+      SELECT
+        l.id as lobby_id,
+        l.invite_code,
+        l.display_name,
+        l.game_mode,
+        l.is_public,
+        l.created_at,
+        l.host_user_id,
+        u.nickname as host_nickname,
+        u.avatar_url as host_avatar_url,
+        COUNT(lm.user_id)::int as member_count
+      FROM lobbies l
+      JOIN users u ON u.id = l.host_user_id
+      LEFT JOIN lobby_members lm ON lm.lobby_id = l.id
+      WHERE l.status = 'waiting'
+        AND l.mode = 'friendly'
+        AND l.is_public = true
+      GROUP BY l.id, u.nickname, u.avatar_url
+      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 2)
+      ORDER BY l.created_at DESC
+      LIMIT ${params.limit}
+    `;
   },
 
   async insertLobbyCategories(lobbyId: string, categories: Array<{ slot: number; categoryId: string }>): Promise<LobbyCategoryRow[]> {

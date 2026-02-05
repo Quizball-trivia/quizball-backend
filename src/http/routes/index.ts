@@ -6,6 +6,7 @@ import { categoriesRoutes } from './categories.routes.js';
 import { questionsRoutes } from './questions.routes.js';
 import { featuredCategoriesRoutes } from './featured-categories.routes.js';
 import { statsRoutes } from './stats.routes.js';
+import { lobbiesRoutes } from './lobbies.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -26,5 +27,6 @@ router.use('/api/v1/categories', categoriesRoutes);
 router.use('/api/v1/questions', questionsRoutes);
 router.use('/api/v1/featured-categories', featuredCategoriesRoutes);
 router.use('/api/v1/stats', statsRoutes);
+router.use('/api/v1/lobbies', lobbiesRoutes);
 
 export const routes = router;

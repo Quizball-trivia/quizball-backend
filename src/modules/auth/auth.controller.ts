@@ -12,6 +12,7 @@ import {
   type ResetPasswordHeaders,
   type SocialLoginRequest,
 } from './auth.schemas.js';
+import { BadRequestError } from '../../core/errors.js';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -83,10 +84,19 @@ export const authController = {
    * Refresh access token.
    */
   async refresh(req: Request, res: Response): Promise<void> {
-    const { refresh_token } = req.validated.body as RefreshRequest;
+    const { refresh_token } = (req.validated.body ?? {}) as RefreshRequest;
     const authClient = getAuthClient();
 
-    const session = await authClient.refresh(refresh_token);
+    const cookieToken =
+      typeof req.cookies?.qb_refresh_token === 'string'
+        ? req.cookies.qb_refresh_token.trim()
+        : null;
+    const refreshToken = refresh_token ?? cookieToken ?? null;
+    if (!refreshToken) {
+      throw new BadRequestError('Missing refresh token');
+    }
+
+    const session = await authClient.refresh(refreshToken);
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));

@@ -3,6 +3,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
+import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -14,9 +15,36 @@ const RANKED_INQUEUE_PREFIX = 'ranked:inqueue:';
 const RANKED_INQUEUE_TTL_SEC = 60;
 const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
 const DRAFT_START_GUARD_TTL_SEC = 15;
+const LOBBY_DISCONNECT_GRACE_MS = 15000;
 
 // Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
+
+const LOBBY_NAME_ADJECTIVES = [
+  'Golden',
+  'Rapid',
+  'Electric',
+  'Stadium',
+  'Victory',
+  'Thunder',
+  'Derby',
+  'Final',
+  'Elite',
+  'Club',
+];
+
+const LOBBY_NAME_NOUNS = [
+  'Kickoff',
+  'Strikers',
+  'Midfield',
+  'Penalty',
+  'Hat-Trick',
+  'Goal Line',
+  'The Kop',
+  'Champions',
+  'Pitch',
+  'Arena',
+];
 
 function generateInviteCode(length = 6): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -27,8 +55,43 @@ function generateInviteCode(length = 6): string {
   return code;
 }
 
+function generateLobbyName(): string {
+  const adjective = LOBBY_NAME_ADJECTIVES[crypto.randomInt(LOBBY_NAME_ADJECTIVES.length)];
+  const noun = LOBBY_NAME_NOUNS[crypto.randomInt(LOBBY_NAME_NOUNS.length)];
+  return `${adjective} ${noun}`;
+}
+
 function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | undefined {
   return lobbyId ?? socket.data.lobbyId;
+}
+
+function emitAlreadyInLobby(
+  socket: QuizballSocket,
+  lobby: {
+    id: string;
+    invite_code: string | null;
+    display_name: string;
+    status: string;
+    mode: string;
+    game_mode: string;
+    host_user_id: string;
+  },
+  userId: string
+): void {
+  socket.emit('error', {
+    code: 'ALREADY_IN_LOBBY',
+    message: 'You are already in a lobby',
+    meta: {
+      lobbyId: lobby.id,
+      inviteCode: lobby.invite_code,
+      displayName: lobby.display_name,
+      status: lobby.status,
+      mode: lobby.mode,
+      gameMode: lobby.game_mode,
+      hostUserId: lobby.host_user_id,
+      isHost: lobby.host_user_id === userId,
+    },
+  });
 }
 
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
@@ -41,6 +104,7 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
       lobbyId,
       status: lobby.status,
       memberCount: state.members.length,
+      memberIds: state.members.map((member) => member.userId),
       mode: lobby.mode,
       gameMode: lobby.game_mode,
     },
@@ -90,6 +154,81 @@ async function popRankedPair(redis: NonNullable<ReturnType<typeof getRedisClient
     arguments: ['2'],
   });
   return Array.isArray(result) ? result.map(String) : [];
+}
+
+async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
+  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+  if (members.length === 0) return;
+  const nextHostId = members[0]?.user_id;
+  if (nextHostId && nextHostId !== previousHostId) {
+    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
+  }
+}
+
+async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
+  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+  sockets.forEach((socket) => {
+    if (socket.data.user.id !== userId) return;
+    socket.leave(`lobby:${lobbyId}`);
+    socket.data.lobbyId = undefined;
+  });
+}
+
+async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  await lobbiesRepo.removeMember(lobbyId, userId);
+  await removeUserFromLobbySockets(io, lobbyId, userId);
+  logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');
+
+  const closed = await closeLobbyIfEmpty(io, lobbyId);
+  if (closed) {
+    return;
+  }
+
+  if (lobby && lobby.status === 'waiting' && lobby.host_user_id === userId) {
+    await transferHostIfNeeded(lobbyId, userId);
+  }
+
+  await emitLobbyState(io, lobbyId);
+}
+
+async function autoLeaveAllWaitingLobbies(
+  io: QuizballServer,
+  userId: string,
+  keepLobbyId?: string
+): Promise<void> {
+  const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+  const waitingLobbies = openLobbies.filter(
+    (lobby) => lobby.status === 'waiting' && lobby.id !== keepLobbyId
+  );
+
+  for (const lobby of waitingLobbies) {
+    await autoLeaveLobby(io, lobby.id, userId);
+  }
+}
+
+async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Promise<boolean> {
+  const memberCount = await lobbiesRepo.countMembers(lobbyId);
+  if (memberCount > 0) return false;
+  await lobbiesRepo.deleteLobby(lobbyId);
+  logger.info({ lobbyId }, 'Lobby deleted (no members)');
+  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
+    lobbyId,
+    mode: 'friendly',
+    status: 'closed',
+    inviteCode: null,
+    displayName: 'Lobby closed',
+    isPublic: false,
+    hostUserId: '',
+    settings: {
+      gameMode: 'friendly',
+      friendlyRandom: true,
+      friendlyCategoryAId: null,
+      friendlyCategoryBId: null,
+    },
+    members: [],
+  });
+  return true;
 }
 
 export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
@@ -202,16 +341,62 @@ async function enqueueRanked(io: QuizballServer, userId: string): Promise<void> 
 }
 
 export const lobbyRealtimeService = {
-  async createLobby(io: QuizballServer, socket: QuizballSocket, mode: 'friendly' | 'ranked'): Promise<void> {
+  async rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const userId = socket.data.user.id;
+    const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    const waitingLobbies = openLobbies.filter((lobby) => lobby.status === 'waiting');
+    if (waitingLobbies.length === 0) return;
 
-    // Prevent creating a new lobby if already in one
-    if (socket.data.lobbyId) {
+    const newestLobby = waitingLobbies[0];
+    await autoLeaveAllWaitingLobbies(io, userId, newestLobby.id);
+
+    socket.join(`lobby:${newestLobby.id}`);
+    socket.data.lobbyId = newestLobby.id;
+    const state = await lobbiesService.buildLobbyState(newestLobby);
+    socket.emit('lobby:state', state);
+    logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
+  },
+
+  async createLobby(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean }
+  ): Promise<void> {
+    const userId = socket.data.user.id;
+    const mode = payload.mode;
+
+    // Prevent creating a new lobby if already in one (DB is source of truth)
+    const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    for (const lobby of openLobbies) {
+      if (lobby.status !== 'active') continue;
+
+      const activeMatch = await matchesRepo.getActiveMatchForLobby(lobby.id);
+      if (activeMatch) {
+        logger.warn(
+          { userId, existingLobbyId: lobby.id },
+          'Lobby create ignored: user already in an active lobby'
+        );
+        emitAlreadyInLobby(socket, lobby, userId);
+        return;
+      }
+
       logger.warn(
-        { userId, existingLobbyId: socket.data.lobbyId },
+        { userId, existingLobbyId: lobby.id },
+        'Lobby create: stale active lobby detected, removing membership'
+      );
+      await autoLeaveLobby(io, lobby.id, userId);
+    }
+
+    await autoLeaveAllWaitingLobbies(io, userId);
+
+    const refreshedLobby = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    if (refreshedLobby.length > 0) {
+      const lobby = refreshedLobby[0];
+      logger.warn(
+        { userId, existingLobbyId: lobby.id },
         'Lobby create ignored: user already in a lobby'
       );
-      socket.emit('error', { code: 'ALREADY_IN_LOBBY', message: 'You are already in a lobby' });
+      emitAlreadyInLobby(socket, lobby, userId);
       return;
     }
 
@@ -222,10 +407,13 @@ export const lobbyRealtimeService = {
     }
 
     const inviteCode = generateInviteCode(6);
+    const displayName = generateLobbyName();
     const lobby = await lobbiesRepo.createLobby({
       mode: 'friendly',
       hostUserId: userId,
       inviteCode,
+      isPublic: payload.isPublic ?? false,
+      displayName,
     });
 
     await lobbiesRepo.addMember(lobby.id, userId, false);
@@ -242,14 +430,52 @@ export const lobbyRealtimeService = {
 
   async joinByCode(io: QuizballServer, socket: QuizballSocket, inviteCode: string): Promise<void> {
     const userId = socket.data.user.id;
+    const normalizedCode = inviteCode.toUpperCase();
 
-    // Prevent joining if already in a lobby
-    if (socket.data.lobbyId) {
+    const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    const matchingLobby = openLobbies.find(
+      (lobby) => lobby.invite_code?.toUpperCase() === normalizedCode
+    );
+
+    for (const lobby of openLobbies) {
+      if (lobby.status !== 'active') continue;
+
+      const activeMatch = await matchesRepo.getActiveMatchForLobby(lobby.id);
+      if (activeMatch) {
+        logger.warn(
+          { userId, existingLobbyId: lobby.id },
+          'Lobby join ignored: user already in an active lobby'
+        );
+        emitAlreadyInLobby(socket, lobby, userId);
+        return;
+      }
+
       logger.warn(
-        { userId, existingLobbyId: socket.data.lobbyId },
+        { userId, existingLobbyId: lobby.id },
+        'Lobby join: stale active lobby detected, removing membership'
+      );
+      await autoLeaveLobby(io, lobby.id, userId);
+    }
+
+    if (matchingLobby) {
+      await autoLeaveAllWaitingLobbies(io, userId, matchingLobby.id);
+      socket.join(`lobby:${matchingLobby.id}`);
+      socket.data.lobbyId = matchingLobby.id;
+      logger.info({ lobbyId: matchingLobby.id, userId }, 'Lobby rejoined by code');
+      await emitLobbyState(io, matchingLobby.id);
+      return;
+    }
+
+    await autoLeaveAllWaitingLobbies(io, userId);
+
+    const refreshedLobby = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    if (refreshedLobby.length > 0) {
+      const lobby = refreshedLobby[0];
+      logger.warn(
+        { userId, existingLobbyId: lobby.id },
         'Lobby join ignored: user already in a lobby'
       );
-      socket.emit('error', { code: 'ALREADY_IN_LOBBY', message: 'You are already in a lobby' });
+      emitAlreadyInLobby(socket, lobby, userId);
       return;
     }
 
@@ -263,8 +489,10 @@ export const lobbyRealtimeService = {
     const members = await lobbiesRepo.listMembersWithUser(lobby.id);
     const alreadyMember = members.some((m) => m.user_id === userId);
     if (alreadyMember) {
-      logger.warn({ lobbyId: lobby.id, userId }, 'User already a member of lobby');
-      socket.emit('error', { code: 'ALREADY_MEMBER', message: 'You are already in this lobby' });
+      socket.join(`lobby:${lobby.id}`);
+      socket.data.lobbyId = lobby.id;
+      logger.info({ lobbyId: lobby.id, userId }, 'Lobby rejoined as existing member');
+      await emitLobbyState(io, lobby.id);
       return;
     }
 
@@ -456,7 +684,10 @@ export const lobbyRealtimeService = {
         friendlyCategoryBId: nextSettings.friendlyCategoryBId,
       });
 
-      logger.info({ lobbyId, gameMode: nextSettings.gameMode }, 'Lobby settings updated');
+      logger.info(
+        { lobbyId, gameMode: nextSettings.gameMode, userId: socket.data.user.id },
+        'Lobby settings updated'
+      );
       await emitLobbyState(io, lobbyId);
     } finally {
       await releaseLock(lockKey, lock.token);
@@ -591,28 +822,101 @@ export const lobbyRealtimeService = {
   },
 
   async leaveLobby(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-    const lobbyId = socket.data.lobbyId;
+    let lobbyId = socket.data.lobbyId;
+    const userId = socket.data.user.id;
+
+    if (!lobbyId) {
+      const existingLobby = await lobbiesRepo.findOpenLobbyForUser(userId);
+      if (existingLobby) {
+        if (existingLobby.status === 'waiting') {
+          lobbyId = existingLobby.id;
+          logger.info({ lobbyId, userId }, 'Lobby leave: resolved lobby from DB');
+        } else {
+          socket.emit('error', {
+            code: 'LOBBY_ACTIVE',
+            message: 'Match already started. Please reconnect to the match.',
+          });
+          return;
+        }
+      }
+    }
+
     if (!lobbyId) {
       const redis = getRedisClient();
       if (redis) {
-        await redis.del(`${RANKED_INQUEUE_PREFIX}${socket.data.user.id}`);
-        await redis.lRem(RANKED_QUEUE_KEY, 0, socket.data.user.id);
+        await redis.del(`${RANKED_INQUEUE_PREFIX}${userId}`);
+        await redis.lRem(RANKED_QUEUE_KEY, 0, userId);
       }
-      logger.info({ userId: socket.data.user.id }, 'Lobby leave: removed from ranked queue');
+      logger.info({ userId }, 'Lobby leave: removed from ranked queue');
       return;
     }
 
-    await lobbiesRepo.removeMember(lobbyId, socket.data.user.id);
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-    logger.info({ lobbyId, userId: socket.data.user.id }, 'Lobby leave: removed member');
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (lobby && lobby.status !== 'waiting') {
+      socket.emit('error', {
+        code: 'LOBBY_ACTIVE',
+        message: 'Match already started. Please reconnect to the match.',
+      });
+      return;
+    }
 
-    const memberCount = await lobbiesRepo.countMembers(lobbyId);
-    if (memberCount === 0) {
-      await lobbiesRepo.setLobbyStatus(lobbyId, 'closed');
-      logger.info({ lobbyId }, 'Lobby closed (no members)');
+    await lobbiesRepo.removeMember(lobbyId, userId);
+    await removeUserFromLobbySockets(io, lobbyId, userId);
+    logger.info({ lobbyId, userId }, 'Lobby leave: removed member');
+
+    const closed = await closeLobbyIfEmpty(io, lobbyId);
+    if (closed) {
+      return;
+    }
+
+    if (lobby && lobby.status === 'waiting' && lobby.host_user_id === userId) {
+      await transferHostIfNeeded(lobbyId, userId);
     }
 
     await emitLobbyState(io, lobbyId);
+  },
+
+  async handleLobbyDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const lobbyId = socket.data.lobbyId;
+    const userId = socket.data.user.id;
+
+    if (!lobbyId) {
+      const redis = getRedisClient();
+      if (redis) {
+        await redis.del(`${RANKED_INQUEUE_PREFIX}${userId}`);
+        await redis.lRem(RANKED_QUEUE_KEY, 0, userId);
+      }
+      logger.info({ userId }, 'Lobby disconnect: removed from ranked queue');
+      return;
+    }
+
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'waiting') {
+      return;
+    }
+
+    setTimeout(async () => {
+      try {
+        const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+        const stillPresent = sockets.some((s) => s.data.user.id === userId);
+        if (stillPresent) return;
+
+        await lobbiesRepo.removeMember(lobbyId, userId);
+        logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
+
+        const closed = await closeLobbyIfEmpty(io, lobbyId);
+        if (closed) {
+          return;
+        }
+
+        if (lobby.host_user_id === userId) {
+          await transferHostIfNeeded(lobbyId, userId);
+        }
+
+        await emitLobbyState(io, lobbyId);
+      } catch (error) {
+        logger.warn({ error, lobbyId, userId }, 'Lobby disconnect cleanup failed');
+      }
+    }, LOBBY_DISCONNECT_GRACE_MS);
   },
 };

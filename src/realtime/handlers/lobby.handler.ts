@@ -17,7 +17,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
       return;
     }
 
-    await lobbyRealtimeService.createLobby(io, socket, parsed.data.mode);
+    await lobbyRealtimeService.createLobby(io, socket, parsed.data);
   });
 
   socket.on('lobby:join_by_code', async (payload) => {

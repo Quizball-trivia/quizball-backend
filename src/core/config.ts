@@ -20,6 +20,10 @@ const configSchema = z.object({
 
   // Redis
   REDIS_URL: z.string().url().optional(),
+  RANKED_HUMAN_QUEUE_ENABLED: z
+    .enum(['true', 'false', '1', '0', ''])
+    .default('false')
+    .transform((val) => val === 'true' || val === '1'),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

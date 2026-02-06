@@ -254,7 +254,7 @@ export const matchesRepo = {
     await sql`
       UPDATE matches
       SET current_q_index = ${qIndex}
-      WHERE id = ${matchId}
+      WHERE id = ${matchId} AND current_q_index < ${qIndex}
     `;
   },
 
@@ -270,6 +270,20 @@ export const matchesRepo = {
     await sql`
       UPDATE match_players
       SET avg_time_ms = ${avgTimeMs}
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+  },
+
+  async setPlayerForfeitWinTotals(
+    matchId: string,
+    userId: string,
+    totalPoints: number,
+    correctAnswers: number
+  ): Promise<void> {
+    await sql`
+      UPDATE match_players
+      SET total_points = GREATEST(total_points, ${totalPoints}),
+          correct_answers = GREATEST(correct_answers, ${correctAnswers})
       WHERE match_id = ${matchId} AND user_id = ${userId}
     `;
   },
@@ -298,5 +312,29 @@ export const matchesRepo = {
       LIMIT 1
     `;
     return row ?? null;
+  },
+
+  async getActiveMatchForUser(userId: string): Promise<MatchRow | null> {
+    const [row] = await sql<MatchRow[]>`
+      SELECT m.*
+      FROM matches m
+      JOIN match_players mp ON mp.match_id = m.id
+      WHERE mp.user_id = ${userId} AND m.status = 'active'
+      ORDER BY m.started_at DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async abandonMatch(matchId: string): Promise<void> {
+    const rows = await sql<{ id: string }[]>`
+      UPDATE matches
+      SET status = 'abandoned', ended_at = NOW()
+      WHERE id = ${matchId} AND status = 'active'
+      RETURNING id
+    `;
+    if (rows.length === 0) {
+      throw new Error('Match is not active or does not exist');
+    }
   },
 };

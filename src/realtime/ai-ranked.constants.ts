@@ -1,0 +1,223 @@
+/**
+ * AI Ranked Bot Configuration
+ *
+ * This module handles AI opponent profile generation for ranked matches.
+ *
+ * Features:
+ * - In-memory caching of avatar URLs (keyed by seed + size)
+ * - Fallback avatar when Dicebear API is unavailable
+ * - Optional server-side validation with timeout protection
+ * - Pre-generation support for build-time caching
+ *
+ * Usage:
+ *
+ * Basic (no validation, uses cache):
+ *   const profile = generateRankedAiProfile();
+ *
+ * With validation (async, checks Dicebear availability):
+ *   const profile = await generateRankedAiProfileValidated();
+ *
+ * Pre-generate at startup (optional):
+ *   await preGenerateAiAvatars(96, true); // with validation
+ *   await preGenerateAiAvatars(96, false); // just cache URLs
+ */
+
+export const RANKED_AI_CORRECTNESS = 0.65;
+
+const AI_NAME_PREFIXES = [
+  'cr',
+  'messi',
+  'ron',
+  'fut',
+  'goal',
+  'striker',
+  'legend',
+  'ultra',
+  'dribble',
+  'pitch',
+];
+
+// Keep this in sync with frontend-web-next/src/lib/avatars.ts.
+const AI_AVATAR_SEEDS = [
+  'striker',
+  'goalkeeper',
+  'defender',
+  'midfielder',
+  'captain',
+  'coach',
+  'ronaldo',
+  'messi',
+  'neymar',
+  'mbappe',
+  'haaland',
+  'benzema',
+  'liverpool',
+  'barcelona',
+  'madrid',
+  'bayern',
+  'arsenal',
+  'chelsea',
+  'legend',
+  'rookie',
+  'veteran',
+  'champion',
+  'winner',
+  'pro',
+];
+
+const AI_AVATAR_BG = 'b6e3f4,c0aede,d1d4f9';
+
+// Fallback avatar - base64 encoded minimal SVG or a static asset path
+const FALLBACK_AVATAR_URL = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iOTYiIGhlaWdodD0iOTYiIHZpZXdCb3g9IjAgMCA5NiA5NiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSI0OCIgY3k9IjQ4IiByPSI0OCIgZmlsbD0iI2I2ZTNmNCIvPjxjaXJjbGUgY3g9IjQ4IiBjeT0iNDAiIHI9IjE2IiBmaWxsPSIjMzMzIi8+PHBhdGggZD0iTTI0IDY0YzAtMTMuMyAxMC43LTI0IDI0LTI0czI0IDEwLjcgMjQgMjR2MzJIMjR6IiBmaWxsPSIjMzMzIi8+PC9zdmc+';
+
+// In-memory cache: seed -> generated URL
+const avatarCache = new Map<string, string>();
+
+// Cache expiry (optional, in ms) - set to 0 to disable expiry
+const CACHE_TTL = 0;
+
+interface CacheEntry {
+  url: string;
+  timestamp: number;
+}
+
+const avatarCacheWithTTL = new Map<string, CacheEntry>();
+
+function randomFrom<T>(values: T[]): T {
+  if (values.length === 0) {
+    throw new Error('randomFrom called with empty array');
+  }
+  return values[Math.floor(Math.random() * values.length)];
+}
+
+function encodeSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
+export function generateRankedAiUsername(): string {
+  const prefix = randomFrom(AI_NAME_PREFIXES);
+  const suffix = Math.floor(Math.random() * 90000) + 10000;
+  return `${prefix}${suffix}`;
+}
+
+/**
+ * Generate AI avatar URL with caching and fallback support.
+ * Returns a Dicebear URL from cache if available, otherwise generates a new one.
+ * In case of external API unavailability, use FALLBACK_AVATAR_URL.
+ */
+export function generateRankedAiAvatarUrl(size = 96, seed?: string): string {
+  // Use provided seed or pick random one
+  const avatarSeed = seed ?? randomFrom(AI_AVATAR_SEEDS);
+  const cacheKey = `${avatarSeed}-${size}`;
+
+  // Check cache with TTL
+  if (CACHE_TTL > 0) {
+    const cached = avatarCacheWithTTL.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.url;
+    }
+  } else {
+    // Simple cache without TTL
+    const cached = avatarCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  // Generate Dicebear URL
+  const url = `https://api.dicebear.com/7.x/big-smile/svg?seed=${encodeSegment(avatarSeed)}&backgroundColor=${encodeSegment(AI_AVATAR_BG)}&size=${size}`;
+
+  // Store in cache
+  if (CACHE_TTL > 0) {
+    avatarCacheWithTTL.set(cacheKey, { url, timestamp: Date.now() });
+  } else {
+    avatarCache.set(cacheKey, url);
+  }
+
+  return url;
+}
+
+/**
+ * Get fallback avatar URL when external service is unavailable.
+ */
+export function getFallbackAvatarUrl(): string {
+  return FALLBACK_AVATAR_URL;
+}
+
+/**
+ * Validate if a Dicebear URL is accessible (optional server-side check).
+ * Returns the URL if valid, otherwise returns fallback.
+ * Uses HEAD request to check availability without downloading the full avatar.
+ */
+export async function getValidatedAvatarUrl(size = 96, seed?: string): Promise<string> {
+  const url = generateRankedAiAvatarUrl(size, seed);
+
+  try {
+    // Use HEAD request to check if URL is accessible without downloading content
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(3000), // 3 second timeout
+    });
+
+    if (response.ok) {
+      return url;
+    }
+
+    // Non-2xx response, return fallback
+    return FALLBACK_AVATAR_URL;
+  } catch (error) {
+    // Network error, timeout, or rate limit - return fallback
+    return FALLBACK_AVATAR_URL;
+  }
+}
+
+/**
+ * Pre-generate and cache avatar URLs for all AI seeds.
+ * Optionally validates URLs if `validate` is true.
+ * Useful for build-time or startup caching.
+ */
+export async function preGenerateAiAvatars(size = 96, validate = false): Promise<void> {
+  const promises = AI_AVATAR_SEEDS.map(async (seed) => {
+    if (validate) {
+      await getValidatedAvatarUrl(size, seed);
+    } else {
+      generateRankedAiAvatarUrl(size, seed);
+    }
+  });
+
+  await Promise.all(promises);
+}
+
+/**
+ * Generate a random AI profile (username + avatar URL).
+ * Uses cached Dicebear URLs without validation.
+ */
+export function generateRankedAiProfile(): { username: string; avatarUrl: string } {
+  return {
+    username: generateRankedAiUsername(),
+    avatarUrl: generateRankedAiAvatarUrl(96),
+  };
+}
+
+/**
+ * Generate a random AI profile with validated avatar URL.
+ * Checks if Dicebear is accessible before returning URL.
+ * Falls back to FALLBACK_AVATAR_URL if unavailable.
+ */
+export async function generateRankedAiProfileValidated(): Promise<{
+  username: string;
+  avatarUrl: string;
+}> {
+  return {
+    username: generateRankedAiUsername(),
+    avatarUrl: await getValidatedAvatarUrl(96),
+  };
+}
+
+export function rankedAiLobbyKey(lobbyId: string): string {
+  return `ranked:ai:lobby:${lobbyId}`;
+}
+
+export function rankedAiMatchKey(matchId: string): string {
+  return `ranked:ai:match:${matchId}`;
+}

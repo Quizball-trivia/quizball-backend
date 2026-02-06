@@ -156,6 +156,14 @@ export const lobbiesRepo = {
     return row ?? null;
   },
 
+  async setVisibility(lobbyId: string, isPublic: boolean): Promise<void> {
+    await sql`
+      UPDATE lobbies
+      SET is_public = ${isPublic}, updated_at = NOW()
+      WHERE id = ${lobbyId}
+    `;
+  },
+
   async addMember(lobbyId: string, userId: string, isReady: boolean): Promise<LobbyMemberRow> {
     const [row] = await sql<LobbyMemberRow[]>`
       INSERT INTO lobby_members (lobby_id, user_id, is_ready)

@@ -3,14 +3,102 @@ import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { matchesService } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { logger } from '../core/logger.js';
+import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
+import { getRedisClient } from './redis.js';
 
 export const QUESTION_TIME_MS = 6000;
-const ROUND_RESULT_DELAY_MS = 2000;
+const ROUND_RESULT_DELAY_MS = 0;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
 
+function getAiAnswerDelayMs(): number {
+  return Math.floor(Math.random() * 4200) + 400;
+}
+
+function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
+  const candidates = Array.from({ length: optionCount }, (_, index) => index).filter(
+    (index) => index !== correctIndex
+  );
+  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  return picked ?? correctIndex;
+}
+
+async function scheduleRankedAiAnswer(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  correctIndex: number,
+  optionCount: number
+): Promise<void> {
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match || match.status !== 'active' || match.mode !== 'ranked') return;
+
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  const redis = getRedisClient();
+  const aiUserId =
+    (redis ? await redis.get(rankedAiMatchKey(matchId)) : null) ??
+    players[1]?.user_id ??
+    null;
+  if (!aiUserId) return;
+
+  const hasAi = players.some((player) => player.user_id === aiUserId);
+  if (!hasAi) return;
+
+  const delayMs = getAiAnswerDelayMs();
+  setTimeout(async () => {
+    try {
+      const freshMatch = await matchesRepo.getMatch(matchId);
+      if (!freshMatch || freshMatch.status !== 'active' || freshMatch.current_q_index !== qIndex) {
+        return;
+      }
+
+      const existing = await matchesRepo.getAnswerForUser(matchId, qIndex, aiUserId);
+      if (existing) return;
+
+      const isCorrect = Math.random() < RANKED_AI_CORRECTNESS;
+      const selectedIndex = isCorrect
+        ? correctIndex
+        : pickIncorrectIndex(correctIndex, optionCount);
+      const timeMs = Math.min(QUESTION_TIME_MS, Math.max(0, delayMs));
+      const pointsEarned = isCorrect ? Math.floor(Math.max(0, QUESTION_TIME_MS - timeMs) / 10) : 0;
+
+      await matchesRepo.insertMatchAnswer({
+        matchId,
+        qIndex,
+        userId: aiUserId,
+        selectedIndex,
+        isCorrect,
+        timeMs,
+        pointsEarned,
+      });
+      await matchesRepo.updatePlayerTotals(matchId, aiUserId, pointsEarned, isCorrect);
+
+      io.to(`match:${matchId}`).emit('match:opponent_answered', {
+        matchId,
+        qIndex,
+      });
+
+      const refreshedPlayers = await matchesRepo.listMatchPlayers(matchId);
+      const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
+      if (answers.length >= refreshedPlayers.length) {
+        await resolveRound(io, matchId, qIndex, false);
+      }
+    } catch (error) {
+      logger.warn({ error, matchId, qIndex }, 'Ranked AI answer scheduling failed');
+    }
+  }, delayMs);
+}
+
 function timerKey(matchId: string, qIndex: number): string {
   return `${matchId}:${qIndex}`;
+}
+
+export function cancelMatchQuestionTimer(matchId: string, qIndex: number): void {
+  const key = timerKey(matchId, qIndex);
+  const timer = questionTimers.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  questionTimers.delete(key);
 }
 
 export async function sendMatchQuestion(
@@ -56,6 +144,14 @@ export async function sendMatchQuestion(
 
   questionTimers.set(key, timeout);
 
+  void scheduleRankedAiAnswer(
+    io,
+    matchId,
+    qIndex,
+    payload.correctIndex,
+    payload.question.options.length
+  );
+
   return { correctIndex: payload.correctIndex };
 }
 
@@ -65,8 +161,8 @@ export async function resolveRound(
   qIndex: number,
   fromTimeout = false
 ): Promise<void> {
-  const lockKey = `lock:match:${matchId}:${qIndex}`;
-  const lock = await acquireLock(lockKey, 3000);
+  const lockKey = `lock:match:${matchId}:resolve`;
+  const lock = await acquireLock(lockKey, 5000);
   if (!lock.acquired || !lock.token) return;
 
   try {
@@ -190,6 +286,12 @@ export async function resolveRound(
       players: finalPlayers,
       durationMs: matchDurationMs,
     });
+
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.del(rankedAiMatchKey(matchId));
+    }
+
     logger.info(
       { matchId, durationMs: matchDurationMs, players: Object.keys(finalPlayers).length },
       'Match final results broadcast'

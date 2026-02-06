@@ -22,6 +22,24 @@ export interface UpdateUserData {
 }
 
 export const usersRepo = {
+  async ensureFixedUser(data: {
+    id: string;
+    nickname: string;
+    avatarUrl?: string | null;
+  }): Promise<User> {
+    const [user] = await sql<User[]>`
+      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
+      VALUES (${data.id}, null, ${data.nickname}, null, ${data.avatarUrl ?? null}, false)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        nickname = EXCLUDED.nickname,
+        avatar_url = EXCLUDED.avatar_url,
+        updated_at = NOW()
+      RETURNING *
+    `;
+    return user;
+  },
+
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
       INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)

@@ -124,6 +124,30 @@ export interface MatchFinalResultsPayload {
   durationMs: number;
 }
 
+export interface MatchOpponentDisconnectedPayload {
+  matchId: string;
+  opponentId: string;
+  graceMs: number;
+}
+
+export interface MatchResumePayload {
+  matchId: string;
+  nextQIndex: number;
+}
+
+export interface RankedSearchStartedPayload {
+  durationMs: number;
+}
+
+export interface RankedMatchFoundPayload {
+  lobbyId: string;
+  opponent: OpponentInfo;
+}
+
+export interface RankedQueueJoinPayload {
+  searchMode?: 'human_first';
+}
+
 export interface ClientToServerEvents {
   'lobby:create': (data: { mode: MatchMode; isPublic?: boolean }) => void;
   'lobby:join_by_code': (data: { inviteCode: string }) => void;
@@ -137,6 +161,8 @@ export interface ClientToServerEvents {
     friendlyCategoryBId?: string | null;
   }) => void;
   'lobby:start': (data?: { lobbyId?: string }) => void;
+  'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
+  'ranked:queue_leave': () => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
 }
@@ -159,4 +185,9 @@ export interface ServerToClientEvents {
   'match:answer_ack': (data: MatchAnswerAckPayload) => void;
   'match:round_result': (data: MatchRoundResultPayload) => void;
   'match:final_results': (data: MatchFinalResultsPayload) => void;
+  'match:opponent_disconnected': (data: MatchOpponentDisconnectedPayload) => void;
+  'match:resume': (data: MatchResumePayload) => void;
+  'ranked:search_started': (data: RankedSearchStartedPayload) => void;
+  'ranked:match_found': (data: RankedMatchFoundPayload) => void;
+  'ranked:queue_left': () => void;
 }

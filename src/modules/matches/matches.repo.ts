@@ -254,7 +254,7 @@ export const matchesRepo = {
     await sql`
       UPDATE matches
       SET current_q_index = ${qIndex}
-      WHERE id = ${matchId}
+      WHERE id = ${matchId} AND current_q_index < ${qIndex}
     `;
   },
 
@@ -298,5 +298,25 @@ export const matchesRepo = {
       LIMIT 1
     `;
     return row ?? null;
+  },
+
+  async getActiveMatchForUser(userId: string): Promise<MatchRow | null> {
+    const [row] = await sql<MatchRow[]>`
+      SELECT m.*
+      FROM matches m
+      JOIN match_players mp ON mp.match_id = m.id
+      WHERE mp.user_id = ${userId} AND m.status = 'active'
+      ORDER BY m.started_at DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async abandonMatch(matchId: string): Promise<void> {
+    await sql`
+      UPDATE matches
+      SET status = 'abandoned', ended_at = NOW()
+      WHERE id = ${matchId}
+    `;
   },
 };

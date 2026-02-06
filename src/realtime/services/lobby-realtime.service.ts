@@ -5,17 +5,23 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
+import {
+  generateRankedAiProfile,
+  rankedAiLobbyKey,
+} from '../ai-ranked.constants.js';
 
-const RANKED_QUEUE_KEY = 'ranked:queue';
-const RANKED_INQUEUE_PREFIX = 'ranked:inqueue:';
-const RANKED_INQUEUE_TTL_SEC = 60;
 const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
 const DRAFT_START_GUARD_TTL_SEC = 15;
 const LOBBY_DISCONNECT_GRACE_MS = 15000;
+const RANKED_SIM_SEARCH_MIN_MS = 3000;
+const RANKED_SIM_SEARCH_MAX_MS = 10000;
+const RANKED_SIM_FOUND_MODAL_MS = 1200;
+const RANKED_AI_KEY_TTL_SEC = 7200;
 
 // Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
@@ -63,6 +69,20 @@ function generateLobbyName(): string {
 
 function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | undefined {
   return lobbyId ?? socket.data.lobbyId;
+}
+
+function randomIntBetween(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function isRankedAiLobby(lobby: { mode: string }): boolean {
+  return lobby.mode === 'ranked';
+}
+
+async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string | null> {
+  const redis = getRedisClient();
+  if (!redis) return null;
+  return redis.get(rankedAiLobbyKey(lobbyId));
 }
 
 function emitAlreadyInLobby(
@@ -133,29 +153,6 @@ async function releaseDraftStartGuard(lobbyId: string): Promise<void> {
   draftStartingSet.delete(lobbyId);
 }
 
-async function popRankedPair(redis: NonNullable<ReturnType<typeof getRedisClient>>): Promise<string[]> {
-  const script = `
-    local key = KEYS[1]
-    local count = tonumber(ARGV[1])
-    local items = redis.call('LPOP', key, count)
-    if not items then return {} end
-    if type(items) == 'string' then items = {items} end
-    if #items < count then
-      for i = #items, 1, -1 do
-        redis.call('LPUSH', key, items[i])
-      end
-      return items
-    end
-    return items
-  `;
-
-  const result = await redis.eval(script, {
-    keys: [RANKED_QUEUE_KEY],
-    arguments: ['2'],
-  });
-  return Array.isArray(result) ? result.map(String) : [];
-}
-
 async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
   if (members.length === 0) return;
@@ -174,9 +171,32 @@ async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: string, u
   });
 }
 
+async function attachUserSocketsToLobby(
+  io: QuizballServer,
+  userId: string,
+  lobbyId: string
+): Promise<void> {
+  await io.in(`user:${userId}`).socketsJoin(`lobby:${lobbyId}`);
+  const sockets = await io.in(`user:${userId}`).fetchSockets();
+  sockets.forEach((socket) => {
+    socket.data.lobbyId = lobbyId;
+  });
+}
+
 async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   await lobbiesRepo.removeMember(lobbyId, userId);
+
+  if (lobby && isRankedAiLobby(lobby)) {
+    const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
+    if (aiUserId) {
+      await lobbiesRepo.removeMember(lobbyId, aiUserId);
+    }
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.del(rankedAiLobbyKey(lobbyId));
+    }
+  }
   await removeUserFromLobbySockets(io, lobbyId, userId);
   logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');
 
@@ -283,61 +303,86 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
   }
 }
 
-async function enqueueRanked(io: QuizballServer, userId: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) {
-    throw new Error('Redis is required for ranked queue');
+export async function startRankedAiForUser(
+  io: QuizballServer,
+  userId: string,
+  options?: {
+    skipSearchEmit?: boolean;
+    searchDurationMs?: number;
   }
-
-  const inQueueKey = `${RANKED_INQUEUE_PREFIX}${userId}`;
-  const alreadyQueued = await redis.exists(inQueueKey);
-  if (alreadyQueued) {
-    logger.debug({ userId }, 'Ranked queue: already queued');
-    return;
-  }
-
-  await redis.setEx(inQueueKey, RANKED_INQUEUE_TTL_SEC, '1');
-  await redis.rPush(RANKED_QUEUE_KEY, userId);
-
-  const queueLength = await redis.lLen(RANKED_QUEUE_KEY);
-  logger.info({ userId, queueLength }, 'Ranked queue: enqueued');
-  if (queueLength < 2) return;
-
-  const popped = await popRankedPair(redis);
-  if (popped.length < 2) {
-    if (popped.length === 1) {
-      logger.debug({ userId: popped[0] }, 'Ranked queue: restored single user after failed match');
-    }
-    return;
-  }
-
-  const [userA, userB] = popped;
-  await redis.del([`${RANKED_INQUEUE_PREFIX}${userA}`, `${RANKED_INQUEUE_PREFIX}${userB}`]);
+): Promise<void> {
+  const aiProfile = generateRankedAiProfile();
+  const aiUser = await usersRepo.create({
+    nickname: aiProfile.username,
+    avatarUrl: aiProfile.avatarUrl,
+  });
 
   const lobby = await lobbiesRepo.createLobby({
     mode: 'ranked',
-    hostUserId: userA,
+    hostUserId: userId,
     inviteCode: null,
   });
 
-  await lobbiesRepo.addMember(lobby.id, userA, true);
-  await lobbiesRepo.addMember(lobby.id, userB, true);
-  logger.info({ lobbyId: lobby.id, userA, userB }, 'Ranked lobby created');
+  await lobbiesRepo.addMember(lobby.id, userId, true);
+  await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
 
-  const socketsA = await io.in(`user:${userA}`).fetchSockets();
-  const socketsB = await io.in(`user:${userB}`).fetchSockets();
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+  }
 
-  socketsA.forEach((socket) => {
-    socket.join(`lobby:${lobby.id}`);
-    socket.data.lobbyId = lobby.id;
-  });
-  socketsB.forEach((socket) => {
-    socket.join(`lobby:${lobby.id}`);
-    socket.data.lobbyId = lobby.id;
-  });
+  await attachUserSocketsToLobby(io, userId, lobby.id);
 
   await emitLobbyState(io, lobby.id);
-  await startDraft(io, lobby.id);
+
+  const searchDurationMs =
+    options?.searchDurationMs ??
+    randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS);
+  if (!options?.skipSearchEmit) {
+    io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+  }
+  logger.info(
+    { lobbyId: lobby.id, userId, searchDurationMs, skipSearchEmit: options?.skipSearchEmit ?? false },
+    'Ranked AI search started'
+  );
+
+  setTimeout(async () => {
+    try {
+      const latestLobby = await lobbiesRepo.getById(lobby.id);
+      if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
+        return;
+      }
+
+      const members = await lobbiesRepo.listMembersWithUser(lobby.id);
+      const hasHost = members.some((member) => member.user_id === userId);
+      const hasAi = members.some((member) => member.user_id === aiUser.id);
+      if (!hasHost || !hasAi) return;
+
+      io.to(`user:${userId}`).emit('ranked:match_found', {
+        lobbyId: lobby.id,
+        opponent: {
+          id: aiUser.id,
+          username: aiUser.nickname ?? aiProfile.username,
+          avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
+        },
+      });
+      logger.info({ lobbyId: lobby.id, userId, aiUserId: aiUser.id }, 'Ranked AI match found');
+
+      setTimeout(async () => {
+        try {
+          const readyLobby = await lobbiesRepo.getById(lobby.id);
+          if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
+            return;
+          }
+          await startDraft(io, lobby.id);
+        } catch (error) {
+          logger.warn({ error, lobbyId: lobby.id }, 'Failed to start ranked AI draft');
+        }
+      }, RANKED_SIM_FOUND_MODAL_MS);
+    } catch (error) {
+      logger.warn({ error, lobbyId: lobby.id }, 'Failed during ranked AI search completion');
+    }
+  }, searchDurationMs);
 }
 
 export const lobbyRealtimeService = {
@@ -401,8 +446,8 @@ export const lobbyRealtimeService = {
     }
 
     if (mode === 'ranked') {
-      logger.info({ userId }, 'Lobby create (ranked) requested');
-      await enqueueRanked(io, userId);
+      logger.info({ userId }, 'Lobby create (ranked AI simulation) requested');
+      await startRankedAiForUser(io, userId);
       return;
     }
 
@@ -842,12 +887,7 @@ export const lobbyRealtimeService = {
     }
 
     if (!lobbyId) {
-      const redis = getRedisClient();
-      if (redis) {
-        await redis.del(`${RANKED_INQUEUE_PREFIX}${userId}`);
-        await redis.lRem(RANKED_QUEUE_KEY, 0, userId);
-      }
-      logger.info({ userId }, 'Lobby leave: removed from ranked queue');
+      logger.info({ userId }, 'Lobby leave: no waiting lobby to leave');
       return;
     }
 
@@ -861,6 +901,16 @@ export const lobbyRealtimeService = {
     }
 
     await lobbiesRepo.removeMember(lobbyId, userId);
+    if (lobby && isRankedAiLobby(lobby)) {
+      const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
+      if (aiUserId) {
+        await lobbiesRepo.removeMember(lobbyId, aiUserId);
+      }
+      const redis = getRedisClient();
+      if (redis) {
+        await redis.del(rankedAiLobbyKey(lobbyId));
+      }
+    }
     await removeUserFromLobbySockets(io, lobbyId, userId);
     logger.info({ lobbyId, userId }, 'Lobby leave: removed member');
 
@@ -881,12 +931,7 @@ export const lobbyRealtimeService = {
     const userId = socket.data.user.id;
 
     if (!lobbyId) {
-      const redis = getRedisClient();
-      if (redis) {
-        await redis.del(`${RANKED_INQUEUE_PREFIX}${userId}`);
-        await redis.lRem(RANKED_QUEUE_KEY, 0, userId);
-      }
-      logger.info({ userId }, 'Lobby disconnect: removed from ranked queue');
+      logger.info({ userId }, 'Lobby disconnect: no waiting lobby attached');
       return;
     }
 
@@ -902,6 +947,16 @@ export const lobbyRealtimeService = {
         if (stillPresent) return;
 
         await lobbiesRepo.removeMember(lobbyId, userId);
+        if (isRankedAiLobby(lobby)) {
+          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
+          if (aiUserId) {
+            await lobbiesRepo.removeMember(lobbyId, aiUserId);
+          }
+          const redis = getRedisClient();
+          if (redis) {
+            await redis.del(rankedAiLobbyKey(lobbyId));
+          }
+        }
         logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
 
         const closed = await closeLobbyIfEmpty(io, lobbyId);

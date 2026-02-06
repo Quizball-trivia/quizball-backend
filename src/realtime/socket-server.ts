@@ -8,8 +8,11 @@ import { socketAuthMiddleware, type SocketAuthData } from './socket-auth.js';
 import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
+import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
 import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
+import { matchRealtimeService } from './services/match-realtime.service.js';
+import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -34,12 +37,26 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   io.adapter(createAdapter(pubClient, subClient));
+  rankedMatchmakingService.start(io);
 
   io.use(socketAuthMiddleware);
 
   io.on('connection', async (socket: QuizballSocket) => {
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
+
+    // Register handlers immediately so early buffered client events are not dropped.
+    registerLobbyHandlers(io, socket);
+    registerRankedHandlers(io, socket);
+    registerDraftHandlers(io, socket);
+    registerMatchHandlers(io, socket);
+
+    socket.on('disconnect', (reason) => {
+      logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
+      void matchRealtimeService.handleMatchDisconnect(io, socket);
+      void rankedMatchmakingService.handleSocketDisconnect(socket);
+    });
 
     logger.info(
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
@@ -52,14 +69,19 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       logger.warn({ error, userId: user.id }, 'Failed to rejoin waiting lobby on connect');
     }
 
-    registerLobbyHandlers(io, socket);
-    registerDraftHandlers(io, socket);
-    registerMatchHandlers(io, socket);
+    try {
+      await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId: user.id }, 'Failed to rejoin active match on connect');
+    }
 
-    socket.on('disconnect', (reason) => {
-      logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
-      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
-    });
+    if (!socket.data.matchId) {
+      try {
+        await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
+      } catch (error) {
+        logger.warn({ error, userId: user.id }, 'Failed to emit last match results on connect');
+      }
+    }
   });
 
   return io;

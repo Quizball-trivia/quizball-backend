@@ -5,6 +5,14 @@ import { matchesService } from '../../modules/matches/matches.service.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
+import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { getRedisClient } from '../redis.js';
+
+const AI_BAN_DELAY_MIN_MS = 700;
+const AI_BAN_DELAY_MAX_MS = 1800;
+
+// Process-local timer guard for delayed AI bans (safe for single-instance deployment).
+const pendingAiBanTimers = new Map<string, NodeJS.Timeout>();
 
 async function startMatchFromDraft(
   io: QuizballServer,
@@ -58,6 +66,103 @@ function getNextActorId(
   const lastActor = bans[bans.length - 1]?.user_id;
   const other = members.find((member) => member.user_id !== lastActor)?.user_id;
   return other ?? hostUserId;
+}
+
+function getAiBanDelayMs(): number {
+  return Math.floor(Math.random() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
+}
+
+function clearPendingAiBanTimer(lobbyId: string): void {
+  const timer = pendingAiBanTimers.get(lobbyId);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingAiBanTimers.delete(lobbyId);
+}
+
+async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') {
+    clearPendingAiBanTimer(lobbyId);
+    return;
+  }
+
+  const categories = await lobbiesService.getLobbyCategories(lobbyId);
+  const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+  if (bans.length < 2) return;
+
+  clearPendingAiBanTimer(lobbyId);
+  const bannedIds = new Set(bans.map((ban) => ban.category_id));
+  const remaining = categories.filter((category) => !bannedIds.has(category.id));
+  if (remaining.length < 2) {
+    logger.warn(
+      {
+        lobbyId,
+        totalCategories: categories.length,
+        bannedCount: bans.length,
+        remainingCount: remaining.length,
+        bannedCategoryIds: Array.from(bannedIds),
+      },
+      'Insufficient categories remaining after bans in draft'
+    );
+    return;
+  }
+
+  const allowed: [string, string] = [remaining[0].id, remaining[1].id];
+  io.to(`lobby:${lobbyId}`).emit('draft:complete', { allowedCategoryIds: allowed });
+  logger.info({ lobbyId, allowedCategoryIds: allowed }, 'Draft complete');
+  await startMatchFromDraft(io, lobbyId, allowed);
+}
+
+function scheduleRankedAiBan(io: QuizballServer, lobbyId: string, aiUserId: string): void {
+  clearPendingAiBanTimer(lobbyId);
+  const delayMs = getAiBanDelayMs();
+
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        const lobby = await lobbiesRepo.getById(lobbyId);
+        if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
+
+        const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+        const hasAiMember = members.some((member) => member.user_id === aiUserId);
+        if (!hasAiMember) return;
+
+        const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+        if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
+
+        const categories = await lobbiesService.getLobbyCategories(lobbyId);
+        const bannedIds = new Set(bans.map((ban) => ban.category_id));
+        const candidates = categories.filter((category) => !bannedIds.has(category.id));
+        const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
+        if (!aiChoice) return;
+
+        try {
+          await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+        } catch (error) {
+          logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
+          return;
+        }
+
+        io.to(`lobby:${lobbyId}`).emit('draft:banned', {
+          actorId: aiUserId,
+          categoryId: aiChoice.id,
+        });
+        logger.info(
+          { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
+          'Draft ban applied (AI)'
+        );
+
+        await completeDraftIfReady(io, lobbyId);
+      } catch (error) {
+        logger.error({ error, lobbyId, aiUserId, delayMs }, 'Scheduled AI draft ban callback failed');
+      } finally {
+        pendingAiBanTimers.delete(lobbyId);
+      }
+    })();
+  }, delayMs);
+
+  pendingAiBanTimers.set(lobbyId, timer);
+  logger.debug({ lobbyId, aiUserId, delayMs }, 'Scheduled delayed AI draft ban');
 }
 
 export const draftRealtimeService = {
@@ -122,33 +227,18 @@ export const draftRealtimeService = {
       categoryId,
     });
 
+    const redis = getRedisClient();
+    const aiUserId = lobby.mode === 'ranked' && redis ? await redis.get(rankedAiLobbyKey(lobbyId)) : null;
+    const aiMember = aiUserId
+      ? members.find((member) => member.user_id === aiUserId)
+      : undefined;
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    if (updatedBans.length < 2) return;
-
-    const bannedIds = new Set(updatedBans.map((ban) => ban.category_id));
-    const remaining = categories.filter((category) => !bannedIds.has(category.id));
-    if (remaining.length < 2) {
-      logger.warn(
-        {
-          lobbyId,
-          totalCategories: categories.length,
-          bannedCount: updatedBans.length,
-          remainingCount: remaining.length,
-          bannedCategoryIds: Array.from(bannedIds),
-        },
-        'Insufficient categories remaining after bans in draft'
-      );
+    const isRankedVsAi = lobby.mode === 'ranked' && aiMember !== undefined;
+    if (isRankedVsAi && aiUserId && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
+      scheduleRankedAiBan(io, lobbyId, aiUserId);
       return;
     }
 
-    const allowed: [string, string] = [remaining[0].id, remaining[1].id];
-
-    io.to(`lobby:${lobbyId}`).emit('draft:complete', { allowedCategoryIds: allowed });
-    logger.info(
-      { lobbyId, allowedCategoryIds: allowed },
-      'Draft complete'
-    );
-
-    await startMatchFromDraft(io, lobbyId, allowed);
+    await completeDraftIfReady(io, lobbyId);
   },
 };

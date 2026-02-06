@@ -11,4 +11,9 @@ export const matchAnswerSchema = z.object({
   timeMs: z.number().int().min(0).max(MAX_TIME_MS),
 });
 
+export const matchRejoinSchema = z.object({
+  matchId: z.string().uuid().optional(),
+});
+
 export type MatchAnswerPayload = z.infer<typeof matchAnswerSchema>;
+export type MatchRejoinPayload = z.infer<typeof matchRejoinSchema>;

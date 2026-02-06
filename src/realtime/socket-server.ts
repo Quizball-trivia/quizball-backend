@@ -45,6 +45,19 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
 
+    // Register handlers immediately so early buffered client events are not dropped.
+    registerLobbyHandlers(io, socket);
+    registerRankedHandlers(io, socket);
+    registerDraftHandlers(io, socket);
+    registerMatchHandlers(io, socket);
+
+    socket.on('disconnect', (reason) => {
+      logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
+      void matchRealtimeService.handleMatchDisconnect(io, socket);
+      void rankedMatchmakingService.handleSocketDisconnect(socket);
+    });
+
     logger.info(
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
       'Socket connected'
@@ -69,18 +82,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
         logger.warn({ error, userId: user.id }, 'Failed to emit last match results on connect');
       }
     }
-
-    registerLobbyHandlers(io, socket);
-    registerRankedHandlers(io, socket);
-    registerDraftHandlers(io, socket);
-    registerMatchHandlers(io, socket);
-
-    socket.on('disconnect', (reason) => {
-      logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
-      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
-      void matchRealtimeService.handleMatchDisconnect(io, socket);
-      void rankedMatchmakingService.handleSocketDisconnect(socket);
-    });
   });
 
   return io;

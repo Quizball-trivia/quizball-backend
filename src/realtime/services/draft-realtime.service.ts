@@ -118,42 +118,46 @@ function scheduleRankedAiBan(io: QuizballServer, lobbyId: string, aiUserId: stri
   const delayMs = getAiBanDelayMs();
 
   const timer = setTimeout(() => {
-    pendingAiBanTimers.delete(lobbyId);
-
     void (async () => {
-      const lobby = await lobbiesRepo.getById(lobbyId);
-      if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
-
-      const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-      const hasAiMember = members.some((member) => member.user_id === aiUserId);
-      if (!hasAiMember) return;
-
-      const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-      if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
-
-      const categories = await lobbiesService.getLobbyCategories(lobbyId);
-      const bannedIds = new Set(bans.map((ban) => ban.category_id));
-      const candidates = categories.filter((category) => !bannedIds.has(category.id));
-      const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
-      if (!aiChoice) return;
-
       try {
-        await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+        const lobby = await lobbiesRepo.getById(lobbyId);
+        if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
+
+        const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+        const hasAiMember = members.some((member) => member.user_id === aiUserId);
+        if (!hasAiMember) return;
+
+        const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+        if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
+
+        const categories = await lobbiesService.getLobbyCategories(lobbyId);
+        const bannedIds = new Set(bans.map((ban) => ban.category_id));
+        const candidates = categories.filter((category) => !bannedIds.has(category.id));
+        const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
+        if (!aiChoice) return;
+
+        try {
+          await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+        } catch (error) {
+          logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
+          return;
+        }
+
+        io.to(`lobby:${lobbyId}`).emit('draft:banned', {
+          actorId: aiUserId,
+          categoryId: aiChoice.id,
+        });
+        logger.info(
+          { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
+          'Draft ban applied (AI)'
+        );
+
+        await completeDraftIfReady(io, lobbyId);
       } catch (error) {
-        logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
-        return;
+        logger.error({ error, lobbyId, aiUserId, delayMs }, 'Scheduled AI draft ban callback failed');
+      } finally {
+        pendingAiBanTimers.delete(lobbyId);
       }
-
-      io.to(`lobby:${lobbyId}`).emit('draft:banned', {
-        actorId: aiUserId,
-        categoryId: aiChoice.id,
-      });
-      logger.info(
-        { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
-        'Draft ban applied (AI)'
-      );
-
-      await completeDraftIfReady(io, lobbyId);
     })();
   }, delayMs);
 

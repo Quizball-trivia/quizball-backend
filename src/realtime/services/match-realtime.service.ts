@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
 import type { MatchAnswerPayload } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
@@ -38,6 +39,44 @@ function lastMatchKey(userId: string): string {
   return `user:last_match:${userId}`;
 }
 
+async function getOpponentInfo(matchId: string, userId: string): Promise<{
+  id: string;
+  username: string;
+  avatarUrl: string | null;
+}> {
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  const opponent = players.find((player) => player.user_id !== userId);
+  if (!opponent) {
+    return {
+      id: 'opponent',
+      username: 'Opponent',
+      avatarUrl: null,
+    };
+  }
+
+  const opponentUser = await usersRepo.getById(opponent.user_id);
+  return {
+    id: opponent.user_id,
+    username: opponentUser?.nickname ?? 'Player',
+    avatarUrl: opponentUser?.avatar_url ?? null,
+  };
+}
+
+async function emitRejoinAvailable(
+  socket: QuizballSocket,
+  match: { id: string; mode: 'friendly' | 'ranked' },
+  userId: string,
+  graceMs: number
+): Promise<void> {
+  const opponent = await getOpponentInfo(match.id, userId);
+  socket.emit('match:rejoin_available', {
+    matchId: match.id,
+    mode: match.mode,
+    opponent,
+    graceMs,
+  });
+}
+
 async function buildFinalResultsPayload(matchId: string): Promise<{
   matchId: string;
   winnerId: string | null;
@@ -57,8 +96,27 @@ async function buildFinalResultsPayload(matchId: string): Promise<{
     };
   }
 
-  const endedAt = match.ended_at ? new Date(match.ended_at).getTime() : Date.now();
-  const durationMs = endedAt - new Date(match.started_at).getTime();
+  // Calculate endedAt and durationMs deterministically
+  let endedAt: number;
+  let durationMs: number;
+
+  if (match.ended_at) {
+    // Normal case: ended_at is present
+    endedAt = new Date(match.ended_at).getTime();
+    durationMs = endedAt - new Date(match.started_at).getTime();
+  } else if (match.status === 'completed') {
+    // Match is completed but ended_at is missing - data inconsistency
+    logger.warn(
+      { matchId, startedAt: match.started_at, status: match.status },
+      'Match is completed but ended_at is null - using started_at as fallback'
+    );
+    endedAt = new Date(match.started_at).getTime();
+    durationMs = 0; // Duration is 0 since we don't have accurate end time
+  } else {
+    // Match is in-progress (shouldn't happen due to line 48 check, but defensive)
+    endedAt = Date.now();
+    durationMs = endedAt - new Date(match.started_at).getTime();
+  }
 
   return {
     matchId,
@@ -165,6 +223,77 @@ export const matchRealtimeService = {
     }
   },
 
+  async handleMatchLeave(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const userId = socket.data.user.id;
+    const activeMatch =
+      (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
+      (await matchesRepo.getActiveMatchForUser(userId));
+
+    if (!activeMatch || activeMatch.status !== 'active') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ACTIVE',
+        message: 'No active match to leave',
+      });
+      return;
+    }
+
+    await this.pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId);
+
+    socket.leave(`match:${activeMatch.id}`);
+    socket.data.matchId = undefined;
+
+    await emitRejoinAvailable(socket, activeMatch, userId, MATCH_DISCONNECT_GRACE_MS);
+  },
+
+  async handleMatchRejoin(io: QuizballServer, socket: QuizballSocket, requestedMatchId: string | null): Promise<void> {
+    const userId = socket.data.user.id;
+    let match = requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null;
+
+    if (!match || match.status !== 'active') {
+      match = await matchesRepo.getActiveMatchForUser(userId);
+    }
+
+    if (!match || match.status !== 'active') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ACTIVE',
+        message: 'No active match to rejoin',
+      });
+      return;
+    }
+
+    const players = await matchesRepo.listMatchPlayers(match.id);
+    const isParticipant = players.some((player) => player.user_id === userId);
+    if (!isParticipant) {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'You are not a participant in this match',
+      });
+      return;
+    }
+
+    socket.join(`match:${match.id}`);
+    socket.data.matchId = match.id;
+
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
+    }
+
+    const opponent = await getOpponentInfo(match.id, userId);
+    socket.emit('match:start', {
+      matchId: match.id,
+      opponent,
+    });
+
+    if (!redis) return;
+
+    const isPaused = (await redis.exists(matchPauseKey(match.id))) === 1;
+    const wasDisconnected = (await redis.exists(matchDisconnectKey(match.id, userId))) === 1;
+    if (isPaused && wasDisconnected) {
+      await this.resumePausedMatch(io, match.id, userId);
+    }
+  },
+
   async emitLastMatchResultIfAny(_io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const redis = getRedisClient();
     if (!redis) return;
@@ -237,12 +366,18 @@ export const matchRealtimeService = {
     if (!matchId) return;
 
     const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active' || match.mode !== 'friendly') return;
+    if (!match || match.status !== 'active') return;
+
+    const userId = socket.data.user.id;
+    await this.pauseMatchForDisconnectedPlayer(io, matchId, userId);
+  },
+
+  async pauseMatchForDisconnectedPlayer(io: QuizballServer, matchId: string, userId: string): Promise<void> {
+    const match = await matchesRepo.getMatch(matchId);
+    if (!match || match.status !== 'active') return;
 
     const redis = getRedisClient();
     if (!redis) return;
-
-    const userId = socket.data.user.id;
 
     await redis.set(matchDisconnectKey(matchId, userId), String(Date.now()), { EX: DISCONNECT_TTL_SEC });
     await redis.set(matchPauseKey(matchId), '1', { EX: PRESENCE_TTL_SEC });
@@ -297,6 +432,15 @@ export const matchRealtimeService = {
         }
 
         const winnerId = roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
+        if (winnerId) {
+          const fullPoints = Math.floor((QUESTION_TIME_MS / 10) * activeMatch.total_questions);
+          await matchesRepo.setPlayerForfeitWinTotals(
+            matchId,
+            winnerId,
+            fullPoints,
+            activeMatch.total_questions
+          );
+        }
         await matchesRepo.completeMatch(matchId, winnerId);
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);

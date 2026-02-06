@@ -346,43 +346,91 @@ export async function startRankedAiForUser(
     'Ranked AI search started'
   );
 
-  setTimeout(async () => {
-    try {
-      const latestLobby = await lobbiesRepo.getById(lobby.id);
-      if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
-        return;
-      }
-
-      const members = await lobbiesRepo.listMembersWithUser(lobby.id);
-      const hasHost = members.some((member) => member.user_id === userId);
-      const hasAi = members.some((member) => member.user_id === aiUser.id);
-      if (!hasHost || !hasAi) return;
-
-      io.to(`user:${userId}`).emit('ranked:match_found', {
+  setTimeout(
+    () =>
+      void handleRankedAiMatchFound({
+        io,
         lobbyId: lobby.id,
-        opponent: {
-          id: aiUser.id,
-          username: aiUser.nickname ?? aiProfile.username,
-          avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
-        },
-      });
-      logger.info({ lobbyId: lobby.id, userId, aiUserId: aiUser.id }, 'Ranked AI match found');
+        userId,
+        aiUser,
+        aiProfile,
+        lobbiesRepo,
+        logger,
+        foundModalMs: RANKED_SIM_FOUND_MODAL_MS,
+        startDraft,
+      }),
+    searchDurationMs
+  );
+}
 
-      setTimeout(async () => {
-        try {
-          const readyLobby = await lobbiesRepo.getById(lobby.id);
-          if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
-            return;
-          }
-          await startDraft(io, lobby.id);
-        } catch (error) {
-          logger.warn({ error, lobbyId: lobby.id }, 'Failed to start ranked AI draft');
-        }
-      }, RANKED_SIM_FOUND_MODAL_MS);
-    } catch (error) {
-      logger.warn({ error, lobbyId: lobby.id }, 'Failed during ranked AI search completion');
+async function handleRankedAiMatchFound(params: {
+  io: QuizballServer;
+  lobbyId: string;
+  userId: string;
+  aiUser: { id: string; nickname: string | null; avatar_url: string | null };
+  aiProfile: { username: string; avatarUrl: string };
+  lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
+  logger: typeof import('../../core/logger.js').logger;
+  foundModalMs: number;
+  startDraft: typeof startDraft;
+}): Promise<void> {
+  const { io, lobbyId, userId, aiUser, aiProfile, lobbiesRepo, logger, foundModalMs, startDraft } =
+    params;
+
+  try {
+    const latestLobby = await lobbiesRepo.getById(lobbyId);
+    if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
+      return;
     }
-  }, searchDurationMs);
+
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const hasHost = members.some((member) => member.user_id === userId);
+    const hasAi = members.some((member) => member.user_id === aiUser.id);
+    if (!hasHost || !hasAi) return;
+
+    io.to(`user:${userId}`).emit('ranked:match_found', {
+      lobbyId,
+      opponent: {
+        id: aiUser.id,
+        username: aiUser.nickname ?? aiProfile.username,
+        avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
+      },
+    });
+    logger.info({ lobbyId, userId, aiUserId: aiUser.id }, 'Ranked AI match found');
+
+    setTimeout(
+      () =>
+        void startRankedAiDraft({
+          io,
+          lobbyId,
+          lobbiesRepo,
+          logger,
+          startDraft,
+        }),
+      foundModalMs
+    );
+  } catch (error) {
+    logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
+  }
+}
+
+async function startRankedAiDraft(params: {
+  io: QuizballServer;
+  lobbyId: string;
+  lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
+  logger: typeof import('../../core/logger.js').logger;
+  startDraft: typeof startDraft;
+}): Promise<void> {
+  const { io, lobbyId, lobbiesRepo, logger, startDraft } = params;
+  try {
+    const readyLobby = await lobbiesRepo.getById(lobbyId);
+    if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
+      return;
+    }
+    await startDraft(io, lobbyId);
+  } catch (error) {
+    logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
+  }
 }
 
 export const lobbyRealtimeService = {
@@ -631,6 +679,7 @@ export const lobbyRealtimeService = {
       friendlyRandom?: boolean;
       friendlyCategoryAId?: string | null;
       friendlyCategoryBId?: string | null;
+      isPublic?: boolean;
     }
   ): Promise<void> {
     const lobbyId = resolveLobbyId(socket, payload.lobbyId);
@@ -728,6 +777,10 @@ export const lobbyRealtimeService = {
         friendlyCategoryAId: nextSettings.friendlyCategoryAId,
         friendlyCategoryBId: nextSettings.friendlyCategoryBId,
       });
+
+      if (payload.isPublic !== undefined) {
+        await lobbiesRepo.setVisibility(lobbyId, payload.isPublic);
+      }
 
       logger.info(
         { lobbyId, gameMode: nextSettings.gameMode, userId: socket.data.user.id },

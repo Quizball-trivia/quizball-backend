@@ -5,6 +5,7 @@ import { rankedMatchmakingService } from '../services/ranked-matchmaking.service
 
 export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('ranked:queue_join', async (payload) => {
+    logger.info({ userId: socket.data.user.id }, 'Received ranked:queue_join');
     const parsed = rankedQueueJoinSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten() }, 'Invalid ranked:queue_join payload');
@@ -15,10 +16,26 @@ export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocke
       return;
     }
 
-    await rankedMatchmakingService.handleQueueJoin(io, socket, parsed.data);
+    try {
+      await rankedMatchmakingService.handleQueueJoin(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user.id }, 'Error in ranked:queue_join handler');
+      socket.emit('error', {
+        code: 'RANKED_QUEUE_JOIN_ERROR',
+        message: 'Failed to join ranked queue. Please try again.',
+      });
+    }
   });
 
   socket.on('ranked:queue_leave', async () => {
-    await rankedMatchmakingService.handleQueueLeave(socket);
+    try {
+      await rankedMatchmakingService.handleQueueLeave(socket);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user.id }, 'Error in ranked:queue_leave handler');
+      socket.emit('error', {
+        code: 'RANKED_QUEUE_LEAVE_ERROR',
+        message: 'Failed to leave ranked queue. Please try again.',
+      });
+    }
   });
 }

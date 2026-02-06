@@ -18,10 +18,11 @@ import {
 const SEARCH_DURATION_MS = 7000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
-const TICK_LOCK_TTL_MS = 90;
+const TICK_LOCK_TTL_MS = TICK_INTERVAL_MS * 2;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
 const FOUND_MODAL_MS = 1200;
+const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 
 const QUEUE_KEY = 'ranked:mm:queue';
 const TIMEOUTS_KEY = 'ranked:mm:timeouts';
@@ -41,6 +42,12 @@ function toStringArray(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === 'string');
 }
 
+function isStaleActiveMatch(startedAt: string): boolean {
+  const startedAtMs = Date.parse(startedAt);
+  if (Number.isNaN(startedAtMs)) return false;
+  return Date.now() - startedAtMs > STALE_ACTIVE_MATCH_MS;
+}
+
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -58,6 +65,51 @@ async function attachUserSocketsToLobby(
   sockets.forEach((socket) => {
     socket.data.lobbyId = lobbyId;
   });
+}
+
+async function removeUserFromLobbySockets(
+  io: QuizballServer,
+  lobbyId: string,
+  userId: string
+): Promise<void> {
+  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+  sockets.forEach((socket) => {
+    if (socket.data.user.id !== userId) return;
+    socket.leave(`lobby:${lobbyId}`);
+    socket.data.lobbyId = undefined;
+  });
+}
+
+async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
+  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+  if (members.length === 0) return;
+  const nextHostId = members[0]?.user_id;
+  if (nextHostId && nextHostId !== previousHostId) {
+    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
+  }
+}
+
+async function autoLeaveOpenLobby(
+  io: QuizballServer,
+  lobby: Awaited<ReturnType<typeof lobbiesRepo.listOpenLobbiesForUser>>[number],
+  userId: string
+): Promise<void> {
+  await lobbiesRepo.removeMember(lobby.id, userId);
+  await removeUserFromLobbySockets(io, lobby.id, userId);
+  logger.info({ lobbyId: lobby.id, userId }, 'Auto-removed user from stale/open lobby before ranked queue join');
+
+  const memberCount = await lobbiesRepo.countMembers(lobby.id);
+  if (memberCount === 0) {
+    await lobbiesRepo.deleteLobby(lobby.id);
+    logger.info({ lobbyId: lobby.id }, 'Lobby deleted after auto-leave before ranked queue join');
+    return;
+  }
+
+  if (lobby.status === 'waiting' && lobby.host_user_id === userId) {
+    await transferHostIfNeeded(lobby.id, userId);
+  }
+
+  await emitLobbyState(io, lobby.id);
 }
 
 async function startHumanRankedMatch(
@@ -207,36 +259,25 @@ export const rankedMatchmakingService = {
     _payload?: { searchMode?: 'human_first' }
   ): Promise<void> {
     const userId = socket.data.user.id;
+    logger.info({ userId }, 'Ranked queue join requested');
 
     if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
+      logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
       await startRankedAiForUser(io, userId);
       return;
     }
 
     const redis = getRedisClient();
     if (!redis) {
-      socket.emit('error', {
-        code: 'RANKED_QUEUE_UNAVAILABLE',
-        message: 'Ranked queue is temporarily unavailable',
-      });
-      return;
-    }
-
-    const [activeMatch, openLobbies] = await Promise.all([
-      matchesRepo.getActiveMatchForUser(userId),
-      lobbiesRepo.listOpenLobbiesForUser(userId),
-    ]);
-    if (activeMatch || openLobbies.length > 0) {
-      socket.emit('error', {
-        code: 'RANKED_QUEUE_BLOCKED',
-        message: 'Leave your current lobby or match before ranked matchmaking',
-      });
+      logger.warn({ userId }, 'Redis unavailable for ranked queue join, falling back to AI');
+      await startRankedAiForUser(io, userId);
       return;
     }
 
     const lockKey = `lock:ranked:mm:join:${userId}`;
     const lock = await acquireLock(lockKey, 2000);
     if (!lock.acquired || !lock.token) {
+      logger.warn({ userId }, 'Ranked queue join blocked: user join lock not acquired');
       socket.emit('error', {
         code: 'RANKED_QUEUE_BUSY',
         message: 'Ranked queue is busy, retry in a moment',
@@ -248,11 +289,85 @@ export const rankedMatchmakingService = {
       const now = Date.now();
       const deadlineAt = now + SEARCH_DURATION_MS;
 
+      const activeMatch = await matchesRepo.getActiveMatchForUser(userId);
+      if (activeMatch) {
+        if (isStaleActiveMatch(activeMatch.started_at)) {
+          logger.warn(
+            {
+              userId,
+              matchId: activeMatch.id,
+              startedAt: activeMatch.started_at,
+            },
+            'Ranked queue join found stale active match, abandoning it'
+          );
+          await matchesRepo.abandonMatch(activeMatch.id);
+        } else {
+          logger.warn(
+            { userId, matchId: activeMatch.id, startedAt: activeMatch.started_at },
+            'Ranked queue join blocked: active match exists'
+          );
+          socket.emit('error', {
+            code: 'RANKED_QUEUE_BLOCKED',
+            message: 'You are already in an active match',
+            meta: { matchId: activeMatch.id },
+          });
+          return;
+        }
+      }
+
+      const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+      logger.info({ userId, count: openLobbies.length }, 'Ranked queue join open lobbies check');
+      for (const lobby of openLobbies) {
+        if (lobby.status === 'active') {
+          const matchForLobby = await matchesRepo.getActiveMatchForLobby(lobby.id);
+          if (matchForLobby) {
+            if (isStaleActiveMatch(matchForLobby.started_at)) {
+              logger.warn(
+                {
+                  userId,
+                  lobbyId: lobby.id,
+                  matchId: matchForLobby.id,
+                  startedAt: matchForLobby.started_at,
+                },
+                'Ranked queue join found stale active lobby match, abandoning it'
+              );
+              await matchesRepo.abandonMatch(matchForLobby.id);
+            } else {
+              logger.warn(
+                { userId, lobbyId: lobby.id, matchId: matchForLobby.id },
+                'Ranked queue join blocked: active lobby match exists'
+              );
+              socket.emit('error', {
+                code: 'RANKED_QUEUE_BLOCKED',
+                message: 'Leave your current lobby or match before ranked matchmaking',
+                meta: { lobbyId: lobby.id, matchId: matchForLobby.id },
+              });
+              return;
+            }
+          }
+        }
+        await autoLeaveOpenLobby(io, lobby, userId);
+      }
+
+      const leftoverLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+      if (leftoverLobbies.length > 0) {
+        logger.warn(
+          { userId, lobbyIds: leftoverLobbies.map((lobby) => lobby.id) },
+          'Ranked queue join blocked: failed to clear existing lobby memberships'
+        );
+        socket.emit('error', {
+          code: 'RANKED_QUEUE_BLOCKED',
+          message: 'Could not leave previous lobby state, try again',
+        });
+        return;
+      }
+
       const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
       if (existingSearchId) {
         const existing = await redis.hGetAll(searchKey(existingSearchId));
         if (existing.status === 'queued') {
           const remainingMs = Math.max(0, Number(existing.deadlineAt ?? String(deadlineAt)) - now);
+          logger.info({ userId, searchId: existingSearchId, remainingMs }, 'Ranked queue join resumed existing queue');
           socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
           return;
         }
@@ -260,7 +375,7 @@ export const rankedMatchmakingService = {
       }
 
       const newSearchId = randomUUID();
-      await redis
+      const multiResult = await redis
         .multi()
         .hSet(searchKey(newSearchId), {
           userId,
@@ -273,6 +388,15 @@ export const rankedMatchmakingService = {
         .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
         .hSet(USER_MAP_KEY, userId, newSearchId)
         .exec();
+
+      if (!multiResult) {
+        logger.error({ userId }, 'Ranked queue join failed: Redis multi returned null');
+        socket.emit('error', {
+          code: 'RANKED_QUEUE_UNAVAILABLE',
+          message: 'Ranked queue is unavailable, please retry',
+        });
+        return;
+      }
 
       socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
       logger.info({ userId, searchId: newSearchId }, 'User joined ranked queue');

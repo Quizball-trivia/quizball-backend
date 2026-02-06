@@ -10,6 +10,7 @@ export const QUESTION_TIME_MS = 6000;
 const ROUND_RESULT_DELAY_MS = 0;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
+const aiAnswerTimers = new Map<string, NodeJS.Timeout>();
 
 function getAiAnswerDelayMs(): number {
   return Math.floor(Math.random() * 4200) + 400;
@@ -30,22 +31,36 @@ async function scheduleRankedAiAnswer(
   correctIndex: number,
   optionCount: number
 ): Promise<void> {
+  const key = timerKey(matchId, qIndex);
+  const existing = aiAnswerTimers.get(key);
+  if (existing) {
+    clearTimeout(existing);
+  }
+
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active' || match.mode !== 'ranked') return;
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
   const redis = getRedisClient();
-  const aiUserId =
-    (redis ? await redis.get(rankedAiMatchKey(matchId)) : null) ??
-    players[1]?.user_id ??
-    null;
-  if (!aiUserId) return;
+  if (!redis) return;
 
+  const aiUserId = await redis.get(rankedAiMatchKey(matchId));
+  if (!aiUserId) {
+    // Human-vs-human ranked matches do not have an AI key; skip AI answer scheduling.
+    return;
+  }
+
+  const players = await matchesRepo.listMatchPlayers(matchId);
   const hasAi = players.some((player) => player.user_id === aiUserId);
   if (!hasAi) return;
 
   const delayMs = getAiAnswerDelayMs();
-  setTimeout(async () => {
+  const timeout = setTimeout(async () => {
+    // Clear timer entry on first execution to avoid leaks.
+    const stored = aiAnswerTimers.get(key);
+    if (stored) {
+      clearTimeout(stored);
+      aiAnswerTimers.delete(key);
+    }
     try {
       const freshMatch = await matchesRepo.getMatch(matchId);
       if (!freshMatch || freshMatch.status !== 'active' || freshMatch.current_q_index !== qIndex) {
@@ -87,6 +102,7 @@ async function scheduleRankedAiAnswer(
       logger.warn({ error, matchId, qIndex }, 'Ranked AI answer scheduling failed');
     }
   }, delayMs);
+  aiAnswerTimers.set(key, timeout);
 }
 
 function timerKey(matchId: string, qIndex: number): string {
@@ -99,6 +115,14 @@ export function cancelMatchQuestionTimer(matchId: string, qIndex: number): void 
   if (!timer) return;
   clearTimeout(timer);
   questionTimers.delete(key);
+}
+
+function cancelAiAnswerTimer(matchId: string, qIndex: number): void {
+  const key = timerKey(matchId, qIndex);
+  const timer = aiAnswerTimers.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  aiAnswerTimers.delete(key);
 }
 
 export async function sendMatchQuestion(
@@ -304,5 +328,6 @@ export async function resolveRound(
       clearTimeout(timer);
       questionTimers.delete(key);
     }
+    cancelAiAnswerTimer(matchId, qIndex);
   }
 }

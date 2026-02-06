@@ -274,6 +274,20 @@ export const matchesRepo = {
     `;
   },
 
+  async setPlayerForfeitWinTotals(
+    matchId: string,
+    userId: string,
+    totalPoints: number,
+    correctAnswers: number
+  ): Promise<void> {
+    await sql`
+      UPDATE match_players
+      SET total_points = GREATEST(total_points, ${totalPoints}),
+          correct_answers = GREATEST(correct_answers, ${correctAnswers})
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+  },
+
   async getAverageTimes(matchId: string): Promise<Array<{ user_id: string; avg_time_ms: number | null }>> {
     return sql<{ user_id: string; avg_time_ms: number | null }[]>`
       SELECT user_id, AVG(time_ms)::int as avg_time_ms
@@ -313,10 +327,14 @@ export const matchesRepo = {
   },
 
   async abandonMatch(matchId: string): Promise<void> {
-    await sql`
+    const rows = await sql<{ id: string }[]>`
       UPDATE matches
       SET status = 'abandoned', ended_at = NOW()
-      WHERE id = ${matchId}
+      WHERE id = ${matchId} AND status = 'active'
+      RETURNING id
     `;
+    if (rows.length === 0) {
+      throw new Error('Match is not active or does not exist');
+    }
   },
 };

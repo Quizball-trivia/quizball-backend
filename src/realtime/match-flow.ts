@@ -6,8 +6,10 @@ import { logger } from '../core/logger.js';
 import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
 import { getRedisClient } from './redis.js';
 
-export const QUESTION_TIME_MS = 6000;
+export const QUESTION_TIME_MS = 10000;
 const ROUND_RESULT_DELAY_MS = 0;
+const TIMEOUT_RESOLVE_GRACE_MS = 250;
+const LAST_MATCH_REPLAY_TTL_SEC = 600;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
 const aiAnswerTimers = new Map<string, NodeJS.Timeout>();
@@ -75,7 +77,9 @@ async function scheduleRankedAiAnswer(
         ? correctIndex
         : pickIncorrectIndex(correctIndex, optionCount);
       const timeMs = Math.min(QUESTION_TIME_MS, Math.max(0, delayMs));
-      const pointsEarned = isCorrect ? Math.floor(Math.max(0, QUESTION_TIME_MS - timeMs) / 10) : 0;
+      const remainingMs = Math.max(0, QUESTION_TIME_MS - timeMs);
+      const remainingSeconds = Math.ceil(remainingMs / 1000);
+      const pointsEarned = isCorrect ? remainingSeconds * 100 : 0;
 
       await matchesRepo.insertMatchAnswer({
         matchId,
@@ -86,11 +90,14 @@ async function scheduleRankedAiAnswer(
         timeMs,
         pointsEarned,
       });
-      await matchesRepo.updatePlayerTotals(matchId, aiUserId, pointsEarned, isCorrect);
+      const updatedAiPlayer = await matchesRepo.updatePlayerTotals(matchId, aiUserId, pointsEarned, isCorrect);
 
       io.to(`match:${matchId}`).emit('match:opponent_answered', {
         matchId,
         qIndex,
+        opponentTotalPoints: updatedAiPlayer?.total_points ?? 0,
+        pointsEarned,
+        isCorrect,
       });
 
       const refreshedPlayers = await matchesRepo.listMatchPlayers(matchId);
@@ -107,6 +114,10 @@ async function scheduleRankedAiAnswer(
 
 function timerKey(matchId: string, qIndex: number): string {
   return `${matchId}:${qIndex}`;
+}
+
+function lastMatchKey(userId: string): string {
+  return `user:last_match:${userId}`;
 }
 
 export function cancelMatchQuestionTimer(matchId: string, qIndex: number): void {
@@ -146,13 +157,28 @@ export async function sendMatchQuestion(
   const deadlineAt = new Date(Date.now() + QUESTION_TIME_MS);
   await matchesRepo.setQuestionTiming(matchId, qIndex, new Date(), deadlineAt);
 
-  io.to(`match:${matchId}`).emit('match:question', {
+  const questionPayload = {
     matchId,
     qIndex,
     total: totalQuestions,
     question: payload.question,
     deadlineAt: deadlineAt.toISOString(),
-  });
+  };
+
+  logger.info({
+    matchId,
+    qIndex,
+    total: totalQuestions,
+    prompt: payload.question.prompt,
+    promptLength: payload.question.prompt?.length,
+    promptPreview: payload.question.prompt?.substring(0, 80) + '...',
+    options: payload.question.options,
+    optionsCount: payload.question.options?.length,
+    categoryName: payload.question.categoryName,
+    payloadQuestionJson: JSON.stringify(payload.question),
+  }, 'Match question being emitted');
+
+  io.to(`match:${matchId}`).emit('match:question', questionPayload);
   logger.info({ matchId, qIndex, total: totalQuestions }, 'Match question sent');
 
   const key = timerKey(matchId, qIndex);
@@ -163,8 +189,10 @@ export async function sendMatchQuestion(
 
   const timeout = setTimeout(() => {
     logger.info({ matchId, qIndex }, 'Match question timeout reached');
-    void resolveRound(io, matchId, qIndex, true);
-  }, QUESTION_TIME_MS + 50);
+    void resolveRound(io, matchId, qIndex, true).catch((error) => {
+      logger.error({ error, matchId, qIndex }, 'Failed to resolve round after timeout');
+    });
+  }, QUESTION_TIME_MS + TIMEOUT_RESOLVE_GRACE_MS + 50);
 
   questionTimers.set(key, timeout);
 
@@ -174,7 +202,9 @@ export async function sendMatchQuestion(
     qIndex,
     payload.correctIndex,
     payload.question.options.length
-  );
+  ).catch((error) => {
+    logger.warn({ error, matchId, qIndex }, 'Failed to schedule ranked AI answer');
+  });
 
   return { correctIndex: payload.correctIndex };
 }
@@ -259,7 +289,9 @@ export async function resolveRound(
     if (nextIndex < match.total_questions) {
       logger.info({ matchId, nextIndex }, 'Scheduling next match question');
       setTimeout(() => {
-        void sendMatchQuestion(io, matchId, nextIndex);
+        void sendMatchQuestion(io, matchId, nextIndex).catch((error) => {
+          logger.error({ error, matchId, nextIndex }, 'Failed to send next match question');
+        });
       }, ROUND_RESULT_DELAY_MS);
       return;
     }
@@ -304,16 +336,27 @@ export async function resolveRound(
 
     const matchDurationMs = Date.now() - new Date(match.started_at).getTime();
 
+    const resultVersion = Date.now();
     io.to(`match:${matchId}`).emit('match:final_results', {
       matchId,
       winnerId: winner.userId,
       players: finalPlayers,
       durationMs: matchDurationMs,
+      resultVersion,
     });
 
     const redis = getRedisClient();
     if (redis) {
       await redis.del(rankedAiMatchKey(matchId));
+      await Promise.all(
+        refreshedPlayers.map((player) =>
+          redis.set(
+            lastMatchKey(player.user_id),
+            JSON.stringify({ matchId, resultVersion }),
+            { EX: LAST_MATCH_REPLAY_TTL_SEC }
+          )
+        )
+      );
     }
 
     logger.info(

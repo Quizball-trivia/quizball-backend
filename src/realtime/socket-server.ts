@@ -9,10 +9,12 @@ import { registerLobbyHandlers } from './handlers/lobby.handler.js';
 import { registerDraftHandlers } from './handlers/draft.handler.js';
 import { registerMatchHandlers } from './handlers/match.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
+import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
 import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
 import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
+import { userSessionGuardService } from './services/user-session-guard.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -50,12 +52,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerRankedHandlers(io, socket);
     registerDraftHandlers(io, socket);
     registerMatchHandlers(io, socket);
+    registerWarmupHandlers(io, socket);
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);
-      void rankedMatchmakingService.handleSocketDisconnect(socket);
+      void rankedMatchmakingService.handleSocketDisconnect(io, socket);
     });
 
     logger.info(
@@ -64,9 +67,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     );
 
     try {
-      await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
+      await userSessionGuardService.withUserSessionLock(user.id, async () => {
+        await userSessionGuardService.prepareForConnect(io, user.id);
+      });
     } catch (error) {
-      logger.warn({ error, userId: user.id }, 'Failed to rejoin waiting lobby on connect');
+      logger.warn({ error, userId: user.id }, 'Failed to prepare session state on connect');
     }
 
     try {
@@ -77,10 +82,24 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     if (!socket.data.matchId) {
       try {
+        await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
+      } catch (error) {
+        logger.warn({ error, userId: user.id }, 'Failed to rejoin waiting lobby on connect');
+      }
+    }
+
+    if (!socket.data.matchId) {
+      try {
         await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
       } catch (error) {
         logger.warn({ error, userId: user.id }, 'Failed to emit last match results on connect');
       }
+    }
+
+    try {
+      await userSessionGuardService.emitState(io, user.id);
+    } catch (error) {
+      logger.warn({ error, userId: user.id }, 'Failed to emit session state on connect');
     }
   });
 

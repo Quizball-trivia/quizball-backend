@@ -212,17 +212,38 @@ export const matchesRepo = {
     timeMs: number;
     pointsEarned: number;
   }): Promise<MatchAnswerRow> {
-    const [row] = await sql<MatchAnswerRow[]>`
-      INSERT INTO match_answers (
-        match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned
-      )
-      VALUES (
-        ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-        ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}
-      )
-      RETURNING *
-    `;
-    return row;
+    // Retry logic for prepared statement errors
+    let attempts = 0;
+    const maxAttempts = 2;
+
+    while (attempts < maxAttempts) {
+      try {
+        const [row] = await sql<MatchAnswerRow[]>`
+          INSERT INTO match_answers (
+            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned
+          )
+          VALUES (
+            ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
+            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}
+          )
+          RETURNING *
+        `;
+        return row;
+      } catch (error: unknown) {
+        attempts++;
+        // Check if it's a prepared statement error (code 26000)
+        if (error && typeof error === 'object' && 'code' in error && error.code === '26000') {
+          if (attempts < maxAttempts) {
+            // Retry once more
+            continue;
+          }
+        }
+        // Re-throw if it's not a prepared statement error or we've exhausted retries
+        throw error;
+      }
+    }
+
+    throw new Error('Failed to insert match answer after retries');
   },
 
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
@@ -282,8 +303,8 @@ export const matchesRepo = {
   ): Promise<void> {
     await sql`
       UPDATE match_players
-      SET total_points = GREATEST(total_points, ${totalPoints}),
-          correct_answers = GREATEST(correct_answers, ${correctAnswers})
+      SET total_points = ${totalPoints},
+          correct_answers = ${correctAnswers}
       WHERE match_id = ${matchId} AND user_id = ${userId}
     `;
   },
@@ -326,15 +347,13 @@ export const matchesRepo = {
     return row ?? null;
   },
 
-  async abandonMatch(matchId: string): Promise<void> {
+  async abandonMatch(matchId: string): Promise<boolean> {
     const rows = await sql<{ id: string }[]>`
       UPDATE matches
       SET status = 'abandoned', ended_at = NOW()
       WHERE id = ${matchId} AND status = 'active'
       RETURNING id
     `;
-    if (rows.length === 0) {
-      throw new Error('Match is not active or does not exist');
-    }
+    return rows.length > 0;
   },
 };

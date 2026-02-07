@@ -4,11 +4,11 @@ import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
-import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
+import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
@@ -18,11 +18,11 @@ import {
 const SEARCH_DURATION_MS = 7000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
-const TICK_LOCK_TTL_MS = TICK_INTERVAL_MS * 2;
+// Keep lock alive across worst-case tick I/O so parallel ticks cannot overlap.
+const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
 const FOUND_MODAL_MS = 1200;
-const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 
 const QUEUE_KEY = 'ranked:mm:queue';
 const TIMEOUTS_KEY = 'ranked:mm:timeouts';
@@ -42,12 +42,6 @@ function toStringArray(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === 'string');
 }
 
-function isStaleActiveMatch(startedAt: string): boolean {
-  const startedAtMs = Date.parse(startedAt);
-  if (Number.isNaN(startedAtMs)) return false;
-  return Date.now() - startedAtMs > STALE_ACTIVE_MATCH_MS;
-}
-
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -65,51 +59,6 @@ async function attachUserSocketsToLobby(
   sockets.forEach((socket) => {
     socket.data.lobbyId = lobbyId;
   });
-}
-
-async function removeUserFromLobbySockets(
-  io: QuizballServer,
-  lobbyId: string,
-  userId: string
-): Promise<void> {
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    if (socket.data.user.id !== userId) return;
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-  });
-}
-
-async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length === 0) return;
-  const nextHostId = members[0]?.user_id;
-  if (nextHostId && nextHostId !== previousHostId) {
-    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
-  }
-}
-
-async function autoLeaveOpenLobby(
-  io: QuizballServer,
-  lobby: Awaited<ReturnType<typeof lobbiesRepo.listOpenLobbiesForUser>>[number],
-  userId: string
-): Promise<void> {
-  await lobbiesRepo.removeMember(lobby.id, userId);
-  await removeUserFromLobbySockets(io, lobby.id, userId);
-  logger.info({ lobbyId: lobby.id, userId }, 'Auto-removed user from stale/open lobby before ranked queue join');
-
-  const memberCount = await lobbiesRepo.countMembers(lobby.id);
-  if (memberCount === 0) {
-    await lobbiesRepo.deleteLobby(lobby.id);
-    logger.info({ lobbyId: lobby.id }, 'Lobby deleted after auto-leave before ranked queue join');
-    return;
-  }
-
-  if (lobby.status === 'waiting' && lobby.host_user_id === userId) {
-    await transferHostIfNeeded(lobby.id, userId);
-  }
-
-  await emitLobbyState(io, lobby.id);
 }
 
 async function startHumanRankedMatch(
@@ -274,161 +223,223 @@ export const rankedMatchmakingService = {
       return;
     }
 
-    const lockKey = `lock:ranked:mm:join:${userId}`;
-    const lock = await acquireLock(lockKey, 2000);
-    if (!lock.acquired || !lock.token) {
-      logger.warn({ userId }, 'Ranked queue join blocked: user join lock not acquired');
-      socket.emit('error', {
-        code: 'RANKED_QUEUE_BUSY',
-        message: 'Ranked queue is busy, retry in a moment',
-      });
-      return;
-    }
-
-    try {
-      const now = Date.now();
-      const deadlineAt = now + SEARCH_DURATION_MS;
-
-      const activeMatch = await matchesRepo.getActiveMatchForUser(userId);
-      if (activeMatch) {
-        if (isStaleActiveMatch(activeMatch.started_at)) {
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId);
+        logger.info(
+          {
+            userId,
+            state: prepared.snapshot.state,
+            activeMatchId: prepared.snapshot.activeMatchId,
+            waitingLobbyId: prepared.snapshot.waitingLobbyId,
+            queueSearchId: prepared.snapshot.queueSearchId,
+          },
+          'Ranked queue join session prepared'
+        );
+        if (!prepared.ok) {
           logger.warn(
             {
               userId,
-              matchId: activeMatch.id,
-              startedAt: activeMatch.started_at,
+              reason: prepared.reason ?? 'ACTIVE_MATCH',
+              state: prepared.snapshot.state,
+              activeMatchId: prepared.snapshot.activeMatchId,
+              waitingLobbyId: prepared.snapshot.waitingLobbyId,
+              queueSearchId: prepared.snapshot.queueSearchId,
             },
-            'Ranked queue join found stale active match, abandoning it'
+            'Ranked queue join blocked by session state'
           );
-          await matchesRepo.abandonMatch(activeMatch.id);
-        } else {
-          logger.warn(
-            { userId, matchId: activeMatch.id, startedAt: activeMatch.started_at },
-            'Ranked queue join blocked: active match exists'
-          );
+          userSessionGuardService.emitBlocked(socket, {
+            reason: prepared.reason ?? 'ACTIVE_MATCH',
+            message: prepared.message ?? 'You are already in an active match',
+            stateSnapshot: prepared.snapshot,
+          });
           socket.emit('error', {
             code: 'RANKED_QUEUE_BLOCKED',
-            message: 'You are already in an active match',
-            meta: { matchId: activeMatch.id },
+            message: prepared.message ?? 'You are already in an active match',
+            meta: { stateSnapshot: prepared.snapshot },
           });
           return;
         }
-      }
 
-      const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
-      logger.info({ userId, count: openLobbies.length }, 'Ranked queue join open lobbies check');
-      for (const lobby of openLobbies) {
-        if (lobby.status === 'active') {
-          const matchForLobby = await matchesRepo.getActiveMatchForLobby(lobby.id);
-          if (matchForLobby) {
-            if (isStaleActiveMatch(matchForLobby.started_at)) {
-              logger.warn(
-                {
-                  userId,
-                  lobbyId: lobby.id,
-                  matchId: matchForLobby.id,
-                  startedAt: matchForLobby.started_at,
-                },
-                'Ranked queue join found stale active lobby match, abandoning it'
-              );
-              await matchesRepo.abandonMatch(matchForLobby.id);
-            } else {
-              logger.warn(
-                { userId, lobbyId: lobby.id, matchId: matchForLobby.id },
-                'Ranked queue join blocked: active lobby match exists'
-              );
-              socket.emit('error', {
-                code: 'RANKED_QUEUE_BLOCKED',
-                message: 'Leave your current lobby or match before ranked matchmaking',
-                meta: { lobbyId: lobby.id, matchId: matchForLobby.id },
-              });
-              return;
-            }
-          }
-        }
-        await autoLeaveOpenLobby(io, lobby, userId);
-      }
-
-      const leftoverLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
-      if (leftoverLobbies.length > 0) {
-        logger.warn(
-          { userId, lobbyIds: leftoverLobbies.map((lobby) => lobby.id) },
-          'Ranked queue join blocked: failed to clear existing lobby memberships'
-        );
-        socket.emit('error', {
-          code: 'RANKED_QUEUE_BLOCKED',
-          message: 'Could not leave previous lobby state, try again',
-        });
-        return;
-      }
-
-      const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
-      if (existingSearchId) {
-        const existing = await redis.hGetAll(searchKey(existingSearchId));
-        if (existing.status === 'queued') {
-          const remainingMs = Math.max(0, Number(existing.deadlineAt ?? String(deadlineAt)) - now);
-          logger.info({ userId, searchId: existingSearchId, remainingMs }, 'Ranked queue join resumed existing queue');
-          socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+        const lockKey = `lock:ranked:mm:join:${userId}`;
+        const lock = await acquireLock(lockKey, 2000);
+        if (!lock.acquired || !lock.token) {
+          logger.warn({ userId }, 'Ranked queue join blocked: user join lock not acquired');
+          socket.emit('error', {
+            code: 'RANKED_QUEUE_BUSY',
+            message: 'Ranked queue is busy, retry in a moment',
+          });
           return;
         }
-        await redis.hDel(USER_MAP_KEY, userId);
+
+        try {
+          const now = Date.now();
+          const deadlineAt = now + SEARCH_DURATION_MS;
+          const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
+          if (existingSearchId) {
+            const existing = await redis.hGetAll(searchKey(existingSearchId));
+            if (existing.status === 'queued') {
+              const remainingMs = Math.max(0, Number(existing.deadlineAt ?? String(deadlineAt)) - now);
+              logger.info(
+                {
+                  userId,
+                  searchId: existingSearchId,
+                  remainingMs,
+                  queuedAt: existing.queuedAt ?? null,
+                  deadlineAt: existing.deadlineAt ?? null,
+                },
+                'Ranked queue join resumed existing queue'
+              );
+              socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+              const snapshot = await userSessionGuardService.emitState(io, userId);
+              logger.info(
+                {
+                  userId,
+                  state: snapshot.state,
+                  queueSearchId: snapshot.queueSearchId,
+                  activeMatchId: snapshot.activeMatchId,
+                  waitingLobbyId: snapshot.waitingLobbyId,
+                },
+                'Ranked queue state emitted after resume'
+              );
+              return;
+            }
+            logger.warn(
+              {
+                userId,
+                searchId: existingSearchId,
+                status: existing.status ?? null,
+              },
+              'Ranked queue join found stale user-map search id'
+            );
+            await redis.hDel(USER_MAP_KEY, userId);
+          }
+
+          const newSearchId = randomUUID();
+          const multiResult = await redis
+            .multi()
+            .hSet(searchKey(newSearchId), {
+              userId,
+              status: 'queued',
+              queuedAt: String(now),
+              deadlineAt: String(deadlineAt),
+            })
+            .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
+            .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
+            .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+            .hSet(USER_MAP_KEY, userId, newSearchId)
+            .exec();
+
+          if (!multiResult) {
+            logger.error({ userId }, 'Ranked queue join failed: Redis multi returned null');
+            socket.emit('error', {
+              code: 'RANKED_QUEUE_UNAVAILABLE',
+              message: 'Ranked queue is unavailable, please retry',
+            });
+            return;
+          }
+
+          socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+          const queueSize = await redis.zCard(QUEUE_KEY);
+          logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
+          const snapshot = await userSessionGuardService.emitState(io, userId);
+          logger.info(
+            {
+              userId,
+              state: snapshot.state,
+              queueSearchId: snapshot.queueSearchId,
+              activeMatchId: snapshot.activeMatchId,
+              waitingLobbyId: snapshot.waitingLobbyId,
+            },
+            'Ranked queue state emitted after join'
+          );
+        } finally {
+          await releaseLock(lockKey, lock.token);
+        }
+      },
+      {
+        code: 'RANKED_QUEUE_BUSY',
+        message: 'Session transition is in progress. Please retry.',
       }
+    );
+    if (!completed) {
+      logger.warn({ userId }, 'Ranked queue join transition lock not acquired');
+      return;
+    }
+  },
 
-      const newSearchId = randomUUID();
-      const multiResult = await redis
-        .multi()
-        .hSet(searchKey(newSearchId), {
-          userId,
-          status: 'queued',
-          queuedAt: String(now),
-          deadlineAt: String(deadlineAt),
-        })
-        .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
-        .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
-        .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
-        .hSet(USER_MAP_KEY, userId, newSearchId)
-        .exec();
+  async handleQueueLeave(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) return;
 
-      if (!multiResult) {
-        logger.error({ userId }, 'Ranked queue join failed: Redis multi returned null');
-        socket.emit('error', {
-          code: 'RANKED_QUEUE_UNAVAILABLE',
-          message: 'Ranked queue is unavailable, please retry',
+    const userId = socket.data.user.id;
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
+          keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
+          arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
         });
-        return;
+        const result = toStringArray(resultRaw);
+        if (result.length > 0) {
+          logger.info({ userId, searchId: result[0] }, 'User left ranked queue');
+        } else {
+          logger.info({ userId }, 'Ranked queue leave requested but no active search found');
+        }
+      },
+      {
+        code: 'RANKED_QUEUE_BUSY',
+        message: 'Session transition is in progress. Please retry.',
       }
-
-      socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-      logger.info({ userId, searchId: newSearchId }, 'User joined ranked queue');
-    } finally {
-      await releaseLock(lockKey, lock.token);
-    }
-  },
-
-  async handleQueueLeave(socket: QuizballSocket): Promise<void> {
-    const redis = getRedisClient();
-    if (!redis) return;
-
-    const userId = socket.data.user.id;
-    const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-      arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
-    });
-    const result = toStringArray(resultRaw);
-    if (result.length > 0) {
-      logger.info({ userId, searchId: result[0] }, 'User left ranked queue');
-    }
+    );
+    if (!completed) return;
     socket.emit('ranked:queue_left');
+    const snapshot = await userSessionGuardService.emitState(io, userId);
+    logger.info(
+      {
+        userId,
+        state: snapshot.state,
+        queueSearchId: snapshot.queueSearchId,
+        activeMatchId: snapshot.activeMatchId,
+        waitingLobbyId: snapshot.waitingLobbyId,
+      },
+      'Ranked queue state emitted after leave'
+    );
   },
 
-  async handleSocketDisconnect(socket: QuizballSocket): Promise<void> {
+  async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const redis = getRedisClient();
     if (!redis) return;
 
     const userId = socket.data.user.id;
-    await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-      arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
-    });
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
+          keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
+          arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
+        });
+        const result = toStringArray(resultRaw);
+        if (result.length > 0) {
+          logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
+        }
+      }
+    );
+    if (!completed) return;
+    const snapshot = await userSessionGuardService.emitState(io, userId);
+    logger.info(
+      {
+        userId,
+        state: snapshot.state,
+        queueSearchId: snapshot.queueSearchId,
+        activeMatchId: snapshot.activeMatchId,
+        waitingLobbyId: snapshot.waitingLobbyId,
+      },
+      'Ranked queue state emitted after disconnect cleanup'
+    );
   },
 };

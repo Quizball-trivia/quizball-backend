@@ -1,3 +1,8 @@
+// New Relic must be imported first in production
+if (process.env.NEW_RELIC_ENABLED === 'true' && process.env.NODE_ENV === 'prod') {
+  await import('newrelic');
+}
+
 import { createServer } from 'http';
 import { createApp } from './app.js';
 import { config } from './core/config.js';

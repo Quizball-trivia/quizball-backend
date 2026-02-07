@@ -27,6 +27,7 @@ export const categoriesController = {
       {
         parentId: query.parent_id,
         isActive: query.is_active,
+        minQuestions: query.min_questions,
       },
       query.page,
       query.limit

@@ -84,6 +84,9 @@ export interface MatchQuestionPayload {
 export interface MatchOpponentAnsweredPayload {
   matchId: string;
   qIndex: number;
+  opponentTotalPoints: number;
+  pointsEarned: number;
+  isCorrect: boolean;
 }
 
 export interface MatchAnswerAckPayload {
@@ -94,6 +97,7 @@ export interface MatchAnswerAckPayload {
   correctIndex: number;
   myTotalPoints: number;
   oppAnswered: boolean;
+  pointsEarned: number;
 }
 
 export interface MatchRoundResultPlayer {
@@ -122,6 +126,7 @@ export interface MatchFinalResultsPayload {
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   durationMs: number;
+  resultVersion: number;
 }
 
 export interface MatchOpponentDisconnectedPayload {
@@ -155,6 +160,77 @@ export interface RankedQueueJoinPayload {
   searchMode?: 'human_first';
 }
 
+export interface WarmupTapPayload {
+  tapX: number;
+  tapY: number;
+  tapSeq: number;
+}
+
+export interface WarmupDroppedPayload {
+  clientTs: number;
+  y: number;
+}
+
+export interface WarmupStatePayload {
+  active: boolean;
+  bounceCount: number;
+  nextTurnUserId: string;
+  lastTapperId: string | null;
+  startedAt: number;
+}
+
+export interface WarmupTappedPayload {
+  tapperId: string;
+  tapX: number;
+  tapY: number;
+  bounceCount: number;
+  nextTurnUserId: string;
+}
+
+export interface WarmupOverPayload {
+  finalScore: number;
+  playerBests: Record<string, number>;
+  pairBest: number;
+  isNewPlayerBest: Record<string, boolean>;
+  isNewPairBest: boolean;
+}
+
+export interface WarmupRestartedPayload {
+  firstTurnUserId: string;
+}
+
+export interface WarmupScoresPayload {
+  playerBest: number;
+  pairBest: number;
+}
+
+export type SessionStateKind =
+  | 'IDLE'
+  | 'IN_QUEUE'
+  | 'IN_WAITING_LOBBY'
+  | 'IN_ACTIVE_MATCH'
+  | 'CORRUPT_MULTI_STATE';
+
+export interface SessionStatePayload {
+  state: SessionStateKind;
+  activeMatchId: string | null;
+  waitingLobbyId: string | null;
+  queueSearchId: string | null;
+  openLobbyIds: string[];
+  resolvedAt: string;
+}
+
+export interface SessionBlockedPayload {
+  reason:
+    | 'ACTIVE_MATCH'
+    | 'TRANSITION_IN_PROGRESS'
+    | 'INVALID_INVITE'
+    | 'LOBBY_NOT_FOUND'
+    | 'QUEUE_UNAVAILABLE';
+  message: string;
+  stateSnapshot: SessionStatePayload;
+}
+
 export interface ClientToServerEvents {
   'lobby:create': (data: { mode: MatchMode; isPublic?: boolean }) => void;
   'lobby:join_by_code': (data: { inviteCode: string }) => void;
@@ -175,6 +251,12 @@ export interface ClientToServerEvents {
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
+  'match:forfeit': (data?: { matchId?: string }) => void;
+  'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
+  'warmup:tap': (data: WarmupTapPayload) => void;
+  'warmup:dropped': (data: WarmupDroppedPayload) => void;
+  'warmup:restart': () => void;
+  'warmup:get_scores': () => void;
 }
 
 export interface ErrorPayload {
@@ -185,6 +267,8 @@ export interface ErrorPayload {
 
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
+  'session:state': (data: SessionStatePayload) => void;
+  'session:blocked': (data: SessionBlockedPayload) => void;
   'lobby:state': (data: LobbyState) => void;
   'draft:start': (data: DraftState) => void;
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;
@@ -201,4 +285,9 @@ export interface ServerToClientEvents {
   'ranked:search_started': (data: RankedSearchStartedPayload) => void;
   'ranked:match_found': (data: RankedMatchFoundPayload) => void;
   'ranked:queue_left': () => void;
+  'warmup:state': (data: WarmupStatePayload) => void;
+  'warmup:tapped': (data: WarmupTappedPayload) => void;
+  'warmup:over': (data: WarmupOverPayload) => void;
+  'warmup:restarted': (data: WarmupRestartedPayload) => void;
+  'warmup:scores': (data: WarmupScoresPayload) => void;
 }

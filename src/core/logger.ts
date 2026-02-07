@@ -38,23 +38,41 @@ const baseOptions: LoggerOptions = {
 };
 
 /**
- * Pino logger with request_id injection via mixin.
- * - In local/dev: Uses pino-pretty for human-readable output
- * - In production: Uses structured JSON for log aggregation tools
+ * Pino logger with request_id injection via mixin and New Relic integration.
+ * - In local/dev: Uses pino-pretty for human-readable console output
+ * - In production: Uses structured JSON logs forwarded to New Relic
  */
-export const logger = usePrettyPrint
-  ? pino({
-      ...baseOptions,
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'SYS:yyyy-mm-dd HH:MM:ss.l',
-          ignore: 'pid,hostname',
-          singleLine: true,
-        },
+let loggerInstance: pino.Logger;
+
+if (usePrettyPrint) {
+  // Development: Pretty console logs
+  loggerInstance = pino({
+    ...baseOptions,
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        translateTime: 'SYS:yyyy-mm-dd HH:MM:ss.l',
+        ignore: 'pid,hostname',
+        singleLine: true,
       },
-    })
-  : pino(baseOptions);
+    },
+  });
+} else {
+  // Production: JSON logs (New Relic will automatically forward these)
+  loggerInstance = pino(baseOptions);
+
+  // If New Relic is available, enrich logs with trace context
+  if (process.env.NEW_RELIC_ENABLED === 'true') {
+    try {
+      // New Relic automatically decorates logs with trace.id and span.id
+      // when application_logging.local_decorating.enabled is true in newrelic.cjs
+    } catch (error) {
+      console.warn('New Relic not available for log correlation');
+    }
+  }
+}
+
+export const logger = loggerInstance;
 
 export type Logger = typeof logger;

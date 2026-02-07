@@ -514,6 +514,7 @@ registry.registerPath({
     query: z.object({
       parent_id: z.string().uuid().optional(),
       is_active: z.string().optional(),
+      min_questions: z.coerce.number().int().min(1).optional(),
       page: z.coerce.number().int().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
     }),

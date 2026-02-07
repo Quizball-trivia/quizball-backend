@@ -316,7 +316,7 @@ export const userSessionGuardService = {
   },
 
   async runWithUserTransitionLock(
-    io: QuizballServer,
+    _io: QuizballServer,
     socket: QuizballSocket,
     work: () => Promise<void>,
     options?: {
@@ -332,7 +332,7 @@ export const userSessionGuardService = {
 
     const snapshot = await this.resolveState(userId);
     this.emitBlocked(socket, {
-      reason: options?.code ?? 'TRANSITION_IN_PROGRESS',
+      reason: 'TRANSITION_IN_PROGRESS',
       message: options?.message ?? 'State transition is in progress. Please retry.',
       stateSnapshot: snapshot,
     });

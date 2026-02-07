@@ -142,6 +142,14 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
         },
         'Error handling match:final_results_ack'
       );
+      socket.emit('error', {
+        code: 'MATCH_FINAL_RESULTS_ACK_ERROR',
+        message: 'Failed to acknowledge match final results',
+        meta: {
+          matchId: parsed.data.matchId,
+          resultVersion: parsed.data.resultVersion,
+        },
+      });
     }
   });
 }

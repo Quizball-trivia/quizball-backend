@@ -68,36 +68,54 @@ export const warmupRepo = {
 
     // UPSERT both player bests
     for (const userId of userIds) {
-      const [row] = await sql<WarmupPlayerBestRow[]>`
+      const [row] = await sql<(WarmupPlayerBestRow & { old_best_score: number | null })[]>`
+        WITH old_record AS (
+          SELECT best_score AS old_best_score
+          FROM warmup_player_bests
+          WHERE user_id = ${userId}::uuid
+        )
         INSERT INTO warmup_player_bests (user_id, best_score, total_games, updated_at)
         VALUES (${userId}::uuid, ${score}, 1, now())
         ON CONFLICT (user_id) DO UPDATE SET
           best_score = GREATEST(warmup_player_bests.best_score, ${score}),
           total_games = warmup_player_bests.total_games + 1,
           updated_at = now()
-        RETURNING *
+        RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score
       `;
       playerBests[userId] = row.best_score;
-      isNewPlayerBest[userId] = row.best_score === score && row.total_games >= 1;
+      // New best if first game (old_best_score is null) or current score strictly exceeds old best
+      isNewPlayerBest[userId] = row.old_best_score === null || score > row.old_best_score;
     }
 
     // UPSERT pair best with JS-sorted canonicalization
+    // Use a CTE to capture the old best_score before the update
     const [a, b] = sortPair(userIds[0], userIds[1]);
-    const [pairRow] = await sql<WarmupPairBestRow[]>`
+    const [pairRow] = await sql<(WarmupPairBestRow & { old_best_score: number | null })[]>`
+      WITH old_record AS (
+        SELECT best_score AS old_best_score
+        FROM warmup_pair_bests
+        WHERE user_a_id = ${a}::uuid AND user_b_id = ${b}::uuid
+      )
       INSERT INTO warmup_pair_bests (user_a_id, user_b_id, best_score, total_games, updated_at)
       VALUES (${a}::uuid, ${b}::uuid, ${score}, 1, now())
       ON CONFLICT (user_a_id, user_b_id) DO UPDATE SET
         best_score = GREATEST(warmup_pair_bests.best_score, ${score}),
         total_games = warmup_pair_bests.total_games + 1,
         updated_at = now()
-      RETURNING *
+      RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score
     `;
+
+    // isNewPairBest is true if:
+    // 1. First game for this pair (old_best_score is null)
+    // 2. Current score strictly exceeds the previous best (score > old_best_score)
+    const isNewPairBest =
+      pairRow.old_best_score === null || score > pairRow.old_best_score;
 
     return {
       playerBests,
       pairBest: pairRow.best_score,
       isNewPlayerBest,
-      isNewPairBest: pairRow.best_score === score && pairRow.total_games >= 1,
+      isNewPairBest,
     };
   },
 };

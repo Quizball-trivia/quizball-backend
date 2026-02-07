@@ -12,9 +12,13 @@ const DEDUP_TTL_SEC = 30;
 const MIN_DROP_MS = 400;
 const SCORE_REQUEST_DEBOUNCE_MS = 1200;
 const SCORE_ERROR_THROTTLE_MS = 15000;
+const SCORE_REQUEST_KEY_TTL_MS = 5 * 60 * 1000;
+const SCORE_ERROR_KEY_TTL_MS = 10 * 60 * 1000;
+const MAP_PRUNE_INTERVAL_MS = 60 * 1000;
 
 const scoreRequestAtBySocket = new Map<string, number>();
 const scoreErrorAtByLobby = new Map<string, number>();
+let lastMapPruneAt = 0;
 
 interface WarmupRedisState {
   active: boolean;
@@ -53,11 +57,29 @@ async function saveState(lobbyId: string, state: WarmupRedisState): Promise<void
 }
 
 function shouldLogScoreError(lobbyId: string): boolean {
+  pruneScoreTrackingMaps();
   const now = Date.now();
   const lastAt = scoreErrorAtByLobby.get(lobbyId) ?? 0;
   if (now - lastAt < SCORE_ERROR_THROTTLE_MS) return false;
   scoreErrorAtByLobby.set(lobbyId, now);
   return true;
+}
+
+function pruneScoreTrackingMaps(now = Date.now()): void {
+  if (now - lastMapPruneAt < MAP_PRUNE_INTERVAL_MS) return;
+  lastMapPruneAt = now;
+
+  for (const [key, value] of scoreRequestAtBySocket) {
+    if (now - value > SCORE_REQUEST_KEY_TTL_MS) {
+      scoreRequestAtBySocket.delete(key);
+    }
+  }
+
+  for (const [key, value] of scoreErrorAtByLobby) {
+    if (now - value > SCORE_ERROR_KEY_TTL_MS) {
+      scoreErrorAtByLobby.delete(key);
+    }
+  }
 }
 
 export const warmupRealtimeService = {
@@ -71,7 +93,18 @@ export const warmupRealtimeService = {
     }
 
     const lock = await acquireLock(lockKey(lobbyId), LOCK_TTL_MS);
-    if (!lock.acquired || !lock.token) return;
+    if (!lock.acquired || !lock.token) {
+      logger.warn(
+        { lobbyId, userId, lockAcquired: lock.acquired, hasToken: Boolean(lock.token) },
+        'Warmup tap skipped: lobby lock not acquired'
+      );
+      socket.emit('error', {
+        code: 'WARMUP_BUSY',
+        message: 'Warmup is busy, try again',
+        meta: { lobbyId },
+      });
+      return;
+    }
 
     try {
       let state = await getState(lobbyId);
@@ -224,6 +257,8 @@ export const warmupRealtimeService = {
     const userId = socket.data.user.id;
     if (!lobbyId) return;
 
+    pruneScoreTrackingMaps();
+
     const debounceKey = `${socket.id}:${lobbyId}`;
     const now = Date.now();
     const lastRequestAt = scoreRequestAtBySocket.get(debounceKey) ?? 0;
@@ -268,10 +303,26 @@ export const warmupRealtimeService = {
       if (redis) {
         await redis.del(stateKey(lobbyId));
       }
+
+      for (const key of scoreRequestAtBySocket.keys()) {
+        if (key.endsWith(`:${lobbyId}`)) {
+          scoreRequestAtBySocket.delete(key);
+        }
+      }
       scoreErrorAtByLobby.delete(lobbyId);
+      pruneScoreTrackingMaps();
       logger.info({ lobbyId }, 'Warmup state cleaned up');
     } catch (error) {
       logger.warn({ error, lobbyId }, 'Warmup cleanup failed');
     }
+  },
+
+  handleSocketDisconnect(socketId: string): void {
+    for (const key of scoreRequestAtBySocket.keys()) {
+      if (key.startsWith(`${socketId}:`)) {
+        scoreRequestAtBySocket.delete(key);
+      }
+    }
+    pruneScoreTrackingMaps();
   },
 };

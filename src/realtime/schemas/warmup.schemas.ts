@@ -8,7 +8,7 @@ export const warmupTapSchema = z.object({
 
 export const warmupDroppedSchema = z.object({
   clientTs: z.number().int().min(0),
-  y: z.number(),
+  y: z.number().min(0).max(1),
 });
 
 export type WarmupTapInput = z.infer<typeof warmupTapSchema>;

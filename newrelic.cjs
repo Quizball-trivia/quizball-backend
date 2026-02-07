@@ -6,6 +6,18 @@
  * See lib/config/default.js in the agent distribution for a more complete
  * description of configuration variables and their potential values.
  */
+
+// Fail fast in production if NEW_RELIC_LICENSE_KEY is missing
+const isProduction = process.env.NODE_ENV === 'production';
+const licenseKey = process.env.NEW_RELIC_LICENSE_KEY;
+
+if (isProduction && !licenseKey) {
+  throw new Error(
+    'NEW_RELIC_LICENSE_KEY environment variable is required in production. ' +
+    'Please set it in your environment or disable New Relic by setting NEW_RELIC_ENABLED=false'
+  );
+}
+
 exports.config = {
   /**
    * Array of application names.
@@ -14,7 +26,7 @@ exports.config = {
   /**
    * Your New Relic license key.
    */
-  license_key: process.env.NEW_RELIC_LICENSE_KEY || 'eu01xx8c42a3ef77f3a147b35dfde466FFFFNRAL',
+  license_key: licenseKey || '',
   /**
    * Logging configuration
    */

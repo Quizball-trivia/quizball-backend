@@ -62,15 +62,9 @@ if (usePrettyPrint) {
   // Production: JSON logs (New Relic will automatically forward these)
   loggerInstance = pino(baseOptions);
 
-  // If New Relic is available, enrich logs with trace context
-  if (process.env.NEW_RELIC_ENABLED === 'true') {
-    try {
-      // New Relic automatically decorates logs with trace.id and span.id
-      // when application_logging.local_decorating.enabled is true in newrelic.cjs
-    } catch (error) {
-      console.warn('New Relic not available for log correlation');
-    }
-  }
+  // New Relic automatically decorates logs with trace.id and span.id
+  // when application_logging.local_decorating.enabled is true in newrelic.cjs
+  // No additional setup required here - enrichment happens at the New Relic agent level
 }
 
 export const logger = loggerInstance;

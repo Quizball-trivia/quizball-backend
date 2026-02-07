@@ -21,6 +21,28 @@ export interface CreateLobbyData {
   displayName?: string;
 }
 
+const MCQ_VALIDATION_CONDITIONS = sql`
+  q.status = 'published'
+  AND q.type = 'mcq_single'
+  AND qp.payload ? 'options'
+  AND jsonb_typeof(qp.payload->'options') = 'array'
+  AND jsonb_array_length(qp.payload->'options') > 0
+  AND NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(qp.payload->'options') opt
+    WHERE jsonb_typeof(opt) <> 'object'
+       OR NOT (opt ? 'text')
+       OR jsonb_typeof(opt->'text') <> 'object'
+       OR NOT (opt ? 'is_correct')
+       OR (opt->>'is_correct') NOT IN ('true', 'false')
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(qp.payload->'options') opt
+    WHERE opt->>'is_correct' = 'true'
+  )
+`;
+
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
     const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly');
@@ -302,25 +324,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-        AND qp.payload ? 'options'
-        AND jsonb_typeof(qp.payload->'options') = 'array'
-        AND jsonb_array_length(qp.payload->'options') > 0
-        AND NOT EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(qp.payload->'options') opt
-          WHERE jsonb_typeof(opt) <> 'object'
-             OR NOT (opt ? 'text')
-             OR jsonb_typeof(opt->'text') <> 'object'
-             OR NOT (opt ? 'is_correct')
-             OR (opt->>'is_correct') NOT IN ('true', 'false')
-        )
-        AND EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(qp.payload->'options') opt
-          WHERE opt->>'is_correct' = 'true'
-        )
+        AND ${MCQ_VALIDATION_CONDITIONS}
       GROUP BY c.id, c.name, c.icon
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()
@@ -341,25 +345,7 @@ export const lobbiesRepo = {
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-        AND qp.payload ? 'options'
-        AND jsonb_typeof(qp.payload->'options') = 'array'
-        AND jsonb_array_length(qp.payload->'options') > 0
-        AND NOT EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(qp.payload->'options') opt
-          WHERE jsonb_typeof(opt) <> 'object'
-             OR NOT (opt ? 'text')
-             OR jsonb_typeof(opt->'text') <> 'object'
-             OR NOT (opt ? 'is_correct')
-             OR (opt->>'is_correct') NOT IN ('true', 'false')
-        )
-        AND EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(qp.payload->'options') opt
-          WHERE opt->>'is_correct' = 'true'
-        )
+        AND ${MCQ_VALIDATION_CONDITIONS}
       GROUP BY c.id
       HAVING COUNT(*) >= ${minQuestions}
     `;

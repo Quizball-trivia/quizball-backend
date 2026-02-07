@@ -9,6 +9,7 @@ import { getRedisClient } from './redis.js';
 export const QUESTION_TIME_MS = 10000;
 const ROUND_RESULT_DELAY_MS = 0;
 const TIMEOUT_RESOLVE_GRACE_MS = 250;
+const TIMEOUT_RESOLVE_BUFFER_MS = 50; // Small event-loop scheduling margin before timeout resolution.
 const LAST_MATCH_REPLAY_TTL_SEC = 600;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
@@ -169,14 +170,20 @@ export async function sendMatchQuestion(
     matchId,
     qIndex,
     total: totalQuestions,
-    prompt: payload.question.prompt,
-    promptLength: payload.question.prompt?.length,
-    promptPreview: payload.question.prompt?.substring(0, 80) + '...',
-    options: payload.question.options,
+    promptPreview: payload.question.prompt
+      ? (payload.question.prompt.length > 80
+        ? `${payload.question.prompt.substring(0, 80)}...`
+        : payload.question.prompt)
+      : '',
     optionsCount: payload.question.options?.length,
     categoryName: payload.question.categoryName,
-    payloadQuestionJson: JSON.stringify(payload.question),
   }, 'Match question being emitted');
+  logger.debug({
+    matchId,
+    qIndex,
+    total: totalQuestions,
+    payloadQuestionJson: JSON.stringify(payload.question),
+  }, 'Match question debug payload');
 
   io.to(`match:${matchId}`).emit('match:question', questionPayload);
   logger.info({ matchId, qIndex, total: totalQuestions }, 'Match question sent');
@@ -192,7 +199,7 @@ export async function sendMatchQuestion(
     void resolveRound(io, matchId, qIndex, true).catch((error) => {
       logger.error({ error, matchId, qIndex }, 'Failed to resolve round after timeout');
     });
-  }, QUESTION_TIME_MS + TIMEOUT_RESOLVE_GRACE_MS + 50);
+  }, QUESTION_TIME_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
 
   questionTimers.set(key, timeout);
 

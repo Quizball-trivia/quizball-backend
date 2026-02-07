@@ -24,6 +24,7 @@ export function getPostHogClient(): PostHog | null {
 export async function shutdownPostHog(): Promise<void> {
   if (posthogClient) {
     await posthogClient.shutdown();
+    posthogClient = null;
     logger.info('PostHog client shutdown');
   }
 }
@@ -65,7 +66,6 @@ export function identifyUser(
       distinctId: userId,
       properties: {
         ...properties,
-        $set: properties, // Set user properties
       },
     });
   } catch (error) {

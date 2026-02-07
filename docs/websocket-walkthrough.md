@@ -292,34 +292,44 @@ socket.on('lobby:create', async ({ mode }) => {
 
 ### Ranked Mode
 
-1. **Player joins queue** → added to Redis list
+1. **Player joins queue** → stored as a search record in Redis (`ranked:mm:search:<id>`)
 2. **System waits** for 2+ players
-3. **Auto-match** → creates lobby, both auto-joined
-4. **Draft starts immediately** (no ready phase)
-5. **Match plays** → 10 questions
+3. **Atomic pair claim** via Lua (`redis.eval`) picks two queued searches in one step
+4. **Auto-match** → creates lobby, both auto-joined
+5. **Draft starts immediately** (no ready phase)
+6. **Match plays** → 10 questions
+
+Implementation notes (current code):
+- Queue is maintained with sorted sets/maps (`ranked:mm:queue`, `ranked:mm:timeouts`, `ranked:mm:user`)
+- Pairing is done by `RANKED_MM_PAIR_TWO_RANDOM_SCRIPT` in
+  `src/realtime/lua/ranked-matchmaking.scripts.ts`
+- Service loop lives in `src/realtime/services/ranked-matchmaking.service.ts`
+- This avoids TOCTOU races from separate length/pop calls.
 
 ```typescript
-// lobby.handler.ts - Ranked queue
-async function enqueueRanked(io, userId) {
-  // Prevent double-queuing
-  const inQueueKey = `ranked:inqueue:${userId}`;
-  if (await redis.exists(inQueueKey)) return;
+// ranked-matchmaking.service.ts (current pattern)
+async function processPairs(io: QuizballServer) {
+  for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+    const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+      keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
+      arguments: [SEARCH_KEY_PREFIX, String(Date.now())],
+    });
 
-  await redis.setEx(inQueueKey, 60, '1');  // TTL 60s
-  await redis.rPush('ranked:queue', userId);
+    const result = toStringArray(resultRaw);
+    if (result.length < 4) return;
 
-  // Check if we can match
-  const queueLength = await redis.lLen('ranked:queue');
-  if (queueLength >= 2) {
-    const userA = await redis.lPop('ranked:queue');
-    const userB = await redis.lPop('ranked:queue');
+    const userAId = result[1];
+    const userBId = result[3];
+    if (!userAId || !userBId) return;
 
-    // Create lobby and start immediately
-    const lobby = await lobbiesRepo.createLobby({ mode: 'ranked', ... });
-    await startDraft(io, lobby.id);
+    await startHumanRankedMatch(io, userAId, userBId);
   }
 }
 ```
+
+Deprecated example (kept here only for contrast, do not use):
+- `LLEN` then `LPOP`/`LPOP` on a Redis list is not atomic for matchmaking.
+- Use Lua/eval claim scripts instead.
 
 ---
 

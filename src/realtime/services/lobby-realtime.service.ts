@@ -971,6 +971,11 @@ export const lobbyRealtimeService = {
       const lobbyLock = await acquireLock(lobbyLockKey, 3000);
       if (!lobbyLock.acquired || !lobbyLock.token) {
         logger.warn({ lobbyId, userId }, 'Lobby leave skipped: lock not acquired');
+        socket.emit('error', {
+          code: 'LOBBY_BUSY',
+          message: 'Lobby is currently busy. Please try again.',
+          details: { lobbyId },
+        });
         return;
       }
 

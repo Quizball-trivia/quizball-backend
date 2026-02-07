@@ -212,11 +212,13 @@ export const matchesRepo = {
     timeMs: number;
     pointsEarned: number;
   }): Promise<MatchAnswerRow> {
-    // Retry logic for prepared statement errors
-    let attempts = 0;
-    const maxAttempts = 2;
+    const maxAttempts = 3;
+    let lastError: unknown;
 
-    while (attempts < maxAttempts) {
+    // Helper to sleep with exponential backoff
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const [row] = await sql<MatchAnswerRow[]>`
           INSERT INTO match_answers (
@@ -230,20 +232,26 @@ export const matchesRepo = {
         `;
         return row;
       } catch (error: unknown) {
-        attempts++;
+        lastError = error;
+
         // Check if it's a prepared statement error (code 26000)
-        if (error && typeof error === 'object' && 'code' in error && error.code === '26000') {
-          if (attempts < maxAttempts) {
-            // Retry once more
-            continue;
-          }
+        const isPreparedStmtError =
+          error && typeof error === 'object' && 'code' in error && error.code === '26000';
+
+        if (isPreparedStmtError && attempt < maxAttempts) {
+          // Exponential backoff: 50ms, 100ms, 200ms...
+          const backoffMs = 50 * Math.pow(2, attempt - 1);
+          await sleep(backoffMs);
+          continue;
         }
-        // Re-throw if it's not a prepared statement error or we've exhausted retries
+
+        // Non-prepared error or exhausted retries - rethrow immediately
         throw error;
       }
     }
 
-    throw new Error('Failed to insert match answer after retries');
+    // Should never reach here, but TypeScript doesn't know that
+    throw lastError;
   },
 
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {

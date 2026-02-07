@@ -332,16 +332,10 @@ export const userSessionGuardService = {
 
     const snapshot = await this.resolveState(userId);
     this.emitBlocked(socket, {
-      reason: 'TRANSITION_IN_PROGRESS',
+      reason: options?.code ?? 'TRANSITION_IN_PROGRESS',
       message: options?.message ?? 'State transition is in progress. Please retry.',
       stateSnapshot: snapshot,
     });
-    socket.emit('error', {
-      code: options?.code ?? 'TRANSITION_IN_PROGRESS',
-      message: options?.message ?? 'State transition is in progress. Please retry.',
-      meta: { stateSnapshot: snapshot },
-    });
-    await this.emitState(io, userId);
     return false;
   },
 

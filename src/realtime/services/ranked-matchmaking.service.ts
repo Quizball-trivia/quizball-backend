@@ -263,101 +263,105 @@ export const rankedMatchmakingService = {
           return;
         }
 
-        const lockKey = `lock:ranked:mm:join:${userId}`;
-        const lock = await acquireLock(lockKey, 2000);
-        if (!lock.acquired || !lock.token) {
-          logger.warn({ userId }, 'Ranked queue join blocked: user join lock not acquired');
+        const now = Date.now();
+        const deadlineAt = now + SEARCH_DURATION_MS;
+        const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
+        if (existingSearchId) {
+          const existing = await redis.hGetAll(searchKey(existingSearchId));
+          if (existing.status === 'queued') {
+            // Validate and parse deadlineAt defensively
+            const parsedDeadline = Number(existing.deadlineAt);
+            let remainingMs: number;
+
+            if (!existing.deadlineAt || !Number.isFinite(parsedDeadline) || parsedDeadline <= 0) {
+              // Invalid or missing deadlineAt - fallback to full duration
+              logger.warn(
+                {
+                  userId,
+                  searchId: existingSearchId,
+                  invalidDeadlineAt: existing.deadlineAt ?? null,
+                  queuedAt: existing.queuedAt ?? null,
+                },
+                'Ranked queue resume found invalid deadlineAt, using fallback duration'
+              );
+              remainingMs = SEARCH_DURATION_MS;
+            } else {
+              remainingMs = Math.max(0, parsedDeadline - now);
+            }
+
+            logger.info(
+              {
+                userId,
+                searchId: existingSearchId,
+                remainingMs,
+                queuedAt: existing.queuedAt ?? null,
+                deadlineAt: existing.deadlineAt ?? null,
+              },
+              'Ranked queue join resumed existing queue'
+            );
+            socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+            const snapshot = await userSessionGuardService.emitState(io, userId);
+            logger.info(
+              {
+                userId,
+                state: snapshot.state,
+                queueSearchId: snapshot.queueSearchId,
+                activeMatchId: snapshot.activeMatchId,
+                waitingLobbyId: snapshot.waitingLobbyId,
+              },
+              'Ranked queue state emitted after resume'
+            );
+            return;
+          }
+          logger.warn(
+            {
+              userId,
+              searchId: existingSearchId,
+              status: existing.status ?? null,
+            },
+            'Ranked queue join found stale user-map search id'
+          );
+          await redis.hDel(USER_MAP_KEY, userId);
+        }
+
+        const newSearchId = randomUUID();
+        const multiResult = await redis
+          .multi()
+          .hSet(searchKey(newSearchId), {
+            userId,
+            status: 'queued',
+            queuedAt: String(now),
+            deadlineAt: String(deadlineAt),
+          })
+          .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
+          .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
+          .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+          .hSet(USER_MAP_KEY, userId, newSearchId)
+          .exec();
+
+        if (!multiResult) {
+          logger.error({ userId }, 'Ranked queue join failed: Redis multi returned null');
           socket.emit('error', {
-            code: 'RANKED_QUEUE_BUSY',
-            message: 'Ranked queue is busy, retry in a moment',
+            code: 'RANKED_QUEUE_UNAVAILABLE',
+            message: 'Ranked queue is unavailable, please retry',
           });
           return;
         }
 
-        try {
-          const now = Date.now();
-          const deadlineAt = now + SEARCH_DURATION_MS;
-          const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
-          if (existingSearchId) {
-            const existing = await redis.hGetAll(searchKey(existingSearchId));
-            if (existing.status === 'queued') {
-              const remainingMs = Math.max(0, Number(existing.deadlineAt ?? String(deadlineAt)) - now);
-              logger.info(
-                {
-                  userId,
-                  searchId: existingSearchId,
-                  remainingMs,
-                  queuedAt: existing.queuedAt ?? null,
-                  deadlineAt: existing.deadlineAt ?? null,
-                },
-                'Ranked queue join resumed existing queue'
-              );
-              socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
-              const snapshot = await userSessionGuardService.emitState(io, userId);
-              logger.info(
-                {
-                  userId,
-                  state: snapshot.state,
-                  queueSearchId: snapshot.queueSearchId,
-                  activeMatchId: snapshot.activeMatchId,
-                  waitingLobbyId: snapshot.waitingLobbyId,
-                },
-                'Ranked queue state emitted after resume'
-              );
-              return;
-            }
-            logger.warn(
-              {
-                userId,
-                searchId: existingSearchId,
-                status: existing.status ?? null,
-              },
-              'Ranked queue join found stale user-map search id'
-            );
-            await redis.hDel(USER_MAP_KEY, userId);
-          }
-
-          const newSearchId = randomUUID();
-          const multiResult = await redis
-            .multi()
-            .hSet(searchKey(newSearchId), {
-              userId,
-              status: 'queued',
-              queuedAt: String(now),
-              deadlineAt: String(deadlineAt),
-            })
-            .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
-            .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
-            .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
-            .hSet(USER_MAP_KEY, userId, newSearchId)
-            .exec();
-
-          if (!multiResult) {
-            logger.error({ userId }, 'Ranked queue join failed: Redis multi returned null');
-            socket.emit('error', {
-              code: 'RANKED_QUEUE_UNAVAILABLE',
-              message: 'Ranked queue is unavailable, please retry',
-            });
-            return;
-          }
-
-          socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-          const queueSize = await redis.zCard(QUEUE_KEY);
-          logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
-          const snapshot = await userSessionGuardService.emitState(io, userId);
-          logger.info(
-            {
-              userId,
-              state: snapshot.state,
-              queueSearchId: snapshot.queueSearchId,
-              activeMatchId: snapshot.activeMatchId,
-              waitingLobbyId: snapshot.waitingLobbyId,
-            },
-            'Ranked queue state emitted after join'
-          );
-        } finally {
-          await releaseLock(lockKey, lock.token);
-        }
+        socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+        const queueSize = await redis.zCard(QUEUE_KEY);
+        logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
+        const snapshot = await userSessionGuardService.emitState(io, userId);
+        logger.info(
+          {
+            userId,
+            state: snapshot.state,
+            queueSearchId: snapshot.queueSearchId,
+            activeMatchId: snapshot.activeMatchId,
+            waitingLobbyId: snapshot.waitingLobbyId,
+          },
+          'Ranked queue state emitted after join'
+        );
       },
       {
         code: 'RANKED_QUEUE_BUSY',
@@ -389,6 +393,19 @@ export const rankedMatchmakingService = {
         } else {
           logger.info({ userId }, 'Ranked queue leave requested but no active search found');
         }
+
+        socket.emit('ranked:queue_left');
+        const snapshot = await userSessionGuardService.emitState(io, userId);
+        logger.info(
+          {
+            userId,
+            state: snapshot.state,
+            queueSearchId: snapshot.queueSearchId,
+            activeMatchId: snapshot.activeMatchId,
+            waitingLobbyId: snapshot.waitingLobbyId,
+          },
+          'Ranked queue state emitted after leave'
+        );
       },
       {
         code: 'RANKED_QUEUE_BUSY',
@@ -396,18 +413,6 @@ export const rankedMatchmakingService = {
       }
     );
     if (!completed) return;
-    socket.emit('ranked:queue_left');
-    const snapshot = await userSessionGuardService.emitState(io, userId);
-    logger.info(
-      {
-        userId,
-        state: snapshot.state,
-        queueSearchId: snapshot.queueSearchId,
-        activeMatchId: snapshot.activeMatchId,
-        waitingLobbyId: snapshot.waitingLobbyId,
-      },
-      'Ranked queue state emitted after leave'
-    );
   },
 
   async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {

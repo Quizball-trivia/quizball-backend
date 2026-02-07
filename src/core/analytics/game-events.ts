@@ -14,15 +14,25 @@ export function trackMatchCreated(
   });
 }
 
-export function trackMatchCompleted(
-  userId: string,
-  matchId: string,
-  mode: string,
-  won: boolean,
-  score: number,
-  opponentScore: number,
-  durationMs: number
-): void {
+export interface TrackMatchCompletedOptions {
+  userId: string;
+  matchId: string;
+  mode: string;
+  won: boolean;
+  score: number;
+  opponentScore: number;
+  durationMs: number;
+}
+
+export function trackMatchCompleted({
+  userId,
+  matchId,
+  mode,
+  won,
+  score,
+  opponentScore,
+  durationMs,
+}: TrackMatchCompletedOptions): void {
   trackEvent('match_completed', userId, {
     match_id: matchId,
     mode,
@@ -137,10 +147,35 @@ export function trackError(
   errorMessage: string,
   context?: Record<string, any>
 ): void {
+  // Allowlist of safe context fields to prevent PII leakage
+  const allowedKeys = [
+    'device',
+    'level',
+    'module',
+    'component',
+    'stack',
+    'statusCode',
+    'method',
+    'path',
+    'duration',
+    'attemptCount',
+    'category',
+    'severity',
+  ];
+
+  const sanitizedContext: Record<string, any> = {};
+  if (context) {
+    for (const key of allowedKeys) {
+      if (key in context) {
+        sanitizedContext[key] = context[key];
+      }
+    }
+  }
+
   trackEvent('error_occurred', userId || 'anonymous', {
     error_code: errorCode,
     error_message: errorMessage,
-    ...context,
+    ...sanitizedContext,
   });
 }
 

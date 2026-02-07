@@ -536,9 +536,9 @@ function waitForEvent<T = unknown>(socket: TestSocket, eventName: string, timeou
       reject(new Error(`Timed out waiting for ${eventName}`));
     }, timeoutMs);
 
-    socket.onceOutbound(eventName, (payload: T) => {
+    socket.onceOutbound(eventName, (payload: unknown) => {
       clearTimeout(timeout);
-      resolve(payload);
+      resolve(payload as T);
     });
   });
 }

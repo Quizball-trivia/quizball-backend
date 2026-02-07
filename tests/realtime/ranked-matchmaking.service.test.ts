@@ -211,22 +211,22 @@ describe('ranked-matchmaking.service queue behavior', () => {
   it('pairs two matches and leaves one waiting when queue effectively has 5 users', async () => {
     const service = await loadService();
     const io = createIoMock();
+    let pairScriptCalls = 0;
 
-    redisMock.eval
-      .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
-        return [];
-      })
-      .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s3', 'u3', 's4', 'u4'];
-        return [];
-      })
-      .mockImplementation(async () => []);
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      pairScriptCalls += 1;
+      if (pairScriptCalls === 1) return ['s1', 'u1', 's2', 'u2'];
+      if (pairScriptCalls === 2) return ['s3', 'u3', 's4', 'u4'];
+      if (pairScriptCalls === 3) return ['s5', 'u5']; // left waiting (unmatched)
+      return [];
+    });
 
     service.start(io);
     await vi.advanceTimersByTimeAsync(120);
 
     expect(createLobbyMock).toHaveBeenCalledTimes(2);
+    expect(pairScriptCalls).toBe(3);
     expect(startRankedAiForUserMock).not.toHaveBeenCalled();
   });
 

@@ -10,10 +10,11 @@ export function pickI18nText(field: Record<string, string> | string | null | und
 
   // Handle stringified JSON (JSONB not parsed by postgres.js)
   if (typeof field === 'string') {
-    // Check if it looks like JSON
-    if (field.startsWith('{') && field.endsWith('}')) {
+    const trimmed = field.trim();
+    // Try to parse as JSON if it looks like an object
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
       try {
-        const parsed = JSON.parse(field);
+        const parsed = JSON.parse(trimmed);
         if (typeof parsed === 'object' && !Array.isArray(parsed)) {
           // Recursively call with parsed object
           return pickI18nText(parsed);

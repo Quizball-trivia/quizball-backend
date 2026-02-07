@@ -43,7 +43,11 @@ export const matchesService = {
     const memberIds = members.map((m) => m.user_id);
 
     if (memberIds.length !== 2) {
-      throw new Error('Lobby must have 2 members to create a match');
+      throw new AppError(
+        'Lobby must have exactly 2 members to create a match',
+        400,
+        ErrorCode.BAD_REQUEST
+      );
     }
 
     const [categoryAId, categoryBId] = params.categoryIds;
@@ -183,7 +187,7 @@ export const matchesService = {
     const row: MatchQuestionWithCategory | null = await matchesRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
 
-    logger.info({
+    logger.debug({
       matchId,
       qIndex,
       questionId: row.question_id,
@@ -202,7 +206,7 @@ export const matchesService = {
     const categoryNameText = pickI18nText(row.category_name);
     const optionsTexts = parsed.data.options.map((option) => pickI18nText(option.text));
 
-    logger.info({
+    logger.debug({
       matchId,
       qIndex,
       promptText,

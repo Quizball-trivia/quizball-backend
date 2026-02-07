@@ -1,6 +1,7 @@
 import { matchesRepo } from './matches.repo.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
 import { logger, pickI18nText } from '../../core/index.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import type { GameQuestionDTO } from '../../realtime/socket.types.js';
 import type {
@@ -42,7 +43,11 @@ export const matchesService = {
     const memberIds = members.map((m) => m.user_id);
 
     if (memberIds.length !== 2) {
-      throw new Error('Lobby must have 2 members to create a match');
+      throw new AppError(
+        'Lobby must have exactly 2 members to create a match',
+        400,
+        ErrorCode.BAD_REQUEST
+      );
     }
 
     const [categoryAId, categoryBId] = params.categoryIds;
@@ -182,18 +187,42 @@ export const matchesService = {
     const row: MatchQuestionWithCategory | null = await matchesRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
 
+    logger.debug({
+      matchId,
+      qIndex,
+      questionId: row.question_id,
+      promptRaw: row.prompt,
+      promptType: typeof row.prompt,
+      categoryNameRaw: row.category_name,
+      categoryNameType: typeof row.category_name,
+    }, 'Building match question payload');
+
     const parsed = questionPayloadSchema.safeParse(row.payload);
     if (!parsed.success || parsed.data.type !== 'mcq_single') {
       return null;
     }
 
+    const promptText = pickI18nText(row.prompt);
+    const categoryNameText = pickI18nText(row.category_name);
+    const optionsTexts = parsed.data.options.map((option) => pickI18nText(option.text));
+
+    logger.debug({
+      matchId,
+      qIndex,
+      promptText,
+      promptTextLength: promptText.length,
+      categoryNameText,
+      optionsTexts,
+      optionsCount: optionsTexts.length,
+    }, 'Parsed question texts');
+
     return {
       question: {
         id: row.question_id,
-        prompt: pickI18nText(row.prompt),
-        options: parsed.data.options.map((option) => pickI18nText(option.text)),
+        prompt: promptText,
+        options: optionsTexts,
         categoryId: row.category_id,
-        categoryName: pickI18nText(row.category_name),
+        categoryName: categoryNameText,
         difficulty: row.difficulty,
         explanation: null,
       },
@@ -205,5 +234,16 @@ export const matchesService = {
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
     const rows = await matchesRepo.getAverageTimes(matchId);
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));
+  },
+
+  async abandonMatch(matchId: string): Promise<void> {
+    const abandoned = await matchesRepo.abandonMatch(matchId);
+    if (!abandoned) {
+      throw new AppError(
+        'Match is not active or does not exist',
+        400,
+        ErrorCode.BAD_REQUEST
+      );
+    }
   },
 };

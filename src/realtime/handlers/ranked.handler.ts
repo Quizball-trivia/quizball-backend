@@ -29,7 +29,7 @@ export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocke
 
   socket.on('ranked:queue_leave', async () => {
     try {
-      await rankedMatchmakingService.handleQueueLeave(socket);
+      await rankedMatchmakingService.handleQueueLeave(io, socket);
     } catch (error) {
       logger.error({ error, userId: socket.data.user.id }, 'Error in ranked:queue_leave handler');
       socket.emit('error', {

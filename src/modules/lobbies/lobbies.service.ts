@@ -13,7 +13,7 @@ function toLobbyMember(row: LobbyMemberWithUser, hostUserId: string): LobbyMembe
   };
 }
 
-const MIN_QUESTIONS_PER_CATEGORY = 5;
+export const MIN_QUESTIONS_PER_CATEGORY = 5;
 
 export const lobbiesService = {
   async buildLobbyState(lobby: LobbyRow): Promise<LobbyState> {

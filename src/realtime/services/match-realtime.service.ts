@@ -8,12 +8,19 @@ import type { MatchAnswerPayload } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
+import { userSessionGuardService } from './user-session-guard.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
 const PRESENCE_TTL_SEC = 45;
 const DISCONNECT_TTL_SEC = 60;
 const GRACE_TTL_SEC = 35;
 const FORFEIT_TTL_SEC = 600;
+
+type LastMatchReplay = {
+  matchId: string;
+  resultVersion: number;
+};
 
 function matchPresenceKey(matchId: string, userId: string): string {
   return `match:presence:${matchId}:${userId}`;
@@ -37,6 +44,24 @@ function matchForfeitKey(matchId: string): string {
 
 function lastMatchKey(userId: string): string {
   return `user:last_match:${userId}`;
+}
+
+function parseLastMatchReplay(raw: string): LastMatchReplay {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LastMatchReplay>;
+    if (typeof parsed.matchId === 'string' && typeof parsed.resultVersion === 'number') {
+      return {
+        matchId: parsed.matchId,
+        resultVersion: parsed.resultVersion,
+      };
+    }
+  } catch {
+    // Backward-compat path for legacy string format.
+  }
+  return {
+    matchId: raw,
+    resultVersion: Date.now(),
+  };
 }
 
 async function getOpponentInfo(matchId: string, userId: string): Promise<{
@@ -77,11 +102,12 @@ async function emitRejoinAvailable(
   });
 }
 
-async function buildFinalResultsPayload(matchId: string): Promise<{
+async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
   winnerId: string | null;
   players: Record<string, { totalPoints: number; correctAnswers: number; avgTimeMs: number | null }>;
   durationMs: number;
+  resultVersion: number;
 } | null> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'completed') return null;
@@ -123,6 +149,7 @@ async function buildFinalResultsPayload(matchId: string): Promise<{
     winnerId: match.winner_user_id,
     players: payloadPlayers,
     durationMs,
+    resultVersion,
   };
 }
 
@@ -194,7 +221,11 @@ function calculatePoints(isCorrect: boolean, timeMs: number): number {
   if (!isCorrect) return 0;
   const clamped = Math.max(0, Math.min(timeMs, QUESTION_TIME_MS));
   const remainingMs = Math.max(0, QUESTION_TIME_MS - clamped);
-  return Math.floor(remainingMs / 10);
+  // Convert to seconds and multiply by 100
+  // Answer instantly (10s left) = 1000 points
+  // Answer at 7s left = 700 points
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  return remainingSeconds * 100;
 }
 
 export const matchRealtimeService = {
@@ -223,75 +254,214 @@ export const matchRealtimeService = {
     }
   },
 
-  async handleMatchLeave(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+  async handleMatchLeave(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    requestedMatchId: string | null
+  ): Promise<void> {
     const userId = socket.data.user.id;
-    const activeMatch =
-      (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
-      (await matchesRepo.getActiveMatchForUser(userId));
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        const activeMatch =
+          (requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null) ??
+          (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
+          (await matchesRepo.getActiveMatchForUser(userId));
 
-    if (!activeMatch || activeMatch.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match to leave',
-      });
-      return;
-    }
+        if (!activeMatch || activeMatch.status !== 'active') {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ACTIVE',
+            message: 'No active match to leave',
+          });
+          return;
+        }
 
-    await this.pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId);
+        await this.pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId);
 
-    socket.leave(`match:${activeMatch.id}`);
-    socket.data.matchId = undefined;
+        socket.leave(`match:${activeMatch.id}`);
+        socket.data.matchId = undefined;
 
-    await emitRejoinAvailable(socket, activeMatch, userId, MATCH_DISCONNECT_GRACE_MS);
+        await emitRejoinAvailable(socket, activeMatch, userId, MATCH_DISCONNECT_GRACE_MS);
+      },
+      {
+        code: 'TRANSITION_IN_PROGRESS',
+        message: 'Match transition is in progress. Please retry.',
+      }
+    );
+    if (!completed) return;
+
+    await userSessionGuardService.emitState(io, userId);
+  },
+
+  async handleMatchForfeit(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    requestedMatchId: string | null
+  ): Promise<void> {
+    const userId = socket.data.user.id;
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        const activeMatch =
+          (requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null) ??
+          (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
+          (await matchesRepo.getActiveMatchForUser(userId));
+
+        if (!activeMatch || activeMatch.status !== 'active') {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ACTIVE',
+            message: 'No active match to forfeit',
+          });
+          return;
+        }
+
+        const roster = await matchesRepo.listMatchPlayers(activeMatch.id);
+        const isParticipant = roster.some((player) => player.user_id === userId);
+        if (!isParticipant) {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ALLOWED',
+            message: 'You are not a participant in this match',
+          });
+          return;
+        }
+
+        const winnerId = roster.find((player) => player.user_id !== userId)?.user_id ?? null;
+        if (winnerId) {
+          const fullPoints = Math.floor((QUESTION_TIME_MS / 10) * activeMatch.total_questions);
+          const fullCorrectAnswers = activeMatch.total_questions;
+          const winnerPlayer = roster.find((player) => player.user_id === winnerId);
+          const currentPoints = winnerPlayer?.total_points ?? 0;
+          const currentCorrect = winnerPlayer?.correct_answers ?? 0;
+
+          const finalPoints = Math.max(currentPoints, fullPoints);
+          const finalCorrect = Math.max(currentCorrect, fullCorrectAnswers);
+          await matchesRepo.setPlayerForfeitWinTotals(
+            activeMatch.id,
+            winnerId,
+            finalPoints,
+            finalCorrect
+          );
+        }
+
+        cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
+        await matchesRepo.completeMatch(activeMatch.id, winnerId);
+
+        const avgTimes = await matchesService.computeAvgTimes(activeMatch.id);
+        for (const player of roster) {
+          await matchesRepo.updatePlayerAvgTime(
+            activeMatch.id,
+            player.user_id,
+            avgTimes.get(player.user_id) ?? null
+          );
+        }
+
+        const resultVersion = Date.now();
+        const finalPayload = await buildFinalResultsPayload(activeMatch.id, resultVersion);
+        if (finalPayload) {
+          io.to(`match:${activeMatch.id}`).emit('match:final_results', finalPayload);
+        }
+
+        const redis = getRedisClient();
+        if (redis) {
+          const cleanupKeys = [
+            matchPauseKey(activeMatch.id),
+            matchGraceKey(activeMatch.id),
+            ...roster.flatMap((player) => [
+              matchDisconnectKey(activeMatch.id, player.user_id),
+              matchPresenceKey(activeMatch.id, player.user_id),
+            ]),
+          ];
+
+          await redis.del(cleanupKeys);
+          await redis.del(rankedAiMatchKey(activeMatch.id));
+          await redis.set(matchForfeitKey(activeMatch.id), winnerId ?? 'draw', {
+            EX: FORFEIT_TTL_SEC,
+          });
+          await Promise.all(
+            roster.map((player) =>
+              redis.set(
+                lastMatchKey(player.user_id),
+                JSON.stringify({ matchId: activeMatch.id, resultVersion }),
+                { EX: FORFEIT_TTL_SEC }
+              )
+            )
+          );
+        }
+
+        socket.leave(`match:${activeMatch.id}`);
+        socket.data.matchId = undefined;
+      },
+      {
+        code: 'TRANSITION_IN_PROGRESS',
+        message: 'Match transition is in progress. Please retry.',
+      }
+    );
+    if (!completed) return;
+
+    await userSessionGuardService.emitState(io, userId);
   },
 
   async handleMatchRejoin(io: QuizballServer, socket: QuizballSocket, requestedMatchId: string | null): Promise<void> {
     const userId = socket.data.user.id;
-    let match = requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null;
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        let match = requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null;
 
-    if (!match || match.status !== 'active') {
-      match = await matchesRepo.getActiveMatchForUser(userId);
-    }
+        if (!match || match.status !== 'active') {
+          match = await matchesRepo.getActiveMatchForUser(userId);
+        }
 
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match to rejoin',
-      });
-      return;
-    }
+        if (!match || match.status !== 'active') {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ACTIVE',
+            message: 'No active match to rejoin',
+          });
+          return;
+        }
 
-    const players = await matchesRepo.listMatchPlayers(match.id);
-    const isParticipant = players.some((player) => player.user_id === userId);
-    if (!isParticipant) {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'You are not a participant in this match',
-      });
-      return;
-    }
+        const players = await matchesRepo.listMatchPlayers(match.id);
+        const isParticipant = players.some((player) => player.user_id === userId);
+        if (!isParticipant) {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ALLOWED',
+            message: 'You are not a participant in this match',
+          });
+          return;
+        }
 
-    socket.join(`match:${match.id}`);
-    socket.data.matchId = match.id;
+        socket.join(`match:${match.id}`);
+        socket.data.matchId = match.id;
 
-    const redis = getRedisClient();
-    if (redis) {
-      await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
-    }
+        const redis = getRedisClient();
+        if (redis) {
+          await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
+        }
 
-    const opponent = await getOpponentInfo(match.id, userId);
-    socket.emit('match:start', {
-      matchId: match.id,
-      opponent,
-    });
+        const opponent = await getOpponentInfo(match.id, userId);
+        socket.emit('match:start', {
+          matchId: match.id,
+          opponent,
+        });
 
-    if (!redis) return;
+        if (!redis) return;
 
-    const isPaused = (await redis.exists(matchPauseKey(match.id))) === 1;
-    const wasDisconnected = (await redis.exists(matchDisconnectKey(match.id, userId))) === 1;
-    if (isPaused && wasDisconnected) {
-      await this.resumePausedMatch(io, match.id, userId);
-    }
+        const isPaused = (await redis.exists(matchPauseKey(match.id))) === 1;
+        const wasDisconnected = (await redis.exists(matchDisconnectKey(match.id, userId))) === 1;
+        if (isPaused && wasDisconnected) {
+          await this.resumePausedMatch(io, match.id, userId);
+        }
+      },
+      {
+        code: 'TRANSITION_IN_PROGRESS',
+        message: 'Match transition is in progress. Please retry.',
+      }
+    );
+    if (!completed) return;
+    await userSessionGuardService.emitState(io, userId);
   },
 
   async emitLastMatchResultIfAny(_io: QuizballServer, socket: QuizballSocket): Promise<void> {
@@ -299,10 +469,11 @@ export const matchRealtimeService = {
     if (!redis) return;
 
     const userId = socket.data.user.id;
-    const lastMatchId = await redis.get(lastMatchKey(userId));
-    if (!lastMatchId) return;
+    const rawReplay = await redis.get(lastMatchKey(userId));
+    if (!rawReplay) return;
+    const replay = parseLastMatchReplay(rawReplay);
 
-    const lastMatch = await matchesRepo.getMatch(lastMatchId);
+    const lastMatch = await matchesRepo.getMatch(replay.matchId);
     if (!lastMatch) {
       await redis.del(lastMatchKey(userId));
       return;
@@ -317,9 +488,26 @@ export const matchRealtimeService = {
       return;
     }
 
-    const payload = await buildFinalResultsPayload(lastMatchId);
+    const payload = await buildFinalResultsPayload(replay.matchId, replay.resultVersion);
     if (payload) {
       socket.emit('match:final_results', payload);
+    }
+  },
+
+  async handleFinalResultsAck(
+    socket: QuizballSocket,
+    payload: MatchFinalResultsAckPayload
+  ): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) return;
+
+    const userId = socket.data.user.id;
+    const rawReplay = await redis.get(lastMatchKey(userId));
+    if (!rawReplay) return;
+
+    const replay = parseLastMatchReplay(rawReplay);
+    if (replay.matchId !== payload.matchId || replay.resultVersion !== payload.resultVersion) {
+      return;
     }
     await redis.del(lastMatchKey(userId));
   },
@@ -369,7 +557,15 @@ export const matchRealtimeService = {
     if (!match || match.status !== 'active') return;
 
     const userId = socket.data.user.id;
-    await this.pauseMatchForDisconnectedPlayer(io, matchId, userId);
+    const completed = await userSessionGuardService.runWithUserTransitionLock(
+      io,
+      socket,
+      async () => {
+        await this.pauseMatchForDisconnectedPlayer(io, matchId, userId);
+      }
+    );
+    if (!completed) return;
+    await userSessionGuardService.emitState(io, userId);
   },
 
   async pauseMatchForDisconnectedPlayer(io: QuizballServer, matchId: string, userId: string): Promise<void> {
@@ -416,7 +612,7 @@ export const matchRealtimeService = {
         if (disconnected.length === 0) return;
 
         if (disconnected.length === roster.length) {
-          await matchesRepo.abandonMatch(matchId);
+          await matchesService.abandonMatch(matchId);
           io.to(`match:${matchId}`).emit('error', {
             code: 'MATCH_ABANDONED',
             message: 'Match abandoned due to both players disconnecting',
@@ -434,11 +630,23 @@ export const matchRealtimeService = {
         const winnerId = roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
         if (winnerId) {
           const fullPoints = Math.floor((QUESTION_TIME_MS / 10) * activeMatch.total_questions);
+          const fullCorrectAnswers = activeMatch.total_questions;
+
+          // Fetch current player stats to compute max values (business logic in service)
+          const players = await matchesRepo.listMatchPlayers(matchId);
+          const winnerPlayer = players.find((p) => p.user_id === winnerId);
+          const currentPoints = winnerPlayer?.total_points ?? 0;
+          const currentCorrect = winnerPlayer?.correct_answers ?? 0;
+
+          // Apply max logic here instead of in SQL
+          const finalPoints = Math.max(currentPoints, fullPoints);
+          const finalCorrect = Math.max(currentCorrect, fullCorrectAnswers);
+
           await matchesRepo.setPlayerForfeitWinTotals(
             matchId,
             winnerId,
-            fullPoints,
-            activeMatch.total_questions
+            finalPoints,
+            finalCorrect
           );
         }
         await matchesRepo.completeMatch(matchId, winnerId);
@@ -448,7 +656,8 @@ export const matchRealtimeService = {
           await matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
         }
 
-        const finalPayload = await buildFinalResultsPayload(matchId);
+        const resultVersion = Date.now();
+        const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
         if (finalPayload) {
           io.to(`match:${matchId}`).emit('match:final_results', finalPayload);
         }
@@ -456,7 +665,13 @@ export const matchRealtimeService = {
         await redis.del(rankedAiMatchKey(matchId));
         await redis.set(matchForfeitKey(matchId), winnerId ?? 'draw', { EX: FORFEIT_TTL_SEC });
         await Promise.all(
-          roster.map((player) => redis.set(lastMatchKey(player.user_id), matchId, { EX: FORFEIT_TTL_SEC }))
+          roster.map((player) =>
+            redis.set(
+              lastMatchKey(player.user_id),
+              JSON.stringify({ matchId, resultVersion }),
+              { EX: FORFEIT_TTL_SEC }
+            )
+          )
         );
       } finally {
         await redis.del(matchGraceKey(matchId));
@@ -554,11 +769,16 @@ export const matchRealtimeService = {
       correctIndex: questionPayload.correctIndex,
       myTotalPoints: updatedPlayer.total_points,
       oppAnswered: !!opponentAnswer,
+      pointsEarned,
     });
 
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
       qIndex,
+      // To the other client, "opponent" is the current answerer.
+      opponentTotalPoints: updatedPlayer.total_points,
+      pointsEarned,
+      isCorrect,
     });
 
     const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);

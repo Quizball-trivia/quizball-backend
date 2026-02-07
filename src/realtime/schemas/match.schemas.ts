@@ -15,5 +15,21 @@ export const matchRejoinSchema = z.object({
   matchId: z.string().uuid().optional(),
 });
 
+export const matchLeaveSchema = z.object({
+  matchId: z.string().uuid().optional(),
+});
+
+export const matchForfeitSchema = z.object({
+  matchId: z.string().uuid().optional(),
+});
+
+export const matchFinalResultsAckSchema = z.object({
+  matchId: z.string().uuid(),
+  resultVersion: z.number().int().positive(),
+});
+
 export type MatchAnswerPayload = z.infer<typeof matchAnswerSchema>;
 export type MatchRejoinPayload = z.infer<typeof matchRejoinSchema>;
+export type MatchLeavePayload = z.infer<typeof matchLeaveSchema>;
+export type MatchForfeitPayload = z.infer<typeof matchForfeitSchema>;
+export type MatchFinalResultsAckPayload = z.infer<typeof matchFinalResultsAckSchema>;

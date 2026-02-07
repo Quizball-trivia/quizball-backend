@@ -24,6 +24,7 @@ export const lobbyUpdateSettingsSchema = z
     friendlyRandom: z.boolean().optional(),
     friendlyCategoryAId: z.string().uuid().nullable().optional(),
     friendlyCategoryBId: z.string().uuid().nullable().optional(),
+    isPublic: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.gameMode !== 'friendly') return;

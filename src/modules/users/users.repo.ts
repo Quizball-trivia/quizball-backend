@@ -18,6 +18,8 @@ export interface UpdateUserData {
   nickname?: string | null;
   country?: string | null;
   avatarUrl?: string | null;
+  favoriteClub?: string | null;
+  preferredLanguage?: string | null;
   onboardingComplete?: boolean;
 }
 
@@ -97,6 +99,8 @@ export const usersRepo = {
         nickname = CASE WHEN ${data.nickname !== undefined} THEN ${data.nickname ?? null} ELSE nickname END,
         country = CASE WHEN ${data.country !== undefined} THEN ${data.country ?? null} ELSE country END,
         avatar_url = CASE WHEN ${data.avatarUrl !== undefined} THEN ${data.avatarUrl ?? null} ELSE avatar_url END,
+        favorite_club = CASE WHEN ${data.favoriteClub !== undefined} THEN ${data.favoriteClub ?? null} ELSE favorite_club END,
+        preferred_language = CASE WHEN ${data.preferredLanguage !== undefined} THEN ${data.preferredLanguage ?? null} ELSE preferred_language END,
         onboarding_complete = CASE WHEN ${data.onboardingComplete !== undefined} THEN ${data.onboardingComplete ?? false} ELSE onboarding_complete END,
         updated_at = NOW()
       WHERE id = ${id}

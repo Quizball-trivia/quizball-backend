@@ -84,7 +84,7 @@ class TestSocket {
   emit(event: string, payload?: unknown): boolean {
     this.emitted.push({ event, payload });
     const handlers = this.outbound.get(event) ?? [];
-    handlers.forEach((handler) => handler(payload));
+    handlers.forEach((handler) => { handler(payload); });
     return true;
   }
 

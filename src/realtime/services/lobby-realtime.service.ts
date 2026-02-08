@@ -482,6 +482,7 @@ export const lobbyRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Lobby state transition is in progress. Please retry.',
+        operation: 'lobby:create',
       }
     );
     if (!completed) return;
@@ -590,7 +591,9 @@ export const lobbyRealtimeService = {
             return;
           }
 
-          await lobbiesRepo.addMember(lobby.id, userId, false);
+          if (!alreadyMember) {
+            await lobbiesRepo.addMember(lobby.id, userId, false);
+          }
           socket.join(`lobby:${lobby.id}`);
           socket.data.lobbyId = lobby.id;
 
@@ -606,6 +609,7 @@ export const lobbyRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Lobby state transition is in progress. Please retry.',
+        operation: 'lobby:join_by_code',
       }
     );
     if (!completed) return;
@@ -905,6 +909,8 @@ export const lobbyRealtimeService = {
             code: 'INSUFFICIENT_CATEGORIES',
             message: 'Selected categories do not have enough questions',
           });
+          await lobbiesRepo.setAllReady(lobbyId, false);
+          await emitLobbyState(io, lobbyId);
           return;
         }
 
@@ -1034,6 +1040,7 @@ export const lobbyRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Lobby state transition is in progress. Please retry.',
+        operation: 'lobby:leave',
       }
     );
     if (!completed) return;

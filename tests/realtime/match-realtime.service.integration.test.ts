@@ -40,6 +40,7 @@ const getMatchMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const getAnswerForUserMock = vi.fn();
+const getMatchQuestionTimingMock = vi.fn();
 const insertMatchAnswerMock = vi.fn();
 const updatePlayerTotalsMock = vi.fn();
 const listAnswersForQuestionMock = vi.fn();
@@ -70,6 +71,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
     insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
@@ -166,6 +168,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
       { user_id: 'u2', total_points: 100, correct_answers: 1 },
     ]);
     getAnswerForUserMock.mockResolvedValue(null);
+    getMatchQuestionTimingMock.mockResolvedValue({
+      shown_at: new Date(Date.now() - 500).toISOString(),
+      deadline_at: new Date(Date.now() + 9500).toISOString(),
+    });
     insertMatchAnswerMock.mockResolvedValue(undefined);
     updatePlayerTotalsMock.mockResolvedValue({
       user_id: 'u1',
@@ -383,6 +389,69 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
       expect.objectContaining({ code: 'MATCH_NOT_ACTIVE' })
+    );
+  });
+
+  it('S22: uses server-authoritative timing for points and persisted answer time', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const fixedNow = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+
+    getMatchQuestionTimingMock.mockResolvedValue({
+      shown_at: new Date(fixedNow - 2400).toISOString(),
+      deadline_at: new Date(fixedNow + 7600).toISOString(),
+    });
+
+    await matchRealtimeService.handleAnswer(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      selectedIndex: 1,
+      timeMs: 50,
+    });
+
+    expect(insertMatchAnswerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: 'm1',
+        qIndex: 0,
+        userId: 'u1',
+        timeMs: 2400,
+        pointsEarned: 800,
+      })
+    );
+  });
+
+  it('S23: logs discrepancy when client time differs from server time beyond tolerance', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { logger } = await import('../../src/core/logger.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const fixedNow = 1_700_000_010_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+
+    getMatchQuestionTimingMock.mockResolvedValue({
+      shown_at: new Date(fixedNow - 3000).toISOString(),
+      deadline_at: new Date(fixedNow + 7000).toISOString(),
+    });
+
+    await matchRealtimeService.handleAnswer(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      selectedIndex: 1,
+      timeMs: 100,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: 'm1',
+        qIndex: 0,
+        userId: 'u1',
+        serverTimeMs: 3000,
+        clientTimeMs: 100,
+        diffMs: 2900,
+      }),
+      'Match answer timing discrepancy detected'
     );
   });
 });

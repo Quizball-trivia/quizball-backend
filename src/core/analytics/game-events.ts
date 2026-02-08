@@ -145,7 +145,7 @@ export function trackError(
   userId: string | undefined,
   errorCode: string,
   errorMessage: string,
-  context?: Record<string, any>
+  context?: Record<string, unknown>
 ): void {
   // Allowlist of safe context fields to prevent PII leakage
   const allowedKeys = [
@@ -163,7 +163,7 @@ export function trackError(
     'severity',
   ];
 
-  const sanitizedContext: Record<string, any> = {};
+  const sanitizedContext: Record<string, unknown> = {};
   if (context) {
     for (const key of allowedKeys) {
       if (key in context) {

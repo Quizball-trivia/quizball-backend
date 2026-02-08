@@ -322,6 +322,7 @@ export const userSessionGuardService = {
     options?: {
       code?: string;
       message?: string;
+      operation?: string;
     }
   ): Promise<boolean> {
     const userId = socket.data.user.id;
@@ -331,9 +332,21 @@ export const userSessionGuardService = {
     }
 
     const snapshot = await this.resolveState(userId);
+    logger.warn(
+      {
+        userId,
+        operation: options?.operation ?? null,
+        state: snapshot.state,
+        activeMatchId: snapshot.activeMatchId,
+        waitingLobbyId: snapshot.waitingLobbyId,
+        queueSearchId: snapshot.queueSearchId,
+      },
+      'User transition lock blocked operation'
+    );
     this.emitBlocked(socket, {
       reason: 'TRANSITION_IN_PROGRESS',
       message: options?.message ?? 'State transition is in progress. Please retry.',
+      operation: options?.operation,
       stateSnapshot: snapshot,
     });
     return false;

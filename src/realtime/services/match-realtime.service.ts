@@ -16,6 +16,7 @@ const PRESENCE_TTL_SEC = 45;
 const DISCONNECT_TTL_SEC = 60;
 const GRACE_TTL_SEC = 35;
 const FORFEIT_TTL_SEC = 600;
+const ANSWER_TIME_TOLERANCE_MS = 1000;
 
 type LastMatchReplay = {
   matchId: string;
@@ -228,6 +229,27 @@ function calculatePoints(isCorrect: boolean, timeMs: number): number {
   return remainingSeconds * 100;
 }
 
+function toAuthoritativeTimeMs(questionTiming: {
+  shown_at: string | null;
+  deadline_at: string | null;
+}, nowMs: number): number | null {
+  if (questionTiming.shown_at) {
+    const shownAtMs = new Date(questionTiming.shown_at).getTime();
+    if (Number.isFinite(shownAtMs)) {
+      return nowMs - shownAtMs;
+    }
+  }
+
+  if (questionTiming.deadline_at) {
+    const deadlineMs = new Date(questionTiming.deadline_at).getTime();
+    if (Number.isFinite(deadlineMs)) {
+      return QUESTION_TIME_MS - (deadlineMs - nowMs);
+    }
+  }
+
+  return null;
+}
+
 export const matchRealtimeService = {
   async rejoinActiveMatchOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const userId = socket.data.user.id;
@@ -287,6 +309,7 @@ export const matchRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Match transition is in progress. Please retry.',
+        operation: 'match:leave',
       }
     );
     if (!completed) return;
@@ -396,6 +419,7 @@ export const matchRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Match transition is in progress. Please retry.',
+        operation: 'match:forfeit',
       }
     );
     if (!completed) return;
@@ -458,6 +482,7 @@ export const matchRealtimeService = {
       {
         code: 'TRANSITION_IN_PROGRESS',
         message: 'Match transition is in progress. Please retry.',
+        operation: 'match:rejoin',
       }
     );
     if (!completed) return;
@@ -557,13 +582,11 @@ export const matchRealtimeService = {
     if (!match || match.status !== 'active') return;
 
     const userId = socket.data.user.id;
-    const completed = await userSessionGuardService.runWithUserTransitionLock(
-      io,
-      socket,
-      async () => {
-        await this.pauseMatchForDisconnectedPlayer(io, matchId, userId);
-      }
-    );
+    const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+      await this.pauseMatchForDisconnectedPlayer(io, matchId, userId);
+    }, {
+      operation: 'match:disconnect',
+    });
     if (!completed) return;
     await userSessionGuardService.emitState(io, userId);
   },
@@ -727,7 +750,36 @@ export const matchRealtimeService = {
 
     const isCorrect =
       selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
-    const pointsEarned = calculatePoints(isCorrect, timeMs);
+    const questionTiming = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
+    const serverTimeMsRaw = questionTiming
+      ? toAuthoritativeTimeMs(questionTiming, Date.now())
+      : null;
+    const authoritativeTimeMs = Math.max(
+      0,
+      Math.min(
+        QUESTION_TIME_MS,
+        Math.round(serverTimeMsRaw ?? timeMs)
+      )
+    );
+
+    if (serverTimeMsRaw !== null) {
+      const diffMs = Math.abs(authoritativeTimeMs - timeMs);
+      if (diffMs > ANSWER_TIME_TOLERANCE_MS) {
+        logger.warn(
+          {
+            matchId,
+            qIndex,
+            userId: socket.data.user.id,
+            serverTimeMs: authoritativeTimeMs,
+            clientTimeMs: timeMs,
+            diffMs,
+          },
+          'Match answer timing discrepancy detected'
+        );
+      }
+    }
+
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs);
 
     try {
       await matchesRepo.insertMatchAnswer({
@@ -736,7 +788,7 @@ export const matchRealtimeService = {
         userId: socket.data.user.id,
         selectedIndex,
         isCorrect,
-        timeMs,
+        timeMs: authoritativeTimeMs,
         pointsEarned,
       });
     } catch (error) {

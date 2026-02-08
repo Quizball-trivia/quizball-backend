@@ -366,6 +366,7 @@ export const rankedMatchmakingService = {
       {
         code: 'RANKED_QUEUE_BUSY',
         message: 'Session transition is in progress. Please retry.',
+        operation: 'ranked:queue_join',
       }
     );
     if (!completed) {
@@ -410,6 +411,7 @@ export const rankedMatchmakingService = {
       {
         code: 'RANKED_QUEUE_BUSY',
         message: 'Session transition is in progress. Please retry.',
+        operation: 'ranked:queue_leave',
       }
     );
     if (!completed) return;
@@ -432,6 +434,9 @@ export const rankedMatchmakingService = {
         if (result.length > 0) {
           logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
         }
+      },
+      {
+        operation: 'ranked:disconnect_cleanup',
       }
     );
     if (!completed) return;

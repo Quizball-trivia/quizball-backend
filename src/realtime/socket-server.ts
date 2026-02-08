@@ -68,12 +68,31 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       'Socket connected'
     );
 
+    let lockAcquired = false;
     try {
-      await userSessionGuardService.withUserSessionLock(user.id, async () => {
+      const lockResult = await userSessionGuardService.withUserSessionLock(user.id, async () => {
         await userSessionGuardService.prepareForConnect(io, user.id);
       });
+      lockAcquired = lockResult !== null;
     } catch (error) {
       logger.warn({ error, userId: user.id }, 'Failed to prepare session state on connect');
+    }
+
+    // If lock wasn't acquired, another transition is in progress - emit blocked state and skip rejoin logic
+    if (!lockAcquired) {
+      logger.warn({ userId: user.id, socketId: socket.id }, 'Session lock busy on connect, skipping rejoin');
+      try {
+        const snapshot = await userSessionGuardService.resolveState(user.id);
+        userSessionGuardService.emitBlocked(socket, {
+          reason: 'TRANSITION_IN_PROGRESS',
+          message: 'Session transition in progress. State will update when ready.',
+          operation: 'connect',
+          stateSnapshot: snapshot,
+        });
+      } catch (error) {
+        logger.warn({ error, userId: user.id }, 'Failed to emit blocked state on connect');
+      }
+      return;
     }
 
     try {

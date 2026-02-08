@@ -21,7 +21,8 @@ export function pickI18nText(field: Record<string, string> | string | null | und
         }
       } catch (err) {
         logger.warn({ field, error: err }, 'Failed to parse JSON string in i18n field');
-        return '';
+        // Return original string instead of discarding malformed brace-wrapped text
+        return field;
       }
     }
     // If it's just a plain string, return it
@@ -39,18 +40,15 @@ export function pickI18nText(field: Record<string, string> | string | null | und
     return field.en;
   }
 
-  // Fall back to first available language
-  const values = Object.values(field);
-  if (values.length === 0) {
-    logger.warn({ field }, 'pickI18nText received empty object');
-    return '';
+  // Fall back to first non-empty string value
+  const firstNonEmpty = Object.values(field).find(
+    (v): v is string => typeof v === 'string' && v.length > 0
+  );
+
+  if (firstNonEmpty) {
+    return firstNonEmpty;
   }
 
-  const first = values[0];
-  if (typeof first === 'string' && first.length > 0) {
-    return first;
-  }
-
-  logger.warn({ field, first }, 'pickI18nText could not extract valid text');
+  logger.warn({ field }, 'pickI18nText could not extract valid text');
   return '';
 }

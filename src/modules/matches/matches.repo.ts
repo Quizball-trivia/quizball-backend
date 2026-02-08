@@ -1,10 +1,12 @@
 import { sql } from '../../db/index.js';
+import { AppError } from '../../core/errors.js';
 import type {
   MatchRow,
   MatchPlayerRow,
   MatchQuestionRow,
   MatchAnswerRow,
   MatchQuestionWithCategory,
+  MatchQuestionTimingRow,
 } from './matches.types.js';
 
 // Reusable SQL fragment for validating question payload structure
@@ -195,6 +197,15 @@ export const matchesRepo = {
     return row ?? null;
   },
 
+  async getMatchQuestionTiming(matchId: string, qIndex: number): Promise<MatchQuestionTimingRow | null> {
+    const [row] = await sql<MatchQuestionTimingRow[]>`
+      SELECT shown_at, deadline_at
+      FROM match_questions
+      WHERE match_id = ${matchId} AND q_index = ${qIndex}
+    `;
+    return row ?? null;
+  },
+
   async setQuestionTiming(matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date): Promise<void> {
     await sql`
       UPDATE match_questions
@@ -212,46 +223,21 @@ export const matchesRepo = {
     timeMs: number;
     pointsEarned: number;
   }): Promise<MatchAnswerRow> {
-    const maxAttempts = 3;
-    let lastError: unknown;
-
-    // Helper to sleep with exponential backoff
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const [row] = await sql<MatchAnswerRow[]>`
-          INSERT INTO match_answers (
-            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned
-          )
-          VALUES (
-            ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}
-          )
-          RETURNING *
-        `;
-        return row;
-      } catch (error: unknown) {
-        lastError = error;
-
-        // Check if it's a prepared statement error (code 26000)
-        const isPreparedStmtError =
-          error && typeof error === 'object' && 'code' in error && error.code === '26000';
-
-        if (isPreparedStmtError && attempt < maxAttempts) {
-          // Exponential backoff: 50ms, 100ms, 200ms...
-          const backoffMs = 50 * Math.pow(2, attempt - 1);
-          await sleep(backoffMs);
-          continue;
-        }
-
-        // Non-prepared error or exhausted retries - rethrow immediately
-        throw error;
-      }
+    try {
+      const [row] = await sql<MatchAnswerRow[]>`
+        INSERT INTO match_answers (
+          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned
+        )
+        VALUES (
+          ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
+          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}
+        )
+        RETURNING *
+      `;
+      return row;
+    } catch (err) {
+      throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
     }
-
-    // Should never reach here, but TypeScript doesn't know that
-    throw lastError;
   },
 
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {

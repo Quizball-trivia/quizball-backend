@@ -85,6 +85,8 @@ const userResponseSchema = z
     nickname: z.string().nullable(),
     country: z.string().nullable(),
     avatar_url: z.string().url().nullable(),
+    favorite_club: z.string().nullable(),
+    preferred_language: z.string().nullable(),
     onboarding_complete: z.boolean(),
     created_at: z.string().datetime(),
   })
@@ -375,6 +377,8 @@ registry.registerPath({
             nickname: z.string().min(1).max(50).optional(),
             country: z.string().min(2).max(100).optional(),
             avatar_url: z.string().url().optional(),
+            favorite_club: z.string().min(1).max(100).optional(),
+            preferred_language: z.string().min(2).max(10).optional(),
           }),
         },
       },

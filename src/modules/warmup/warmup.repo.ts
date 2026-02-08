@@ -59,63 +59,62 @@ export const warmupRepo = {
     score: number
   ): Promise<{
     playerBests: Record<string, number>;
+    playerOldBests: Record<string, number | null>;
     pairBest: number;
-    isNewPlayerBest: Record<string, boolean>;
-    isNewPairBest: boolean;
+    pairOldBest: number | null;
   }> {
-    const playerBests: Record<string, number> = {};
-    const isNewPlayerBest: Record<string, boolean> = {};
+    return sql.begin(async (tx) => {
+      const playerBests: Record<string, number> = {};
+      const playerOldBests: Record<string, number | null> = {};
 
-    // UPSERT both player bests
-    for (const userId of userIds) {
-      const [row] = await sql<(WarmupPlayerBestRow & { old_best_score: number | null })[]>`
-        WITH old_record AS (
-          SELECT best_score AS old_best_score
-          FROM warmup_player_bests
-          WHERE user_id = ${userId}::uuid
-        )
-        INSERT INTO warmup_player_bests (user_id, best_score, total_games, updated_at)
-        VALUES (${userId}::uuid, ${score}, 1, now())
-        ON CONFLICT (user_id) DO UPDATE SET
-          best_score = GREATEST(warmup_player_bests.best_score, ${score}),
-          total_games = warmup_player_bests.total_games + 1,
-          updated_at = now()
-        RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score
-      `;
-      playerBests[userId] = row.best_score;
-      // New best if first game (old_best_score is null) or current score strictly exceeds old best
-      isNewPlayerBest[userId] = row.old_best_score === null || score > row.old_best_score;
-    }
+      // UPSERT both player bests
+      for (const userId of userIds) {
+        const [row] = await tx.unsafe<(WarmupPlayerBestRow & { old_best_score: number | null })[]>(
+          `WITH old_record AS (
+             SELECT best_score AS old_best_score
+             FROM warmup_player_bests
+             WHERE user_id = $1::uuid
+           )
+           INSERT INTO warmup_player_bests (user_id, best_score, total_games, updated_at)
+           VALUES ($1::uuid, $2, 1, now())
+           ON CONFLICT (user_id) DO UPDATE SET
+             best_score = GREATEST(warmup_player_bests.best_score, $2),
+             total_games = warmup_player_bests.total_games + 1,
+             updated_at = now()
+           RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score`,
+          [userId, score]
+        );
+        playerBests[userId] = row.best_score;
+        playerOldBests[userId] = row.old_best_score;
+      }
 
-    // UPSERT pair best with JS-sorted canonicalization
-    // Use a CTE to capture the old best_score before the update
-    const [a, b] = sortPair(userIds[0], userIds[1]);
-    const [pairRow] = await sql<(WarmupPairBestRow & { old_best_score: number | null })[]>`
-      WITH old_record AS (
-        SELECT best_score AS old_best_score
-        FROM warmup_pair_bests
-        WHERE user_a_id = ${a}::uuid AND user_b_id = ${b}::uuid
-      )
-      INSERT INTO warmup_pair_bests (user_a_id, user_b_id, best_score, total_games, updated_at)
-      VALUES (${a}::uuid, ${b}::uuid, ${score}, 1, now())
-      ON CONFLICT (user_a_id, user_b_id) DO UPDATE SET
-        best_score = GREATEST(warmup_pair_bests.best_score, ${score}),
-        total_games = warmup_pair_bests.total_games + 1,
-        updated_at = now()
-      RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score
-    `;
+      // UPSERT pair best with JS-sorted canonicalization
+      // Use a CTE to capture the old best_score before the update
+      const [a, b] = sortPair(userIds[0], userIds[1]);
+      const [pairRow] = await tx.unsafe<(
+        WarmupPairBestRow & { old_best_score: number | null }
+      )[]>(
+        `WITH old_record AS (
+           SELECT best_score AS old_best_score
+           FROM warmup_pair_bests
+           WHERE user_a_id = $1::uuid AND user_b_id = $2::uuid
+         )
+         INSERT INTO warmup_pair_bests (user_a_id, user_b_id, best_score, total_games, updated_at)
+         VALUES ($1::uuid, $2::uuid, $3, 1, now())
+         ON CONFLICT (user_a_id, user_b_id) DO UPDATE SET
+           best_score = GREATEST(warmup_pair_bests.best_score, $3),
+           total_games = warmup_pair_bests.total_games + 1,
+           updated_at = now()
+         RETURNING *, (SELECT old_best_score FROM old_record) AS old_best_score`,
+        [a, b, score]
+      );
 
-    // isNewPairBest is true if:
-    // 1. First game for this pair (old_best_score is null)
-    // 2. Current score strictly exceeds the previous best (score > old_best_score)
-    const isNewPairBest =
-      pairRow.old_best_score === null || score > pairRow.old_best_score;
-
-    return {
-      playerBests,
-      pairBest: pairRow.best_score,
-      isNewPlayerBest,
-      isNewPairBest,
-    };
+      return {
+        playerBests,
+        playerOldBests,
+        pairBest: pairRow.best_score,
+        pairOldBest: pairRow.old_best_score,
+      };
+    });
   },
 };

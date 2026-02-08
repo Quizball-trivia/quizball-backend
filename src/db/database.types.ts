@@ -209,9 +209,11 @@ export type Database = {
           country: string | null
           created_at: string
           email: string | null
+          favorite_club: string | null
           id: string
           nickname: string | null
           onboarding_complete: boolean
+          preferred_language: string | null
           role: Role
           updated_at: string
         }
@@ -220,9 +222,11 @@ export type Database = {
           country?: string | null
           created_at?: string
           email?: string | null
+          favorite_club?: string | null
           id: string
           nickname?: string | null
           onboarding_complete: boolean
+          preferred_language?: string | null
           role?: Role
           updated_at?: string
         }
@@ -231,9 +235,11 @@ export type Database = {
           country?: string | null
           created_at?: string
           email?: string | null
+          favorite_club?: string | null
           id?: string
           nickname?: string | null
           onboarding_complete?: boolean
+          preferred_language?: string | null
           role?: Role
           updated_at?: string
         }

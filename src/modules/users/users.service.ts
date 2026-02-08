@@ -96,7 +96,7 @@ export const usersService = {
    */
   async updateProfile(
     id: string,
-    data: Pick<UpdateUserData, 'nickname' | 'country' | 'avatarUrl'>
+    data: Pick<UpdateUserData, 'nickname' | 'country' | 'avatarUrl' | 'favoriteClub' | 'preferredLanguage'>
   ): Promise<User> {
     const user = await usersRepo.update(id, data);
 

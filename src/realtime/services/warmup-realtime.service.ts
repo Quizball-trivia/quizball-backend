@@ -181,25 +181,37 @@ export const warmupRealtimeService = {
       state.active = false;
       await saveState(lobbyId, state);
 
-      let scoreResult;
+      let scoreResult: Awaited<ReturnType<typeof warmupRepo.saveScore>>;
+      let isNewPlayerBest: Record<string, boolean>;
+      let isNewPairBest: boolean;
       try {
         scoreResult = await warmupRepo.saveScore(state.memberIds, state.bounceCount);
+        isNewPlayerBest = Object.fromEntries(
+          state.memberIds.map((id) => {
+            const oldBest = scoreResult.playerOldBests[id];
+            return [id, oldBest === null || state.bounceCount > oldBest];
+          })
+        );
+        isNewPairBest =
+          scoreResult.pairOldBest === null || state.bounceCount > scoreResult.pairOldBest;
       } catch (error) {
         logger.warn({ error, lobbyId, score: state.bounceCount }, 'Failed to save warmup score');
         scoreResult = {
           playerBests: Object.fromEntries(state.memberIds.map((id) => [id, state.bounceCount])),
+          playerOldBests: Object.fromEntries(state.memberIds.map((id) => [id, null])),
           pairBest: state.bounceCount,
-          isNewPlayerBest: Object.fromEntries(state.memberIds.map((id) => [id, false])),
-          isNewPairBest: false,
+          pairOldBest: null,
         };
+        isNewPlayerBest = Object.fromEntries(state.memberIds.map((id) => [id, false]));
+        isNewPairBest = false;
       }
 
       io.to(`lobby:${lobbyId}`).emit('warmup:over', {
         finalScore: state.bounceCount,
         playerBests: scoreResult.playerBests,
         pairBest: scoreResult.pairBest,
-        isNewPlayerBest: scoreResult.isNewPlayerBest,
-        isNewPairBest: scoreResult.isNewPairBest,
+        isNewPlayerBest,
+        isNewPairBest,
       });
 
       // Clean up state key

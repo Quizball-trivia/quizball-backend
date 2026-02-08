@@ -30,6 +30,8 @@ export const usersController = {
       nickname: data.nickname,
       country: data.country,
       avatarUrl: data.avatar_url,
+      favoriteClub: data.favorite_club,
+      preferredLanguage: data.preferred_language,
     });
 
     res.json(toUserResponse(updatedUser));

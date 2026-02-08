@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 import { registerRankedHandlers } from '../../src/realtime/handlers/ranked.handler.js';
+import { AppError } from '../../src/core/errors.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
@@ -54,7 +55,7 @@ class FakeRedis {
       hash.set(fieldOrObject, value ?? '');
       return 1;
     }
-    Object.entries(fieldOrObject).forEach(([field, v]) => hash.set(field, String(v)));
+    Object.entries(fieldOrObject).forEach(([field, v]) => { hash.set(field, String(v)); });
     return 1;
   }
 
@@ -533,7 +534,7 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 function waitForEvent<T = unknown>(socket: TestSocket, eventName: string, timeoutMs = 2500): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error(`Timed out waiting for ${eventName}`));
+      reject(new AppError(`Timed out waiting for ${eventName}`, { code: 'TIMED_OUT' }));
     }, timeoutMs);
 
     socket.onceOutbound(eventName, (payload: unknown) => {

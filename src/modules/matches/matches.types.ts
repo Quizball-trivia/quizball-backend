@@ -61,3 +61,8 @@ export interface MatchQuestionWithCategory {
   category_name: Record<string, string>;
   category_icon: string | null;
 }
+
+export interface MatchQuestionTimingRow {
+  shown_at: string | null;
+  deadline_at: string | null;
+}

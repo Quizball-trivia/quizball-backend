@@ -20,7 +20,7 @@ const VALID_PAYLOAD_CONDITIONS = `
     WHERE jsonb_typeof(opt) <> 'object'
        OR NOT (opt ? 'id')
        OR jsonb_typeof(opt->'id') <> 'string'
-       OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
        OR NOT (opt ? 'text')
        OR jsonb_typeof(opt->'text') <> 'object'
        OR NOT (opt ? 'is_correct')

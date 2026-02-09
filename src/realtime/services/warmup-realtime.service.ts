@@ -166,17 +166,36 @@ export const warmupRealtimeService = {
 
   async handleDropped(io: QuizballServer, socket: QuizballSocket, _payload: WarmupDroppedInput): Promise<void> {
     const lobbyId = socket.data.lobbyId;
-    if (!lobbyId) return;
+    const userId = socket.data.user.id;
+
+    if (!lobbyId) {
+      logger.warn({ userId }, 'Warmup dropped: no lobbyId');
+      return;
+    }
 
     const lock = await acquireLock(lockKey(lobbyId), LOCK_TTL_MS);
-    if (!lock.acquired || !lock.token) return;
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ lobbyId, userId }, 'Warmup dropped: lock not acquired');
+      return;
+    }
 
     try {
       const state = await getState(lobbyId);
-      if (!state || !state.active) return;
+      if (!state) {
+        logger.warn({ lobbyId, userId }, 'Warmup dropped: no state found');
+        return;
+      }
+      if (!state.active) {
+        logger.debug({ lobbyId, userId }, 'Warmup dropped: game already inactive');
+        return;
+      }
 
       // Drop guard: ignore if too soon after last tap
-      if (Date.now() - state.lastTapAt < MIN_DROP_MS) return;
+      const timeSinceLastTap = Date.now() - state.lastTapAt;
+      if (timeSinceLastTap < MIN_DROP_MS) {
+        logger.debug({ lobbyId, userId, timeSinceLastTap, MIN_DROP_MS }, 'Warmup dropped: too soon after last tap');
+        return;
+      }
 
       state.active = false;
       await saveState(lobbyId, state);

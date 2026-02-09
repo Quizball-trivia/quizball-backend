@@ -62,8 +62,8 @@ export const usersRepo = {
   ): Promise<User> {
     return sql.begin(async (tx) => {
       const result = await tx.unsafe<User[]>(
-        `INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, false)
+        `INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, false, false)
          RETURNING *`,
         [
           userData.email ?? null,

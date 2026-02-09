@@ -430,7 +430,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
     const fixedNow = 1_700_000_010_000;
-    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
 
     getMatchQuestionTimingMock.mockResolvedValue({
       shown_at: new Date(fixedNow - 3000).toISOString(),
@@ -455,5 +455,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       }),
       'Match answer timing discrepancy detected'
     );
+
+    nowSpy.mockRestore();
   });
 });

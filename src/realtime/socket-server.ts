@@ -20,6 +20,50 @@ import { userSessionGuardService } from './services/user-session-guard.service.j
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
 
+const ONLINE_COUNT_DEBOUNCE_MS = 250;
+const ONLINE_COUNT_REFRESH_MS = 10000;
+
+let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
+let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
+let onlineCountInFlight = false;
+
+async function computeOnlineUserCount(io: QuizballServer): Promise<number> {
+  const sockets = await io.fetchSockets();
+  const onlineUsers = new Set<string>();
+  for (const socket of sockets) {
+    const userId = socket.data.user?.id;
+    if (userId) onlineUsers.add(userId);
+  }
+  return onlineUsers.size;
+}
+
+async function emitOnlineCount(io: QuizballServer, socket?: QuizballSocket): Promise<void> {
+  if (onlineCountInFlight) return;
+  onlineCountInFlight = true;
+  try {
+    const onlineUsers = await computeOnlineUserCount(io);
+    if (socket) {
+      socket.emit('presence:online_count', { onlineUsers });
+      return;
+    }
+    io.emit('presence:online_count', { onlineUsers });
+  } catch (error) {
+    logger.warn({ error }, 'Failed to emit online user count');
+  } finally {
+    onlineCountInFlight = false;
+  }
+}
+
+function scheduleOnlineCountBroadcast(io: QuizballServer): void {
+  if (onlineCountDebounceTimer) {
+    clearTimeout(onlineCountDebounceTimer);
+  }
+  onlineCountDebounceTimer = setTimeout(() => {
+    onlineCountDebounceTimer = null;
+    void emitOnlineCount(io);
+  }, ONLINE_COUNT_DEBOUNCE_MS);
+}
+
 export async function initSocketServer(httpServer: HttpServer): Promise<QuizballServer> {
   const io: QuizballServer = new Server(httpServer, {
     cors: {
@@ -42,6 +86,14 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.adapter(createAdapter(pubClient, subClient));
   rankedMatchmakingService.start(io);
 
+  if (onlineCountRefreshTimer) {
+    clearInterval(onlineCountRefreshTimer);
+  }
+  onlineCountRefreshTimer = setInterval(() => {
+    void emitOnlineCount(io);
+  }, ONLINE_COUNT_REFRESH_MS);
+  onlineCountRefreshTimer.unref();
+
   io.use(socketAuthMiddleware);
 
   io.on('connection', async (socket: QuizballSocket) => {
@@ -61,12 +113,15 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);
       void rankedMatchmakingService.handleSocketDisconnect(io, socket);
+      scheduleOnlineCountBroadcast(io);
     });
 
     logger.info(
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
       'Socket connected'
     );
+    void emitOnlineCount(io, socket);
+    scheduleOnlineCountBroadcast(io);
 
     let lockAcquired = false;
     try {

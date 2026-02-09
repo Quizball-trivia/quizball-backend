@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { MCQ_VALIDATION_CONDITIONS } from '../../db/sql-fragments.js';
 import { config } from '../../core/config.js';
 import type { Category, I18nField, Json } from '../../db/types.js';
 
@@ -60,32 +61,7 @@ export const categoriesRepo = {
               FROM questions q
               JOIN question_payloads qp ON qp.question_id = q.id
               WHERE q.category_id = categories.id
-                AND q.status = 'published'
-                AND q.type = 'mcq_single'
-                AND qp.payload ? 'options'
-                AND jsonb_typeof(qp.payload->'options') = 'array'
-                AND jsonb_array_length(qp.payload->'options') = 4
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM jsonb_array_elements(qp.payload->'options') opt
-                  WHERE jsonb_typeof(opt) <> 'object'
-                     OR NOT (opt ? 'id')
-                     OR jsonb_typeof(opt->'id') <> 'string'
-                     OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-                     OR NOT (opt ? 'text')
-                     OR jsonb_typeof(opt->'text') <> 'object'
-                     OR NOT (opt ? 'is_correct')
-                     OR (opt->>'is_correct') NOT IN ('true', 'false')
-                )
-                AND (
-                  SELECT COUNT(*)
-                  FROM jsonb_array_elements(qp.payload->'options') opt
-                  WHERE opt->>'is_correct' = 'true'
-                ) = 1
-                AND (
-                  SELECT COUNT(DISTINCT opt->>'id')
-                  FROM jsonb_array_elements(qp.payload->'options') opt
-                ) = 4
+                AND ${MCQ_VALIDATION_CONDITIONS}
             ) >= ${filter.minQuestions}
           `
         : sql``;

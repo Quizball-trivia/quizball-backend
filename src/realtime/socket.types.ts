@@ -204,6 +204,10 @@ export interface WarmupScoresPayload {
   pairBest: number;
 }
 
+export interface PresenceOnlineCountPayload {
+  onlineUsers: number;
+}
+
 export type SessionStateKind =
   | 'IDLE'
   | 'IN_QUEUE'
@@ -268,6 +272,7 @@ export interface ErrorPayload {
 
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
+  'presence:online_count': (data: PresenceOnlineCountPayload) => void;
   'session:state': (data: SessionStatePayload) => void;
   'session:blocked': (data: SessionBlockedPayload) => void;
   'lobby:state': (data: LobbyState) => void;

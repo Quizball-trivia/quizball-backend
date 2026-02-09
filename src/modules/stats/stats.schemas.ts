@@ -51,12 +51,16 @@ export const recentMatchesResponseSchema = z.object({
   items: z.array(recentMatchResponseSchema),
 });
 
+/**
+ * Statistics summary for a specific game mode.
+ * @property winRate - Win rate as a percentage (0-100), with up to 2 decimal places
+ */
 export const modeStatsSummarySchema = z.object({
   gamesPlayed: z.number().int().nonnegative(),
   wins: z.number().int().nonnegative(),
   losses: z.number().int().nonnegative(),
   draws: z.number().int().nonnegative(),
-  winRate: z.number().nonnegative(),
+  winRate: z.number().nonnegative().max(100),
 });
 
 export const statsSummaryResponseSchema = z.object({

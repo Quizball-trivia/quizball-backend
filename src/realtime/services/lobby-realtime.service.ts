@@ -292,6 +292,7 @@ export async function startRankedAiForUser(
   const aiUser = await usersRepo.create({
     nickname: aiProfile.username,
     avatarUrl: aiProfile.avatarUrl,
+    isAi: true,
   });
 
   const lobby = await lobbiesRepo.createLobby({
@@ -420,8 +421,7 @@ export const lobbyRealtimeService = {
     const newestLobby = waitingLobbies[0];
     await autoLeaveAllWaitingLobbies(io, userId, newestLobby.id);
 
-    socket.join(`lobby:${newestLobby.id}`);
-    socket.data.lobbyId = newestLobby.id;
+    await attachUserSocketsToLobby(io, userId, newestLobby.id);
     const state = await lobbiesService.buildLobbyState(newestLobby);
     socket.emit('lobby:state', state);
     logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
@@ -469,8 +469,7 @@ export const lobbyRealtimeService = {
         });
 
         await lobbiesRepo.addMember(lobby.id, userId, false);
-        socket.join(`lobby:${lobby.id}`);
-        socket.data.lobbyId = lobby.id;
+        await attachUserSocketsToLobby(io, userId, lobby.id);
 
         const redactedInvite = inviteCode ? `${inviteCode.slice(0, 2)}***` : null;
         logger.info(
@@ -594,8 +593,7 @@ export const lobbyRealtimeService = {
           if (!alreadyMember) {
             await lobbiesRepo.addMember(lobby.id, userId, false);
           }
-          socket.join(`lobby:${lobby.id}`);
-          socket.data.lobbyId = lobby.id;
+          await attachUserSocketsToLobby(io, userId, lobby.id);
 
           logger.info(
             { lobbyId: lobby.id, userId, alreadyMember },

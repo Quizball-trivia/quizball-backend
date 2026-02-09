@@ -713,6 +713,35 @@ describe('lobby realtime socket integration', () => {
     expect(store.lobbies.get(lobbyId)?.is_public).toBe(false);
   });
 
+  it('broadcasts join updates to all sockets of the host user', async () => {
+    const hostPrimary = createSocket('host-multi');
+    const hostSecondary = createSocket('host-multi');
+    const guest = createSocket('guest-multi');
+
+    const createPrimaryStatePromise = waitForEvent<{ inviteCode: string }>(hostPrimary, 'lobby:state');
+    const createSecondaryStatePromise = waitForEvent<{ inviteCode: string }>(hostSecondary, 'lobby:state');
+    await hostPrimary.trigger('lobby:create', { mode: 'friendly', isPublic: true });
+    const [createPrimaryState, createSecondaryState] = await Promise.all([
+      createPrimaryStatePromise,
+      createSecondaryStatePromise,
+    ]);
+
+    expect(createPrimaryState.inviteCode).toBeTruthy();
+    expect(createSecondaryState.inviteCode).toBe(createPrimaryState.inviteCode);
+
+    const joinPrimaryStatePromise = waitForEvent<{ members: Array<{ userId: string }> }>(hostPrimary, 'lobby:state');
+    const joinSecondaryStatePromise = waitForEvent<{ members: Array<{ userId: string }> }>(hostSecondary, 'lobby:state');
+    await guest.trigger('lobby:join_by_code', { inviteCode: createPrimaryState.inviteCode });
+    const [joinPrimaryState, joinSecondaryState] = await Promise.all([
+      joinPrimaryStatePromise,
+      joinSecondaryStatePromise,
+    ]);
+
+    const expectedMemberIds = ['guest-multi', 'host-multi'];
+    expect(joinPrimaryState.members.map((member) => member.userId).sort()).toEqual(expectedMemberIds);
+    expect(joinSecondaryState.members.map((member) => member.userId).sort()).toEqual(expectedMemberIds);
+  });
+
   it('blocks friendly start when selected categories are insufficient (manual mode)', async () => {
     const host = createSocket('host-sel');
     const guest = createSocket('guest-sel');

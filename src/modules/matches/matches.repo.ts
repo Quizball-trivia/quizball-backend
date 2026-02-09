@@ -13,21 +13,28 @@ import type {
 const VALID_PAYLOAD_CONDITIONS = `
   AND qp.payload ? 'options'
   AND jsonb_typeof(qp.payload->'options') = 'array'
-  AND jsonb_array_length(qp.payload->'options') > 0
+  AND jsonb_array_length(qp.payload->'options') = 4
   AND NOT EXISTS (
     SELECT 1
     FROM jsonb_array_elements(qp.payload->'options') opt
     WHERE jsonb_typeof(opt) <> 'object'
+       OR NOT (opt ? 'id')
+       OR jsonb_typeof(opt->'id') <> 'string'
+       OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
        OR NOT (opt ? 'text')
        OR jsonb_typeof(opt->'text') <> 'object'
        OR NOT (opt ? 'is_correct')
        OR (opt->>'is_correct') NOT IN ('true', 'false')
   )
-  AND EXISTS (
-    SELECT 1
+  AND (
+    SELECT COUNT(*)
     FROM jsonb_array_elements(qp.payload->'options') opt
     WHERE opt->>'is_correct' = 'true'
-  )
+  ) = 1
+  AND (
+    SELECT COUNT(DISTINCT opt->>'id')
+    FROM jsonb_array_elements(qp.payload->'options') opt
+  ) = 4
 `;
 
 export interface CreateMatchData {
@@ -274,11 +281,82 @@ export const matchesRepo = {
   },
 
   async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
-    await sql`
-      UPDATE matches
-      SET status = 'completed', winner_user_id = ${winnerId}, ended_at = NOW()
-      WHERE id = ${matchId}
-    `;
+    await sql.begin(async (tx) => {
+      const completedRows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at'>[]>(
+        `
+        UPDATE matches
+        SET status = 'completed', winner_user_id = $2, ended_at = NOW()
+        WHERE id = $1 AND status = 'active'
+        RETURNING id, mode, ended_at
+        `,
+        [matchId, winnerId]
+      );
+      const completedMatch = completedRows[0];
+
+      // Idempotency guard: if already completed/abandoned, skip aggregate updates.
+      if (!completedMatch) {
+        return;
+      }
+
+      const matchPlayers = await tx.unsafe<Pick<MatchPlayerRow, 'user_id'>[]>(
+        `
+        SELECT user_id
+        FROM match_players
+        WHERE match_id = $1
+        `,
+        [matchId]
+      );
+
+      for (const player of matchPlayers) {
+        const isDraw = winnerId === null;
+        const isWinner = winnerId !== null && winnerId === player.user_id;
+
+        await tx.unsafe(
+          `
+          INSERT INTO user_mode_match_stats (
+            user_id,
+            mode,
+            games_played,
+            wins,
+            losses,
+            draws,
+            last_match_at,
+            updated_at
+          )
+          VALUES (
+            $1,
+            $2,
+            1,
+            $3,
+            $4,
+            $5,
+            $6,
+            NOW()
+          )
+          ON CONFLICT (user_id, mode) DO UPDATE
+          SET
+            games_played = user_mode_match_stats.games_played + 1,
+            wins = user_mode_match_stats.wins + EXCLUDED.wins,
+            losses = user_mode_match_stats.losses + EXCLUDED.losses,
+            draws = user_mode_match_stats.draws + EXCLUDED.draws,
+            last_match_at = COALESCE(
+              GREATEST(user_mode_match_stats.last_match_at, EXCLUDED.last_match_at),
+              EXCLUDED.last_match_at,
+              user_mode_match_stats.last_match_at
+            ),
+            updated_at = NOW()
+          `,
+          [
+            player.user_id,
+            completedMatch.mode,
+            isWinner ? 1 : 0,
+            !isDraw && !isWinner ? 1 : 0,
+            isDraw ? 1 : 0,
+            completedMatch.ended_at,
+          ]
+        );
+      }
+    });
   },
 
   async updatePlayerAvgTime(matchId: string, userId: string, avgTimeMs: number | null): Promise<void> {

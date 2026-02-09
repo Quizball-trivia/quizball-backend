@@ -6,6 +6,7 @@ export interface CreateUserData {
   nickname?: string | null;
   country?: string | null;
   avatarUrl?: string | null;
+  isAi?: boolean;
 }
 
 export interface CreateIdentityData {
@@ -30,8 +31,8 @@ export const usersRepo = {
     avatarUrl?: string | null;
   }): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
-      VALUES (${data.id}, null, ${data.nickname}, null, ${data.avatarUrl ?? null}, false)
+      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
+      VALUES (${data.id}, null, ${data.nickname}, null, ${data.avatarUrl ?? null}, false, false)
       ON CONFLICT (id)
       DO UPDATE SET
         nickname = EXCLUDED.nickname,
@@ -44,8 +45,8 @@ export const usersRepo = {
 
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, false)
+      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, false, ${data.isAi ?? false})
       RETURNING *
     `;
     return user;

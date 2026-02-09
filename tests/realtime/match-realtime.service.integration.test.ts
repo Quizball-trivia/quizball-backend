@@ -397,7 +397,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
     const fixedNow = 1_700_000_000_000;
-    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
 
     getMatchQuestionTimingMock.mockResolvedValue({
       shown_at: new Date(fixedNow - 2400).toISOString(),
@@ -420,6 +420,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
         pointsEarned: 800,
       })
     );
+
+    dateNowSpy.mockRestore();
   });
 
   it('S23: logs discrepancy when client time differs from server time beyond tolerance', async () => {

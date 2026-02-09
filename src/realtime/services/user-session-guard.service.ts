@@ -12,6 +12,8 @@ import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
+const SESSION_LOCK_WAIT_MS = 1200;
+const SESSION_LOCK_RETRY_INTERVAL_MS = 75;
 const RANKED_QUEUE_KEY = 'ranked:mm:queue';
 const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const RANKED_USER_MAP_KEY = 'ranked:mm:user';
@@ -258,15 +260,34 @@ async function cleanupOpenLobbies(
 }
 
 export const userSessionGuardService = {
-  async withUserSessionLock<T>(userId: string, work: () => Promise<T>): Promise<T | null> {
-    const lock = await acquireLock(`lock:user:session:${userId}`, SESSION_LOCK_TTL_MS);
-    if (!lock.acquired || !lock.token) {
-      return null;
-    }
-    try {
-      return await work();
-    } finally {
-      await releaseLock(`lock:user:session:${userId}`, lock.token);
+  async withUserSessionLock<T>(
+    userId: string,
+    work: () => Promise<T>,
+    options?: { waitMs?: number }
+  ): Promise<T | null> {
+    const lockKey = `lock:user:session:${userId}`;
+    const waitMs = Math.max(0, options?.waitMs ?? 0);
+    const deadlineMs = Date.now() + waitMs;
+
+    while (true) {
+      const lock = await acquireLock(lockKey, SESSION_LOCK_TTL_MS);
+      if (lock.acquired && lock.token) {
+        try {
+          return await work();
+        } finally {
+          await releaseLock(lockKey, lock.token);
+        }
+      }
+
+      if (Date.now() >= deadlineMs) {
+        return null;
+      }
+
+      const remainingMs = deadlineMs - Date.now();
+      const sleepMs = Math.min(SESSION_LOCK_RETRY_INTERVAL_MS, remainingMs);
+      if (sleepMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      }
     }
   },
 
@@ -326,7 +347,9 @@ export const userSessionGuardService = {
     }
   ): Promise<boolean> {
     const userId = socket.data.user.id;
-    const locked = await this.withUserSessionLock(userId, work);
+    const locked = await this.withUserSessionLock(userId, work, {
+      waitMs: SESSION_LOCK_WAIT_MS,
+    });
     if (locked !== null) {
       return true;
     }

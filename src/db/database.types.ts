@@ -211,6 +211,7 @@ export type Database = {
           email: string | null
           favorite_club: string | null
           id: string
+          is_ai: boolean
           nickname: string | null
           onboarding_complete: boolean
           preferred_language: string | null
@@ -224,6 +225,7 @@ export type Database = {
           email?: string | null
           favorite_club?: string | null
           id: string
+          is_ai?: boolean
           nickname?: string | null
           onboarding_complete: boolean
           preferred_language?: string | null
@@ -237,6 +239,7 @@ export type Database = {
           email?: string | null
           favorite_club?: string | null
           id?: string
+          is_ai?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
           preferred_language?: string | null

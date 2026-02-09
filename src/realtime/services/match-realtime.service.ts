@@ -222,11 +222,11 @@ function calculatePoints(isCorrect: boolean, timeMs: number): number {
   if (!isCorrect) return 0;
   const clamped = Math.max(0, Math.min(timeMs, QUESTION_TIME_MS));
   const remainingMs = Math.max(0, QUESTION_TIME_MS - clamped);
-  // Convert to seconds and multiply by 100
-  // Answer instantly (10s left) = 1000 points
-  // Answer at 7s left = 700 points
+  // Convert to seconds and multiply by 10
+  // Answer instantly (10s left) = 100 points
+  // Answer at 7s left = 70 points
   const remainingSeconds = Math.ceil(remainingMs / 1000);
-  return remainingSeconds * 100;
+  return remainingSeconds * 10;
 }
 
 function toAuthoritativeTimeMs(questionTiming: {
@@ -352,7 +352,7 @@ export const matchRealtimeService = {
 
         const winnerId = roster.find((player) => player.user_id !== userId)?.user_id ?? null;
         if (winnerId) {
-          const fullPoints = Math.floor((QUESTION_TIME_MS / 10) * activeMatch.total_questions);
+          const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
           const fullCorrectAnswers = activeMatch.total_questions;
           const winnerPlayer = roster.find((player) => player.user_id === winnerId);
           const currentPoints = winnerPlayer?.total_points ?? 0;
@@ -652,7 +652,7 @@ export const matchRealtimeService = {
 
         const winnerId = roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
         if (winnerId) {
-          const fullPoints = Math.floor((QUESTION_TIME_MS / 10) * activeMatch.total_questions);
+          const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
           const fullCorrectAnswers = activeMatch.total_questions;
 
           // Fetch current player stats to compute max values (business logic in service)

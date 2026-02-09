@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { statsController, headToHeadQuerySchema } from '../../modules/stats/index.js';
+import {
+  statsController,
+  headToHeadQuerySchema,
+  recentMatchesQuerySchema,
+} from '../../modules/stats/index.js';
 
 const router = Router();
 
@@ -16,5 +20,21 @@ router.get(
   validate({ query: headToHeadQuerySchema }),
   statsController.headToHead
 );
+
+/**
+ * GET /api/v1/stats/recent-matches
+ * Get recent matches for authenticated user.
+ */
+router.get(
+  '/recent-matches',
+  validate({ query: recentMatchesQuerySchema }),
+  statsController.recentMatches
+);
+
+/**
+ * GET /api/v1/stats/summary
+ * Get aggregate match stats for authenticated user.
+ */
+router.get('/summary', statsController.summary);
 
 export const statsRoutes = router;

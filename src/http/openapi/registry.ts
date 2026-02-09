@@ -6,7 +6,13 @@ import {
 import { z } from 'zod';
 import { i18nFieldSchema as baseI18nFieldSchema } from '../schemas/shared.js';
 import { config } from '../../core/config.js';
-import { headToHeadQuerySchema, headToHeadResponseSchema } from '../../modules/stats/stats.schemas.js';
+import {
+  headToHeadQuerySchema,
+  headToHeadResponseSchema,
+  recentMatchesQuerySchema,
+  recentMatchesResponseSchema,
+  statsSummaryResponseSchema,
+} from '../../modules/stats/stats.schemas.js';
 import {
   listPublicLobbiesQuerySchema,
   listPublicLobbiesResponseSchema,
@@ -94,6 +100,8 @@ const userResponseSchema = z
 
 registry.register('UserResponse', userResponseSchema);
 registry.register('HeadToHeadResponse', headToHeadResponseSchema);
+registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
+registry.register('StatsSummaryResponse', statsSummaryResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -307,6 +315,45 @@ registry.registerPath({
     200: {
       description: 'Head-to-head summary',
       content: { 'application/json': { schema: headToHeadResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/stats/recent-matches',
+  summary: 'Get recent matches for authenticated user',
+  tags: ['Stats'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: recentMatchesQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Recent matches list',
+      content: { 'application/json': { schema: recentMatchesResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/stats/summary',
+  summary: 'Get aggregate match stats for authenticated user',
+  tags: ['Stats'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Aggregate stats summary',
+      content: { 'application/json': { schema: statsSummaryResponseSchema } },
     },
     401: {
       description: 'Authentication required',

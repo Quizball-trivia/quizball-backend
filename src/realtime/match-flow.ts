@@ -80,7 +80,7 @@ async function scheduleRankedAiAnswer(
       const timeMs = Math.min(QUESTION_TIME_MS, Math.max(0, delayMs));
       const remainingMs = Math.max(0, QUESTION_TIME_MS - timeMs);
       const remainingSeconds = Math.ceil(remainingMs / 1000);
-      const pointsEarned = isCorrect ? remainingSeconds * 100 : 0;
+      const pointsEarned = isCorrect ? remainingSeconds * 10 : 0;
 
       await matchesRepo.insertMatchAnswer({
         matchId,

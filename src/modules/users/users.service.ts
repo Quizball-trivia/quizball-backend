@@ -92,7 +92,7 @@ export const usersService = {
 
   /**
    * Update user profile.
-   * Only allows updating: nickname, country, avatarUrl
+   * Only allows updating: nickname, country, avatarUrl, favoriteClub, preferredLanguage
    */
   async updateProfile(
     id: string,

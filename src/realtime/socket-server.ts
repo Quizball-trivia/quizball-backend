@@ -22,6 +22,8 @@ export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
 
 const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
+const POST_CONNECT_RETRY_MS = 350;
+const POST_CONNECT_MAX_ATTEMPTS = 6;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
@@ -62,6 +64,87 @@ function scheduleOnlineCountBroadcast(io: QuizballServer): void {
     onlineCountDebounceTimer = null;
     void emitOnlineCount(io);
   }, ONLINE_COUNT_DEBOUNCE_MS);
+}
+
+async function runPostConnectHydration(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  attempt = 0
+): Promise<void> {
+  if (!socket.connected) return;
+
+  const userId = socket.data.user.id;
+  let lockAcquired = false;
+  try {
+    const lockResult = await userSessionGuardService.withUserSessionLock(
+      userId,
+      async () => {
+        await userSessionGuardService.prepareForConnect(io, userId);
+      },
+      { waitMs: POST_CONNECT_RETRY_MS }
+    );
+    lockAcquired = lockResult !== null;
+  } catch (error) {
+    logger.warn({ error, userId, attempt }, 'Failed to prepare session state on connect');
+  }
+
+  if (!lockAcquired) {
+    if (attempt === 0) {
+      logger.warn({ userId, socketId: socket.id }, 'Session lock busy on connect, scheduling rejoin retry');
+      try {
+        const snapshot = await userSessionGuardService.resolveState(userId);
+        userSessionGuardService.emitBlocked(socket, {
+          reason: 'TRANSITION_IN_PROGRESS',
+          message: 'Session transition in progress. State will update when ready.',
+          operation: 'connect',
+          stateSnapshot: snapshot,
+        });
+      } catch (error) {
+        logger.warn({ error, userId }, 'Failed to emit blocked state on connect');
+      }
+    }
+
+    if (attempt < POST_CONNECT_MAX_ATTEMPTS) {
+      const delayMs = POST_CONNECT_RETRY_MS * (attempt + 1);
+      setTimeout(() => {
+        void runPostConnectHydration(io, socket, attempt + 1);
+      }, delayMs);
+    } else {
+      logger.warn(
+        { userId, socketId: socket.id, attempts: attempt + 1 },
+        'Post-connect hydration exhausted retries'
+      );
+    }
+    return;
+  }
+
+  try {
+    await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+  } catch (error) {
+    logger.warn({ error, userId }, 'Failed to rejoin active match on connect');
+  }
+
+  if (!socket.data.matchId) {
+    try {
+      await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin waiting lobby on connect');
+    }
+  }
+
+  if (!socket.data.matchId) {
+    try {
+      await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to emit last match results on connect');
+    }
+  }
+
+  try {
+    await userSessionGuardService.emitState(io, userId);
+  } catch (error) {
+    logger.warn({ error, userId }, 'Failed to emit session state on connect');
+  }
 }
 
 export async function initSocketServer(httpServer: HttpServer): Promise<QuizballServer> {
@@ -122,61 +205,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     );
     void emitOnlineCount(io, socket);
     scheduleOnlineCountBroadcast(io);
-
-    let lockAcquired = false;
-    try {
-      const lockResult = await userSessionGuardService.withUserSessionLock(user.id, async () => {
-        await userSessionGuardService.prepareForConnect(io, user.id);
-      });
-      lockAcquired = lockResult !== null;
-    } catch (error) {
-      logger.warn({ error, userId: user.id }, 'Failed to prepare session state on connect');
-    }
-
-    // If lock wasn't acquired, another transition is in progress - emit blocked state and skip rejoin logic
-    if (!lockAcquired) {
-      logger.warn({ userId: user.id, socketId: socket.id }, 'Session lock busy on connect, skipping rejoin');
-      try {
-        const snapshot = await userSessionGuardService.resolveState(user.id);
-        userSessionGuardService.emitBlocked(socket, {
-          reason: 'TRANSITION_IN_PROGRESS',
-          message: 'Session transition in progress. State will update when ready.',
-          operation: 'connect',
-          stateSnapshot: snapshot,
-        });
-      } catch (error) {
-        logger.warn({ error, userId: user.id }, 'Failed to emit blocked state on connect');
-      }
-      return;
-    }
-
-    try {
-      await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
-    } catch (error) {
-      logger.warn({ error, userId: user.id }, 'Failed to rejoin active match on connect');
-    }
-
-    if (!socket.data.matchId) {
-      try {
-        await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
-      } catch (error) {
-        logger.warn({ error, userId: user.id }, 'Failed to rejoin waiting lobby on connect');
-      }
-    }
-
-    if (!socket.data.matchId) {
-      try {
-        await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
-      } catch (error) {
-        logger.warn({ error, userId: user.id }, 'Failed to emit last match results on connect');
-      }
-    }
-
-    try {
-      await userSessionGuardService.emitState(io, user.id);
-    } catch (error) {
-      logger.warn({ error, userId: user.id }, 'Failed to emit session state on connect');
-    }
+    void runPostConnectHydration(io, socket);
   });
 
   return io;

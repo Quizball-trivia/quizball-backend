@@ -26,6 +26,8 @@ const RANKED_SIM_SEARCH_MIN_MS = 3000;
 const RANKED_SIM_SEARCH_MAX_MS = 10000;
 const RANKED_SIM_FOUND_MODAL_MS = 1200;
 const RANKED_AI_KEY_TTL_SEC = 7200;
+const LOBBY_LOCK_WAIT_MS = 1200;
+const LOBBY_LOCK_RETRY_INTERVAL_MS = 75;
 
 // Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
@@ -199,6 +201,30 @@ async function autoLeaveAllWaitingLobbies(
 
   for (const lobby of waitingLobbies) {
     await autoLeaveLobby(io, lobby.id, userId);
+  }
+}
+
+async function acquireLobbyLockWithRetry(
+  lobbyId: string,
+  ttlMs = 3000,
+  waitMs = LOBBY_LOCK_WAIT_MS
+): Promise<Awaited<ReturnType<typeof acquireLock>>> {
+  const key = `lock:lobby:${lobbyId}`;
+  const deadline = Date.now() + Math.max(0, waitMs);
+
+  while (true) {
+    const lock = await acquireLock(key, ttlMs);
+    if (lock.acquired && lock.token) {
+      return lock;
+    }
+    if (Date.now() >= deadline) {
+      return { acquired: false };
+    }
+    const remainingMs = deadline - Date.now();
+    const sleepMs = Math.min(LOBBY_LOCK_RETRY_INTERVAL_MS, remainingMs);
+    if (sleepMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    }
   }
 }
 
@@ -714,9 +740,12 @@ export const lobbyRealtimeService = {
     }
 
     const lockKey = `lock:lobby:${lobbyId}`;
-    const lock = await acquireLock(lockKey, 3000);
+    const lock = await acquireLobbyLockWithRetry(lobbyId, 3000);
     if (!lock.acquired || !lock.token) {
-      logger.warn({ lobbyId }, 'Lobby settings update skipped: lock not acquired');
+      logger.warn(
+        { lobbyId, userId: socket.data.user.id, socketId: socket.id },
+        'Lobby settings update skipped: lock not acquired'
+      );
       socket.emit('error', {
         code: 'LOBBY_SETTINGS_LOCKED',
         message: 'Lobby settings update is busy. Please retry.',
@@ -780,6 +809,18 @@ export const lobbyRealtimeService = {
         }
       }
 
+      const normalizedVisibility = payload.isPublic ?? lobby.is_public;
+      const settingsUnchanged =
+        nextSettings.gameMode === currentSettings.gameMode &&
+        nextSettings.friendlyRandom === currentSettings.friendlyRandom &&
+        nextSettings.friendlyCategoryAId === currentSettings.friendlyCategoryAId &&
+        nextSettings.friendlyCategoryBId === currentSettings.friendlyCategoryBId &&
+        normalizedVisibility === lobby.is_public;
+      if (settingsUnchanged) {
+        logger.debug({ lobbyId, userId: socket.data.user.id }, 'Lobby settings update no-op');
+        return;
+      }
+
       await lobbiesRepo.updateLobbySettings(lobbyId, {
         gameMode: nextSettings.gameMode,
         friendlyRandom: nextSettings.friendlyRandom,
@@ -794,6 +835,7 @@ export const lobbyRealtimeService = {
       logger.info(
         {
           lobbyId,
+          socketId: socket.id,
           gameMode: nextSettings.gameMode,
           friendlyRandom: nextSettings.friendlyRandom,
           friendlyCategoryAId: nextSettings.friendlyCategoryAId,

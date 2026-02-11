@@ -5,9 +5,15 @@ import { acquireLock, releaseLock } from './locks.js';
 import { logger } from '../core/logger.js';
 import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
 import { getRedisClient } from './redis.js';
+import {
+  cancelPossessionQuestionTimer,
+  resolvePossessionRound,
+  sendPossessionMatchQuestion,
+} from './possession-match-flow.js';
 
 export const QUESTION_TIME_MS = 10000;
-const ROUND_RESULT_DELAY_MS = 0;
+const FRONTEND_REVEAL_MS = 2000; // Frontend shows question text before unlocking options
+const ROUND_RESULT_DELAY_MS = 1800;
 const TIMEOUT_RESOLVE_GRACE_MS = 250;
 const TIMEOUT_RESOLVE_BUFFER_MS = 50; // Small event-loop scheduling margin before timeout resolution.
 const LAST_MATCH_REPLAY_TTL_SEC = 600;
@@ -124,9 +130,11 @@ function lastMatchKey(userId: string): string {
 export function cancelMatchQuestionTimer(matchId: string, qIndex: number): void {
   const key = timerKey(matchId, qIndex);
   const timer = questionTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  questionTimers.delete(key);
+  if (timer) {
+    clearTimeout(timer);
+    questionTimers.delete(key);
+  }
+  cancelPossessionQuestionTimer(matchId, qIndex);
 }
 
 function cancelAiAnswerTimer(matchId: string, qIndex: number): void {
@@ -148,6 +156,10 @@ export async function sendMatchQuestion(
     return null;
   }
 
+  if (match.engine === 'possession_v1') {
+    return sendPossessionMatchQuestion(io, matchId, qIndex);
+  }
+
   const payload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
   if (!payload) {
     logger.warn({ matchId, qIndex }, 'Unable to build match question payload');
@@ -160,10 +172,15 @@ export async function sendMatchQuestion(
 
   const questionPayload = {
     matchId,
+    engine: 'classic' as const,
     qIndex,
     total: totalQuestions,
     question: payload.question,
     deadlineAt: deadlineAt.toISOString(),
+    phaseKind: payload.phaseKind,
+    phaseRound: payload.phaseRound,
+    shooterSeat: payload.shooterSeat,
+    attackerSeat: payload.attackerSeat,
   };
 
   logger.info({
@@ -199,7 +216,7 @@ export async function sendMatchQuestion(
     void resolveRound(io, matchId, qIndex, true).catch((error) => {
       logger.error({ error, matchId, qIndex }, 'Failed to resolve round after timeout');
     });
-  }, QUESTION_TIME_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
+  }, QUESTION_TIME_MS + FRONTEND_REVEAL_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
 
   questionTimers.set(key, timeout);
 
@@ -222,6 +239,12 @@ export async function resolveRound(
   qIndex: number,
   fromTimeout = false
 ): Promise<void> {
+  const candidateMatch = await matchesRepo.getMatch(matchId);
+  if (candidateMatch?.engine === 'possession_v1') {
+    await resolvePossessionRound(io, matchId, qIndex, fromTimeout);
+    return;
+  }
+
   const lockKey = `lock:match:${matchId}:resolve`;
   const lock = await acquireLock(lockKey, 5000);
   if (!lock.acquired || !lock.token) return;

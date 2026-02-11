@@ -24,6 +24,10 @@ const configSchema = z.object({
     .enum(['true', 'false', '1', '0', ''])
     .default('false')
     .transform((val) => val === 'true' || val === '1'),
+  POSSESSION_V1_ENABLED: z
+    .enum(['true', 'false', '1', '0', ''])
+    .default('true')
+    .transform((val) => val === 'true' || val === '1'),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

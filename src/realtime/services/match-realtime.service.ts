@@ -8,8 +8,15 @@ import type { MatchAnswerPayload } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { calculatePoints } from '../scoring.js';
 import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
+import {
+  cancelPossessionHalftimeTimer,
+  emitPossessionStateToSocket,
+  handlePossessionAnswer,
+  handlePossessionTacticSelect,
+} from '../possession-match-flow.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
 const PRESENCE_TTL_SEC = 45;
@@ -105,21 +112,38 @@ async function emitRejoinAvailable(
 
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
+  engine?: 'classic' | 'possession_v1';
   winnerId: string | null;
-  players: Record<string, { totalPoints: number; correctAnswers: number; avgTimeMs: number | null }>;
+  players: Record<string, {
+    totalPoints: number;
+    correctAnswers: number;
+    avgTimeMs: number | null;
+    goals?: number;
+    penaltyGoals?: number;
+  }>;
   durationMs: number;
   resultVersion: number;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
+  totalPointsFallbackUsed?: boolean;
 } | null> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'completed') return null;
 
   const players = await matchesRepo.listMatchPlayers(matchId);
-  const payloadPlayers: Record<string, { totalPoints: number; correctAnswers: number; avgTimeMs: number | null }> = {};
+  const payloadPlayers: Record<string, {
+    totalPoints: number;
+    correctAnswers: number;
+    avgTimeMs: number | null;
+    goals?: number;
+    penaltyGoals?: number;
+  }> = {};
   for (const player of players) {
     payloadPlayers[player.user_id] = {
       totalPoints: player.total_points,
       correctAnswers: player.correct_answers,
       avgTimeMs: player.avg_time_ms,
+      goals: player.goals,
+      penaltyGoals: player.penalty_goals,
     };
   }
 
@@ -145,12 +169,20 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     durationMs = endedAt - new Date(match.started_at).getTime();
   }
 
+  const winnerDecisionMethod =
+    match.engine === 'possession_v1'
+      ? ((match.state_payload as { winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' } | null)?.winnerDecisionMethod ?? null)
+      : undefined;
+
   return {
     matchId,
+    engine: match.engine,
     winnerId: match.winner_user_id,
     players: payloadPlayers,
     durationMs,
     resultVersion,
+    winnerDecisionMethod,
+    totalPointsFallbackUsed: winnerDecisionMethod === 'total_points_fallback',
   };
 }
 
@@ -179,9 +211,15 @@ export async function beginMatchForLobby(
 
   const memberA = members[0];
   const memberB = members[1];
+  const match = await matchesRepo.getMatch(matchId);
+  const engine = match?.engine ?? 'classic';
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat as 1 | 2]));
 
   io.to(`user:${memberA.user_id}`).emit('match:start', {
     matchId,
+    engine,
+    mySeat: seatByUserId.get(memberA.user_id) ?? undefined,
     opponent: {
       id: memberB.user_id,
       username: memberB.nickname ?? 'Player',
@@ -191,6 +229,8 @@ export async function beginMatchForLobby(
 
   io.to(`user:${memberB.user_id}`).emit('match:start', {
     matchId,
+    engine,
+    mySeat: seatByUserId.get(memberB.user_id) ?? undefined,
     opponent: {
       id: memberA.user_id,
       username: memberA.nickname ?? 'Player',
@@ -200,7 +240,6 @@ export async function beginMatchForLobby(
 
   const redis = getRedisClient();
   if (redis) {
-    const match = await matchesRepo.getMatch(matchId);
     if (match?.mode === 'ranked') {
       const aiUserId = await redis.get(rankedAiLobbyKey(lobbyId));
       if (aiUserId) {
@@ -218,16 +257,7 @@ export async function beginMatchForLobby(
   await sendMatchQuestion(io, matchId, 0);
 }
 
-function calculatePoints(isCorrect: boolean, timeMs: number): number {
-  if (!isCorrect) return 0;
-  const clamped = Math.max(0, Math.min(timeMs, QUESTION_TIME_MS));
-  const remainingMs = Math.max(0, QUESTION_TIME_MS - clamped);
-  // Convert to seconds and multiply by 10
-  // Answer instantly (10s left) = 100 points
-  // Answer at 7s left = 70 points
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  return remainingSeconds * 10;
-}
+
 
 function toAuthoritativeTimeMs(questionTiming: {
   shown_at: string | null;
@@ -258,6 +288,19 @@ export const matchRealtimeService = {
 
     socket.join(`match:${match.id}`);
     socket.data.matchId = match.id;
+
+    const opponent = await getOpponentInfo(match.id, userId);
+    const players = await matchesRepo.listMatchPlayers(match.id);
+    const mySeat = players.find((player) => player.user_id === userId)?.seat;
+    socket.emit('match:start', {
+      matchId: match.id,
+      engine: match.engine,
+      mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
+      opponent,
+    });
+    if (match.engine === 'possession_v1') {
+      await emitPossessionStateToSocket(socket, match.id);
+    }
 
     const redis = getRedisClient();
     if (redis) {
@@ -369,6 +412,7 @@ export const matchRealtimeService = {
         }
 
         cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
+        cancelPossessionHalftimeTimer(activeMatch.id);
         await matchesRepo.completeMatch(activeMatch.id, winnerId);
 
         const avgTimes = await matchesService.computeAvgTimes(activeMatch.id);
@@ -466,10 +510,16 @@ export const matchRealtimeService = {
         }
 
         const opponent = await getOpponentInfo(match.id, userId);
+        const mySeat = players.find((player) => player.user_id === userId)?.seat;
         socket.emit('match:start', {
           matchId: match.id,
+          engine: match.engine,
+          mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
           opponent,
         });
+        if (match.engine === 'possession_v1') {
+          await emitPossessionStateToSocket(socket, match.id);
+        }
 
         if (!redis) return;
 
@@ -571,6 +621,16 @@ export const matchRealtimeService = {
       nextQIndex: match.current_q_index,
     });
 
+    if (match.engine === 'possession_v1') {
+      const activeQuestion = await matchesRepo.getMatchQuestion(matchId, match.current_q_index);
+      if (activeQuestion) {
+        await resolveRound(io, matchId, match.current_q_index, true);
+        return;
+      }
+      await sendMatchQuestion(io, matchId, match.current_q_index);
+      return;
+    }
+
     await resolveRound(io, matchId, match.current_q_index, true);
   },
 
@@ -602,6 +662,7 @@ export const matchRealtimeService = {
     await redis.set(matchPauseKey(matchId), '1', { EX: PRESENCE_TTL_SEC });
 
     cancelMatchQuestionTimer(matchId, match.current_q_index);
+    cancelPossessionHalftimeTimer(matchId);
 
     const players = await matchesRepo.listMatchPlayers(matchId);
     const opponent = players.find((player) => player.user_id !== userId);
@@ -636,6 +697,7 @@ export const matchRealtimeService = {
 
         if (disconnected.length === roster.length) {
           await matchesService.abandonMatch(matchId);
+          cancelPossessionHalftimeTimer(matchId);
           io.to(`match:${matchId}`).emit('error', {
             code: 'MATCH_ABANDONED',
             message: 'Match abandoned due to both players disconnecting',
@@ -673,6 +735,7 @@ export const matchRealtimeService = {
           );
         }
         await matchesRepo.completeMatch(matchId, winnerId);
+        cancelPossessionHalftimeTimer(matchId);
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);
         for (const player of roster) {
@@ -701,6 +764,31 @@ export const matchRealtimeService = {
         await redis.del(matchPauseKey(matchId));
       }
     }, MATCH_DISCONNECT_GRACE_MS);
+  },
+
+  async handleTacticSelect(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    payload: { matchId: string; tactic: 'press-high' | 'play-safe' | 'all-in' }
+  ): Promise<void> {
+    const match = await matchesRepo.getMatch(payload.matchId);
+    if (!match || match.status !== 'active') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ACTIVE',
+        message: 'No active match found for tactic selection.',
+      });
+      return;
+    }
+
+    if (match.engine !== 'possession_v1') {
+      socket.emit('error', {
+        code: 'MATCH_INVALID_PHASE',
+        message: 'Tactic selection is only available in possession matches.',
+      });
+      return;
+    }
+
+    await handlePossessionTacticSelect(io, socket, payload);
   },
 
   async handleAnswer(
@@ -734,6 +822,11 @@ export const matchRealtimeService = {
         });
         return;
       }
+    }
+
+    if (match.engine === 'possession_v1') {
+      await handlePossessionAnswer(io, socket, payload);
+      return;
     }
 
     const existing = await matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id);
@@ -779,7 +872,7 @@ export const matchRealtimeService = {
       }
     }
 
-    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs);
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
 
     try {
       await matchesRepo.insertMatchAnswer({

@@ -5,12 +5,56 @@ import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import type { GameQuestionDTO } from '../../realtime/socket.types.js';
 import type {
+  MatchEngine,
   MatchRow,
   MatchQuestionWithCategory,
 } from './matches.types.js';
+import { config } from '../../core/config.js';
 
-const TOTAL_QUESTIONS = 10;
-const QUESTIONS_PER_CATEGORY = 5;
+const CLASSIC_TOTAL_QUESTIONS = 10;
+const CLASSIC_QUESTIONS_PER_CATEGORY = 5;
+export const POSSESSION_QUESTIONS_PER_HALF = 6;
+export const POSSESSION_TOTAL_NORMAL_QUESTIONS = POSSESSION_QUESTIONS_PER_HALF * 2;
+
+type PossessionTactic = 'press-high' | 'play-safe' | 'all-in';
+
+export interface PossessionStatePayload {
+  version: 1;
+  phase: 'NORMAL_PLAY' | 'SHOT_ON_GOAL' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
+  half: 1 | 2;
+  sharedPossession: number;
+  seatMomentum: { seat1: number; seat2: number };
+  kickOffSeat: 1 | 2;
+  goals: { seat1: number; seat2: number };
+  penaltyGoals: { seat1: number; seat2: number };
+  normalQuestionsPerHalf: number;
+  normalQuestionsAnsweredInHalf: number;
+  normalQuestionsAnsweredTotal: number;
+  shot: {
+    attackerSeat: 1 | 2 | null;
+  };
+  halftime: {
+    deadlineAt: string | null;
+    tactics: {
+      seat1: PossessionTactic | null;
+      seat2: PossessionTactic | null;
+    };
+  };
+  penalty: {
+    round: number;
+    shooterSeat: 1 | 2;
+    suddenDeath: boolean;
+    kicksTaken: { seat1: number; seat2: number };
+  };
+  currentQuestion: {
+    qIndex: number;
+    phaseKind: 'normal' | 'shot' | 'penalty';
+    phaseRound: number;
+    shooterSeat: 1 | 2 | null;
+    attackerSeat: 1 | 2 | null;
+  } | null;
+  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
+}
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
@@ -32,6 +76,47 @@ export interface MatchCreationResult {
   playerIds: [string, string];
 }
 
+function resolveMatchEngine(): MatchEngine {
+  return config.POSSESSION_V1_ENABLED ? 'possession_v1' : 'classic';
+}
+
+export function createInitialPossessionState(): PossessionStatePayload {
+  return {
+    version: 1,
+    phase: 'NORMAL_PLAY',
+    half: 1,
+    sharedPossession: 50,
+    seatMomentum: { seat1: 0, seat2: 0 },
+    kickOffSeat: 1,
+    goals: { seat1: 0, seat2: 0 },
+    penaltyGoals: { seat1: 0, seat2: 0 },
+    normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
+    normalQuestionsAnsweredInHalf: 0,
+    normalQuestionsAnsweredTotal: 0,
+    shot: {
+      attackerSeat: null,
+    },
+    halftime: {
+      deadlineAt: null,
+      tactics: {
+        seat1: null,
+        seat2: null,
+      },
+    },
+    penalty: {
+      round: 0,
+      shooterSeat: 1,
+      suddenDeath: false,
+      kicksTaken: {
+        seat1: 0,
+        seat2: 0,
+      },
+    },
+    currentQuestion: null,
+    winnerDecisionMethod: null,
+  };
+}
+
 export const matchesService = {
   async createMatchFromLobby(params: {
     lobbyId: string;
@@ -51,6 +136,7 @@ export const matchesService = {
     }
 
     const [categoryAId, categoryBId] = params.categoryIds;
+    const engine = resolveMatchEngine();
 
     const hostIndex = memberIds.indexOf(params.hostUserId);
     let seat1: string;
@@ -82,15 +168,20 @@ export const matchesService = {
       seat2 = memberIds[1];
     }
 
-    const selections = await this.pickQuestions([categoryAId, categoryBId]);
-    const shuffled = shuffle(selections);
+    const shouldPreselectClassicQuestions = engine === 'classic';
+    const selections = shouldPreselectClassicQuestions
+      ? await this.pickQuestions([categoryAId, categoryBId])
+      : [];
+    const shuffled = shouldPreselectClassicQuestions ? shuffle(selections) : [];
 
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
+      engine,
       categoryAId,
       categoryBId,
-      totalQuestions: TOTAL_QUESTIONS,
+      totalQuestions: engine === 'classic' ? CLASSIC_TOTAL_QUESTIONS : POSSESSION_TOTAL_NORMAL_QUESTIONS,
+      statePayload: engine === 'possession_v1' ? createInitialPossessionState() : null,
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [
@@ -98,15 +189,17 @@ export const matchesService = {
       { userId: seat2, seat: 2 },
     ]);
 
-    await matchesRepo.insertMatchQuestions(
-      match.id,
-      shuffled.map((q, index) => ({
-        qIndex: index,
-        questionId: q.questionId,
-        categoryId: q.categoryId,
-        correctIndex: q.correctIndex,
-      }))
-    );
+    if (shouldPreselectClassicQuestions) {
+      await matchesRepo.insertMatchQuestions(
+        match.id,
+        shuffled.map((q, index) => ({
+          qIndex: index,
+          questionId: q.questionId,
+          categoryId: q.categoryId,
+          correctIndex: q.correctIndex,
+        }))
+      );
+    }
 
     return {
       match,
@@ -120,9 +213,9 @@ export const matchesService = {
     for (const categoryId of categoryIds) {
       const rows = await matchesRepo.getRandomQuestionsForCategory(
         categoryId,
-        QUESTIONS_PER_CATEGORY * 3
+        CLASSIC_QUESTIONS_PER_CATEGORY * 3
       );
-      if (rows.length < QUESTIONS_PER_CATEGORY) {
+      if (rows.length < CLASSIC_QUESTIONS_PER_CATEGORY) {
         throw new Error('Not enough questions to start match');
       }
 
@@ -141,18 +234,18 @@ export const matchesService = {
           categoryId: row.category_id,
           correctIndex,
         });
-        if (categorySelections.length >= QUESTIONS_PER_CATEGORY) {
+        if (categorySelections.length >= CLASSIC_QUESTIONS_PER_CATEGORY) {
           break;
         }
       }
 
-      if (categorySelections.length < QUESTIONS_PER_CATEGORY) {
+      if (categorySelections.length < CLASSIC_QUESTIONS_PER_CATEGORY) {
         throw new Error('Not enough valid questions to start match');
       }
       selections.push(...categorySelections);
     }
 
-    if (selections.length < TOTAL_QUESTIONS) {
+    if (selections.length < CLASSIC_TOTAL_QUESTIONS) {
       throw new Error('Not enough valid questions to start match');
     }
 
@@ -183,6 +276,10 @@ export const matchesService = {
     question: GameQuestionDTO;
     correctIndex: number;
     categoryId: string;
+    phaseKind: 'normal' | 'shot' | 'penalty';
+    phaseRound: number | null;
+    shooterSeat: 1 | 2 | null;
+    attackerSeat: 1 | 2 | null;
   } | null> {
     const row: MatchQuestionWithCategory | null = await matchesRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
@@ -228,6 +325,10 @@ export const matchesService = {
       },
       correctIndex: row.correct_index,
       categoryId: row.category_id,
+      phaseKind: row.phase_kind,
+      phaseRound: row.phase_round,
+      shooterSeat: row.shooter_seat as 1 | 2 | null,
+      attackerSeat: row.attacker_seat as 1 | 2 | null,
     };
   },
 

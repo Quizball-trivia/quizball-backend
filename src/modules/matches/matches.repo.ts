@@ -1,12 +1,15 @@
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import type {
+  MatchEngine,
   MatchRow,
   MatchPlayerRow,
   MatchQuestionRow,
   MatchAnswerRow,
   MatchQuestionWithCategory,
   MatchQuestionTimingRow,
+  MatchQuestionPhaseKind,
 } from './matches.types.js';
 
 // Reusable SQL fragment for validating question payload structure
@@ -40,20 +43,23 @@ const VALID_PAYLOAD_CONDITIONS = `
 export interface CreateMatchData {
   lobbyId: string | null;
   mode: 'friendly' | 'ranked';
+  engine?: MatchEngine;
   categoryAId: string;
   categoryBId: string;
   totalQuestions: number;
+  statePayload?: unknown;
 }
 
 export const matchesRepo = {
   async createMatch(data: CreateMatchData): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, started_at
+        id, lobby_id, mode, engine, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, started_at
       )
       VALUES (
-        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, 'active',
-        ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions}, NOW()
+        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, ${data.engine ?? 'classic'}, 'active',
+        ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions},
+        ${sql.json(data.statePayload as Json ?? null)}, NOW()
       )
       RETURNING *
     `;
@@ -85,15 +91,68 @@ export const matchesRepo = {
     return row?.total_points ?? 0;
   },
 
-  async insertMatchQuestions(matchId: string, questions: Array<{ qIndex: number; questionId: string; categoryId: string; correctIndex: number }>): Promise<MatchQuestionRow[]> {
+  async insertMatchQuestions(matchId: string, questions: Array<{
+    qIndex: number;
+    questionId: string;
+    categoryId: string;
+    correctIndex: number;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+    attackerSeat?: number | null;
+  }>): Promise<MatchQuestionRow[]> {
     if (questions.length === 0) return [];
-    const rows = questions.map((q) => [matchId, q.qIndex, q.questionId, q.categoryId, q.correctIndex]);
+    const rows = questions.map((q) => [
+      matchId,
+      q.qIndex,
+      q.questionId,
+      q.categoryId,
+      q.correctIndex,
+      q.phaseKind ?? 'normal',
+      q.phaseRound ?? null,
+      q.shooterSeat ?? null,
+      q.attackerSeat ?? null,
+    ]);
 
     return sql<MatchQuestionRow[]>`
-      INSERT INTO match_questions (match_id, q_index, question_id, category_id, correct_index)
+      INSERT INTO match_questions (
+        match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
+      )
       VALUES ${sql(rows)}
       RETURNING *
     `;
+  },
+
+  async insertMatchQuestionIfMissing(question: {
+    matchId: string;
+    qIndex: number;
+    questionId: string;
+    categoryId: string;
+    correctIndex: number;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+    attackerSeat?: number | null;
+  }): Promise<MatchQuestionRow | null> {
+    const [row] = await sql<MatchQuestionRow[]>`
+      INSERT INTO match_questions (
+        match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
+      )
+      VALUES (
+        ${question.matchId},
+        ${question.qIndex},
+        ${question.questionId},
+        ${question.categoryId},
+        ${question.correctIndex},
+        ${question.phaseKind ?? 'normal'},
+        ${question.phaseRound ?? null},
+        ${question.shooterSeat ?? null},
+        ${question.attackerSeat ?? null}
+      )
+      ON CONFLICT (match_id, q_index) DO NOTHING
+      RETURNING *
+    `;
+    return row ?? null;
   },
 
   async getRandomQuestionsForCategory(
@@ -190,9 +249,51 @@ export const matchesRepo = {
     return [...sampled, ...fallback];
   },
 
+  async getRandomQuestionForMatch(params: {
+    matchId: string;
+    categoryIds: [string, string];
+    difficulties: Array<'easy' | 'medium' | 'hard'>;
+  }): Promise<{
+    id: string;
+    prompt: Record<string, string>;
+    difficulty: string;
+    category_id: string;
+    payload: unknown;
+  } | null> {
+    const rows = await sql.unsafe<{
+      id: string;
+      prompt: Record<string, string>;
+      difficulty: string;
+      category_id: string;
+      payload: unknown;
+    }[]>(
+      `
+      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.category_id = ANY($2::uuid[])
+        AND q.difficulty = ANY($3::text[])
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
+        ${VALID_PAYLOAD_CONDITIONS}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM match_questions mq
+          WHERE mq.match_id = $1
+            AND mq.question_id = q.id
+        )
+      ORDER BY RANDOM()
+      LIMIT 1
+      `,
+      [params.matchId, params.categoryIds, params.difficulties]
+    );
+    return rows[0] ?? null;
+  },
+
   async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {
     const [row] = await sql<MatchQuestionWithCategory[]>`
       SELECT mq.question_id, mq.q_index, mq.category_id, mq.correct_index,
+             mq.phase_kind, mq.phase_round, mq.shooter_seat, mq.attacker_seat,
              q.prompt, q.difficulty, qp.payload,
              c.name as category_name, c.icon as category_icon
       FROM match_questions mq
@@ -229,15 +330,18 @@ export const matchesRepo = {
     isCorrect: boolean;
     timeMs: number;
     pointsEarned: number;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
   }): Promise<MatchAnswerRow> {
     try {
       const [row] = await sql<MatchAnswerRow[]>`
         INSERT INTO match_answers (
-          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned
+          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
         )
         VALUES (
           ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}
+          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
         )
         RETURNING *
       `;
@@ -278,6 +382,54 @@ export const matchesRepo = {
       SET current_q_index = ${qIndex}
       WHERE id = ${matchId} AND current_q_index < ${qIndex}
     `;
+  },
+
+  async setMatchStatePayload(
+    matchId: string,
+    statePayload: unknown,
+    qIndex?: number
+  ): Promise<void> {
+    const jsonPayload = sql.json(statePayload as Json ?? null);
+    if (qIndex === undefined) {
+      await sql`
+        UPDATE matches
+        SET state_payload = ${jsonPayload}
+        WHERE id = ${matchId}
+      `;
+      return;
+    }
+
+    await sql`
+      UPDATE matches
+      SET state_payload = ${jsonPayload},
+          current_q_index = GREATEST(current_q_index, ${qIndex})
+      WHERE id = ${matchId}
+    `;
+  },
+
+  async updatePlayerGoalTotals(
+    matchId: string,
+    userId: string,
+    changes: { goals?: number; penaltyGoals?: number }
+  ): Promise<MatchPlayerRow | null> {
+    const [row] = await sql<MatchPlayerRow[]>`
+      UPDATE match_players
+      SET
+        goals = goals + ${changes.goals ?? 0},
+        penalty_goals = penalty_goals + ${changes.penaltyGoals ?? 0}
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+      RETURNING *
+    `;
+    return row ?? null;
+  },
+
+  async getPlayerBySeat(matchId: string, seat: 1 | 2): Promise<MatchPlayerRow | null> {
+    const [row] = await sql<MatchPlayerRow[]>`
+      SELECT * FROM match_players
+      WHERE match_id = ${matchId} AND seat = ${seat}
+      LIMIT 1
+    `;
+    return row ?? null;
   },
 
   async completeMatch(matchId: string, winnerId: string | null): Promise<void> {

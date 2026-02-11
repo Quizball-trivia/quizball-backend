@@ -70,8 +70,8 @@ export const statsRepo = {
         m.winner_user_id,
         m.ended_at,
         m.started_at,
-        mp_self.total_points AS player_score,
-        COALESCE(mp_opp.total_points, 0) AS opponent_score,
+        (mp_self.goals + mp_self.penalty_goals) AS player_score,
+        COALESCE(mp_opp.goals + mp_opp.penalty_goals, 0) AS opponent_score,
         opp.id AS opponent_id,
         opp.nickname AS opponent_username,
         opp.avatar_url AS opponent_avatar_url,
@@ -81,7 +81,7 @@ export const statsRepo = {
         ON mp_self.match_id = m.id
        AND mp_self.user_id = ${userId}
       LEFT JOIN LATERAL (
-        SELECT mp2.user_id, mp2.total_points
+        SELECT mp2.user_id, mp2.goals, mp2.penalty_goals
         FROM match_players mp2
         WHERE mp2.match_id = m.id
           AND mp2.user_id <> ${userId}

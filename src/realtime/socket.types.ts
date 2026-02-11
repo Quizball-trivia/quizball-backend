@@ -1,6 +1,10 @@
 export type MatchMode = 'friendly' | 'ranked';
+export type MatchEngine = 'classic' | 'possession_v1';
 export type LobbyGameMode = 'friendly' | 'ranked_sim';
 export type LobbyStatus = 'waiting' | 'active' | 'closed';
+export type MatchPhase = 'NORMAL_PLAY' | 'SHOT_ON_GOAL' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
+export type MatchPhaseKind = 'normal' | 'shot' | 'penalty';
+export type TacticalCard = 'press-high' | 'play-safe' | 'all-in';
 
 export type GameStage =
   | 'idle'
@@ -70,15 +74,22 @@ export interface GameQuestionDTO {
 
 export interface MatchStartPayload {
   matchId: string;
+  engine: MatchEngine;
+  mySeat?: 1 | 2;
   opponent: OpponentInfo;
 }
 
 export interface MatchQuestionPayload {
   matchId: string;
+  engine: MatchEngine;
   qIndex: number;
   total: number;
   question: GameQuestionDTO;
   deadlineAt: string;
+  phaseKind?: MatchPhaseKind;
+  phaseRound?: number | null;
+  shooterSeat?: 1 | 2 | null;
+  attackerSeat?: 1 | 2 | null;
 }
 
 export interface MatchOpponentAnsweredPayload {
@@ -98,6 +109,9 @@ export interface MatchAnswerAckPayload {
   myTotalPoints: number;
   oppAnswered: boolean;
   pointsEarned: number;
+  phaseKind?: MatchPhaseKind;
+  phaseRound?: number | null;
+  shooterSeat?: 1 | 2 | null;
 }
 
 export interface MatchRoundResultPlayer {
@@ -113,20 +127,59 @@ export interface MatchRoundResultPayload {
   qIndex: number;
   correctIndex: number;
   players: Record<string, MatchRoundResultPlayer>;
+  phaseKind?: MatchPhaseKind;
+  phaseRound?: number | null;
+  shooterSeat?: 1 | 2 | null;
+  attackerSeat?: 1 | 2 | null;
 }
 
 export interface MatchFinalResultPlayer {
   totalPoints: number;
   correctAnswers: number;
   avgTimeMs: number | null;
+  goals?: number;
+  penaltyGoals?: number;
 }
 
 export interface MatchFinalResultsPayload {
   matchId: string;
+  engine?: MatchEngine;
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   durationMs: number;
   resultVersion: number;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
+  totalPointsFallbackUsed?: boolean;
+}
+
+export interface MatchStatePayload {
+  matchId: string;
+  engine: MatchEngine;
+  phase: MatchPhase;
+  half: 1 | 2;
+  sharedPossession: number;
+  normalQuestionsAnsweredInHalf: number;
+  seatMomentum: {
+    seat1: number;
+    seat2: number;
+  };
+  attackerSeat: 1 | 2 | null;
+  kickOffSeat: 1 | 2;
+  goals: {
+    seat1: number;
+    seat2: number;
+  };
+  penaltyGoals: {
+    seat1: number;
+    seat2: number;
+  };
+  phaseKind: MatchPhaseKind;
+  phaseRound: number;
+  shooterSeat: 1 | 2 | null;
+  halftimeReady: {
+    seat1: boolean;
+    seat2: boolean;
+  };
 }
 
 export interface MatchOpponentDisconnectedPayload {
@@ -254,6 +307,7 @@ export interface ClientToServerEvents {
   'ranked:queue_leave': () => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
+  'match:tactic_select': (data: { matchId: string; tactic: TacticalCard }) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;
@@ -262,6 +316,8 @@ export interface ClientToServerEvents {
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;
   'warmup:get_scores': () => void;
+  'dev:quick_match': () => void;
+  'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'shot' | 'penalties' | 'second_half' }) => void;
 }
 
 export interface ErrorPayload {
@@ -280,6 +336,7 @@ export interface ServerToClientEvents {
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;
   'draft:complete': (data: { allowedCategoryIds: [string, string] }) => void;
   'match:start': (data: MatchStartPayload) => void;
+  'match:state': (data: MatchStatePayload) => void;
   'match:question': (data: MatchQuestionPayload) => void;
   'match:opponent_answered': (data: MatchOpponentAnsweredPayload) => void;
   'match:answer_ack': (data: MatchAnswerAckPayload) => void;

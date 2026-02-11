@@ -1,12 +1,17 @@
+export type MatchEngine = 'classic' | 'possession_v1';
+export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'penalty';
+
 export interface MatchRow {
   id: string;
   lobby_id: string | null;
   mode: 'friendly' | 'ranked';
+  engine: MatchEngine;
   status: 'active' | 'completed' | 'abandoned';
   category_a_id: string;
   category_b_id: string;
   current_q_index: number;
   total_questions: number;
+  state_payload: Record<string, unknown> | null;
   started_at: string;
   ended_at: string | null;
   winner_user_id: string | null;
@@ -19,6 +24,8 @@ export interface MatchPlayerRow {
   total_points: number;
   correct_answers: number;
   avg_time_ms: number | null;
+  goals: number;
+  penalty_goals: number;
 }
 
 export interface MatchQuestionRow {
@@ -29,6 +36,10 @@ export interface MatchQuestionRow {
   correct_index: number;
   shown_at: string | null;
   deadline_at: string | null;
+  phase_kind: MatchQuestionPhaseKind;
+  phase_round: number | null;
+  shooter_seat: number | null;
+  attacker_seat: number | null;
 }
 
 export interface MatchAnswerRow {
@@ -39,6 +50,9 @@ export interface MatchAnswerRow {
   is_correct: boolean;
   time_ms: number;
   points_earned: number;
+  phase_kind: MatchQuestionPhaseKind;
+  phase_round: number | null;
+  shooter_seat: number | null;
   answered_at: string;
 }
 
@@ -55,6 +69,10 @@ export interface MatchQuestionWithCategory {
   q_index: number;
   category_id: string;
   correct_index: number;
+  phase_kind: MatchQuestionPhaseKind;
+  phase_round: number | null;
+  shooter_seat: number | null;
+  attacker_seat: number | null;
   prompt: Record<string, string>;
   difficulty: string;
   payload: unknown;

@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   matchAnswerSchema,
+  matchTacticSelectSchema,
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
@@ -32,6 +33,32 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
       socket.emit('error', {
         code: 'MATCH_ANSWER_ERROR',
         message: 'Failed to process answer',
+      });
+    }
+  });
+
+  socket.on('match:tactic_select', async (payload) => {
+    const parsed = matchTacticSelectSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:tactic_select payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleTacticSelect(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          tactic: parsed.data.tactic,
+        },
+        'Error handling match:tactic_select'
+      );
+      socket.emit('error', {
+        code: 'MATCH_TACTIC_ERROR',
+        message: 'Failed to apply tactic selection',
       });
     }
   });

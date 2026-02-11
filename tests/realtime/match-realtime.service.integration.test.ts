@@ -318,7 +318,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
 
-    expect(setPlayerForfeitWinTotalsMock).toHaveBeenCalledWith('m1', 'u2', 10000, 10);
+    expect(setPlayerForfeitWinTotalsMock).toHaveBeenCalledWith('m1', 'u2', 1000, 10);
     expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
     expect(updatePlayerAvgTimeMock).toHaveBeenCalledWith('m1', 'u1', null);
     expect(updatePlayerAvgTimeMock).toHaveBeenCalledWith('m1', 'u2', null);
@@ -417,7 +417,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         qIndex: 0,
         userId: 'u1',
         timeMs: 2400,
-        pointsEarned: 800,
+        pointsEarned: 80,
       })
     );
 

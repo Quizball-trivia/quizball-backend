@@ -102,28 +102,25 @@ export const matchesRepo = {
     attackerSeat?: number | null;
   }>): Promise<MatchQuestionRow[]> {
     if (questions.length === 0) return [];
-    const inserted: MatchQuestionRow[] = [];
-    for (const question of questions) {
-      const [row] = await sql<MatchQuestionRow[]>`
-        INSERT INTO match_questions (
-          match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
-        )
-        VALUES (
-          ${matchId},
-          ${question.qIndex},
-          ${question.questionId},
-          ${question.categoryId},
-          ${question.correctIndex},
-          ${question.phaseKind ?? 'normal'},
-          ${question.phaseRound ?? null},
-          ${question.shooterSeat ?? null},
-          ${question.attackerSeat ?? null}
-        )
-        RETURNING *
-      `;
-      inserted.push(row);
-    }
-    return inserted;
+    const rows = questions.map((q) => [
+      matchId,
+      q.qIndex,
+      q.questionId,
+      q.categoryId,
+      q.correctIndex,
+      q.phaseKind ?? 'normal',
+      q.phaseRound ?? null,
+      q.shooterSeat ?? null,
+      q.attackerSeat ?? null,
+    ]);
+
+    return sql<MatchQuestionRow[]>`
+      INSERT INTO match_questions (
+        match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
+      )
+      VALUES ${sql(rows)}
+      RETURNING *
+    `;
   },
 
   async insertMatchQuestionIfMissing(question: {

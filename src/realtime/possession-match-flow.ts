@@ -14,6 +14,7 @@ import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.j
 import { getRedisClient } from './redis.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchPhaseKind, MatchStatePayload, TacticalCard } from './socket.types.js';
+import { clamp, calculatePoints } from './scoring.js';
 
 const QUESTION_TIME_MS = 10000;
 const FRONTEND_REVEAL_MS = 2000; // Frontend shows question text before unlocking options
@@ -69,10 +70,6 @@ function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
   );
   const picked = candidates[Math.floor(Math.random() * candidates.length)];
   return picked ?? correctIndex;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 function asSeat(value: number | null | undefined): Seat | null {
@@ -308,14 +305,6 @@ function scheduleQuestionTimeout(io: QuizballServer, matchId: string, qIndex: nu
   questionTimers.set(key, timeout);
 }
 
-function calculatePoints(isCorrect: boolean, timeMs: number): number {
-  if (!isCorrect) return 0;
-  const clamped = clamp(timeMs, 0, QUESTION_TIME_MS);
-  const remainingMs = Math.max(0, QUESTION_TIME_MS - clamped);
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  return remainingSeconds * 10;
-}
-
 function toAuthoritativeTimeMs(
   questionTiming: {
     shown_at: string | null;
@@ -449,7 +438,7 @@ async function schedulePossessionAiAnswer(
           ? options.correctIndex
           : pickIncorrectIndex(options.correctIndex, options.optionCount);
         const timeMs = clamp(delayMs, 0, QUESTION_TIME_MS);
-        const pointsEarned = calculatePoints(isCorrect, timeMs);
+        const pointsEarned = calculatePoints(isCorrect, timeMs, QUESTION_TIME_MS);
 
         await matchesRepo.insertMatchAnswer({
           matchId,
@@ -511,7 +500,7 @@ function determineShotAttackerSeat(state: PossessionStatePayload): Seat | null {
 }
 
 function shotReboundPossession(attackerSeat: Seat): number {
-  return attackerSeat === 1 ? Math.max(50, 60) : Math.min(50, 40);
+  return attackerSeat === 1 ? 60 : 40;
 }
 
 function decideWinner(
@@ -1337,7 +1326,7 @@ export async function handlePossessionAnswer(
     : clamp(timeMs, 0, QUESTION_TIME_MS);
 
   const isCorrect = selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
-  const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs);
+  const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
 
   await matchesRepo.insertMatchAnswer({
     matchId,

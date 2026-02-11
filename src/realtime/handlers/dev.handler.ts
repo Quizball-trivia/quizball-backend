@@ -20,6 +20,7 @@ export function registerDevHandlers(io: QuizballServer, socket: QuizballSocket):
     const parsed = devSkipToSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten() }, 'Invalid dev:skip_to payload');
+      socket.emit('error', { code: 'VALIDATION_ERROR', message: 'Invalid dev:skip_to payload', meta: parsed.error.flatten() as Record<string, unknown> });
       return;
     }
 

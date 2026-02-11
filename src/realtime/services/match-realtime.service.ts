@@ -8,6 +8,7 @@ import type { MatchAnswerPayload } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { calculatePoints } from '../scoring.js';
 import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
@@ -256,16 +257,7 @@ export async function beginMatchForLobby(
   await sendMatchQuestion(io, matchId, 0);
 }
 
-function calculatePoints(isCorrect: boolean, timeMs: number): number {
-  if (!isCorrect) return 0;
-  const clamped = Math.max(0, Math.min(timeMs, QUESTION_TIME_MS));
-  const remainingMs = Math.max(0, QUESTION_TIME_MS - clamped);
-  // Convert to seconds and multiply by 10
-  // Answer instantly (10s left) = 100 points
-  // Answer at 7s left = 70 points
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  return remainingSeconds * 10;
-}
+
 
 function toAuthoritativeTimeMs(questionTiming: {
   shown_at: string | null;
@@ -880,7 +872,7 @@ export const matchRealtimeService = {
       }
     }
 
-    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs);
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
 
     try {
       await matchesRepo.insertMatchAnswer({

@@ -74,7 +74,6 @@ export const devRealtimeService = {
 
   async handleSkipTo(
     _io: QuizballServer,
-    _socket: QuizballSocket,
     payload: { matchId: string; target: 'halftime' | 'shot' | 'penalties' | 'second_half' }
   ): Promise<void> {
     await devSkipToPossessionPhase(_io, payload.matchId, payload.target);

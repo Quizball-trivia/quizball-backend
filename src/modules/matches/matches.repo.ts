@@ -112,7 +112,7 @@ export const matchesRepo = {
       q.phaseRound ?? null,
       q.shooterSeat ?? null,
       q.attackerSeat ?? null,
-    ]);
+    ] as (string | number)[]);
 
     return sql<MatchQuestionRow[]>`
       INSERT INTO match_questions (

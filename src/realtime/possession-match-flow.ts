@@ -90,6 +90,12 @@ function getUserIdBySeat(players: Array<{ user_id: string; seat: number }>, seat
   return players.find((player) => player.seat === seat)?.user_id ?? null;
 }
 
+const VALID_PHASE_KINDS: ReadonlySet<MatchPhaseKind> = new Set(['normal', 'shot', 'penalty']);
+
+function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
+  return typeof value === 'string' && VALID_PHASE_KINDS.has(value as MatchPhaseKind);
+}
+
 function parsePossessionState(raw: unknown): PossessionStatePayload {
   if (typeof raw === 'string') {
     try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(); }
@@ -147,7 +153,7 @@ function parsePossessionState(raw: unknown): PossessionStatePayload {
     currentQuestion: candidate.currentQuestion
       ? {
         qIndex: Number(candidate.currentQuestion.qIndex ?? 0),
-        phaseKind: (candidate.currentQuestion.phaseKind as MatchPhaseKind) ?? 'normal',
+        phaseKind: isMatchPhaseKind(candidate.currentQuestion.phaseKind) ? candidate.currentQuestion.phaseKind : 'normal',
         phaseRound: Number(candidate.currentQuestion.phaseRound ?? 0),
         shooterSeat: asSeat(candidate.currentQuestion.shooterSeat),
         attackerSeat: asSeat(candidate.currentQuestion.attackerSeat),

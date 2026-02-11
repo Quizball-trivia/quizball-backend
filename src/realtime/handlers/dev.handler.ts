@@ -25,7 +25,7 @@ export function registerDevHandlers(io: QuizballServer, socket: QuizballSocket):
     }
 
     try {
-      await devRealtimeService.handleSkipTo(io, socket, parsed.data);
+      await devRealtimeService.handleSkipTo(io, parsed.data);
     } catch (error) {
       logger.error({ error, userId: socket.data.user.id }, 'dev:skip_to failed');
       socket.emit('error', { code: 'DEV_ERROR', message: 'Skip failed' });

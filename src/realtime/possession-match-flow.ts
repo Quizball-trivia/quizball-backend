@@ -340,8 +340,11 @@ async function getExpectedAnswersForQuestion(matchId: string, qIndex: number): P
 
   if (question.phase_kind === 'penalty' && shooterSeat) {
     const shooterUserId = getUserIdBySeat(players, shooterSeat);
+    const keeperSeat = shooterSeat === 1 ? 2 : 1;
+    const keeperUserId = getUserIdBySeat(players, keeperSeat);
+    const expectedUserIds = [shooterUserId, keeperUserId].filter((id): id is string => id !== null);
     return {
-      expectedUserIds: shooterUserId ? [shooterUserId] : [],
+      expectedUserIds,
       shooterSeat,
       attackerSeat,
     };
@@ -1308,10 +1311,11 @@ export async function handlePossessionAnswer(
 
   if (questionPayload.phaseKind === 'penalty') {
     const shooterSeat = asSeat(questionPayload.shooterSeat);
-    if (!shooterSeat || shooterSeat !== mySeat) {
+    const keeperSeat = shooterSeat === 1 ? 2 : 1;
+    if (mySeat !== shooterSeat && mySeat !== keeperSeat) {
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
-        message: 'Only the shooter can answer this penalty question.',
+        message: 'Only the shooter or keeper can answer this penalty question.',
       });
       return;
     }

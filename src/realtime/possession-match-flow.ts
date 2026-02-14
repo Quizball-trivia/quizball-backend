@@ -278,15 +278,18 @@ function toMatchStatePayload(matchId: string, state: PossessionStatePayload): Ma
   };
 }
 
+function bumpStateVersion(state: PossessionStatePayload): void {
+  const next = Number(state.stateVersionCounter);
+  state.stateVersionCounter = Number.isFinite(next) ? next + 1 : 1;
+}
+
 async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
-  state.stateVersionCounter += 1;
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
 }
 
 export async function emitPossessionStateToSocket(socket: QuizballSocket, matchId: string): Promise<void> {
   const cache = await getMatchCacheOrRebuild(matchId);
   if (cache) {
-    cache.statePayload.stateVersionCounter += 1;
     socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
     return;
   }
@@ -294,7 +297,6 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return;
   const state = parsePossessionState(match.state_payload);
-  state.stateVersionCounter += 1;
   socket.emit('match:state', toMatchStatePayload(matchId, state));
 }
 
@@ -922,6 +924,7 @@ async function finalizeHalftime(io: QuizballServer, matchId: string): Promise<vo
     state.shot.attackerSeat = null;
     state.currentQuestion = null;
     state.normalQuestionsAnsweredInHalf = 0;
+    bumpStateVersion(state);
 
     cache.currentQuestion = null;
     cache.answers = {};
@@ -994,6 +997,7 @@ export async function handlePossessionTacticSelect(
 
     if (seat === 1) state.halftime.tactics.seat1 = payload.tactic;
     if (seat === 2) state.halftime.tactics.seat2 = payload.tactic;
+    bumpStateVersion(state);
 
     await setMatchCache(cache);
     fireAndForget('setMatchStatePayload(tacticSelect)', async () => {
@@ -1023,6 +1027,11 @@ export async function sendPossessionMatchQuestion(
 
   if (state.phase === 'HALFTIME') {
     scheduleHalftimeTimeout(io, matchId);
+    bumpStateVersion(state);
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(sendQuestion:halftime)', async () => {
+      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+    });
     await emitMatchState(io, matchId, state);
     return null;
   }
@@ -1093,6 +1102,7 @@ export async function sendPossessionMatchQuestion(
     questionDTO: payload.question,
   };
   cache.answers = {};
+  bumpStateVersion(state);
 
   await setMatchCache(cache);
   fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
@@ -1580,6 +1590,7 @@ async function resolvePossessionRoundDbPath(
 
     // ── Persist and emit state ──
     const nextIndex = qIndex + 1;
+    bumpStateVersion(state);
     await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
     await emitMatchState(io, matchId, state);
 
@@ -1926,6 +1937,7 @@ export async function resolvePossessionRound(
     cache.currentQIndex = nextIndex;
     cache.currentQuestion = null;
     cache.answers = {};
+    bumpStateVersion(state);
 
     await setMatchCache(cache);
     fireAndForget('setMatchStatePayload(resolve)', async () => {
@@ -2208,6 +2220,7 @@ export async function devSkipToPossessionPhase(
   cache.currentQIndex = nextQIndex;
   cache.currentQuestion = null;
   cache.answers = {};
+  bumpStateVersion(state);
   await setMatchCache(cache);
   fireAndForget('setMatchStatePayload(devSkip)', async () => {
     await matchesRepo.setMatchStatePayload(matchId, state, nextQIndex);

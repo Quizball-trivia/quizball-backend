@@ -42,7 +42,7 @@ describe('Auth Middleware', () => {
       expect(response.status).toBe(401);
       expect(response.body).toEqual({
         code: 'AUTHENTICATION_ERROR',
-        message: 'Missing authorization header',
+        message: 'Missing auth token',
         details: null,
         request_id: requestId,
       });
@@ -72,7 +72,7 @@ describe('Auth Middleware', () => {
 
       expect(response.status).toBe(401);
       expect(response.body.code).toBe('AUTHENTICATION_ERROR');
-      expect(response.body.message).toBe('Missing authorization header');
+      expect(response.body.message).toBe('Missing auth token');
       expect(response.body.request_id).toBe(requestId);
     });
 

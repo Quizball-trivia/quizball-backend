@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, type Request, type Response, type NextFunction, type RequestHandler } from 'express';
 import swaggerUi from 'swagger-ui-express';
 import { generateOpenApiDocument } from './registry.js';
 import { config } from '../../core/config.js';
@@ -92,7 +92,9 @@ if (config.DOCS_ENABLED) {
   });
 
   // Serve Swagger UI at /docs (protected)
-  router.use('/docs', docsBasicAuth, swaggerUi.serve, swaggerUi.setup(getOpenApiDocument()));
+  const serve = swaggerUi.serve as unknown as RequestHandler[];
+  const setup = swaggerUi.setup(getOpenApiDocument()) as unknown as RequestHandler;
+  router.use('/docs', docsBasicAuth, ...serve, setup);
 }
 
 export const swaggerRoutes = router;

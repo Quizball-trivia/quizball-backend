@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
@@ -77,6 +78,32 @@ router.post(
   requireRole('admin'),
   validate({ body: checkDuplicatesSchema }),
   questionsController.checkDuplicates
+);
+
+/**
+ * POST /api/v1/questions/translate/backfill
+ * Translate all untranslated questions from English to Georgian.
+ * Protected endpoint - requires admin role.
+ */
+router.post(
+  '/translate/backfill',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: z.object({}).strict() }),
+  questionsController.translateBackfill
+);
+
+/**
+ * GET /api/v1/questions/translate/status
+ * Check translation progress.
+ * Protected endpoint - requires admin role.
+ */
+router.get(
+  '/translate/status',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ query: z.object({}).strict() }),
+  questionsController.translateStatus
 );
 
 /**

@@ -11,19 +11,34 @@ import {
 import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
+import {
+  answerCount,
+  deleteMatchCache,
+  getCachedPlayer,
+  getExpectedUserIds,
+  getMatchCacheOrRebuild,
+  hasUserAnswered,
+  setMatchCache,
+  type CachedAnswer,
+  type CachedPlayer,
+  type CachedSeat,
+  type MatchCache,
+} from './match-cache.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
-import type { MatchPhaseKind, MatchStatePayload, TacticalCard } from './socket.types.js';
+import type { MatchPhaseKind, MatchRoundResultDeltas, MatchStatePayload, TacticalCard } from './socket.types.js';
 import { clamp, calculatePoints } from './scoring.js';
 
 const QUESTION_TIME_MS = 10000;
 const FRONTEND_REVEAL_MS = 2000; // Frontend shows question text before unlocking options
-const ROUND_RESULT_DELAY_MS = 1800;
+const ROUND_RESULT_DELAY_MS = 0;
+const PENALTY_INTRO_DELAY_MS = 5000;
 const TIMEOUT_RESOLVE_GRACE_MS = 250;
 const TIMEOUT_RESOLVE_BUFFER_MS = 50;
 const HALFTIME_DURATION_MS = 15000;
 const FAST_ANSWER_THRESHOLD_MS = 3000;
 const LAST_MATCH_REPLAY_TTL_SEC = 600;
+const TIMING_DISCREPANCY_WARN_MS = 500;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
 const halftimeTimers = new Map<string, NodeJS.Timeout>();
@@ -61,7 +76,9 @@ function lastMatchKey(userId: string): string {
 }
 
 function getAiAnswerDelayMs(): number {
-  return Math.floor(Math.random() * 4200) + 400;
+  // Min delay must exceed the frontend's 2s question-reveal phase so the AI
+  // never answers before the human player can even see the options.
+  return Math.floor(Math.random() * 4000) + 3000;
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -232,7 +249,6 @@ function toMatchStatePayload(matchId: string, state: PossessionStatePayload): Ma
   const phaseRound = state.currentQuestion?.phaseRound ?? 0;
   return {
     matchId,
-    engine: 'possession_v1',
     phase: state.phase,
     half: state.half,
     sharedPossession: state.sharedPossession,
@@ -258,17 +274,27 @@ function toMatchStatePayload(matchId: string, state: PossessionStatePayload): Ma
       seat1: !!state.halftime.tactics.seat1,
       seat2: !!state.halftime.tactics.seat2,
     },
+    stateVersion: state.stateVersionCounter,
   };
 }
 
 async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
+  state.stateVersionCounter += 1;
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
 }
 
 export async function emitPossessionStateToSocket(socket: QuizballSocket, matchId: string): Promise<void> {
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (cache) {
+    cache.statePayload.stateVersionCounter += 1;
+    socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
+    return;
+  }
+
   const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.engine !== 'possession_v1') return;
+  if (!match) return;
   const state = parsePossessionState(match.state_payload);
+  state.stateVersionCounter += 1;
   socket.emit('match:state', toMatchStatePayload(matchId, state));
 }
 
@@ -319,21 +345,132 @@ function toAuthoritativeTimeMs(
   nowMs: number,
   fallbackTimeMs: number
 ): number {
-  if (questionTiming.shown_at) {
-    const shownAtMs = new Date(questionTiming.shown_at).getTime();
+  return computeAuthoritativeTimeMs(
+    { shownAt: questionTiming.shown_at, deadlineAt: questionTiming.deadline_at },
+    nowMs,
+    fallbackTimeMs
+  );
+}
+
+function toAuthoritativeTimeMsFromCache(
+  questionTiming: {
+    shownAt: string | null;
+    deadlineAt: string | null;
+  },
+  nowMs: number,
+  fallbackTimeMs: number
+): number {
+  return computeAuthoritativeTimeMs(questionTiming, nowMs, fallbackTimeMs);
+}
+
+function computeAuthoritativeTimeMs(
+  questionTiming: {
+    shownAt: string | null;
+    deadlineAt: string | null;
+  },
+  nowMs: number,
+  fallbackTimeMs: number
+): number {
+  if (questionTiming.shownAt) {
+    const shownAtMs = new Date(questionTiming.shownAt).getTime();
     if (Number.isFinite(shownAtMs)) {
       return clamp(Math.round(nowMs - shownAtMs), 0, QUESTION_TIME_MS);
     }
   }
 
-  if (questionTiming.deadline_at) {
-    const deadlineMs = new Date(questionTiming.deadline_at).getTime();
+  if (questionTiming.deadlineAt) {
+    const deadlineMs = new Date(questionTiming.deadlineAt).getTime();
     if (Number.isFinite(deadlineMs)) {
       return clamp(Math.round(QUESTION_TIME_MS - (deadlineMs - nowMs)), 0, QUESTION_TIME_MS);
     }
   }
 
   return clamp(Math.round(fallbackTimeMs), 0, QUESTION_TIME_MS);
+}
+
+function fireAndForget(label: string, fn: () => Promise<unknown>): void {
+  fn().catch((error) => {
+    logger.error({ error, label }, 'Fire-and-forget DB write failed');
+  });
+}
+
+function getUserIdByCachedSeat(players: CachedPlayer[], seat: CachedSeat): string | null {
+  return players.find((player) => player.seat === seat)?.userId ?? null;
+}
+
+function toCachedAnswerByUserId(cache: MatchCache): Map<string, { is_correct: boolean; time_ms: number }> {
+  return new Map(
+    Object.entries(cache.answers).map(([userId, answer]) => [
+      userId,
+      {
+        is_correct: answer.isCorrect,
+        time_ms: answer.timeMs,
+      },
+    ])
+  );
+}
+
+function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, {
+  selectedIndex: number | null;
+  isCorrect: boolean;
+  timeMs: number;
+  pointsEarned: number;
+  totalPoints: number;
+}> {
+  const payload: Record<string, {
+    selectedIndex: number | null;
+    isCorrect: boolean;
+    timeMs: number;
+    pointsEarned: number;
+    totalPoints: number;
+  }> = {};
+
+  for (const player of cache.players) {
+    const answer = cache.answers[player.userId];
+    if (!answer) continue;
+    payload[player.userId] = {
+      selectedIndex: answer.selectedIndex,
+      isCorrect: answer.isCorrect,
+      timeMs: answer.timeMs,
+      pointsEarned: answer.pointsEarned,
+      totalPoints: player.totalPoints,
+    };
+  }
+  return payload;
+}
+
+function toCachedPlayers(rows: Array<{
+  user_id: string;
+  seat: number;
+  total_points: number;
+  correct_answers: number;
+  goals: number;
+  penalty_goals: number;
+  avg_time_ms: number | null;
+}>): CachedPlayer[] {
+  return rows.map((row) => ({
+    userId: row.user_id,
+    seat: row.seat === 2 ? 2 : 1,
+    totalPoints: row.total_points,
+    correctAnswers: row.correct_answers,
+    goals: row.goals,
+    penaltyGoals: row.penalty_goals,
+    avgTimeMs: row.avg_time_ms,
+  }));
+}
+
+async function flushCacheToDB(cache: MatchCache): Promise<void> {
+  await matchesRepo.setMatchStatePayload(cache.matchId, cache.statePayload, cache.currentQIndex);
+  await Promise.all(
+    cache.players.map((player) =>
+      matchesRepo.setPlayerFinalTotals(cache.matchId, player.userId, {
+        totalPoints: player.totalPoints,
+        correctAnswers: player.correctAnswers,
+        goals: player.goals,
+        penaltyGoals: player.penaltyGoals,
+      })
+    )
+  );
 }
 
 async function getExpectedAnswersForQuestion(matchId: string, qIndex: number): Promise<ExpectedAnswerInfo | null> {
@@ -404,20 +541,19 @@ async function schedulePossessionAiAnswer(
 ): Promise<void> {
   const key = timerKey(matchId, qIndex);
   clearAiAnswerTimer(matchId, qIndex);
-
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active' || match.engine !== 'possession_v1') return;
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return;
+  if (cache.currentQIndex !== qIndex) return;
+  if (!cache.currentQuestion) return;
 
   const aiUserId = await resolveAiUserIdForMatch(matchId);
   if (!aiUserId) return;
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  const hasAi = players.some((player) => player.user_id === aiUserId);
+  const hasAi = cache.players.some((player) => player.userId === aiUserId);
   if (!hasAi) return;
 
-  const expected = await getExpectedAnswersForQuestion(matchId, qIndex);
-  if (!expected) return;
-  if (!expected.expectedUserIds.includes(aiUserId)) return;
+  const expectedUserIds = getExpectedUserIds(cache);
+  if (!expectedUserIds.includes(aiUserId)) return;
 
   const delayMs = getAiAnswerDelayMs();
   const timeout = setTimeout(() => {
@@ -429,61 +565,112 @@ async function schedulePossessionAiAnswer(
 
     void (async () => {
       try {
-        const freshMatch = await matchesRepo.getMatch(matchId);
-        if (
-          !freshMatch ||
-          freshMatch.status !== 'active' ||
-          freshMatch.engine !== 'possession_v1' ||
-          freshMatch.current_q_index !== qIndex
-        ) {
-          return;
+        const lockKey = `lock:match:${matchId}:answer`;
+        const lock = await acquireLock(lockKey, 2000);
+        if (!lock.acquired || !lock.token) return;
+
+        let committed: {
+          selectedIndex: number | null;
+          isCorrect: boolean;
+          pointsEarned: number;
+          totalPoints: number;
+          phaseKind: MatchPhaseKind;
+          phaseRound: number | null;
+          shooterSeat: Seat | null;
+          answerCount: number;
+          expectedCount: number;
+        } | null = null;
+
+        try {
+          const fresh = await getMatchCacheOrRebuild(matchId);
+          if (!fresh || fresh.status !== 'active') return;
+          if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) return;
+          if (hasUserAnswered(fresh, aiUserId)) return;
+
+          const expected = getExpectedUserIds(fresh);
+          if (!expected.includes(aiUserId)) return;
+
+          const isCorrect = Math.random() < RANKED_AI_CORRECTNESS;
+          const selectedIndex = isCorrect
+            ? options.correctIndex
+            : pickIncorrectIndex(options.correctIndex, options.optionCount);
+          const timeMs = clamp(delayMs, 0, QUESTION_TIME_MS);
+          const pointsEarned = calculatePoints(isCorrect, timeMs, QUESTION_TIME_MS);
+          const question = fresh.currentQuestion;
+          const aiPlayer = getCachedPlayer(fresh, aiUserId);
+          if (!aiPlayer) return;
+
+          const answer: CachedAnswer = {
+            userId: aiUserId,
+            selectedIndex,
+            isCorrect,
+            timeMs,
+            pointsEarned,
+            phaseKind: question.phaseKind,
+            phaseRound: question.phaseRound,
+            shooterSeat: question.shooterSeat,
+            answeredAt: new Date().toISOString(),
+          };
+
+          fresh.answers[aiUserId] = answer;
+          aiPlayer.totalPoints += pointsEarned;
+          if (isCorrect) aiPlayer.correctAnswers += 1;
+
+          await setMatchCache(fresh);
+
+          committed = {
+            selectedIndex,
+            isCorrect,
+            pointsEarned,
+            totalPoints: aiPlayer.totalPoints,
+            phaseKind: question.phaseKind,
+            phaseRound: question.phaseRound,
+            shooterSeat: question.shooterSeat,
+            answerCount: answerCount(fresh),
+            expectedCount: expected.length,
+          };
+        } finally {
+          await releaseLock(lockKey, lock.token);
         }
 
-        const existing = await matchesRepo.getAnswerForUser(matchId, qIndex, aiUserId);
-        if (existing) return;
+        if (!committed) return;
 
-        const isCorrect = Math.random() < RANKED_AI_CORRECTNESS;
-        const selectedIndex = isCorrect
-          ? options.correctIndex
-          : pickIncorrectIndex(options.correctIndex, options.optionCount);
-        const timeMs = clamp(delayMs, 0, QUESTION_TIME_MS);
-        const pointsEarned = calculatePoints(isCorrect, timeMs, QUESTION_TIME_MS);
-
-        await matchesRepo.insertMatchAnswer({
-          matchId,
-          qIndex,
-          userId: aiUserId,
-          selectedIndex,
-          isCorrect,
-          timeMs,
-          pointsEarned,
-          phaseKind: options.phaseKind,
-          phaseRound: options.phaseRound,
-          shooterSeat: options.shooterSeat,
+        fireAndForget('insertMatchAnswer(ai)', async () => {
+          await matchesRepo.insertMatchAnswerIfMissing({
+            matchId,
+            qIndex,
+            userId: aiUserId,
+            selectedIndex: committed.selectedIndex,
+            isCorrect: committed.isCorrect,
+            timeMs: clamp(delayMs, 0, QUESTION_TIME_MS),
+            pointsEarned: committed.pointsEarned,
+            phaseKind: committed.phaseKind,
+            phaseRound: committed.phaseRound,
+            shooterSeat: committed.shooterSeat,
+          });
         });
 
-        const updatedAiPlayer = await matchesRepo.updatePlayerTotals(
-          matchId,
-          aiUserId,
-          pointsEarned,
-          isCorrect
-        );
+        fireAndForget('updatePlayerTotals(ai)', async () => {
+          await matchesRepo.updatePlayerTotals(
+            matchId,
+            aiUserId,
+            committed.pointsEarned,
+            committed.isCorrect
+          );
+        });
 
-        if (options.phaseKind !== 'penalty') {
+        if (committed.phaseKind !== 'penalty') {
           io.to(`match:${matchId}`).emit('match:opponent_answered', {
             matchId,
             qIndex,
-            opponentTotalPoints: updatedAiPlayer?.total_points ?? 0,
-            pointsEarned,
-            isCorrect,
+            opponentTotalPoints: committed.totalPoints,
+            pointsEarned: committed.pointsEarned,
+            isCorrect: committed.isCorrect,
+            selectedIndex: committed.selectedIndex,
           });
         }
 
-        const refreshedExpected = await getExpectedAnswersForQuestion(matchId, qIndex);
-        if (!refreshedExpected) return;
-
-        const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
-        if (answers.length >= refreshedExpected.expectedUserIds.length) {
+        if (committed.answerCount >= committed.expectedCount) {
           await resolvePossessionRound(io, matchId, qIndex, false);
         }
       } catch (error) {
@@ -558,23 +745,55 @@ function decideWinner(
 async function completePossessionMatch(
   io: QuizballServer,
   matchId: string,
-  state: PossessionStatePayload
+  state: PossessionStatePayload,
+  preloadedCache?: MatchCache
 ): Promise<void> {
+  const cache = preloadedCache ?? await getMatchCacheOrRebuild(matchId);
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return;
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  const decision = decideWinner(players, state);
+  const decisionInput = cache
+    ? cache.players.map((player) => ({
+      user_id: player.userId,
+      seat: player.seat,
+      total_points: player.totalPoints,
+    }))
+    : (await matchesRepo.listMatchPlayers(matchId)).map((player) => ({
+      user_id: player.user_id,
+      seat: player.seat,
+      total_points: player.total_points,
+    }));
+  const decision = decideWinner(decisionInput, state);
 
   state.phase = 'COMPLETED';
   state.currentQuestion = null;
   state.winnerDecisionMethod = decision.method;
 
-  await matchesRepo.setMatchStatePayload(matchId, state, match.current_q_index);
+  if (cache) {
+    cache.status = 'completed';
+    cache.statePayload = state;
+    cache.currentQuestion = null;
+    cache.answers = {};
+    await setMatchCache(cache);
+    await flushCacheToDB(cache);
+  } else {
+    await matchesRepo.setMatchStatePayload(matchId, state, match.current_q_index);
+  }
+
   await matchesRepo.completeMatch(matchId, decision.winnerId);
 
   const avgTimes = await matchesService.computeAvgTimes(matchId);
-  for (const player of players) {
+  const playerRows = cache
+    ? cache.players.map((player) => ({
+      user_id: player.userId,
+      total_points: player.totalPoints,
+      correct_answers: player.correctAnswers,
+      goals: player.goals,
+      penalty_goals: player.penaltyGoals,
+    }))
+    : await matchesRepo.listMatchPlayers(matchId);
+
+  for (const player of playerRows) {
     await matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
   }
 
@@ -597,12 +816,11 @@ async function completePossessionMatch(
     };
   }
 
-  const durationMs = Date.now() - new Date(match.started_at).getTime();
+  const durationMs = Date.now() - new Date(cache?.startedAt ?? match.started_at).getTime();
   const resultVersion = Date.now();
 
   io.to(`match:${matchId}`).emit('match:final_results', {
     matchId,
-    engine: 'possession_v1',
     winnerId: decision.winnerId,
     players: payloadPlayers,
     durationMs,
@@ -636,18 +854,19 @@ async function completePossessionMatch(
 
   aiUserIdByMatch.delete(matchId);
   clearHalftimeTimer(matchId);
+  await deleteMatchCache(matchId);
 }
 
-async function maybePickQuestionForState(matchId: string, state: PossessionStatePayload): Promise<{
+async function maybePickQuestionForState(
+  matchId: string,
+  state: PossessionStatePayload,
+  categoryIds: [string, string]
+): Promise<{
   questionId: string;
   categoryId: string;
   correctIndex: number;
 } | null> {
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match) return null;
-
   const preferredDifficulties = getDifficultyForState(state);
-  const categoryIds: [string, string] = [match.category_a_id, match.category_b_id];
 
   let row = await matchesRepo.getRandomQuestionForMatch({
     matchId,
@@ -686,10 +905,9 @@ async function finalizeHalftime(io: QuizballServer, matchId: string): Promise<vo
   if (!lock.acquired || !lock.token) return;
 
   try {
-    const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active' || match.engine !== 'possession_v1') return;
-
-    const state = parsePossessionState(match.state_payload);
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    const state = cache.statePayload;
     if (state.phase !== 'HALFTIME') return;
 
     state.halftime.tactics.seat1 = state.halftime.tactics.seat1 ?? 'play-safe';
@@ -705,10 +923,15 @@ async function finalizeHalftime(io: QuizballServer, matchId: string): Promise<vo
     state.currentQuestion = null;
     state.normalQuestionsAnsweredInHalf = 0;
 
-    await matchesRepo.setMatchStatePayload(matchId, state, match.current_q_index);
+    cache.currentQuestion = null;
+    cache.answers = {};
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(finalizeHalftime)', async () => {
+      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+    });
     await emitMatchState(io, matchId, state);
 
-    await sendPossessionMatchQuestion(io, matchId, match.current_q_index);
+    await sendPossessionMatchQuestion(io, matchId, cache.currentQIndex, { cache });
   } finally {
     clearHalftimeTimer(matchId);
     await releaseLock(lockKey, lock.token);
@@ -741,16 +964,16 @@ export async function handlePossessionTacticSelect(
   }
 
   try {
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active' || match.engine !== 'possession_v1') {
+    const cache = await getMatchCacheOrRebuild(payload.matchId);
+    if (!cache || cache.status !== 'active') {
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
-        message: 'No active possession match found.',
+        message: 'No active match found.',
       });
       return;
     }
 
-    const state = parsePossessionState(match.state_payload);
+    const state = cache.statePayload;
     if (state.phase !== 'HALFTIME') {
       socket.emit('error', {
         code: 'MATCH_INVALID_PHASE',
@@ -759,8 +982,8 @@ export async function handlePossessionTacticSelect(
       return;
     }
 
-    const players = await matchesRepo.listMatchPlayers(payload.matchId);
-    const seat = getSeatFromUserId(players, socket.data.user.id);
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    const seat = player?.seat ?? null;
     if (!seat) {
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
@@ -772,7 +995,10 @@ export async function handlePossessionTacticSelect(
     if (seat === 1) state.halftime.tactics.seat1 = payload.tactic;
     if (seat === 2) state.halftime.tactics.seat2 = payload.tactic;
 
-    await matchesRepo.setMatchStatePayload(payload.matchId, state, match.current_q_index);
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(tacticSelect)', async () => {
+      await matchesRepo.setMatchStatePayload(payload.matchId, state, cache.currentQIndex);
+    });
     await emitMatchState(io, payload.matchId, state);
 
     if (state.halftime.tactics.seat1 && state.halftime.tactics.seat2) {
@@ -787,14 +1013,13 @@ export async function handlePossessionTacticSelect(
 export async function sendPossessionMatchQuestion(
   io: QuizballServer,
   matchId: string,
-  qIndex: number
+  qIndex: number,
+  preloaded?: { cache: MatchCache }
 ): Promise<{ correctIndex: number } | null> {
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active' || match.engine !== 'possession_v1') {
-    return null;
-  }
-
-  const state = parsePossessionState(match.state_payload);
+  const cache = preloaded?.cache ?? await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return null;
+  const totalQuestions = cache.totalQuestions;
+  const state = cache.statePayload;
 
   if (state.phase === 'HALFTIME') {
     scheduleHalftimeTimeout(io, matchId);
@@ -816,7 +1041,7 @@ export async function sendPossessionMatchQuestion(
       ? state.goals.seat1 + state.goals.seat2 + 1
       : state.penalty.round + 1;
 
-  const picked = await maybePickQuestionForState(matchId, state);
+  const picked = await maybePickQuestionForState(matchId, state, [cache.categoryAId, cache.categoryBId]);
   if (!picked) {
     logger.error({ matchId, phaseKind }, 'Failed to pick a valid question for possession state');
     return null;
@@ -844,8 +1069,8 @@ export async function sendPossessionMatchQuestion(
     return null;
   }
 
+  const shownAt = new Date();
   const deadlineAt = new Date(Date.now() + QUESTION_TIME_MS);
-  await matchesRepo.setQuestionTiming(matchId, qIndex, new Date(), deadlineAt);
 
   state.currentQuestion = {
     qIndex,
@@ -854,17 +1079,38 @@ export async function sendPossessionMatchQuestion(
     shooterSeat,
     attackerSeat,
   };
+  cache.currentQIndex = qIndex;
+  cache.currentQuestion = {
+    qIndex,
+    questionId: payload.question.id,
+    correctIndex: payload.correctIndex,
+    phaseKind,
+    phaseRound,
+    shooterSeat,
+    attackerSeat,
+    shownAt: shownAt.toISOString(),
+    deadlineAt: deadlineAt.toISOString(),
+    questionDTO: payload.question,
+  };
+  cache.answers = {};
 
-  await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
+  await setMatchCache(cache);
+  fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
+    await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
+  });
+  fireAndForget('setQuestionTiming(sendQuestion)', async () => {
+    await matchesRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt);
+  });
+
   await emitMatchState(io, matchId, state);
 
   io.to(`match:${matchId}`).emit('match:question', {
     matchId,
-    engine: 'possession_v1',
     qIndex,
-    total: match.total_questions,
-    question: payload.question,
+    total: totalQuestions,
+    question: cache.currentQuestion.questionDTO,
     deadlineAt: deadlineAt.toISOString(),
+    correctIndex: cache.currentQuestion.correctIndex,
     phaseKind,
     phaseRound,
     shooterSeat,
@@ -1015,31 +1261,33 @@ function applyNormalResolution(
   state.phase = 'NORMAL_PLAY';
 }
 
-async function applyShotResolution(
-  matchId: string,
+function applyShotResolution(
   state: PossessionStatePayload,
-  players: Array<{ user_id: string; seat: number }>,
+  players: CachedPlayer[],
   answerByUserId: Map<string, { is_correct: boolean }>
-): Promise<void> {
+): { goalScoredByUserId: string | null } {
   const attackerSeat = state.shot.attackerSeat ?? (state.sharedPossession >= 50 ? 1 : 2);
   const defenderSeat = nextSeat(attackerSeat);
 
-  const attackerUserId = getUserIdBySeat(players, attackerSeat);
-  const defenderUserId = getUserIdBySeat(players, defenderSeat);
+  const attackerUserId = getUserIdByCachedSeat(players, attackerSeat);
+  const defenderUserId = getUserIdByCachedSeat(players, defenderSeat);
   if (!attackerUserId || !defenderUserId) {
     state.phase = 'NORMAL_PLAY';
     state.currentQuestion = null;
     state.shot.attackerSeat = null;
-    return;
+    return { goalScoredByUserId: null };
   }
 
   const attackerCorrect = answerByUserId.get(attackerUserId)?.is_correct ?? false;
   const defenderCorrect = answerByUserId.get(defenderUserId)?.is_correct ?? false;
+  let goalScoredByUserId: string | null = null;
 
   if (attackerCorrect && !defenderCorrect) {
     if (attackerSeat === 1) state.goals.seat1 += 1;
     else state.goals.seat2 += 1;
-    await matchesRepo.updatePlayerGoalTotals(matchId, attackerUserId, { goals: 1 });
+    const attacker = players.find((player) => player.userId === attackerUserId);
+    if (attacker) attacker.goals += 1;
+    goalScoredByUserId = attackerUserId;
     state.sharedPossession = 50;
     // Conceding team gets kick-off after a goal (like real football)
     state.kickOffSeat = defenderSeat;
@@ -1052,6 +1300,7 @@ async function applyShotResolution(
   state.phase = 'NORMAL_PLAY';
   state.currentQuestion = null;
   state.shot.attackerSeat = null;
+  return { goalScoredByUserId };
 }
 
 function penaltyWinnerSeat(state: PossessionStatePayload): Seat | null {
@@ -1073,20 +1322,19 @@ function penaltyWinnerSeat(state: PossessionStatePayload): Seat | null {
   return null;
 }
 
-async function applyPenaltyResolution(
-  matchId: string,
+function applyPenaltyResolution(
   state: PossessionStatePayload,
-  players: Array<{ user_id: string; seat: number }>,
+  players: CachedPlayer[],
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number }>,
   shooterSeat: Seat
-): Promise<void> {
+): { goalScoredByUserId: string | null } {
   const keeperSeat = nextSeat(shooterSeat);
-  const shooterUserId = getUserIdBySeat(players, shooterSeat);
-  const keeperUserId = getUserIdBySeat(players, keeperSeat);
+  const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
+  const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return;
+    return { goalScoredByUserId: null };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -1108,10 +1356,13 @@ async function applyPenaltyResolution(
     isGoal = shooterTimeMs < keeperTimeMs;
   }
 
+  let goalScoredByUserId: string | null = null;
   if (isGoal) {
     if (shooterSeat === 1) state.penaltyGoals.seat1 += 1;
     else state.penaltyGoals.seat2 += 1;
-    await matchesRepo.updatePlayerGoalTotals(matchId, shooterUserId, { penaltyGoals: 1 });
+    const shooter = players.find((player) => player.userId === shooterUserId);
+    if (shooter) shooter.penaltyGoals += 1;
+    goalScoredByUserId = shooterUserId;
   }
 
   if (shooterSeat === 1) state.penalty.kicksTaken.seat1 += 1;
@@ -1121,7 +1372,7 @@ async function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return;
+    return { goalScoredByUserId };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -1135,9 +1386,10 @@ async function applyPenaltyResolution(
     state.penalty.suddenDeath = true;
   }
   state.currentQuestion = null;
+  return { goalScoredByUserId };
 }
 
-export async function resolvePossessionRound(
+async function resolvePossessionRoundDbPath(
   io: QuizballServer,
   matchId: string,
   qIndex: number,
@@ -1149,17 +1401,19 @@ export async function resolvePossessionRound(
 
   try {
     const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active' || match.engine !== 'possession_v1') return;
+    if (!match || match.status !== 'active') return;
     if (match.current_q_index > qIndex) return;
 
-    const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
+    // Parallelize independent reads for speed
+    const [questionPayload, expected, players, answers] = await Promise.all([
+      matchesService.buildMatchQuestionPayload(matchId, qIndex),
+      getExpectedAnswersForQuestion(matchId, qIndex),
+      matchesRepo.listMatchPlayers(matchId),
+      matchesRepo.listAnswersForQuestion(matchId, qIndex),
+    ]);
     if (!questionPayload) return;
-
-    const expected = await getExpectedAnswersForQuestion(matchId, qIndex);
     if (!expected) return;
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
-    const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
     const answeredUserIds = new Set(answers.map((answer) => answer.user_id));
 
     if (!fromTimeout && answers.length < expected.expectedUserIds.length) {
@@ -1168,7 +1422,7 @@ export async function resolvePossessionRound(
 
     for (const userId of expected.expectedUserIds) {
       if (answeredUserIds.has(userId)) continue;
-      await matchesRepo.insertMatchAnswer({
+      await matchesRepo.insertMatchAnswerIfMissing({
         matchId,
         qIndex,
         userId,
@@ -1182,8 +1436,13 @@ export async function resolvePossessionRound(
       });
     }
 
-    const finalAnswers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
-    const playerRows = await matchesRepo.listMatchPlayers(matchId);
+    // When not from timeout, all answers were already present (no backfill) — reuse cached data
+    const finalAnswers = fromTimeout
+      ? await matchesRepo.listAnswersForQuestion(matchId, qIndex)
+      : answers;
+    const playerRows = fromTimeout
+      ? await matchesRepo.listMatchPlayers(matchId)
+      : players;
 
     const playersPayload: Record<string, {
       selectedIndex: number | null;
@@ -1205,18 +1464,16 @@ export async function resolvePossessionRound(
       };
     }
 
-    io.to(`match:${matchId}`).emit('match:round_result', {
-      matchId,
-      qIndex,
-      correctIndex: questionPayload.correctIndex,
-      players: playersPayload,
-      phaseKind: questionPayload.phaseKind,
-      phaseRound: questionPayload.phaseRound,
-      shooterSeat: questionPayload.shooterSeat,
-      attackerSeat: questionPayload.attackerSeat,
-    });
-
+    // ── Snapshot state BEFORE mutations ──
     const state = parsePossessionState(match.state_payload);
+    const prevPossession = state.sharedPossession;
+    const prevMomentumSeat1 = state.seatMomentum.seat1;
+    const prevMomentumSeat2 = state.seatMomentum.seat2;
+    const prevGoalsSeat1 = state.goals.seat1;
+    const prevGoalsSeat2 = state.goals.seat2;
+    const prevPenGoalsSeat1 = state.penaltyGoals.seat1;
+    const prevPenGoalsSeat2 = state.penaltyGoals.seat2;
+
     const answerByUserId = new Map(finalAnswers.map((answer) => [
       answer.user_id,
       {
@@ -1225,6 +1482,7 @@ export async function resolvePossessionRound(
       },
     ]));
 
+    // ── Apply mutations ──
     if (questionPayload.phaseKind === 'normal') {
       const seat1UserId = getUserIdBySeat(players, 1);
       const seat2UserId = getUserIdBySeat(players, 2);
@@ -1243,24 +1501,84 @@ export async function resolvePossessionRound(
 
       applyNormalResolution(state, seat1Answer, seat2Answer);
     } else if (questionPayload.phaseKind === 'shot') {
-      await applyShotResolution(
-        matchId,
+      const shotOutcome = applyShotResolution(
         state,
-        players,
+        toCachedPlayers(players),
         new Map(finalAnswers.map((answer) => [answer.user_id, { is_correct: answer.is_correct }]))
       );
+      if (shotOutcome.goalScoredByUserId) {
+        await matchesRepo.updatePlayerGoalTotals(matchId, shotOutcome.goalScoredByUserId, { goals: 1 });
+      }
     } else {
-      await applyPenaltyResolution(
-        matchId,
+      const penaltyOutcome = applyPenaltyResolution(
         state,
-        players,
+        toCachedPlayers(players),
         new Map(finalAnswers.map((answer) => [answer.user_id, { is_correct: answer.is_correct, time_ms: answer.time_ms }])),
         asSeat(questionPayload.shooterSeat) ?? state.penalty.shooterSeat
       );
+      if (penaltyOutcome.goalScoredByUserId) {
+        await matchesRepo.updatePlayerGoalTotals(matchId, penaltyOutcome.goalScoredByUserId, { penaltyGoals: 1 });
+      }
     }
 
     state.currentQuestion = null;
 
+    // ── Compute deltas (post-mutation minus pre-mutation) ──
+    const deltas: MatchRoundResultDeltas = {
+      possessionDelta: state.sharedPossession - prevPossession,
+      momentumSeat1Delta: state.seatMomentum.seat1 - prevMomentumSeat1,
+      momentumSeat2Delta: state.seatMomentum.seat2 - prevMomentumSeat2,
+      shotOutcome: null,
+      penaltyOutcome: null,
+      goalScoredBySeat: null,
+    };
+
+    if (questionPayload.phaseKind === 'shot') {
+      const goalDiff1 = state.goals.seat1 - prevGoalsSeat1;
+      const goalDiff2 = state.goals.seat2 - prevGoalsSeat2;
+      if (goalDiff1 > 0) {
+        deltas.shotOutcome = 'goal';
+        deltas.goalScoredBySeat = 1;
+      } else if (goalDiff2 > 0) {
+        deltas.shotOutcome = 'goal';
+        deltas.goalScoredBySeat = 2;
+      } else {
+        // Defender correct → saved; both wrong → miss
+        const attackerSeat = questionPayload.attackerSeat ?? (prevPossession >= 50 ? 1 : 2);
+        const defenderSeat = attackerSeat === 1 ? 2 : 1;
+        const attackerUserId = getUserIdBySeat(players, attackerSeat as Seat);
+        const defenderUserId = getUserIdBySeat(players, defenderSeat as Seat);
+        const defenderCorrect = defenderUserId ? (answerByUserId.get(defenderUserId)?.is_correct ?? false) : false;
+        const attackerCorrect = attackerUserId ? (answerByUserId.get(attackerUserId)?.is_correct ?? false) : false;
+        deltas.shotOutcome = defenderCorrect ? 'saved' : (!attackerCorrect ? 'miss' : 'saved');
+      }
+    }
+
+    if (questionPayload.phaseKind === 'penalty') {
+      const penDiff1 = state.penaltyGoals.seat1 - prevPenGoalsSeat1;
+      const penDiff2 = state.penaltyGoals.seat2 - prevPenGoalsSeat2;
+      if (penDiff1 > 0 || penDiff2 > 0) {
+        deltas.penaltyOutcome = 'goal';
+        deltas.goalScoredBySeat = penDiff1 > 0 ? 1 : 2;
+      } else {
+        deltas.penaltyOutcome = 'saved';
+      }
+    }
+
+    // ── Emit round_result with deltas (AFTER mutations) ──
+    io.to(`match:${matchId}`).emit('match:round_result', {
+      matchId,
+      qIndex,
+      correctIndex: questionPayload.correctIndex,
+      players: playersPayload,
+      phaseKind: questionPayload.phaseKind,
+      phaseRound: questionPayload.phaseRound,
+      shooterSeat: questionPayload.shooterSeat,
+      attackerSeat: questionPayload.attackerSeat,
+      deltas,
+    });
+
+    // ── Persist and emit state ──
     const nextIndex = qIndex + 1;
     await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
     await emitMatchState(io, matchId, state);
@@ -1275,11 +1593,15 @@ export async function resolvePossessionRound(
       return;
     }
 
+    const nextQuestionDelay = state.phase === 'PENALTY_SHOOTOUT'
+      ? PENALTY_INTRO_DELAY_MS
+      : ROUND_RESULT_DELAY_MS;
+
     setTimeout(() => {
       void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
         logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
       });
-    }, ROUND_RESULT_DELAY_MS);
+    }, nextQuestionDelay);
   } finally {
     await releaseLock(lockKey, lock.token);
     clearQuestionTimer(matchId, qIndex);
@@ -1287,7 +1609,7 @@ export async function resolvePossessionRound(
   }
 }
 
-export async function handlePossessionAnswer(
+async function handlePossessionAnswerDbPath(
   io: QuizballServer,
   socket: QuizballSocket,
   payload: {
@@ -1300,7 +1622,7 @@ export async function handlePossessionAnswer(
   const { matchId, qIndex, selectedIndex, timeMs } = payload;
 
   const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active' || match.engine !== 'possession_v1') {
+  if (!match || match.status !== 'active') {
     return;
   }
 
@@ -1308,12 +1630,18 @@ export async function handlePossessionAnswer(
     return;
   }
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  // Parallelize independent reads: players, question payload, duplicate check, timing
+  const [players, questionPayload, existing, questionTiming] = await Promise.all([
+    matchesRepo.listMatchPlayers(matchId),
+    matchesService.buildMatchQuestionPayload(matchId, qIndex),
+    matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id),
+    matchesRepo.getMatchQuestionTiming(matchId, qIndex),
+  ]);
+
   const mySeat = getSeatFromUserId(players, socket.data.user.id);
   if (!mySeat) return;
-
-  const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
   if (!questionPayload) return;
+  if (existing) return;
 
   if (questionPayload.phaseKind === 'penalty') {
     const shooterSeat = asSeat(questionPayload.shooterSeat);
@@ -1327,13 +1655,24 @@ export async function handlePossessionAnswer(
     }
   }
 
-  const existing = await matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id);
-  if (existing) return;
-
-  const questionTiming = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
   const authoritativeTimeMs = questionTiming
     ? toAuthoritativeTimeMs(questionTiming, Date.now(), timeMs)
     : clamp(timeMs, 0, QUESTION_TIME_MS);
+  const clientTimeMs = clamp(timeMs, 0, QUESTION_TIME_MS);
+  const diffMs = Math.abs(authoritativeTimeMs - clientTimeMs);
+  if (diffMs > TIMING_DISCREPANCY_WARN_MS) {
+    logger.warn(
+      {
+        matchId,
+        qIndex,
+        userId: socket.data.user.id,
+        serverTimeMs: authoritativeTimeMs,
+        clientTimeMs,
+        diffMs,
+      },
+      'Match answer timing discrepancy detected'
+    );
+  }
 
   const isCorrect = selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
   const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
@@ -1359,8 +1698,11 @@ export async function handlePossessionAnswer(
   );
   if (!updatedPlayer) return;
 
-  const expected = await getExpectedAnswersForQuestion(matchId, qIndex);
-  const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
+  // Parallelize: check expected answers + count submitted answers
+  const [expected, answers] = await Promise.all([
+    getExpectedAnswersForQuestion(matchId, qIndex),
+    matchesRepo.listAnswersForQuestion(matchId, qIndex),
+  ]);
 
   const shouldWaitForOpponent = expected
     ? expected.expectedUserIds.length > 1 && answers.length < expected.expectedUserIds.length
@@ -1387,10 +1729,409 @@ export async function handlePossessionAnswer(
       opponentTotalPoints: updatedPlayer.total_points,
       pointsEarned,
       isCorrect,
+      selectedIndex,
     });
   }
 
   if (expected && answers.length >= expected.expectedUserIds.length) {
+    await resolvePossessionRound(io, matchId, qIndex, false);
+  }
+}
+
+export async function resolvePossessionRound(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  fromTimeout = false
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    await resolvePossessionRoundDbPath(io, matchId, qIndex, fromTimeout);
+    return;
+  }
+
+  const lockKey = `lock:match:${matchId}:resolve`;
+  const lock = await acquireLock(lockKey, 5000);
+  if (!lock.acquired || !lock.token) return;
+
+  try {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    if (cache.currentQIndex > qIndex) return;
+    if (cache.currentQIndex !== qIndex) return;
+
+    const question = cache.currentQuestion;
+    if (!question) return;
+
+    const expectedUserIds = getExpectedUserIds(cache);
+    if (!fromTimeout && answerCount(cache) < expectedUserIds.length) {
+      return;
+    }
+
+    if (fromTimeout) {
+      for (const userId of expectedUserIds) {
+        if (cache.answers[userId]) continue;
+        const backfill: CachedAnswer = {
+          userId,
+          selectedIndex: null,
+          isCorrect: false,
+          timeMs: QUESTION_TIME_MS,
+          pointsEarned: 0,
+          phaseKind: question.phaseKind,
+          phaseRound: question.phaseRound,
+          shooterSeat: question.shooterSeat,
+          answeredAt: new Date().toISOString(),
+        };
+        cache.answers[userId] = backfill;
+        fireAndForget('insertMatchAnswerIfMissing(timeout)', async () => {
+          await matchesRepo.insertMatchAnswerIfMissing({
+            matchId,
+            qIndex,
+            userId,
+            selectedIndex: null,
+            isCorrect: false,
+            timeMs: QUESTION_TIME_MS,
+            pointsEarned: 0,
+            phaseKind: question.phaseKind,
+            phaseRound: question.phaseRound,
+            shooterSeat: question.shooterSeat,
+          });
+        });
+      }
+    }
+
+    const playersPayload = buildPlayersPayloadFromCache(cache);
+    const state = cache.statePayload;
+    const prevPossession = state.sharedPossession;
+    const prevMomentumSeat1 = state.seatMomentum.seat1;
+    const prevMomentumSeat2 = state.seatMomentum.seat2;
+    const prevGoalsSeat1 = state.goals.seat1;
+    const prevGoalsSeat2 = state.goals.seat2;
+    const prevPenGoalsSeat1 = state.penaltyGoals.seat1;
+    const prevPenGoalsSeat2 = state.penaltyGoals.seat2;
+
+    const answerByUserId = toCachedAnswerByUserId(cache);
+    let goalScoredByUserId: string | null = null;
+
+    if (question.phaseKind === 'normal') {
+      const seat1UserId = getUserIdByCachedSeat(cache.players, 1);
+      const seat2UserId = getUserIdByCachedSeat(cache.players, 2);
+      const seat1Answer = seat1UserId
+        ? {
+          isCorrect: answerByUserId.get(seat1UserId)?.is_correct ?? false,
+          timeMs: answerByUserId.get(seat1UserId)?.time_ms ?? QUESTION_TIME_MS,
+        }
+        : { isCorrect: false, timeMs: QUESTION_TIME_MS };
+      const seat2Answer = seat2UserId
+        ? {
+          isCorrect: answerByUserId.get(seat2UserId)?.is_correct ?? false,
+          timeMs: answerByUserId.get(seat2UserId)?.time_ms ?? QUESTION_TIME_MS,
+        }
+        : { isCorrect: false, timeMs: QUESTION_TIME_MS };
+      applyNormalResolution(state, seat1Answer, seat2Answer);
+    } else if (question.phaseKind === 'shot') {
+      const shotOutcome = applyShotResolution(
+        state,
+        cache.players,
+        new Map(Object.entries(cache.answers).map(([userId, answer]) => [userId, { is_correct: answer.isCorrect }]))
+      );
+      goalScoredByUserId = shotOutcome.goalScoredByUserId;
+    } else {
+      const penaltyOutcome = applyPenaltyResolution(
+        state,
+        cache.players,
+        answerByUserId,
+        asSeat(question.shooterSeat) ?? state.penalty.shooterSeat
+      );
+      goalScoredByUserId = penaltyOutcome.goalScoredByUserId;
+    }
+
+    state.currentQuestion = null;
+
+    if (goalScoredByUserId) {
+      const delta = question.phaseKind === 'penalty' ? { penaltyGoals: 1 } : { goals: 1 };
+      fireAndForget('updatePlayerGoalTotals(resolve)', async () => {
+        const MAX_RETRIES = 3;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, delta);
+            return;
+          } catch (err) {
+            if (attempt === MAX_RETRIES) {
+              logger.error(
+                { error: err, matchId, userId: goalScoredByUserId, delta, phaseKind: question.phaseKind },
+                'updatePlayerGoalTotals failed after retries'
+              );
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
+          }
+        }
+      });
+    }
+
+    const deltas: MatchRoundResultDeltas = {
+      possessionDelta: state.sharedPossession - prevPossession,
+      momentumSeat1Delta: state.seatMomentum.seat1 - prevMomentumSeat1,
+      momentumSeat2Delta: state.seatMomentum.seat2 - prevMomentumSeat2,
+      shotOutcome: null,
+      penaltyOutcome: null,
+      goalScoredBySeat: null,
+    };
+
+    if (question.phaseKind === 'shot') {
+      const goalDiff1 = state.goals.seat1 - prevGoalsSeat1;
+      const goalDiff2 = state.goals.seat2 - prevGoalsSeat2;
+      if (goalDiff1 > 0) {
+        deltas.shotOutcome = 'goal';
+        deltas.goalScoredBySeat = 1;
+      } else if (goalDiff2 > 0) {
+        deltas.shotOutcome = 'goal';
+        deltas.goalScoredBySeat = 2;
+      } else {
+        const attackerSeat = question.attackerSeat ?? (prevPossession >= 50 ? 1 : 2);
+        const defenderSeat = attackerSeat === 1 ? 2 : 1;
+        const attackerUserId = getUserIdByCachedSeat(cache.players, attackerSeat as Seat);
+        const defenderUserId = getUserIdByCachedSeat(cache.players, defenderSeat as Seat);
+        const defenderCorrect = defenderUserId ? (answerByUserId.get(defenderUserId)?.is_correct ?? false) : false;
+        const attackerCorrect = attackerUserId ? (answerByUserId.get(attackerUserId)?.is_correct ?? false) : false;
+        deltas.shotOutcome = defenderCorrect ? 'saved' : (!attackerCorrect ? 'miss' : 'saved');
+      }
+    }
+
+    if (question.phaseKind === 'penalty') {
+      const penDiff1 = state.penaltyGoals.seat1 - prevPenGoalsSeat1;
+      const penDiff2 = state.penaltyGoals.seat2 - prevPenGoalsSeat2;
+      if (penDiff1 > 0 || penDiff2 > 0) {
+        deltas.penaltyOutcome = 'goal';
+        deltas.goalScoredBySeat = penDiff1 > 0 ? 1 : 2;
+      } else {
+        deltas.penaltyOutcome = 'saved';
+      }
+    }
+
+    io.to(`match:${matchId}`).emit('match:round_result', {
+      matchId,
+      qIndex,
+      correctIndex: question.correctIndex,
+      players: playersPayload,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      attackerSeat: question.attackerSeat,
+      deltas,
+    });
+
+    const nextIndex = qIndex + 1;
+    cache.currentQIndex = nextIndex;
+    cache.currentQuestion = null;
+    cache.answers = {};
+
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(resolve)', async () => {
+      await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
+    });
+    await emitMatchState(io, matchId, state);
+
+    if (state.phase === 'HALFTIME') {
+      scheduleHalftimeTimeout(io, matchId);
+      return;
+    }
+
+    if (state.phase === 'COMPLETED') {
+      await completePossessionMatch(io, matchId, state, cache);
+      return;
+    }
+
+    const nextQuestionDelay = state.phase === 'PENALTY_SHOOTOUT'
+      ? PENALTY_INTRO_DELAY_MS
+      : ROUND_RESULT_DELAY_MS;
+
+    setTimeout(() => {
+      void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
+        logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
+      });
+    }, nextQuestionDelay);
+  } finally {
+    await releaseLock(lockKey, lock.token);
+    clearQuestionTimer(matchId, qIndex);
+    clearAiAnswerTimer(matchId, qIndex);
+  }
+}
+
+export async function handlePossessionAnswer(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload: {
+    matchId: string;
+    qIndex: number;
+    selectedIndex: number | null;
+    timeMs: number;
+  }
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    await handlePossessionAnswerDbPath(io, socket, payload);
+    return;
+  }
+
+  const { matchId, qIndex, selectedIndex, timeMs } = payload;
+  const lockKey = `lock:match:${matchId}:answer`;
+  const lock = await acquireLock(lockKey, 2000);
+  if (!lock.acquired || !lock.token) {
+    socket.emit('error', {
+      code: 'MATCH_BUSY',
+      message: 'Match is busy. Please retry answer submission.',
+    });
+    return;
+  }
+
+  let committed: {
+    question: NonNullable<MatchCache['currentQuestion']>;
+    isCorrect: boolean;
+    pointsEarned: number;
+    authoritativeTimeMs: number;
+    myTotalPoints: number;
+    expectedCount: number;
+    answerCount: number;
+  } | null = null;
+
+  try {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    if (cache.currentQIndex !== qIndex) return;
+    if (!cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    if (!player) return;
+    if (hasUserAnswered(cache, socket.data.user.id)) return;
+
+    const question = cache.currentQuestion;
+    if (question.phaseKind === 'penalty') {
+      const shooterSeat = asSeat(question.shooterSeat);
+      const keeperSeat = shooterSeat === 1 ? 2 : 1;
+      if (player.seat !== shooterSeat && player.seat !== keeperSeat) {
+        socket.emit('error', {
+          code: 'MATCH_NOT_ALLOWED',
+          message: 'Only the shooter or keeper can answer this penalty question.',
+        });
+        return;
+      }
+    }
+
+    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
+      {
+        shownAt: question.shownAt,
+        deadlineAt: question.deadlineAt,
+      },
+      Date.now(),
+      timeMs
+    );
+    const clientTimeMs = clamp(timeMs, 0, QUESTION_TIME_MS);
+    const diffMs = Math.abs(authoritativeTimeMs - clientTimeMs);
+    if (diffMs > TIMING_DISCREPANCY_WARN_MS) {
+      logger.warn(
+        {
+          matchId,
+          qIndex,
+          userId: socket.data.user.id,
+          serverTimeMs: authoritativeTimeMs,
+          clientTimeMs,
+          diffMs,
+        },
+        'Match answer timing discrepancy detected'
+      );
+    }
+    const isCorrect = selectedIndex !== null && selectedIndex === question.correctIndex;
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
+
+    const answer: CachedAnswer = {
+      userId: socket.data.user.id,
+      selectedIndex,
+      isCorrect,
+      timeMs: authoritativeTimeMs,
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      answeredAt: new Date().toISOString(),
+    };
+
+    cache.answers[socket.data.user.id] = answer;
+    player.totalPoints += pointsEarned;
+    if (isCorrect) player.correctAnswers += 1;
+
+    const expectedCount = getExpectedUserIds(cache).length;
+    const currentAnswerCount = answerCount(cache);
+
+    await setMatchCache(cache);
+
+    committed = {
+      question,
+      isCorrect,
+      pointsEarned,
+      authoritativeTimeMs,
+      myTotalPoints: player.totalPoints,
+      expectedCount,
+      answerCount: currentAnswerCount,
+    };
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
+
+  if (!committed) return;
+
+  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
+
+  fireAndForget('insertMatchAnswer(handlePossessionAnswer)', async () => {
+    await matchesRepo.insertMatchAnswerIfMissing({
+      matchId,
+      qIndex,
+      userId: socket.data.user.id,
+      selectedIndex,
+      isCorrect: committed.isCorrect,
+      timeMs: committed.authoritativeTimeMs,
+      pointsEarned: committed.pointsEarned,
+      phaseKind: committed.question.phaseKind,
+      phaseRound: committed.question.phaseRound,
+      shooterSeat: committed.question.shooterSeat,
+    });
+  });
+  fireAndForget('updatePlayerTotals(handlePossessionAnswer)', async () => {
+    await matchesRepo.updatePlayerTotals(
+      matchId,
+      socket.data.user.id,
+      committed.pointsEarned,
+      committed.isCorrect
+    );
+  });
+
+  socket.emit('match:answer_ack', {
+    matchId,
+    qIndex,
+    selectedIndex,
+    isCorrect: committed.isCorrect,
+    correctIndex: committed.question.correctIndex,
+    myTotalPoints: committed.myTotalPoints,
+    oppAnswered: !shouldWaitForOpponent,
+    pointsEarned: committed.pointsEarned,
+    phaseKind: committed.question.phaseKind,
+    phaseRound: committed.question.phaseRound,
+    shooterSeat: committed.question.shooterSeat,
+  });
+
+  if (committed.question.phaseKind !== 'penalty') {
+    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+      matchId,
+      qIndex,
+      opponentTotalPoints: committed.myTotalPoints,
+      pointsEarned: committed.pointsEarned,
+      isCorrect: committed.isCorrect,
+      selectedIndex,
+    });
+  }
+
+  if (committed.answerCount >= committed.expectedCount) {
     await resolvePossessionRound(io, matchId, qIndex, false);
   }
 }
@@ -1410,16 +2151,16 @@ export async function devSkipToPossessionPhase(
   matchId: string,
   target: 'halftime' | 'shot' | 'penalties' | 'second_half'
 ): Promise<void> {
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active' || match.engine !== 'possession_v1') return;
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return;
 
   // Cancel all active timers
-  clearQuestionTimer(matchId, match.current_q_index);
-  clearAiAnswerTimer(matchId, match.current_q_index);
+  clearQuestionTimer(matchId, cache.currentQIndex);
+  clearAiAnswerTimer(matchId, cache.currentQIndex);
   clearHalftimeTimer(matchId);
 
-  const state = parsePossessionState(match.state_payload);
-  const nextQIndex = match.current_q_index + 1;
+  const state = cache.statePayload;
+  const nextQIndex = cache.currentQIndex + 1;
 
   switch (target) {
     case 'halftime':
@@ -1464,7 +2205,13 @@ export async function devSkipToPossessionPhase(
       break;
   }
 
-  await matchesRepo.setMatchStatePayload(matchId, state, nextQIndex);
+  cache.currentQIndex = nextQIndex;
+  cache.currentQuestion = null;
+  cache.answers = {};
+  await setMatchCache(cache);
+  fireAndForget('setMatchStatePayload(devSkip)', async () => {
+    await matchesRepo.setMatchStatePayload(matchId, state, nextQIndex);
+  });
   await emitMatchState(io, matchId, state);
 
   if (target === 'halftime') {

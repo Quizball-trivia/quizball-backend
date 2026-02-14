@@ -13,7 +13,7 @@ WHERE u.email IS NULL
 -- Partial index for cleanup queries targeting AI users by age
 CREATE INDEX idx_users_is_ai_created ON users (created_at) WHERE is_ai = true;
 
--- RPC function for the edge function cleanup job to call
+-- RPC function called by pg_cron to delete stale AI users
 CREATE OR REPLACE FUNCTION cleanup_ai_users()
 RETURNS integer
 LANGUAGE plpgsql
@@ -29,3 +29,8 @@ BEGIN
   RETURN deleted_count;
 END;
 $$;
+
+-- Restrict execution: only postgres (used by pg_cron) can call this function
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM anon;
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM authenticated;

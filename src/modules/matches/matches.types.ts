@@ -1,11 +1,9 @@
-export type MatchEngine = 'classic' | 'possession_v1';
 export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'penalty';
 
 export interface MatchRow {
   id: string;
   lobby_id: string | null;
   mode: 'friendly' | 'ranked';
-  engine: MatchEngine;
   status: 'active' | 'completed' | 'abandoned';
   category_a_id: string;
   category_b_id: string;

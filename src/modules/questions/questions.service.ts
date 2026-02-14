@@ -8,6 +8,7 @@ import {
 } from './questions.repo.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
+import { translationService } from './translation.service.js';
 import { logger } from '../../core/logger.js';
 import type {
   BulkCreateResponse,
@@ -301,6 +302,14 @@ export const questionsService = {
       },
       'Bulk question upload completed'
     );
+
+    // Fire-and-forget: auto-translate newly created questions to Georgian
+    if (results.successful > 0) {
+      const createdIds = results.created.map((q) => q.id);
+      translationService
+        .translateInBackground(createdIds, categoryId)
+        .catch((err) => logger.error({ error: err }, 'Background translation trigger failed'));
+    }
 
     return results;
   },

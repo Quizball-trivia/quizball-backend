@@ -10,6 +10,7 @@ import { devSkipToPossessionPhase } from '../possession-match-flow.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
 const AI_REDIS_TTL_SEC = 7200;
+const DEV_MATCH_START_COUNTDOWN_SEC = 2;
 
 /**
  * Dev-only realtime service for fast iteration tooling.
@@ -59,15 +60,19 @@ export const devRealtimeService = {
 
     // 7. Set AI Redis key so AI answer scheduling works
     const redis = getRedisClient();
-    if (redis) {
+    if (redis?.isOpen) {
       await redis.set(rankedAiMatchKey(result.match.id), aiUser.id, { EX: AI_REDIS_TTL_SEC });
+    } else {
+      logger.warn({ matchId: result.match.id }, 'Redis unavailable during dev quick match; continuing without AI Redis marker');
     }
 
     // 8. Start match (emits match:start, moves socket, sends first question)
-    await beginMatchForLobby(io, lobby.id, result.match.id);
+    await beginMatchForLobby(io, lobby.id, result.match.id, {
+      countdownSec: DEV_MATCH_START_COUNTDOWN_SEC,
+    });
 
     logger.info(
-      { matchId: result.match.id, userId, aiUserId: aiUser.id, engine: result.match.engine },
+      { matchId: result.match.id, userId, aiUserId: aiUser.id },
       'Dev quick match started'
     );
   },

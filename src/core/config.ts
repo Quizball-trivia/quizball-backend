@@ -24,10 +24,6 @@ const configSchema = z.object({
     .enum(['true', 'false', '1', '0', ''])
     .default('false')
     .transform((val) => val === 'true' || val === '1'),
-  POSSESSION_V1_ENABLED: z
-    .enum(['true', 'false', '1', '0', ''])
-    .default('true')
-    .transform((val) => val === 'true' || val === '1'),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
@@ -54,6 +50,10 @@ const configSchema = z.object({
 
   // API Server URL (for OpenAPI documentation)
   API_BASE_URL: z.string().url().optional(),
+
+  // OpenRouter (AI translation)
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;

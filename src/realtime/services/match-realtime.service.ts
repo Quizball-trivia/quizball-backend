@@ -395,9 +395,18 @@ export async function beginMatchForLobby(
   );
 
   setTimeout(() => {
-    void sendMatchQuestion(io, matchId, 0).catch((error) => {
-      logger.error({ error, matchId }, 'Failed to send first match question after countdown');
-    });
+    void (async () => {
+      try {
+        const match = await matchesRepo.getMatch(matchId);
+        if (!match || match.status !== 'active') {
+          logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
+          return;
+        }
+        await sendMatchQuestion(io, matchId, 0);
+      } catch (error) {
+        logger.error({ error, matchId }, 'Failed to send first match question after countdown');
+      }
+    })();
   }, countdownMs);
 }
 

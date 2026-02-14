@@ -130,14 +130,18 @@ class OpenRouterTranslationProvider {
     } catch (error) {
       clearTimeout(timeoutId);
 
-      // Check if the error was due to timeout/abort
+      if (error instanceof ExternalServiceError) throw error;
+
       if (error instanceof Error && error.name === 'AbortError') {
         logger.error({ timeout: REQUEST_TIMEOUT_MS }, 'OpenRouter API request timed out');
         throw new ExternalServiceError('Translation request timed out');
       }
 
-      // Re-throw other errors
-      throw error;
+      logger.error({ error, model: this.model }, 'OpenRouter API request failed');
+      throw new ExternalServiceError(
+        `OpenRouter API request failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        error
+      );
     }
   }
 

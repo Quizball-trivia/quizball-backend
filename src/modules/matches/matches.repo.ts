@@ -361,18 +361,22 @@ export const matchesRepo = {
     phaseRound?: number | null;
     shooterSeat?: number | null;
   }): Promise<MatchAnswerRow | null> {
-    const [row] = await sql<MatchAnswerRow[]>`
-      INSERT INTO match_answers (
-        match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
-      )
-      VALUES (
-        ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-        ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-      )
-      ON CONFLICT (match_id, q_index, user_id) DO NOTHING
-      RETURNING *
-    `;
-    return row ?? null;
+    try {
+      const [row] = await sql<MatchAnswerRow[]>`
+        INSERT INTO match_answers (
+          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
+        )
+        VALUES (
+          ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
+          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
+        )
+        ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+        RETURNING *
+      `;
+      return row ?? null;
+    } catch (err) {
+      throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
+    }
   },
 
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {

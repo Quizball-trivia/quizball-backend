@@ -247,7 +247,6 @@ function getTacticModifiers(tactic: PossessionTactic | null): TacticModifiers {
 function toMatchStatePayload(matchId: string, state: PossessionStatePayload): MatchStatePayload {
   const phaseKind = state.currentQuestion?.phaseKind ?? phaseKindFromState(state);
   const phaseRound = state.currentQuestion?.phaseRound ?? 0;
-  state.stateVersionCounter += 1;
   return {
     matchId,
     phase: state.phase,
@@ -280,12 +279,14 @@ function toMatchStatePayload(matchId: string, state: PossessionStatePayload): Ma
 }
 
 async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
+  state.stateVersionCounter += 1;
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
 }
 
 export async function emitPossessionStateToSocket(socket: QuizballSocket, matchId: string): Promise<void> {
   const cache = await getMatchCacheOrRebuild(matchId);
   if (cache) {
+    cache.statePayload.stateVersionCounter += 1;
     socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
     return;
   }
@@ -293,6 +294,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return;
   const state = parsePossessionState(match.state_payload);
+  state.stateVersionCounter += 1;
   socket.emit('match:state', toMatchStatePayload(matchId, state));
 }
 
@@ -1847,12 +1849,24 @@ export async function resolvePossessionRound(
     state.currentQuestion = null;
 
     if (goalScoredByUserId) {
+      const delta = question.phaseKind === 'penalty' ? { penaltyGoals: 1 } : { goals: 1 };
       fireAndForget('updatePlayerGoalTotals(resolve)', async () => {
-        await matchesRepo.updatePlayerGoalTotals(
-          matchId,
-          goalScoredByUserId,
-          question.phaseKind === 'penalty' ? { penaltyGoals: 1 } : { goals: 1 }
-        );
+        const MAX_RETRIES = 3;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, delta);
+            return;
+          } catch (err) {
+            if (attempt === MAX_RETRIES) {
+              logger.error(
+                { error: err, matchId, userId: goalScoredByUserId, delta, phaseKind: question.phaseKind },
+                'updatePlayerGoalTotals failed after retries'
+              );
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
+          }
+        }
       });
     }
 

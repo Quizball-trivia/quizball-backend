@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
@@ -88,6 +89,7 @@ router.post(
   '/translate/backfill',
   authMiddleware,
   requireRole('admin'),
+  validate({ body: z.object({}).strict() }),
   questionsController.translateBackfill
 );
 
@@ -100,6 +102,7 @@ router.get(
   '/translate/status',
   authMiddleware,
   requireRole('admin'),
+  validate({ query: z.object({}).strict() }),
   questionsController.translateStatus
 );
 

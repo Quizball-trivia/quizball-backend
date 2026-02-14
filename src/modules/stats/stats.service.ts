@@ -1,5 +1,6 @@
 import { statsRepo } from './stats.repo.js';
 import { BadRequestError } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 
 export interface HeadToHeadSummary {
   userAId: string;
@@ -93,6 +94,9 @@ export const statsService = {
             : 'loss';
 
       const rawMethod = row.winner_decision_method;
+      if (rawMethod && !(VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)) {
+        logger.warn({ matchId: row.match_id, value: rawMethod }, 'Unexpected winner_decision_method');
+      }
       const winnerDecisionMethod: WinnerDecisionMethod | null =
         rawMethod && (VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)
           ? (rawMethod as WinnerDecisionMethod)

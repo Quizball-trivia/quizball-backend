@@ -4,13 +4,18 @@ import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
-import type { MatchAnswerPayload } from '../schemas/match.schemas.js';
+import type { MatchAnswerPayload, MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
-import { calculatePoints } from '../scoring.js';
-import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
+import {
+  buildInitialCache,
+  deleteMatchCache,
+  getMatchCacheOrRebuild,
+  setMatchCache,
+  type MatchCache,
+} from '../match-cache.js';
 import {
   cancelPossessionHalftimeTimer,
   emitPossessionStateToSocket,
@@ -19,15 +24,25 @@ import {
 } from '../possession-match-flow.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
+const MATCH_START_COUNTDOWN_SEC = 5;
 const PRESENCE_TTL_SEC = 45;
 const DISCONNECT_TTL_SEC = 60;
 const GRACE_TTL_SEC = 35;
 const FORFEIT_TTL_SEC = 600;
-const ANSWER_TIME_TOLERANCE_MS = 1000;
 
 type LastMatchReplay = {
   matchId: string;
   resultVersion: number;
+};
+
+type MatchParticipantSnapshot = {
+  user_id: string;
+  seat: 1 | 2;
+  total_points: number;
+  correct_answers: number;
+  goals: number;
+  penalty_goals: number;
+  avg_time_ms: number | null;
 };
 
 function matchPresenceKey(matchId: string, userId: string): string {
@@ -95,6 +110,82 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
   };
 }
 
+function participantSnapshotFromCache(cache: MatchCache): MatchParticipantSnapshot[] {
+  return cache.players.map((player) => ({
+    user_id: player.userId,
+    seat: player.seat,
+    total_points: player.totalPoints,
+    correct_answers: player.correctAnswers,
+    goals: player.goals,
+    penalty_goals: player.penaltyGoals,
+    avg_time_ms: player.avgTimeMs,
+  }));
+}
+
+function participantSnapshotFromRows(rows: Array<{
+  user_id: string;
+  seat: number;
+  total_points: number;
+  correct_answers: number;
+  goals: number;
+  penalty_goals: number;
+  avg_time_ms: number | null;
+}>): MatchParticipantSnapshot[] {
+  return rows.map((row) => ({
+    user_id: row.user_id,
+    seat: row.seat === 2 ? 2 : 1,
+    total_points: row.total_points,
+    correct_answers: row.correct_answers,
+    goals: row.goals,
+    penalty_goals: row.penalty_goals,
+    avg_time_ms: row.avg_time_ms,
+  }));
+}
+
+async function getParticipantSnapshot(matchId: string): Promise<{
+  participants: MatchParticipantSnapshot[];
+  cache: MatchCache | null;
+}> {
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (cache && cache.players.length > 0) {
+    return {
+      participants: participantSnapshotFromCache(cache),
+      cache,
+    };
+  }
+
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  return {
+    participants: participantSnapshotFromRows(players),
+    cache: null,
+  };
+}
+
+async function getOpponentInfoFromParticipants(
+  participants: MatchParticipantSnapshot[],
+  userId: string
+): Promise<{
+  id: string;
+  username: string;
+  avatarUrl: string | null;
+}> {
+  const opponent = participants.find((player) => player.user_id !== userId);
+  if (!opponent) {
+    return {
+      id: 'opponent',
+      username: 'Opponent',
+      avatarUrl: null,
+    };
+  }
+
+  const opponentUser = await usersRepo.getById(opponent.user_id);
+  return {
+    id: opponent.user_id,
+    username: opponentUser?.nickname ?? 'Player',
+    avatarUrl: opponentUser?.avatar_url ?? null,
+  };
+}
+
 async function emitRejoinAvailable(
   socket: QuizballSocket,
   match: { id: string; mode: 'friendly' | 'ranked' },
@@ -112,7 +203,6 @@ async function emitRejoinAvailable(
 
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
-  engine?: 'classic' | 'possession_v1';
   winnerId: string | null;
   players: Record<string, {
     totalPoints: number;
@@ -123,7 +213,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   }>;
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
   totalPointsFallbackUsed?: boolean;
 } | null> {
   const match = await matchesRepo.getMatch(matchId);
@@ -170,13 +260,10 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   }
 
   const winnerDecisionMethod =
-    match.engine === 'possession_v1'
-      ? ((match.state_payload as { winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' } | null)?.winnerDecisionMethod ?? null)
-      : undefined;
+    (match.state_payload as { winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' } | null)?.winnerDecisionMethod ?? null;
 
   return {
     matchId,
-    engine: match.engine,
     winnerId: match.winner_user_id,
     players: payloadPlayers,
     durationMs,
@@ -189,17 +276,50 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 export async function beginMatchForLobby(
   io: QuizballServer,
   lobbyId: string,
-  matchId: string
+  matchId: string,
+  options?: { countdownSec?: number }
 ): Promise<void> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length !== 2) {
-    logger.warn({ lobbyId, memberCount: members.length }, 'Match start aborted: invalid member count');
+  const countdownSec = Math.max(
+    0,
+    Number.isFinite(options?.countdownSec)
+      ? Math.floor(options?.countdownSec ?? MATCH_START_COUNTDOWN_SEC)
+      : MATCH_START_COUNTDOWN_SEC
+  );
+  const countdownMs = countdownSec * 1000;
+
+  const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url'>;
+  const match = await matchesRepo.getMatch(matchId);
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  if (!match || players.length !== 2) {
+    logger.warn(
+      { lobbyId, matchId, hasMatch: Boolean(match), playerCount: players.length },
+      'Match start aborted: invalid match context'
+    );
     return;
+  }
+
+  let members: MatchStartMember[] = lobbyMembers.map((member) => ({
+    user_id: member.user_id,
+    nickname: member.nickname,
+    avatar_url: member.avatar_url,
+  }));
+  if (members.length !== 2) {
+    logger.warn(
+      { lobbyId, matchId, memberCount: members.length },
+      'Match start member count invalid, falling back to match players'
+    );
+    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
+    members = players.map((player, index) => ({
+      user_id: player.user_id,
+      nickname: users[index]?.nickname ?? 'Player',
+      avatar_url: users[index]?.avatar_url ?? null,
+    }));
   }
 
   // Lobby is no longer needed for membership tracking once match starts.
   await lobbiesRepo.setLobbyStatus(lobbyId, 'closed');
-  await Promise.all(members.map((member) => lobbiesRepo.removeMember(lobbyId, member.user_id)));
+  await Promise.all(lobbyMembers.map((member) => lobbiesRepo.removeMember(lobbyId, member.user_id)));
 
   const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
   sockets.forEach((socket) => {
@@ -209,16 +329,26 @@ export async function beginMatchForLobby(
     socket.data.matchId = matchId;
   });
 
+  await Promise.all(
+    members.map(async (member) => {
+      const userSockets = await io.in(`user:${member.user_id}`).fetchSockets();
+      userSockets.forEach((socket) => {
+        socket.leave(`lobby:${lobbyId}`);
+        socket.data.lobbyId = undefined;
+        socket.join(`match:${matchId}`);
+        socket.data.matchId = matchId;
+      });
+    })
+  );
+
   const memberA = members[0];
   const memberB = members[1];
-  const match = await matchesRepo.getMatch(matchId);
-  const engine = match?.engine ?? 'classic';
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const cache = buildInitialCache({ match, players });
+  await setMatchCache(cache);
   const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat as 1 | 2]));
 
   io.to(`user:${memberA.user_id}`).emit('match:start', {
     matchId,
-    engine,
     mySeat: seatByUserId.get(memberA.user_id) ?? undefined,
     opponent: {
       id: memberB.user_id,
@@ -229,7 +359,6 @@ export async function beginMatchForLobby(
 
   io.to(`user:${memberB.user_id}`).emit('match:start', {
     matchId,
-    engine,
     mySeat: seatByUserId.get(memberB.user_id) ?? undefined,
     opponent: {
       id: memberA.user_id,
@@ -239,7 +368,7 @@ export async function beginMatchForLobby(
   });
 
   const redis = getRedisClient();
-  if (redis) {
+  if (redis?.isOpen) {
     if (match?.mode === 'ranked') {
       const aiUserId = await redis.get(rankedAiLobbyKey(lobbyId));
       if (aiUserId) {
@@ -254,31 +383,25 @@ export async function beginMatchForLobby(
     ]);
   }
 
-  await sendMatchQuestion(io, matchId, 0);
+  const startsAt = new Date(Date.now() + countdownMs).toISOString();
+  io.to(`match:${matchId}`).emit('match:countdown', {
+    matchId,
+    seconds: countdownSec,
+    startsAt,
+  });
+  logger.info(
+    { matchId, seconds: countdownSec, startsAt },
+    'Match start countdown scheduled'
+  );
+
+  setTimeout(() => {
+    void sendMatchQuestion(io, matchId, 0).catch((error) => {
+      logger.error({ error, matchId }, 'Failed to send first match question after countdown');
+    });
+  }, countdownMs);
 }
 
 
-
-function toAuthoritativeTimeMs(questionTiming: {
-  shown_at: string | null;
-  deadline_at: string | null;
-}, nowMs: number): number | null {
-  if (questionTiming.shown_at) {
-    const shownAtMs = new Date(questionTiming.shown_at).getTime();
-    if (Number.isFinite(shownAtMs)) {
-      return nowMs - shownAtMs;
-    }
-  }
-
-  if (questionTiming.deadline_at) {
-    const deadlineMs = new Date(questionTiming.deadline_at).getTime();
-    if (Number.isFinite(deadlineMs)) {
-      return QUESTION_TIME_MS - (deadlineMs - nowMs);
-    }
-  }
-
-  return null;
-}
 
 export const matchRealtimeService = {
   async rejoinActiveMatchOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
@@ -289,18 +412,15 @@ export const matchRealtimeService = {
     socket.join(`match:${match.id}`);
     socket.data.matchId = match.id;
 
-    const opponent = await getOpponentInfo(match.id, userId);
-    const players = await matchesRepo.listMatchPlayers(match.id);
-    const mySeat = players.find((player) => player.user_id === userId)?.seat;
+    const { participants } = await getParticipantSnapshot(match.id);
+    const opponent = await getOpponentInfoFromParticipants(participants, userId);
+    const mySeat = participants.find((player) => player.user_id === userId)?.seat;
     socket.emit('match:start', {
       matchId: match.id,
-      engine: match.engine,
       mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
       opponent,
     });
-    if (match.engine === 'possession_v1') {
-      await emitPossessionStateToSocket(socket, match.id);
-    }
+    await emitPossessionStateToSocket(socket, match.id);
 
     const redis = getRedisClient();
     if (redis) {
@@ -383,7 +503,7 @@ export const matchRealtimeService = {
           return;
         }
 
-        const roster = await matchesRepo.listMatchPlayers(activeMatch.id);
+        const { participants: roster, cache } = await getParticipantSnapshot(activeMatch.id);
         const isParticipant = roster.some((player) => player.user_id === userId);
         if (!isParticipant) {
           socket.emit('error', {
@@ -391,6 +511,20 @@ export const matchRealtimeService = {
             message: 'You are not a participant in this match',
           });
           return;
+        }
+
+        if (cache && cache.status === 'active') {
+          await matchesRepo.setMatchStatePayload(activeMatch.id, cache.statePayload, cache.currentQIndex);
+          await Promise.all(
+            cache.players.map((player) =>
+              matchesRepo.setPlayerFinalTotals(activeMatch.id, player.userId, {
+                totalPoints: player.totalPoints,
+                correctAnswers: player.correctAnswers,
+                goals: player.goals,
+                penaltyGoals: player.penaltyGoals,
+              })
+            )
+          );
         }
 
         const winnerId = roster.find((player) => player.user_id !== userId)?.user_id ?? null;
@@ -411,9 +545,17 @@ export const matchRealtimeService = {
           );
         }
 
+        // Mark decision method as forfeit before completing
+        const currentPayload = (cache?.statePayload ?? activeMatch.state_payload ?? {}) as Record<string, unknown>;
+        await matchesRepo.setMatchStatePayload(activeMatch.id, {
+          ...currentPayload,
+          winnerDecisionMethod: 'forfeit',
+        });
+
         cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
         cancelPossessionHalftimeTimer(activeMatch.id);
         await matchesRepo.completeMatch(activeMatch.id, winnerId);
+        await deleteMatchCache(activeMatch.id);
 
         const avgTimes = await matchesService.computeAvgTimes(activeMatch.id);
         for (const player of roster) {
@@ -491,8 +633,8 @@ export const matchRealtimeService = {
           return;
         }
 
-        const players = await matchesRepo.listMatchPlayers(match.id);
-        const isParticipant = players.some((player) => player.user_id === userId);
+        const { participants } = await getParticipantSnapshot(match.id);
+        const isParticipant = participants.some((player) => player.user_id === userId);
         if (!isParticipant) {
           socket.emit('error', {
             code: 'MATCH_NOT_ALLOWED',
@@ -509,17 +651,14 @@ export const matchRealtimeService = {
           await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
         }
 
-        const opponent = await getOpponentInfo(match.id, userId);
-        const mySeat = players.find((player) => player.user_id === userId)?.seat;
+        const opponent = await getOpponentInfoFromParticipants(participants, userId);
+        const mySeat = participants.find((player) => player.user_id === userId)?.seat;
         socket.emit('match:start', {
           matchId: match.id,
-          engine: match.engine,
           mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
           opponent,
         });
-        if (match.engine === 'possession_v1') {
-          await emitPossessionStateToSocket(socket, match.id);
-        }
+        await emitPossessionStateToSocket(socket, match.id);
 
         if (!redis) return;
 
@@ -621,17 +760,12 @@ export const matchRealtimeService = {
       nextQIndex: match.current_q_index,
     });
 
-    if (match.engine === 'possession_v1') {
-      const activeQuestion = await matchesRepo.getMatchQuestion(matchId, match.current_q_index);
-      if (activeQuestion) {
-        await resolveRound(io, matchId, match.current_q_index, true);
-        return;
-      }
-      await sendMatchQuestion(io, matchId, match.current_q_index);
+    const activeQuestion = await matchesRepo.getMatchQuestion(matchId, match.current_q_index);
+    if (activeQuestion) {
+      await resolveRound(io, matchId, match.current_q_index, true);
       return;
     }
-
-    await resolveRound(io, matchId, match.current_q_index, true);
+    await sendMatchQuestion(io, matchId, match.current_q_index);
   },
 
   async handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
@@ -697,6 +831,7 @@ export const matchRealtimeService = {
 
         if (disconnected.length === roster.length) {
           await matchesService.abandonMatch(matchId);
+          await deleteMatchCache(matchId);
           cancelPossessionHalftimeTimer(matchId);
           io.to(`match:${matchId}`).emit('error', {
             code: 'MATCH_ABANDONED',
@@ -734,7 +869,16 @@ export const matchRealtimeService = {
             finalCorrect
           );
         }
+
+        // Mark decision method as forfeit before completing
+        const statePayload = (activeMatch.state_payload ?? {}) as Record<string, unknown>;
+        await matchesRepo.setMatchStatePayload(matchId, {
+          ...statePayload,
+          winnerDecisionMethod: 'forfeit',
+        });
+
         await matchesRepo.completeMatch(matchId, winnerId);
+        await deleteMatchCache(matchId);
         cancelPossessionHalftimeTimer(matchId);
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);
@@ -780,14 +924,6 @@ export const matchRealtimeService = {
       return;
     }
 
-    if (match.engine !== 'possession_v1') {
-      socket.emit('error', {
-        code: 'MATCH_INVALID_PHASE',
-        message: 'Tactic selection is only available in possession matches.',
-      });
-      return;
-    }
-
     await handlePossessionTacticSelect(io, socket, payload);
   },
 
@@ -796,21 +932,7 @@ export const matchRealtimeService = {
     socket: QuizballSocket,
     payload: MatchAnswerPayload
   ): Promise<void> {
-    const { matchId, qIndex, selectedIndex, timeMs } = payload;
-
-    const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active') {
-      logger.warn({ matchId, qIndex }, 'Match answer ignored: match not active');
-      return;
-    }
-
-    if (match.current_q_index !== qIndex) {
-      logger.warn(
-        { matchId, qIndex, current: match.current_q_index },
-        'Answer for non-current question'
-      );
-      return;
-    }
+    const { matchId } = payload;
 
     const redis = getRedisClient();
     if (redis) {
@@ -824,111 +946,6 @@ export const matchRealtimeService = {
       }
     }
 
-    if (match.engine === 'possession_v1') {
-      await handlePossessionAnswer(io, socket, payload);
-      return;
-    }
-
-    const existing = await matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id);
-    if (existing) {
-      logger.debug({ matchId, qIndex, userId: socket.data.user.id }, 'Duplicate answer ignored');
-      return;
-    }
-
-    const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
-    if (!questionPayload) {
-      logger.warn({ matchId, qIndex }, 'Match answer ignored: question not found');
-      return;
-    }
-
-    const isCorrect =
-      selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
-    const questionTiming = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
-    const serverTimeMsRaw = questionTiming
-      ? toAuthoritativeTimeMs(questionTiming, Date.now())
-      : null;
-    const authoritativeTimeMs = Math.max(
-      0,
-      Math.min(
-        QUESTION_TIME_MS,
-        Math.round(serverTimeMsRaw ?? timeMs)
-      )
-    );
-
-    if (serverTimeMsRaw !== null) {
-      const diffMs = Math.abs(authoritativeTimeMs - timeMs);
-      if (diffMs > ANSWER_TIME_TOLERANCE_MS) {
-        logger.warn(
-          {
-            matchId,
-            qIndex,
-            userId: socket.data.user.id,
-            serverTimeMs: authoritativeTimeMs,
-            clientTimeMs: timeMs,
-            diffMs,
-          },
-          'Match answer timing discrepancy detected'
-        );
-      }
-    }
-
-    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
-
-    try {
-      await matchesRepo.insertMatchAnswer({
-        matchId,
-        qIndex,
-        userId: socket.data.user.id,
-        selectedIndex,
-        isCorrect,
-        timeMs: authoritativeTimeMs,
-        pointsEarned,
-      });
-    } catch (error) {
-      logger.warn({ error, matchId, qIndex }, 'Failed to insert match answer');
-      return;
-    }
-
-    const updatedPlayer = await matchesRepo.updatePlayerTotals(
-      matchId,
-      socket.data.user.id,
-      pointsEarned,
-      isCorrect
-    );
-    if (!updatedPlayer) {
-      logger.warn({ matchId, userId: socket.data.user.id }, 'Match answer ignored: player not found');
-      return;
-    }
-
-    const players = await matchesRepo.listMatchPlayers(matchId);
-    const opponent = players.find((p) => p.user_id !== socket.data.user.id);
-    const opponentAnswer = opponent
-      ? await matchesRepo.getAnswerForUser(matchId, qIndex, opponent.user_id)
-      : null;
-
-    socket.emit('match:answer_ack', {
-      matchId,
-      qIndex,
-      selectedIndex,
-      isCorrect,
-      correctIndex: questionPayload.correctIndex,
-      myTotalPoints: updatedPlayer.total_points,
-      oppAnswered: !!opponentAnswer,
-      pointsEarned,
-    });
-
-    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
-      matchId,
-      qIndex,
-      // To the other client, "opponent" is the current answerer.
-      opponentTotalPoints: updatedPlayer.total_points,
-      pointsEarned,
-      isCorrect,
-    });
-
-    const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
-    if (answers.length >= players.length) {
-      await resolveRound(io, matchId, qIndex, false);
-    }
+    await handlePossessionAnswer(io, socket, payload);
   },
 };

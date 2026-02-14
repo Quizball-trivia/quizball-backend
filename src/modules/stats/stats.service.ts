@@ -11,6 +11,9 @@ export interface HeadToHeadSummary {
   lastPlayedAt: string | null;
 }
 
+const VALID_WINNER_DECISION_METHODS = ['goals', 'penalty_goals', 'total_points_fallback', 'forfeit'] as const;
+export type WinnerDecisionMethod = (typeof VALID_WINNER_DECISION_METHODS)[number];
+
 export interface RecentMatchSummary {
   matchId: string;
   mode: 'friendly' | 'ranked';
@@ -19,6 +22,11 @@ export interface RecentMatchSummary {
   endedAt: string | null;
   playerScore: number;
   opponentScore: number;
+  playerGoals: number;
+  playerPenaltyGoals: number;
+  opponentGoals: number;
+  opponentPenaltyGoals: number;
+  winnerDecisionMethod: WinnerDecisionMethod | null;
   opponent: {
     id: string | null;
     username: string;
@@ -84,6 +92,12 @@ export const statsService = {
             ? 'win'
             : 'loss';
 
+      const rawMethod = row.winner_decision_method;
+      const winnerDecisionMethod: WinnerDecisionMethod | null =
+        rawMethod && (VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)
+          ? (rawMethod as WinnerDecisionMethod)
+          : null;
+
       return {
         matchId: row.match_id,
         mode: row.mode,
@@ -92,6 +106,11 @@ export const statsService = {
         endedAt: row.ended_at,
         playerScore: row.player_score,
         opponentScore: row.opponent_score,
+        playerGoals: row.player_goals,
+        playerPenaltyGoals: row.player_penalty_goals,
+        opponentGoals: row.opponent_goals,
+        opponentPenaltyGoals: row.opponent_penalty_goals,
+        winnerDecisionMethod,
         opponent: {
           id: row.opponent_id,
           username: row.opponent_username ?? 'Opponent',

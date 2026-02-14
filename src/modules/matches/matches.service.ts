@@ -1,18 +1,30 @@
 import { matchesRepo } from './matches.repo.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
-import { logger, pickI18nText } from '../../core/index.js';
+import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import type { GameQuestionDTO } from '../../realtime/socket.types.js';
 import type {
-  MatchEngine,
   MatchRow,
   MatchQuestionWithCategory,
 } from './matches.types.js';
-import { config } from '../../core/config.js';
 
-const CLASSIC_TOTAL_QUESTIONS = 10;
-const CLASSIC_QUESTIONS_PER_CATEGORY = 5;
+/**
+ * Ensure a JSONB field is a proper object (handles double-encoded strings from DB).
+ */
+function ensureI18nObject(field: unknown): Record<string, string> {
+  if (!field) return {};
+  if (typeof field === 'object' && !Array.isArray(field)) return field as Record<string, string>;
+  if (typeof field === 'string') {
+    try {
+      const parsed = JSON.parse(field);
+      if (typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch { /* fall through */ }
+    return { en: field };
+  }
+  return {};
+}
+
 export const POSSESSION_QUESTIONS_PER_HALF = 6;
 export const POSSESSION_TOTAL_NORMAL_QUESTIONS = POSSESSION_QUESTIONS_PER_HALF * 2;
 
@@ -53,31 +65,13 @@ export interface PossessionStatePayload {
     shooterSeat: 1 | 2 | null;
     attackerSeat: 1 | 2 | null;
   } | null;
-  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
-}
-
-function shuffle<T>(items: T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-export interface MatchQuestionSelection {
-  questionId: string;
-  categoryId: string;
-  correctIndex: number;
+  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
+  stateVersionCounter: number;
 }
 
 export interface MatchCreationResult {
   match: MatchRow;
   playerIds: [string, string];
-}
-
-function resolveMatchEngine(): MatchEngine {
-  return config.POSSESSION_V1_ENABLED ? 'possession_v1' : 'classic';
 }
 
 export function createInitialPossessionState(): PossessionStatePayload {
@@ -114,6 +108,7 @@ export function createInitialPossessionState(): PossessionStatePayload {
     },
     currentQuestion: null,
     winnerDecisionMethod: null,
+    stateVersionCounter: 0,
   };
 }
 
@@ -136,7 +131,6 @@ export const matchesService = {
     }
 
     const [categoryAId, categoryBId] = params.categoryIds;
-    const engine = resolveMatchEngine();
 
     const hostIndex = memberIds.indexOf(params.hostUserId);
     let seat1: string;
@@ -168,20 +162,13 @@ export const matchesService = {
       seat2 = memberIds[1];
     }
 
-    const shouldPreselectClassicQuestions = engine === 'classic';
-    const selections = shouldPreselectClassicQuestions
-      ? await this.pickQuestions([categoryAId, categoryBId])
-      : [];
-    const shuffled = shouldPreselectClassicQuestions ? shuffle(selections) : [];
-
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
-      engine,
       categoryAId,
       categoryBId,
-      totalQuestions: engine === 'classic' ? CLASSIC_TOTAL_QUESTIONS : POSSESSION_TOTAL_NORMAL_QUESTIONS,
-      statePayload: engine === 'possession_v1' ? createInitialPossessionState() : null,
+      totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
+      statePayload: createInitialPossessionState(),
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [
@@ -189,67 +176,10 @@ export const matchesService = {
       { userId: seat2, seat: 2 },
     ]);
 
-    if (shouldPreselectClassicQuestions) {
-      await matchesRepo.insertMatchQuestions(
-        match.id,
-        shuffled.map((q, index) => ({
-          qIndex: index,
-          questionId: q.questionId,
-          categoryId: q.categoryId,
-          correctIndex: q.correctIndex,
-        }))
-      );
-    }
-
     return {
       match,
       playerIds: [seat1, seat2],
     };
-  },
-
-  async pickQuestions(categoryIds: [string, string]): Promise<MatchQuestionSelection[]> {
-    const selections: MatchQuestionSelection[] = [];
-
-    for (const categoryId of categoryIds) {
-      const rows = await matchesRepo.getRandomQuestionsForCategory(
-        categoryId,
-        CLASSIC_QUESTIONS_PER_CATEGORY * 3
-      );
-      if (rows.length < CLASSIC_QUESTIONS_PER_CATEGORY) {
-        throw new Error('Not enough questions to start match');
-      }
-
-      const categorySelections: MatchQuestionSelection[] = [];
-      for (const row of rows) {
-        const parsed = questionPayloadSchema.safeParse(row.payload);
-        if (!parsed.success || parsed.data.type !== 'mcq_single') {
-          continue;
-        }
-        const correctIndex = parsed.data.options.findIndex((option) => option.is_correct);
-        if (correctIndex < 0) {
-          continue;
-        }
-        categorySelections.push({
-          questionId: row.id,
-          categoryId: row.category_id,
-          correctIndex,
-        });
-        if (categorySelections.length >= CLASSIC_QUESTIONS_PER_CATEGORY) {
-          break;
-        }
-      }
-
-      if (categorySelections.length < CLASSIC_QUESTIONS_PER_CATEGORY) {
-        throw new Error('Not enough valid questions to start match');
-      }
-      selections.push(...categorySelections);
-    }
-
-    if (selections.length < CLASSIC_TOTAL_QUESTIONS) {
-      throw new Error('Not enough valid questions to start match');
-    }
-
-    return selections;
   },
 
   async buildGameQuestion(matchId: string, qIndex: number): Promise<GameQuestionDTO | null> {
@@ -263,10 +193,10 @@ export const matchesService = {
 
     return {
       id: row.question_id,
-      prompt: pickI18nText(row.prompt),
-      options: parsed.data.options.map((option) => pickI18nText(option.text)),
+      prompt: ensureI18nObject(row.prompt),
+      options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
       categoryId: row.category_id,
-      categoryName: pickI18nText(row.category_name),
+      categoryName: ensureI18nObject(row.category_name),
       difficulty: row.difficulty,
       explanation: null,
     };
@@ -288,10 +218,6 @@ export const matchesService = {
       matchId,
       qIndex,
       questionId: row.question_id,
-      promptRaw: row.prompt,
-      promptType: typeof row.prompt,
-      categoryNameRaw: row.category_name,
-      categoryNameType: typeof row.category_name,
     }, 'Building match question payload');
 
     const parsed = questionPayloadSchema.safeParse(row.payload);
@@ -299,27 +225,13 @@ export const matchesService = {
       return null;
     }
 
-    const promptText = pickI18nText(row.prompt);
-    const categoryNameText = pickI18nText(row.category_name);
-    const optionsTexts = parsed.data.options.map((option) => pickI18nText(option.text));
-
-    logger.debug({
-      matchId,
-      qIndex,
-      promptText,
-      promptTextLength: promptText.length,
-      categoryNameText,
-      optionsTexts,
-      optionsCount: optionsTexts.length,
-    }, 'Parsed question texts');
-
     return {
       question: {
         id: row.question_id,
-        prompt: promptText,
-        options: optionsTexts,
+        prompt: ensureI18nObject(row.prompt),
+        options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
         categoryId: row.category_id,
-        categoryName: categoryNameText,
+        categoryName: ensureI18nObject(row.category_name),
         difficulty: row.difficulty,
         explanation: null,
       },

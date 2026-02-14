@@ -2,7 +2,6 @@ import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import type {
-  MatchEngine,
   MatchRow,
   MatchPlayerRow,
   MatchQuestionRow,
@@ -43,7 +42,6 @@ const VALID_PAYLOAD_CONDITIONS = `
 export interface CreateMatchData {
   lobbyId: string | null;
   mode: 'friendly' | 'ranked';
-  engine?: MatchEngine;
   categoryAId: string;
   categoryBId: string;
   totalQuestions: number;
@@ -54,10 +52,10 @@ export const matchesRepo = {
   async createMatch(data: CreateMatchData): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, engine, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, started_at
+        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, started_at
       )
       VALUES (
-        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, ${data.engine ?? 'classic'}, 'active',
+        gen_random_uuid(), ${data.lobbyId}, ${data.mode}, 'active',
         ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions},
         ${sql.json(data.statePayload as Json ?? null)}, NOW()
       )
@@ -351,6 +349,32 @@ export const matchesRepo = {
     }
   },
 
+  async insertMatchAnswerIfMissing(data: {
+    matchId: string;
+    qIndex: number;
+    userId: string;
+    selectedIndex: number | null;
+    isCorrect: boolean;
+    timeMs: number;
+    pointsEarned: number;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+  }): Promise<MatchAnswerRow | null> {
+    const [row] = await sql<MatchAnswerRow[]>`
+      INSERT INTO match_answers (
+        match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
+      )
+      VALUES (
+        ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
+        ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
+      )
+      ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+      RETURNING *
+    `;
+    return row ?? null;
+  },
+
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
     return sql<MatchAnswerRow[]>`
       SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
@@ -370,6 +394,29 @@ export const matchesRepo = {
       SET
         total_points = total_points + ${points},
         correct_answers = correct_answers + ${isCorrect ? 1 : 0}
+      WHERE match_id = ${matchId} AND user_id = ${userId}
+      RETURNING *
+    `;
+    return row ?? null;
+  },
+
+  async setPlayerFinalTotals(
+    matchId: string,
+    userId: string,
+    values: {
+      totalPoints: number;
+      correctAnswers: number;
+      goals: number;
+      penaltyGoals: number;
+    }
+  ): Promise<MatchPlayerRow | null> {
+    const [row] = await sql<MatchPlayerRow[]>`
+      UPDATE match_players
+      SET
+        total_points = ${values.totalPoints},
+        correct_answers = ${values.correctAnswers},
+        goals = ${values.goals},
+        penalty_goals = ${values.penaltyGoals}
       WHERE match_id = ${matchId} AND user_id = ${userId}
       RETURNING *
     `;

@@ -80,6 +80,30 @@ router.post(
 );
 
 /**
+ * POST /api/v1/questions/translate/backfill
+ * Translate all untranslated questions from English to Georgian.
+ * Protected endpoint - requires admin role.
+ */
+router.post(
+  '/translate/backfill',
+  authMiddleware,
+  requireRole('admin'),
+  questionsController.translateBackfill
+);
+
+/**
+ * GET /api/v1/questions/translate/status
+ * Check translation progress.
+ * Protected endpoint - requires admin role.
+ */
+router.get(
+  '/translate/status',
+  authMiddleware,
+  requireRole('admin'),
+  questionsController.translateStatus
+);
+
+/**
  * POST /api/v1/questions
  * Create a new question with optional payload.
  * Protected endpoint - requires admin role.

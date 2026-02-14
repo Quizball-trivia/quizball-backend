@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { questionsService } from './questions.service.js';
+import { translationService } from './translation.service.js';
 import {
   toQuestionResponse,
   toPaginatedResponse,
@@ -185,5 +186,45 @@ export const questionsController = {
     const result = await questionsService.checkDuplicates(prompts, locale);
 
     res.status(200).json(result);
+  },
+
+  /**
+   * POST /api/v1/questions/translate/backfill
+   * Translate all existing questions that have English but no Georgian.
+   * Returns immediately with counts, translation runs in background.
+   */
+  async translateBackfill(_req: Request, res: Response): Promise<void> {
+    const counts = await translationService.getBackfillCounts();
+
+    if (counts.questions === 0 && counts.categories === 0) {
+      res.json({ status: 'done', total: 0, remaining: 0, categories: 0 });
+      return;
+    }
+
+    // Fire-and-forget — respond immediately, translate in background
+    translationService
+      .backfillAll()
+      .then((result) => {
+        logger.info(result, 'Backfill translation completed');
+      })
+      .catch((err) => {
+        logger.error({ error: err }, 'Backfill translation failed');
+      });
+
+    res.json({
+      status: 'started',
+      total: counts.questions,
+      remaining: counts.questions,
+      categories: counts.categories,
+    });
+  },
+
+  /**
+   * GET /api/v1/questions/translate/status
+   * Check translation progress.
+   */
+  async translateStatus(_req: Request, res: Response): Promise<void> {
+    const counts = await translationService.getBackfillCounts();
+    res.json(counts);
   },
 };

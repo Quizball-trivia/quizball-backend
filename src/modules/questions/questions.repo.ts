@@ -25,11 +25,18 @@ function getLocaleAccessor(locale: string): string {
 }
 
 /**
- * Helper to safely stringify JSON values.
- * Avoids double-encoding if the value is already a string.
+ * Helper to safely stringify JSON values for ::jsonb casts.
+ * If the value is already a string, parse it first to avoid double-encoding.
+ * e.g. '{"en":"..."}' → parse → {"en":"..."} → stringify → '{"en":"..."}'
  */
 const toJsonString = (val: unknown): string => {
-  if (typeof val === 'string') return val;
+  if (typeof val === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(val));
+    } catch {
+      return JSON.stringify(val);
+    }
+  }
   return JSON.stringify(val);
 };
 

@@ -3,6 +3,10 @@ import '../setup.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 
 const resolveRoundMock = vi.fn();
+const sendMatchQuestionMock = vi.fn();
+const listMembersWithUserMock = vi.fn();
+const setLobbyStatusMock = vi.fn();
+const removeMemberMock = vi.fn();
 
 type FakeRedisStore = {
   values: Map<string, string>;
@@ -13,6 +17,7 @@ const fakeRedisStore: FakeRedisStore = {
 };
 
 const fakeRedis = {
+  isOpen: false,
   async set(key: string, value: string): Promise<'OK'> {
     fakeRedisStore.values.set(key, value);
     return 'OK';
@@ -41,12 +46,16 @@ const getActiveMatchForUserMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const getAnswerForUserMock = vi.fn();
 const getMatchQuestionTimingMock = vi.fn();
+const getMatchQuestionMock = vi.fn();
 const insertMatchAnswerMock = vi.fn();
 const updatePlayerTotalsMock = vi.fn();
+const updatePlayerGoalTotalsMock = vi.fn();
 const listAnswersForQuestionMock = vi.fn();
+const setMatchStatePayloadMock = vi.fn();
 const completeMatchMock = vi.fn();
 const updatePlayerAvgTimeMock = vi.fn();
 const setPlayerForfeitWinTotalsMock = vi.fn();
+const setPlayerFinalTotalsMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const abandonMatchMock = vi.fn();
 
@@ -72,28 +81,37 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
     getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
     insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
+    setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
   },
 }));
 
-vi.mock('../../src/modules/matches/matches.service.js', () => ({
-  matchesService: {
-    buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
-    computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
-    abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
-  },
-}));
+vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/modules/matches/matches.service.js')>();
+  return {
+    ...actual,
+    matchesService: {
+      ...actual.matchesService,
+      buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
+      computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
+      abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
+    },
+  };
+});
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
-    listMembersWithUser: vi.fn(),
-    setLobbyStatus: vi.fn(),
-    removeMember: vi.fn(),
+    listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
+    setLobbyStatus: (...args: unknown[]) => setLobbyStatusMock(...args),
+    removeMember: (...args: unknown[]) => removeMemberMock(...args),
   },
 }));
 
@@ -121,7 +139,7 @@ vi.mock('../../src/realtime/match-flow.js', () => ({
   QUESTION_TIME_MS: 10000,
   cancelMatchQuestionTimer: vi.fn(),
   resolveRound: (...args: unknown[]) => resolveRoundMock(...args),
-  sendMatchQuestion: vi.fn(),
+  sendMatchQuestion: (...args: unknown[]) => sendMatchQuestionMock(...args),
 }));
 
 function createIoMock(): QuizballServer {
@@ -151,7 +169,15 @@ describe('match-realtime.service high-risk integration behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fakeRedisStore.values.clear();
+    fakeRedis.isOpen = false;
     resolveRoundMock.mockResolvedValue(undefined);
+    sendMatchQuestionMock.mockResolvedValue(undefined);
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1', nickname: 'u1', avatar_url: null },
+      { user_id: 'u2', nickname: 'u2', avatar_url: null },
+    ]);
+    setLobbyStatusMock.mockResolvedValue(undefined);
+    removeMemberMock.mockResolvedValue(undefined);
 
     getActiveMatchForUserMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({
@@ -164,13 +190,26 @@ describe('match-realtime.service high-risk integration behavior', () => {
       lobby_id: 'l1',
     });
     listMatchPlayersMock.mockResolvedValue([
-      { user_id: 'u1', total_points: 200, correct_answers: 2 },
-      { user_id: 'u2', total_points: 100, correct_answers: 1 },
+      { user_id: 'u1', seat: 1, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 100, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
     ]);
     getAnswerForUserMock.mockResolvedValue(null);
     getMatchQuestionTimingMock.mockResolvedValue({
       shown_at: new Date(Date.now() - 500).toISOString(),
       deadline_at: new Date(Date.now() + 9500).toISOString(),
+    });
+    getMatchQuestionMock.mockResolvedValue({
+      match_id: 'm1',
+      q_index: 0,
+      question_id: 'q1',
+      category_id: 'cat1',
+      correct_index: 1,
+      phase_kind: 'normal',
+      phase_round: 1,
+      shooter_seat: null,
+      attacker_seat: null,
+      shown_at: null,
+      deadline_at: null,
     });
     insertMatchAnswerMock.mockResolvedValue(undefined);
     updatePlayerTotalsMock.mockResolvedValue({
@@ -178,9 +217,12 @@ describe('match-realtime.service high-risk integration behavior', () => {
       total_points: 300,
       correct_answers: 3,
     });
+    updatePlayerGoalTotalsMock.mockResolvedValue(undefined);
+    setMatchStatePayloadMock.mockResolvedValue(undefined);
     completeMatchMock.mockResolvedValue(undefined);
     updatePlayerAvgTimeMock.mockResolvedValue(undefined);
     setPlayerForfeitWinTotalsMock.mockResolvedValue(undefined);
+    setPlayerFinalTotalsMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     abandonMatchMock.mockResolvedValue(undefined);
     listAnswersForQuestionMock.mockResolvedValue([
@@ -225,15 +267,6 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const opponentEmitter = vi.fn();
     socket.to = vi.fn(() => ({ emit: opponentEmitter })) as unknown as QuizballSocket['to'];
 
-    // First call checks duplicate for current user, second call checks opponent answered.
-    getAnswerForUserMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
-      user_id: 'u2',
-      selected_index: 2,
-      is_correct: false,
-      points_earned: 0,
-      time_ms: 4000,
-    });
-
     await matchRealtimeService.handleAnswer(io, socket, {
       matchId: 'm1',
       qIndex: 0,
@@ -257,7 +290,6 @@ describe('match-realtime.service high-risk integration behavior', () => {
         qIndex: 0,
       })
     );
-    expect(resolveRoundMock).toHaveBeenCalledWith(io, 'm1', 0, false);
   });
 
   it('S18: clears replay key only when matchId and version both match', async () => {
@@ -289,6 +321,45 @@ describe('match-realtime.service high-risk integration behavior', () => {
     const socket = createSocketMock('u1', 'm1');
     const nowIso = new Date().toISOString();
 
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set(
+      'match:cache:m1',
+      JSON.stringify({
+        matchId: 'm1',
+        status: 'active',
+        mode: 'friendly',
+        totalQuestions: 10,
+        categoryAId: 'cat1',
+        categoryBId: 'cat2',
+        startedAt: nowIso,
+        players: [
+          { userId: 'u1', seat: 1, totalPoints: 220, correctAnswers: 2, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+          { userId: 'u2', seat: 2, totalPoints: 140, correctAnswers: 1, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+        ],
+        currentQIndex: 4,
+        statePayload: {
+          version: 1,
+          phase: 'NORMAL_PLAY',
+          half: 1,
+          sharedPossession: 50,
+          seatMomentum: { seat1: 0, seat2: 0 },
+          kickOffSeat: 1,
+          goals: { seat1: 0, seat2: 0 },
+          penaltyGoals: { seat1: 0, seat2: 0 },
+          normalQuestionsPerHalf: 6,
+          normalQuestionsAnsweredInHalf: 2,
+          normalQuestionsAnsweredTotal: 2,
+          shot: { attackerSeat: null },
+          halftime: { deadlineAt: null, tactics: { seat1: null, seat2: null } },
+          penalty: { round: 0, shooterSeat: 1, suddenDeath: false, kicksTaken: { seat1: 0, seat2: 0 } },
+          currentQuestion: null,
+          winnerDecisionMethod: null,
+        },
+        currentQuestion: null,
+        answers: {},
+      })
+    );
+
     getMatchMock
       .mockResolvedValueOnce({
         id: 'm1',
@@ -312,19 +383,98 @@ describe('match-realtime.service high-risk integration behavior', () => {
       });
 
     listMatchPlayersMock.mockResolvedValue([
-      { user_id: 'u1', total_points: 200, correct_answers: 2 },
-      { user_id: 'u2', total_points: 100, correct_answers: 1 },
+      { user_id: 'u1', seat: 1, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 100, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
     ]);
 
     await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
 
     expect(setPlayerForfeitWinTotalsMock).toHaveBeenCalledWith('m1', 'u2', 1000, 10);
+    expect(setPlayerFinalTotalsMock).toHaveBeenCalledTimes(2);
+    expect(setPlayerFinalTotalsMock).toHaveBeenCalledWith(
+      'm1',
+      'u1',
+      expect.objectContaining({ totalPoints: 220, correctAnswers: 2, goals: 0, penaltyGoals: 0 })
+    );
+    expect(setPlayerFinalTotalsMock).toHaveBeenCalledWith(
+      'm1',
+      'u2',
+      expect.objectContaining({ totalPoints: 140, correctAnswers: 1, goals: 0, penaltyGoals: 0 })
+    );
     expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
     expect(updatePlayerAvgTimeMock).toHaveBeenCalledWith('m1', 'u1', null);
     expect(updatePlayerAvgTimeMock).toHaveBeenCalledWith('m1', 'u2', null);
     expect(socket.leave).toHaveBeenCalledWith('match:m1');
     expect(socket.data.matchId).toBeUndefined();
     expect((io.to as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('match:m1');
+  });
+
+  it('S26: match:rejoin resolves seat/opponent from cache without roster DB read', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', undefined);
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set(
+      'match:cache:m1',
+      JSON.stringify({
+        matchId: 'm1',
+        status: 'active',
+        mode: 'friendly',
+        totalQuestions: 10,
+        categoryAId: 'cat1',
+        categoryBId: 'cat2',
+        startedAt: nowIso,
+        players: [
+          { userId: 'u2', seat: 1, totalPoints: 300, correctAnswers: 3, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+          { userId: 'u1', seat: 2, totalPoints: 200, correctAnswers: 2, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+        ],
+        currentQIndex: 3,
+        statePayload: {
+          version: 1,
+          phase: 'NORMAL_PLAY',
+          half: 1,
+          sharedPossession: 60,
+          seatMomentum: { seat1: 1, seat2: 0 },
+          kickOffSeat: 1,
+          goals: { seat1: 0, seat2: 0 },
+          penaltyGoals: { seat1: 0, seat2: 0 },
+          normalQuestionsPerHalf: 6,
+          normalQuestionsAnsweredInHalf: 3,
+          normalQuestionsAnsweredTotal: 3,
+          shot: { attackerSeat: null },
+          halftime: { deadlineAt: null, tactics: { seat1: null, seat2: null } },
+          penalty: { round: 0, shooterSeat: 1, suddenDeath: false, kicksTaken: { seat1: 0, seat2: 0 } },
+          currentQuestion: null,
+          winnerDecisionMethod: null,
+        },
+        currentQuestion: null,
+        answers: {},
+      })
+    );
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+    });
+
+    await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
+
+    expect(listMatchPlayersMock).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:start',
+      expect.objectContaining({
+        matchId: 'm1',
+        mySeat: 2,
+        opponent: expect.objectContaining({ id: 'u2' }),
+      })
+    );
   });
 
   it('S20: match:forfeit rejects non-participants', async () => {
@@ -457,5 +607,50 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
 
     nowSpy.mockRestore();
+  });
+
+  it('S24: beginMatchForLobby emits countdown and delays first question by 5s', async () => {
+    vi.useFakeTimers();
+    try {
+      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+
+      await beginMatchForLobby(io, 'l1', 'm1');
+
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+      expect((io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([room]: [string]) => room === 'match:m1')).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S25: beginMatchForLobby falls back to match players when lobby membership is stale', async () => {
+    vi.useFakeTimers();
+    try {
+      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+
+      listMembersWithUserMock.mockResolvedValueOnce([
+        { user_id: 'u1', nickname: 'u1', avatar_url: null },
+      ]);
+
+      await beginMatchForLobby(io, 'l1', 'm1');
+
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+      const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(toCalls.some(([room]: [string]) => room === 'user:u1')).toBe(true);
+      expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

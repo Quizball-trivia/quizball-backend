@@ -17,6 +17,11 @@ export interface RecentMatchRow {
   started_at: string;
   player_score: number;
   opponent_score: number;
+  player_goals: number;
+  player_penalty_goals: number;
+  opponent_goals: number;
+  opponent_penalty_goals: number;
+  winner_decision_method: string | null;
   opponent_id: string | null;
   opponent_username: string | null;
   opponent_avatar_url: string | null;
@@ -72,6 +77,11 @@ export const statsRepo = {
         m.started_at,
         (mp_self.goals + mp_self.penalty_goals) AS player_score,
         COALESCE(mp_opp.goals + mp_opp.penalty_goals, 0) AS opponent_score,
+        mp_self.goals AS player_goals,
+        mp_self.penalty_goals AS player_penalty_goals,
+        COALESCE(mp_opp.goals, 0) AS opponent_goals,
+        COALESCE(mp_opp.penalty_goals, 0) AS opponent_penalty_goals,
+        m.state_payload->>'winnerDecisionMethod' AS winner_decision_method,
         opp.id AS opponent_id,
         opp.nickname AS opponent_username,
         opp.avatar_url AS opponent_avatar_url,

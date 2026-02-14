@@ -1,5 +1,4 @@
 export type MatchMode = 'friendly' | 'ranked';
-export type MatchEngine = 'classic' | 'possession_v1';
 export type LobbyGameMode = 'friendly' | 'ranked_sim';
 export type LobbyStatus = 'waiting' | 'active' | 'closed';
 export type MatchPhase = 'NORMAL_PLAY' | 'SHOT_ON_GOAL' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
@@ -64,28 +63,33 @@ export interface OpponentInfo {
 
 export interface GameQuestionDTO {
   id: string;
-  prompt: string;
-  options: string[];
+  prompt: Record<string, string>;
+  options: Array<Record<string, string>>;
   categoryId?: string;
-  categoryName?: string;
+  categoryName?: Record<string, string>;
   difficulty?: string;
   explanation?: string | null;
 }
 
 export interface MatchStartPayload {
   matchId: string;
-  engine: MatchEngine;
   mySeat?: 1 | 2;
   opponent: OpponentInfo;
 }
 
+export interface MatchCountdownPayload {
+  matchId: string;
+  seconds: number;
+  startsAt: string;
+}
+
 export interface MatchQuestionPayload {
   matchId: string;
-  engine: MatchEngine;
   qIndex: number;
   total: number;
   question: GameQuestionDTO;
   deadlineAt: string;
+  correctIndex: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
   shooterSeat?: 1 | 2 | null;
@@ -98,6 +102,7 @@ export interface MatchOpponentAnsweredPayload {
   opponentTotalPoints: number;
   pointsEarned: number;
   isCorrect: boolean;
+  selectedIndex: number | null;
 }
 
 export interface MatchAnswerAckPayload {
@@ -122,6 +127,15 @@ export interface MatchRoundResultPlayer {
   totalPoints: number;
 }
 
+export interface MatchRoundResultDeltas {
+  possessionDelta: number;
+  momentumSeat1Delta: number;
+  momentumSeat2Delta: number;
+  shotOutcome: 'goal' | 'saved' | 'miss' | null;
+  penaltyOutcome: 'goal' | 'saved' | null;
+  goalScoredBySeat: 1 | 2 | null;
+}
+
 export interface MatchRoundResultPayload {
   matchId: string;
   qIndex: number;
@@ -131,6 +145,7 @@ export interface MatchRoundResultPayload {
   phaseRound?: number | null;
   shooterSeat?: 1 | 2 | null;
   attackerSeat?: 1 | 2 | null;
+  deltas?: MatchRoundResultDeltas;
 }
 
 export interface MatchFinalResultPlayer {
@@ -143,18 +158,16 @@ export interface MatchFinalResultPlayer {
 
 export interface MatchFinalResultsPayload {
   matchId: string;
-  engine?: MatchEngine;
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
   totalPointsFallbackUsed?: boolean;
 }
 
 export interface MatchStatePayload {
   matchId: string;
-  engine: MatchEngine;
   phase: MatchPhase;
   half: 1 | 2;
   sharedPossession: number;
@@ -180,6 +193,7 @@ export interface MatchStatePayload {
     seat1: boolean;
     seat2: boolean;
   };
+  stateVersion?: number;
 }
 
 export interface MatchOpponentDisconnectedPayload {
@@ -336,6 +350,7 @@ export interface ServerToClientEvents {
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;
   'draft:complete': (data: { allowedCategoryIds: [string, string] }) => void;
   'match:start': (data: MatchStartPayload) => void;
+  'match:countdown': (data: MatchCountdownPayload) => void;
   'match:state': (data: MatchStatePayload) => void;
   'match:question': (data: MatchQuestionPayload) => void;
   'match:opponent_answered': (data: MatchOpponentAnsweredPayload) => void;

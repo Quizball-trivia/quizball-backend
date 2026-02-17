@@ -10,6 +10,7 @@ export interface MatchRow {
   current_q_index: number;
   total_questions: number;
   state_payload: Record<string, unknown> | null;
+  ranked_context: Record<string, unknown> | null;
   started_at: string;
   ended_at: string | null;
   winner_user_id: string | null;

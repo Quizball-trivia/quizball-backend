@@ -1,5 +1,7 @@
 import { matchesRepo } from './matches.repo.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
+import { rankedService } from '../ranked/ranked.service.js';
+import { usersRepo } from '../users/users.repo.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -162,6 +164,21 @@ export const matchesService = {
       seat2 = memberIds[1];
     }
 
+    // For ranked matches, build placement AI context so the anchor adapts per match
+    let rankedContext: unknown;
+    if (params.mode === 'ranked') {
+      const user1 = await usersRepo.getById(seat1);
+      const humanUserId = user1?.is_ai ? seat2 : seat1;
+      const profile = await rankedService.ensureProfile(humanUserId);
+      if (rankedService.isPlacementRequired(profile)) {
+        rankedContext = rankedService.buildPlacementAiContext(profile);
+        logger.info(
+          { lobbyId: params.lobbyId, humanUserId, rankedContext },
+          'Built placement AI context for ranked match'
+        );
+      }
+    }
+
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
@@ -169,6 +186,7 @@ export const matchesService = {
       categoryBId,
       totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
       statePayload: createInitialPossessionState(),
+      rankedContext,
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [

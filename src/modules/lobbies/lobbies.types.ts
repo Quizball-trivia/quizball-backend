@@ -8,6 +8,7 @@ export interface LobbyRow {
   friendly_category_b_id: string | null;
   is_public: boolean;
   display_name: string;
+  ranked_context: Record<string, unknown> | null;
   host_user_id: string;
   status: 'waiting' | 'active' | 'closed';
   created_at: string;

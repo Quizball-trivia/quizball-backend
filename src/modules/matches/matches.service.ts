@@ -1,5 +1,7 @@
 import { matchesRepo } from './matches.repo.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
+import { rankedService } from '../ranked/ranked.service.js';
+import { usersRepo } from '../users/users.repo.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -8,6 +10,7 @@ import type {
   MatchRow,
   MatchQuestionWithCategory,
 } from './matches.types.js';
+import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 /**
  * Ensure a JSONB field is a proper object (handles double-encoded strings from DB).
@@ -162,6 +165,35 @@ export const matchesService = {
       seat2 = memberIds[1];
     }
 
+    // For ranked matches, build placement AI context so the anchor adapts per match
+    let rankedContext: RankedLobbyContext | null = null;
+    if (params.mode === 'ranked') {
+      const [user1, user2] = await Promise.all([
+        usersRepo.getById(seat1),
+        usersRepo.getById(seat2),
+      ]);
+
+      let humanUserId: string | null = null;
+      if (user1 && !user1.is_ai) humanUserId = seat1;
+      else if (user2 && !user2.is_ai) humanUserId = seat2;
+
+      if (!humanUserId) {
+        logger.warn(
+          { lobbyId: params.lobbyId, seat1, seat2 },
+          'Could not determine human player for ranked context'
+        );
+      } else {
+        const profile = await rankedService.ensureProfile(humanUserId);
+        if (rankedService.isPlacementRequired(profile)) {
+          rankedContext = rankedService.buildPlacementAiContext(profile);
+          logger.info(
+            { lobbyId: params.lobbyId, humanUserId, rankedContext },
+            'Built placement AI context for ranked match'
+          );
+        }
+      }
+    }
+
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
@@ -169,6 +201,7 @@ export const matchesService = {
       categoryBId,
       totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
       statePayload: createInitialPossessionState(),
+      rankedContext,
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [

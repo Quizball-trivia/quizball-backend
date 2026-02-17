@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 import { MCQ_VALIDATION_CONDITIONS } from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
@@ -8,6 +9,7 @@ import type {
   LobbyCategoryRow,
   LobbyCategoryWithDetails,
   LobbyCategoryBanRow,
+  RankedLobbyContext,
 } from './lobbies.types.js';
 
 export interface CreateLobbyData {
@@ -20,6 +22,7 @@ export interface CreateLobbyData {
   friendlyCategoryBId?: string | null;
   isPublic?: boolean;
   displayName?: string;
+  rankedContext?: RankedLobbyContext | null;
 }
 
 export const lobbiesRepo = {
@@ -39,6 +42,7 @@ export const lobbiesRepo = {
         friendly_category_b_id,
         is_public,
         display_name,
+        ranked_context,
         host_user_id,
         status
       )
@@ -52,6 +56,7 @@ export const lobbiesRepo = {
         ${data.friendlyCategoryBId ?? null},
         ${isPublic},
         ${displayName},
+        ${sql.json((data.rankedContext ?? null) as Json)},
         ${data.hostUserId},
         'waiting'
       )

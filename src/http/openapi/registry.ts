@@ -17,6 +17,9 @@ import {
   listPublicLobbiesQuerySchema,
   listPublicLobbiesResponseSchema,
 } from '../../modules/lobbies/lobbies.schemas.js';
+import {
+  rankedProfileResponseSchema,
+} from '../../modules/ranked/ranked.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -102,6 +105,7 @@ registry.register('UserResponse', userResponseSchema);
 registry.register('HeadToHeadResponse', headToHeadResponseSchema);
 registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
 registry.register('StatsSummaryResponse', statsSummaryResponseSchema);
+registry.register('RankedProfileResponse', rankedProfileResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -379,6 +383,28 @@ registry.registerPath({
     200: {
       description: 'Public lobby list',
       content: { 'application/json': { schema: listPublicLobbiesResponseSchema } },
+    },
+    401: {
+      description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Ranked Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/ranked/profile',
+  summary: 'Get ranked profile for authenticated user',
+  tags: ['Ranked'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Ranked profile',
+      content: { 'application/json': { schema: rankedProfileResponseSchema } },
     },
     401: {
       description: 'Authentication required',

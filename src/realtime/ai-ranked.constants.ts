@@ -188,6 +188,38 @@ export async function preGenerateAiAvatars(size = 96, validate = false): Promise
   await Promise.all(promises);
 }
 
+const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; flag: string; lat: number; lon: number }> = [
+  { city: 'London',        country: 'United Kingdom', countryCode: 'GB', flag: '\u{1F1EC}\u{1F1E7}', lat: 51.51, lon: -0.13 },
+  { city: 'Paris',         country: 'France',         countryCode: 'FR', flag: '\u{1F1EB}\u{1F1F7}', lat: 48.86, lon: 2.35 },
+  { city: 'Madrid',        country: 'Spain',          countryCode: 'ES', flag: '\u{1F1EA}\u{1F1F8}', lat: 40.42, lon: -3.70 },
+  { city: 'Rome',          country: 'Italy',          countryCode: 'IT', flag: '\u{1F1EE}\u{1F1F9}', lat: 41.90, lon: 12.50 },
+  { city: 'Berlin',        country: 'Germany',        countryCode: 'DE', flag: '\u{1F1E9}\u{1F1EA}', lat: 52.52, lon: 13.40 },
+  { city: 'Tokyo',         country: 'Japan',          countryCode: 'JP', flag: '\u{1F1EF}\u{1F1F5}', lat: 35.68, lon: 139.69 },
+  { city: 'Seoul',         country: 'South Korea',    countryCode: 'KR', flag: '\u{1F1F0}\u{1F1F7}', lat: 37.57, lon: 126.98 },
+  { city: 'Istanbul',      country: 'Turkey',         countryCode: 'TR', flag: '\u{1F1F9}\u{1F1F7}', lat: 41.01, lon: 28.98 },
+  { city: 'Buenos Aires',  country: 'Argentina',      countryCode: 'AR', flag: '\u{1F1E6}\u{1F1F7}', lat: -34.60, lon: -58.38 },
+  { city: 'Rio de Janeiro', country: 'Brazil',        countryCode: 'BR', flag: '\u{1F1E7}\u{1F1F7}', lat: -22.91, lon: -43.17 },
+  { city: 'Lagos',         country: 'Nigeria',        countryCode: 'NG', flag: '\u{1F1F3}\u{1F1EC}', lat: 6.52, lon: 3.38 },
+  { city: 'Cairo',         country: 'Egypt',          countryCode: 'EG', flag: '\u{1F1EA}\u{1F1EC}', lat: 30.04, lon: 31.24 },
+  { city: 'Mumbai',        country: 'India',          countryCode: 'IN', flag: '\u{1F1EE}\u{1F1F3}', lat: 19.08, lon: 72.88 },
+  { city: 'Mexico City',   country: 'Mexico',         countryCode: 'MX', flag: '\u{1F1F2}\u{1F1FD}', lat: 19.43, lon: -99.13 },
+  { city: 'Sydney',        country: 'Australia',      countryCode: 'AU', flag: '\u{1F1E6}\u{1F1FA}', lat: -33.87, lon: 151.21 },
+  { city: 'Casablanca',    country: 'Morocco',        countryCode: 'MA', flag: '\u{1F1F2}\u{1F1E6}', lat: 33.57, lon: -7.59 },
+  { city: 'Amsterdam',     country: 'Netherlands',    countryCode: 'NL', flag: '\u{1F1F3}\u{1F1F1}', lat: 52.37, lon: 4.90 },
+  { city: 'Lisbon',        country: 'Portugal',       countryCode: 'PT', flag: '\u{1F1F5}\u{1F1F9}', lat: 38.72, lon: -9.14 },
+  { city: 'Nairobi',       country: 'Kenya',          countryCode: 'KE', flag: '\u{1F1F0}\u{1F1EA}', lat: -1.29, lon: 36.82 },
+  { city: 'Riyadh',        country: 'Saudi Arabia',   countryCode: 'SA', flag: '\u{1F1F8}\u{1F1E6}', lat: 24.71, lon: 46.67 },
+  { city: 'Jakarta',       country: 'Indonesia',      countryCode: 'ID', flag: '\u{1F1EE}\u{1F1E9}', lat: -6.21, lon: 106.85 },
+  { city: 'Doha',          country: 'Qatar',          countryCode: 'QA', flag: '\u{1F1F6}\u{1F1E6}', lat: 25.29, lon: 51.53 },
+  { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.71, lon: -74.01 },
+  { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.05, lon: -118.24 },
+  { city: 'Toronto',       country: 'Canada',         countryCode: 'CA', flag: '\u{1F1E8}\u{1F1E6}', lat: 43.65, lon: -79.38 },
+];
+
+export function generateRankedAiGeo(): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+  return randomFrom(AI_GEO_POOL);
+}
+
 /**
  * Generate a random AI profile (username + avatar URL).
  * Uses cached Dicebear URLs without validation.

@@ -1,6 +1,7 @@
 import { trackEvent } from '../core/analytics.js';
 import { logger } from '../core/logger.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { rankedService } from '../modules/ranked/ranked.service.js';
 import { usersRepo } from '../modules/users/users.repo.js';
 import {
   createInitialPossessionState,
@@ -32,7 +33,7 @@ import { clamp, calculatePoints } from './scoring.js';
 const QUESTION_TIME_MS = 10000;
 const FRONTEND_REVEAL_MS = 2000; // Frontend shows question text before unlocking options
 const ROUND_RESULT_DELAY_MS = 0;
-const PENALTY_INTRO_DELAY_MS = 5000;
+const PENALTY_INTRO_DELAY_MS = 1000;
 const TIMEOUT_RESOLVE_GRACE_MS = 250;
 const TIMEOUT_RESOLVE_BUFFER_MS = 50;
 const HALFTIME_DURATION_MS = 15000;
@@ -44,6 +45,7 @@ const questionTimers = new Map<string, NodeJS.Timeout>();
 const halftimeTimers = new Map<string, NodeJS.Timeout>();
 const aiAnswerTimers = new Map<string, NodeJS.Timeout>();
 const aiUserIdByMatch = new Map<string, string | null>();
+const aiCorrectnessForMatch = new Map<string, number>();
 
 type Seat = 1 | 2;
 type PossessionTactic = 'press-high' | 'play-safe' | 'all-in';
@@ -246,7 +248,8 @@ function getTacticModifiers(tactic: PossessionTactic | null): TacticModifiers {
 
 function toMatchStatePayload(matchId: string, state: PossessionStatePayload): MatchStatePayload {
   const phaseKind = state.currentQuestion?.phaseKind ?? phaseKindFromState(state);
-  const phaseRound = state.currentQuestion?.phaseRound ?? 0;
+  const phaseRound = state.currentQuestion?.phaseRound
+    ?? (state.phase === 'PENALTY_SHOOTOUT' ? Math.ceil(state.penalty.round / 2) : 0);
   return {
     matchId,
     phase: state.phase,
@@ -274,6 +277,7 @@ function toMatchStatePayload(matchId: string, state: PossessionStatePayload): Ma
       seat1: !!state.halftime.tactics.seat1,
       seat2: !!state.halftime.tactics.seat2,
     },
+    penaltySuddenDeath: state.penalty.suddenDeath,
     stateVersion: state.stateVersionCounter,
   };
 }
@@ -529,6 +533,24 @@ async function resolveAiUserIdForMatch(matchId: string): Promise<string | null> 
   return null;
 }
 
+async function resolveAiCorrectnessForMatch(matchId: string): Promise<number> {
+  const cached = aiCorrectnessForMatch.get(matchId);
+  if (cached !== undefined) return cached;
+
+  const match = await matchesRepo.getMatch(matchId);
+  const ctx = match?.ranked_context;
+  if (ctx && typeof ctx === 'object' && 'aiCorrectness' in ctx) {
+    const val = (ctx as { aiCorrectness?: unknown }).aiCorrectness;
+    if (typeof val === 'number') {
+      aiCorrectnessForMatch.set(matchId, val);
+      return val;
+    }
+  }
+
+  aiCorrectnessForMatch.set(matchId, RANKED_AI_CORRECTNESS);
+  return RANKED_AI_CORRECTNESS;
+}
+
 async function schedulePossessionAiAnswer(
   io: QuizballServer,
   matchId: string,
@@ -558,6 +580,7 @@ async function schedulePossessionAiAnswer(
   if (!expectedUserIds.includes(aiUserId)) return;
 
   const delayMs = getAiAnswerDelayMs();
+  const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
   const timeout = setTimeout(() => {
     const stored = aiAnswerTimers.get(key);
     if (stored) {
@@ -592,7 +615,7 @@ async function schedulePossessionAiAnswer(
           const expected = getExpectedUserIds(fresh);
           if (!expected.includes(aiUserId)) return;
 
-          const isCorrect = Math.random() < RANKED_AI_CORRECTNESS;
+          const isCorrect = Math.random() < aiCorrectness;
           const selectedIndex = isCorrect
             ? options.correctIndex
             : pickIncorrectIndex(options.correctIndex, options.optionCount);
@@ -821,6 +844,16 @@ async function completePossessionMatch(
   const durationMs = Date.now() - new Date(cache?.startedAt ?? match.started_at).getTime();
   const resultVersion = Date.now();
 
+  let rankedOutcome = null;
+  if (match.mode === 'ranked') {
+    try {
+      rankedOutcome = await rankedService.settleCompletedRankedMatch(matchId);
+      logger.info({ matchId, hasOutcome: rankedOutcome != null, userIds: rankedOutcome ? Object.keys(rankedOutcome.byUserId) : [] }, 'Ranked settlement result for final_results emit');
+    } catch (err) {
+      logger.warn({ err, matchId }, 'Ranked settlement failed — emitting results without rankedOutcome');
+    }
+  }
+
   io.to(`match:${matchId}`).emit('match:final_results', {
     matchId,
     winnerId: decision.winnerId,
@@ -829,6 +862,7 @@ async function completePossessionMatch(
     resultVersion,
     winnerDecisionMethod: decision.method,
     totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
+    ...(rankedOutcome ? { rankedOutcome } : {}),
   });
 
   if (decision.totalPointsFallbackUsed) {
@@ -855,6 +889,7 @@ async function completePossessionMatch(
   }
 
   aiUserIdByMatch.delete(matchId);
+  aiCorrectnessForMatch.delete(matchId);
   clearHalftimeTimer(matchId);
   await deleteMatchCache(matchId);
 }
@@ -1048,7 +1083,7 @@ export async function sendPossessionMatchQuestion(
     ? state.normalQuestionsAnsweredTotal + 1
     : phaseKind === 'shot'
       ? state.goals.seat1 + state.goals.seat2 + 1
-      : state.penalty.round + 1;
+      : Math.ceil(state.penalty.round / 2);
 
   const picked = await maybePickQuestionForState(matchId, state, [cache.categoryAId, cache.categoryBId]);
   if (!picked) {
@@ -1319,13 +1354,23 @@ function penaltyWinnerSeat(state: PossessionStatePayload): Seat | null {
   const k1 = state.penalty.kicksTaken.seat1;
   const k2 = state.penalty.kicksTaken.seat2;
 
+  // Sudden death: only decide after both players have kicked equally
+  if (state.penalty.suddenDeath) {
+    if (k1 === k2 && p1 !== p2) {
+      return p1 > p2 ? 1 : 2;
+    }
+    return null;
+  }
+
+  // Regular rounds (1-5): clinch if one side can't catch up
   const rem1 = Math.max(0, 5 - k1);
   const rem2 = Math.max(0, 5 - k2);
 
   if (p1 > p2 + rem2) return 1;
   if (p2 > p1 + rem1) return 2;
 
-  if (k1 >= 5 && k2 >= 5 && k1 === k2 && p1 !== p2) {
+  // All 5 kicks taken by both, scores differ
+  if (k1 >= 5 && k2 >= 5 && p1 !== p2) {
     return p1 > p2 ? 1 : 2;
   }
 
@@ -2156,6 +2201,7 @@ export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): 
 export function cancelPossessionHalftimeTimer(matchId: string): void {
   clearHalftimeTimer(matchId);
   aiUserIdByMatch.delete(matchId);
+  aiCorrectnessForMatch.delete(matchId);
 }
 
 export async function devSkipToPossessionPhase(

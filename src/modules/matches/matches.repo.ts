@@ -10,6 +10,7 @@ import type {
   MatchQuestionTimingRow,
   MatchQuestionPhaseKind,
 } from './matches.types.js';
+import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 // Reusable SQL fragment for validating question payload structure
 const VALID_PAYLOAD_CONDITIONS = `
@@ -46,18 +47,21 @@ export interface CreateMatchData {
   categoryBId: string;
   totalQuestions: number;
   statePayload?: unknown;
+  rankedContext?: RankedLobbyContext | null;
 }
 
 export const matchesRepo = {
   async createMatch(data: CreateMatchData): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, started_at
+        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, started_at
       )
       VALUES (
         gen_random_uuid(), ${data.lobbyId}, ${data.mode}, 'active',
         ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions},
-        ${sql.json(data.statePayload as Json ?? null)}, NOW()
+        ${sql.json(data.statePayload as Json ?? null)},
+        ${sql.json((data.rankedContext ?? null) as Json)},
+        NOW()
       )
       RETURNING *
     `;

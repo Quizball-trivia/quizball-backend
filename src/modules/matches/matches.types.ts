@@ -1,3 +1,5 @@
+import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
+
 export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'penalty';
 
 export interface MatchRow {
@@ -10,6 +12,7 @@ export interface MatchRow {
   current_q_index: number;
   total_questions: number;
   state_payload: Record<string, unknown> | null;
+  ranked_context: RankedLobbyContext | null;
   started_at: string;
   ended_at: string | null;
   winner_user_id: string | null;

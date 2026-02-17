@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
 import type { MatchAnswerPayload, MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
@@ -215,6 +216,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
   totalPointsFallbackUsed?: boolean;
+  rankedOutcome?: Awaited<ReturnType<typeof rankedService.getMatchOutcome>> | null;
 } | null> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'completed') return null;
@@ -262,6 +264,12 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   const winnerDecisionMethod =
     (match.state_payload as { winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' } | null)?.winnerDecisionMethod ?? null;
 
+  let rankedOutcome = null;
+  if (match.mode === 'ranked') {
+    try { rankedOutcome = await rankedService.getMatchOutcome(matchId); }
+    catch (err) { logger.warn({ err, matchId }, 'Failed to fetch ranked outcome for replay'); }
+  }
+
   return {
     matchId,
     winnerId: match.winner_user_id,
@@ -270,6 +278,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     resultVersion,
     winnerDecisionMethod,
     totalPointsFallbackUsed: winnerDecisionMethod === 'total_points_fallback',
+    ...(rankedOutcome ? { rankedOutcome } : {}),
   };
 }
 
@@ -565,6 +574,11 @@ export const matchRealtimeService = {
         cancelPossessionHalftimeTimer(activeMatch.id);
         await matchesRepo.completeMatch(activeMatch.id, winnerId);
         await deleteMatchCache(activeMatch.id);
+
+        if (activeMatch.mode === 'ranked') {
+          try { await rankedService.settleCompletedRankedMatch(activeMatch.id); }
+          catch (err) { logger.warn({ err, matchId: activeMatch.id }, 'Ranked settlement failed in forfeit'); }
+        }
 
         const avgTimes = await matchesService.computeAvgTimes(activeMatch.id);
         for (const player of roster) {
@@ -889,6 +903,11 @@ export const matchRealtimeService = {
         await matchesRepo.completeMatch(matchId, winnerId);
         await deleteMatchCache(matchId);
         cancelPossessionHalftimeTimer(matchId);
+
+        if (activeMatch.mode === 'ranked') {
+          try { await rankedService.settleCompletedRankedMatch(matchId); }
+          catch (err) { logger.warn({ err, matchId }, 'Ranked settlement failed in grace expiry'); }
+        }
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);
         for (const player of roster) {

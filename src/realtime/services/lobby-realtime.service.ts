@@ -14,6 +14,7 @@ import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import {
   generateRankedAiProfile,
+  generateRankedAiGeo,
   rankedAiLobbyKey,
 } from '../ai-ranked.constants.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
@@ -392,12 +393,19 @@ async function handleRankedAiMatchFound(params: {
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
 
+    const aiGeo = generateRankedAiGeo();
     io.to(`user:${userId}`).emit('ranked:match_found', {
       lobbyId,
       opponent: {
         id: aiUser.id,
         username: aiUser.nickname ?? aiProfile.username,
         avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
+        country: aiGeo.country,
+        countryCode: aiGeo.countryCode,
+        city: aiGeo.city,
+        flag: aiGeo.flag,
+        lat: aiGeo.lat,
+        lon: aiGeo.lon,
       },
     });
     logger.info({ lobbyId, userId, aiUserId: aiUser.id }, 'Ranked AI match found');

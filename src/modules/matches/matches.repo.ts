@@ -10,6 +10,7 @@ import type {
   MatchQuestionTimingRow,
   MatchQuestionPhaseKind,
 } from './matches.types.js';
+import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 // Reusable SQL fragment for validating question payload structure
 const VALID_PAYLOAD_CONDITIONS = `
@@ -46,7 +47,7 @@ export interface CreateMatchData {
   categoryBId: string;
   totalQuestions: number;
   statePayload?: unknown;
-  rankedContext?: unknown;
+  rankedContext?: RankedLobbyContext | null;
 }
 
 export const matchesRepo = {

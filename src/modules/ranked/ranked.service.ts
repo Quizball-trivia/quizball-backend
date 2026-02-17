@@ -16,6 +16,9 @@ const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
+// How much correctness affects each placement perf score.
+// 0% correct → -(SWING/2), 50% → 0, 100% → +(SWING/2)
+const PLACEMENT_CORRECTNESS_SWING = 1400;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -283,7 +286,14 @@ export const rankedService = {
         placementWins = profile.placement_wins + (isWin ? 1 : 0);
         placementGameNo = placementPlayed;
         placementAnchorRp = opponentRp;
-        placementPerfScore = opponentRp + (isWin ? 300 : -300);
+
+        // Correctness modifier: rewards/punishes based on how well you answered
+        // 0% correct → -700, 50% correct → 0 (neutral), 100% correct → +700
+        const totalQs = match.total_questions || 12;
+        const correctnessRate = totalQs > 0 ? player.correct_answers / totalQs : 0.5;
+        const correctnessModifier = Math.round((correctnessRate - 0.5) * PLACEMENT_CORRECTNESS_SWING);
+
+        placementPerfScore = Math.max(0, opponentRp + (isWin ? 300 : -300) + correctnessModifier);
         placementPerfSum = profile.placement_perf_sum + placementPerfScore;
         placementPointsForSum = profile.placement_points_for_sum + player.total_points;
         placementPointsAgainstSum = profile.placement_points_against_sum + (opponent?.total_points ?? 0);
@@ -292,8 +302,8 @@ export const rankedService = {
           const base = placementPerfSum / DEFAULT_PLACEMENT_MATCHES;
           const dominanceAdj = clamp(
             Math.round((placementPointsForSum - placementPointsAgainstSum) / 50),
-            -100,
-            100
+            -150,
+            150
           );
           const seedRp = clamp(roundToNearest25(base + dominanceAdj), 0, 2600);
           newRp = seedRp;

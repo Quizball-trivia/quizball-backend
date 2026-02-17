@@ -9,6 +9,7 @@ import type {
   LobbyCategoryRow,
   LobbyCategoryWithDetails,
   LobbyCategoryBanRow,
+  RankedLobbyContext,
 } from './lobbies.types.js';
 
 export interface CreateLobbyData {
@@ -21,7 +22,7 @@ export interface CreateLobbyData {
   friendlyCategoryBId?: string | null;
   isPublic?: boolean;
   displayName?: string;
-  rankedContext?: unknown;
+  rankedContext?: RankedLobbyContext | null;
 }
 
 export const lobbiesRepo = {

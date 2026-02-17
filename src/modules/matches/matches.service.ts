@@ -10,6 +10,7 @@ import type {
   MatchRow,
   MatchQuestionWithCategory,
 } from './matches.types.js';
+import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 /**
  * Ensure a JSONB field is a proper object (handles double-encoded strings from DB).
@@ -165,17 +166,31 @@ export const matchesService = {
     }
 
     // For ranked matches, build placement AI context so the anchor adapts per match
-    let rankedContext: unknown;
+    let rankedContext: RankedLobbyContext | null = null;
     if (params.mode === 'ranked') {
-      const user1 = await usersRepo.getById(seat1);
-      const humanUserId = user1?.is_ai ? seat2 : seat1;
-      const profile = await rankedService.ensureProfile(humanUserId);
-      if (rankedService.isPlacementRequired(profile)) {
-        rankedContext = rankedService.buildPlacementAiContext(profile);
-        logger.info(
-          { lobbyId: params.lobbyId, humanUserId, rankedContext },
-          'Built placement AI context for ranked match'
+      const [user1, user2] = await Promise.all([
+        usersRepo.getById(seat1),
+        usersRepo.getById(seat2),
+      ]);
+
+      let humanUserId: string | null = null;
+      if (user1 && !user1.is_ai) humanUserId = seat1;
+      else if (user2 && !user2.is_ai) humanUserId = seat2;
+
+      if (!humanUserId) {
+        logger.warn(
+          { lobbyId: params.lobbyId, seat1, seat2 },
+          'Could not determine human player for ranked context'
         );
+      } else {
+        const profile = await rankedService.ensureProfile(humanUserId);
+        if (rankedService.isPlacementRequired(profile)) {
+          rankedContext = rankedService.buildPlacementAiContext(profile);
+          logger.info(
+            { lobbyId: params.lobbyId, humanUserId, rankedContext },
+            'Built placement AI context for ranked match'
+          );
+        }
       }
     }
 

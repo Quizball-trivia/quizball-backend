@@ -20,12 +20,15 @@ const DEV_DOMAINS = [
 const PROD_DOMAINS = ['quizball.io', 'www.quizball.io', 'quizball.app', 'www.quizball.app'];
 const isProd = config.NODE_ENV === 'prod' || config.NODE_ENV === 'staging';
 
+// Matches valid hostname/IPv4 with optional port, or bracketed IPv6.
+const VALID_HOST_RE = /^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::\d{1,5})?$/;
+
 function parseHostFromOrigin(origin: string): string | null {
   try {
     return new URL(origin).host;
   } catch {
-    // If env accidentally contains host-only entries, keep them.
-    return origin.includes('.') || origin.includes(':') ? origin : null;
+    // If env accidentally contains host-only entries (no scheme), accept if valid hostname.
+    return VALID_HOST_RE.test(origin) ? origin : null;
   }
 }
 

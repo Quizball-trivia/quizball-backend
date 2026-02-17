@@ -1,3 +1,14 @@
+export interface RankedLobbyContext {
+  isPlacement?: boolean;
+  placementGameNo?: number;
+  aiAnchorRp?: number;
+  aiCorrectness?: number;
+  aiDelayProfile?: {
+    minMs: number;
+    maxMs: number;
+  };
+}
+
 export interface LobbyRow {
   id: string;
   invite_code: string | null;
@@ -8,7 +19,7 @@ export interface LobbyRow {
   friendly_category_b_id: string | null;
   is_public: boolean;
   display_name: string;
-  ranked_context: Record<string, unknown> | null;
+  ranked_context: RankedLobbyContext | null;
   host_user_id: string;
   status: 'waiting' | 'active' | 'closed';
   created_at: string;

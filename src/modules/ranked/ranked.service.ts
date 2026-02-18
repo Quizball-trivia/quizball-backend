@@ -126,6 +126,7 @@ export const rankedService = {
           calculationMethod: 'ranked_formula',
         },
       }]);
+      profile.tier = normalizedTier;
     }
     return profile;
   },

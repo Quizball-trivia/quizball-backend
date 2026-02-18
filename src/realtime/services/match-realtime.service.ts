@@ -21,7 +21,7 @@ import {
   cancelPossessionHalftimeTimer,
   emitPossessionStateToSocket,
   handlePossessionAnswer,
-  handlePossessionTacticSelect,
+  handlePossessionHalftimeBan,
 } from '../possession-match-flow.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
@@ -938,21 +938,21 @@ export const matchRealtimeService = {
     }, MATCH_DISCONNECT_GRACE_MS);
   },
 
-  async handleTacticSelect(
+  async handleHalftimeBan(
     io: QuizballServer,
     socket: QuizballSocket,
-    payload: { matchId: string; tactic: 'press-high' | 'play-safe' | 'all-in' }
+    payload: { matchId: string; categoryId: string }
   ): Promise<void> {
     const match = await matchesRepo.getMatch(payload.matchId);
     if (!match || match.status !== 'active') {
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found for tactic selection.',
+        message: 'No active match found for halftime category ban.',
       });
       return;
     }
 
-    await handlePossessionTacticSelect(io, socket, payload);
+    await handlePossessionHalftimeBan(io, socket, payload);
   },
 
   async handleAnswer(

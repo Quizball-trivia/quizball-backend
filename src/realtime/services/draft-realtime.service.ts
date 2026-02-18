@@ -17,7 +17,7 @@ const pendingAiBanTimers = new Map<string, NodeJS.Timeout>();
 async function startMatchFromDraft(
   io: QuizballServer,
   lobbyId: string,
-  allowedCategoryIds: [string, string]
+  halfOneCategoryId: string
 ): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -31,7 +31,8 @@ async function startMatchFromDraft(
       lobbyId,
       mode: lobby.mode,
       hostUserId: lobby.host_user_id,
-      categoryIds: allowedCategoryIds,
+      categoryAId: halfOneCategoryId,
+      categoryBId: null,
     });
   } catch (error) {
     logger.warn(
@@ -44,7 +45,7 @@ async function startMatchFromDraft(
 
   const matchId = result.match.id;
   logger.info(
-    { lobbyId, matchId, mode: lobby.mode, categoryIds: allowedCategoryIds },
+    { lobbyId, matchId, mode: lobby.mode, halfOneCategoryId },
     'Match created from draft'
   );
   await beginMatchForLobby(io, lobbyId, matchId);
@@ -93,7 +94,7 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   clearPendingAiBanTimer(lobbyId);
   const bannedIds = new Set(bans.map((ban) => ban.category_id));
   const remaining = categories.filter((category) => !bannedIds.has(category.id));
-  if (remaining.length < 2) {
+  if (remaining.length !== 1) {
     logger.warn(
       {
         lobbyId,
@@ -107,10 +108,10 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
     return;
   }
 
-  const allowed: [string, string] = [remaining[0].id, remaining[1].id];
-  io.to(`lobby:${lobbyId}`).emit('draft:complete', { allowedCategoryIds: allowed });
-  logger.info({ lobbyId, allowedCategoryIds: allowed }, 'Draft complete');
-  await startMatchFromDraft(io, lobbyId, allowed);
+  const halfOneCategoryId = remaining[0].id;
+  io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
+  logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
+  await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 
 function scheduleRankedAiBan(io: QuizballServer, lobbyId: string, aiUserId: string): void {

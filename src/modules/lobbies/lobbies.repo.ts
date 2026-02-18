@@ -316,6 +316,30 @@ export const lobbiesRepo = {
     `;
   },
 
+  async selectRandomActiveCategoriesExcluding(
+    minQuestions: number,
+    limit: number,
+    excludeCategoryIds: string[]
+  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null }>> {
+    const exclusionClause = excludeCategoryIds.length > 0
+      ? sql`AND c.id <> ALL(${sql.array(excludeCategoryIds)}::uuid[])`
+      : sql``;
+
+    return sql<{ id: string; name: Record<string, string>; icon: string | null }[]>`
+      SELECT c.id, c.name, c.icon
+      FROM categories c
+      JOIN questions q ON q.category_id = c.id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE c.is_active = true
+        ${exclusionClause}
+        AND ${MCQ_VALIDATION_CONDITIONS}
+      GROUP BY c.id, c.name, c.icon
+      HAVING COUNT(*) >= ${minQuestions}
+      ORDER BY RANDOM()
+      LIMIT ${limit}
+    `;
+  },
+
   async listValidCategoryIds(
     categoryIds: string[],
     minQuestions: number

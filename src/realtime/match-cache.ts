@@ -55,7 +55,7 @@ export interface MatchCache {
   mode: MatchMode;
   totalQuestions: number;
   categoryAId: string;
-  categoryBId: string;
+  categoryBId: string | null;
   startedAt: string;
   players: CachedPlayer[];
   currentQIndex: number;
@@ -73,6 +73,14 @@ function asSeat(value: number | null | undefined): CachedSeat | null {
   return null;
 }
 
+const RUNTIME_PHASE_KINDS = new Set(['normal', 'last_attack', 'penalty'] as const);
+function asRuntimePhaseKind(value: unknown): 'normal' | 'last_attack' | 'penalty' {
+  if (typeof value === 'string' && RUNTIME_PHASE_KINDS.has(value as 'normal' | 'last_attack' | 'penalty')) {
+    return value as 'normal' | 'last_attack' | 'penalty';
+  }
+  return 'normal';
+}
+
 function sanitizePossessionState(raw: unknown): PossessionStatePayload {
   const fallback = createInitialPossessionState();
   if (!raw || typeof raw !== 'object') return fallback;
@@ -81,10 +89,6 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
   return {
     ...fallback,
     ...candidate,
-    seatMomentum: {
-      seat1: clamp(Number(candidate.seatMomentum?.seat1 ?? fallback.seatMomentum.seat1), 0, 6),
-      seat2: clamp(Number(candidate.seatMomentum?.seat2 ?? fallback.seatMomentum.seat2), 0, 6),
-    },
     goals: {
       seat1: Math.max(0, Number(candidate.goals?.seat1 ?? fallback.goals.seat1)),
       seat2: Math.max(0, Number(candidate.goals?.seat2 ?? fallback.goals.seat2)),
@@ -93,20 +97,32 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
       seat1: Math.max(0, Number(candidate.penaltyGoals?.seat1 ?? fallback.penaltyGoals.seat1)),
       seat2: Math.max(0, Number(candidate.penaltyGoals?.seat2 ?? fallback.penaltyGoals.seat2)),
     },
-    sharedPossession: clamp(Number(candidate.sharedPossession ?? fallback.sharedPossession), 0, 100),
+    possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
     normalQuestionsAnsweredInHalf: Math.max(0, Number(candidate.normalQuestionsAnsweredInHalf ?? 0)),
     normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
-      tactics: {
-        seat1: candidate.halftime?.tactics?.seat1 ?? null,
-        seat2: candidate.halftime?.tactics?.seat2 ?? null,
+      categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
+        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null }>>((acc, category) => {
+          if (!category || typeof category !== 'object') return acc;
+          if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          acc.push({
+            id: category.id,
+            name: category.name,
+            icon: typeof category.icon === 'string' ? category.icon : null,
+          });
+          return acc;
+        }, [])
+        : [],
+      bans: {
+        seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
+        seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
       },
     },
-    shot: {
-      attackerSeat: asSeat(candidate.shot?.attackerSeat),
+    lastAttack: {
+      attackerSeat: asSeat(candidate.lastAttack?.attackerSeat),
     },
     penalty: {
       round: Math.max(0, Number(candidate.penalty?.round ?? 0)),
@@ -120,7 +136,7 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
     currentQuestion: candidate.currentQuestion
       ? {
         qIndex: Number(candidate.currentQuestion.qIndex ?? 0),
-        phaseKind: candidate.currentQuestion.phaseKind ?? 'normal',
+        phaseKind: asRuntimePhaseKind(candidate.currentQuestion.phaseKind),
         phaseRound: Number(candidate.currentQuestion.phaseRound ?? 0),
         shooterSeat: asSeat(candidate.currentQuestion.shooterSeat),
         attackerSeat: asSeat(candidate.currentQuestion.attackerSeat),
@@ -165,7 +181,7 @@ export function buildInitialCache(params: {
     mode: MatchMode;
     total_questions: number;
     category_a_id: string;
-    category_b_id: string;
+    category_b_id: string | null;
     started_at: string;
     current_q_index: number;
     state_payload: unknown;

@@ -5,7 +5,7 @@ import { usersRepo } from '../users/users.repo.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
-import type { GameQuestionDTO } from '../../realtime/socket.types.js';
+import type { DraftCategory, GameQuestionDTO } from '../../realtime/socket.types.js';
 import type {
   MatchRow,
   MatchQuestionWithCategory,
@@ -31,28 +31,26 @@ function ensureI18nObject(field: unknown): Record<string, string> {
 export const POSSESSION_QUESTIONS_PER_HALF = 6;
 export const POSSESSION_TOTAL_NORMAL_QUESTIONS = POSSESSION_QUESTIONS_PER_HALF * 2;
 
-type PossessionTactic = 'press-high' | 'play-safe' | 'all-in';
-
 export interface PossessionStatePayload {
   version: 1;
-  phase: 'NORMAL_PLAY' | 'SHOT_ON_GOAL' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
+  phase: 'NORMAL_PLAY' | 'LAST_ATTACK' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
   half: 1 | 2;
-  sharedPossession: number;
-  seatMomentum: { seat1: number; seat2: number };
+  possessionDiff: number;
   kickOffSeat: 1 | 2;
   goals: { seat1: number; seat2: number };
   penaltyGoals: { seat1: number; seat2: number };
   normalQuestionsPerHalf: number;
   normalQuestionsAnsweredInHalf: number;
   normalQuestionsAnsweredTotal: number;
-  shot: {
+  lastAttack: {
     attackerSeat: 1 | 2 | null;
   };
   halftime: {
     deadlineAt: string | null;
-    tactics: {
-      seat1: PossessionTactic | null;
-      seat2: PossessionTactic | null;
+    categoryOptions: DraftCategory[];
+    bans: {
+      seat1: string | null;
+      seat2: string | null;
     };
   };
   penalty: {
@@ -63,7 +61,7 @@ export interface PossessionStatePayload {
   };
   currentQuestion: {
     qIndex: number;
-    phaseKind: 'normal' | 'shot' | 'penalty';
+    phaseKind: 'normal' | 'last_attack' | 'penalty';
     phaseRound: number;
     shooterSeat: 1 | 2 | null;
     attackerSeat: 1 | 2 | null;
@@ -82,20 +80,20 @@ export function createInitialPossessionState(): PossessionStatePayload {
     version: 1,
     phase: 'NORMAL_PLAY',
     half: 1,
-    sharedPossession: 50,
-    seatMomentum: { seat1: 0, seat2: 0 },
+    possessionDiff: 0,
     kickOffSeat: 1,
     goals: { seat1: 0, seat2: 0 },
     penaltyGoals: { seat1: 0, seat2: 0 },
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
     normalQuestionsAnsweredInHalf: 0,
     normalQuestionsAnsweredTotal: 0,
-    shot: {
+    lastAttack: {
       attackerSeat: null,
     },
     halftime: {
       deadlineAt: null,
-      tactics: {
+      categoryOptions: [],
+      bans: {
         seat1: null,
         seat2: null,
       },
@@ -120,7 +118,8 @@ export const matchesService = {
     lobbyId: string;
     mode: 'friendly' | 'ranked';
     hostUserId: string;
-    categoryIds: [string, string];
+    categoryAId: string;
+    categoryBId: string | null;
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
@@ -132,8 +131,6 @@ export const matchesService = {
         ErrorCode.BAD_REQUEST
       );
     }
-
-    const [categoryAId, categoryBId] = params.categoryIds;
 
     const hostIndex = memberIds.indexOf(params.hostUserId);
     let seat1: string;
@@ -183,12 +180,20 @@ export const matchesService = {
           'Could not determine human player for ranked context'
         );
       } else {
-        const profile = await rankedService.ensureProfile(humanUserId);
-        if (rankedService.isPlacementRequired(profile)) {
-          rankedContext = rankedService.buildPlacementAiContext(profile);
-          logger.info(
-            { lobbyId: params.lobbyId, humanUserId, rankedContext },
-            'Built placement AI context for ranked match'
+        try {
+          const profile = await rankedService.ensureProfile(humanUserId);
+          if (rankedService.isPlacementRequired(profile)) {
+            rankedContext = rankedService.buildPlacementAiContext(profile);
+            logger.info(
+              { lobbyId: params.lobbyId, humanUserId, rankedContext },
+              'Built placement AI context for ranked match'
+            );
+          }
+        } catch (err) {
+          if (err instanceof AppError) throw err;
+          logger.error(
+            { err, humanUserId, fn: 'createMatchFromLobby' },
+            'Failed to load ranked profile; proceeding without ranked context'
           );
         }
       }
@@ -197,8 +202,8 @@ export const matchesService = {
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
-      categoryAId,
-      categoryBId,
+      categoryAId: params.categoryAId,
+      categoryBId: params.categoryBId,
       totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
       statePayload: createInitialPossessionState(),
       rankedContext,
@@ -239,7 +244,7 @@ export const matchesService = {
     question: GameQuestionDTO;
     correctIndex: number;
     categoryId: string;
-    phaseKind: 'normal' | 'shot' | 'penalty';
+    phaseKind: 'normal' | 'shot' | 'last_attack' | 'penalty';
     phaseRound: number | null;
     shooterSeat: 1 | 2 | null;
     attackerSeat: 1 | 2 | null;

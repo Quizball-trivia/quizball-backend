@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
 import type {
   PlacementStatus,
   RankedLeaderboardEntry,
@@ -84,7 +85,12 @@ export const rankedRepo = {
       SELECT * FROM ranked_profiles WHERE user_id = ${userId}
     `;
     if (!existing) {
-      throw new Error('Failed to load ranked profile after ensureProfile');
+      throw new AppError(
+        'Failed to load ranked profile after ensureProfile',
+        500,
+        ErrorCode.INTERNAL_ERROR,
+        { userId }
+      );
     }
     return existing;
   },

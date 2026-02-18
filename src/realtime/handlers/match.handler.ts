@@ -1,7 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   matchAnswerSchema,
-  matchTacticSelectSchema,
+  matchHalftimeBanSchema,
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
@@ -37,28 +37,28 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
     }
   });
 
-  socket.on('match:tactic_select', async (payload) => {
-    const parsed = matchTacticSelectSchema.safeParse(payload);
+  socket.on('match:halftime_ban', async (payload) => {
+    const parsed = matchHalftimeBanSchema.safeParse(payload);
     if (!parsed.success) {
-      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:tactic_select payload');
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:halftime_ban payload');
       return;
     }
 
     try {
-      await matchRealtimeService.handleTacticSelect(io, socket, parsed.data);
+      await matchRealtimeService.handleHalftimeBan(io, socket, parsed.data);
     } catch (error) {
       logger.error(
         {
           err: error,
           userId: socket.data.user?.id,
           matchId: parsed.data.matchId,
-          tactic: parsed.data.tactic,
+          categoryId: parsed.data.categoryId,
         },
-        'Error handling match:tactic_select'
+        'Error handling match:halftime_ban'
       );
       socket.emit('error', {
-        code: 'MATCH_TACTIC_ERROR',
-        message: 'Failed to apply tactic selection',
+        code: 'MATCH_HALFTIME_BAN_ERROR',
+        message: 'Failed to apply halftime ban',
       });
     }
   });

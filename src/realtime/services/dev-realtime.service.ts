@@ -55,7 +55,8 @@ export const devRealtimeService = {
       lobbyId: lobby.id,
       mode: 'friendly',
       hostUserId: userId,
-      categoryIds: [categories[0].id, categories[1].id],
+      categoryAId: categories[0].id,
+      categoryBId: categories[1].id,
     });
 
     // 7. Set AI Redis key so AI answer scheduling works
@@ -79,7 +80,7 @@ export const devRealtimeService = {
 
   async handleSkipTo(
     _io: QuizballServer,
-    payload: { matchId: string; target: 'halftime' | 'shot' | 'penalties' | 'second_half' }
+    payload: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half' }
   ): Promise<void> {
     await devSkipToPossessionPhase(_io, payload.matchId, payload.target);
 

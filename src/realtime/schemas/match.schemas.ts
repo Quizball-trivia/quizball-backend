@@ -11,9 +11,9 @@ export const matchAnswerSchema = z.object({
   timeMs: z.number().int().min(0).max(MAX_TIME_MS),
 });
 
-export const matchTacticSelectSchema = z.object({
+export const matchHalftimeBanSchema = z.object({
   matchId: z.string().uuid(),
-  tactic: z.enum(['press-high', 'play-safe', 'all-in']),
+  categoryId: z.string().uuid(),
 });
 
 export const matchRejoinSchema = z.object({
@@ -34,7 +34,7 @@ export const matchFinalResultsAckSchema = z.object({
 });
 
 export type MatchAnswerPayload = z.infer<typeof matchAnswerSchema>;
-export type MatchTacticSelectPayload = z.infer<typeof matchTacticSelectSchema>;
+export type MatchHalftimeBanPayload = z.infer<typeof matchHalftimeBanSchema>;
 export type MatchRejoinPayload = z.infer<typeof matchRejoinSchema>;
 export type MatchLeavePayload = z.infer<typeof matchLeaveSchema>;
 export type MatchForfeitPayload = z.infer<typeof matchForfeitSchema>;

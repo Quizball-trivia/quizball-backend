@@ -1,6 +1,6 @@
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
-export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'penalty';
+export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'last_attack' | 'penalty';
 
 export interface MatchRow {
   id: string;
@@ -8,7 +8,7 @@ export interface MatchRow {
   mode: 'friendly' | 'ranked';
   status: 'active' | 'completed' | 'abandoned';
   category_a_id: string;
-  category_b_id: string;
+  category_b_id: string | null;
   current_q_index: number;
   total_questions: number;
   state_payload: Record<string, unknown> | null;

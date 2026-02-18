@@ -266,8 +266,8 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
   }
 
   try {
-    const categories = await lobbiesService.selectRandomCategories(4);
-    if (categories.length < 4) {
+    const categories = await lobbiesService.selectRandomCategories(3);
+    if (categories.length < 3) {
       logger.warn(
         { lobbyId, categoryCount: categories.length },
         'Draft start failed: insufficient categories with questions'
@@ -910,7 +910,8 @@ export const lobbyRealtimeService = {
     }
 
     try {
-      let categoryIds: [string, string];
+      let categoryAId: string;
+      let categoryBId: string | null;
 
       if (lobby.friendly_random) {
         const categories = await lobbiesService.selectRandomCategories(2);
@@ -927,7 +928,8 @@ export const lobbyRealtimeService = {
           });
           return;
         }
-        categoryIds = [categories[0].id, categories[1].id];
+        categoryAId = categories[0].id;
+        categoryBId = categories[1].id;
       } else {
         const categoryA = lobby.friendly_category_a_id;
         const categoryB = lobby.friendly_category_b_id;
@@ -962,7 +964,8 @@ export const lobbyRealtimeService = {
           return;
         }
 
-        categoryIds = [categoryA, categoryB];
+        categoryAId = categoryA;
+        categoryBId = categoryB;
       }
 
       let result;
@@ -971,7 +974,8 @@ export const lobbyRealtimeService = {
           lobbyId,
           mode: lobby.mode,
           hostUserId: lobby.host_user_id,
-          categoryIds,
+          categoryAId,
+          categoryBId,
         });
       } catch (error) {
         logger.warn(
@@ -991,7 +995,7 @@ export const lobbyRealtimeService = {
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       logger.info(
-        { lobbyId, matchId: result.match.id, mode: lobby.mode, categoryIds },
+        { lobbyId, matchId: result.match.id, mode: lobby.mode, categoryAId, categoryBId },
         'Friendly match created'
       );
 

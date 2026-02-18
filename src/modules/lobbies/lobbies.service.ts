@@ -57,6 +57,20 @@ export const lobbiesService = {
     }));
   },
 
+  async selectRandomCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
+    const rows = await lobbiesRepo.selectRandomActiveCategoriesExcluding(
+      MIN_QUESTIONS_PER_CATEGORY,
+      count,
+      excludeCategoryIds
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: pickI18nText(row.name),
+      icon: row.icon ?? null,
+    }));
+  },
+
   async getLobbyCategories(lobbyId: string): Promise<DraftCategory[]> {
     const rows: LobbyCategoryWithDetails[] = await lobbiesRepo.listLobbyCategoriesWithDetails(lobbyId);
     return rows.map((row) => ({

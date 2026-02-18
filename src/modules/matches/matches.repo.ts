@@ -44,7 +44,7 @@ export interface CreateMatchData {
   lobbyId: string | null;
   mode: 'friendly' | 'ranked';
   categoryAId: string;
-  categoryBId: string;
+  categoryBId: string | null;
   totalQuestions: number;
   statePayload?: unknown;
   rankedContext?: RankedLobbyContext | null;
@@ -253,7 +253,7 @@ export const matchesRepo = {
 
   async getRandomQuestionForMatch(params: {
     matchId: string;
-    categoryIds: [string, string];
+    categoryIds: string[];
     difficulties: Array<'easy' | 'medium' | 'hard'>;
   }): Promise<{
     id: string;
@@ -458,6 +458,14 @@ export const matchesRepo = {
       UPDATE matches
       SET state_payload = ${jsonPayload},
           current_q_index = GREATEST(current_q_index, ${qIndex})
+      WHERE id = ${matchId}
+    `;
+  },
+
+  async setMatchCategoryB(matchId: string, categoryBId: string | null): Promise<void> {
+    await sql`
+      UPDATE matches
+      SET category_b_id = ${categoryBId}
       WHERE id = ${matchId}
     `;
   },

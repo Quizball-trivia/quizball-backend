@@ -3,45 +3,98 @@ import { createInitialPossessionState } from '../../src/modules/matches/matches.
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
 
 const {
+  categoryIdsForCurrentHalf,
+  applyDeltaAndGoalCheck,
   applyNormalResolution,
-  shotReboundPossession,
+  applyLastAttackResolution,
   decideWinner,
+  effectiveAnswerTimeMs,
   penaltyWinnerSeat,
 } = __possessionInternals;
 
 describe('possession-match-flow internals', () => {
-  it('moves possession toward midfield by 2 when both players are wrong', () => {
-    const aboveMid = createInitialPossessionState();
-    aboveMid.sharedPossession = 58;
-    applyNormalResolution(
-      aboveMid,
-      { isCorrect: false, timeMs: 10000 },
-      { isCorrect: false, timeMs: 10000 }
-    );
-    expect(aboveMid.sharedPossession).toBe(56);
-
-    const belowMid = createInitialPossessionState();
-    belowMid.sharedPossession = 42;
-    applyNormalResolution(
-      belowMid,
-      { isCorrect: false, timeMs: 10000 },
-      { isCorrect: false, timeMs: 10000 }
-    );
-    expect(belowMid.sharedPossession).toBe(44);
-
-    const exactMid = createInitialPossessionState();
-    exactMid.sharedPossession = 50;
-    applyNormalResolution(
-      exactMid,
-      { isCorrect: false, timeMs: 10000 },
-      { isCorrect: false, timeMs: 10000 }
-    );
-    expect(exactMid.sharedPossession).toBe(50);
+  it('applies reveal offset helper for timer scoring', () => {
+    expect(effectiveAnswerTimeMs(0)).toBe(0);
+    expect(effectiveAnswerTimeMs(2000)).toBe(0);
+    expect(effectiveAnswerTimeMs(5000)).toBe(3000);
+    expect(effectiveAnswerTimeMs(12000)).toBe(10000);
   });
 
-  it('applies fixed defensive rebound after missed shot by attacker seat', () => {
-    expect(shotReboundPossession(1)).toBe(60);
-    expect(shotReboundPossession(2)).toBe(40);
+  it('checks goals on raw nextDiff before clamping', () => {
+    const state = createInitialPossessionState();
+    state.possessionDiff = 99;
+    const result = applyDeltaAndGoalCheck(state, 51, 50);
+    expect(result.delta).toBe(1);
+    expect(result.goalScoredBySeat).toBe(1);
+    expect(state.possessionDiff).toBe(0);
+    expect(state.goals.seat1).toBe(1);
+  });
+
+  it('enters last attack at exact +50 / -50 after Q6', () => {
+    const seat1Lead = createInitialPossessionState();
+    seat1Lead.normalQuestionsAnsweredInHalf = 5;
+    seat1Lead.normalQuestionsAnsweredTotal = 5;
+    seat1Lead.possessionDiff = 40;
+    applyNormalResolution(seat1Lead, 60, 50);
+    expect(seat1Lead.phase).toBe('LAST_ATTACK');
+    expect(seat1Lead.lastAttack.attackerSeat).toBe(1);
+    expect(seat1Lead.normalQuestionsAnsweredInHalf).toBe(6);
+
+    const seat2Lead = createInitialPossessionState();
+    seat2Lead.normalQuestionsAnsweredInHalf = 5;
+    seat2Lead.normalQuestionsAnsweredTotal = 5;
+    seat2Lead.possessionDiff = -40;
+    applyNormalResolution(seat2Lead, 50, 60);
+    expect(seat2Lead.phase).toBe('LAST_ATTACK');
+    expect(seat2Lead.lastAttack.attackerSeat).toBe(2);
+  });
+
+  it('skips last attack when abs(possessionDiff) < 50 at Q6', () => {
+    const state = createInitialPossessionState();
+    state.normalQuestionsAnsweredInHalf = 5;
+    state.normalQuestionsAnsweredTotal = 5;
+    state.possessionDiff = 20;
+
+    applyNormalResolution(state, 50, 50);
+    expect(state.phase).toBe('HALFTIME');
+    expect(state.lastAttack.attackerSeat).toBeNull();
+  });
+
+  it('last attack resolution does not increment normal question counters', () => {
+    const state = createInitialPossessionState();
+    state.half = 1;
+    state.phase = 'LAST_ATTACK';
+    state.normalQuestionsAnsweredInHalf = 6;
+    state.normalQuestionsAnsweredTotal = 6;
+    state.possessionDiff = 70;
+
+    applyLastAttackResolution(state, 55, 45);
+    expect(state.normalQuestionsAnsweredInHalf).toBe(6);
+    expect(state.normalQuestionsAnsweredTotal).toBe(6);
+    expect(state.phase).toBe('HALFTIME');
+  });
+
+  it('uses category A as half 2 fallback when category B is null', () => {
+    expect(
+      categoryIdsForCurrentHalf(
+        { half: 1 },
+        { categoryAId: 'cat-a', categoryBId: null }
+      )
+    ).toEqual(['cat-a']);
+
+    expect(
+      categoryIdsForCurrentHalf(
+        { half: 2 },
+        { categoryAId: 'cat-a', categoryBId: 'cat-b' }
+      )
+    ).toEqual(['cat-b']);
+
+    expect(
+      categoryIdsForCurrentHalf(
+        { half: 2 },
+        { categoryAId: 'cat-a', categoryBId: null }
+      )
+    ).toEqual(['cat-a']);
   });
 
   it('detects penalty winner when mathematically unreachable', () => {

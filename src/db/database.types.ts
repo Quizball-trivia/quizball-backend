@@ -469,7 +469,7 @@ export type Database = {
       matches: {
         Row: {
           category_a_id: string
-          category_b_id: string
+          category_b_id: string | null
           current_q_index: number
           ended_at: string | null
           id: string
@@ -484,7 +484,7 @@ export type Database = {
         }
         Insert: {
           category_a_id: string
-          category_b_id: string
+          category_b_id?: string | null
           current_q_index?: number
           ended_at?: string | null
           id?: string
@@ -499,7 +499,7 @@ export type Database = {
         }
         Update: {
           category_a_id?: string
-          category_b_id?: string
+          category_b_id?: string | null
           current_q_index?: number
           ended_at?: string | null
           id?: string

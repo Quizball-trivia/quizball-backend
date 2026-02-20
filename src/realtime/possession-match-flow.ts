@@ -1,8 +1,10 @@
 import { trackEvent } from '../core/analytics.js';
+import { BadRequestError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
+import { storeService } from '../modules/store/store.service.js';
 import { usersRepo } from '../modules/users/users.repo.js';
 import {
   createInitialPossessionState,
@@ -32,12 +34,13 @@ import type { DraftCategory, MatchPhaseKind, MatchRoundResultDeltas, MatchStateP
 import { clamp, calculatePoints } from './scoring.js';
 
 const QUESTION_TIME_MS = 10000;
-const FRONTEND_REVEAL_MS = 2000; // Frontend shows question text before unlocking options
+const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
+const FRONTEND_TRANSITION_MS = 3500; // Frontend round-transition overlay between questions
 const ROUND_RESULT_DELAY_MS = 0;
 const PENALTY_INTRO_DELAY_MS = 1000;
 const TIMEOUT_RESOLVE_GRACE_MS = 250;
 const TIMEOUT_RESOLVE_BUFFER_MS = 50;
-const HALFTIME_DURATION_MS = 15000;
+const HALFTIME_DURATION_MS = 20000;
 const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
 const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
 const LAST_MATCH_REPLAY_TTL_SEC = 600;
@@ -77,9 +80,10 @@ function lastMatchKey(userId: string): string {
 }
 
 function getAiAnswerDelayMs(): number {
-  // Min delay must exceed the frontend's 2s question-reveal phase so the AI
+  // Min delay must exceed the frontend's 3s question-reveal phase so the AI
   // never answers before the human player can even see the options.
-  return Math.floor(Math.random() * 4000) + 3000;
+  // Range: 5–10s after question sent = 2–7s after options appear.
+  return Math.floor(Math.random() * 5000) + 5000;
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -106,6 +110,27 @@ function getSeatFromUserId(players: Array<{ user_id: string; seat: number }>, us
 
 function getUserIdBySeat(players: Array<{ user_id: string; seat: number }>, seat: Seat): string | null {
   return players.find((player) => player.seat === seat)?.user_id ?? null;
+}
+
+function emitChanceCardError(
+  socket: QuizballSocket,
+  payload: {
+    matchId: string;
+    qIndex: number;
+    clientActionId: string;
+  },
+  code: 'CHANCE_CARD_NOT_AVAILABLE' | 'CHANCE_CARD_NOT_ALLOWED' | 'CHANCE_CARD_ALREADY_USED' | 'CHANCE_CARD_SYNC_FAILED',
+  message: string
+): void {
+  socket.emit('error', {
+    code,
+    message,
+    meta: {
+      matchId: payload.matchId,
+      qIndex: payload.qIndex,
+      clientActionId: payload.clientActionId,
+    },
+  });
 }
 
 const VALID_PHASE_KINDS: ReadonlySet<MatchPhaseKind> = new Set(['normal', 'last_attack', 'penalty']);
@@ -309,11 +334,12 @@ function scheduleQuestionTimeout(io: QuizballServer, matchId: string, qIndex: nu
     clearTimeout(existing);
   }
 
+  // Budget: transition overlay (3.5s) + question reveal (3s) + answer timer (10s) + grace (0.3s)
   const timeout = setTimeout(() => {
     void resolvePossessionRound(io, matchId, qIndex, true).catch((error) => {
       logger.error({ error, matchId, qIndex }, 'Failed to resolve possession round after timeout');
     });
-  }, QUESTION_TIME_MS + FRONTEND_REVEAL_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
+  }, QUESTION_TIME_MS + FRONTEND_REVEAL_MS + FRONTEND_TRANSITION_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
 
   questionTimers.set(key, timeout);
 }
@@ -2217,6 +2243,173 @@ export async function handlePossessionAnswer(
 
   if (committed.answerCount >= committed.expectedCount) {
     await resolvePossessionRound(io, matchId, qIndex, false);
+  }
+}
+
+export async function handlePossessionChanceCardUse(
+  _io: QuizballServer,
+  socket: QuizballSocket,
+  payload: {
+    matchId: string;
+    qIndex: number;
+    clientActionId: string;
+  }
+): Promise<void> {
+  const lockKey = `lock:match:${payload.matchId}:chance_card_use`;
+  const lock = await acquireLock(lockKey, 2000);
+  if (!lock.acquired || !lock.token) {
+    emitChanceCardError(
+      socket,
+      payload,
+      'CHANCE_CARD_SYNC_FAILED',
+      '50-50 card is syncing. Please retry.'
+    );
+    return;
+  }
+
+  try {
+    const cache = await getMatchCacheOrRebuild(payload.matchId);
+    if (!cache || cache.status !== 'active') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ACTIVE',
+        message: 'No active match found for 50-50 card use.',
+        meta: {
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          clientActionId: payload.clientActionId,
+        },
+      });
+      return;
+    }
+
+    if (cache.mode !== 'ranked') {
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_NOT_ALLOWED',
+        '50-50 cards are available only in ranked matches.'
+      );
+      return;
+    }
+
+    if (!cache.currentQuestion || cache.currentQuestion.qIndex !== payload.qIndex || cache.currentQIndex !== payload.qIndex) {
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_NOT_ALLOWED',
+        '50-50 card can only be used for the active question.'
+      );
+      return;
+    }
+
+    if (cache.currentQuestion.phaseKind === 'penalty') {
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_NOT_ALLOWED',
+        '50-50 card cannot be used during penalty rounds.'
+      );
+      return;
+    }
+
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    if (!player) {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'Only match participants can use 50-50 cards.',
+        meta: {
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          clientActionId: payload.clientActionId,
+        },
+      });
+      return;
+    }
+
+    const usageKey = `${payload.qIndex}:${socket.data.user.id}`;
+    const existingUse = cache.chanceCardUses[usageKey];
+    if (existingUse) {
+      socket.emit('match:chance_card_applied', {
+        matchId: payload.matchId,
+        qIndex: payload.qIndex,
+        clientActionId: existingUse.clientActionId,
+        eliminatedIndices: existingUse.eliminatedIndices,
+        remainingQuantity: existingUse.remainingQuantity,
+      });
+      return;
+    }
+
+    const optionCount = cache.currentQuestion.questionDTO.options.length;
+    const wrongIndices = Array.from({ length: optionCount }, (_, index) => index).filter(
+      (index) => index !== cache.currentQuestion!.correctIndex
+    );
+    if (wrongIndices.length < 2) {
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_SYNC_FAILED',
+        '50-50 card could not be applied to this question.'
+      );
+      return;
+    }
+    const shuffledWrongIndices = [...wrongIndices];
+    for (let index = shuffledWrongIndices.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [shuffledWrongIndices[index], shuffledWrongIndices[swapIndex]] = [
+        shuffledWrongIndices[swapIndex],
+        shuffledWrongIndices[index],
+      ];
+    }
+    const eliminatedIndices = shuffledWrongIndices.slice(0, 2);
+
+    let remainingQuantity = 0;
+    try {
+      const consumed = await storeService.consumeChanceCardForMatch({
+        userId: socket.data.user.id,
+        matchId: payload.matchId,
+        qIndex: payload.qIndex,
+        clientActionId: payload.clientActionId,
+      });
+      remainingQuantity = consumed.remainingQuantity;
+    } catch (error) {
+      if (error instanceof BadRequestError) {
+        emitChanceCardError(
+          socket,
+          payload,
+          'CHANCE_CARD_NOT_AVAILABLE',
+          'You do not have any 50-50 cards left.'
+        );
+        return;
+      }
+
+      logger.error({ err: error, payload, userId: socket.data.user.id }, 'Failed to consume 50-50 card');
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_SYNC_FAILED',
+        'Failed to apply 50-50 card.'
+      );
+      return;
+    }
+
+    cache.chanceCardUses[usageKey] = {
+      userId: socket.data.user.id,
+      qIndex: payload.qIndex,
+      clientActionId: payload.clientActionId,
+      eliminatedIndices,
+      remainingQuantity,
+    };
+    await setMatchCache(cache);
+
+    socket.emit('match:chance_card_applied', {
+      matchId: payload.matchId,
+      qIndex: payload.qIndex,
+      clientActionId: payload.clientActionId,
+      eliminatedIndices,
+      remainingQuantity,
+    });
+  } finally {
+    await releaseLock(lockKey, lock.token);
   }
 }
 

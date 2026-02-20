@@ -6,6 +6,7 @@ import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -77,6 +78,11 @@ async function startHumanRankedMatch(
     return;
   }
 
+  const [profileA, profileB] = await Promise.all([
+    rankedRepo.getProfile(userAId),
+    rankedRepo.getProfile(userBId),
+  ]);
+
   const lobby = await lobbiesRepo.createLobby({
     mode: 'ranked',
     hostUserId: userAId,
@@ -98,6 +104,7 @@ async function startHumanRankedMatch(
       id: userB.id,
       username: userB.nickname ?? 'Player',
       avatarUrl: userB.avatar_url,
+      ...(profileB?.rp != null ? { rp: profileB.rp } : {}),
     },
   });
   io.to(`user:${userBId}`).emit('ranked:match_found', {
@@ -106,6 +113,7 @@ async function startHumanRankedMatch(
       id: userA.id,
       username: userA.nickname ?? 'Player',
       avatarUrl: userA.avatar_url,
+      ...(profileA?.rp != null ? { rp: profileA.rp } : {}),
     },
   });
 

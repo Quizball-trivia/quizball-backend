@@ -16,6 +16,9 @@ const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
+const RANKED_BASE_WIN_DELTA = 25;
+const RANKED_BASE_LOSS_DELTA = -25;
+const RANKED_FORFEIT_EXTRA_LOSS_DELTA = -10;
 // How much correctness affects each placement perf score.
 // 0% correct → -(SWING/2), 50% → 0, 100% → +(SWING/2)
 const PLACEMENT_CORRECTNESS_SWING = 1400;
@@ -42,6 +45,28 @@ function parseRankedContext(raw: unknown): {
   };
 }
 
+function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw !== 'object') return null;
+  const candidate = (raw as { winnerDecisionMethod?: unknown }).winnerDecisionMethod;
+  if (
+    candidate === 'goals'
+    || candidate === 'penalty_goals'
+    || candidate === 'total_points_fallback'
+    || candidate === 'forfeit'
+  ) {
+    return candidate;
+  }
+  return null;
+}
+
 function tierFromRp(rp: number): RankedTier {
   if (rp >= 3200) return 'GOAT';
   if (rp >= 2900) return 'Legend';
@@ -60,12 +85,16 @@ function needsPlacement(profile: RankedProfileRow): boolean {
   return profile.placement_status !== 'placed' || profile.placement_played < profile.placement_required;
 }
 
-function computeRankedDelta(playerRp: number, opponentRp: number, isWin: boolean): number {
+function computeRankedDelta(playerRp: number, opponentRp: number, isWin: boolean, isForfeitLoss = false): number {
   const rankDiff = opponentRp - playerRp;
   if (isWin) {
-    return Math.round(25 + clamp(rankDiff / 50, -15, 20));
+    return Math.round(RANKED_BASE_WIN_DELTA + clamp(rankDiff / 50, -15, 20));
   }
-  return Math.round(-20 + clamp(rankDiff / 50, -25, 10));
+  const lossDelta = Math.round(RANKED_BASE_LOSS_DELTA + clamp(rankDiff / 50, -25, 10));
+  if (isForfeitLoss) {
+    return lossDelta + RANKED_FORFEIT_EXTRA_LOSS_DELTA;
+  }
+  return lossDelta;
 }
 
 function computeNextPlacementAnchor(profile: RankedProfileRow): number {
@@ -210,6 +239,7 @@ export const rankedService = {
     }
 
     const rankedContext = parseRankedContext(match.ranked_context);
+    const winnerDecisionMethod = parseWinnerDecisionMethod(match.state_payload);
     const profiles = await Promise.all(humanPlayers.map((player) => rankedRepo.ensureProfile(player.user_id)));
     const profileByUser = new Map(profiles.map((profile) => [profile.user_id, profile]));
 
@@ -322,7 +352,12 @@ export const rankedService = {
           newTier = oldTier;
         }
       } else {
-        deltaRp = computeRankedDelta(oldRp, opponentRp, isWin);
+        deltaRp = computeRankedDelta(
+          oldRp,
+          opponentRp,
+          isWin,
+          !isWin && winnerDecisionMethod === 'forfeit'
+        );
         newRp = Math.max(0, oldRp + deltaRp);
         newTier = tierFromRp(newRp);
       }
@@ -427,5 +462,5 @@ export const rankedService = {
   },
 
   tierFromRp,
+  DEFAULT_AI_OPPONENT_RP: DEFAULT_PLACEMENT_ANCHOR_RP,
 };
-

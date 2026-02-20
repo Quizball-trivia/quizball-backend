@@ -49,6 +49,14 @@ export interface CachedQuestion {
   questionDTO: GameQuestionDTO;
 }
 
+export interface CachedChanceCardUse {
+  userId: string;
+  qIndex: number;
+  clientActionId: string;
+  eliminatedIndices: number[];
+  remainingQuantity: number;
+}
+
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -62,6 +70,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
+  chanceCardUses: Record<string, CachedChanceCardUse>;
 }
 
 export function matchCacheKey(matchId: string): string {
@@ -221,6 +230,7 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
+    chanceCardUses: {},
   };
 }
 
@@ -232,7 +242,15 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
   if (!raw) return null;
 
   try {
-    return JSON.parse(raw) as MatchCache;
+    const parsed = JSON.parse(raw) as Partial<MatchCache>;
+    const chanceCardUses =
+      parsed.chanceCardUses && typeof parsed.chanceCardUses === 'object'
+        ? parsed.chanceCardUses
+        : {};
+    return {
+      ...(parsed as MatchCache),
+      chanceCardUses,
+    };
   } catch (error) {
     logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');
     await redis.del(matchCacheKey(matchId));

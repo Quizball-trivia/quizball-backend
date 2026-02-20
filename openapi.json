@@ -1,3 +1,7 @@
+
+> quizball-backend@1.0.0 api:export
+> tsx scripts/export-openapi.ts
+
 {
   "openapi": "3.0.0",
   "info": {
@@ -152,6 +156,14 @@
             "nullable": true,
             "format": "uri"
           },
+          "favorite_club": {
+            "type": "string",
+            "nullable": true
+          },
+          "preferred_language": {
+            "type": "string",
+            "nullable": true
+          },
           "onboarding_complete": {
             "type": "boolean"
           },
@@ -166,14 +178,894 @@
           "nickname",
           "country",
           "avatar_url",
+          "favorite_club",
+          "preferred_language",
           "onboarding_complete",
           "created_at"
+        ]
+      },
+      "HeadToHeadResponse": {
+        "type": "object",
+        "properties": {
+          "userAId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userBId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "winsA": {
+            "type": "integer"
+          },
+          "winsB": {
+            "type": "integer"
+          },
+          "draws": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "lastPlayedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "userAId",
+          "userBId",
+          "winsA",
+          "winsB",
+          "draws",
+          "total",
+          "lastPlayedAt"
+        ]
+      },
+      "RecentMatchesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "matchId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "friendly",
+                    "ranked"
+                  ]
+                },
+                "competition": {
+                  "type": "string",
+                  "enum": [
+                    "friendly",
+                    "placement",
+                    "ranked"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "completed",
+                    "abandoned"
+                  ]
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "win",
+                    "loss",
+                    "draw"
+                  ]
+                },
+                "endedAt": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "date-time"
+                },
+                "playerScore": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "opponentScore": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "playerGoals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "playerPenaltyGoals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "opponentGoals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "opponentPenaltyGoals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "winnerDecisionMethod": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "goals",
+                    "penalty_goals",
+                    "total_points_fallback",
+                    "forfeit"
+                  ]
+                },
+                "rpDelta": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "opponent": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "avatarUrl": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uri"
+                    },
+                    "isAi": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "username",
+                    "avatarUrl",
+                    "isAi"
+                  ]
+                }
+              },
+              "required": [
+                "matchId",
+                "mode",
+                "competition",
+                "status",
+                "result",
+                "endedAt",
+                "playerScore",
+                "opponentScore",
+                "playerGoals",
+                "playerPenaltyGoals",
+                "opponentGoals",
+                "opponentPenaltyGoals",
+                "winnerDecisionMethod",
+                "rpDelta",
+                "opponent"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "StatsSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "overall": {
+            "type": "object",
+            "properties": {
+              "gamesPlayed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "wins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "losses": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "draws": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "winRate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "gamesPlayed",
+              "wins",
+              "losses",
+              "draws",
+              "winRate"
+            ]
+          },
+          "ranked": {
+            "type": "object",
+            "properties": {
+              "gamesPlayed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "wins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "losses": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "draws": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "winRate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "gamesPlayed",
+              "wins",
+              "losses",
+              "draws",
+              "winRate"
+            ]
+          },
+          "friendly": {
+            "type": "object",
+            "properties": {
+              "gamesPlayed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "wins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "losses": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "draws": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "winRate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "gamesPlayed",
+              "wins",
+              "losses",
+              "draws",
+              "winRate"
+            ]
+          }
+        },
+        "required": [
+          "overall",
+          "ranked",
+          "friendly"
+        ]
+      },
+      "RankedProfileResponse": {
+        "type": "object",
+        "properties": {
+          "rp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "Academy",
+              "Youth Prospect",
+              "Reserve",
+              "Bench",
+              "Rotation",
+              "Starting11",
+              "Key Player",
+              "Captain",
+              "World-Class",
+              "Legend",
+              "GOAT"
+            ]
+          },
+          "placementStatus": {
+            "type": "string",
+            "enum": [
+              "unplaced",
+              "in_progress",
+              "placed"
+            ]
+          },
+          "placementPlayed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "placementRequired": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "placementWins": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentWinStreak": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRankedMatchAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "rp",
+          "tier",
+          "placementStatus",
+          "placementPlayed",
+          "placementRequired",
+          "placementWins",
+          "currentWinStreak",
+          "lastRankedMatchAt"
+        ]
+      },
+      "StoreProductsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "coin_pack",
+                    "ticket_pack",
+                    "avatar",
+                    "chance_card"
+                  ]
+                },
+                "name": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "default": {}
+                },
+                "description": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "default": {}
+                },
+                "priceCents": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "slug",
+                "type",
+                "priceCents",
+                "currency",
+                "metadata"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "StoreWalletResponse": {
+        "type": "object",
+        "properties": {
+          "coins": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tickets": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "coins",
+          "tickets"
+        ]
+      },
+      "StoreInventoryResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "inventoryId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "productId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "coin_pack",
+                    "ticket_pack",
+                    "avatar",
+                    "chance_card"
+                  ]
+                },
+                "name": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "default": {}
+                },
+                "description": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "default": {}
+                },
+                "metadata": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "acquiredAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "inventoryId",
+                "productId",
+                "slug",
+                "type",
+                "metadata",
+                "quantity",
+                "acquiredAt"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CreateCheckoutResponse": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "PurchaseWithCoinsResponse": {
+        "type": "object",
+        "properties": {
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "coins",
+              "tickets"
+            ]
+          }
+        },
+        "required": [
+          "wallet"
+        ]
+      },
+      "ManualAdjustmentResponse": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "coins",
+              "tickets"
+            ]
+          },
+          "inventoryApplied": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "productSlug": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true,
+                  "maximum": 999,
+                  "default": 1
+                }
+              },
+              "required": [
+                "productSlug"
+              ]
+            }
+          }
+        },
+        "required": [
+          "applied",
+          "wallet",
+          "inventoryApplied"
+        ]
+      },
+      "StoreTransactionLogResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "checkout_session_created",
+              "checkout_session_failed",
+              "webhook_received",
+              "webhook_signature_invalid",
+              "fulfillment_succeeded",
+              "fulfillment_failed",
+              "manual_adjustment_succeeded",
+              "manual_adjustment_failed"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure"
+            ]
+          },
+          "purchaseId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "actorUserId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "productId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "stripeCheckoutId": {
+            "type": "string",
+            "nullable": true
+          },
+          "stripePaymentIntent": {
+            "type": "string",
+            "nullable": true
+          },
+          "coinsDelta": {
+            "type": "integer"
+          },
+          "ticketsDelta": {
+            "type": "integer"
+          },
+          "inventoryDelta": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "eventType",
+          "outcome",
+          "purchaseId",
+          "userId",
+          "actorUserId",
+          "productId",
+          "stripeCheckoutId",
+          "stripePaymentIntent",
+          "coinsDelta",
+          "ticketsDelta",
+          "inventoryDelta",
+          "reason",
+          "errorCode",
+          "errorMessage",
+          "requestId",
+          "metadata",
+          "idempotencyKey",
+          "createdAt"
+        ]
+      },
+      "ListStoreTransactionsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventType": {
+                  "type": "string",
+                  "enum": [
+                    "checkout_session_created",
+                    "checkout_session_failed",
+                    "webhook_received",
+                    "webhook_signature_invalid",
+                    "fulfillment_succeeded",
+                    "fulfillment_failed",
+                    "manual_adjustment_succeeded",
+                    "manual_adjustment_failed"
+                  ]
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "success",
+                    "failure"
+                  ]
+                },
+                "purchaseId": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "userId": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "actorUserId": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "productId": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "stripeCheckoutId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "stripePaymentIntent": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "coinsDelta": {
+                  "type": "integer"
+                },
+                "ticketsDelta": {
+                  "type": "integer"
+                },
+                "inventoryDelta": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "errorCode": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "errorMessage": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "requestId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "metadata": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "idempotencyKey": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "eventType",
+                "outcome",
+                "purchaseId",
+                "userId",
+                "actorUserId",
+                "productId",
+                "stripeCheckoutId",
+                "stripePaymentIntent",
+                "coinsDelta",
+                "ticketsDelta",
+                "inventoryDelta",
+                "reason",
+                "errorCode",
+                "errorMessage",
+                "requestId",
+                "metadata",
+                "idempotencyKey",
+                "createdAt"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "limit",
+          "total",
+          "totalPages"
         ]
       },
       "I18nField": {
         "type": "object",
         "additionalProperties": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         }
       },
       "CategoryResponse": {
@@ -236,6 +1128,42 @@
           "is_active",
           "created_at",
           "updated_at"
+        ]
+      },
+      "PaginatedCategoriesResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryResponse"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "data",
+          "page",
+          "limit",
+          "total",
+          "total_pages"
         ]
       },
       "CategoryDependenciesResponse": {
@@ -427,66 +1355,7 @@
             "format": "date-time"
           },
           "category": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "slug": {
-                "type": "string"
-              },
-              "parent_id": {
-                "type": "string",
-                "nullable": true,
-                "format": "uuid"
-              },
-              "name": {
-                "$ref": "#/components/schemas/I18nField"
-              },
-              "description": {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/I18nField"
-                  },
-                  {
-                    "nullable": true
-                  }
-                ]
-              },
-              "icon": {
-                "type": "string",
-                "nullable": true
-              },
-              "image_url": {
-                "type": "string",
-                "nullable": true,
-                "format": "uri"
-              },
-              "is_active": {
-                "type": "boolean"
-              },
-              "created_at": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "updated_at": {
-                "type": "string",
-                "format": "date-time"
-              }
-            },
-            "required": [
-              "id",
-              "slug",
-              "parent_id",
-              "name",
-              "description",
-              "icon",
-              "image_url",
-              "is_active",
-              "created_at",
-              "updated_at"
-            ]
+            "$ref": "#/components/schemas/CategoryResponse"
           }
         },
         "required": [
@@ -495,6 +1364,188 @@
           "sort_order",
           "created_at",
           "category"
+        ]
+      },
+      "BulkCreateResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "successful": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionResponse"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "question": {
+                  "nullable": true
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "error"
+              ]
+            }
+          }
+        },
+        "required": [
+          "total",
+          "successful",
+          "failed",
+          "created",
+          "errors"
+        ]
+      },
+      "CategorySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "DuplicateGroup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "cross_category",
+              "same_category"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionResponse"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategorySummary"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "prompt",
+          "count",
+          "questions",
+          "categories"
+        ]
+      },
+      "DuplicatesResponse": {
+        "type": "object",
+        "properties": {
+          "total_groups": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateGroup"
+            }
+          }
+        },
+        "required": [
+          "total_groups",
+          "groups"
+        ]
+      },
+      "DuplicateQuestionInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category_name": {
+            "$ref": "#/components/schemas/I18nField"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "category_id",
+          "category_name",
+          "created_at"
+        ]
+      },
+      "CheckDuplicatesResponse": {
+        "type": "object",
+        "properties": {
+          "duplicates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "prompt": {
+                  "$ref": "#/components/schemas/I18nField"
+                },
+                "existingQuestions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DuplicateQuestionInfo"
+                  }
+                }
+              },
+              "required": [
+                "index",
+                "prompt",
+                "existingQuestions"
+              ]
+            }
+          }
+        },
+        "required": [
+          "duplicates"
         ]
       }
     },
@@ -508,6 +1559,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -561,6 +1613,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -614,6 +1667,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -661,6 +1715,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -703,6 +1758,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -745,6 +1801,7 @@
           "Auth"
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -819,6 +1876,1616 @@
         }
       }
     },
+    "/api/v1/stats/head-to-head": {
+      "get": {
+        "summary": "Get head-to-head summary for two users",
+        "tags": [
+          "Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userA",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userB",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Head-to-head summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "userAId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "userBId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "winsA": {
+                      "type": "integer"
+                    },
+                    "winsB": {
+                      "type": "integer"
+                    },
+                    "draws": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "lastPlayedAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "userAId",
+                    "userBId",
+                    "winsA",
+                    "winsB",
+                    "draws",
+                    "total",
+                    "lastPlayedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/recent-matches": {
+      "get": {
+        "summary": "Get recent matches for authenticated user",
+        "tags": [
+          "Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent matches list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "matchId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "friendly",
+                              "ranked"
+                            ]
+                          },
+                          "competition": {
+                            "type": "string",
+                            "enum": [
+                              "friendly",
+                              "placement",
+                              "ranked"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "completed",
+                              "abandoned"
+                            ]
+                          },
+                          "result": {
+                            "type": "string",
+                            "enum": [
+                              "win",
+                              "loss",
+                              "draw"
+                            ]
+                          },
+                          "endedAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "playerScore": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "opponentScore": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "playerGoals": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "playerPenaltyGoals": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "opponentGoals": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "opponentPenaltyGoals": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "winnerDecisionMethod": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "goals",
+                              "penalty_goals",
+                              "total_points_fallback",
+                              "forfeit"
+                            ]
+                          },
+                          "rpDelta": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "opponent": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "uuid"
+                              },
+                              "username": {
+                                "type": "string"
+                              },
+                              "avatarUrl": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "uri"
+                              },
+                              "isAi": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "username",
+                              "avatarUrl",
+                              "isAi"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "matchId",
+                          "mode",
+                          "competition",
+                          "status",
+                          "result",
+                          "endedAt",
+                          "playerScore",
+                          "opponentScore",
+                          "playerGoals",
+                          "playerPenaltyGoals",
+                          "opponentGoals",
+                          "opponentPenaltyGoals",
+                          "winnerDecisionMethod",
+                          "rpDelta",
+                          "opponent"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/summary": {
+      "get": {
+        "summary": "Get aggregate match stats for authenticated user",
+        "tags": [
+          "Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate stats summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "overall": {
+                      "type": "object",
+                      "properties": {
+                        "gamesPlayed": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "wins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "losses": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "draws": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "winRate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "gamesPlayed",
+                        "wins",
+                        "losses",
+                        "draws",
+                        "winRate"
+                      ]
+                    },
+                    "ranked": {
+                      "type": "object",
+                      "properties": {
+                        "gamesPlayed": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "wins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "losses": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "draws": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "winRate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "gamesPlayed",
+                        "wins",
+                        "losses",
+                        "draws",
+                        "winRate"
+                      ]
+                    },
+                    "friendly": {
+                      "type": "object",
+                      "properties": {
+                        "gamesPlayed": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "wins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "losses": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "draws": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "winRate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "gamesPlayed",
+                        "wins",
+                        "losses",
+                        "draws",
+                        "winRate"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "overall",
+                    "ranked",
+                    "friendly"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lobbies/public": {
+      "get": {
+        "summary": "List public lobbies",
+        "tags": [
+          "Lobbies"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "default": false
+            },
+            "required": false,
+            "name": "joinableOnly",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public lobby list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lobbyId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "inviteCode": {
+                            "type": "string"
+                          },
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "gameMode": {
+                            "type": "string",
+                            "enum": [
+                              "friendly",
+                              "ranked_sim"
+                            ]
+                          },
+                          "isPublic": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "memberCount": {
+                            "type": "integer"
+                          },
+                          "maxMembers": {
+                            "type": "integer"
+                          },
+                          "host": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "username": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "avatarUrl": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "uri"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "username",
+                              "avatarUrl"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "lobbyId",
+                          "inviteCode",
+                          "displayName",
+                          "gameMode",
+                          "isPublic",
+                          "createdAt",
+                          "memberCount",
+                          "maxMembers",
+                          "host"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ranked/profile": {
+      "get": {
+        "summary": "Get ranked profile for authenticated user",
+        "tags": [
+          "Ranked"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rp": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "Academy",
+                        "Youth Prospect",
+                        "Reserve",
+                        "Bench",
+                        "Rotation",
+                        "Starting11",
+                        "Key Player",
+                        "Captain",
+                        "World-Class",
+                        "Legend",
+                        "GOAT"
+                      ]
+                    },
+                    "placementStatus": {
+                      "type": "string",
+                      "enum": [
+                        "unplaced",
+                        "in_progress",
+                        "placed"
+                      ]
+                    },
+                    "placementPlayed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "placementRequired": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "placementWins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "currentWinStreak": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "lastRankedMatchAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "rp",
+                    "tier",
+                    "placementStatus",
+                    "placementPlayed",
+                    "placementRequired",
+                    "placementWins",
+                    "currentWinStreak",
+                    "lastRankedMatchAt"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/products": {
+      "get": {
+        "summary": "List active store products",
+        "tags": [
+          "Store"
+        ],
+        "responses": {
+          "200": {
+            "description": "Active store products",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "coin_pack",
+                              "ticket_pack",
+                              "avatar",
+                              "chance_card"
+                            ]
+                          },
+                          "name": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "default": {}
+                          },
+                          "description": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "default": {}
+                          },
+                          "priceCents": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "nullable": true,
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "slug",
+                          "type",
+                          "priceCents",
+                          "currency",
+                          "metadata"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/checkout": {
+      "post": {
+        "summary": "Create Stripe checkout session",
+        "tags": [
+          "Store"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "productSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "productSlug"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout URL created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Product not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe checkout creation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/purchase-coins": {
+      "post": {
+        "summary": "Purchase non-coin-pack products with coin balance",
+        "tags": [
+          "Store"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "productSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "productSlug"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Product purchased with coins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wallet": {
+                      "type": "object",
+                      "properties": {
+                        "coins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tickets": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "coins",
+                        "tickets"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "wallet"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Insufficient coins or invalid product type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Product not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/wallet": {
+      "get": {
+        "summary": "Get authenticated wallet balances",
+        "tags": [
+          "Store"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "coins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "tickets": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "coins",
+                    "tickets"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/inventory": {
+      "get": {
+        "summary": "Get authenticated user inventory",
+        "tags": [
+          "Store"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "inventoryId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "productId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "coin_pack",
+                              "ticket_pack",
+                              "avatar",
+                              "chance_card"
+                            ]
+                          },
+                          "name": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "default": {}
+                          },
+                          "description": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "default": {}
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "nullable": true,
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          },
+                          "quantity": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "acquiredAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "inventoryId",
+                          "productId",
+                          "slug",
+                          "type",
+                          "metadata",
+                          "quantity",
+                          "acquiredAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/dev/grant-self": {
+      "post": {
+        "summary": "Development-only self wallet grant",
+        "description": "Local development helper for quickly granting coins/tickets to the authenticated user.",
+        "tags": [
+          "Store"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "coinsDelta": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000
+                  },
+                  "ticketsDelta": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated wallet after grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wallet": {
+                      "type": "object",
+                      "properties": {
+                        "coins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tickets": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "coins",
+                        "tickets"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "wallet"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not available outside local environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/admin/adjustments": {
+      "post": {
+        "summary": "Apply manual admin adjustment",
+        "description": "Requires admin role",
+        "tags": [
+          "Store Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "coinsDelta": {
+                    "type": "integer"
+                  },
+                  "ticketsDelta": {
+                    "type": "integer"
+                  },
+                  "inventoryGrants": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "productSlug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 999,
+                          "default": 1
+                        }
+                      },
+                      "required": [
+                        "productSlug"
+                      ]
+                    }
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "userId",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adjustment result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "applied": {
+                      "type": "boolean"
+                    },
+                    "wallet": {
+                      "type": "object",
+                      "properties": {
+                        "coins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tickets": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "coins",
+                        "tickets"
+                      ]
+                    },
+                    "inventoryApplied": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "productSlug": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          },
+                          "quantity": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true,
+                            "maximum": 999,
+                            "default": 1
+                          }
+                        },
+                        "required": [
+                          "productSlug"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "applied",
+                    "wallet",
+                    "inventoryApplied"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid adjustment request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/admin/transactions": {
+      "get": {
+        "summary": "List store transaction logs",
+        "description": "Requires admin role",
+        "tags": [
+          "Store Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "userId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "purchaseId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "checkout_session_created",
+                "checkout_session_failed",
+                "webhook_received",
+                "webhook_signature_invalid",
+                "fulfillment_succeeded",
+                "fulfillment_failed",
+                "manual_adjustment_succeeded",
+                "manual_adjustment_failed"
+              ]
+            },
+            "required": false,
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure"
+              ]
+            },
+            "required": false,
+            "name": "outcome",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated store transaction logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "checkout_session_created",
+                              "checkout_session_failed",
+                              "webhook_received",
+                              "webhook_signature_invalid",
+                              "fulfillment_succeeded",
+                              "fulfillment_failed",
+                              "manual_adjustment_succeeded",
+                              "manual_adjustment_failed"
+                            ]
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "success",
+                              "failure"
+                            ]
+                          },
+                          "purchaseId": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uuid"
+                          },
+                          "userId": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uuid"
+                          },
+                          "actorUserId": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uuid"
+                          },
+                          "productId": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uuid"
+                          },
+                          "stripeCheckoutId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "stripePaymentIntent": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "coinsDelta": {
+                            "type": "integer"
+                          },
+                          "ticketsDelta": {
+                            "type": "integer"
+                          },
+                          "inventoryDelta": {
+                            "type": "object",
+                            "nullable": true,
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          },
+                          "reason": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "errorCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "errorMessage": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "requestId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "nullable": true,
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          },
+                          "idempotencyKey": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "eventType",
+                          "outcome",
+                          "purchaseId",
+                          "userId",
+                          "actorUserId",
+                          "productId",
+                          "stripeCheckoutId",
+                          "stripePaymentIntent",
+                          "coinsDelta",
+                          "ticketsDelta",
+                          "inventoryDelta",
+                          "reason",
+                          "errorCode",
+                          "errorMessage",
+                          "requestId",
+                          "metadata",
+                          "idempotencyKey",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "totalPages": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "page",
+                    "limit",
+                    "total",
+                    "totalPages"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me": {
       "get": {
         "summary": "Get current user profile",
@@ -864,6 +3531,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -882,6 +3550,16 @@
                   "avatar_url": {
                     "type": "string",
                     "format": "uri"
+                  },
+                  "favorite_club": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "preferred_language": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 10
                   }
                 }
               }
@@ -970,6 +3648,34 @@
             "required": false,
             "name": "is_active",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "min_questions",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
           }
         ],
         "responses": {
@@ -978,10 +3684,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CategoryResponse"
-                  }
+                  "$ref": "#/components/schemas/PaginatedCategoriesResponse"
                 }
               }
             }
@@ -1000,6 +3703,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1157,6 +3861,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1411,6 +4116,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1549,6 +4255,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1681,6 +4388,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1866,6 +4574,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -2032,6 +4741,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -2197,6 +4907,136 @@
         }
       }
     },
+    "/api/v1/questions/bulk": {
+      "post": {
+        "summary": "Bulk create questions",
+        "description": "Create multiple questions in a single request. Maximum 100 questions per upload. Requires admin role.",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "category_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "mcq_single",
+                            "input_text"
+                          ]
+                        },
+                        "difficulty": {
+                          "type": "string",
+                          "enum": [
+                            "easy",
+                            "medium",
+                            "hard"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "published",
+                            "archived"
+                          ]
+                        },
+                        "prompt": {
+                          "$ref": "#/components/schemas/I18nField"
+                        },
+                        "explanation": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/I18nField"
+                            },
+                            {
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        "payload": {
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "difficulty",
+                        "prompt"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "category_id",
+                  "questions"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "207": {
+            "description": "Questions created (may include partial failures)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or category not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/questions/{id}/status": {
       "patch": {
         "summary": "Update question status",
@@ -2221,6 +5061,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -2275,6 +5116,177 @@
           },
           "404": {
             "description": "Question not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions/duplicates": {
+      "get": {
+        "summary": "Find duplicate questions",
+        "description": "Detect questions with identical prompt text. Returns groups of questions with the same prompt, either within the same category or across different categories. Requires admin role.",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cross_category",
+                "same_category",
+                "all"
+              ],
+              "description": "Filter by duplicate type",
+              "example": "all"
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Limit search to specific category"
+            },
+            "required": false,
+            "name": "category_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Include draft questions in search (default: true)",
+              "example": "true"
+            },
+            "required": false,
+            "name": "include_drafts",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Duplicate groups found successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicatesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions/check-duplicates": {
+      "post": {
+        "summary": "Check for duplicate prompts before bulk upload",
+        "description": "Check if question prompts already exist in the database. Used during bulk upload preview to show users which questions are duplicates. Requires admin role.",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompts": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "description": "Array of question prompts to check",
+                    "example": [
+                      {
+                        "en": "What is the capital of France?"
+                      },
+                      {
+                        "en": "What is 2+2?"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "prompts"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate check completed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckDuplicatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g., too many prompts)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
             "content": {
               "application/json": {
                 "schema": {

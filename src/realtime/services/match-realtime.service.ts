@@ -3,9 +3,14 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
-import type { MatchAnswerPayload, MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
+import type {
+  MatchAnswerPayload,
+  MatchChanceCardUsePayload,
+  MatchFinalResultsAckPayload,
+} from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
@@ -21,6 +26,7 @@ import {
   cancelPossessionHalftimeTimer,
   emitPossessionStateToSocket,
   handlePossessionAnswer,
+  handlePossessionChanceCardUse,
   handlePossessionHalftimeBan,
 } from '../possession-match-flow.js';
 
@@ -164,11 +170,13 @@ async function getParticipantSnapshot(matchId: string): Promise<{
 
 async function getOpponentInfoFromParticipants(
   participants: MatchParticipantSnapshot[],
-  userId: string
+  userId: string,
+  matchMode?: 'friendly' | 'ranked'
 ): Promise<{
   id: string;
   username: string;
   avatarUrl: string | null;
+  rp?: number;
 }> {
   const opponent = participants.find((player) => player.user_id !== userId);
   if (!opponent) {
@@ -180,10 +188,16 @@ async function getOpponentInfoFromParticipants(
   }
 
   const opponentUser = await usersRepo.getById(opponent.user_id);
+  let rp: number | undefined;
+  if (matchMode === 'ranked') {
+    const profile = await rankedRepo.getProfile(opponent.user_id);
+    rp = profile?.rp ?? undefined;
+  }
   return {
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
+    ...(rp != null ? { rp } : {}),
   };
 }
 
@@ -356,23 +370,39 @@ export async function beginMatchForLobby(
   await setMatchCache(cache);
   const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat as 1 | 2]));
 
+  // Fetch ranked profiles for RP injection into opponent payload
+  let rpA: number | undefined;
+  let rpB: number | undefined;
+  if (match.mode === 'ranked') {
+    const [profileA, profileB] = await Promise.all([
+      rankedRepo.getProfile(memberA.user_id),
+      rankedRepo.getProfile(memberB.user_id),
+    ]);
+    rpA = profileA?.rp ?? undefined;
+    rpB = profileB?.rp ?? undefined;
+  }
+
   io.to(`user:${memberA.user_id}`).emit('match:start', {
     matchId,
+    mode: match.mode,
     mySeat: seatByUserId.get(memberA.user_id) ?? undefined,
     opponent: {
       id: memberB.user_id,
       username: memberB.nickname ?? 'Player',
       avatarUrl: memberB.avatar_url,
+      ...(rpB != null ? { rp: rpB } : {}),
     },
   });
 
   io.to(`user:${memberB.user_id}`).emit('match:start', {
     matchId,
+    mode: match.mode,
     mySeat: seatByUserId.get(memberB.user_id) ?? undefined,
     opponent: {
       id: memberA.user_id,
       username: memberA.nickname ?? 'Player',
       avatarUrl: memberA.avatar_url,
+      ...(rpA != null ? { rp: rpA } : {}),
     },
   });
 
@@ -431,10 +461,11 @@ export const matchRealtimeService = {
     socket.data.matchId = match.id;
 
     const { participants } = await getParticipantSnapshot(match.id);
-    const opponent = await getOpponentInfoFromParticipants(participants, userId);
+    const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode);
     const mySeat = participants.find((player) => player.user_id === userId)?.seat;
     socket.emit('match:start', {
       matchId: match.id,
+      mode: match.mode,
       mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
       opponent,
     });
@@ -674,10 +705,11 @@ export const matchRealtimeService = {
           await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
         }
 
-        const opponent = await getOpponentInfoFromParticipants(participants, userId);
+        const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode);
         const mySeat = participants.find((player) => player.user_id === userId)?.seat;
         socket.emit('match:start', {
           matchId: match.id,
+          mode: match.mode,
           mySeat: mySeat === 1 || mySeat === 2 ? mySeat : undefined,
           opponent,
         });
@@ -975,5 +1007,32 @@ export const matchRealtimeService = {
     }
 
     await handlePossessionAnswer(io, socket, payload);
+  },
+
+  async handleChanceCardUse(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    payload: MatchChanceCardUsePayload
+  ): Promise<void> {
+    const { matchId } = payload;
+
+    const redis = getRedisClient();
+    if (redis) {
+      const paused = await redis.exists(matchPauseKey(matchId));
+      if (paused) {
+        socket.emit('error', {
+          code: 'MATCH_PAUSED',
+          message: 'Match is paused. Please wait for your opponent to return.',
+          meta: {
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            clientActionId: payload.clientActionId,
+          },
+        });
+        return;
+      }
+    }
+
+    await handlePossessionChanceCardUse(io, socket, payload);
   },
 };

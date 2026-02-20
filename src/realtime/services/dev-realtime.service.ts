@@ -3,6 +3,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { generateRankedAiProfile, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
@@ -11,6 +12,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
 const AI_REDIS_TTL_SEC = 7200;
 const DEV_MATCH_START_COUNTDOWN_SEC = 2;
+const DEV_MATCHES_TO_KEEP = 5;
 
 /**
  * Dev-only realtime service for fast iteration tooling.
@@ -20,6 +22,16 @@ const DEV_MATCH_START_COUNTDOWN_SEC = 2;
 export const devRealtimeService = {
   async handleQuickMatch(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const userId = socket.data.user.id;
+
+    // 0. Clean up old dev matches (keep most recent N)
+    try {
+      const cleaned = await matchesRepo.cleanupOldDevMatches(DEV_MATCHES_TO_KEEP);
+      if (cleaned > 0) {
+        logger.info({ cleaned }, 'Cleaned up old dev matches');
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Dev match cleanup failed; continuing');
+    }
 
     // 1. Create AI opponent
     const aiProfile = generateRankedAiProfile();
@@ -43,20 +55,21 @@ export const devRealtimeService = {
     // 4. Join socket to lobby room (beginMatchForLobby reads from this)
     socket.join(`lobby:${lobby.id}`);
 
-    // 5. Pick 2 random categories
-    const categories = await lobbiesService.selectRandomCategories(2);
-    if (categories.length < 2) {
+    // 5. Pick 1 random category for first half (second half chosen at halftime)
+    const categories = await lobbiesService.selectRandomCategories(1);
+    if (categories.length < 1) {
       socket.emit('error', { code: 'DEV_ERROR', message: 'Not enough categories with questions' });
       return;
     }
 
-    // 6. Create match via production service
+    // 6. Create match via production service (marked as dev)
     const result = await matchesService.createMatchFromLobby({
       lobbyId: lobby.id,
       mode: 'friendly',
       hostUserId: userId,
       categoryAId: categories[0].id,
-      categoryBId: categories[1].id,
+      categoryBId: null,
+      isDev: true,
     });
 
     // 7. Set AI Redis key so AI answer scheduling works

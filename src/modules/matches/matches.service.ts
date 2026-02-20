@@ -120,6 +120,7 @@ export const matchesService = {
     hostUserId: string;
     categoryAId: string;
     categoryBId: string | null;
+    isDev?: boolean;
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
@@ -207,6 +208,7 @@ export const matchesService = {
       totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
       statePayload: createInitialPossessionState(),
       rankedContext,
+      isDev: params.isDev,
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [

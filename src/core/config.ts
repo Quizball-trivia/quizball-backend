@@ -66,6 +66,12 @@ const configSchema = z.object({
   // OpenRouter (AI translation)
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
+
+  // Stripe (Store payments)
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_SUCCESS_URL: z.string().url().optional(),
+  STRIPE_CANCEL_URL: z.string().url().optional(),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;
@@ -94,6 +100,34 @@ function loadConfig(): Config {
     if (!hasDocsUsername || !hasDocsPassword) {
       console.error(
         'Invalid configuration: DOCS_USERNAME and DOCS_PASSWORD are required when DOCS_ENABLED is true outside local environment.'
+      );
+      process.exit(1);
+    }
+  }
+
+  const hasAnyStripeConfig = Boolean(
+    result.data.STRIPE_SECRET_KEY
+    || result.data.STRIPE_WEBHOOK_SECRET
+    || result.data.STRIPE_SUCCESS_URL
+    || result.data.STRIPE_CANCEL_URL
+  );
+
+  if (hasAnyStripeConfig) {
+    const requiredStripeVars = [
+      'STRIPE_SECRET_KEY',
+      'STRIPE_WEBHOOK_SECRET',
+      'STRIPE_SUCCESS_URL',
+      'STRIPE_CANCEL_URL',
+    ] as const;
+
+    const missing = requiredStripeVars.filter((name) => {
+      const value = result.data[name];
+      return typeof value !== 'string' || value.trim() === '';
+    });
+
+    if (missing.length > 0) {
+      console.error(
+        `Invalid configuration: missing required Stripe vars: ${missing.join(', ')}`
       );
       process.exit(1);
     }

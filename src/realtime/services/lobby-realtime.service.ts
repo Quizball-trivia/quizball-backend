@@ -7,6 +7,7 @@ import {
 } from '../../modules/lobbies/lobbies.service.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -393,6 +394,21 @@ async function handleRankedAiMatchFound(params: {
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
 
+    // Compute AI opponent RP for the frontend's optimistic RP calculation.
+    // During placement: use the anchor RP from placement context.
+    // Post-placement: use 1900 (default anchor RP used in settlement).
+    let aiOpponentRp: number | undefined;
+    try {
+      const playerProfile = await rankedService.ensureProfile(userId);
+      if (rankedService.isPlacementRequired(playerProfile)) {
+        aiOpponentRp = rankedService.buildPlacementAiContext(playerProfile).aiAnchorRp;
+      } else {
+        aiOpponentRp = rankedService.DEFAULT_AI_OPPONENT_RP;
+      }
+    } catch (err) {
+      logger.warn({ err, userId }, 'Failed to compute AI opponent RP for ranked:match_found');
+    }
+
     const aiGeo = generateRankedAiGeo();
     io.to(`user:${userId}`).emit('ranked:match_found', {
       lobbyId,
@@ -400,6 +416,7 @@ async function handleRankedAiMatchFound(params: {
         id: aiUser.id,
         username: aiUser.nickname ?? aiProfile.username,
         avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
+        ...(aiOpponentRp != null ? { rp: aiOpponentRp } : {}),
         country: aiGeo.country,
         countryCode: aiGeo.countryCode,
         city: aiGeo.city,
@@ -801,20 +818,15 @@ export const lobbyRealtimeService = {
         nextSettings.friendlyCategoryAId = null;
         nextSettings.friendlyCategoryBId = null;
       } else {
-        if (!nextSettings.friendlyCategoryAId || !nextSettings.friendlyCategoryBId) {
+        if (!nextSettings.friendlyCategoryAId) {
           socket.emit('error', {
             code: 'INVALID_SETTINGS',
-            message: 'Two categories are required when random is disabled',
+            message: 'A category is required when random is disabled',
           });
           return;
         }
-        if (nextSettings.friendlyCategoryAId === nextSettings.friendlyCategoryBId) {
-          socket.emit('error', {
-            code: 'INVALID_SETTINGS',
-            message: 'Selected categories must be different',
-          });
-          return;
-        }
+        // Second-half category is determined at halftime via ban/pick
+        nextSettings.friendlyCategoryBId = null;
       }
 
       const normalizedVisibility = payload.isPublic ?? lobby.is_public;
@@ -914,8 +926,8 @@ export const lobbyRealtimeService = {
       let categoryBId: string | null;
 
       if (lobby.friendly_random) {
-        const categories = await lobbiesService.selectRandomCategories(2);
-        if (categories.length < 2) {
+        const categories = await lobbiesService.selectRandomCategories(1);
+        if (categories.length < 1) {
           logger.warn(
             { lobbyId, categoryCount: categories.length },
             'Friendly match start failed: insufficient categories'
@@ -929,35 +941,34 @@ export const lobbyRealtimeService = {
           return;
         }
         categoryAId = categories[0].id;
-        categoryBId = categories[1].id;
+        categoryBId = null;
       } else {
         const categoryA = lobby.friendly_category_a_id;
-        const categoryB = lobby.friendly_category_b_id;
-        if (!categoryA || !categoryB || categoryA === categoryB) {
+        if (!categoryA) {
           socket.emit('error', {
             code: 'INVALID_SETTINGS',
-            message: 'Please select two different categories',
+            message: 'Please select a category for the first half',
           });
           return;
         }
 
-        const categories = await categoriesRepo.listByIds([categoryA, categoryB]);
-        if (categories.length !== 2) {
+        const categories = await categoriesRepo.listByIds([categoryA]);
+        if (categories.length !== 1) {
           socket.emit('error', {
             code: 'INVALID_SETTINGS',
-            message: 'Selected categories are invalid',
+            message: 'Selected category is invalid',
           });
           return;
         }
 
         const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
-          [categoryA, categoryB],
+          [categoryA],
           MIN_QUESTIONS_PER_CATEGORY
         );
-        if (validCategoryIds.length !== 2) {
+        if (validCategoryIds.length !== 1) {
           socket.emit('error', {
             code: 'INSUFFICIENT_CATEGORIES',
-            message: 'Selected categories do not have enough questions',
+            message: 'Selected category does not have enough questions',
           });
           await lobbiesRepo.setAllReady(lobbyId, false);
           await emitLobbyState(io, lobbyId);
@@ -965,7 +976,7 @@ export const lobbyRealtimeService = {
         }
 
         categoryAId = categoryA;
-        categoryBId = categoryB;
+        categoryBId = null;
       }
 
       let result;

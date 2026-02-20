@@ -60,6 +60,7 @@ const computeAvgTimesMock = vi.fn();
 const abandonMatchMock = vi.fn();
 
 const buildMatchQuestionPayloadMock = vi.fn();
+const consumeChanceCardForMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -122,6 +123,12 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
       nickname: id,
       avatar_url: null,
     })),
+  },
+}));
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    consumeChanceCardForMatch: (...args: unknown[]) => consumeChanceCardForMatchMock(...args),
   },
 }));
 
@@ -233,11 +240,17 @@ describe('match-realtime.service high-risk integration behavior', () => {
       question: {
         id: 'q1',
         prompt: 'Test?',
-        options: [{ index: 0, text: 'A' }, { index: 1, text: 'B' }],
+        options: [
+          { index: 0, text: 'A' },
+          { index: 1, text: 'B' },
+          { index: 2, text: 'C' },
+          { index: 3, text: 'D' },
+        ],
         categoryName: 'General',
       },
       correctIndex: 1,
     });
+    consumeChanceCardForMatchMock.mockResolvedValue({ remainingQuantity: 2 });
   });
 
   it('S15: match:leave uses pause/grace flow and emits rejoin_available', async () => {
@@ -288,6 +301,157 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect.objectContaining({
         matchId: 'm1',
         qIndex: 0,
+      })
+    );
+  });
+
+  it('S27: chance card use emits match:chance_card_applied and consumes once', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-12345678',
+    });
+
+    expect(consumeChanceCardForMatchMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-12345678',
+    });
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:chance_card_applied',
+      expect.objectContaining({
+        matchId: 'm1',
+        qIndex: 0,
+        clientActionId: 'action-12345678',
+        remainingQuantity: 2,
+      })
+    );
+  });
+
+  it('S28: duplicate chance card use for same user/question does not consume twice', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set(
+      'match:cache:m1',
+      JSON.stringify({
+        matchId: 'm1',
+        status: 'active',
+        mode: 'ranked',
+        totalQuestions: 10,
+        categoryAId: 'cat1',
+        categoryBId: 'cat2',
+        startedAt: nowIso,
+        players: [
+          { userId: 'u1', seat: 1, totalPoints: 200, correctAnswers: 2, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+          { userId: 'u2', seat: 2, totalPoints: 100, correctAnswers: 1, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+        ],
+        currentQIndex: 0,
+        statePayload: {
+          phase: 'NORMAL_PLAY',
+          half: 1,
+          possessionDiff: 0,
+          kickOffSeat: 1,
+          goals: { seat1: 0, seat2: 0 },
+          penaltyGoals: { seat1: 0, seat2: 0 },
+          normalQuestionsPerHalf: 6,
+          normalQuestionsAnsweredInHalf: 0,
+          normalQuestionsAnsweredTotal: 0,
+          halftime: { deadlineAt: null, categoryOptions: [], bans: { seat1: null, seat2: null } },
+          lastAttack: { attackerSeat: null },
+          penalty: { round: 0, shooterSeat: 1, suddenDeath: false, kicksTaken: { seat1: 0, seat2: 0 } },
+          currentQuestion: null,
+          winnerDecisionMethod: null,
+        },
+        currentQuestion: {
+          qIndex: 0,
+          questionId: 'q1',
+          correctIndex: 1,
+          phaseKind: 'normal',
+          phaseRound: 1,
+          shooterSeat: null,
+          attackerSeat: null,
+          shownAt: null,
+          deadlineAt: null,
+          questionDTO: {
+            id: 'q1',
+            prompt: { en: 'Prompt' },
+            options: [{ en: 'A' }, { en: 'B' }, { en: 'C' }, { en: 'D' }],
+          },
+        },
+        answers: {},
+        chanceCardUses: {},
+      })
+    );
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-dup-1',
+    });
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-dup-2',
+    });
+
+    expect(consumeChanceCardForMatchMock).toHaveBeenCalledTimes(1);
+    const chanceCardEmits = (socket.emit as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([event]) => event === 'match:chance_card_applied'
+    );
+    expect(chanceCardEmits).toHaveLength(2);
+    expect(chanceCardEmits[1]?.[1]).toEqual(
+      expect.objectContaining({
+        clientActionId: 'action-dup-1',
+      })
+    );
+  });
+
+  it('S29: emits CHANCE_CARD_NOT_AVAILABLE when user has no 50-50 cards', async () => {
+    const { BadRequestError } = await import('../../src/core/errors.js');
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+    consumeChanceCardForMatchMock.mockRejectedValue(new BadRequestError('No 50-50 cards available'));
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-none-123',
+    });
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        code: 'CHANCE_CARD_NOT_AVAILABLE',
       })
     );
   });

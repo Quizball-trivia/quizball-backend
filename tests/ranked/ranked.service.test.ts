@@ -72,7 +72,12 @@ function createProfile(overrides: Partial<RankedProfileRow> & {
   };
 }
 
-function createCompletedRankedMatch(matchId: string, winnerUserId: string | null, rankedContext?: unknown): MatchRow {
+function createCompletedRankedMatch(
+  matchId: string,
+  winnerUserId: string | null,
+  rankedContext?: unknown,
+  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null = null
+): MatchRow {
   return {
     id: matchId,
     lobby_id: null,
@@ -82,7 +87,7 @@ function createCompletedRankedMatch(matchId: string, winnerUserId: string | null
     category_b_id: 'cat-b',
     current_q_index: 10,
     total_questions: 12,
-    state_payload: null,
+    state_payload: winnerDecisionMethod ? { winnerDecisionMethod } : null,
     ranked_context: (rankedContext as Record<string, unknown> | null) ?? null,
     started_at: NOW_ISO,
     ended_at: NOW_ISO,
@@ -222,11 +227,11 @@ describe('rankedService', () => {
 
   it.each([
     { name: 'equal-rank win', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-1', delta: 25, newRp: 1225 },
-    { name: 'equal-rank loss', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-2', delta: -20, newRp: 1180 },
+    { name: 'equal-rank loss', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-2', delta: -25, newRp: 1175 },
     { name: 'win vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-1', delta: 35, newRp: 1035 },
-    { name: 'loss vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-2', delta: -10, newRp: 990 },
+    { name: 'loss vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-2', delta: -15, newRp: 985 },
     { name: 'win vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-1', delta: 15, newRp: 1515 },
-    { name: 'loss vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-2', delta: -30, newRp: 1470 },
+    { name: 'loss vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-2', delta: -35, newRp: 1465 },
     { name: 'clamp upper win', playerRp: 200, opponentRp: 4000, winnerUserId: 'u-1', delta: 45, newRp: 245 },
     { name: 'clamp lower win (big gap)', playerRp: 4000, opponentRp: 200, winnerUserId: 'u-1', delta: 10, newRp: 4010 },
   ])('applies ranked RP formula correctly: $name', async ({ playerRp, opponentRp, winnerUserId, delta, newRp }) => {
@@ -265,6 +270,46 @@ describe('rankedService', () => {
     expect(userOutcome).toBeDefined();
     expect(userOutcome?.deltaRp).toBe(delta);
     expect(userOutcome?.newRp).toBe(newRp);
+  });
+
+  it('applies extra RP loss on forfeit', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'u-2', undefined, 'forfeit')
+    );
+    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('u-1', 1, 400),
+      createPlayer('u-2', 2, 900),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: false,
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => {
+      if (userId === 'u-1') {
+        return createProfile({
+          user_id: 'u-1',
+          rp: 1200,
+          tier: rankedService.tierFromRp(1200),
+          placement_status: 'placed',
+          placement_played: 3,
+        });
+      }
+      return createProfile({
+        user_id: 'u-2',
+        rp: 1200,
+        tier: rankedService.tierFromRp(1200),
+        placement_status: 'placed',
+        placement_played: 3,
+      });
+    });
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+    const userOutcome = outcome?.byUserId['u-1'];
+    expect(userOutcome).toBeDefined();
+    expect(userOutcome?.deltaRp).toBe(-35);
+    expect(userOutcome?.newRp).toBe(1165);
   });
 
   it('keeps RP unchanged during placement game 1 and updates placement counters', async () => {
@@ -383,8 +428,8 @@ describe('rankedService', () => {
         opponent_user_id: 'u-1',
         opponent_is_ai: false,
         old_rp: 1200,
-        delta_rp: -20,
-        new_rp: 1180,
+        delta_rp: -25,
+        new_rp: 1175,
         result: 'loss',
         is_placement: false,
         placement_game_no: null,
@@ -405,8 +450,8 @@ describe('rankedService', () => {
       }),
       createProfile({
         user_id: 'u-2',
-        rp: 1180,
-        tier: rankedService.tierFromRp(1180),
+        rp: 1175,
+        tier: rankedService.tierFromRp(1175),
         placement_status: 'placed',
         placement_played: 3,
       }),
@@ -417,7 +462,7 @@ describe('rankedService', () => {
     expect(outcome).toBeDefined();
     expect(outcome?.isPlacement).toBe(false);
     expect(outcome?.byUserId['u-1']?.deltaRp).toBe(25);
-    expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-20);
+    expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-25);
     expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
     expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
   });

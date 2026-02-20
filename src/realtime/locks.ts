@@ -54,6 +54,15 @@ export async function releaseLock(key: string, token: string): Promise<boolean> 
   const client = getRedisClient();
 
   if (client && client.isOpen) {
+    if (typeof client.eval !== 'function') {
+      // Test/mocked Redis clients may not implement eval; keep a safe fallback.
+      const currentToken = await client.get(key);
+      if (currentToken !== token) {
+        return false;
+      }
+      await client.del(key);
+      return true;
+    }
     // Atomic compare-and-delete using Lua script
     const result = await client.eval(RELEASE_LOCK_SCRIPT, {
       keys: [key],

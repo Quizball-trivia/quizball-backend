@@ -36,6 +36,7 @@ export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'tot
 export const recentMatchResponseSchema = z.object({
   matchId: z.string().uuid(),
   mode: z.enum(['friendly', 'ranked']),
+  competition: z.enum(['friendly', 'placement', 'ranked']),
   status: z.enum(['completed', 'abandoned']),
   result: recentMatchResultSchema,
   endedAt: z.string().datetime().nullable(),
@@ -46,6 +47,7 @@ export const recentMatchResponseSchema = z.object({
   opponentGoals: z.number().int().nonnegative(),
   opponentPenaltyGoals: z.number().int().nonnegative(),
   winnerDecisionMethod: winnerDecisionMethodSchema.nullable(),
+  rpDelta: z.number().int().nullable(),
   opponent: z.object({
     id: z.string().uuid().nullable(),
     username: z.string(),

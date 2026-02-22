@@ -93,6 +93,31 @@ async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string | null
   return redis.get(rankedAiLobbyKey(lobbyId));
 }
 
+async function resolveRankedAiUserIdForDraft(
+  lobbyId: string,
+  members: Array<{ user_id: string }>
+): Promise<string | null> {
+  const aiUserIdFromRedis = await getRankedAiUserIdForLobby(lobbyId);
+  if (aiUserIdFromRedis && members.some((member) => member.user_id === aiUserIdFromRedis)) {
+    return aiUserIdFromRedis;
+  }
+
+  const users = await Promise.all(
+    members.map(async (member) => ({
+      userId: member.user_id,
+      user: await usersRepo.getById(member.user_id),
+    }))
+  );
+  const aiMember = users.find((entry) => entry.user?.is_ai);
+  if (!aiMember) return null;
+
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: RANKED_AI_KEY_TTL_SEC });
+  }
+  return aiMember.userId;
+}
+
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -294,13 +319,23 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
     await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
     await warmupRealtimeService.cleanupLobby(lobbyId);
 
+    let turnUserId = lobby.host_user_id;
+    if (lobby.mode === 'ranked') {
+      const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+      const aiUserId = await resolveRankedAiUserIdForDraft(lobbyId, members);
+      if (aiUserId) {
+        turnUserId =
+          members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
+      }
+    }
+
     io.to(`lobby:${lobbyId}`).emit('draft:start', {
       lobbyId,
       categories,
-      turnUserId: lobby.host_user_id,
+      turnUserId,
     });
     logger.info(
-      { lobbyId, hostUserId: lobby.host_user_id, categoryCount: categories.length },
+      { lobbyId, hostUserId: lobby.host_user_id, turnUserId, categoryCount: categories.length },
       'Draft started'
     );
   } finally {

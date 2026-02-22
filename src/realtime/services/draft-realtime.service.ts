@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
@@ -10,6 +11,7 @@ import { getRedisClient } from '../redis.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
+const AI_LOBBY_KEY_TTL_SEC = 7200;
 
 // Process-local timer guard for delayed AI bans (safe for single-instance deployment).
 const pendingAiBanTimers = new Map<string, NodeJS.Timeout>();
@@ -59,14 +61,14 @@ async function startMatchFromDraft(
 function getNextActorId(
   members: Array<{ user_id: string }>,
   bans: Array<{ user_id: string }>,
-  hostUserId: string
+  firstActorUserId: string
 ): string {
-  if (bans.length === 0) return hostUserId;
+  if (bans.length === 0) return firstActorUserId;
 
   // Most recent ban is last in the array (ordered by banned_at ASC)
   const lastActor = bans[bans.length - 1]?.user_id;
   const other = members.find((member) => member.user_id !== lastActor)?.user_id;
-  return other ?? hostUserId;
+  return other ?? firstActorUserId;
 }
 
 function getAiBanDelayMs(): number {
@@ -78,6 +80,42 @@ function clearPendingAiBanTimer(lobbyId: string): void {
   if (!timer) return;
   clearTimeout(timer);
   pendingAiBanTimers.delete(lobbyId);
+}
+
+async function resolveRankedAiUserId(
+  lobbyId: string,
+  members: Array<{ user_id: string }>
+): Promise<string | null> {
+  const redis = getRedisClient();
+  if (redis) {
+    const aiUserId = await redis.get(rankedAiLobbyKey(lobbyId));
+    if (aiUserId && members.some((member) => member.user_id === aiUserId)) {
+      return aiUserId;
+    }
+  }
+
+  const users = await Promise.all(
+    members.map(async (member) => ({
+      userId: member.user_id,
+      user: await usersRepo.getById(member.user_id),
+    }))
+  );
+  const aiMember = users.find((entry) => entry.user?.is_ai);
+  if (!aiMember) return null;
+
+  if (redis) {
+    await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: AI_LOBBY_KEY_TTL_SEC });
+  }
+  return aiMember.userId;
+}
+
+function getFirstDraftActorId(
+  members: Array<{ user_id: string }>,
+  hostUserId: string,
+  aiUserId: string | null
+): string {
+  if (!aiUserId) return hostUserId;
+  return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<void> {
@@ -201,8 +239,12 @@ export const draftRealtimeService = {
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const aiUserId = lobby.mode === 'ranked'
+      ? await resolveRankedAiUserId(lobbyId, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
 
-    const expectedUserId = getNextActorId(members, bans, lobby.host_user_id);
+    const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (socket.data.user.id !== expectedUserId) {
       logger.warn(
         { lobbyId, userId: socket.data.user.id, expectedUserId },
@@ -228,14 +270,9 @@ export const draftRealtimeService = {
       categoryId,
     });
 
-    const redis = getRedisClient();
-    const aiUserId = lobby.mode === 'ranked' && redis ? await redis.get(rankedAiLobbyKey(lobbyId)) : null;
-    const aiMember = aiUserId
-      ? members.find((member) => member.user_id === aiUserId)
-      : undefined;
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const isRankedVsAi = lobby.mode === 'ranked' && aiMember !== undefined;
-    if (isRankedVsAi && aiUserId && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
+    const isRankedVsAi = lobby.mode === 'ranked' && aiUserId !== null;
+    if (isRankedVsAi && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
       scheduleRankedAiBan(io, lobbyId, aiUserId);
       return;
     }

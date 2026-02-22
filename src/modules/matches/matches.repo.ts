@@ -13,17 +13,30 @@ import type {
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 // Reusable SQL fragment for validating question payload structure
+const NORMALIZED_PAYLOAD_SQL = `
+  (
+    CASE
+      WHEN jsonb_typeof(qp.payload) = 'object' THEN qp.payload
+      WHEN jsonb_typeof(qp.payload) = 'string'
+        AND (qp.payload #>> '{}') ~ '^\\s*\\{.*\\}\\s*$'
+      THEN (qp.payload #>> '{}')::jsonb
+      ELSE '{}'::jsonb
+    END
+  )
+`;
+
+const NORMALIZED_OPTIONS_SQL = `(${NORMALIZED_PAYLOAD_SQL}->'options')`;
+
 const VALID_PAYLOAD_CONDITIONS = `
-  AND qp.payload ? 'options'
-  AND jsonb_typeof(qp.payload->'options') = 'array'
-  AND jsonb_array_length(qp.payload->'options') = 4
+  AND (${NORMALIZED_PAYLOAD_SQL}) ? 'options'
+  AND jsonb_typeof(${NORMALIZED_OPTIONS_SQL}) = 'array'
+  AND jsonb_array_length(${NORMALIZED_OPTIONS_SQL}) = 4
   AND NOT EXISTS (
     SELECT 1
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
     WHERE jsonb_typeof(opt) <> 'object'
        OR NOT (opt ? 'id')
        OR jsonb_typeof(opt->'id') <> 'string'
-       OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
        OR NOT (opt ? 'text')
        OR jsonb_typeof(opt->'text') <> 'object'
        OR NOT (opt ? 'is_correct')
@@ -31,12 +44,12 @@ const VALID_PAYLOAD_CONDITIONS = `
   )
   AND (
     SELECT COUNT(*)
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
     WHERE opt->>'is_correct' = 'true'
   ) = 1
   AND (
     SELECT COUNT(DISTINCT opt->>'id')
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
   ) = 4
 `;
 

@@ -48,6 +48,8 @@ export interface PossessionStatePayload {
   halftime: {
     deadlineAt: string | null;
     categoryOptions: DraftCategory[];
+    firstHalfShownCategoryIds: string[];
+    firstBanSeat: 1 | 2 | null;
     bans: {
       seat1: string | null;
       seat2: string | null;
@@ -93,6 +95,8 @@ export function createInitialPossessionState(): PossessionStatePayload {
     halftime: {
       deadlineAt: null,
       categoryOptions: [],
+      firstHalfShownCategoryIds: [],
+      firstBanSeat: null,
       bans: {
         seat1: null,
         seat2: null,

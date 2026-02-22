@@ -16,6 +16,7 @@ const addMemberMock = vi.fn();
 const getLobbyByIdMock = vi.fn();
 const buildLobbyStateMock = vi.fn();
 const getUserByIdMock = vi.fn();
+const ensureProfileMock = vi.fn();
 const startDraftMock = vi.fn();
 const startRankedAiForUserMock = vi.fn();
 const acquireLockMock = vi.fn();
@@ -64,6 +65,12 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: {
+    ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
   },
 }));
 
@@ -158,6 +165,20 @@ describe('ranked-matchmaking.service queue behavior', () => {
       nickname: userId,
       avatar_url: null,
     }));
+    ensureProfileMock.mockImplementation(async (userId: string) => ({
+      user_id: userId,
+      rp: userId === 'u1' ? 1111 : 2222,
+      tier: 'Bench',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_required: 3,
+      placement_wins: 0,
+      placement_seed_rp: null,
+      placement_perf_sum: 0,
+      placement_points_for_sum: 0,
+      placement_points_against_sum: 0,
+      current_win_streak: 0,
+    }));
     startDraftMock.mockResolvedValue(undefined);
     startRankedAiForUserMock.mockResolvedValue(undefined);
   });
@@ -248,5 +269,37 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'u-fallback', {
       skipSearchEmit: true,
     });
+  });
+
+  it('emits ranked:match_found with opponent RP from ensured profiles', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(ensureProfileMock).toHaveBeenCalledWith('u1');
+    expect(ensureProfileMock).toHaveBeenCalledWith('u2');
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const matchFoundCalls = emitFns
+      .flatMap((emit) => emit.mock.calls)
+      .filter(([event]) => event === 'ranked:match_found');
+
+    expect(matchFoundCalls).toEqual(
+      expect.arrayContaining([
+        ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', rp: 2222 }) })],
+        ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', rp: 1111 }) })],
+      ])
+    );
   });
 });

@@ -142,7 +142,7 @@ VALUES
     '{"en":"Jersey cosmetic avatar"}'::jsonb,
     1500,
     'usd',
-    '{"avatarKey":"jersey_special","assetUrl":"/assets/store/jesrsey5.svg"}'::jsonb,
+    '{"avatarKey":"jersey_special","assetUrl":"/assets/store/jersey5.svg"}'::jsonb,
     true,
     224
   ),

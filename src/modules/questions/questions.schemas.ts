@@ -35,7 +35,7 @@ export type Status = z.infer<typeof statusEnum>;
  * MCQ Option schema - single answer option with i18n text
  */
 export const mcqOptionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().min(1),
   text: i18nFieldSchema,
   is_correct: z.boolean(),
 });
@@ -59,12 +59,107 @@ const textInputPayloadBaseSchema = z.object({
   case_sensitive: z.boolean(),
 });
 
+function parseNestedJsonString(value: unknown): unknown {
+  let current = value;
+  for (let i = 0; i < 2; i += 1) {
+    if (typeof current !== 'string') break;
+    const trimmed = current.trim();
+    if (trimmed.length === 0) break;
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function toI18nField(value: unknown): Record<string, string> | null {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    return { en: text };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([locale, text]) => typeof locale === 'string' && typeof text === 'string' && text.trim().length > 0)
+    .map(([locale, text]) => [locale, (text as string).trim()] as const);
+
+  if (entries.length === 0) return null;
+  return Object.fromEntries(entries);
+}
+
+function toBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+  }
+  return null;
+}
+
+function normalizeMcqOptions(payload: Record<string, unknown>): Record<string, unknown> {
+  const rawOptions = Array.isArray(payload.options)
+    ? payload.options
+    : Array.isArray(payload.choices)
+      ? payload.choices
+      : Array.isArray(payload.answers)
+        ? payload.answers
+        : Array.isArray(payload.answer_options)
+          ? payload.answer_options
+          : null;
+
+  if (!rawOptions) return payload;
+
+  const normalized = rawOptions
+    .map((option, index) => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)) return null;
+      const candidate = option as Record<string, unknown>;
+
+      const rawId = candidate.id ?? candidate.option_id ?? String(index + 1);
+      if (typeof rawId !== 'string' || rawId.trim().length === 0) return null;
+
+      const text = toI18nField(candidate.text ?? candidate.label ?? candidate.answer ?? candidate.value);
+      if (!text) return null;
+
+      const isCorrect = toBoolean(candidate.is_correct ?? candidate.isCorrect ?? candidate.correct);
+      if (isCorrect === null) return null;
+
+      return {
+        id: rawId.trim(),
+        text,
+        is_correct: isCorrect,
+      };
+    })
+    .filter((option): option is { id: string; text: Record<string, string>; is_correct: boolean } => option !== null);
+
+  if (normalized.length !== rawOptions.length) return payload;
+
+  return {
+    ...payload,
+    options: normalized,
+  };
+}
+
+export function normalizeQuestionPayloadCandidate(payload: unknown): unknown {
+  const parsed = parseNestedJsonString(payload);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
+
+  const candidate = parsed as Record<string, unknown>;
+  if (candidate.type === 'mcq_single') {
+    return normalizeMcqOptions(candidate);
+  }
+
+  return candidate;
+}
+
 /**
  * Union of all payload types - discriminated by 'type' field
  * Additional validation (unique IDs, exactly 1 correct) applied via superRefine
  */
 export const questionPayloadSchema = z
-  .discriminatedUnion('type', [mcqPayloadBaseSchema, textInputPayloadBaseSchema])
+  .preprocess(normalizeQuestionPayloadCandidate, z.discriminatedUnion('type', [mcqPayloadBaseSchema, textInputPayloadBaseSchema]))
   .superRefine((data, ctx) => {
     if (data.type === 'mcq_single') {
       // Check exactly one correct answer

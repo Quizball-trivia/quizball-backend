@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
+import { config } from '../../core/config.js';
 import {
   createCheckoutBodySchema,
   purchaseWithCoinsBodySchema,
@@ -15,7 +16,7 @@ const router = Router();
 
 /**
  * GET /api/v1/store/products
- * List active store products.
+ * List active store products. Intentionally public (no auth) — catalog is visible to all.
  */
 router.get('/products', storeController.listProducts);
 
@@ -56,13 +57,16 @@ router.get('/inventory', authMiddleware, storeController.getInventory);
 /**
  * POST /api/v1/store/dev/grant-self
  * Development-only helper to grant self wallet funds quickly.
+ * Only registered in non-prod environments.
  */
-router.post(
-  '/dev/grant-self',
-  authMiddleware,
-  validate({ body: devGrantSelfBodySchema }),
-  storeController.createDevSelfGrant
-);
+if (config.NODE_ENV !== 'prod') {
+  router.post(
+    '/dev/grant-self',
+    authMiddleware,
+    validate({ body: devGrantSelfBodySchema }),
+    storeController.createDevSelfGrant
+  );
+}
 
 /**
  * POST /api/v1/store/admin/adjustments

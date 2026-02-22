@@ -3,7 +3,6 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
-import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
 import type {
@@ -190,8 +189,8 @@ async function getOpponentInfoFromParticipants(
   const opponentUser = await usersRepo.getById(opponent.user_id);
   let rp: number | undefined;
   if (matchMode === 'ranked') {
-    const profile = await rankedRepo.getProfile(opponent.user_id);
-    rp = profile?.rp ?? undefined;
+    const profile = await rankedService.ensureProfile(opponent.user_id);
+    rp = profile.rp;
   }
   return {
     id: opponent.user_id,
@@ -253,6 +252,34 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     };
   }
 
+  const seat1UserId = players.find((player) => player.seat === 1)?.user_id ?? null;
+  const seat2UserId = players.find((player) => player.seat === 2)?.user_id ?? null;
+  const fallbackWinnerId = seat1UserId ?? seat2UserId ?? players[0]?.user_id ?? null;
+  const statePayload = (match.state_payload ?? {}) as Partial<{
+    goals: { seat1?: number; seat2?: number };
+    penaltyGoals: { seat1?: number; seat2?: number };
+  }>;
+  const goalsSeat1 = Number(statePayload.goals?.seat1 ?? 0);
+  const goalsSeat2 = Number(statePayload.goals?.seat2 ?? 0);
+  const penaltiesSeat1 = Number(statePayload.penaltyGoals?.seat1 ?? 0);
+  const penaltiesSeat2 = Number(statePayload.penaltyGoals?.seat2 ?? 0);
+  const seat1Points = players.find((player) => player.seat === 1)?.total_points ?? 0;
+  const seat2Points = players.find((player) => player.seat === 2)?.total_points ?? 0;
+  const derivedWinnerId =
+    goalsSeat1 > goalsSeat2
+      ? (seat1UserId ?? fallbackWinnerId)
+      : goalsSeat2 > goalsSeat1
+        ? (seat2UserId ?? fallbackWinnerId)
+        : penaltiesSeat1 > penaltiesSeat2
+          ? (seat1UserId ?? fallbackWinnerId)
+          : penaltiesSeat2 > penaltiesSeat1
+            ? (seat2UserId ?? fallbackWinnerId)
+            : seat1Points > seat2Points
+              ? (seat1UserId ?? fallbackWinnerId)
+              : seat2Points > seat1Points
+                ? (seat2UserId ?? fallbackWinnerId)
+                : fallbackWinnerId;
+
   // Calculate endedAt and durationMs deterministically
   let endedAt: number;
   let durationMs: number;
@@ -286,7 +313,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
-    winnerId: match.winner_user_id,
+    winnerId: match.winner_user_id ?? derivedWinnerId,
     players: payloadPlayers,
     durationMs,
     resultVersion,
@@ -375,11 +402,11 @@ export async function beginMatchForLobby(
   let rpB: number | undefined;
   if (match.mode === 'ranked') {
     const [profileA, profileB] = await Promise.all([
-      rankedRepo.getProfile(memberA.user_id),
-      rankedRepo.getProfile(memberB.user_id),
+      rankedService.ensureProfile(memberA.user_id),
+      rankedService.ensureProfile(memberB.user_id),
     ]);
-    rpA = profileA?.rp ?? undefined;
-    rpB = profileB?.rp ?? undefined;
+    rpA = profileA.rp;
+    rpB = profileB.rp;
   }
 
   io.to(`user:${memberA.user_id}`).emit('match:start', {

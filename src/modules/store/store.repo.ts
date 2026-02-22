@@ -305,16 +305,17 @@ export const storeRepo = {
     tx: TransactionSql,
     userId: string,
     productId: string
-  ): Promise<number> {
-    await tx.unsafe(
+  ): Promise<number | null> {
+    const deleted = await tx.unsafe<Array<{ product_id: string }>>(
       `
       DELETE FROM user_inventory
       WHERE user_id = $1
         AND product_id = $2
+      RETURNING product_id
       `,
       [userId, productId]
     );
-    return 0;
+    return deleted.length > 0 ? 0 : null;
   },
 
   async decrementInventoryItemInTx(
@@ -328,6 +329,7 @@ export const storeRepo = {
       SET quantity = quantity - 1
       WHERE user_id = $1
         AND product_id = $2
+        AND quantity > 0
       RETURNING quantity
       `,
       [userId, productId]

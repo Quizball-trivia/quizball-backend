@@ -61,6 +61,8 @@ const abandonMatchMock = vi.fn();
 
 const buildMatchQuestionPayloadMock = vi.fn();
 const consumeChanceCardForMatchMock = vi.fn();
+const ensureProfileMock = vi.fn();
+const settleCompletedRankedMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -129,6 +131,16 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 vi.mock('../../src/modules/store/store.service.js', () => ({
   storeService: {
     consumeChanceCardForMatch: (...args: unknown[]) => consumeChanceCardForMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: {
+    ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
+    settleCompletedRankedMatch: (...args: unknown[]) => settleCompletedRankedMatchMock(...args),
+    isPlacementRequired: vi.fn(() => false),
+    buildPlacementAiContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
+    DEFAULT_AI_OPPONENT_RP: 1900,
   },
 }));
 
@@ -251,6 +263,21 @@ describe('match-realtime.service high-risk integration behavior', () => {
       correctIndex: 1,
     });
     consumeChanceCardForMatchMock.mockResolvedValue({ remainingQuantity: 2 });
+    ensureProfileMock.mockImplementation(async (userId: string) => ({
+      user_id: userId,
+      rp: userId === 'u1' ? 1111 : 2222,
+      tier: 'Bench',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_required: 3,
+      placement_wins: 0,
+      placement_seed_rp: null,
+      placement_perf_sum: 0,
+      placement_points_for_sum: 0,
+      placement_points_against_sum: 0,
+      current_win_streak: 0,
+    }));
+    settleCompletedRankedMatchMock.mockResolvedValue(null);
   });
 
   it('S15: match:leave uses pause/grace flow and emits rejoin_available', async () => {
@@ -704,7 +731,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
-  it('S22: uses server-authoritative timing for points and persisted answer time', async () => {
+  it('S22: persists clamped client timing and awards points deterministically', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
@@ -728,7 +755,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         matchId: 'm1',
         qIndex: 0,
         userId: 'u1',
-        timeMs: 2400,
+        timeMs: 50,
         pointsEarned: 100,
       })
     );
@@ -814,5 +841,39 @@ describe('match-realtime.service high-risk integration behavior', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('S29: beginMatchForLobby ranked emits opponent RP from ensured profiles', async () => {
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+
+    getMatchMock.mockResolvedValueOnce({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+
+    await beginMatchForLobby(io, 'l1', 'm1');
+
+    expect(ensureProfileMock).toHaveBeenCalledWith('u1');
+    expect(ensureProfileMock).toHaveBeenCalledWith('u2');
+    const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]);
+    expect(toCalls).toContain('user:u1');
+    expect(toCalls).toContain('user:u2');
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const emitCalls = emitFns.flatMap((emit) => emit.mock.calls).filter(([event]) => event === 'match:start');
+    expect(emitCalls).toEqual(
+      expect.arrayContaining([
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', rp: 2222 }) })],
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', rp: 1111 }) })],
+      ])
+    );
   });
 });

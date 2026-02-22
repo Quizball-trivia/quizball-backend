@@ -238,6 +238,7 @@ export interface MatchStatePayload {
   halftime: {
     deadlineAt: string | null;
     categoryOptions: DraftCategory[];
+    firstBanSeat: 1 | 2 | null;
     bans: {
       seat1: string | null;
       seat2: string | null;

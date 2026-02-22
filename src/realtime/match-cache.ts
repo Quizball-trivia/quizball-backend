@@ -125,6 +125,10 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
           return acc;
         }, [])
         : [],
+      firstHalfShownCategoryIds: Array.isArray(candidate.halftime?.firstHalfShownCategoryIds)
+        ? candidate.halftime.firstHalfShownCategoryIds.filter((categoryId): categoryId is string => typeof categoryId === 'string')
+        : [],
+      firstBanSeat: asSeat(candidate.halftime?.firstBanSeat),
       bans: {
         seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
         seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
@@ -244,7 +248,9 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
   try {
     const parsed = JSON.parse(raw) as Partial<MatchCache>;
     const chanceCardUses =
-      parsed.chanceCardUses && typeof parsed.chanceCardUses === 'object'
+      parsed.chanceCardUses &&
+      typeof parsed.chanceCardUses === 'object' &&
+      !Array.isArray(parsed.chanceCardUses)
         ? parsed.chanceCardUses
         : {};
     return {

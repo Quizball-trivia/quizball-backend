@@ -222,7 +222,6 @@ export const storeService = {
     let purchase: StorePurchaseRow | null = null;
 
     try {
-      const metadata = parseProductMetadata(product);
       purchase = await storeRepo.createPurchase({
         userId,
         productId: product.id,

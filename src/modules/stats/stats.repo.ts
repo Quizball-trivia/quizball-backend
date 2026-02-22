@@ -22,6 +22,8 @@ export interface RecentMatchRow {
   opponent_goals: number;
   opponent_penalty_goals: number;
   winner_decision_method: string | null;
+  ranked_delta_rp: number | null;
+  ranked_is_placement: boolean | null;
   opponent_id: string | null;
   opponent_username: string | null;
   opponent_avatar_url: string | null;
@@ -82,6 +84,8 @@ export const statsRepo = {
         COALESCE(mp_opp.goals, 0) AS opponent_goals,
         COALESCE(mp_opp.penalty_goals, 0) AS opponent_penalty_goals,
         m.state_payload->>'winnerDecisionMethod' AS winner_decision_method,
+        rrc.delta_rp AS ranked_delta_rp,
+        rrc.is_placement AS ranked_is_placement,
         opp.id AS opponent_id,
         opp.nickname AS opponent_username,
         opp.avatar_url AS opponent_avatar_url,
@@ -98,6 +102,9 @@ export const statsRepo = {
         ORDER BY mp2.seat ASC
         LIMIT 1
       ) AS mp_opp ON true
+      LEFT JOIN ranked_rp_changes rrc
+        ON rrc.match_id = m.id
+       AND rrc.user_id = mp_self.user_id
       LEFT JOIN users opp ON opp.id = mp_opp.user_id
       WHERE m.status IN ('completed', 'abandoned')
       ORDER BY COALESCE(m.ended_at, m.started_at) DESC

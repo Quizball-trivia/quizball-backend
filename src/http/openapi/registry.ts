@@ -20,6 +20,22 @@ import {
 import {
   rankedProfileResponseSchema,
 } from '../../modules/ranked/ranked.schemas.js';
+import {
+  createCheckoutBodySchema,
+  createCheckoutResponseSchema,
+  purchaseWithCoinsBodySchema,
+  purchaseWithCoinsResponseSchema,
+  devGrantSelfBodySchema,
+  devGrantSelfResponseSchema,
+  listStoreTransactionsQuerySchema,
+  listStoreTransactionsResponseSchema,
+  manualAdjustmentBodySchema,
+  manualAdjustmentResponseSchema,
+  storeInventoryResponseSchema,
+  storeProductsResponseSchema,
+  storeTransactionLogResponseSchema,
+  storeWalletResponseSchema,
+} from '../../modules/store/store.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -106,6 +122,14 @@ registry.register('HeadToHeadResponse', headToHeadResponseSchema);
 registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
 registry.register('StatsSummaryResponse', statsSummaryResponseSchema);
 registry.register('RankedProfileResponse', rankedProfileResponseSchema);
+registry.register('StoreProductsResponse', storeProductsResponseSchema);
+registry.register('StoreWalletResponse', storeWalletResponseSchema);
+registry.register('StoreInventoryResponse', storeInventoryResponseSchema);
+registry.register('CreateCheckoutResponse', createCheckoutResponseSchema);
+registry.register('PurchaseWithCoinsResponse', purchaseWithCoinsResponseSchema);
+registry.register('ManualAdjustmentResponse', manualAdjustmentResponseSchema);
+registry.register('StoreTransactionLogResponse', storeTransactionLogResponseSchema);
+registry.register('ListStoreTransactionsResponse', listStoreTransactionsResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -408,6 +432,227 @@ registry.registerPath({
     },
     401: {
       description: 'Authentication required',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+// =============================================================================
+// Store Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/store/products',
+  summary: 'List active store products',
+  tags: ['Store'],
+  responses: {
+    200: {
+      description: 'Active store products',
+      content: { 'application/json': { schema: storeProductsResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/store/checkout',
+  summary: 'Create Stripe checkout session',
+  tags: ['Store'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: createCheckoutBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Checkout URL created',
+      content: { 'application/json': { schema: createCheckoutResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Product not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    502: {
+      description: 'Stripe checkout creation failed',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/store/purchase-coins',
+  summary: 'Purchase non-coin-pack products with coin balance',
+  tags: ['Store'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: purchaseWithCoinsBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Product purchased with coins',
+      content: { 'application/json': { schema: purchaseWithCoinsResponseSchema } },
+    },
+    400: {
+      description: 'Insufficient coins or invalid product type',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Product not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/store/wallet',
+  summary: 'Get authenticated wallet balances',
+  tags: ['Store'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Wallet balances',
+      content: { 'application/json': { schema: storeWalletResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/store/inventory',
+  summary: 'Get authenticated user inventory',
+  tags: ['Store'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'User inventory',
+      content: { 'application/json': { schema: storeInventoryResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/store/dev/grant-self',
+  summary: 'Development-only self wallet grant',
+  description: 'Local development helper for quickly granting coins/tickets to the authenticated user.',
+  tags: ['Store'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: devGrantSelfBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Updated wallet after grant',
+      content: { 'application/json': { schema: devGrantSelfResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Not available outside local environment',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/store/admin/adjustments',
+  summary: 'Apply manual admin adjustment',
+  description: 'Requires admin role',
+  tags: ['Store Admin'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: manualAdjustmentBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Adjustment result',
+      content: { 'application/json': { schema: manualAdjustmentResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    400: {
+      description: 'Invalid adjustment request',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/store/admin/transactions',
+  summary: 'List store transaction logs',
+  description: 'Requires admin role',
+  tags: ['Store Admin'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: listStoreTransactionsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Paginated store transaction logs',
+      content: { 'application/json': { schema: listStoreTransactionsResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

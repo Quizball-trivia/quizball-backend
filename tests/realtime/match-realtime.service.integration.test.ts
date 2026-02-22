@@ -60,6 +60,9 @@ const computeAvgTimesMock = vi.fn();
 const abandonMatchMock = vi.fn();
 
 const buildMatchQuestionPayloadMock = vi.fn();
+const consumeChanceCardForMatchMock = vi.fn();
+const ensureProfileMock = vi.fn();
+const settleCompletedRankedMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -122,6 +125,22 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
       nickname: id,
       avatar_url: null,
     })),
+  },
+}));
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    consumeChanceCardForMatch: (...args: unknown[]) => consumeChanceCardForMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: {
+    ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
+    settleCompletedRankedMatch: (...args: unknown[]) => settleCompletedRankedMatchMock(...args),
+    isPlacementRequired: vi.fn(() => false),
+    buildPlacementAiContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
+    DEFAULT_AI_OPPONENT_RP: 1900,
   },
 }));
 
@@ -233,11 +252,32 @@ describe('match-realtime.service high-risk integration behavior', () => {
       question: {
         id: 'q1',
         prompt: 'Test?',
-        options: [{ index: 0, text: 'A' }, { index: 1, text: 'B' }],
+        options: [
+          { index: 0, text: 'A' },
+          { index: 1, text: 'B' },
+          { index: 2, text: 'C' },
+          { index: 3, text: 'D' },
+        ],
         categoryName: 'General',
       },
       correctIndex: 1,
     });
+    consumeChanceCardForMatchMock.mockResolvedValue({ remainingQuantity: 2 });
+    ensureProfileMock.mockImplementation(async (userId: string) => ({
+      user_id: userId,
+      rp: userId === 'u1' ? 1111 : 2222,
+      tier: 'Bench',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_required: 3,
+      placement_wins: 0,
+      placement_seed_rp: null,
+      placement_perf_sum: 0,
+      placement_points_for_sum: 0,
+      placement_points_against_sum: 0,
+      current_win_streak: 0,
+    }));
+    settleCompletedRankedMatchMock.mockResolvedValue(null);
   });
 
   it('S15: match:leave uses pause/grace flow and emits rejoin_available', async () => {
@@ -288,6 +328,157 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect.objectContaining({
         matchId: 'm1',
         qIndex: 0,
+      })
+    );
+  });
+
+  it('S27: chance card use emits match:chance_card_applied and consumes once', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-12345678',
+    });
+
+    expect(consumeChanceCardForMatchMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-12345678',
+    });
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:chance_card_applied',
+      expect.objectContaining({
+        matchId: 'm1',
+        qIndex: 0,
+        clientActionId: 'action-12345678',
+        remainingQuantity: 2,
+      })
+    );
+  });
+
+  it('S28: duplicate chance card use for same user/question does not consume twice', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set(
+      'match:cache:m1',
+      JSON.stringify({
+        matchId: 'm1',
+        status: 'active',
+        mode: 'ranked',
+        totalQuestions: 10,
+        categoryAId: 'cat1',
+        categoryBId: 'cat2',
+        startedAt: nowIso,
+        players: [
+          { userId: 'u1', seat: 1, totalPoints: 200, correctAnswers: 2, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+          { userId: 'u2', seat: 2, totalPoints: 100, correctAnswers: 1, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+        ],
+        currentQIndex: 0,
+        statePayload: {
+          phase: 'NORMAL_PLAY',
+          half: 1,
+          possessionDiff: 0,
+          kickOffSeat: 1,
+          goals: { seat1: 0, seat2: 0 },
+          penaltyGoals: { seat1: 0, seat2: 0 },
+          normalQuestionsPerHalf: 6,
+          normalQuestionsAnsweredInHalf: 0,
+          normalQuestionsAnsweredTotal: 0,
+          halftime: { deadlineAt: null, categoryOptions: [], bans: { seat1: null, seat2: null } },
+          lastAttack: { attackerSeat: null },
+          penalty: { round: 0, shooterSeat: 1, suddenDeath: false, kicksTaken: { seat1: 0, seat2: 0 } },
+          currentQuestion: null,
+          winnerDecisionMethod: null,
+        },
+        currentQuestion: {
+          qIndex: 0,
+          questionId: 'q1',
+          correctIndex: 1,
+          phaseKind: 'normal',
+          phaseRound: 1,
+          shooterSeat: null,
+          attackerSeat: null,
+          shownAt: null,
+          deadlineAt: null,
+          questionDTO: {
+            id: 'q1',
+            prompt: { en: 'Prompt' },
+            options: [{ en: 'A' }, { en: 'B' }, { en: 'C' }, { en: 'D' }],
+          },
+        },
+        answers: {},
+        chanceCardUses: {},
+      })
+    );
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-dup-1',
+    });
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-dup-2',
+    });
+
+    expect(consumeChanceCardForMatchMock).toHaveBeenCalledTimes(1);
+    const chanceCardEmits = (socket.emit as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([event]) => event === 'match:chance_card_applied'
+    );
+    expect(chanceCardEmits).toHaveLength(2);
+    expect(chanceCardEmits[1]?.[1]).toEqual(
+      expect.objectContaining({
+        clientActionId: 'action-dup-1',
+      })
+    );
+  });
+
+  it('S29: emits CHANCE_CARD_NOT_AVAILABLE when user has no 50-50 cards', async () => {
+    const { BadRequestError } = await import('../../src/core/errors.js');
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+    consumeChanceCardForMatchMock.mockRejectedValue(new BadRequestError('No 50-50 cards available'));
+
+    await matchRealtimeService.handleChanceCardUse(io, socket, {
+      matchId: 'm1',
+      qIndex: 0,
+      clientActionId: 'action-none-123',
+    });
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        code: 'CHANCE_CARD_NOT_AVAILABLE',
       })
     );
   });
@@ -540,7 +731,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
-  it('S22: uses server-authoritative timing for points and persisted answer time', async () => {
+  it('S22: persists clamped client timing and awards points deterministically', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
@@ -564,7 +755,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         matchId: 'm1',
         qIndex: 0,
         userId: 'u1',
-        timeMs: 2400,
+        timeMs: 50,
         pointsEarned: 100,
       })
     );
@@ -650,5 +841,39 @@ describe('match-realtime.service high-risk integration behavior', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('S29: beginMatchForLobby ranked emits opponent RP from ensured profiles', async () => {
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+
+    getMatchMock.mockResolvedValueOnce({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+    });
+
+    await beginMatchForLobby(io, 'l1', 'm1');
+
+    expect(ensureProfileMock).toHaveBeenCalledWith('u1');
+    expect(ensureProfileMock).toHaveBeenCalledWith('u2');
+    const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]);
+    expect(toCalls).toContain('user:u1');
+    expect(toCalls).toContain('user:u2');
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const emitCalls = emitFns.flatMap((emit) => emit.mock.calls).filter(([event]) => event === 'match:start');
+    expect(emitCalls).toEqual(
+      expect.arrayContaining([
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', rp: 2222 }) })],
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', rp: 1111 }) })],
+      ])
+    );
   });
 });

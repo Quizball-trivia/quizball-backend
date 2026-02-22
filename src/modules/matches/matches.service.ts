@@ -48,6 +48,8 @@ export interface PossessionStatePayload {
   halftime: {
     deadlineAt: string | null;
     categoryOptions: DraftCategory[];
+    firstHalfShownCategoryIds: string[];
+    firstBanSeat: 1 | 2 | null;
     bans: {
       seat1: string | null;
       seat2: string | null;
@@ -93,6 +95,8 @@ export function createInitialPossessionState(): PossessionStatePayload {
     halftime: {
       deadlineAt: null,
       categoryOptions: [],
+      firstHalfShownCategoryIds: [],
+      firstBanSeat: null,
       bans: {
         seat1: null,
         seat2: null,
@@ -120,6 +124,7 @@ export const matchesService = {
     hostUserId: string;
     categoryAId: string;
     categoryBId: string | null;
+    isDev?: boolean;
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
@@ -207,6 +212,7 @@ export const matchesService = {
       totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
       statePayload: createInitialPossessionState(),
       rankedContext,
+      isDev: params.isDev,
     });
 
     await matchesRepo.insertMatchPlayers(match.id, [

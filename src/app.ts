@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
 import { AuthorizationError } from './core/errors.js';
+import { createStoreWebhookRouter, stripe as storeStripe } from './modules/store/index.js';
 import {
   requestIdMiddleware,
   errorHandler,
@@ -79,6 +80,11 @@ export function createApp(): Express {
     },
   };
   app.use(pinoHttp(httpLoggerOptions));
+
+  // Stripe webhook must be registered before /api/v1 rate limiter and body parsers.
+  if (storeStripe && config.STRIPE_WEBHOOK_SECRET) {
+    app.use(createStoreWebhookRouter(storeStripe));
+  }
 
   // Rate Limiting (disabled in development)
   if (process.env.NODE_ENV !== 'development') {

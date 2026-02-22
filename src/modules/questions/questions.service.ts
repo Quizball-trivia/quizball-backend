@@ -19,25 +19,17 @@ import type {
   CategorySummary,
   Status,
 } from './questions.schemas.js';
-import { toQuestionResponse } from './questions.schemas.js';
+import { normalizeQuestionPayloadCandidate, toQuestionResponse } from './questions.schemas.js';
 import { createHash } from 'crypto';
 import { getLocalizedString } from '../../lib/localization.js';
 
 const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
-  if (typeof payload !== 'string') return payload;
+  const normalized = normalizeQuestionPayloadCandidate(payload);
 
-  const parseJson = (value: string): unknown => {
-    try {
-      return JSON.parse(value);
-    } catch {
-      throw new BadRequestError(`Invalid payload JSON in ${context}`);
-    }
-  };
-
-  const first = parseJson(payload);
-  const normalized = typeof first === 'string' ? parseJson(first) : first;
-
+  if (typeof normalized === 'string') {
+    throw new BadRequestError(`Invalid payload JSON in ${context}`);
+  }
   if (typeof normalized !== 'object' || normalized === null || Array.isArray(normalized)) {
     throw new BadRequestError(`Payload must be a JSON object in ${context}`);
   }

@@ -18,6 +18,7 @@ export type WinnerDecisionMethod = (typeof VALID_WINNER_DECISION_METHODS)[number
 export interface RecentMatchSummary {
   matchId: string;
   mode: 'friendly' | 'ranked';
+  competition: 'friendly' | 'placement' | 'ranked';
   status: 'completed' | 'abandoned';
   result: 'win' | 'loss' | 'draw';
   endedAt: string | null;
@@ -28,6 +29,7 @@ export interface RecentMatchSummary {
   opponentGoals: number;
   opponentPenaltyGoals: number;
   winnerDecisionMethod: WinnerDecisionMethod | null;
+  rpDelta: number | null;
   opponent: {
     id: string | null;
     username: string;
@@ -101,10 +103,16 @@ export const statsService = {
         rawMethod && (VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)
           ? (rawMethod as WinnerDecisionMethod)
           : null;
+      const competition: RecentMatchSummary['competition'] = row.mode === 'friendly'
+        ? 'friendly'
+        : row.ranked_is_placement
+          ? 'placement'
+          : 'ranked';
 
       return {
         matchId: row.match_id,
         mode: row.mode,
+        competition,
         status: row.status,
         result,
         endedAt: row.ended_at,
@@ -115,6 +123,7 @@ export const statsService = {
         opponentGoals: row.opponent_goals,
         opponentPenaltyGoals: row.opponent_penalty_goals,
         winnerDecisionMethod,
+        rpDelta: row.mode === 'ranked' ? row.ranked_delta_rp : null,
         opponent: {
           id: row.opponent_id,
           username: row.opponent_username ?? 'Opponent',

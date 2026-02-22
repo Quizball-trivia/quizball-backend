@@ -49,6 +49,14 @@ export interface CachedQuestion {
   questionDTO: GameQuestionDTO;
 }
 
+export interface CachedChanceCardUse {
+  userId: string;
+  qIndex: number;
+  clientActionId: string;
+  eliminatedIndices: number[];
+  remainingQuantity: number;
+}
+
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -62,6 +70,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
+  chanceCardUses: Record<string, CachedChanceCardUse>;
 }
 
 export function matchCacheKey(matchId: string): string {
@@ -116,6 +125,10 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
           return acc;
         }, [])
         : [],
+      firstHalfShownCategoryIds: Array.isArray(candidate.halftime?.firstHalfShownCategoryIds)
+        ? candidate.halftime.firstHalfShownCategoryIds.filter((categoryId): categoryId is string => typeof categoryId === 'string')
+        : [],
+      firstBanSeat: asSeat(candidate.halftime?.firstBanSeat),
       bans: {
         seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
         seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
@@ -221,6 +234,7 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
+    chanceCardUses: {},
   };
 }
 
@@ -232,7 +246,17 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
   if (!raw) return null;
 
   try {
-    return JSON.parse(raw) as MatchCache;
+    const parsed = JSON.parse(raw) as Partial<MatchCache>;
+    const chanceCardUses =
+      parsed.chanceCardUses &&
+      typeof parsed.chanceCardUses === 'object' &&
+      !Array.isArray(parsed.chanceCardUses)
+        ? parsed.chanceCardUses
+        : {};
+    return {
+      ...(parsed as MatchCache),
+      chanceCardUses,
+    };
   } catch (error) {
     logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');
     await redis.del(matchCacheKey(matchId));

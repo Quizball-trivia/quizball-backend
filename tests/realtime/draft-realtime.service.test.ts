@@ -8,6 +8,10 @@ const insertLobbyCategoryBanMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
+const getUserByIdMock = vi.fn();
+const redisGetMock = vi.fn();
+const redisSetMock = vi.fn();
+let redisClientMock: { get: typeof redisGetMock; set: typeof redisSetMock } | null = null;
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
@@ -39,11 +43,17 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
-  getRedisClient: () => null,
+  getRedisClient: () => redisClientMock,
 }));
 
 vi.mock('../../src/realtime/ai-ranked.constants.js', () => ({
   rankedAiLobbyKey: (lobbyId: string) => `ranked:ai:lobby:${lobbyId}`,
+}));
+
+vi.mock('../../src/modules/users/users.repo.js', () => ({
+  usersRepo: {
+    getById: (...args: unknown[]) => getUserByIdMock(...args),
+  },
 }));
 
 function createIoMock() {
@@ -65,6 +75,9 @@ function createSocketMock(userId: string, lobbyId: string): QuizballSocket {
 describe('draftRealtimeService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    redisClientMock = null;
+    redisGetMock.mockResolvedValue(null);
+    redisSetMock.mockResolvedValue('OK');
 
     const bans: Array<{ user_id: string; category_id: string }> = [];
 
@@ -90,6 +103,11 @@ describe('draftRealtimeService', () => {
     insertLobbyCategoryBanMock.mockImplementation(async (_lobbyId: string, userId: string, categoryId: string) => {
       bans.push({ user_id: userId, category_id: categoryId });
     });
+
+    getUserByIdMock.mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: userId.startsWith('ai-'),
+    }));
 
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
     beginMatchForLobbyMock.mockResolvedValue(undefined);
@@ -126,5 +144,75 @@ describe('draftRealtimeService', () => {
       categoryBId: null,
     });
     expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+  });
+
+  it('auto-bans for ranked AI even when redis AI key is missing', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { io } = createIoMock();
+
+      getLobbyByIdMock.mockResolvedValue({
+        id: 'l1',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'u1',
+      });
+      listMembersWithUserMock.mockResolvedValue([
+        { user_id: 'u1' },
+        { user_id: 'ai-1' },
+      ]);
+
+      await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+      await vi.advanceTimersByTimeAsync(800);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+      expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+    } finally {
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('enforces human first ban in ranked-vs-AI even when AI is host', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { io } = createIoMock();
+      const aiSocket = createSocketMock('ai-1', 'l1');
+      const userSocket = createSocketMock('u1', 'l1');
+
+      getLobbyByIdMock.mockResolvedValue({
+        id: 'l1',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'ai-1',
+      });
+      listMembersWithUserMock.mockResolvedValue([
+        { user_id: 'u1' },
+        { user_id: 'ai-1' },
+      ]);
+
+      await draftRealtimeService.handleBan(io, aiSocket, 'cat-a');
+      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+      expect(aiSocket.emit).toHaveBeenCalledWith('error', {
+        code: 'NOT_YOUR_TURN',
+        message: 'It is not your turn to ban',
+      });
+
+      await draftRealtimeService.handleBan(io, userSocket, 'cat-a');
+      await vi.advanceTimersByTimeAsync(800);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

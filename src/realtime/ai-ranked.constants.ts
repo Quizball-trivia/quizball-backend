@@ -22,7 +22,7 @@
  *   await preGenerateAiAvatars(96, false); // just cache URLs
  */
 
-export const RANKED_AI_CORRECTNESS = 0.65;
+export const RANKED_AI_CORRECTNESS = 0.45;
 
 const AI_NAME_PREFIXES = [
   'cr',

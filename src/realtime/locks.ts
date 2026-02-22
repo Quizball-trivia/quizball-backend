@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getRedisClient } from './redis.js';
+import { config } from '../core/config.js';
 
 // Store tokens for local locks: key -> { token, timeout }
 const localLocks = new Map<string, { token: string; timeout: NodeJS.Timeout }>();
@@ -54,6 +55,15 @@ export async function releaseLock(key: string, token: string): Promise<boolean> 
   const client = getRedisClient();
 
   if (client && client.isOpen) {
+    if (typeof client.eval !== 'function') {
+      // Test/mocked Redis clients may not implement eval; keep a safe fallback.
+      const currentToken = await client.get(key);
+      if (currentToken !== token) {
+        return false;
+      }
+      await client.del(key);
+      return true;
+    }
     // Atomic compare-and-delete using Lua script
     const result = await client.eval(RELEASE_LOCK_SCRIPT, {
       keys: [key],

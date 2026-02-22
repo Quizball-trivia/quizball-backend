@@ -13,17 +13,30 @@ import type {
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 // Reusable SQL fragment for validating question payload structure
+const NORMALIZED_PAYLOAD_SQL = `
+  (
+    CASE
+      WHEN jsonb_typeof(qp.payload) = 'object' THEN qp.payload
+      WHEN jsonb_typeof(qp.payload) = 'string'
+        AND (qp.payload #>> '{}') ~ '^\\s*\\{.*\\}\\s*$'
+      THEN (qp.payload #>> '{}')::jsonb
+      ELSE '{}'::jsonb
+    END
+  )
+`;
+
+const NORMALIZED_OPTIONS_SQL = `(${NORMALIZED_PAYLOAD_SQL}->'options')`;
+
 const VALID_PAYLOAD_CONDITIONS = `
-  AND qp.payload ? 'options'
-  AND jsonb_typeof(qp.payload->'options') = 'array'
-  AND jsonb_array_length(qp.payload->'options') = 4
+  AND (${NORMALIZED_PAYLOAD_SQL}) ? 'options'
+  AND jsonb_typeof(${NORMALIZED_OPTIONS_SQL}) = 'array'
+  AND jsonb_array_length(${NORMALIZED_OPTIONS_SQL}) = 4
   AND NOT EXISTS (
     SELECT 1
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
     WHERE jsonb_typeof(opt) <> 'object'
        OR NOT (opt ? 'id')
        OR jsonb_typeof(opt->'id') <> 'string'
-       OR (opt->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
        OR NOT (opt ? 'text')
        OR jsonb_typeof(opt->'text') <> 'object'
        OR NOT (opt ? 'is_correct')
@@ -31,12 +44,12 @@ const VALID_PAYLOAD_CONDITIONS = `
   )
   AND (
     SELECT COUNT(*)
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
     WHERE opt->>'is_correct' = 'true'
   ) = 1
   AND (
     SELECT COUNT(DISTINCT opt->>'id')
-    FROM jsonb_array_elements(qp.payload->'options') opt
+    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
   ) = 4
 `;
 
@@ -48,19 +61,21 @@ export interface CreateMatchData {
   totalQuestions: number;
   statePayload?: unknown;
   rankedContext?: RankedLobbyContext | null;
+  isDev?: boolean;
 }
 
 export const matchesRepo = {
   async createMatch(data: CreateMatchData): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
-        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, started_at
+        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
       )
       VALUES (
         gen_random_uuid(), ${data.lobbyId}, ${data.mode}, 'active',
         ${data.categoryAId}, ${data.categoryBId}, 0, ${data.totalQuestions},
         ${sql.json(data.statePayload as Json ?? null)},
         ${sql.json((data.rankedContext ?? null) as Json)},
+        ${data.isDev ?? false},
         NOW()
       )
       RETURNING *
@@ -497,12 +512,12 @@ export const matchesRepo = {
 
   async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
     await sql.begin(async (tx) => {
-      const completedRows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at'>[]>(
+      const completedRows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
         `
         UPDATE matches
         SET status = 'completed', winner_user_id = $2, ended_at = NOW()
         WHERE id = $1 AND status = 'active'
-        RETURNING id, mode, ended_at
+        RETURNING id, mode, ended_at, is_dev
         `,
         [matchId, winnerId]
       );
@@ -510,6 +525,11 @@ export const matchesRepo = {
 
       // Idempotency guard: if already completed/abandoned, skip aggregate updates.
       if (!completedMatch) {
+        return;
+      }
+
+      // Dev matches don't affect user stats
+      if (completedMatch.is_dev) {
         return;
       }
 
@@ -632,6 +652,53 @@ export const matchesRepo = {
       LIMIT 1
     `;
     return row ?? null;
+  },
+
+  /**
+   * Delete old dev matches, keeping only the most recent `keep` completed ones.
+   * Cascades to match_players, match_questions, match_answers via FK.
+   * Also cleans up orphaned AI users that were created for dev matches.
+   */
+  async cleanupOldDevMatches(keep: number): Promise<number> {
+    const deleted = await sql<{ id: string }[]>`
+      WITH matches_to_delete AS (
+        SELECT id
+        FROM matches
+        WHERE is_dev = true AND status IN ('completed', 'abandoned')
+        ORDER BY started_at DESC
+        OFFSET ${keep}
+      ),
+      orphaned_ai_users AS (
+        SELECT DISTINCT mp.user_id
+        FROM match_players mp
+        JOIN users u ON u.id = mp.user_id
+        WHERE mp.match_id IN (SELECT id FROM matches_to_delete)
+          AND u.is_ai = true
+          AND NOT EXISTS (
+            SELECT 1 FROM match_players mp2
+            WHERE mp2.user_id = mp.user_id
+              AND mp2.match_id NOT IN (SELECT id FROM matches_to_delete)
+          )
+      ),
+      del_answers AS (
+        DELETE FROM match_answers WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_questions AS (
+        DELETE FROM match_questions WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_players AS (
+        DELETE FROM match_players WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_matches AS (
+        DELETE FROM matches WHERE id IN (SELECT id FROM matches_to_delete)
+        RETURNING id
+      ),
+      del_ai_users AS (
+        DELETE FROM users WHERE id IN (SELECT user_id FROM orphaned_ai_users)
+      )
+      SELECT id FROM del_matches
+    `;
+    return deleted.length;
   },
 
   async abandonMatch(matchId: string): Promise<boolean> {

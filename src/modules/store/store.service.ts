@@ -278,7 +278,6 @@ export const storeService = {
         metadata: {
           productSlug: product.slug,
           productType: product.type,
-          metadata,
         } as unknown as Json,
       });
 

@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { getRedisClient } from './redis.js';
-import { config } from '../core/config.js';
 
 // Store tokens for local locks: key -> { token, timeout }
 const localLocks = new Map<string, { token: string; timeout: NodeJS.Timeout }>();

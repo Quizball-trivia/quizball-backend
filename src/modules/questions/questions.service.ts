@@ -22,6 +22,7 @@ import type {
 import { normalizeQuestionPayloadCandidate, toQuestionResponse } from './questions.schemas.js';
 import { createHash } from 'crypto';
 import { getLocalizedString } from '../../lib/localization.js';
+import { logAudit } from '../activity/audit.js';
 
 const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
@@ -73,10 +74,10 @@ export const questionsService = {
    * Uses transaction to ensure atomicity.
    * Validates category existence.
    */
-  async create(data: CreateQuestionData & { payload?: Json }): Promise<QuestionWithPayload> {
+  async create(data: CreateQuestionData & { payload?: Json; createdBy?: string }): Promise<QuestionWithPayload> {
     // Validate category exists
-    const categoryExists = await categoriesRepo.exists(data.categoryId);
-    if (!categoryExists) {
+    const category = await categoriesRepo.getById(data.categoryId);
+    if (!category) {
       throw new BadRequestError('Category not found');
     }
 
@@ -90,6 +91,22 @@ export const questionsService = {
       'Created new question'
     );
 
+    if (data.createdBy) {
+      logAudit({
+        userId: data.createdBy,
+        action: 'create',
+        entityType: 'question',
+        entityId: question.id,
+        metadata: {
+          category_name: getLocalizedString(category.name),
+          type: data.type,
+          difficulty: data.difficulty,
+          status: data.status ?? 'draft',
+          title: getLocalizedString(question.prompt),
+        },
+      });
+    }
+
     return question;
   },
 
@@ -99,7 +116,8 @@ export const questionsService = {
    */
   async update(
     id: string,
-    data: UpdateQuestionData & { payload?: Json }
+    data: UpdateQuestionData & { payload?: Json },
+    userId?: string
   ): Promise<QuestionWithPayload> {
     // Check question exists
     const existing = await questionsRepo.getById(id);
@@ -161,15 +179,37 @@ export const questionsService = {
 
     logger.debug({ questionId: id }, 'Updated question');
 
+    if (userId) {
+      const changedFields: string[] = [];
+      if (data.categoryId && data.categoryId !== existing.category_id) changedFields.push('category');
+      if (data.type && data.type !== existing.type) changedFields.push('type');
+      if (data.difficulty && data.difficulty !== existing.difficulty) changedFields.push('difficulty');
+      if (data.status && data.status !== existing.status) changedFields.push('status');
+      if (data.prompt) changedFields.push('prompt');
+      if (data.explanation) changedFields.push('explanation');
+      if (data.payload !== undefined) changedFields.push('payload');
+
+      logAudit({
+        userId,
+        action: 'update',
+        entityType: 'question',
+        entityId: id,
+        metadata: {
+          changed_fields: changedFields,
+          title: getLocalizedString(updatedQuestion.prompt),
+        },
+      });
+    }
+
     return updatedQuestion;
   },
 
   /**
    * Update question status only.
    */
-  async updateStatus(id: string, status: Status): Promise<QuestionWithPayload> {
-    // Check question exists
-    const existing = await questionsRepo.exists(id);
+  async updateStatus(id: string, status: Status, userId?: string): Promise<QuestionWithPayload> {
+    // Check question exists + get old status for audit
+    const existing = await questionsRepo.getById(id);
     if (!existing) {
       throw new NotFoundError('Question not found');
     }
@@ -185,6 +225,20 @@ export const questionsService = {
       throw new NotFoundError('Question not found after status update');
     }
 
+    if (userId) {
+      logAudit({
+        userId,
+        action: 'status_change',
+        entityType: 'question',
+        entityId: id,
+        metadata: {
+          old_status: existing.status,
+          new_status: status,
+          title: getLocalizedString(updated.prompt),
+        },
+      });
+    }
+
     return updated;
   },
 
@@ -192,16 +246,32 @@ export const questionsService = {
    * Delete a question.
    * Payload will be deleted via CASCADE.
    */
-  async delete(id: string): Promise<void> {
-    // Check question exists
-    const existing = await questionsRepo.exists(id);
+  async delete(id: string, userId?: string): Promise<void> {
+    // Fetch question details for audit before deleting
+    const existing = await questionsRepo.getById(id);
     if (!existing) {
       throw new NotFoundError('Question not found');
     }
 
+    // Look up category name for audit before deleting
+    const category = await categoriesRepo.getById(existing.category_id);
+
     await questionsRepo.delete(id);
 
     logger.info({ questionId: id }, 'Deleted question');
+
+    if (userId) {
+      logAudit({
+        userId,
+        action: 'delete',
+        entityType: 'question',
+        entityId: id,
+        metadata: {
+          title: getLocalizedString(existing.prompt),
+          category_name: category ? getLocalizedString(category.name) : null,
+        },
+      });
+    }
   },
 
   /**
@@ -218,11 +288,12 @@ export const questionsService = {
    */
   async bulkCreate(
     categoryId: string,
-    questions: Omit<CreateQuestionRequest, 'category_id'>[]
+    questions: Omit<CreateQuestionRequest, 'category_id'>[],
+    createdBy?: string
   ): Promise<BulkCreateResponse> {
     // Validate category exists once
-    const categoryExists = await categoriesRepo.exists(categoryId);
-    if (!categoryExists) {
+    const category = await categoriesRepo.getById(categoryId);
+    if (!category) {
       throw new BadRequestError('Category not found');
     }
 
@@ -248,6 +319,7 @@ export const questionsService = {
           status: questions[i].status || 'draft',
           prompt: questions[i].prompt,
           explanation: questions[i].explanation,
+          createdBy,
         };
 
         const question = await questionsRepo.createWithPayload(
@@ -294,6 +366,20 @@ export const questionsService = {
       },
       'Bulk question upload completed'
     );
+
+    if (createdBy) {
+      logAudit({
+        userId: createdBy,
+        action: 'bulk_create',
+        entityType: 'question',
+        metadata: {
+          category_name: getLocalizedString(category.name),
+          count: results.total,
+          successful: results.successful,
+          failed: results.failed,
+        },
+      });
+    }
 
     // Fire-and-forget: auto-translate newly created questions to Georgian
     if (results.successful > 0) {

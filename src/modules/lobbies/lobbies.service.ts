@@ -54,6 +54,7 @@ export const lobbiesService = {
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 
@@ -68,6 +69,7 @@ export const lobbiesService = {
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 
@@ -77,6 +79,7 @@ export const lobbiesService = {
       id: row.category_id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 

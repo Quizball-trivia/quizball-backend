@@ -11,6 +11,7 @@ export interface CreateCategoryData {
   icon?: string | null;
   imageUrl?: string | null;
   isActive?: boolean;
+  createdBy?: string;
 }
 
 export interface UpdateCategoryData {
@@ -97,7 +98,7 @@ export const categoriesRepo = {
 
   async create(data: CreateCategoryData): Promise<Category> {
     const [category] = await sql<Category[]>`
-      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, is_active)
+      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, is_active, created_by)
       VALUES (
         ${data.slug},
         ${data.parentId ?? null},
@@ -105,7 +106,8 @@ export const categoriesRepo = {
         ${data.description ? sql.json(data.description as unknown as Json) : null},
         ${data.icon ?? null},
         ${data.imageUrl ?? null},
-        ${data.isActive ?? true}
+        ${data.isActive ?? true},
+        ${data.createdBy ?? null}
       )
       RETURNING *
     `;

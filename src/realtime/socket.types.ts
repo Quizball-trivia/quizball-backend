@@ -59,6 +59,7 @@ export interface DraftCategory {
   id: string;
   name: string;
   icon: string | null;
+  imageUrl: string | null;
 }
 
 export interface DraftState {

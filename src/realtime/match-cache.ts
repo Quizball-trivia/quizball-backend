@@ -114,13 +114,20 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
-        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null }>>((acc, category) => {
+        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null; imageUrl: string | null }>>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
           if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
             name: category.name,
             icon: typeof category.icon === 'string' ? category.icon : null,
+            imageUrl:
+              typeof category.imageUrl === 'string'
+                ? category.imageUrl
+                : typeof legacyImageUrl === 'string'
+                  ? legacyImageUrl
+                  : null,
           });
           return acc;
         }, [])

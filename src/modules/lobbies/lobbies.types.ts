@@ -64,4 +64,5 @@ export interface LobbyCategoryWithDetails {
   slot: number;
   name: Record<string, string>;
   icon: string | null;
+  image_url: string | null;
 }

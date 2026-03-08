@@ -19,6 +19,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
     createWithPayload: vi.fn(),
     createPayload: vi.fn(),
     update: vi.fn(),
+    updateWithPayload: vi.fn(),
     updatePayload: vi.fn(),
     updateStatus: vi.fn(),
     delete: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
 // Mock the categories repo for validation
 vi.mock('../../src/modules/categories/categories.repo.js', () => ({
   categoriesRepo: {
+    getById: vi.fn(),
     exists: vi.fn(),
     listByIds: vi.fn(),
   },
@@ -77,6 +79,11 @@ const mockQuestion = {
   payload: mockMcqPayload,
   created_at: '2024-01-01T00:00:00.000Z',
   updated_at: '2024-01-01T00:00:00.000Z',
+};
+
+const mockCategory = {
+  id: mockQuestion.category_id,
+  name: { en: 'General Knowledge' },
 };
 
 describe('Questions API', () => {
@@ -265,7 +272,7 @@ describe('Questions API', () => {
 
   describe('POST /api/v1/questions', () => {
     it('should create question with payload', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
       (questionsRepo.createWithPayload as Mock).mockResolvedValue(mockQuestion);
 
       const response = await request(app)
@@ -283,7 +290,7 @@ describe('Questions API', () => {
     });
 
     it('should return 400 for invalid category_id', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(false);
+      (categoriesRepo.getById as Mock).mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/v1/questions')
@@ -330,7 +337,7 @@ describe('Questions API', () => {
     });
 
     it('should default status to draft', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
       (questionsRepo.createWithPayload as Mock).mockResolvedValue({
         ...mockQuestion,
         status: 'draft',
@@ -400,8 +407,9 @@ describe('Questions API', () => {
 
   describe('DELETE /api/v1/questions/:id', () => {
     it('should delete question and cascade payload', async () => {
-      (questionsRepo.exists as Mock).mockResolvedValue(true);
-      (questionsRepo.delete as Mock).mockResolvedValue(true);
+      (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (questionsRepo.delete as Mock).mockResolvedValue(undefined);
 
       const response = await request(app).delete(
         `/api/v1/questions/${mockQuestion.id}`
@@ -411,7 +419,7 @@ describe('Questions API', () => {
     });
 
     it('should return 404 for non-existent question', async () => {
-      (questionsRepo.exists as Mock).mockResolvedValue(false);
+      (questionsRepo.getById as Mock).mockResolvedValue(null);
 
       const response = await request(app).delete(
         '/api/v1/questions/123e4567-e89b-12d3-a456-426614174999'
@@ -424,15 +432,13 @@ describe('Questions API', () => {
 
   describe('PATCH /api/v1/questions/:id/status', () => {
     it('should update only status field', async () => {
-      (questionsRepo.exists as Mock).mockResolvedValue(true);
-      (questionsRepo.updateStatus as Mock).mockResolvedValue({
-        ...mockQuestion,
-        status: 'published',
-      });
-      (questionsRepo.getById as Mock).mockResolvedValue({
-        ...mockQuestion,
-        status: 'published',
-      });
+      (questionsRepo.getById as Mock)
+        .mockResolvedValueOnce(mockQuestion)
+        .mockResolvedValueOnce({
+          ...mockQuestion,
+          status: 'published',
+        });
+      (questionsRepo.updateStatus as Mock).mockResolvedValue(undefined);
 
       const response = await request(app)
         .patch(`/api/v1/questions/${mockQuestion.id}/status`)
@@ -456,7 +462,7 @@ describe('Questions API', () => {
     });
 
     it('should return 404 for non-existent question', async () => {
-      (questionsRepo.exists as Mock).mockResolvedValue(false);
+      (questionsRepo.getById as Mock).mockResolvedValue(null);
 
       const response = await request(app)
         .patch('/api/v1/questions/123e4567-e89b-12d3-a456-426614174999/status')
@@ -484,7 +490,7 @@ describe('Questions API', () => {
     ];
 
     it('should create multiple questions successfully', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
       (questionsRepo.createWithPayload as Mock)
         .mockResolvedValueOnce({
           ...mockQuestion,
@@ -511,7 +517,7 @@ describe('Questions API', () => {
     });
 
     it('should handle partial failures', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
       (questionsRepo.createWithPayload as Mock)
         .mockResolvedValueOnce({
           ...mockQuestion,
@@ -537,7 +543,7 @@ describe('Questions API', () => {
     });
 
     it('should handle complete failure', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
       (questionsRepo.createWithPayload as Mock)
         .mockRejectedValueOnce(new Error('Database error'))
         .mockRejectedValueOnce(new Error('Database error'));
@@ -557,7 +563,7 @@ describe('Questions API', () => {
     });
 
     it('should return 400 for invalid category', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(false);
+      (categoriesRepo.getById as Mock).mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/v1/questions/bulk')
@@ -597,7 +603,7 @@ describe('Questions API', () => {
     });
 
     it('should validate payload matches type', async () => {
-      (categoriesRepo.exists as Mock).mockResolvedValue(true);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
 
       const response = await request(app)
         .post('/api/v1/questions/bulk')

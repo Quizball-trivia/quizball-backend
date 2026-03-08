@@ -42,9 +42,12 @@ RETURNS void AS $$
 $$ LANGUAGE sql;
 
 -- Unschedule existing job if any (idempotent)
-SELECT cron.unschedule('simulate-leaderboard-movement') WHERE EXISTS (
-  SELECT 1 FROM cron.job WHERE jobname = 'simulate-leaderboard-movement'
-);
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'simulate-leaderboard-movement') THEN
+    PERFORM cron.unschedule('simulate-leaderboard-movement');
+  END IF;
+END $$;
 
 -- Run every 4 hours
 SELECT cron.schedule(

@@ -3,6 +3,14 @@ import { rankedService } from './ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
 import type { RankedProfileResponse } from './ranked.schemas.js';
 
+function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
+  if (total === 0) return { trend: 'same', trendValue: 0 };
+  const losses = total - wins;
+  if (wins > losses) return { trend: 'up', trendValue: wins };
+  if (losses > wins) return { trend: 'down', trendValue: losses };
+  return { trend: 'same', trendValue: 0 };
+}
+
 export const rankedController = {
   async getProfile(req: Request, res: Response): Promise<void> {
     const profile = await rankedService.ensureProfile(req.user!.id);
@@ -32,11 +40,14 @@ export const rankedController = {
 
     const entries = await rankedService.getLeaderboard(limit, offset, country);
 
-    // Add rank numbers based on offset
-    const ranked = entries.map((entry, i) => ({
-      ...entry,
-      rank: offset + i + 1,
-    }));
+    const ranked = entries.map((entry, i) => {
+      const { trendWins, trendTotal, ...rest } = entry;
+      return {
+        ...rest,
+        rank: offset + i + 1,
+        ...computeTrend(trendWins, trendTotal),
+      };
+    });
 
     res.json({ entries: ranked });
   },
@@ -67,10 +78,12 @@ export const rankedController = {
       userId,
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
+      country: user?.country ?? null,
       rp: profile.rp,
       tier: profile.tier,
       rank: rankInfo.rank,
       total: rankInfo.total,
+      ...computeTrend(rankInfo.trendWins, rankInfo.trendTotal),
     });
   },
 };

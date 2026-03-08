@@ -70,6 +70,7 @@ const buildMatchQuestionPayloadMock = vi.fn();
 const consumeChanceCardForMatchMock = vi.fn();
 const ensureProfileMock = vi.fn();
 const settleCompletedRankedMatchMock = vi.fn();
+const listUnlockedForMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -154,6 +155,12 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
     isPlacementRequired: vi.fn(() => false),
     buildPlacementAiContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
     DEFAULT_AI_OPPONENT_RP: 1900,
+  },
+}));
+
+vi.mock('../../src/modules/achievements/index.js', () => ({
+  achievementsService: {
+    listUnlockedForMatch: (...args: unknown[]) => listUnlockedForMatchMock(...args),
   },
 }));
 
@@ -355,6 +362,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       current_win_streak: 0,
     }));
     settleCompletedRankedMatchMock.mockResolvedValue(null);
+    listUnlockedForMatchMock.mockResolvedValue({});
   });
 
   it('S15: match:leave uses pause/grace flow and emits rejoin_available', async () => {

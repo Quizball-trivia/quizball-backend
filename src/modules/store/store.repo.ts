@@ -8,6 +8,7 @@ import type {
   StoreTxOutcome,
   UserInventoryWithProductRow,
   WalletRow,
+  WalletStateRow,
 } from './store.types.js';
 import type { ListStoreTransactionsQuery } from './store.schemas.js';
 
@@ -224,13 +225,27 @@ export const storeRepo = {
     return row ?? null;
   },
 
-  async getWallet(userId: string): Promise<WalletRow | null> {
-    const [row] = await sql<WalletRow[]>`
-      SELECT coins, tickets
+  async getWallet(userId: string): Promise<WalletStateRow | null> {
+    const [row] = await sql<WalletStateRow[]>`
+      SELECT coins, tickets, tickets_refill_started_at
       FROM users
       WHERE id = ${userId}
       LIMIT 1
     `;
+    return row ?? null;
+  },
+
+  async getWalletForUpdateInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
+    const [row] = await tx.unsafe<WalletStateRow[]>(
+      `
+      SELECT coins, tickets, tickets_refill_started_at
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [userId]
+    );
     return row ?? null;
   },
 
@@ -263,6 +278,52 @@ export const storeRepo = {
 
   async addTicketsInTx(tx: TransactionSql, userId: string, amount: number): Promise<WalletRow | null> {
     return this.adjustWalletInTx(tx, userId, 0, amount);
+  },
+
+  async setTicketsStateInTx(
+    tx: TransactionSql,
+    userId: string,
+    tickets: number,
+    ticketsRefillStartedAt: string | null
+  ): Promise<WalletStateRow | null> {
+    const [row] = await tx.unsafe<WalletStateRow[]>(
+      `
+      UPDATE users
+      SET
+        tickets = $1,
+        tickets_refill_started_at = $2,
+        updated_at = NOW()
+      WHERE id = $3
+      RETURNING coins, tickets, tickets_refill_started_at
+      `,
+      [tickets, ticketsRefillStartedAt, userId]
+    );
+    return row ?? null;
+  },
+
+  async setWalletStateInTx(
+    tx: TransactionSql,
+    userId: string,
+    wallet: {
+      coins: number;
+      tickets: number;
+      ticketsRefillStartedAt: string | null;
+    }
+  ): Promise<WalletStateRow | null> {
+    const [row] = await tx.unsafe<WalletStateRow[]>(
+      `
+      UPDATE users
+      SET
+        coins = $1,
+        tickets = $2,
+        tickets_refill_started_at = $3,
+        updated_at = NOW()
+      WHERE id = $4
+      RETURNING coins, tickets, tickets_refill_started_at
+      `,
+      [wallet.coins, wallet.tickets, wallet.ticketsRefillStartedAt, userId]
+    );
+    return row ?? null;
   },
 
   async upsertInventoryInTx(

@@ -99,6 +99,10 @@ class FakeRedis {
     return sorted.slice(offset, offset + count);
   }
 
+  async zCard(key: string): Promise<number> {
+    return this.zsets.get(key)?.size ?? 0;
+  }
+
   multi(): {
     hSet: (
       key: string,
@@ -242,6 +246,16 @@ class FakeRedis {
       this.zsets.get(timeoutKey)?.delete(searchId);
       await this.hDel(userMapKey, userId);
       return [searchId];
+    }
+
+    if (data.keys.length === 1 && data.arguments.length === 1) {
+      const key = data.keys[0];
+      const token = data.arguments[0];
+      if (this.kv.get(key) === token) {
+        this.kv.delete(key);
+        return 1 as unknown as string[];
+      }
+      return 0 as unknown as string[];
     }
 
     return [];
@@ -445,6 +459,19 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
       id: userId,
       nickname: userId,
       avatar_url: null,
+    })),
+  },
+}));
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: {
+    ensureProfile: vi.fn(async () => ({
+      rp: 1200,
+      tier: 'Rotation',
+      placement_status: 'placed',
+      placement_required: 3,
+      placement_played: 3,
+      placement_wins: 2,
     })),
   },
 }));

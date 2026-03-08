@@ -2,6 +2,7 @@ import { trackEvent } from '../core/analytics.js';
 import { BadRequestError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
+import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { storeService } from '../modules/store/store.service.js';
@@ -927,10 +928,16 @@ async function completePossessionMatch(
     }
   }
 
+  const unlockedAchievements = await achievementsService.evaluateForMatch(
+    matchId,
+    refreshedPlayers.map((player) => player.user_id)
+  );
+
   io.to(`match:${matchId}`).emit('match:final_results', {
     matchId,
     winnerId: decision.winnerId,
     players: payloadPlayers,
+    unlockedAchievements,
     durationMs,
     resultVersion,
     winnerDecisionMethod: decision.method,

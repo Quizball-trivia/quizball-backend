@@ -1,11 +1,13 @@
 import crypto from 'crypto';
 
 import type { QuizballServer } from './socket-server.js';
+import { acquireLock, releaseLock } from './locks.js';
 import { logger } from '../core/logger.js';
 import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 
 export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
+const LOBBY_LOCK_TTL_MS = 3000;
 
 const LOBBY_NAME_ADJECTIVES = [
   'Golden',
@@ -57,7 +59,7 @@ export function normalizeFriendlyGameMode(
   return 'friendly_possession';
 }
 
-export async function syncFriendlyLobbyModeForMemberCount(
+async function syncFriendlyLobbyModeForMemberCountInternal(
   lobbyId: string,
   options?: { clearReadyOnPartyTransition?: boolean }
 ): Promise<void> {
@@ -87,6 +89,31 @@ export async function syncFriendlyLobbyModeForMemberCount(
   if (shouldClearReady) {
     await lobbiesRepo.setAllReady(lobbyId, false);
   }
+}
+
+export async function syncFriendlyLobbyModeForMemberCount(
+  lobbyId: string,
+  options?: { clearReadyOnPartyTransition?: boolean }
+): Promise<void> {
+  const lockKey = `lock:lobby:${lobbyId}`;
+  const lock = await acquireLock(lockKey, LOBBY_LOCK_TTL_MS);
+  if (!lock.acquired || !lock.token) {
+    logger.warn({ lobbyId }, 'Friendly lobby mode sync skipped: lobby lock not acquired');
+    return;
+  }
+
+  try {
+    await syncFriendlyLobbyModeForMemberCountInternal(lobbyId, options);
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
+}
+
+export async function syncFriendlyLobbyModeForMemberCountLocked(
+  lobbyId: string,
+  options?: { clearReadyOnPartyTransition?: boolean }
+): Promise<void> {
+  await syncFriendlyLobbyModeForMemberCountInternal(lobbyId, options);
 }
 
 export async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {

@@ -212,6 +212,17 @@ export interface MatchStandingPayload {
   avgTimeMs: number | null;
 }
 
+export interface AchievementUnlockPayload {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlocked: boolean;
+  progress: number;
+  target: number;
+  unlockedAt: string | null;
+}
+
 export interface RankedUserOutcomePayload {
   userId: string;
   oldRp: number;
@@ -235,6 +246,7 @@ export interface MatchFinalResultsPayload {
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   standings?: MatchStandingPayload[];
+  unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;

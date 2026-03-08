@@ -12,16 +12,19 @@ describe('possession timer fix', () => {
 
   it('applies reveal offset for mid-speed answers', () => {
     const effective = effectiveAnswerTimeMs(5000);
-    expect(calculatePoints(true, effective, 10000)).toBe(70);
+    expect(effective).toBe(2000);
+    expect(calculatePoints(true, effective, 10000)).toBe(80);
   });
 
   it('times out at zero points after reveal offset', () => {
     const effective = effectiveAnswerTimeMs(12000);
-    expect(calculatePoints(true, effective, 10000)).toBe(0);
+    expect(effective).toBe(9000);
+    expect(calculatePoints(true, effective, 10000)).toBe(10);
   });
 
   it('applies the same offset model to AI delays', () => {
     const effective = effectiveAnswerTimeMs(3000);
-    expect(calculatePoints(true, effective, 10000)).toBe(90);
+    expect(effective).toBe(0);
+    expect(calculatePoints(true, effective, 10000)).toBe(100);
   });
 });

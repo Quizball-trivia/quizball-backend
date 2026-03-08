@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { ExternalServiceError } from '../../src/core/errors.js';
+import { AppError, ExternalServiceError } from '../../src/core/errors.js';
 import { config } from '../../src/core/config.js';
 import '../setup.js';
 
@@ -17,9 +17,12 @@ vi.mock('../../src/modules/store/store.repo.js', () => ({
     getPurchaseByStripeCheckoutIdInTx: vi.fn(),
     markPurchaseCompletedInTx: vi.fn(),
     getWallet: vi.fn(),
+    getWalletForUpdateInTx: vi.fn(),
     adjustWalletInTx: vi.fn(),
     addCoinsInTx: vi.fn(),
     addTicketsInTx: vi.fn(),
+    setTicketsStateInTx: vi.fn(),
+    setWalletStateInTx: vi.fn(),
     upsertInventoryInTx: vi.fn(),
     listInventoryWithProducts: vi.fn(),
     insertTransactionLog: vi.fn(),
@@ -121,6 +124,78 @@ describe('storeService', () => {
         outcome: 'failure',
       })
     );
+  });
+
+  it('createCheckoutSession allows ticket packs through Stripe checkout when user has space', async () => {
+    (storeRepo.getProductBySlug as Mock).mockResolvedValue({
+      id: 'prod-ticket-1',
+      slug: 'ticket_pack_3',
+      type: 'ticket_pack',
+      name: { en: '3 Arena Tickets' },
+      description: { en: 'Tickets' },
+      price_cents: 199,
+      currency: 'usd',
+      metadata: { tickets: 3 },
+      is_active: true,
+      sort_order: 1,
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    (storeRepo.getWallet as Mock).mockResolvedValue({
+      coins: 100,
+      tickets: 6,
+      tickets_refill_started_at: null,
+    });
+    (storeRepo.createPurchase as Mock).mockResolvedValue({
+      id: 'purchase-ticket-1',
+      user_id: 'user-1',
+      product_id: 'prod-ticket-1',
+    });
+    (stripe!.checkout.sessions.create as Mock).mockResolvedValue({
+      id: 'cs_test_ticket',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_ticket',
+    });
+    (storeRepo.insertTransactionLog as Mock).mockResolvedValue({ id: 'log-1' });
+
+    const result = await storeService.createCheckoutSession('user-1', 'ticket_pack_3');
+
+    expect(result.url).toContain('checkout.stripe.com');
+    expect(storeRepo.createPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        productId: 'prod-ticket-1',
+      })
+    );
+  });
+
+  it('createCheckoutSession rejects ticket packs that would overflow the ticket cap', async () => {
+    (storeRepo.getProductBySlug as Mock).mockResolvedValue({
+      id: 'prod-ticket-1',
+      slug: 'ticket_pack_3',
+      type: 'ticket_pack',
+      name: { en: '3 Arena Tickets' },
+      description: { en: 'Tickets' },
+      price_cents: 199,
+      currency: 'usd',
+      metadata: { tickets: 3 },
+      is_active: true,
+      sort_order: 1,
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    (storeRepo.getWallet as Mock).mockResolvedValue({
+      coins: 100,
+      tickets: 9,
+      tickets_refill_started_at: null,
+    });
+    (storeRepo.insertTransactionLog as Mock).mockResolvedValue({ id: 'log-1' });
+
+    await expect(
+      storeService.createCheckoutSession('user-1', 'ticket_pack_3')
+    ).rejects.toMatchObject<AppError>({
+      code: 'TICKETS_FULL',
+    });
+
+    expect(stripe!.checkout.sessions.create).not.toHaveBeenCalled();
+    expect(storeRepo.createPurchase).not.toHaveBeenCalled();
   });
 
   it('applyManualAdjustment returns existing successful idempotent result', async () => {

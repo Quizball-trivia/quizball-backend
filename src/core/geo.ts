@@ -26,17 +26,22 @@ export async function detectCountryFromRequest(req: Request): Promise<string | n
   // 2. Fallback: ip-api.com
   const ip = req.ip;
   if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+    // On localhost, try Accept-Language header as last resort (e.g. "en-US,en" → "US")
+    const acceptLang = req.headers['accept-language'];
+    if (typeof acceptLang === 'string') {
+      const match = acceptLang.match(/[a-z]{2}-([A-Z]{2})/);
+      if (match) return match[1];
+    }
     return null;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-
+    // ip-api.com free tier only supports HTTP; HTTPS requires a paid plan
     const res = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!res.ok) return null;
 
@@ -45,7 +50,9 @@ export async function detectCountryFromRequest(req: Request): Promise<string | n
       return data.countryCode.toUpperCase();
     }
   } catch (err) {
-    logger.debug({ ip, err }, 'Geo detection failed — skipping');
+    logger.debug({ err }, 'Geo detection failed — skipping');
+  } finally {
+    clearTimeout(timeout);
   }
 
   return null;

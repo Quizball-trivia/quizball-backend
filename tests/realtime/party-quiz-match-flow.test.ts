@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
+import { acquireLock } from '../../src/realtime/locks.js';
 
 const getMatchMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
@@ -16,6 +17,8 @@ const setQuestionTimingMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
+const evaluateAchievementsForMatchMock = vi.fn();
+const listUnlockedForMatchMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -33,6 +36,13 @@ vi.mock('../../src/realtime/locks.js', () => ({
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => null,
+}));
+
+vi.mock('../../src/modules/achievements/index.js', () => ({
+  achievementsService: {
+    evaluateForMatch: (...args: unknown[]) => evaluateAchievementsForMatchMock(...args),
+    listUnlockedForMatch: (...args: unknown[]) => listUnlockedForMatchMock(...args),
+  },
 }));
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
@@ -176,6 +186,34 @@ describe('party quiz realtime flow', () => {
     setQuestionTimingMock.mockResolvedValue(undefined);
     deleteMatchCacheMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
+    evaluateAchievementsForMatchMock.mockResolvedValue({
+      u1: [
+        {
+          id: 'debut_match',
+          title: 'Debut Match',
+          description: 'Complete your first match.',
+          icon: 'Trophy',
+          unlocked: true,
+          progress: 1,
+          target: 1,
+          unlockedAt: '2026-03-08T00:00:00.000Z',
+        },
+      ],
+    });
+    listUnlockedForMatchMock.mockResolvedValue({
+      u1: [
+        {
+          id: 'debut_match',
+          title: 'Debut Match',
+          description: 'Complete your first match.',
+          icon: 'Trophy',
+          unlocked: true,
+          progress: 1,
+          target: 1,
+          unlockedAt: '2026-03-08T00:00:00.000Z',
+        },
+      ],
+    });
     buildMatchQuestionPayloadMock.mockResolvedValue({
       question: {
         id: 'question-1',
@@ -288,5 +326,57 @@ describe('party quiz realtime flow', () => {
         expect.objectContaining({ userId: 'u3', rank: 3, answered: false }),
       ]),
     }));
+  });
+
+  it('preserves existing answered users when another answer is processed under the answer lock', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    const { socket } = createSocketMock('u3');
+
+    partyState = {
+      ...partyState,
+      answeredUserIds: ['u1', 'u2'],
+      stateVersionCounter: 4,
+    };
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 0,
+      selectedIndex: 2,
+      timeMs: 1500,
+    });
+
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.objectContaining({
+        answeredUserIds: ['u1', 'u2', 'u3'],
+        stateVersionCounter: 5,
+      }),
+      0
+    );
+  });
+
+  it('returns TRANSITION_IN_PROGRESS when the per-question answer lock is unavailable', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    const { socket, emitted } = createSocketMock('u1');
+
+    vi.mocked(acquireLock).mockResolvedValueOnce({ acquired: false });
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 0,
+      selectedIndex: 2,
+      timeMs: 1000,
+    });
+
+    expect(updatePlayerTotalsMock).not.toHaveBeenCalled();
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual({
+      event: 'error',
+      payload: expect.objectContaining({
+        code: 'TRANSITION_IN_PROGRESS',
+      }),
+    });
   });
 });

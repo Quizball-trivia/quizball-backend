@@ -1,5 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { achievementsService } from '../../modules/achievements/index.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
@@ -41,6 +42,7 @@ import {
   emitPartyQuizStateToSocket,
   handlePartyQuizAnswer,
 } from '../party-quiz-match-flow.js';
+import type { AchievementUnlockPayload } from '../socket.types.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MATCH_START_COUNTDOWN_SEC = 5;
@@ -358,6 +360,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     correctAnswers: number;
     avgTimeMs: number | null;
   }>;
+  unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
@@ -387,6 +390,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   const standings = buildStandings(players);
   const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
   const seat1UserId = players.find((player) => player.seat === 1)?.user_id ?? null;
   const seat2UserId = players.find((player) => player.seat === 2)?.user_id ?? null;
   const fallbackWinnerId = standings[0]?.userId ?? seat1UserId ?? seat2UserId ?? players[0]?.user_id ?? null;
@@ -457,6 +461,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     winnerId: match.winner_user_id ?? derivedWinnerId,
     players: payloadPlayers,
     ...(variant === 'friendly_party_quiz' ? { standings } : {}),
+    unlockedAchievements,
     durationMs,
     resultVersion,
     winnerDecisionMethod,

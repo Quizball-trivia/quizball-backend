@@ -379,6 +379,22 @@ export const questionsService = {
           failed: results.failed,
         },
       });
+
+      // Emit per-question create audits so the activity backfill query
+      // (NOT EXISTS on entity_id) doesn't double-count bulk-created questions
+      for (const created of results.created) {
+        logAudit({
+          userId: createdBy,
+          action: 'create',
+          entityType: 'question',
+          entityId: created.id,
+          metadata: {
+            title: created.prompt?.en || created.prompt?.ka || created.type,
+            category_name: getLocalizedString(category.name),
+            bulk_import: true,
+          },
+        });
+      }
     }
 
     // Fire-and-forget: auto-translate newly created questions to Georgian

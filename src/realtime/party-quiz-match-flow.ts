@@ -1,5 +1,6 @@
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import { logger } from '../core/logger.js';
+import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPartyQuizState,
@@ -207,12 +208,14 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   const startedAtMs = new Date(match.started_at).getTime();
   const endedAtMs = match.ended_at ? new Date(match.ended_at).getTime() : startedAtMs;
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+  const unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
 
   return {
     matchId,
     winnerId: match.winner_user_id ?? standings[0]?.userId ?? null,
     players: payloadPlayers,
     standings,
+    unlockedAchievements,
     durationMs: Math.max(0, endedAtMs - startedAtMs),
     resultVersion,
     winnerDecisionMethod: state.winnerDecisionMethod,
@@ -253,6 +256,10 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     await matchesRepo.setMatchStatePayload(matchId, state, activeMatch.total_questions);
     await matchesRepo.completeMatch(matchId, standings[0]?.userId ?? null);
     await deleteMatchCache(matchId);
+    await achievementsService.evaluateForMatch(
+      matchId,
+      players.map((player) => player.user_id)
+    );
 
     const resultVersion = Date.now();
     const payload = await buildFinalResultsPayload(matchId, resultVersion);
@@ -543,27 +550,51 @@ export async function handlePartyQuizAnswer(
     return;
   }
 
-  const updatedPlayer = await matchesRepo.updatePlayerTotals(payload.matchId, userId, pointsEarned, isCorrect);
-  state.answeredUserIds = Array.from(new Set([...state.answeredUserIds, userId]));
-  bumpStateVersion(state);
-  await matchesRepo.setMatchStatePayload(payload.matchId, state, payload.qIndex);
+  const answerLockKey = `lock:match:${payload.matchId}:party_answer:${payload.qIndex}`;
+  const answerLock = await acquireLock(answerLockKey, 3000);
+  if (!answerLock.acquired || !answerLock.token) {
+    socket.emit('error', {
+      code: 'TRANSITION_IN_PROGRESS',
+      message: 'Answer is being processed. Please retry.',
+    });
+    return;
+  }
 
-  socket.emit(
-    'match:answer_ack',
-    buildAnswerAckPayload({
-      matchId: payload.matchId,
-      qIndex: payload.qIndex,
-      selectedIndex: payload.selectedIndex,
-      isCorrect,
-      correctIndex: question.correctIndex,
-      myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
-      pointsEarned,
-    })
-  );
+  try {
+    const latestMatch = await matchesRepo.getMatch(payload.matchId);
+    if (!latestMatch || latestMatch.status !== 'active') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ACTIVE',
+        message: 'Match is no longer active',
+      });
+      return;
+    }
 
-  await emitPartyQuizState(io, payload.matchId);
+    const latestState = sanitizePartyQuizState(latestMatch.state_payload, latestMatch.total_questions);
+    const updatedPlayer = await matchesRepo.updatePlayerTotals(payload.matchId, userId, pointsEarned, isCorrect);
+    latestState.answeredUserIds = Array.from(new Set([...latestState.answeredUserIds, userId]));
+    bumpStateVersion(latestState);
+    await matchesRepo.setMatchStatePayload(payload.matchId, latestState, payload.qIndex);
 
-  if (state.answeredUserIds.length >= participants.length) {
-    await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
+    socket.emit(
+      'match:answer_ack',
+      buildAnswerAckPayload({
+        matchId: payload.matchId,
+        qIndex: payload.qIndex,
+        selectedIndex: payload.selectedIndex,
+        isCorrect,
+        correctIndex: question.correctIndex,
+        myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
+        pointsEarned,
+      })
+    );
+
+    await emitPartyQuizState(io, payload.matchId);
+
+    if (latestState.answeredUserIds.length >= participants.length) {
+      await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
+    }
+  } finally {
+    await releaseLock(answerLockKey, answerLock.token);
   }
 }

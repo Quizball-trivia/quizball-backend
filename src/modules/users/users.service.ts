@@ -5,6 +5,9 @@ import { NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
 import { getCachedUser, setCachedUser, updateCachedUser } from './user-cache.js';
+import { rankedRepo } from '../ranked/ranked.repo.js';
+import { statsService } from '../stats/stats.service.js';
+import type { PublicProfileData } from './users.schemas.js';
 
 /**
  * Users service.
@@ -131,6 +134,50 @@ export const usersService = {
 
     logger.debug({ userId: id }, 'Updated user profile');
     return user;
+  },
+
+  /**
+   * Get public profile for a target user, including ranked, stats, and H2H with the viewer.
+   */
+  async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
+    const user = await usersRepo.getById(targetUserId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    const [rankedProfile, statsSummary, headToHead, globalRank, countryRank] = await Promise.all([
+      rankedRepo.getProfile(targetUserId),
+      statsService.getUserStatsSummary(targetUserId),
+      viewerUserId !== targetUserId
+        ? statsService.getHeadToHead(viewerUserId, targetUserId)
+        : Promise.resolve(null),
+      rankedRepo.getUserRank(targetUserId),
+      user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
+    ]);
+
+    return {
+      user: {
+        id: user.id,
+        nickname: user.nickname,
+        avatar_url: user.avatar_url,
+        country: user.country,
+        favorite_club: user.favorite_club,
+      },
+      ranked: rankedProfile ? {
+        rp: rankedProfile.rp,
+        tier: rankedProfile.tier,
+        placementStatus: rankedProfile.placement_status,
+        placementPlayed: rankedProfile.placement_played,
+        placementRequired: rankedProfile.placement_required,
+        placementWins: rankedProfile.placement_wins,
+        currentWinStreak: rankedProfile.current_win_streak,
+        lastRankedMatchAt: rankedProfile.last_ranked_match_at,
+      } : null,
+      stats: statsSummary,
+      headToHead,
+      globalRank: globalRank ? { rank: globalRank.rank, total: globalRank.total } : null,
+      countryRank: countryRank ? { rank: countryRank.rank, total: countryRank.total } : null,
+    };
   },
 
   /**

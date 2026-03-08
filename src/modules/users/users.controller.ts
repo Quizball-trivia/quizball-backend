@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
-import { toUserResponse, type UpdateProfileRequest } from './users.schemas.js';
+import { achievementsService } from '../achievements/index.js';
+import { toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam } from './users.schemas.js';
 
 /**
  * Users controller.
@@ -35,6 +36,27 @@ export const usersController = {
     });
 
     res.json(toUserResponse(updatedUser));
+  },
+
+  /**
+   * GET /api/v1/users/:userId/profile
+   * Get public profile for a user.
+   */
+  async getPublicProfile(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const profile = await usersService.getPublicProfile(userId, req.user!.id);
+    res.json(toPublicProfileResponse(profile));
+  },
+
+  async getMyAchievements(req: Request, res: Response): Promise<void> {
+    const achievements = await achievementsService.listForUser(req.user!.id);
+    res.json(toAchievementsResponse(achievements));
+  },
+
+  async getUserAchievements(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const achievements = await achievementsService.listForUser(userId);
+    res.json(toAchievementsResponse(achievements));
   },
 
   /**

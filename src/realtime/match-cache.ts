@@ -90,9 +90,17 @@ function asRuntimePhaseKind(value: unknown): 'normal' | 'last_attack' | 'penalty
   return 'normal';
 }
 
-function sanitizePossessionState(raw: unknown): PossessionStatePayload {
-  const fallbackVariant =
-    raw && typeof raw === 'object' && (raw as Partial<PossessionStatePayload>).variant === 'ranked_sim'
+function sanitizePossessionState(
+  raw: unknown,
+  mode: MatchMode = 'friendly'
+): PossessionStatePayload {
+  const explicitVariant =
+    raw && typeof raw === 'object'
+      ? (raw as Partial<PossessionStatePayload>).variant
+      : undefined;
+  const fallbackVariant = explicitVariant === 'ranked_sim'
+    ? 'ranked_sim'
+    : mode === 'ranked'
       ? 'ranked_sim'
       : 'friendly_possession';
   const fallback = createInitialPossessionState(fallbackVariant);
@@ -221,7 +229,7 @@ export function buildInitialCache(params: {
   }>;
   state?: PossessionStatePayload;
 }): MatchCache {
-  const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload);
+  const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload, params.match.mode);
   const players = params.players.map((player) => ({
     userId: player.user_id,
     seat: (player.seat === 2 ? 2 : 1) as CachedSeat,
@@ -297,7 +305,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return null;
   const players = await matchesRepo.listMatchPlayers(matchId);
-  const state = sanitizePossessionState(match.state_payload);
+  const state = sanitizePossessionState(match.state_payload, match.mode);
 
   const cache = buildInitialCache({
     match,

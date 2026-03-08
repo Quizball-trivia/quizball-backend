@@ -6,6 +6,7 @@ import type {
   RankedProfileRow,
   RankedRpChangeRow,
   RankedTier,
+  RankedUserRankResult,
 } from './ranked.types.js';
 
 interface RankedProfileUpdateInput {
@@ -97,7 +98,10 @@ export const rankedRepo = {
 
   async getProfile(userId: string): Promise<RankedProfileRow | null> {
     const [row] = await sql<RankedProfileRow[]>`
-      SELECT * FROM ranked_profiles WHERE user_id = ${userId}
+      SELECT rp.*, u.country
+      FROM ranked_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE rp.user_id = ${userId}
     `;
     return row ?? null;
   },
@@ -204,9 +208,21 @@ export const rankedRepo = {
           u.avatar_url AS "avatarUrl",
           rp.rp,
           rp.tier,
-          u.country
+          u.country,
+          COALESCE(trend.wins, 0)::int AS "trendWins",
+          COALESCE(trend.total, 0)::int AS "trendTotal"
         FROM ranked_profiles rp
         JOIN users u ON u.id = rp.user_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*) FILTER (WHERE sub.result = 'win') AS wins,
+            COUNT(*) AS total
+          FROM (
+            SELECT result FROM ranked_rp_changes
+            WHERE user_id = rp.user_id AND is_placement = false
+            ORDER BY created_at DESC LIMIT 3
+          ) sub
+        ) trend ON true
         WHERE u.is_ai = false AND rp.placement_status = 'placed' AND u.country = ${country}
         ORDER BY rp.rp DESC, rp.updated_at ASC
         LIMIT ${limit}
@@ -220,9 +236,21 @@ export const rankedRepo = {
         u.avatar_url AS "avatarUrl",
         rp.rp,
         rp.tier,
-        u.country
+        u.country,
+        COALESCE(trend.wins, 0)::int AS "trendWins",
+        COALESCE(trend.total, 0)::int AS "trendTotal"
       FROM ranked_profiles rp
       JOIN users u ON u.id = rp.user_id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) FILTER (WHERE sub.result = 'win') AS wins,
+          COUNT(*) AS total
+        FROM (
+          SELECT result FROM ranked_rp_changes
+          WHERE user_id = rp.user_id AND is_placement = false
+          ORDER BY created_at DESC LIMIT 3
+        ) sub
+      ) trend ON true
       WHERE u.is_ai = false AND rp.placement_status = 'placed'
       ORDER BY rp.rp DESC, rp.updated_at ASC
       LIMIT ${limit}
@@ -230,15 +258,21 @@ export const rankedRepo = {
     `;
   },
 
-  async getUserRank(userId: string, country?: string): Promise<{ rank: number; total: number } | null> {
+  async getUserRank(userId: string, country?: string): Promise<RankedUserRankResult | null> {
     const profile = await this.getProfile(userId);
     if (!profile || profile.placement_status !== 'placed') return null;
+    if (country && profile.country !== country) return null;
 
     const countryFilter = country
       ? sql`AND u.country = ${country}`
       : sql``;
 
-    const [result] = await sql<{ rank: number; total: number }[]>`
+    const [result] = await sql<RankedUserRankResult[]>`
+      WITH recent_matches AS (
+        SELECT result FROM ranked_rp_changes
+        WHERE user_id = ${userId} AND is_placement = false
+        ORDER BY created_at DESC LIMIT 3
+      )
       SELECT
         (SELECT COUNT(*)::int + 1
          FROM ranked_profiles rp2
@@ -250,7 +284,9 @@ export const rankedRepo = {
          FROM ranked_profiles rp3
          JOIN users u ON u.id = rp3.user_id
          WHERE u.is_ai = false AND rp3.placement_status = 'placed' ${countryFilter}
-        ) AS total
+        ) AS total,
+        (SELECT COUNT(*) FILTER (WHERE result = 'win') FROM recent_matches)::int AS "trendWins",
+        (SELECT COUNT(*) FROM recent_matches)::int AS "trendTotal"
     `;
     return result ?? null;
   },

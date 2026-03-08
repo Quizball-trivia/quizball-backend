@@ -8,6 +8,7 @@ import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -25,6 +26,7 @@ import {
   generateLobbyName,
   normalizeFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCount,
+  syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -219,6 +221,67 @@ async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Promise<b
   return true;
 }
 
+async function detachAllSocketsFromLobby(io: QuizballServer, lobbyId: string): Promise<void> {
+  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+  sockets.forEach((socket) => {
+    socket.leave(`lobby:${lobbyId}`);
+    socket.data.lobbyId = undefined;
+  });
+}
+
+async function emitClosedLobbyStateForMode(
+  io: QuizballServer,
+  lobbyId: string,
+  mode: 'friendly' | 'ranked'
+): Promise<void> {
+  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
+    lobbyId,
+    mode,
+    status: 'closed',
+    inviteCode: null,
+    displayName: 'Lobby closed',
+    isPublic: false,
+    hostUserId: '',
+    settings: {
+      gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
+      friendlyRandom: true,
+      friendlyCategoryAId: null,
+      friendlyCategoryBId: null,
+    },
+    members: [],
+  });
+}
+
+async function abortRankedDraftStartForTickets(
+  io: QuizballServer,
+  lobby: { id: string; mode: 'friendly' | 'ranked' },
+  humanUserIds: string[]
+): Promise<void> {
+  await lobbiesRepo.deleteLobby(lobby.id);
+  await warmupRealtimeService.cleanupLobby(lobby.id);
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.del(rankedAiLobbyKey(lobby.id));
+  }
+  await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
+  await detachAllSocketsFromLobby(io, lobby.id);
+
+  for (const userId of humanUserIds) {
+    io.to(`user:${userId}`).emit('ranked:queue_left');
+    io.to(`user:${userId}`).emit('error', {
+      code: 'INSUFFICIENT_TICKETS',
+      message: 'A player does not have enough tickets to start ranked.',
+      meta: {
+        lobbyId: lobby.id,
+        source: 'ranked_ticket_check',
+      },
+    });
+    await userSessionGuardService.emitState(io, userId);
+  }
+
+  logger.info({ lobbyId: lobby.id, humanUserIds }, 'Ranked draft start aborted: insufficient tickets');
+}
+
 export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -231,6 +294,9 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
   }
 
   try {
+    let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
+    let rankedAiUserId: string | null = null;
+
     const categories = await lobbiesService.selectRandomCategories(3);
     if (categories.length < 3) {
       logger.warn(
@@ -244,6 +310,20 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         message: 'Not enough categories with questions to start the game',
       });
       return;
+    }
+
+    if (lobby.mode === 'ranked') {
+      rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+      rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
+      const ticketUserIds = rankedMembers
+        .filter((member) => member.user_id !== rankedAiUserId)
+        .map((member) => member.user_id);
+
+      const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
+      if (!consumedTickets) {
+        await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
+        return;
+      }
     }
 
     await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
@@ -260,8 +340,8 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
 
     let turnUserId = lobby.host_user_id;
     if (lobby.mode === 'ranked') {
-      const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-      const aiUserId = await resolveRankedAiUserIdForDraft(lobbyId, members);
+      const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+      const aiUserId = rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members);
       if (aiUserId) {
         turnUserId =
           members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
@@ -383,7 +463,8 @@ async function handleRankedAiMatchFound(params: {
       logger.warn({ err, userId }, 'Failed to compute AI opponent RP for ranked:match_found');
     }
 
-    const aiGeo = generateRankedAiGeo();
+    const playerUser = await usersRepo.getById(userId);
+    const aiGeo = generateRankedAiGeo(playerUser?.country);
     io.to(`user:${userId}`).emit('ranked:match_found', {
       lobbyId,
       opponent: {
@@ -617,7 +698,7 @@ export const lobbyRealtimeService = {
 
           if (!alreadyMember) {
             await lobbiesRepo.addMember(lobby.id, userId, false);
-            await syncFriendlyLobbyModeForMemberCount(lobby.id, {
+            await syncFriendlyLobbyModeForMemberCountLocked(lobby.id, {
               clearReadyOnPartyTransition: members.length <= 2,
             });
           }
@@ -1095,7 +1176,7 @@ export const lobbyRealtimeService = {
           await transferHostIfNeeded(lobbyId, userId);
         }
 
-        await syncFriendlyLobbyModeForMemberCount(lobbyId);
+        await syncFriendlyLobbyModeForMemberCountLocked(lobbyId);
 
         await emitLobbyState(io, lobbyId);
       } finally {

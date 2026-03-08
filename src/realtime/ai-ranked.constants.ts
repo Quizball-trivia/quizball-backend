@@ -228,7 +228,12 @@ const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; f
   { city: 'Tbilisi',       country: 'Georgia',        countryCode: 'GE', flag: '\u{1F1EC}\u{1F1EA}', lat: 41.72, lon: 44.79 },
 ];
 
-export function generateRankedAiGeo(): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+export function generateRankedAiGeo(playerCountryCode?: string | null): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+  // 80% chance to pick same country as the player, 20% random worldwide
+  if (playerCountryCode && Math.random() < 0.8) {
+    const sameCountry = AI_GEO_POOL.filter(g => g.countryCode === playerCountryCode);
+    if (sameCountry.length > 0) return randomFrom(sameCountry);
+  }
   return randomFrom(AI_GEO_POOL);
 }
 

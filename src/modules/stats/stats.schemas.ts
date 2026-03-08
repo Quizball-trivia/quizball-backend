@@ -27,6 +27,7 @@ export type HeadToHeadResponse = z.infer<typeof headToHeadResponseSchema>;
 
 export const recentMatchesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(10),
+  userId: z.string().uuid().optional(),
 });
 
 export const recentMatchResultSchema = z.enum(['win', 'loss', 'draw']);

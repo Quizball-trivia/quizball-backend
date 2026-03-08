@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sql } from '../../db/index.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { config } from '../../core/config.js';
 import { AppError, BadRequestError, ErrorCode, ExternalServiceError, NotFoundError } from '../../core/errors.js';
@@ -7,6 +7,11 @@ import { logger } from '../../core/logger.js';
 import { getRequestId } from '../../core/request-context.js';
 import { storeRepo } from './store.repo.js';
 import { stripe } from './stripe.js';
+import {
+  MAX_TICKETS,
+  resolveHydratedTicketState,
+  ticketRefillService,
+} from './ticket-refill.service.js';
 import {
   avatarMetadataSchema,
   chanceCardMetadataSchema,
@@ -201,6 +206,85 @@ function buildCoinPurchaseFailureContext(
   };
 }
 
+async function applyWalletAdjustmentInTx(
+  tx: TransactionSql,
+  userId: string,
+  adjustments: {
+    coinsDelta: number;
+    ticketsDelta: number;
+    rejectTicketOverflow?: boolean;
+    insufficientCoinsMessage?: string;
+  }
+): Promise<{ wallet: StoreWalletResponse; appliedTicketsDelta: number }> {
+  const nowIso = new Date().toISOString();
+  const wallet = await storeRepo.getWalletForUpdateInTx(tx, userId);
+  if (!wallet) {
+    throw new NotFoundError('User not found');
+  }
+
+  const hydrated = resolveHydratedTicketState(wallet, nowIso);
+  const currentCoins = wallet.coins;
+  const currentTickets = hydrated.tickets;
+  const currentAnchor = hydrated.ticketsRefillStartedAt;
+  const nextCoins = currentCoins + adjustments.coinsDelta;
+
+  if (nextCoins < 0) {
+    throw new BadRequestError(
+      adjustments.insufficientCoinsMessage ?? 'Not enough coins for this purchase'
+    );
+  }
+
+  let nextTickets = currentTickets;
+  let nextAnchor = currentAnchor;
+  let appliedTicketsDelta = 0;
+
+  if (adjustments.ticketsDelta > 0) {
+    const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);
+    if (availableSpace === 0 || (adjustments.rejectTicketOverflow && adjustments.ticketsDelta > availableSpace)) {
+      throw new AppError(
+        'Tickets are already full',
+        400,
+        ErrorCode.TICKETS_FULL,
+        {
+          userId,
+          requestedAmount: adjustments.ticketsDelta,
+          availableSpace,
+          maxTickets: MAX_TICKETS,
+        }
+      );
+    }
+    appliedTicketsDelta = Math.min(adjustments.ticketsDelta, availableSpace);
+    nextTickets = currentTickets + appliedTicketsDelta;
+    nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
+  } else if (adjustments.ticketsDelta < 0) {
+    if (currentTickets + adjustments.ticketsDelta < 0) {
+      throw new BadRequestError('Manual adjustment would result in negative ticket balance', {
+        userId,
+      });
+    }
+    appliedTicketsDelta = adjustments.ticketsDelta;
+    nextTickets = currentTickets + adjustments.ticketsDelta;
+    nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor ?? nowIso;
+  }
+
+  const updated = await storeRepo.setWalletStateInTx(tx, userId, {
+    coins: nextCoins,
+    tickets: nextTickets,
+    ticketsRefillStartedAt: nextAnchor,
+  });
+  if (!updated) {
+    throw new NotFoundError('User not found');
+  }
+
+  return {
+    wallet: {
+      coins: updated.coins,
+      tickets: updated.tickets,
+    },
+    appliedTicketsDelta,
+  };
+}
+
 export const storeService = {
   async listProducts(): Promise<{ items: StoreProductResponse[] }> {
     const rows = await storeRepo.listActiveProducts();
@@ -216,8 +300,41 @@ export const storeService = {
     if (!product || !product.is_active) {
       throw new NotFoundError('Store product not found');
     }
-    if (product.type !== 'coin_pack') {
-      throw new BadRequestError('Only coin packs are purchasable via Stripe checkout');
+    if (product.type !== 'coin_pack' && product.type !== 'ticket_pack') {
+      throw new BadRequestError('Only coin packs and ticket packs are purchasable via Stripe checkout');
+    }
+
+    if (product.type === 'ticket_pack') {
+      const parsed = ticketPackMetadataSchema.safeParse(product.metadata);
+      if (!parsed.success) {
+        throw new AppError(
+          'Invalid ticket pack metadata',
+          500,
+          ErrorCode.INTERNAL_ERROR,
+          { productId: product.id, slug: product.slug }
+        );
+      }
+
+      const wallet = await storeRepo.getWallet(userId);
+      if (!wallet) {
+        throw new NotFoundError('User not found');
+      }
+      const hydratedWallet = resolveHydratedTicketState(wallet);
+      const availableSpace = Math.max(0, MAX_TICKETS - hydratedWallet.tickets);
+      if (availableSpace === 0 || parsed.data.tickets > availableSpace) {
+        throw new AppError(
+          'Tickets are already full',
+          400,
+          ErrorCode.TICKETS_FULL,
+          {
+            userId,
+            requestedAmount: parsed.data.tickets,
+            availableSpace,
+            maxTickets: MAX_TICKETS,
+            productSlug,
+          }
+        );
+      }
     }
     let purchase: StorePurchaseRow | null = null;
 
@@ -335,11 +452,6 @@ export const storeService = {
           });
         }
 
-        const walletAfterSpend = await storeRepo.adjustWalletInTx(tx, userId, -coinsCost, 0);
-        if (!walletAfterSpend) {
-          throw new BadRequestError('Not enough coins for this purchase');
-        }
-
         const purchase = await storeRepo.createCompletedPurchaseInTx(tx, {
           userId,
           productId: product.id,
@@ -347,7 +459,7 @@ export const storeService = {
           currency: 'coins',
         });
 
-        let walletAfter = walletAfterSpend;
+        let walletAfter: StoreWalletResponse;
         let ticketsDelta = 0;
         let inventoryDelta: Record<string, number> = {};
 
@@ -363,21 +475,24 @@ export const storeService = {
               );
             }
 
-            ticketsDelta = parsed.data.tickets;
-            const updatedWallet = await storeRepo.addTicketsInTx(tx, userId, ticketsDelta);
-            if (!updatedWallet) {
-              throw new AppError(
-                'Failed to apply ticket fulfillment',
-                500,
-                ErrorCode.INTERNAL_ERROR,
-                { userId, productId: product.id, purchaseId: purchase.id }
-              );
-            }
-            walletAfter = updatedWallet;
+            const updatedWallet = await applyWalletAdjustmentInTx(tx, userId, {
+              coinsDelta: -coinsCost,
+              ticketsDelta: parsed.data.tickets,
+              rejectTicketOverflow: true,
+              insufficientCoinsMessage: 'Not enough coins for this purchase',
+            });
+            walletAfter = updatedWallet.wallet;
+            ticketsDelta = updatedWallet.appliedTicketsDelta;
             break;
           }
           case 'avatar':
           case 'chance_card': {
+            const updatedWallet = await applyWalletAdjustmentInTx(tx, userId, {
+              coinsDelta: -coinsCost,
+              ticketsDelta: 0,
+              insufficientCoinsMessage: 'Not enough coins for this purchase',
+            });
+            walletAfter = updatedWallet.wallet;
             await storeRepo.upsertInventoryInTx(tx, userId, product.id, 1);
             inventoryDelta = { [product.slug]: 1 };
             break;
@@ -526,16 +641,13 @@ export const storeService = {
               );
             }
             const metadata = parsed.data;
-            ticketsDelta = metadata.tickets;
-            const wallet = await storeRepo.addTicketsInTx(tx, completedPurchase.user_id, ticketsDelta);
-            if (!wallet) {
-              throw new AppError(
-                'Failed to apply ticket fulfillment',
-                500,
-                ErrorCode.INTERNAL_ERROR,
-                { purchaseId: completedPurchase.id, userId: completedPurchase.user_id }
-              );
-            }
+            const ticketGrant = await ticketRefillService.clampTicketGrantInTx(
+              tx,
+              completedPurchase.user_id,
+              metadata.tickets,
+              { rejectOnOverflow: true }
+            );
+            ticketsDelta = ticketGrant.grantedTickets;
             break;
           }
           case 'avatar':
@@ -593,11 +705,40 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const wallet = await storeRepo.getWallet(userId);
-    if (!wallet) {
-      throw new NotFoundError('User not found');
+    const wallet = await ticketRefillService.hydrateTickets(userId);
+    return {
+      coins: wallet.coins,
+      tickets: wallet.tickets,
+    };
+  },
+
+  async consumeRankedTickets(
+    userIds: string[]
+  ): Promise<{ wallets: Record<string, StoreWalletResponse> } | null> {
+    const dedupedUserIds = [...new Set(userIds)].sort((left, right) => left.localeCompare(right));
+    if (dedupedUserIds.length === 0) {
+      return { wallets: {} };
     }
-    return wallet;
+
+    return sql.begin(async (tx) => {
+      const wallets: Record<string, StoreWalletResponse> = {};
+
+      for (const userId of dedupedUserIds) {
+        const result = await ticketRefillService.consumeRankedTicketInTx(tx, userId);
+        if (!result.wallet) {
+          throw new NotFoundError('User not found');
+        }
+        if (!result.consumed) {
+          return null;
+        }
+        wallets[userId] = {
+          coins: result.wallet.coins,
+          tickets: result.wallet.tickets,
+        };
+      }
+
+      return { wallets };
+    });
   },
 
   async getInventory(userId: string): Promise<{ items: StoreInventoryItemResponse[] }> {
@@ -734,19 +875,14 @@ export const storeService = {
 
     try {
       const result = await sql.begin(async (tx) => {
-        const walletAfter = await storeRepo.adjustWalletInTx(
-          tx,
-          input.userId,
+        const adjustedWallet = await applyWalletAdjustmentInTx(tx, input.userId, {
           coinsDelta,
-          ticketsDelta
-        );
-
-        if (!walletAfter) {
-          throw new BadRequestError(
-            'Manual adjustment would result in negative balance or user was not found',
-            { userId: input.userId }
-          );
-        }
+          ticketsDelta,
+          rejectTicketOverflow: false,
+          insufficientCoinsMessage: 'Manual adjustment would result in negative balance',
+        });
+        const walletAfter = adjustedWallet.wallet;
+        const appliedTicketsDelta = adjustedWallet.appliedTicketsDelta;
 
         const appliedInventory: Array<{ productSlug: string; quantity: number }> = [];
         const inventoryDelta: Record<string, number> = {};
@@ -777,7 +913,7 @@ export const storeService = {
           userId: input.userId,
           actorUserId,
           coinsDelta,
-          ticketsDelta,
+          ticketsDelta: appliedTicketsDelta,
           inventoryDelta,
           reason: input.reason,
           requestId: getRequestId(),

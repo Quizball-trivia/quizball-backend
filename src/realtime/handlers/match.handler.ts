@@ -6,6 +6,7 @@ import {
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
+  matchPlayAgainSchema,
   matchRejoinSchema,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
@@ -178,6 +179,35 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
       socket.emit('error', {
         code: 'MATCH_FORFEIT_ERROR',
         message: 'Failed to forfeit match',
+      });
+    }
+  });
+
+  socket.on('match:play_again', async (payload) => {
+    const parsed = matchPlayAgainSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:play_again payload');
+      socket.emit('error', {
+        code: 'INVALID_PAYLOAD',
+        message: 'Invalid play again request',
+      });
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handlePlayAgain(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+        },
+        'Error handling match:play_again'
+      );
+      socket.emit('error', {
+        code: 'MATCH_PLAY_AGAIN_ERROR',
+        message: 'Failed to create rematch lobby',
       });
     }
   });

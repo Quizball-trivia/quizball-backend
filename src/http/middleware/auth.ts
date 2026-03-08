@@ -1,8 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AuthenticationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { detectCountryFromRequest } from '../../core/geo.js';
 import { getAuthProvider } from '../../modules/auth/index.js';
 import { usersService } from '../../modules/users/index.js';
+import { getCachedUser } from '../../modules/users/user-cache.js';
 
 /**
  * Extract bearer token from Authorization header.
@@ -62,7 +64,11 @@ export async function authMiddleware(
     );
 
     // 3. Resolve internal user (CRITICAL - don't skip this!)
-    const user = await usersService.getOrCreateFromIdentity(identity);
+    // Only call geo detection if the user doesn't have a country yet — avoids blocking
+    // third-party HTTP call on every authenticated request
+    const cached = getCachedUser(identity.provider, identity.subject);
+    const detectedCountry = cached?.country ? null : await detectCountryFromRequest(req);
+    const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
 
     // 4. Attach BOTH to request
     req.identity = identity;

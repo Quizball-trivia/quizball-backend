@@ -90,8 +90,20 @@ function asRuntimePhaseKind(value: unknown): 'normal' | 'last_attack' | 'penalty
   return 'normal';
 }
 
-function sanitizePossessionState(raw: unknown): PossessionStatePayload {
-  const fallback = createInitialPossessionState();
+function sanitizePossessionState(
+  raw: unknown,
+  mode: MatchMode = 'friendly'
+): PossessionStatePayload {
+  const explicitVariant =
+    raw && typeof raw === 'object'
+      ? (raw as Partial<PossessionStatePayload>).variant
+      : undefined;
+  const fallbackVariant = explicitVariant === 'ranked_sim'
+    ? 'ranked_sim'
+    : mode === 'ranked'
+      ? 'ranked_sim'
+      : 'friendly_possession';
+  const fallback = createInitialPossessionState(fallbackVariant);
   if (!raw || typeof raw !== 'object') return fallback;
   const candidate = raw as Partial<PossessionStatePayload>;
 
@@ -114,13 +126,20 @@ function sanitizePossessionState(raw: unknown): PossessionStatePayload {
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
-        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null }>>((acc, category) => {
+        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null; imageUrl: string | null }>>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
           if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
             name: category.name,
             icon: typeof category.icon === 'string' ? category.icon : null,
+            imageUrl:
+              typeof category.imageUrl === 'string'
+                ? category.imageUrl
+                : typeof legacyImageUrl === 'string'
+                  ? legacyImageUrl
+                  : null,
           });
           return acc;
         }, [])
@@ -210,7 +229,7 @@ export function buildInitialCache(params: {
   }>;
   state?: PossessionStatePayload;
 }): MatchCache {
-  const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload);
+  const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload, params.match.mode);
   const players = params.players.map((player) => ({
     userId: player.user_id,
     seat: (player.seat === 2 ? 2 : 1) as CachedSeat,
@@ -286,7 +305,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return null;
   const players = await matchesRepo.listMatchPlayers(matchId);
-  const state = sanitizePossessionState(match.state_payload);
+  const state = sanitizePossessionState(match.state_payload, match.mode);
 
   const cache = buildInitialCache({
     match,

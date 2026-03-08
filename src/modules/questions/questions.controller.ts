@@ -92,6 +92,7 @@ export const questionsController = {
       prompt: data.prompt,
       explanation: data.explanation,
       payload: data.payload as Json,
+      createdBy: req.user?.id,
     });
 
     res.status(201).json(toQuestionResponse(question));
@@ -113,7 +114,7 @@ export const questionsController = {
       prompt: data.prompt,
       explanation: data.explanation,
       payload: data.payload as Json,
-    });
+    }, req.user?.id);
 
     res.json(toQuestionResponse(question));
   },
@@ -125,7 +126,7 @@ export const questionsController = {
   async delete(req: Request, res: Response): Promise<void> {
     const { id } = req.validated.params as UuidParam;
 
-    await questionsService.delete(id);
+    await questionsService.delete(id, req.user?.id);
 
     res.status(204).send();
   },
@@ -138,7 +139,7 @@ export const questionsController = {
     const { id } = req.validated.params as UuidParam;
     const { status } = req.validated.body as UpdateStatusRequest;
 
-    const question = await questionsService.updateStatus(id, status);
+    const question = await questionsService.updateStatus(id, status, req.user?.id);
 
     res.json(toQuestionResponse(question));
   },
@@ -152,7 +153,8 @@ export const questionsController = {
 
     const result = await questionsService.bulkCreate(
       data.category_id,
-      data.questions
+      data.questions,
+      req.user?.id
     );
 
     // Return 207 for partial failures, 201 for full success

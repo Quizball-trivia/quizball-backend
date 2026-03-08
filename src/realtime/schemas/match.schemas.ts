@@ -39,6 +39,10 @@ export const matchFinalResultsAckSchema = z.object({
   resultVersion: z.number().int().positive(),
 });
 
+export const matchPlayAgainSchema = z.object({
+  matchId: z.string().uuid(),
+});
+
 export type MatchAnswerPayload = z.infer<typeof matchAnswerSchema>;
 export type MatchHalftimeBanPayload = z.infer<typeof matchHalftimeBanSchema>;
 export type MatchChanceCardUsePayload = z.infer<typeof matchChanceCardUseSchema>;
@@ -46,3 +50,4 @@ export type MatchRejoinPayload = z.infer<typeof matchRejoinSchema>;
 export type MatchLeavePayload = z.infer<typeof matchLeaveSchema>;
 export type MatchForfeitPayload = z.infer<typeof matchForfeitSchema>;
 export type MatchFinalResultsAckPayload = z.infer<typeof matchFinalResultsAckSchema>;
+export type MatchPlayAgainPayload = z.infer<typeof matchPlayAgainSchema>;

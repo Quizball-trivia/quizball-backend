@@ -16,7 +16,7 @@ export interface CreateLobbyData {
   mode: 'friendly' | 'ranked';
   hostUserId: string;
   inviteCode: string | null;
-  gameMode?: 'friendly' | 'ranked_sim';
+  gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;
@@ -27,7 +27,7 @@ export interface CreateLobbyData {
 
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
-    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly');
+    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
     const friendlyRandom = data.friendlyRandom ?? true;
     const isPublic = data.isPublic ?? false;
     const displayName = data.displayName ?? '';
@@ -278,7 +278,7 @@ export const lobbiesRepo = {
         AND l.mode = 'friendly'
         AND l.is_public = true
       GROUP BY l.id, u.nickname, u.avatar_url
-      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 2)
+      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 6)
       ORDER BY l.created_at DESC
       LIMIT ${params.limit}
     `;
@@ -301,15 +301,15 @@ export const lobbiesRepo = {
   async selectRandomActiveCategories(
     minQuestions: number,
     limit: number
-  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null }>> {
-    return sql<{ id: string; name: Record<string, string>; icon: string | null }[]>`
-      SELECT c.id, c.name, c.icon
+  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
+      SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
         AND ${MCQ_VALIDATION_CONDITIONS}
-      GROUP BY c.id, c.name, c.icon
+      GROUP BY c.id, c.name, c.icon, c.image_url
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()
       LIMIT ${limit}
@@ -320,20 +320,20 @@ export const lobbiesRepo = {
     minQuestions: number,
     limit: number,
     excludeCategoryIds: string[]
-  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null }>> {
+  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
     const exclusionClause = excludeCategoryIds.length > 0
       ? sql`AND c.id <> ALL(${sql.array(excludeCategoryIds)}::uuid[])`
       : sql``;
 
-    return sql<{ id: string; name: Record<string, string>; icon: string | null }[]>`
-      SELECT c.id, c.name, c.icon
+    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
+      SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
         ${exclusionClause}
         AND ${MCQ_VALIDATION_CONDITIONS}
-      GROUP BY c.id, c.name, c.icon
+      GROUP BY c.id, c.name, c.icon, c.image_url
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()
       LIMIT ${limit}
@@ -375,7 +375,7 @@ export const lobbiesRepo = {
 
   async listLobbyCategoriesWithDetails(lobbyId: string): Promise<LobbyCategoryWithDetails[]> {
     return sql<LobbyCategoryWithDetails[]>`
-      SELECT lc.category_id, lc.slot, c.name, c.icon
+      SELECT lc.category_id, lc.slot, c.name, c.icon, c.image_url
       FROM lobby_categories lc
       JOIN categories c ON c.id = lc.category_id
       WHERE lc.lobby_id = ${lobbyId}

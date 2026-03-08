@@ -1,0 +1,2 @@
+ALTER TABLE users
+  ALTER COLUMN tickets SET DEFAULT 10;

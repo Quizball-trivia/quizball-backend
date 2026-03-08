@@ -27,7 +27,7 @@ export const lobbiesService = {
       isPublic: lobby.is_public ?? false,
       hostUserId: lobby.host_user_id,
       settings: {
-        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
+        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
         friendlyRandom: lobby.friendly_random ?? true,
         friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
         friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
@@ -54,6 +54,7 @@ export const lobbiesService = {
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 
@@ -68,6 +69,7 @@ export const lobbiesService = {
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 
@@ -77,6 +79,7 @@ export const lobbiesService = {
       id: row.category_id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
     }));
   },
 
@@ -86,11 +89,11 @@ export const lobbiesService = {
       lobbyId: row.lobby_id,
       inviteCode: row.invite_code,
       displayName: row.display_name ?? 'Friendly Lobby',
-      gameMode: row.game_mode ?? 'friendly',
+      gameMode: row.game_mode ?? 'friendly_possession',
       isPublic: row.is_public,
       createdAt: row.created_at,
       memberCount: row.member_count,
-      maxMembers: 2,
+      maxMembers: 6,
       host: {
         id: row.host_user_id,
         username: row.host_nickname ?? 'Player',

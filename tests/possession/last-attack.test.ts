@@ -11,7 +11,7 @@ describe('last attack mechanic', () => {
     state.normalQuestionsAnsweredTotal = 5;
     state.possessionDiff = 40;
 
-    applyNormalResolution(state, 60, 50);
+    applyNormalResolution(state, 60, 50, true, false);
     expect(state.phase).toBe('LAST_ATTACK');
     expect(state.lastAttack.attackerSeat).toBe(1);
   });
@@ -22,7 +22,7 @@ describe('last attack mechanic', () => {
     state.normalQuestionsAnsweredTotal = 5;
     state.possessionDiff = -40;
 
-    applyNormalResolution(state, 50, 60);
+    applyNormalResolution(state, 50, 60, false, true);
     expect(state.phase).toBe('LAST_ATTACK');
     expect(state.lastAttack.attackerSeat).toBe(2);
   });
@@ -33,7 +33,7 @@ describe('last attack mechanic', () => {
     state.normalQuestionsAnsweredTotal = 5;
     state.possessionDiff = 10;
 
-    applyNormalResolution(state, 50, 50);
+    applyNormalResolution(state, 50, 50, true, true);
     expect(state.phase).toBe('HALFTIME');
   });
 

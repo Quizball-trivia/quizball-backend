@@ -5,7 +5,7 @@ import { usersRepo } from '../users/users.repo.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
-import type { DraftCategory, GameQuestionDTO } from '../../realtime/socket.types.js';
+import type { DraftCategory, GameQuestionDTO, MatchVariant } from '../../realtime/socket.types.js';
 import type {
   MatchRow,
   MatchQuestionWithCategory,
@@ -30,9 +30,18 @@ function ensureI18nObject(field: unknown): Record<string, string> {
 
 export const POSSESSION_QUESTIONS_PER_HALF = 6;
 export const POSSESSION_TOTAL_NORMAL_QUESTIONS = POSSESSION_QUESTIONS_PER_HALF * 2;
+export const PARTY_QUIZ_TOTAL_QUESTIONS = 10;
+
+export type MatchWinnerDecisionMethod =
+  | 'goals'
+  | 'penalty_goals'
+  | 'total_points'
+  | 'total_points_fallback'
+  | 'forfeit';
 
 export interface PossessionStatePayload {
   version: 1;
+  variant: 'friendly_possession' | 'ranked_sim';
   phase: 'NORMAL_PLAY' | 'LAST_ATTACK' | 'HALFTIME' | 'PENALTY_SHOOTOUT' | 'COMPLETED';
   half: 1 | 2;
   possessionDiff: number;
@@ -68,18 +77,36 @@ export interface PossessionStatePayload {
     shooterSeat: 1 | 2 | null;
     attackerSeat: 1 | 2 | null;
   } | null;
-  winnerDecisionMethod: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
+  winnerDecisionMethod: MatchWinnerDecisionMethod | null;
+  stateVersionCounter: number;
+}
+
+export interface PartyQuizStatePayload {
+  version: 1;
+  variant: 'friendly_party_quiz';
+  totalQuestions: number;
+  currentQuestion: {
+    qIndex: number;
+  } | null;
+  answeredUserIds: string[];
+  winnerDecisionMethod: MatchWinnerDecisionMethod | null;
   stateVersionCounter: number;
 }
 
 export interface MatchCreationResult {
   match: MatchRow;
-  playerIds: [string, string];
+  playerIds: string[];
+  variant: MatchVariant;
 }
 
-export function createInitialPossessionState(): PossessionStatePayload {
+export type MatchStatePayload = PossessionStatePayload | PartyQuizStatePayload;
+
+export function createInitialPossessionState(
+  variant: 'friendly_possession' | 'ranked_sim'
+): PossessionStatePayload {
   return {
     version: 1,
+    variant,
     phase: 'NORMAL_PLAY',
     half: 1,
     possessionDiff: 0,
@@ -117,59 +144,109 @@ export function createInitialPossessionState(): PossessionStatePayload {
   };
 }
 
+export function createInitialPartyQuizState(
+  totalQuestions = PARTY_QUIZ_TOTAL_QUESTIONS
+): PartyQuizStatePayload {
+  return {
+    version: 1,
+    variant: 'friendly_party_quiz',
+    totalQuestions,
+    currentQuestion: null,
+    answeredUserIds: [],
+    winnerDecisionMethod: null,
+    stateVersionCounter: 0,
+  };
+}
+
+export function resolveMatchVariant(
+  statePayload: unknown,
+  mode: 'friendly' | 'ranked'
+): MatchVariant {
+  const candidate = statePayload as Partial<{ variant: MatchVariant }> | null;
+  if (
+    candidate?.variant === 'friendly_possession' ||
+    candidate?.variant === 'friendly_party_quiz' ||
+    candidate?.variant === 'ranked_sim'
+  ) {
+    return candidate.variant;
+  }
+
+  return mode === 'ranked' ? 'ranked_sim' : 'friendly_possession';
+}
+
 export const matchesService = {
   async createMatchFromLobby(params: {
     lobbyId: string;
     mode: 'friendly' | 'ranked';
+    variant: MatchVariant;
     hostUserId: string;
     categoryAId: string;
     categoryBId: string | null;
     isDev?: boolean;
+    totalQuestions?: number;
   }): Promise<MatchCreationResult> {
     const members = await lobbiesRepo.listMembersWithUser(params.lobbyId);
     const memberIds = members.map((m) => m.user_id);
+    let playerIds: string[];
 
-    if (memberIds.length !== 2) {
-      throw new AppError(
-        'Lobby must have exactly 2 members to create a match',
-        400,
-        ErrorCode.BAD_REQUEST
-      );
-    }
-
-    const hostIndex = memberIds.indexOf(params.hostUserId);
-    let seat1: string;
-    let seat2: string;
-
-    if (hostIndex !== -1) {
-      // Host is in the lobby - host gets seat 1
-      seat1 = params.hostUserId;
-      const candidateSeat2 = memberIds.find((id) => id !== seat1);
-
-      if (!candidateSeat2 || candidateSeat2 === seat1) {
-        logger.error(
-          { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds, candidateSeat2 },
-          'Invalid lobby state: could not determine second player'
+    if (params.variant === 'friendly_party_quiz') {
+      if (memberIds.length < 2 || memberIds.length > 6) {
+        throw new AppError(
+          'Party quiz requires between 2 and 6 members',
+          400,
+          ErrorCode.BAD_REQUEST
         );
-        // Fall back to using first two members as a safe default
-        seat1 = memberIds[0];
-        seat2 = memberIds[1];
+      }
+
+      const hostIndex = memberIds.indexOf(params.hostUserId);
+      if (hostIndex <= 0) {
+        playerIds = [...memberIds];
       } else {
-        seat2 = candidateSeat2;
+        playerIds = [params.hostUserId, ...memberIds.filter((id) => id !== params.hostUserId)];
       }
     } else {
-      // Host not found (edge case) - use first two members
-      logger.warn(
-        { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds },
-        'Host not found in lobby members, using first two members'
-      );
-      seat1 = memberIds[0];
-      seat2 = memberIds[1];
+      if (memberIds.length !== 2) {
+        throw new AppError(
+          'Lobby must have exactly 2 members to create a match',
+          400,
+          ErrorCode.BAD_REQUEST
+        );
+      }
+
+      const hostIndex = memberIds.indexOf(params.hostUserId);
+      let seat1: string;
+      let seat2: string;
+
+      if (hostIndex !== -1) {
+        seat1 = params.hostUserId;
+        const candidateSeat2 = memberIds.find((id) => id !== seat1);
+
+        if (!candidateSeat2 || candidateSeat2 === seat1) {
+          logger.error(
+            { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds, candidateSeat2 },
+            'Invalid lobby state: could not determine second player'
+          );
+          seat1 = memberIds[0];
+          seat2 = memberIds[1];
+        } else {
+          seat2 = candidateSeat2;
+        }
+      } else {
+        logger.warn(
+          { lobbyId: params.lobbyId, hostUserId: params.hostUserId, memberIds },
+          'Host not found in lobby members, using first two members'
+        );
+        seat1 = memberIds[0];
+        seat2 = memberIds[1];
+      }
+
+      playerIds = [seat1, seat2];
     }
 
     // For ranked matches, build placement AI context so the anchor adapts per match
     let rankedContext: RankedLobbyContext | null = null;
     if (params.mode === 'ranked') {
+      const [seat1, seat2] = playerIds;
       const [user1, user2] = await Promise.all([
         usersRepo.getById(seat1),
         usersRepo.getById(seat2),
@@ -204,25 +281,36 @@ export const matchesService = {
       }
     }
 
+    const totalQuestions = params.totalQuestions
+      ?? (params.variant === 'friendly_party_quiz' ? PARTY_QUIZ_TOTAL_QUESTIONS : POSSESSION_TOTAL_NORMAL_QUESTIONS);
+    const statePayload =
+      params.variant === 'friendly_party_quiz'
+        ? createInitialPartyQuizState(totalQuestions)
+        : createInitialPossessionState(params.variant === 'ranked_sim' ? 'ranked_sim' : 'friendly_possession');
+
     const match = await matchesRepo.createMatch({
       lobbyId: params.lobbyId,
       mode: params.mode,
       categoryAId: params.categoryAId,
       categoryBId: params.categoryBId,
-      totalQuestions: POSSESSION_TOTAL_NORMAL_QUESTIONS,
-      statePayload: createInitialPossessionState(),
+      totalQuestions,
+      statePayload,
       rankedContext,
       isDev: params.isDev,
     });
 
-    await matchesRepo.insertMatchPlayers(match.id, [
-      { userId: seat1, seat: 1 },
-      { userId: seat2, seat: 2 },
-    ]);
+    await matchesRepo.insertMatchPlayers(
+      match.id,
+      playerIds.map((userId, index) => ({
+        userId,
+        seat: index + 1,
+      }))
+    );
 
     return {
       match,
-      playerIds: [seat1, seat2],
+      playerIds,
+      variant: params.variant,
     };
   },
 

@@ -9,10 +9,14 @@ import { config } from '../../core/config.js';
 import {
   headToHeadQuerySchema,
   headToHeadResponseSchema,
+  modeStatsSummarySchema,
   recentMatchesQuerySchema,
   recentMatchesResponseSchema,
   statsSummaryResponseSchema,
 } from '../../modules/stats/stats.schemas.js';
+import {
+  userIdParamSchema,
+} from '../../modules/users/users.schemas.js';
 import {
   listPublicLobbiesQuerySchema,
   listPublicLobbiesResponseSchema,
@@ -727,6 +731,69 @@ registry.registerPath({
     },
     401: {
       description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+// Public profile response schema
+const rankPositionSchema = z.object({
+  rank: z.number().int(),
+  total: z.number().int(),
+});
+
+const publicProfileResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+    nickname: z.string().nullable(),
+    avatarUrl: z.string().nullable(),
+    country: z.string().nullable(),
+    favoriteClub: z.string().nullable(),
+    ranked: z
+      .object({
+        rp: z.number().int(),
+        tier: z.string(),
+        placementStatus: z.string(),
+        placementPlayed: z.number().int().nonnegative(),
+        placementRequired: z.number().int().nonnegative(),
+        placementWins: z.number().int().nonnegative(),
+        currentWinStreak: z.number().int().nonnegative(),
+        lastRankedMatchAt: z.string().datetime().nullable(),
+      })
+      .nullable(),
+    stats: z.object({
+      overall: modeStatsSummarySchema,
+      ranked: modeStatsSummarySchema,
+      friendly: modeStatsSummarySchema,
+    }),
+    headToHead: headToHeadResponseSchema.nullable(),
+    globalRank: rankPositionSchema.nullable(),
+    countryRank: rankPositionSchema.nullable(),
+  })
+  .openapi('PublicProfileResponse');
+
+registry.register('PublicProfileResponse', publicProfileResponseSchema);
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/users/{userId}/profile',
+  summary: 'Get public profile for a user',
+  tags: ['Users'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: userIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Public profile data',
+      content: { 'application/json': { schema: publicProfileResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'User not found',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

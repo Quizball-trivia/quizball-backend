@@ -2,6 +2,7 @@ import { trackEvent } from '../core/analytics.js';
 import { BadRequestError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
+import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { storeService } from '../modules/store/store.service.js';
@@ -160,15 +161,19 @@ function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
 }
 
 function parsePossessionState(raw: unknown): PossessionStatePayload {
+  const fallbackVariant =
+    raw && typeof raw === 'object' && (raw as Partial<PossessionStatePayload>).variant === 'ranked_sim'
+      ? 'ranked_sim'
+      : 'friendly_possession';
   if (typeof raw === 'string') {
-    try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(); }
+    try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(fallbackVariant); }
   }
   if (!raw || typeof raw !== 'object') {
-    return createInitialPossessionState();
+    return createInitialPossessionState(fallbackVariant);
   }
 
   const candidate = raw as Partial<PossessionStatePayload>;
-  const fallback = createInitialPossessionState();
+  const fallback = createInitialPossessionState(fallbackVariant);
 
   if (!candidate.phase || !candidate.half || !candidate.goals || !candidate.penaltyGoals) {
     return fallback;
@@ -196,10 +201,17 @@ function parsePossessionState(raw: unknown): PossessionStatePayload {
         ? candidate.halftime.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
           if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
             name: category.name,
             icon: typeof category.icon === 'string' ? category.icon : null,
+            imageUrl:
+              typeof category.imageUrl === 'string'
+                ? category.imageUrl
+                : typeof legacyImageUrl === 'string'
+                  ? legacyImageUrl
+                  : null,
           });
           return acc;
         }, [])
@@ -916,10 +928,16 @@ async function completePossessionMatch(
     }
   }
 
+  const unlockedAchievements = await achievementsService.evaluateForMatch(
+    matchId,
+    refreshedPlayers.map((player) => player.user_id)
+  );
+
   io.to(`match:${matchId}`).emit('match:final_results', {
     matchId,
     winnerId: decision.winnerId,
     players: payloadPlayers,
+    unlockedAchievements,
     durationMs,
     resultVersion,
     winnerDecisionMethod: decision.method,

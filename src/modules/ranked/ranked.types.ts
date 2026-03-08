@@ -17,6 +17,7 @@ export interface RankedProfileRow {
   user_id: string;
   rp: number;
   tier: RankedTier;
+  country: string | null;
   placement_status: PlacementStatus;
   placement_required: number;
   placement_played: number;
@@ -84,5 +85,14 @@ export interface RankedLeaderboardEntry {
   avatarUrl: string | null;
   rp: number;
   tier: RankedTier;
+  country: string | null;
+  trendWins: number;
+  trendTotal: number;
 }
 
+export interface RankedUserRankResult {
+  rank: number;
+  total: number;
+  trendWins: number;
+  trendTotal: number;
+}

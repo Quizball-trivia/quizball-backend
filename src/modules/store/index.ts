@@ -1,5 +1,6 @@
 export { storeRepo } from './store.repo.js';
 export { storeService } from './store.service.js';
+export { ticketRefillService } from './ticket-refill.service.js';
 export { storeController } from './store.controller.js';
 export { stripe } from './stripe.js';
 export { createStoreWebhookRouter } from './store.webhook.js';

@@ -23,8 +23,9 @@ export const statsController = {
    * Get recent completed/abandoned matches for the authenticated user.
    */
   async recentMatches(req: Request, res: Response): Promise<void> {
-    const { limit } = req.validated.query as RecentMatchesQuery;
-    const items = await statsService.getRecentMatchesForUser(req.user!.id, limit);
+    const { limit, userId } = req.validated.query as RecentMatchesQuery;
+    const targetUserId = userId ?? req.user!.id;
+    const items = await statsService.getRecentMatchesForUser(targetUserId, limit);
     res.json({ items });
   },
 

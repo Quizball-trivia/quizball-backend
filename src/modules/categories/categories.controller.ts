@@ -69,6 +69,7 @@ export const categoriesController = {
       icon: data.icon,
       imageUrl: data.image_url,
       isActive: data.is_active,
+      createdBy: req.user?.id,
     });
 
     res.status(201).json(toCategoryResponse(category));
@@ -90,7 +91,7 @@ export const categoriesController = {
       icon: data.icon,
       imageUrl: data.image_url,
       isActive: data.is_active,
-    });
+    }, req.user?.id);
 
     res.json(toCategoryResponse(category));
   },
@@ -115,7 +116,7 @@ export const categoriesController = {
     const { id } = req.validated.params as UuidParam;
     const query = req.validated.query as DeleteCategoryQuery | undefined;
 
-    await categoriesService.delete(id, { cascade: query?.cascade });
+    await categoriesService.delete(id, { cascade: query?.cascade, userId: req.user?.id });
 
     res.status(204).send();
   },

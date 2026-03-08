@@ -32,6 +32,7 @@ async function startMatchFromDraft(
     result = await matchesService.createMatchFromLobby({
       lobbyId,
       mode: lobby.mode,
+      variant: 'ranked_sim',
       hostUserId: lobby.host_user_id,
       categoryAId: halfOneCategoryId,
       categoryBId: null,

@@ -143,9 +143,10 @@ export class SupabaseAuthClient implements AuthClient {
    * Handle Supabase error responses.
    */
   private handleError(status: number, data: unknown): never {
-    const errorData = data as { error?: string; error_description?: string; message?: string };
+    const errorData = data as { error?: string; error_description?: string; message?: string; msg?: string };
     const message =
       errorData.error_description ||
+      errorData.msg ||
       errorData.error ||
       errorData.message ||
       'Unknown error';

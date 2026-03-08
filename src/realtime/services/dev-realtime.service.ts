@@ -66,6 +66,7 @@ export const devRealtimeService = {
     const result = await matchesService.createMatchFromLobby({
       lobbyId: lobby.id,
       mode: 'friendly',
+      variant: 'friendly_possession',
       hostUserId: userId,
       categoryAId: categories[0].id,
       categoryBId: null,

@@ -12,4 +12,16 @@ router.use(authMiddleware);
  */
 router.get('/profile', rankedController.getProfile);
 
+/**
+ * GET /api/v1/ranked/leaderboard?scope=global|country&limit=50&offset=0
+ * Get leaderboard entries sorted by RP descending.
+ */
+router.get('/leaderboard', rankedController.getLeaderboard);
+
+/**
+ * GET /api/v1/ranked/leaderboard/me?scope=global|country
+ * Get the authenticated user's rank position.
+ */
+router.get('/leaderboard/me', rankedController.getUserRank);
+
 export const rankedRoutes = router;

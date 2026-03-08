@@ -24,17 +24,30 @@
 
 export const RANKED_AI_CORRECTNESS = 0.45;
 
-const AI_NAME_PREFIXES = [
-  'cr',
-  'messi',
-  'ron',
-  'fut',
-  'goal',
-  'striker',
-  'legend',
-  'ultra',
-  'dribble',
-  'pitch',
+const AI_NICKNAMES = [
+  // surname-style
+  'lukaberidze', 'giorgimenbde', 'sandroavaliani', 'giorgizandukeli',
+  'temogujejiani', 'datokhmaladze', 'nilogiorgadze', 'beaborjgali',
+  'lazareishvili', 'tornibakuradze', 'gaborchiladze', 'leaborjgali',
+  // stretched / repeated letters
+  'sabaaa', 'romeoooo12', 'cotneee', 'benzooo', 'tamazaa', 'kobaaaa',
+  'gagoshaa13', 'nikushaa', 'zukaaaa', 'datunaaaa', 'gioooo', 'beckaaaa',
+  'lukaaaa7', 'shotaaaa', 'rezooo99', 'nugziii', 'giooo777', 'bekaaa11',
+  // classic nicknames
+  'elosha89', 'talakha', 'murtalo', 'somekhii', 'chatlakhi0000',
+  'zveri007', 'nadiri99', 'khvedela', 'rostika', 'asata1111',
+  'bitchiko', 'papunaa', 'makvala22', 'kachua', 'tsikaaa', 'batooo',
+  'gujoo', 'dzmaaaa', 'bosikoo', 'jigaroo', 'zaqoo', 'patioo',
+  // number combos
+  'gio_2003', 'saba_04', 'luka2005', 'dato_99', 'beka777', 'tornike_01',
+  'nika2004', 'gela_ge', 'levo_tb', 'sandro_11', 'giorgi_33', 'temoo_07',
+  // stylized
+  'xinkali_king', 'tbiliseli', 'kartuli_bichi', 'mziuri_park',
+  'dinamo_fan', 'vefxistyao', 'rustaveli99', 'qartlosii',
+  'kolxida', 'borjgalo', 'didostati', 'suliko_ge',
+  // short punchy
+  'zuraa', 'mamuka', 'otari', 'nodari', 'archili', 'tamazi',
+  'vakhooo', 'zuraaa', 'jamboo', 'gotcha', 'mimino', 'kakhaberi',
 ];
 
 // Keep this in sync with frontend-web-next/src/lib/avatars.ts.
@@ -95,9 +108,7 @@ function encodeSegment(value: string): string {
 }
 
 export function generateRankedAiUsername(): string {
-  const prefix = randomFrom(AI_NAME_PREFIXES);
-  const suffix = Math.floor(Math.random() * 90000) + 10000;
-  return `${prefix}${suffix}`;
+  return randomFrom(AI_NICKNAMES);
 }
 
 /**
@@ -214,9 +225,15 @@ const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; f
   { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.71, lon: -74.01 },
   { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.05, lon: -118.24 },
   { city: 'Toronto',       country: 'Canada',         countryCode: 'CA', flag: '\u{1F1E8}\u{1F1E6}', lat: 43.65, lon: -79.38 },
+  { city: 'Tbilisi',       country: 'Georgia',        countryCode: 'GE', flag: '\u{1F1EC}\u{1F1EA}', lat: 41.72, lon: 44.79 },
 ];
 
-export function generateRankedAiGeo(): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+export function generateRankedAiGeo(playerCountryCode?: string | null): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
+  // 80% chance to pick same country as the player, 20% random worldwide
+  if (playerCountryCode && Math.random() < 0.8) {
+    const sameCountry = AI_GEO_POOL.filter(g => g.countryCode === playerCountryCode);
+    if (sameCountry.length > 0) return randomFrom(sameCountry);
+  }
   return randomFrom(AI_GEO_POOL);
 }
 

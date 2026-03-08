@@ -77,8 +77,14 @@ export const statsRepo = {
         m.winner_user_id,
         m.ended_at,
         m.started_at,
-        (mp_self.goals + mp_self.penalty_goals) AS player_score,
-        COALESCE(mp_opp.goals + mp_opp.penalty_goals, 0) AS opponent_score,
+        CASE
+          WHEN m.state_payload->>'variant' = 'friendly_party_quiz' THEN mp_self.total_points
+          ELSE (mp_self.goals + mp_self.penalty_goals)
+        END AS player_score,
+        CASE
+          WHEN m.state_payload->>'variant' = 'friendly_party_quiz' THEN COALESCE(mp_opp.total_points, 0)
+          ELSE COALESCE(mp_opp.goals + mp_opp.penalty_goals, 0)
+        END AS opponent_score,
         mp_self.goals AS player_goals,
         mp_self.penalty_goals AS player_penalty_goals,
         COALESCE(mp_opp.goals, 0) AS opponent_goals,
@@ -95,7 +101,7 @@ export const statsRepo = {
         ON mp_self.match_id = m.id
        AND mp_self.user_id = ${userId}
       LEFT JOIN LATERAL (
-        SELECT mp2.user_id, mp2.goals, mp2.penalty_goals
+        SELECT mp2.user_id, mp2.goals, mp2.penalty_goals, mp2.total_points
         FROM match_players mp2
         WHERE mp2.match_id = m.id
           AND mp2.user_id <> ${userId}

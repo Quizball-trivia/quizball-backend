@@ -95,4 +95,46 @@ describe('match-cache helpers', () => {
 
     expect(getExpectedUserIds(cache)).toEqual(['u2', 'u1']);
   });
+
+  it('falls back to ranked_sim when rebuilding a ranked cache without an explicit variant', () => {
+    const cache = buildInitialCache({
+      match: {
+        id: 'ranked-1',
+        status: 'active',
+        mode: 'ranked',
+        total_questions: 12,
+        category_a_id: 'cat-a',
+        category_b_id: 'cat-b',
+        started_at: new Date().toISOString(),
+        current_q_index: 0,
+        state_payload: {
+          version: 1,
+          half: 1,
+          currentQuestion: { qIndex: 0 },
+        },
+      },
+      players: [
+        {
+          user_id: 'u1',
+          seat: 1,
+          total_points: 0,
+          correct_answers: 0,
+          goals: 0,
+          penalty_goals: 0,
+          avg_time_ms: null,
+        },
+        {
+          user_id: 'u2',
+          seat: 2,
+          total_points: 0,
+          correct_answers: 0,
+          goals: 0,
+          penalty_goals: 0,
+          avg_time_ms: null,
+        },
+      ],
+    });
+
+    expect(cache.statePayload.variant).toBe('ranked_sim');
+  });
 });

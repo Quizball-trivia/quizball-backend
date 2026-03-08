@@ -139,6 +139,7 @@ describe('draftRealtimeService', () => {
     expect(createMatchFromLobbyMock).toHaveBeenCalledWith({
       lobbyId: 'l1',
       mode: 'friendly',
+      variant: 'ranked_sim',
       hostUserId: 'u1',
       categoryAId: 'cat-c',
       categoryBId: null,

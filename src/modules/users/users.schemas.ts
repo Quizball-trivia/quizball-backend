@@ -1,4 +1,15 @@
 import { z } from 'zod';
+import type { UserStatsSummary, HeadToHeadSummary } from '../stats/stats.service.js';
+import type { RankedUserRankResult } from '../ranked/ranked.types.js';
+
+/**
+ * userId path parameter schema.
+ */
+export const userIdParamSchema = z.object({
+  userId: z.string().uuid(),
+});
+
+export type UserIdParam = z.infer<typeof userIdParamSchema>;
 
 /**
  * User response schema.
@@ -54,5 +65,71 @@ export function toUserResponse(user: {
     preferred_language: user.preferred_language,
     onboarding_complete: user.onboarding_complete,
     created_at: user.created_at,
+  };
+}
+
+/**
+ * Public profile response — excludes private fields (email, preferred_language, onboarding_complete).
+ */
+export interface PublicProfileData {
+  user: {
+    id: string;
+    nickname: string | null;
+    avatar_url: string | null;
+    country: string | null;
+    favorite_club: string | null;
+  };
+  ranked: {
+    rp: number;
+    tier: string;
+    placementStatus: string;
+    placementPlayed: number;
+    placementRequired: number;
+    placementWins: number;
+    currentWinStreak: number;
+    lastRankedMatchAt: string | null;
+  } | null;
+  stats: UserStatsSummary;
+  headToHead: HeadToHeadSummary | null;
+  globalRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
+  countryRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
+}
+
+export const achievementResponseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  icon: z.string(),
+  unlocked: z.boolean(),
+  progress: z.number().int().nonnegative(),
+  target: z.number().int().positive(),
+  unlockedAt: z.string().datetime().nullable(),
+});
+
+export const achievementsResponseSchema = z.object({
+  achievements: z.array(achievementResponseSchema),
+});
+
+export type AchievementResponse = z.infer<typeof achievementResponseSchema>;
+export type AchievementsResponse = z.infer<typeof achievementsResponseSchema>;
+
+export function toPublicProfileResponse(data: PublicProfileData) {
+  return {
+    id: data.user.id,
+    nickname: data.user.nickname,
+    avatarUrl: data.user.avatar_url,
+    country: data.user.country,
+    favoriteClub: data.user.favorite_club,
+    ranked: data.ranked,
+    stats: data.stats,
+    headToHead: data.headToHead,
+    globalRank: data.globalRank,
+    countryRank: data.countryRank,
+  };
+}
+
+export function toAchievementsResponse(data: AchievementResponse[]) {
+  return {
+    achievements: data,
   };
 }

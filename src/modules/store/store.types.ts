@@ -100,6 +100,10 @@ export interface WalletRow {
   tickets: number;
 }
 
+export interface WalletStateRow extends WalletRow {
+  tickets_refill_started_at: string | null;
+}
+
 export interface CoinPackMetadata {
   coins: number;
   bonusPercent?: number;

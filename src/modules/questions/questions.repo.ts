@@ -48,6 +48,7 @@ export interface CreateQuestionData {
   prompt: I18nField;
   explanation?: I18nField | null;
   payload?: Json;
+  createdBy?: string;
 }
 
 export interface UpdateQuestionData {
@@ -146,14 +147,15 @@ export const questionsRepo = {
 
   async create(data: CreateQuestionData): Promise<Question> {
     const [question] = await sql<Question[]>`
-      INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
+      INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
       VALUES (
         ${data.categoryId},
         ${data.type},
         ${data.difficulty},
         ${data.status ?? 'draft'},
         ${sql.json(data.prompt as unknown as Json)},
-        ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}
+        ${data.explanation ? sql.json(data.explanation as unknown as Json) : null},
+        ${data.createdBy ?? null}
       )
       RETURNING *
     `;
@@ -170,8 +172,8 @@ export const questionsRepo = {
   ): Promise<QuestionWithPayload> {
     return sql.begin(async (tx) => {
       const questionResult = await tx.unsafe<Question[]>(
-        `INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+        `INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
          RETURNING *`,
         [
           data.categoryId,
@@ -180,6 +182,7 @@ export const questionsRepo = {
           data.status ?? 'draft',
           toJsonString(data.prompt),
           data.explanation ? toJsonString(data.explanation) : null,
+          data.createdBy ?? null,
         ]
       );
       const question = questionResult[0];

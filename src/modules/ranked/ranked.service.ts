@@ -457,8 +457,12 @@ export const rankedService = {
     };
   },
 
-  async getLeaderboard(limit: number, offset: number) {
-    return rankedRepo.listLeaderboard(limit, offset);
+  async getLeaderboard(limit: number, offset: number, country?: string) {
+    return rankedRepo.listLeaderboard(limit, offset, country);
+  },
+
+  async getUserRank(userId: string, country?: string) {
+    return rankedRepo.getUserRank(userId, country);
   },
 
   tierFromRp,

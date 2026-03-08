@@ -27,11 +27,12 @@ export type HeadToHeadResponse = z.infer<typeof headToHeadResponseSchema>;
 
 export const recentMatchesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(10),
+  userId: z.string().uuid().optional(),
 });
 
 export const recentMatchResultSchema = z.enum(['win', 'loss', 'draw']);
 
-export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'total_points_fallback', 'forfeit']);
+export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'total_points', 'total_points_fallback', 'forfeit']);
 
 export const recentMatchResponseSchema = z.object({
   matchId: z.string().uuid(),

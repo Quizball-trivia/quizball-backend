@@ -16,8 +16,8 @@ describe('possession-match-flow internals', () => {
   it('applies reveal offset helper for timer scoring', () => {
     expect(effectiveAnswerTimeMs(0)).toBe(0);
     expect(effectiveAnswerTimeMs(2000)).toBe(0);
-    expect(effectiveAnswerTimeMs(5000)).toBe(3000);
-    expect(effectiveAnswerTimeMs(12000)).toBe(10000);
+    expect(effectiveAnswerTimeMs(5000)).toBe(2000);
+    expect(effectiveAnswerTimeMs(12000)).toBe(9000);
   });
 
   it('checks goals on raw nextDiff before clamping', () => {
@@ -35,7 +35,7 @@ describe('possession-match-flow internals', () => {
     seat1Lead.normalQuestionsAnsweredInHalf = 5;
     seat1Lead.normalQuestionsAnsweredTotal = 5;
     seat1Lead.possessionDiff = 40;
-    applyNormalResolution(seat1Lead, 60, 50);
+    applyNormalResolution(seat1Lead, 60, 50, true, false);
     expect(seat1Lead.phase).toBe('LAST_ATTACK');
     expect(seat1Lead.lastAttack.attackerSeat).toBe(1);
     expect(seat1Lead.normalQuestionsAnsweredInHalf).toBe(6);
@@ -44,7 +44,7 @@ describe('possession-match-flow internals', () => {
     seat2Lead.normalQuestionsAnsweredInHalf = 5;
     seat2Lead.normalQuestionsAnsweredTotal = 5;
     seat2Lead.possessionDiff = -40;
-    applyNormalResolution(seat2Lead, 50, 60);
+    applyNormalResolution(seat2Lead, 50, 60, false, true);
     expect(seat2Lead.phase).toBe('LAST_ATTACK');
     expect(seat2Lead.lastAttack.attackerSeat).toBe(2);
   });
@@ -55,7 +55,7 @@ describe('possession-match-flow internals', () => {
     state.normalQuestionsAnsweredTotal = 5;
     state.possessionDiff = 20;
 
-    applyNormalResolution(state, 50, 50);
+    applyNormalResolution(state, 50, 50, true, true);
     expect(state.phase).toBe('HALFTIME');
     expect(state.lastAttack.attackerSeat).toBeNull();
   });

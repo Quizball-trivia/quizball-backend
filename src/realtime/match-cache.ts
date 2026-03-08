@@ -91,7 +91,11 @@ function asRuntimePhaseKind(value: unknown): 'normal' | 'last_attack' | 'penalty
 }
 
 function sanitizePossessionState(raw: unknown): PossessionStatePayload {
-  const fallback = createInitialPossessionState();
+  const fallbackVariant =
+    raw && typeof raw === 'object' && (raw as Partial<PossessionStatePayload>).variant === 'ranked_sim'
+      ? 'ranked_sim'
+      : 'friendly_possession';
+  const fallback = createInitialPossessionState(fallbackVariant);
   if (!raw || typeof raw !== 'object') return fallback;
   const candidate = raw as Partial<PossessionStatePayload>;
 

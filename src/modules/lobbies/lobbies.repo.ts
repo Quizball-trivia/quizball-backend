@@ -16,7 +16,7 @@ export interface CreateLobbyData {
   mode: 'friendly' | 'ranked';
   hostUserId: string;
   inviteCode: string | null;
-  gameMode?: 'friendly' | 'ranked_sim';
+  gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;
@@ -27,7 +27,7 @@ export interface CreateLobbyData {
 
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
-    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly');
+    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
     const friendlyRandom = data.friendlyRandom ?? true;
     const isPublic = data.isPublic ?? false;
     const displayName = data.displayName ?? '';
@@ -278,7 +278,7 @@ export const lobbiesRepo = {
         AND l.mode = 'friendly'
         AND l.is_public = true
       GROUP BY l.id, u.nickname, u.avatar_url
-      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 2)
+      HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 6)
       ORDER BY l.created_at DESC
       LIMIT ${params.limit}
     `;

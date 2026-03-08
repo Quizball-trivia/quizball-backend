@@ -195,20 +195,63 @@ export const rankedRepo = {
     });
   },
 
-  async listLeaderboard(limit: number, offset: number): Promise<RankedLeaderboardEntry[]> {
+  async listLeaderboard(limit: number, offset: number, country?: string): Promise<RankedLeaderboardEntry[]> {
+    if (country) {
+      return sql<RankedLeaderboardEntry[]>`
+        SELECT
+          rp.user_id AS "userId",
+          COALESCE(u.nickname, 'Player') AS "username",
+          u.avatar_url AS "avatarUrl",
+          rp.rp,
+          rp.tier,
+          u.country
+        FROM ranked_profiles rp
+        JOIN users u ON u.id = rp.user_id
+        WHERE u.is_ai = false AND rp.placement_status = 'placed' AND u.country = ${country}
+        ORDER BY rp.rp DESC, rp.updated_at ASC
+        LIMIT ${limit}
+        OFFSET ${offset}
+      `;
+    }
     return sql<RankedLeaderboardEntry[]>`
       SELECT
         rp.user_id AS "userId",
         COALESCE(u.nickname, 'Player') AS "username",
         u.avatar_url AS "avatarUrl",
         rp.rp,
-        rp.tier
+        rp.tier,
+        u.country
       FROM ranked_profiles rp
       JOIN users u ON u.id = rp.user_id
-      WHERE u.is_ai = false
+      WHERE u.is_ai = false AND rp.placement_status = 'placed'
       ORDER BY rp.rp DESC, rp.updated_at ASC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
+  },
+
+  async getUserRank(userId: string, country?: string): Promise<{ rank: number; total: number } | null> {
+    const profile = await this.getProfile(userId);
+    if (!profile || profile.placement_status !== 'placed') return null;
+
+    const countryFilter = country
+      ? sql`AND u.country = ${country}`
+      : sql``;
+
+    const [result] = await sql<{ rank: number; total: number }[]>`
+      SELECT
+        (SELECT COUNT(*)::int + 1
+         FROM ranked_profiles rp2
+         JOIN users u ON u.id = rp2.user_id
+         WHERE u.is_ai = false AND rp2.placement_status = 'placed' ${countryFilter}
+           AND (rp2.rp > ${profile.rp} OR (rp2.rp = ${profile.rp} AND rp2.updated_at < ${profile.updated_at}))
+        ) AS rank,
+        (SELECT COUNT(*)::int
+         FROM ranked_profiles rp3
+         JOIN users u ON u.id = rp3.user_id
+         WHERE u.is_ai = false AND rp3.placement_status = 'placed' ${countryFilter}
+        ) AS total
+    `;
+    return result ?? null;
   },
 };

@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AuthenticationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { detectCountryFromRequest } from '../../core/geo.js';
 import { getAuthProvider } from '../../modules/auth/index.js';
 import { usersService } from '../../modules/users/index.js';
 
@@ -62,7 +63,8 @@ export async function authMiddleware(
     );
 
     // 3. Resolve internal user (CRITICAL - don't skip this!)
-    const user = await usersService.getOrCreateFromIdentity(identity);
+    const detectedCountry = await detectCountryFromRequest(req);
+    const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
 
     // 4. Attach BOTH to request
     req.identity = identity;

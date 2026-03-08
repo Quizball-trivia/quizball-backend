@@ -84,5 +84,6 @@ export interface RankedLeaderboardEntry {
   avatarUrl: string | null;
   rp: number;
   tier: RankedTier;
+  country: string | null;
 }
 

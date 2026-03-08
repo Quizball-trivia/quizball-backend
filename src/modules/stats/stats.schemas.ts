@@ -31,7 +31,7 @@ export const recentMatchesQuerySchema = z.object({
 
 export const recentMatchResultSchema = z.enum(['win', 'loss', 'draw']);
 
-export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'total_points_fallback', 'forfeit']);
+export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'total_points', 'total_points_fallback', 'forfeit']);
 
 export const recentMatchResponseSchema = z.object({
   matchId: z.string().uuid(),

@@ -158,7 +158,7 @@ async function emitClosedLobbyState(io: QuizballServer, lobbyId: string): Promis
     isPublic: false,
     hostUserId: '',
     settings: {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       friendlyRandom: true,
       friendlyCategoryAId: null,
       friendlyCategoryBId: null,

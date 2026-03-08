@@ -1,5 +1,6 @@
 export type MatchMode = 'friendly' | 'ranked';
-export type LobbyGameMode = 'friendly' | 'ranked_sim';
+export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
+export type MatchVariant = LobbyGameMode;
 export type LobbyStatus = 'waiting' | 'active' | 'closed';
 export type MatchPhase =
   | 'NORMAL_PLAY'
@@ -34,6 +35,14 @@ export interface LobbyMember {
   avatarUrl: string | null;
   isReady: boolean;
   isHost: boolean;
+}
+
+export interface MatchParticipant {
+  userId: string;
+  username: string;
+  avatarUrl: string | null;
+  seat: number;
+  rankPoints?: number;
 }
 
 export interface LobbyState {
@@ -94,8 +103,10 @@ export interface GameQuestionDTO {
 export interface MatchStartPayload {
   matchId: string;
   mode: MatchMode;
-  mySeat?: 1 | 2;
+  variant: MatchVariant;
+  mySeat?: number;
   opponent: OpponentInfo;
+  participants: MatchParticipant[];
 }
 
 export interface MatchCountdownPayload {
@@ -121,6 +132,10 @@ export interface MatchChanceCardUsePayload {
   matchId: string;
   qIndex: number;
   clientActionId: string;
+}
+
+export interface MatchPlayAgainPayload {
+  matchId: string;
 }
 
 export interface MatchChanceCardAppliedPayload {
@@ -173,6 +188,7 @@ export interface MatchRoundResultPayload {
   qIndex: number;
   correctIndex: number;
   players: Record<string, MatchRoundResultPlayer>;
+  rankingOrder?: string[];
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
   shooterSeat?: 1 | 2 | null;
@@ -186,6 +202,14 @@ export interface MatchFinalResultPlayer {
   avgTimeMs: number | null;
   goals?: number;
   penaltyGoals?: number;
+}
+
+export interface MatchStandingPayload {
+  userId: string;
+  rank: number;
+  totalPoints: number;
+  correctAnswers: number;
+  avgTimeMs: number | null;
 }
 
 export interface RankedUserOutcomePayload {
@@ -210,9 +234,10 @@ export interface MatchFinalResultsPayload {
   matchId: string;
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
+  standings?: MatchStandingPayload[];
   durationMs: number;
   resultVersion: number;
-  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null;
+  winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: RankedMatchOutcomePayload | null;
 }
@@ -249,6 +274,25 @@ export interface MatchStatePayload {
   stateVersion?: number;
 }
 
+export interface MatchPartyPlayerState {
+  userId: string;
+  totalPoints: number;
+  correctAnswers: number;
+  answered: boolean;
+  rank: number;
+  avgTimeMs: number | null;
+}
+
+export interface MatchPartyStatePayload {
+  matchId: string;
+  totalQuestions: number;
+  currentQuestionIndex: number;
+  leaderUserId: string | null;
+  rankingOrder: string[];
+  players: MatchPartyPlayerState[];
+  stateVersion: number;
+}
+
 export interface MatchOpponentDisconnectedPayload {
   matchId: string;
   opponentId: string;
@@ -263,7 +307,9 @@ export interface MatchResumePayload {
 export interface MatchRejoinAvailablePayload {
   matchId: string;
   mode: MatchMode;
+  variant: MatchVariant;
   opponent: OpponentInfo;
+  participants: MatchParticipant[];
   graceMs: number;
 }
 
@@ -379,6 +425,7 @@ export interface ClientToServerEvents {
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;
+  'match:play_again': (data: MatchPlayAgainPayload) => void;
   'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
   'warmup:tap': (data: WarmupTapPayload) => void;
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
@@ -406,6 +453,7 @@ export interface ServerToClientEvents {
   'match:start': (data: MatchStartPayload) => void;
   'match:countdown': (data: MatchCountdownPayload) => void;
   'match:state': (data: MatchStatePayload) => void;
+  'match:party_state': (data: MatchPartyStatePayload) => void;
   'match:question': (data: MatchQuestionPayload) => void;
   'match:chance_card_applied': (data: MatchChanceCardAppliedPayload) => void;
   'match:opponent_answered': (data: MatchOpponentAnsweredPayload) => void;

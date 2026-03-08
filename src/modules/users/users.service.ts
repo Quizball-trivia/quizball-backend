@@ -22,14 +22,23 @@ export const usersService = {
    * 3. If exists → cache and return associated User
    * 4. If not → create User + UserIdentity atomically, cache and return User
    */
-  async getOrCreateFromIdentity(identity: AuthIdentity): Promise<User> {
+  async getOrCreateFromIdentity(identity: AuthIdentity, detectedCountry?: string | null): Promise<User> {
     // 1. Check cache first
     const cached = getCachedUser(identity.provider, identity.subject);
     if (cached) {
-      logger.debug(
-        { userId: cached.id, provider: identity.provider },
-        'User found in cache'
-      );
+      // Backfill missing fields for existing users
+      const backfill: Record<string, string> = {};
+      if (!cached.country && detectedCountry) backfill.country = detectedCountry;
+      if (!cached.avatar_url && identity.avatarUrl) backfill.avatarUrl = identity.avatarUrl;
+
+      if (Object.keys(backfill).length > 0) {
+        const updated = await usersRepo.update(cached.id, backfill);
+        if (updated) {
+          updateCachedUser(cached.id, updated);
+          logger.info({ userId: cached.id, ...backfill }, 'Backfilled user fields');
+          return updated;
+        }
+      }
       return cached;
     }
 
@@ -40,12 +49,24 @@ export const usersService = {
     );
 
     if (existingIdentity) {
-      logger.debug(
-        { userId: existingIdentity.user.id, provider: identity.provider },
-        'Found existing user for identity'
-      );
-      setCachedUser(identity.provider, identity.subject, existingIdentity.user);
-      return existingIdentity.user;
+      const existingUser = existingIdentity.user;
+
+      // Backfill missing fields for existing users
+      const backfill: Record<string, string> = {};
+      if (!existingUser.country && detectedCountry) backfill.country = detectedCountry;
+      if (!existingUser.avatar_url && identity.avatarUrl) backfill.avatarUrl = identity.avatarUrl;
+
+      if (Object.keys(backfill).length > 0) {
+        const updated = await usersRepo.update(existingUser.id, backfill);
+        if (updated) {
+          setCachedUser(identity.provider, identity.subject, updated);
+          logger.info({ userId: existingUser.id, ...backfill }, 'Backfilled user fields');
+          return updated;
+        }
+      }
+
+      setCachedUser(identity.provider, identity.subject, existingUser);
+      return existingUser;
     }
 
     // 3. Create new user with identity in a single transaction
@@ -59,6 +80,7 @@ export const usersService = {
         email: identity.email,
         nickname: identity.name,
         avatarUrl: identity.avatarUrl,
+        country: detectedCountry ?? undefined,
       },
       {
         provider: identity.provider,
@@ -68,7 +90,7 @@ export const usersService = {
     );
 
     logger.info(
-      { userId: newUser.id, provider: identity.provider },
+      { userId: newUser.id, provider: identity.provider, country: detectedCountry },
       'Created new user and identity'
     );
 

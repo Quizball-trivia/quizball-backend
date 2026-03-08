@@ -20,29 +20,21 @@ export const lobbyReadySchema = z.object({
 export const lobbyUpdateSettingsSchema = z
   .object({
     lobbyId: z.string().uuid().optional(),
-    gameMode: z.enum(['friendly', 'ranked_sim']),
+    gameMode: z.enum(['friendly_possession', 'friendly_party_quiz', 'ranked_sim']),
     friendlyRandom: z.boolean().optional(),
     friendlyCategoryAId: z.string().uuid().nullable().optional(),
     friendlyCategoryBId: z.string().uuid().nullable().optional(),
     isPublic: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.gameMode !== 'friendly') return;
+    if (data.gameMode === 'ranked_sim') return;
 
     if (data.friendlyRandom === false) {
-      if (!data.friendlyCategoryAId || !data.friendlyCategoryBId) {
+      if (!data.friendlyCategoryAId) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Friendly mode requires two categories when random is disabled',
+          message: 'A category is required when random is disabled',
           path: ['friendlyCategoryAId'],
-        });
-        return;
-      }
-      if (data.friendlyCategoryAId === data.friendlyCategoryBId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Selected categories must be different',
-          path: ['friendlyCategoryBId'],
         });
       }
     }

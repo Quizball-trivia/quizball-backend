@@ -5,8 +5,15 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
+const getLobbyByIdMock = vi.fn();
+const createLobbyMock = vi.fn();
+const addMemberMock = vi.fn();
+const countMembersMock = vi.fn();
+const updateLobbySettingsMock = vi.fn();
+const setAllReadyMock = vi.fn();
 const setLobbyStatusMock = vi.fn();
 const removeMemberMock = vi.fn();
+const prepareForLobbyEntryMock = vi.fn();
 
 type FakeRedisStore = {
   values: Map<string, string>;
@@ -112,6 +119,12 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
+    getById: (...args: unknown[]) => getLobbyByIdMock(...args),
+    createLobby: (...args: unknown[]) => createLobbyMock(...args),
+    addMember: (...args: unknown[]) => addMemberMock(...args),
+    countMembers: (...args: unknown[]) => countMembersMock(...args),
+    updateLobbySettings: (...args: unknown[]) => updateLobbySettingsMock(...args),
+    setAllReady: (...args: unknown[]) => setAllReadyMock(...args),
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     setLobbyStatus: (...args: unknown[]) => setLobbyStatusMock(...args),
     removeMember: (...args: unknown[]) => removeMemberMock(...args),
@@ -150,6 +163,7 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
       await work();
       return true;
     }),
+    prepareForLobbyEntry: (...args: unknown[]) => prepareForLobbyEntryMock(...args),
     emitState: vi.fn(async () => undefined),
   },
 }));
@@ -184,6 +198,24 @@ function createSocketMock(userId: string, matchId?: string): QuizballSocket {
   } as unknown as QuizballSocket;
 }
 
+function createIoWithUserSocket(userId: string, socket: QuizballSocket): QuizballServer {
+  const emit = vi.fn();
+  const to = vi.fn(() => ({ emit }));
+  const inFn = vi.fn((room: string) => ({
+    fetchSockets: vi.fn(async () => (room === `user:${userId}` ? [socket] : [])),
+    socketsJoin: vi.fn(async (targetRoom: string) => {
+      if (room === `user:${userId}`) {
+        socket.join(targetRoom);
+      }
+    }),
+  }));
+
+  return {
+    to,
+    in: inFn,
+  } as unknown as QuizballServer;
+}
+
 describe('match-realtime.service high-risk integration behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -197,6 +229,51 @@ describe('match-realtime.service high-risk integration behavior', () => {
     ]);
     setLobbyStatusMock.mockResolvedValue(undefined);
     removeMemberMock.mockResolvedValue(undefined);
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      invite_code: 'ROOM42',
+      mode: 'friendly',
+      game_mode: 'friendly_possession',
+      friendly_random: false,
+      friendly_category_a_id: 'cat-a',
+      friendly_category_b_id: null,
+      is_public: true,
+      display_name: 'Original Lobby',
+      host_user_id: 'u1',
+      status: 'closed',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    createLobbyMock.mockResolvedValue({
+      id: 'rematch-lobby',
+      invite_code: 'NEW123',
+      mode: 'friendly',
+      game_mode: 'friendly_possession',
+      friendly_random: true,
+      friendly_category_a_id: null,
+      friendly_category_b_id: null,
+      is_public: true,
+      display_name: 'Rematch Lobby',
+      host_user_id: 'u1',
+      status: 'waiting',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    addMemberMock.mockResolvedValue(undefined);
+    countMembersMock.mockResolvedValue(1);
+    updateLobbySettingsMock.mockResolvedValue(undefined);
+    setAllReadyMock.mockResolvedValue(undefined);
+    prepareForLobbyEntryMock.mockResolvedValue({
+      ok: true,
+      snapshot: {
+        state: 'IDLE',
+        activeMatchId: null,
+        waitingLobbyId: null,
+        queueSearchId: null,
+        openLobbyIds: [],
+        resolvedAt: new Date().toISOString(),
+      },
+    });
 
     getActiveMatchForUserMock.mockResolvedValue(null);
     getMatchMock.mockResolvedValue({
@@ -875,5 +952,259 @@ describe('match-realtime.service high-risk integration behavior', () => {
         ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', rp: 1111 }) })],
       ])
     );
+  });
+
+  it('S30: play again creates a new friendly lobby with reset category settings and carried visibility', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u1', 'rematch-match-1');
+    const io = createIoWithUserSocket('u1', socket);
+    const rematchMembers: Array<{
+      user_id: string;
+      nickname: string;
+      avatar_url: string | null;
+      is_ready: boolean;
+      joined_at: string;
+    }> = [];
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-1',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 400, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 1, penalty_goals: 0, avg_time_ms: 1400 },
+    ]);
+
+    addMemberMock.mockImplementation(async (_lobbyId: string, userId: string) => {
+      rematchMembers.push({
+        user_id: userId,
+        nickname: userId,
+        avatar_url: null,
+        is_ready: false,
+        joined_at: new Date().toISOString(),
+      });
+      return undefined;
+    });
+
+    countMembersMock.mockImplementation(async () => rematchMembers.length);
+
+    listMembersWithUserMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby') {
+        return rematchMembers;
+      }
+      return [
+        { user_id: 'u1', nickname: 'u1', avatar_url: null },
+        { user_id: 'u2', nickname: 'u2', avatar_url: null },
+      ];
+    });
+
+    getLobbyByIdMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby') {
+        return {
+          id: 'rematch-lobby',
+          invite_code: 'NEW123',
+          mode: 'friendly',
+          game_mode: 'friendly_possession',
+          friendly_random: true,
+          friendly_category_a_id: null,
+          friendly_category_b_id: null,
+          is_public: true,
+          display_name: 'Rematch Lobby',
+          host_user_id: 'u1',
+          status: 'waiting',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return {
+        id: 'l1',
+        invite_code: 'ROOM42',
+        mode: 'friendly',
+        game_mode: 'friendly_party_quiz',
+        friendly_random: false,
+        friendly_category_a_id: 'cat-a',
+        friendly_category_b_id: null,
+        is_public: true,
+        display_name: 'Original Lobby',
+        host_user_id: 'u1',
+        status: 'closed',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    await matchRealtimeService.handlePlayAgain(io, socket, { matchId: 'rematch-match-1' });
+
+    expect(createLobbyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'friendly',
+        hostUserId: 'u1',
+        isPublic: true,
+        gameMode: 'friendly_possession',
+        friendlyRandom: true,
+        friendlyCategoryAId: null,
+        friendlyCategoryBId: null,
+      })
+    );
+    expect(addMemberMock).toHaveBeenCalledWith('rematch-lobby', 'u1', false);
+    expect(socket.leave).toHaveBeenCalledWith('match:rematch-match-1');
+    expect(socket.join).toHaveBeenCalledWith('lobby:rematch-lobby');
+    expect(socket.data.matchId).toBeUndefined();
+    expect(socket.data.lobbyId).toBe('rematch-lobby');
+
+    const emitCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit: ReturnType<typeof vi.fn> }).emit.mock.calls)
+      .flat();
+    expect(emitCalls).toContainEqual([
+      'lobby:state',
+      expect.objectContaining({
+        lobbyId: 'rematch-lobby',
+        isPublic: true,
+        settings: expect.objectContaining({
+          friendlyRandom: true,
+          friendlyCategoryAId: null,
+          friendlyCategoryBId: null,
+        }),
+      }),
+    ]);
+  });
+
+  it('S31: later play again joins the existing rematch lobby and forces party quiz when the third player joins', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const hostSocket = createSocketMock('u1', 'rematch-match-2');
+    const thirdPlayerSocket = createSocketMock('u3', 'rematch-match-2');
+    const hostIo = createIoWithUserSocket('u1', hostSocket);
+    const thirdPlayerIo = createIoWithUserSocket('u3', thirdPlayerSocket);
+
+    const rematchMembers = new Map<string, Array<{
+      user_id: string;
+      nickname: string;
+      avatar_url: string | null;
+      is_ready: boolean;
+      joined_at: string;
+    }>>();
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-2',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_party_quiz' },
+    });
+
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 500, correct_answers: 5, goals: 0, penalty_goals: 0, avg_time_ms: 1000 },
+      { user_id: 'u2', seat: 2, total_points: 420, correct_answers: 4, goals: 0, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u3', seat: 3, total_points: 390, correct_answers: 4, goals: 0, penalty_goals: 0, avg_time_ms: 1100 },
+    ]);
+
+    createLobbyMock.mockResolvedValue({
+      id: 'rematch-lobby-2',
+      invite_code: 'REPLAY',
+      mode: 'friendly',
+      game_mode: 'friendly_possession',
+      friendly_random: true,
+      friendly_category_a_id: null,
+      friendly_category_b_id: null,
+      is_public: false,
+      display_name: 'Rematch Lobby',
+      host_user_id: 'u1',
+      status: 'waiting',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    addMemberMock.mockImplementation(async (lobbyId: string, userId: string) => {
+      const current = rematchMembers.get(lobbyId) ?? [];
+      if (!current.some((member) => member.user_id === userId)) {
+        current.push({
+          user_id: userId,
+          nickname: userId,
+          avatar_url: null,
+          is_ready: userId !== 'u3',
+          joined_at: new Date().toISOString(),
+        });
+      }
+      rematchMembers.set(lobbyId, current);
+      return undefined;
+    });
+
+    countMembersMock.mockImplementation(async (lobbyId: string) => (rematchMembers.get(lobbyId) ?? []).length);
+
+    listMembersWithUserMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby-2') {
+        return rematchMembers.get(lobbyId) ?? [];
+      }
+      return [
+        { user_id: 'u1', nickname: 'u1', avatar_url: null },
+        { user_id: 'u2', nickname: 'u2', avatar_url: null },
+        { user_id: 'u3', nickname: 'u3', avatar_url: null },
+      ];
+    });
+
+    getLobbyByIdMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby-2') {
+        return {
+          id: 'rematch-lobby-2',
+          invite_code: 'REPLAY',
+          mode: 'friendly',
+          game_mode: 'friendly_possession',
+          friendly_random: true,
+          friendly_category_a_id: null,
+          friendly_category_b_id: null,
+          is_public: false,
+          display_name: 'Rematch Lobby',
+          host_user_id: 'u1',
+          status: 'waiting',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return {
+        id: 'l1',
+        invite_code: 'ROOM42',
+        mode: 'friendly',
+        game_mode: 'friendly_party_quiz',
+        friendly_random: true,
+        friendly_category_a_id: null,
+        friendly_category_b_id: null,
+        is_public: false,
+        display_name: 'Original Lobby',
+        host_user_id: 'u1',
+        status: 'closed',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    await matchRealtimeService.handlePlayAgain(hostIo, hostSocket, { matchId: 'rematch-match-2' });
+    rematchMembers.set('rematch-lobby-2', [
+      { user_id: 'u1', nickname: 'u1', avatar_url: null, is_ready: true, joined_at: new Date(Date.now() - 2000).toISOString() },
+      { user_id: 'u2', nickname: 'u2', avatar_url: null, is_ready: true, joined_at: new Date(Date.now() - 1000).toISOString() },
+    ]);
+    await matchRealtimeService.handlePlayAgain(thirdPlayerIo, thirdPlayerSocket, { matchId: 'rematch-match-2' });
+
+    expect(createLobbyMock).toHaveBeenCalledTimes(1);
+    expect(addMemberMock).toHaveBeenCalledWith('rematch-lobby-2', 'u3', false);
+    expect(updateLobbySettingsMock).toHaveBeenCalledWith(
+      'rematch-lobby-2',
+      expect.objectContaining({ gameMode: 'friendly_party_quiz' })
+    );
+    expect(thirdPlayerSocket.join).toHaveBeenCalledWith('lobby:rematch-lobby-2');
+    expect(thirdPlayerSocket.data.lobbyId).toBe('rematch-lobby-2');
   });
 });

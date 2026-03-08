@@ -160,15 +160,19 @@ function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
 }
 
 function parsePossessionState(raw: unknown): PossessionStatePayload {
+  const fallbackVariant =
+    raw && typeof raw === 'object' && (raw as Partial<PossessionStatePayload>).variant === 'ranked_sim'
+      ? 'ranked_sim'
+      : 'friendly_possession';
   if (typeof raw === 'string') {
-    try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(); }
+    try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(fallbackVariant); }
   }
   if (!raw || typeof raw !== 'object') {
-    return createInitialPossessionState();
+    return createInitialPossessionState(fallbackVariant);
   }
 
   const candidate = raw as Partial<PossessionStatePayload>;
-  const fallback = createInitialPossessionState();
+  const fallback = createInitialPossessionState(fallbackVariant);
 
   if (!candidate.phase || !candidate.half || !candidate.goals || !candidate.penaltyGoals) {
     return fallback;

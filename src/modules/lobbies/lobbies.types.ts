@@ -13,7 +13,7 @@ export interface LobbyRow {
   id: string;
   invite_code: string | null;
   mode: 'friendly' | 'ranked';
-  game_mode: 'friendly' | 'ranked_sim';
+  game_mode: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;

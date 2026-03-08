@@ -12,7 +12,7 @@ export interface HeadToHeadSummary {
   lastPlayedAt: string | null;
 }
 
-const VALID_WINNER_DECISION_METHODS = ['goals', 'penalty_goals', 'total_points_fallback', 'forfeit'] as const;
+const VALID_WINNER_DECISION_METHODS = ['goals', 'penalty_goals', 'total_points', 'total_points_fallback', 'forfeit'] as const;
 export type WinnerDecisionMethod = (typeof VALID_WINNER_DECISION_METHODS)[number];
 
 export interface RecentMatchSummary {

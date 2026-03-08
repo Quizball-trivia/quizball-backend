@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import {
@@ -18,6 +17,15 @@ import {
   generateRankedAiGeo,
   rankedAiLobbyKey,
 } from '../ai-ranked.constants.js';
+import {
+  FRIENDLY_LOBBY_MAX_MEMBERS,
+  attachUserSocketsToLobby,
+  emitLobbyState,
+  generateInviteCode,
+  generateLobbyName,
+  normalizeFriendlyGameMode,
+  syncFriendlyLobbyModeForMemberCount,
+} from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 
@@ -33,47 +41,6 @@ const LOBBY_LOCK_RETRY_INTERVAL_MS = 75;
 
 // Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
-
-const LOBBY_NAME_ADJECTIVES = [
-  'Golden',
-  'Rapid',
-  'Electric',
-  'Stadium',
-  'Victory',
-  'Thunder',
-  'Derby',
-  'Final',
-  'Elite',
-  'Club',
-];
-
-const LOBBY_NAME_NOUNS = [
-  'Kickoff',
-  'Strikers',
-  'Midfield',
-  'Penalty',
-  'Hat-Trick',
-  'Goal Line',
-  'The Kop',
-  'Champions',
-  'Pitch',
-  'Arena',
-];
-
-function generateInviteCode(length = 6): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < length; i += 1) {
-    code += chars[crypto.randomInt(chars.length)];
-  }
-  return code;
-}
-
-function generateLobbyName(): string {
-  const adjective = LOBBY_NAME_ADJECTIVES[crypto.randomInt(LOBBY_NAME_ADJECTIVES.length)];
-  const noun = LOBBY_NAME_NOUNS[crypto.randomInt(LOBBY_NAME_NOUNS.length)];
-  return `${adjective} ${noun}`;
-}
 
 function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | undefined {
   return lobbyId ?? socket.data.lobbyId;
@@ -118,24 +85,6 @@ async function resolveRankedAiUserIdForDraft(
   return aiMember.userId;
 }
 
-async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
-  const state = await lobbiesService.buildLobbyState(lobby);
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
-  logger.debug(
-    {
-      lobbyId,
-      status: lobby.status,
-      memberCount: state.members.length,
-      memberIds: state.members.map((member) => member.userId),
-      mode: lobby.mode,
-      gameMode: lobby.game_mode,
-    },
-    'Lobby state broadcast'
-  );
-}
-
 async function tryAcquireDraftStartGuard(lobbyId: string): Promise<boolean> {
   const redis = getRedisClient();
   if (redis) {
@@ -175,18 +124,6 @@ async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: string, u
   });
 }
 
-async function attachUserSocketsToLobby(
-  io: QuizballServer,
-  userId: string,
-  lobbyId: string
-): Promise<void> {
-  await io.in(`user:${userId}`).socketsJoin(`lobby:${lobbyId}`);
-  const sockets = await io.in(`user:${userId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    socket.data.lobbyId = lobbyId;
-  });
-}
-
 async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   await lobbiesRepo.removeMember(lobbyId, userId);
@@ -212,6 +149,8 @@ async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: strin
   if (lobby && lobby.status === 'waiting' && lobby.host_user_id === userId) {
     await transferHostIfNeeded(lobbyId, userId);
   }
+
+  await syncFriendlyLobbyModeForMemberCount(lobbyId);
 
   await emitLobbyState(io, lobbyId);
 }
@@ -270,7 +209,7 @@ async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Promise<b
     isPublic: false,
     hostUserId: '',
     settings: {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       friendlyRandom: true,
       friendlyCategoryAId: null,
       friendlyCategoryBId: null,
@@ -670,7 +609,7 @@ export const lobbyRealtimeService = {
 
           const members = await lobbiesRepo.listMembersWithUser(lobby.id);
           const alreadyMember = members.some((member) => member.user_id === userId);
-          if (!alreadyMember && members.length >= 2) {
+          if (!alreadyMember && members.length >= FRIENDLY_LOBBY_MAX_MEMBERS) {
             logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
             socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
             return;
@@ -678,6 +617,9 @@ export const lobbyRealtimeService = {
 
           if (!alreadyMember) {
             await lobbiesRepo.addMember(lobby.id, userId, false);
+            await syncFriendlyLobbyModeForMemberCount(lobby.id, {
+              clearReadyOnPartyTransition: members.length <= 2,
+            });
           }
           await attachUserSocketsToLobby(io, userId, lobby.id);
 
@@ -737,12 +679,23 @@ export const lobbyRealtimeService = {
       const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
       const memberCount = await lobbiesRepo.countMembers(lobbyId);
 
-      if (memberCount === 2 && readyCount === 2) {
-        if (lobby.mode === 'friendly' && lobby.game_mode === 'friendly') {
-          logger.info({ lobbyId }, 'Lobby ready -> waiting for host start (friendly)');
+      if (lobby.mode === 'friendly') {
+        const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
+        const allReady = memberCount > 0 && readyCount === memberCount;
+
+        if (
+          (friendlyMode === 'friendly_possession' && memberCount === 2 && allReady) ||
+          (friendlyMode === 'friendly_party_quiz' && memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS && allReady)
+        ) {
+          logger.info({ lobbyId, gameMode: friendlyMode }, 'Lobby ready -> waiting for host start (friendly)');
           return;
         }
+        if (friendlyMode !== 'ranked_sim') {
+          return;
+        }
+      }
 
+      if (memberCount === 2 && readyCount === 2) {
         const acquiredGuard = await tryAcquireDraftStartGuard(lobbyId);
         if (!acquiredGuard) {
           logger.debug({ lobbyId }, 'Draft already starting, skipping duplicate');
@@ -770,7 +723,7 @@ export const lobbyRealtimeService = {
     socket: QuizballSocket,
     payload: {
       lobbyId?: string;
-      gameMode: 'friendly' | 'ranked_sim';
+      gameMode: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
       friendlyRandom?: boolean;
       friendlyCategoryAId?: string | null;
       friendlyCategoryBId?: string | null;
@@ -822,7 +775,7 @@ export const lobbyRealtimeService = {
       }
 
       const currentSettings = {
-        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
+        gameMode: lobby.game_mode ?? (lobby.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
         friendlyRandom: lobby.friendly_random ?? true,
         friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
         friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
@@ -845,6 +798,12 @@ export const lobbyRealtimeService = {
             : currentSettings.friendlyCategoryBId,
       };
 
+      if (lobby.mode === 'friendly') {
+        if (memberCount > 2) {
+          nextSettings.gameMode = 'friendly_party_quiz';
+        }
+      }
+
       if (nextSettings.gameMode === 'ranked_sim') {
         nextSettings.friendlyRandom = true;
         nextSettings.friendlyCategoryAId = null;
@@ -860,7 +819,6 @@ export const lobbyRealtimeService = {
           });
           return;
         }
-        // Second-half category is determined at halftime via ban/pick
         nextSettings.friendlyCategoryBId = null;
       }
 
@@ -933,15 +891,21 @@ export const lobbyRealtimeService = {
       return;
     }
 
-    if (lobby.game_mode !== 'friendly') {
-      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Match start is only available for friendly mode' });
+    const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
+    if (friendlyMode === 'ranked_sim') {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
       return;
     }
 
     const memberCount = await lobbiesRepo.countMembers(lobbyId);
     const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
-    if (memberCount !== 2 || readyCount !== 2) {
-      socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'Both players must be ready' });
+    const allReady = memberCount > 0 && readyCount === memberCount;
+    const isValidFriendlyStart =
+      (friendlyMode === 'friendly_possession' && memberCount === 2) ||
+      (friendlyMode === 'friendly_party_quiz' && memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS);
+
+    if (!isValidFriendlyStart || !allReady) {
+      socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
       return;
     }
 
@@ -1019,6 +983,7 @@ export const lobbyRealtimeService = {
         result = await matchesService.createMatchFromLobby({
           lobbyId,
           mode: lobby.mode,
+          variant: friendlyMode,
           hostUserId: lobby.host_user_id,
           categoryAId,
           categoryBId,
@@ -1130,6 +1095,8 @@ export const lobbyRealtimeService = {
           await transferHostIfNeeded(lobbyId, userId);
         }
 
+        await syncFriendlyLobbyModeForMemberCount(lobbyId);
+
         await emitLobbyState(io, lobbyId);
       } finally {
         await releaseLock(lobbyLockKey, lobbyLock.token);
@@ -1187,6 +1154,8 @@ export const lobbyRealtimeService = {
         if (lobby.host_user_id === userId) {
           await transferHostIfNeeded(lobbyId, userId);
         }
+
+        await syncFriendlyLobbyModeForMemberCount(lobbyId);
 
         await emitLobbyState(io, lobbyId);
       } catch (error) {

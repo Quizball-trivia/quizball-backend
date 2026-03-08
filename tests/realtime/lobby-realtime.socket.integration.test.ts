@@ -9,7 +9,7 @@ type LobbyRow = {
   id: string;
   invite_code: string | null;
   mode: LobbyMode;
-  game_mode: 'friendly' | 'ranked_sim';
+  game_mode: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   friendly_random: boolean;
   friendly_category_a_id: string | null;
   friendly_category_b_id: string | null;
@@ -242,7 +242,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
       inviteCode: string | null;
       isPublic?: boolean;
       displayName?: string;
-      gameMode?: 'friendly' | 'ranked_sim';
+      gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
       friendlyRandom?: boolean;
       friendlyCategoryAId?: string | null;
       friendlyCategoryBId?: string | null;
@@ -252,7 +252,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
         id,
         invite_code: data.inviteCode,
         mode: data.mode,
-        game_mode: data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly'),
+        game_mode: data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
         friendly_random: data.friendlyRandom ?? true,
         friendly_category_a_id: data.friendlyCategoryAId ?? null,
         friendly_category_b_id: data.friendlyCategoryBId ?? null,
@@ -314,7 +314,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     }),
 
     updateLobbySettings: vi.fn(async (lobbyId: string, settings: {
-      gameMode: 'friendly' | 'ranked_sim';
+      gameMode: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
       friendlyRandom: boolean;
       friendlyCategoryAId: string | null;
       friendlyCategoryBId: string | null;
@@ -630,7 +630,7 @@ describe('lobby realtime socket integration', () => {
 
     await user.trigger('lobby:join_by_code', { inviteCode: 'BAD999' });
     await user.trigger('lobby:update_settings', {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       isPublic: true,
     });
 
@@ -658,7 +658,7 @@ describe('lobby realtime socket integration', () => {
 
     await user.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
     await user.trigger('lobby:update_settings', {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       isPublic: true,
     });
 
@@ -701,13 +701,13 @@ describe('lobby realtime socket integration', () => {
     const lobbyId = [...store.lobbies.keys()][0];
 
     await host.trigger('lobby:update_settings', {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       isPublic: true,
     });
     expect(store.lobbies.get(lobbyId)?.is_public).toBe(true);
 
     await host.trigger('lobby:update_settings', {
-      gameMode: 'friendly',
+      gameMode: 'friendly_possession',
       isPublic: false,
     });
     expect(store.lobbies.get(lobbyId)?.is_public).toBe(false);
@@ -742,6 +742,328 @@ describe('lobby realtime socket integration', () => {
     expect(joinSecondaryState.members.map((member) => member.userId).sort()).toEqual(expectedMemberIds);
   });
 
+  it('allows friendly lobbies to fill to 6 players and rejects the 7th join', async () => {
+    const host = createSocket('host-six');
+    const guests = ['guest-1', 'guest-2', 'guest-3', 'guest-4', 'guest-5', 'guest-6'].map((userId) => createSocket(userId));
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    for (const guest of guests.slice(0, 5)) {
+      await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    }
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(lobby).toBeDefined();
+    expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual([
+      'host-six',
+      'guest-1',
+      'guest-2',
+      'guest-3',
+      'guest-4',
+      'guest-5',
+    ]);
+    expect(listMembers(lobby.id)).toHaveLength(6);
+
+    await guests[5].trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    const fullError = guests[5].emitted.find(
+      (entry) =>
+        entry.event === 'error' &&
+        (entry.payload as { code?: string }).code === 'LOBBY_FULL'
+    );
+    expect(fullError).toBeDefined();
+    expect(listMembers(lobby.id)).toHaveLength(6);
+  });
+
+  it('forces party quiz and clears all ready states when a third player joins', async () => {
+    const host = createSocket('party-host');
+    const guest = createSocket('party-guest');
+    const third = createSocket('party-third');
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    const lobby = [...store.lobbies.values()][0];
+
+    await host.trigger('lobby:ready', { ready: true });
+    await guest.trigger('lobby:ready', { ready: true });
+    expect(listMembers(lobby.id).every((member) => member.is_ready)).toBe(true);
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_possession');
+
+    await third.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_party_quiz');
+    expect(listMembers(lobby.id).map((member) => member.is_ready)).toEqual([false, false, false]);
+  });
+
+  it('keeps party quiz selected when a forced 3-player lobby drops back to 2 players', async () => {
+    const host = createSocket('party-sticky-host');
+    const guest = createSocket('party-sticky-guest');
+    const third = createSocket('party-sticky-third');
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    await third.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_party_quiz');
+
+    await third.trigger('lobby:leave');
+
+    expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['party-sticky-host', 'party-sticky-guest']);
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_party_quiz');
+  });
+
+  it('allows a 2-player host to switch the lobby into party quiz mode', async () => {
+    const host = createSocket('party-duel-host');
+    const guest = createSocket('party-duel-guest');
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    await host.trigger('lobby:update_settings', {
+      gameMode: 'friendly_party_quiz',
+    });
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_party_quiz');
+  });
+
+  it('normalizes 3-player settings updates to party quiz even if host selects ranked sim', async () => {
+    const host = createSocket('settings-host');
+    const guest = createSocket('settings-guest');
+    const third = createSocket('settings-third');
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: true });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    await third.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    await host.trigger('lobby:update_settings', {
+      gameMode: 'ranked_sim',
+      isPublic: false,
+    });
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_party_quiz');
+    expect(store.lobbies.get(lobby.id)?.is_public).toBe(false);
+  });
+
+  it('clears friendly category settings when switching a 2-player lobby to ranked sim', async () => {
+    const host = createSocket('ranked-host');
+    const guest = createSocket('ranked-guest');
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    const lobby = [...store.lobbies.values()][0];
+    lobby.friendly_random = false;
+    lobby.friendly_category_a_id = 'cat-a';
+    lobby.friendly_category_b_id = null;
+    store.lobbies.set(lobby.id, lobby);
+
+    await host.trigger('lobby:update_settings', {
+      gameMode: 'ranked_sim',
+      friendlyRandom: false,
+      friendlyCategoryAId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    const updatedLobby = store.lobbies.get(lobby.id);
+    expect(updatedLobby?.game_mode).toBe('ranked_sim');
+    expect(updatedLobby?.friendly_random).toBe(true);
+    expect(updatedLobby?.friendly_category_a_id).toBeNull();
+    expect(updatedLobby?.friendly_category_b_id).toBeNull();
+  });
+
+  it('stores the selected category when random is disabled for friendly settings', async () => {
+    const host = createSocket('manual-host');
+    const categoryId = '11111111-1111-4111-8111-111111111111';
+
+    await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await host.trigger('lobby:update_settings', {
+      gameMode: 'friendly_possession',
+      friendlyRandom: false,
+      friendlyCategoryAId: categoryId,
+    });
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(store.lobbies.get(lobby.id)?.game_mode).toBe('friendly_possession');
+    expect(store.lobbies.get(lobby.id)?.friendly_random).toBe(false);
+    expect(store.lobbies.get(lobby.id)?.friendly_category_a_id).toBe(categoryId);
+    expect(store.lobbies.get(lobby.id)?.friendly_category_b_id).toBeNull();
+  });
+
+  it('does not start party quiz until all lobby players are ready', async () => {
+    const host = createSocket('start-host');
+    const guestA = createSocket('start-a');
+    const guestB = createSocket('start-b');
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const { lobbiesService } = await import('../../src/modules/lobbies/lobbies.service.js');
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+
+    vi.mocked(lobbiesService.selectRandomCategories).mockResolvedValue([{ id: 'cat-party' }] as never);
+    vi.mocked(matchesService.createMatchFromLobby).mockResolvedValue({
+      match: { id: 'match-party' } as never,
+      playerIds: ['start-host', 'start-a', 'start-b'],
+      variant: 'friendly_party_quiz',
+    });
+    vi.mocked(beginMatchForLobby).mockResolvedValue(undefined);
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guestA.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    await guestB.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+
+    await host.trigger('lobby:ready', { ready: true });
+    await guestA.trigger('lobby:ready', { ready: true });
+    await host.trigger('lobby:start');
+
+    const notReadyError = host.emitted.find(
+      (entry) =>
+        entry.event === 'error' &&
+        (entry.payload as { code?: string }).code === 'LOBBY_NOT_READY'
+    );
+    expect(notReadyError).toBeDefined();
+    expect(vi.mocked(matchesService.createMatchFromLobby)).not.toHaveBeenCalled();
+
+    await guestB.trigger('lobby:ready', { ready: true });
+    await host.trigger('lobby:start');
+
+    expect(vi.mocked(matchesService.createMatchFromLobby)).toHaveBeenCalledWith({
+      lobbyId: expect.any(String),
+      mode: 'friendly',
+      variant: 'friendly_party_quiz',
+      hostUserId: 'start-host',
+      categoryAId: expect.any(String),
+      categoryBId: null,
+    });
+    expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'match-party'
+    );
+  });
+
+  it('keeps 2-player friendly host start on the possession variant', async () => {
+    const host = createSocket('duel-host');
+    const guest = createSocket('duel-guest');
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const { lobbiesService } = await import('../../src/modules/lobbies/lobbies.service.js');
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+
+    vi.mocked(lobbiesService.selectRandomCategories).mockResolvedValue([{ id: 'cat-duel' }] as never);
+    vi.mocked(matchesService.createMatchFromLobby).mockResolvedValue({
+      match: { id: 'match-duel' } as never,
+      playerIds: ['duel-host', 'duel-guest'],
+      variant: 'friendly_possession',
+    });
+    vi.mocked(beginMatchForLobby).mockResolvedValue(undefined);
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    await host.trigger('lobby:ready', { ready: true });
+    await guest.trigger('lobby:ready', { ready: true });
+    await host.trigger('lobby:start');
+
+    expect(vi.mocked(matchesService.createMatchFromLobby)).toHaveBeenCalledWith({
+      lobbyId: expect.any(String),
+      mode: 'friendly',
+      variant: 'friendly_possession',
+      hostUserId: 'duel-host',
+      categoryAId: expect.any(String),
+      categoryBId: null,
+    });
+    expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'match-duel'
+    );
+  });
+
+  it('allows 2-player friendly host start on the party quiz variant', async () => {
+    const host = createSocket('party-duel-start-host');
+    const guest = createSocket('party-duel-start-guest');
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const { lobbiesService } = await import('../../src/modules/lobbies/lobbies.service.js');
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+
+    vi.mocked(lobbiesService.selectRandomCategories).mockResolvedValue([{ id: 'cat-party-duel' }] as never);
+    vi.mocked(matchesService.createMatchFromLobby).mockResolvedValue({
+      match: { id: 'match-party-duel' } as never,
+      playerIds: ['party-duel-start-host', 'party-duel-start-guest'],
+      variant: 'friendly_party_quiz',
+    });
+    vi.mocked(beginMatchForLobby).mockResolvedValue(undefined);
+
+    const createdState = await (async () => {
+      const promise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+      await host.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+      return promise;
+    })();
+
+    await guest.trigger('lobby:join_by_code', { inviteCode: createdState.inviteCode });
+    await host.trigger('lobby:update_settings', {
+      gameMode: 'friendly_party_quiz',
+    });
+    await host.trigger('lobby:ready', { ready: true });
+    await guest.trigger('lobby:ready', { ready: true });
+    await host.trigger('lobby:start');
+
+    expect(vi.mocked(matchesService.createMatchFromLobby)).toHaveBeenCalledWith({
+      lobbyId: expect.any(String),
+      mode: 'friendly',
+      variant: 'friendly_party_quiz',
+      hostUserId: 'party-duel-start-host',
+      categoryAId: expect.any(String),
+      categoryBId: null,
+    });
+    expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'match-party-duel'
+    );
+  });
+
   it('blocks friendly start when selected categories are insufficient (manual mode)', async () => {
     const host = createSocket('host-sel');
     const guest = createSocket('guest-sel');
@@ -760,16 +1082,13 @@ describe('lobby realtime socket integration', () => {
     const lobby = [...store.lobbies.values()][0];
     lobby.friendly_random = false;
     lobby.friendly_category_a_id = '11111111-1111-4111-8111-111111111111';
-    lobby.friendly_category_b_id = '22222222-2222-4222-8222-222222222222';
+    lobby.game_mode = 'friendly_possession';
     store.lobbies.set(lobby.id, lobby);
 
     vi.mocked(categoriesRepo.listByIds).mockResolvedValueOnce([
       { id: lobby.friendly_category_a_id } as never,
-      { id: lobby.friendly_category_b_id } as never,
     ]);
-    vi.mocked(lobbiesRepo.listValidCategoryIds).mockResolvedValueOnce([
-      lobby.friendly_category_a_id as string,
-    ]);
+    vi.mocked(lobbiesRepo.listValidCategoryIds).mockResolvedValueOnce([]);
 
     await host.trigger('lobby:ready', { ready: true });
     await guest.trigger('lobby:ready', { ready: true });

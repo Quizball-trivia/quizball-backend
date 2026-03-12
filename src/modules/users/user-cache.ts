@@ -14,7 +14,7 @@ import type { User } from '../../db/types.js';
 const cache = new LRUCache<string, User>({
   max: 1000,          // Maximum 1000 cached users
   ttl: 60 * 1000,     // 60 second TTL
-  updateAgeOnGet: true, // Reset TTL on access (keep active users cached)
+  updateAgeOnGet: false, // Don't reset TTL - ensure stale roles/data expire
 });
 
 export function getCacheKey(provider: string, subject: string): string {

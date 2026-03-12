@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AuthorizationError } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 
 /**
  * Middleware to require specific user role(s).
@@ -20,6 +21,16 @@ export function requireRole(...allowedRoles: string[]) {
     const userRole = req.user?.role;
 
     if (!userRole || !allowedRoles.includes(userRole)) {
+      logger.warn(
+        {
+          userId: req.user?.id,
+          userRole: userRole ?? 'none',
+          requiredRoles: allowedRoles,
+          method: req.method,
+          path: req.originalUrl,
+        },
+        'Role check failed: insufficient permissions'
+      );
       throw new AuthorizationError('Insufficient permissions');
     }
 

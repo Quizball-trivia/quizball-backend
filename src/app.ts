@@ -69,6 +69,14 @@ export function createApp(): Express {
     customErrorMessage: (req, res, err) => {
       return `${req.method} ${req.url} ${res.statusCode} - ${err.message}`;
     },
+    // Attach user info to every request log
+    customProps: (req) => {
+      const expressReq = req as unknown as import('express').Request;
+      if (expressReq.user) {
+        return { userId: expressReq.user.id, userRole: expressReq.user.role };
+      }
+      return {};
+    },
     // Don't include req/res/responseTime objects in logs - already in message
     serializers: {
       req: () => undefined,

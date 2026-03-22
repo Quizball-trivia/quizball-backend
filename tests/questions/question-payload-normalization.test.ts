@@ -61,4 +61,62 @@ describe('question payload normalization', () => {
     const parsed = questionPayloadSchema.safeParse(malformed);
     expect(parsed.success).toBe(false);
   });
+
+  it('parses countdown_list payloads', () => {
+    const payload = {
+      type: 'countdown_list',
+      prompt: { en: 'Name the clubs' },
+      answer_groups: [
+        {
+          id: 'clubs',
+          display: { en: 'Premier League Winners' },
+          accepted_answers: ['arsenal', 'chelsea'],
+        },
+      ],
+    };
+
+    const parsed = questionPayloadSchema.safeParse(payload);
+    expect(parsed.success).toBe(true);
+  });
+
+  it('parses clue_chain payloads', () => {
+    const payload = {
+      type: 'clue_chain',
+      display_answer: { en: 'Lionel Messi' },
+      accepted_answers: ['lionel messi', 'messi'],
+      clues: [
+        { type: 'text', content: { en: 'World Cup winner' } },
+        { type: 'emoji', content: { en: '🐐' } },
+      ],
+    };
+
+    const parsed = questionPayloadSchema.safeParse(payload);
+    expect(parsed.success).toBe(true);
+  });
+
+  it('parses put_in_order payloads and rejects duplicate item ids', () => {
+    const validPayload = {
+      type: 'put_in_order',
+      prompt: { en: 'Put these wins in order' },
+      direction: 'asc',
+      items: [
+        { id: 'a', label: { en: '2010' }, sort_value: 2010 },
+        { id: 'b', label: { en: '2014' }, sort_value: 2014 },
+        { id: 'c', label: { en: '2022' }, sort_value: 2022 },
+      ],
+    };
+
+    expect(questionPayloadSchema.safeParse(validPayload).success).toBe(true);
+
+    const duplicateIdPayload = {
+      ...validPayload,
+      items: [
+        { id: 'dup', label: { en: '2010' }, sort_value: 2010 },
+        { id: 'dup', label: { en: '2014' }, sort_value: 2014 },
+        { id: 'c', label: { en: '2022' }, sort_value: 2022 },
+      ],
+    };
+
+    expect(questionPayloadSchema.safeParse(duplicateIdPayload).success).toBe(false);
+  });
 });

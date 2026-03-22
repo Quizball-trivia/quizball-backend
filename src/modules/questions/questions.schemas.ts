@@ -12,7 +12,13 @@ import { createHash } from 'crypto';
 /**
  * Question type enum
  */
-export const questionTypeEnum = z.enum(['mcq_single', 'input_text']);
+export const questionTypeEnum = z.enum([
+  'mcq_single',
+  'input_text',
+  'countdown_list',
+  'clue_chain',
+  'put_in_order',
+]);
 export type QuestionType = z.infer<typeof questionTypeEnum>;
 
 /**
@@ -57,6 +63,45 @@ const textInputPayloadBaseSchema = z.object({
   type: z.literal('input_text'),
   accepted_answers: z.array(i18nFieldSchema).min(1),
   case_sensitive: z.boolean(),
+});
+
+const countdownAnswerGroupSchema = z.object({
+  id: z.string().min(1),
+  display: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+});
+
+const countdownPayloadBaseSchema = z.object({
+  type: z.literal('countdown_list'),
+  prompt: i18nFieldSchema,
+  answer_groups: z.array(countdownAnswerGroupSchema).min(1),
+});
+
+const clueItemSchema = z.object({
+  type: z.enum(['text', 'emoji']),
+  content: i18nFieldSchema,
+});
+
+const clueChainPayloadBaseSchema = z.object({
+  type: z.literal('clue_chain'),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+  clues: z.array(clueItemSchema).min(1),
+});
+
+const putInOrderItemSchema = z.object({
+  id: z.string().min(1),
+  label: i18nFieldSchema,
+  details: i18nFieldSchema.nullish(),
+  emoji: z.string().nullable().optional(),
+  sort_value: z.number(),
+});
+
+const putInOrderPayloadBaseSchema = z.object({
+  type: z.literal('put_in_order'),
+  prompt: i18nFieldSchema,
+  direction: z.enum(['asc', 'desc']),
+  items: z.array(putInOrderItemSchema).min(3),
 });
 
 function parseNestedJsonString(value: unknown): unknown {
@@ -159,7 +204,16 @@ export function normalizeQuestionPayloadCandidate(payload: unknown): unknown {
  * Additional validation (unique IDs, exactly 1 correct) applied via superRefine
  */
 export const questionPayloadSchema = z
-  .preprocess(normalizeQuestionPayloadCandidate, z.discriminatedUnion('type', [mcqPayloadBaseSchema, textInputPayloadBaseSchema]))
+  .preprocess(
+    normalizeQuestionPayloadCandidate,
+    z.discriminatedUnion('type', [
+      mcqPayloadBaseSchema,
+      textInputPayloadBaseSchema,
+      countdownPayloadBaseSchema,
+      clueChainPayloadBaseSchema,
+      putInOrderPayloadBaseSchema,
+    ])
+  )
   .superRefine((data, ctx) => {
     if (data.type === 'mcq_single') {
       // Check exactly one correct answer
@@ -182,10 +236,35 @@ export const questionPayloadSchema = z
         });
       }
     }
+
+    if (data.type === 'countdown_list') {
+      const ids = data.answer_groups.map((group) => group.id);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Answer group IDs must be unique',
+          path: ['answer_groups'],
+        });
+      }
+    }
+
+    if (data.type === 'put_in_order') {
+      const ids = data.items.map((item) => item.id);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Item IDs must be unique',
+          path: ['items'],
+        });
+      }
+    }
   });
 
 export type McqPayload = z.infer<typeof mcqPayloadBaseSchema>;
 export type TextInputPayload = z.infer<typeof textInputPayloadBaseSchema>;
+export type CountdownPayload = z.infer<typeof countdownPayloadBaseSchema>;
+export type ClueChainPayload = z.infer<typeof clueChainPayloadBaseSchema>;
+export type PutInOrderPayload = z.infer<typeof putInOrderPayloadBaseSchema>;
 export type QuestionPayload = z.infer<typeof questionPayloadSchema>;
 
 /**
@@ -199,7 +278,7 @@ export const questionResponseSchema = z.object({
   status: statusEnum,
   prompt: i18nFieldSchema,
   explanation: i18nFieldSchema.nullable(),
-  payload: z.unknown().nullable(),
+  payload: z.union([questionPayloadSchema, z.null()]),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
 });
@@ -385,6 +464,22 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
   const prompt = parseJsonField(question.prompt, 'prompt', true);
   const explanation = parseJsonField(question.explanation, 'explanation', false);
   const payload = parseJsonField(question.payload, 'payload', false);
+  let validatedPayload: QuestionPayload | null = null;
+  if (payload != null) {
+    const payloadResult = questionPayloadSchema.safeParse(payload);
+    if (payloadResult.success) {
+      validatedPayload = payloadResult.data;
+    } else {
+      logger.error(
+        {
+          questionId: question.id,
+          payload,
+          error: payloadResult.error.flatten(),
+        },
+        'Invalid question payload in database'
+      );
+    }
+  }
 
   if (prompt == null) {
     throw new InternalError(
@@ -400,7 +495,7 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
     status: statusResult.data,
     prompt,
     explanation,
-    payload,
+    payload: validatedPayload,
     created_at: question.created_at,
     updated_at: question.updated_at,
   };

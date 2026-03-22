@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { UserStatsSummary, HeadToHeadSummary } from '../stats/stats.service.js';
 import type { RankedUserRankResult } from '../ranked/ranked.types.js';
+import type { PlacementStatus, RankedTier } from '../ranked/ranked.types.js';
+
+export const userRoleSchema = z.enum(['admin', 'user']);
+export type UserRole = z.infer<typeof userRoleSchema>;
 
 /**
  * userId path parameter schema.
@@ -17,6 +21,7 @@ export type UserIdParam = z.infer<typeof userIdParamSchema>;
 export const userResponseSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email().nullable(),
+  role: userRoleSchema,
   nickname: z.string().nullable(),
   country: z.string().nullable(),
   avatar_url: z.string().url().nullable(),
@@ -47,6 +52,7 @@ export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;
 export function toUserResponse(user: {
   id: string;
   email: string | null;
+  role: string;
   nickname: string | null;
   country: string | null;
   avatar_url: string | null;
@@ -58,6 +64,7 @@ export function toUserResponse(user: {
   return {
     id: user.id,
     email: user.email,
+    role: user.role as UserRole,
     nickname: user.nickname,
     country: user.country,
     avatar_url: user.avatar_url,
@@ -81,8 +88,8 @@ export interface PublicProfileData {
   };
   ranked: {
     rp: number;
-    tier: string;
-    placementStatus: string;
+    tier: RankedTier;
+    placementStatus: PlacementStatus;
     placementPlayed: number;
     placementRequired: number;
     placementWins: number;

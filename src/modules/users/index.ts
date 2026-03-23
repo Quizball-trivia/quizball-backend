@@ -4,6 +4,7 @@ export { usersService } from './users.service.js';
 export { usersController } from './users.controller.js';
 export {
   userResponseSchema,
+  publicProfileResponseSchema,
   achievementResponseSchema,
   achievementsResponseSchema,
   updateProfileSchema,
@@ -14,6 +15,7 @@ export {
   type AchievementResponse,
   type AchievementsResponse,
   type UserResponse,
+  type PublicProfileResponse,
   type UpdateProfileRequest,
   type UserIdParam,
   type PublicProfileData,

@@ -4,6 +4,7 @@ import { logger } from '../core/logger.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { progressionService } from '../modules/progression/progression.service.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { storeService } from '../modules/store/store.service.js';
 import { usersRepo } from '../modules/users/users.repo.js';
@@ -928,9 +929,16 @@ async function completePossessionMatch(
     }
   }
 
+  try {
+    await progressionService.awardCompletedMatchXp(matchId);
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Match XP award failed after completion');
+  }
+
   const unlockedAchievements = await achievementsService.evaluateForMatch(
     matchId,
-    refreshedPlayers.map((player) => player.user_id)
+    refreshedPlayers.map((player) => player.user_id),
+    match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
   );
 
   io.to(`match:${matchId}`).emit('match:final_results', {

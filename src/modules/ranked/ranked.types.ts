@@ -50,15 +50,20 @@ export interface RankedRpChangeRow {
   created_at: string;
 }
 
-export interface RankedPlacementAiContext {
-  isPlacement: true;
-  placementGameNo: number;
+export interface RankedAiMatchContext {
+  isPlacement: boolean;
+  placementGameNo?: number;
   aiAnchorRp: number;
   aiCorrectness: number;
   aiDelayProfile: {
     minMs: number;
     maxMs: number;
   };
+}
+
+export interface RankedPlacementAiContext extends RankedAiMatchContext {
+  isPlacement: true;
+  placementGameNo: number;
 }
 
 export interface RankedUserOutcome {

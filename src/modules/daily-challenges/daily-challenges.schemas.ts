@@ -28,7 +28,7 @@ const moneyDropSettingsBaseSchema = z.object({
 });
 
 const footballJeopardySettingsBaseSchema = z.object({
-  categoryIds: z.array(z.string().uuid()).length(3),
+  categoryIds: z.array(z.string().uuid()).default([]),
   pickCount: z.number().int().min(1).max(9),
 });
 
@@ -178,7 +178,7 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
         name: z.string().min(1),
         questions: z.array(jeopardyQuestionSchema).length(3),
       })
-    ).length(3),
+    ).min(1),
   }),
   z.object({
     challengeType: z.literal('countdown'),

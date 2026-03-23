@@ -258,7 +258,8 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     await deleteMatchCache(matchId);
     await achievementsService.evaluateForMatch(
       matchId,
-      players.map((player) => player.user_id)
+      players.map((player) => player.user_id),
+      'friendly_party_quiz'
     );
 
     const resultVersion = Date.now();

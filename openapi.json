@@ -1,7 +1,3 @@
-
-> quizball-backend@1.0.0 api:export
-> tsx scripts/export-openapi.ts
-
 {
   "openapi": "3.0.0",
   "info": {
@@ -131,6 +127,41 @@
           "url"
         ]
       },
+      "ProgressionResponse": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "totalXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentLevelXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpForNextLevel": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "progressPct": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "level",
+          "totalXp",
+          "currentLevelXp",
+          "xpForNextLevel",
+          "progressPct"
+        ]
+      },
       "UserResponse": {
         "type": "object",
         "properties": {
@@ -174,6 +205,9 @@
           "onboarding_complete": {
             "type": "boolean"
           },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -189,6 +223,7 @@
           "favorite_club",
           "preferred_language",
           "onboarding_complete",
+          "progression",
           "created_at"
         ]
       },
@@ -540,6 +575,99 @@
           "placementWins",
           "currentWinStreak",
           "lastRankedMatchAt"
+        ]
+      },
+      "PublicProfileResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nickname": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "favoriteClub": {
+            "type": "string",
+            "nullable": true
+          },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
+          "ranked": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RankedProfileResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "stats": {
+            "$ref": "#/components/schemas/StatsSummaryResponse"
+          },
+          "headToHead": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeadToHeadResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "globalRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          },
+          "countryRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "nickname",
+          "avatarUrl",
+          "country",
+          "favoriteClub",
+          "progression",
+          "ranked",
+          "stats",
+          "headToHead",
+          "globalRank",
+          "countryRank"
         ]
       },
       "StoreProductsResponse": {
@@ -1070,94 +1198,6 @@
           "totalPages"
         ]
       },
-      "PublicProfileResponse": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "nickname": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "country": {
-            "type": "string",
-            "nullable": true
-          },
-          "favoriteClub": {
-            "type": "string",
-            "nullable": true
-          },
-          "ranked": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RankedProfileResponse"
-              }
-            ],
-            "nullable": true
-          },
-          "stats": {
-            "$ref": "#/components/schemas/StatsSummaryResponse"
-          },
-          "headToHead": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeadToHeadResponse"
-              }
-            ],
-            "nullable": true
-          },
-          "globalRank": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "rank": {
-                "type": "integer"
-              },
-              "total": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "rank",
-              "total"
-            ]
-          },
-          "countryRank": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "rank": {
-                "type": "integer"
-              },
-              "total": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "rank",
-              "total"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "nickname",
-          "avatarUrl",
-          "country",
-          "favoriteClub",
-          "ranked",
-          "stats",
-          "headToHead",
-          "globalRank",
-          "countryRank"
-        ]
-      },
       "I18nField": {
         "type": "object",
         "additionalProperties": {
@@ -1506,7 +1546,8 @@
               "direction": {
                 "type": "string",
                 "enum": [
-                  "asc"
+                  "asc",
+                  "desc"
                 ]
               },
               "items": {
@@ -1608,14 +1649,12 @@
             ]
           },
           "payload": {
-            "oneOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/QuestionPayload"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "nullable": true
           },
           "created_at": {
             "type": "string",
@@ -1998,7 +2037,8 @@
                 "items": {
                   "type": "string",
                   "format": "uuid"
-                }
+                },
+                "default": []
               },
               "pickCount": {
                 "type": "integer",
@@ -2013,7 +2053,6 @@
               }
             },
             "required": [
-              "categoryIds",
               "pickCount",
               "challengeType"
             ]
@@ -2333,7 +2372,8 @@
                     "name",
                     "questions"
                   ]
-                }
+                },
+                "minItems": 1
               }
             },
             "required": [
@@ -5955,7 +5995,8 @@
                   "category_id",
                   "type",
                   "difficulty",
-                  "prompt"
+                  "prompt",
+                  "payload"
                 ]
               }
             }
@@ -6892,7 +6933,8 @@
                               "name",
                               "questions"
                             ]
-                          }
+                          },
+                          "minItems": 1
                         }
                       },
                       "required": [
@@ -7588,7 +7630,8 @@
                                     "items": {
                                       "type": "string",
                                       "format": "uuid"
-                                    }
+                                    },
+                                    "default": []
                                   },
                                   "pickCount": {
                                     "type": "integer",
@@ -7603,7 +7646,6 @@
                                   }
                                 },
                                 "required": [
-                                  "categoryIds",
                                   "pickCount",
                                   "challengeType"
                                 ]

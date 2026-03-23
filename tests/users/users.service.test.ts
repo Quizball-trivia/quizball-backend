@@ -73,6 +73,7 @@ const MOCK_USER = {
   favorite_club: 'Arsenal',
   preferred_language: 'en',
   onboarding_complete: true,
+  total_xp: 250,
   created_at: '2024-01-01T00:00:00.000Z',
 };
 
@@ -135,6 +136,7 @@ describe('usersService.getPublicProfile', () => {
       avatar_url: 'https://example.com/avatar.png',
       country: 'US',
       favorite_club: 'Arsenal',
+      total_xp: 250,
     });
     // Excludes private fields
     expect(result.user).not.toHaveProperty('email');
@@ -152,6 +154,13 @@ describe('usersService.getPublicProfile', () => {
       lastRankedMatchAt: '2024-06-01T00:00:00.000Z',
     });
 
+    expect(result.progression).toEqual({
+      level: 3,
+      totalXp: 250,
+      currentLevelXp: 38,
+      xpForNextLevel: 125,
+      progressPct: 30,
+    });
     expect(result.stats).toEqual(MOCK_STATS_SUMMARY);
     expect(result.headToHead).toEqual(MOCK_H2H);
     expect(result.globalRank).toEqual({ rank: 42, total: 500 });

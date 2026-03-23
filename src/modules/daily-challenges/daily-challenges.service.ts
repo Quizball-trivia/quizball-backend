@@ -73,7 +73,7 @@ function ensureEnough<T>(
 }
 
 async function ensureActiveCategories(
-  challengeType: string,
+  challengeType: DailyChallengeType,
   categoryIds: string[]
 ): Promise<void> {
   if (categoryIds.length === 0) return;
@@ -162,7 +162,7 @@ function getQuestionClue(explanation: Json | null): string | null {
   if (!explanation) {
     return null;
   }
-  const clue = getLocalizedString(explanation as Json, { fallback: '' }).trim();
+  const clue = getLocalizedString(explanation, { fallback: '' }).trim();
   return clue.length > 0 ? clue : null;
 }
 
@@ -291,7 +291,25 @@ export const dailyChallengesService = {
         byCategory.set(item.row.category_id, [...(byCategory.get(item.row.category_id) ?? []), item]);
       }
 
-      const categories = settings.categoryIds.map((categoryId) => {
+      const resolvedCategoryIds = settings.categoryIds.length > 0
+        ? settings.categoryIds
+        : [...byCategory.keys()];
+      const eligibleCategoryIds = resolvedCategoryIds.filter((categoryId) => {
+        const categoryRows = byCategory.get(categoryId) ?? [];
+        return categoryRows.some((item) => item.row.difficulty === 'easy')
+          && categoryRows.some((item) => item.row.difficulty === 'medium')
+          && categoryRows.some((item) => item.row.difficulty === 'hard');
+      });
+      const selectedCategoryIds = pickRandom(
+        ensureEnough(eligibleCategoryIds, 1, challengeType, {
+          configuredCategoryIds: settings.categoryIds,
+          resolvedCategoryIds,
+          pickCount: settings.pickCount,
+        }),
+        Math.min(settings.pickCount, eligibleCategoryIds.length)
+      );
+
+      const categories = selectedCategoryIds.map((categoryId) => {
         const categoryRows = byCategory.get(categoryId) ?? [];
         const easy = pickRandom(categoryRows.filter((item) => item.row.difficulty === 'easy'), 1)[0];
         const medium = pickRandom(categoryRows.filter((item) => item.row.difficulty === 'medium'), 1)[0];
@@ -462,6 +480,16 @@ export const dailyChallengesService = {
       }
 
       const wallet = await txRepo.addCoins(userId, config.coin_reward);
+      await txRepo.grantXp({
+        userId,
+        sourceType: 'daily_challenge_completion',
+        sourceKey: `${challengeType}:${day}`,
+        xpDelta: config.xp_reward,
+        metadata: {
+          challengeType,
+          challengeDay: day,
+        },
+      });
 
       return {
         challengeType,

@@ -2,6 +2,10 @@ import { z } from 'zod';
 import type { UserStatsSummary, HeadToHeadSummary } from '../stats/stats.service.js';
 import type { RankedUserRankResult } from '../ranked/ranked.types.js';
 import type { PlacementStatus, RankedTier } from '../ranked/ranked.types.js';
+import { headToHeadResponseSchema, statsSummaryResponseSchema } from '../stats/stats.schemas.js';
+import { progressionResponseSchema, type ProgressionResponse } from '../progression/progression.schemas.js';
+import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
+import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -28,6 +32,7 @@ export const userResponseSchema = z.object({
   favorite_club: z.string().nullable(),
   preferred_language: z.string().nullable(),
   onboarding_complete: z.boolean(),
+  progression: progressionResponseSchema,
   created_at: z.string().datetime(),
 });
 
@@ -59,6 +64,7 @@ export function toUserResponse(user: {
   favorite_club: string | null;
   preferred_language: string | null;
   onboarding_complete: boolean;
+  total_xp: number;
   created_at: string;
 }): UserResponse {
   return {
@@ -71,6 +77,7 @@ export function toUserResponse(user: {
     favorite_club: user.favorite_club,
     preferred_language: user.preferred_language,
     onboarding_complete: user.onboarding_complete,
+    progression: getProgressionFromTotalXp(user.total_xp),
     created_at: user.created_at,
   };
 }
@@ -85,7 +92,9 @@ export interface PublicProfileData {
     avatar_url: string | null;
     country: string | null;
     favorite_club: string | null;
+    total_xp: number;
   };
+  progression: ProgressionResponse;
   ranked: {
     rp: number;
     tier: RankedTier;
@@ -101,6 +110,27 @@ export interface PublicProfileData {
   globalRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
   countryRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
 }
+
+const rankPositionSchema = z.object({
+  rank: z.number().int(),
+  total: z.number().int(),
+});
+
+export const publicProfileResponseSchema = z.object({
+  id: z.string().uuid(),
+  nickname: z.string().nullable(),
+  avatarUrl: z.string().url().nullable(),
+  country: z.string().nullable(),
+  favoriteClub: z.string().nullable(),
+  progression: progressionResponseSchema,
+  ranked: rankedProfileResponseSchema.nullable(),
+  stats: statsSummaryResponseSchema,
+  headToHead: headToHeadResponseSchema.nullable(),
+  globalRank: rankPositionSchema.nullable(),
+  countryRank: rankPositionSchema.nullable(),
+});
+
+export type PublicProfileResponse = z.infer<typeof publicProfileResponseSchema>;
 
 export const achievementResponseSchema = z.object({
   id: z.string(),
@@ -127,6 +157,7 @@ export function toPublicProfileResponse(data: PublicProfileData) {
     avatarUrl: data.user.avatar_url,
     country: data.user.country,
     favoriteClub: data.user.favorite_club,
+    progression: data.progression,
     ranked: data.ranked,
     stats: data.stats,
     headToHead: data.headToHead,

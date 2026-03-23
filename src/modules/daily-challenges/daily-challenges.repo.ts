@@ -1,5 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
+import { progressionRepo, type GrantXpInput, type GrantXpResult } from '../progression/progression.repo.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { WalletRow } from '../store/store.types.js';
 import type {
@@ -24,6 +25,7 @@ export interface DailyChallengesTransactionRepo {
     xpAwarded: number;
   }): Promise<DailyChallengeCompletionRow>;
   addCoins(userId: string, amount: number): Promise<WalletRow | null>;
+  grantXp(input: GrantXpInput): Promise<GrantXpResult>;
 }
 
 export const dailyChallengesRepo = {
@@ -33,6 +35,7 @@ export const dailyChallengesRepo = {
         dailyChallengesRepo.getCompletionForUserOnDayInTx(tx, userId, challengeType, challengeDay),
       createCompletion: (input) => dailyChallengesRepo.createCompletionInTx(tx, input),
       addCoins: (userId, amount) => storeRepo.addCoinsInTx(tx, userId, amount),
+      grantXp: (input) => progressionRepo.grantXpInTx(tx, input),
     })) as Promise<T>;
   },
 
@@ -192,10 +195,6 @@ export const dailyChallengesRepo = {
       ]
     );
     return row;
-  },
-
-  async addCoinsInTx(tx: TransactionSql, userId: string, amount: number) {
-    return storeRepo.addCoinsInTx(tx, userId, amount);
   },
 
   async listPublishedQuestionsByTypeAndCategories(

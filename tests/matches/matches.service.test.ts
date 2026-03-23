@@ -7,8 +7,7 @@ const createMatchMock = vi.fn();
 const insertMatchPlayersMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const ensureProfileMock = vi.fn();
-const isPlacementRequiredMock = vi.fn();
-const buildPlacementAiContextMock = vi.fn();
+const buildAiMatchContextMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -41,8 +40,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
     ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
-    isPlacementRequired: (...args: unknown[]) => isPlacementRequiredMock(...args),
-    buildPlacementAiContext: (...args: unknown[]) => buildPlacementAiContextMock(...args),
+    buildAiMatchContext: (...args: unknown[]) => buildAiMatchContextMock(...args),
   },
 }));
 
@@ -54,8 +52,7 @@ describe('matches.service friendly-party-quiz variants', () => {
     insertMatchPlayersMock.mockResolvedValue(undefined);
     getUserByIdMock.mockResolvedValue({ id: 'user-1', is_ai: false });
     ensureProfileMock.mockResolvedValue({ placementStatus: 'placed' });
-    isPlacementRequiredMock.mockReturnValue(false);
-    buildPlacementAiContextMock.mockReturnValue(null);
+    buildAiMatchContextMock.mockReturnValue(null);
   });
 
   it('creates the initial party quiz state with the default v1 question count', async () => {

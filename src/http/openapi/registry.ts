@@ -14,8 +14,9 @@ import {
   statsSummaryResponseSchema,
 } from '../../modules/stats/stats.schemas.js';
 import {
+  publicProfileResponseSchema,
   userIdParamSchema,
-  userRoleSchema,
+  userResponseSchema,
 } from '../../modules/users/users.schemas.js';
 import {
   listPublicLobbiesQuerySchema,
@@ -55,6 +56,7 @@ import {
 import {
   questionTypeEnum,
 } from '../../modules/questions/questions.schemas.js';
+import { progressionResponseSchema } from '../../modules/progression/progression.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -122,30 +124,20 @@ registry.register('SocialLoginResponse', socialLoginResponseSchema);
 // User Schemas
 // =============================================================================
 
-const userResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    email: z.string().email().nullable(),
-    role: userRoleSchema,
-    nickname: z.string().nullable(),
-    country: z.string().nullable(),
-    avatar_url: z.string().url().nullable(),
-    favorite_club: z.string().nullable(),
-    preferred_language: z.string().nullable(),
-    onboarding_complete: z.boolean(),
-    created_at: z.string().datetime(),
-  })
-  .openapi('UserResponse');
-
+const progressionResponseOpenApiSchema = progressionResponseSchema.openapi('ProgressionResponse');
+const userResponseOpenApiSchema = userResponseSchema.openapi('UserResponse');
 const headToHeadResponseOpenApiSchema = headToHeadResponseSchema.openapi('HeadToHeadResponse');
 const statsSummaryResponseOpenApiSchema = statsSummaryResponseSchema.openapi('StatsSummaryResponse');
 const rankedProfileResponseOpenApiSchema = rankedProfileResponseSchema.openapi('RankedProfileResponse');
+const publicProfileResponseOpenApiSchema = publicProfileResponseSchema.openapi('PublicProfileResponse');
 
-registry.register('UserResponse', userResponseSchema);
+registry.register('ProgressionResponse', progressionResponseOpenApiSchema);
+registry.register('UserResponse', userResponseOpenApiSchema);
 registry.register('HeadToHeadResponse', headToHeadResponseOpenApiSchema);
 registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
 registry.register('StatsSummaryResponse', statsSummaryResponseOpenApiSchema);
 registry.register('RankedProfileResponse', rankedProfileResponseOpenApiSchema);
+registry.register('PublicProfileResponse', publicProfileResponseOpenApiSchema);
 registry.register('StoreProductsResponse', storeProductsResponseSchema);
 registry.register('StoreWalletResponse', storeWalletResponseSchema);
 registry.register('StoreInventoryResponse', storeInventoryResponseSchema);
@@ -695,7 +687,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'User profile',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -729,7 +721,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Profile updated',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -747,7 +739,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Onboarding completed',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -755,29 +747,6 @@ registry.registerPath({
     },
   },
 });
-
-// Public profile response schema
-const rankPositionSchema = z.object({
-  rank: z.number().int(),
-  total: z.number().int(),
-});
-
-const publicProfileResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    nickname: z.string().nullable(),
-    avatarUrl: z.string().nullable(),
-    country: z.string().nullable(),
-    favoriteClub: z.string().nullable(),
-    ranked: rankedProfileResponseOpenApiSchema.nullable(),
-    stats: statsSummaryResponseOpenApiSchema,
-    headToHead: headToHeadResponseOpenApiSchema.nullable(),
-    globalRank: rankPositionSchema.nullable(),
-    countryRank: rankPositionSchema.nullable(),
-  })
-  .openapi('PublicProfileResponse');
-
-registry.register('PublicProfileResponse', publicProfileResponseSchema);
 
 registry.registerPath({
   method: 'get',
@@ -791,7 +760,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Public profile data',
-      content: { 'application/json': { schema: publicProfileResponseSchema } },
+      content: { 'application/json': { schema: publicProfileResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -911,7 +880,7 @@ const clueChainPayloadOpenApiSchema = z.object({
 const putInOrderPayloadOpenApiSchema = z.object({
   type: z.literal('put_in_order'),
   prompt: i18nFieldSchema,
-  direction: z.literal('asc'),
+  direction: z.enum(['asc', 'desc']),
   items: z.array(
     z.object({
       id: z.string().min(1),
@@ -1439,7 +1408,7 @@ registry.registerPath({
             status: z.enum(['draft', 'published', 'archived']).optional(),
             prompt: i18nFieldSchema,
             explanation: i18nFieldSchema.nullable().optional(),
-            payload: questionPayloadOpenApiSchema.optional(),
+            payload: questionPayloadOpenApiSchema,
           }),
         },
       },
@@ -2089,16 +2058,29 @@ export function generateOpenApiDocument() {
 
   if (questionResponse?.properties) {
     questionResponse.properties.payload = {
-      oneOf: [
-        { $ref: '#/components/schemas/QuestionPayload' },
-        { type: 'null' },
-      ],
+      allOf: [{ $ref: '#/components/schemas/QuestionPayload' }],
+      nullable: true,
+    };
+  }
+
+  const userResponse = document.components?.schemas?.UserResponse as
+    | {
+        properties?: {
+          progression?: unknown;
+        };
+      }
+    | undefined;
+
+  if (userResponse?.properties) {
+    userResponse.properties.progression = {
+      $ref: '#/components/schemas/ProgressionResponse',
     };
   }
 
   const publicProfileResponse = document.components?.schemas?.PublicProfileResponse as
     | {
         properties?: {
+          progression?: unknown;
           ranked?: unknown;
           stats?: unknown;
           headToHead?: unknown;
@@ -2107,6 +2089,9 @@ export function generateOpenApiDocument() {
     | undefined;
 
   if (publicProfileResponse?.properties) {
+    publicProfileResponse.properties.progression = {
+      $ref: '#/components/schemas/ProgressionResponse',
+    };
     publicProfileResponse.properties.ranked = {
       allOf: [{ $ref: '#/components/schemas/RankedProfileResponse' }],
       nullable: true,

@@ -8,6 +8,7 @@ import { getCachedUser, setCachedUser, updateCachedUser } from './user-cache.js'
 import { rankedRepo } from '../ranked/ranked.repo.js';
 import { statsService } from '../stats/stats.service.js';
 import type { PublicProfileData } from './users.schemas.js';
+import { progressionService } from '../progression/progression.service.js';
 
 /**
  * Users service.
@@ -162,7 +163,9 @@ export const usersService = {
         avatar_url: user.avatar_url,
         country: user.country,
         favorite_club: user.favorite_club,
+        total_xp: user.total_xp,
       },
+      progression: progressionService.getProgression(user.total_xp),
       ranked: rankedProfile ? {
         rp: rankedProfile.rp,
         tier: rankedProfile.tier,

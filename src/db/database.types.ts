@@ -708,6 +708,7 @@ export type Database = {
           onboarding_complete: boolean
           preferred_language: string
           role: string
+          total_xp: number
           updated_at: string
         }
         Insert: {
@@ -722,6 +723,7 @@ export type Database = {
           onboarding_complete?: boolean
           preferred_language?: string
           role?: string
+          total_xp?: number
           updated_at?: string
         }
         Update: {
@@ -736,9 +738,48 @@ export type Database = {
           onboarding_complete?: boolean
           preferred_language?: string
           role?: string
+          total_xp?: number
           updated_at?: string
         }
         Relationships: []
+      }
+      user_xp_events: {
+        Row: {
+          created_at: string
+          id: string
+          metadata: Json | null
+          source_key: string
+          source_type: string
+          user_id: string
+          xp_delta: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          source_key: string
+          source_type: string
+          user_id: string
+          xp_delta: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          source_key?: string
+          source_type?: string
+          user_id?: string
+          xp_delta?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_xp_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       warmup_pair_bests: {
         Row: {

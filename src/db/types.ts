@@ -7,6 +7,8 @@ export type UserUpdate = Database['public']['Tables']['users']['Update'];
 
 export type UserIdentity = Database['public']['Tables']['user_identities']['Row'];
 export type UserIdentityInsert = Database['public']['Tables']['user_identities']['Insert'];
+export type UserXpEvent = Database['public']['Tables']['user_xp_events']['Row'];
+export type UserXpEventInsert = Database['public']['Tables']['user_xp_events']['Insert'];
 
 // Identity with user joined
 export type IdentityWithUser = UserIdentity & { user: User };

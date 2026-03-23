@@ -4,6 +4,7 @@ import { matchesRepo } from '../matches/matches.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { rankedRepo } from './ranked.repo.js';
 import type {
+  RankedAiMatchContext,
   PlacementStatus,
   RankedMatchOutcome,
   RankedPlacementAiContext,
@@ -120,6 +121,10 @@ function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: numbe
   };
 }
 
+function computeRankedAiAnchor(profile: RankedProfileRow): number {
+  return clamp(roundToNearest25(profile.rp), MIN_PLACEMENT_ANCHOR_RP, MAX_PLACEMENT_ANCHOR_RP);
+}
+
 export const rankedService = {
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
     const profile = await rankedRepo.ensureProfile(userId);
@@ -174,6 +179,20 @@ export const rankedService = {
     return {
       isPlacement: true,
       placementGameNo,
+      aiAnchorRp,
+      aiCorrectness: correctnessFromAnchor(aiAnchorRp),
+      aiDelayProfile: delayProfileFromAnchor(aiAnchorRp),
+    };
+  },
+
+  buildAiMatchContext(profile: RankedProfileRow): RankedAiMatchContext {
+    if (needsPlacement(profile)) {
+      return this.buildPlacementAiContext(profile);
+    }
+
+    const aiAnchorRp = computeRankedAiAnchor(profile);
+    return {
+      isPlacement: false,
       aiAnchorRp,
       aiCorrectness: correctnessFromAnchor(aiAnchorRp),
       aiDelayProfile: delayProfileFromAnchor(aiAnchorRp),

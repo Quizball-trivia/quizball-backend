@@ -26,6 +26,14 @@ describe('toPublicProfileResponse', () => {
       avatar_url: 'https://example.com/avatar.png',
       country: 'US',
       favorite_club: 'Chelsea',
+      total_xp: 250,
+    },
+    progression: {
+      level: 3,
+      totalXp: 250,
+      currentLevelXp: 38,
+      xpForNextLevel: 125,
+      progressPct: 30,
     },
     ranked: {
       rp: 1200,
@@ -64,6 +72,7 @@ describe('toPublicProfileResponse', () => {
       avatarUrl: 'https://example.com/avatar.png',
       country: 'US',
       favoriteClub: 'Chelsea',
+      progression: fullProfile.progression,
       ranked: {
         rp: 1200,
         tier: 'Captain',
@@ -115,6 +124,7 @@ describe('toPublicProfileResponse', () => {
         avatar_url: null,
         country: null,
         favorite_club: null,
+        total_xp: 0,
       },
     };
     const result = toPublicProfileResponse(profile);

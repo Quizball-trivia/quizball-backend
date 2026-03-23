@@ -61,7 +61,7 @@ describe('achievementsService', () => {
     );
   });
 
-  it('returns only newly unlocked achievements when evaluating a match', async () => {
+  it('returns only newly unlocked achievements that the current match variant can trigger', async () => {
     listForUserMock.mockResolvedValue([
       {
         user_id: 'user-1',
@@ -94,7 +94,7 @@ describe('achievementsService', () => {
     upsertProgressMock.mockImplementation(async (params: unknown) => params);
 
     const { achievementsService } = await import('../../src/modules/achievements/achievements.service.js');
-    const unlocked = await achievementsService.evaluateForMatch('match-1', ['user-1']);
+    const unlocked = await achievementsService.evaluateForMatch('match-1', ['user-1'], 'ranked_sim');
 
     expect(unlocked['user-1']).toEqual(
       expect.arrayContaining([
@@ -103,7 +103,11 @@ describe('achievementsService', () => {
         expect.objectContaining({ id: 'clean_sheet', unlocked: true }),
         expect.objectContaining({ id: 'winning_streak', unlocked: true, progress: 5 }),
         expect.objectContaining({ id: 'multiplayer_master', unlocked: true, progress: 10 }),
-        expect.objectContaining({ id: 'trophy_collector', unlocked: true }),
+      ])
+    );
+    expect(unlocked['user-1']).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'trophy_collector' }),
       ])
     );
     expect(upsertProgressMock).toHaveBeenCalledWith(
@@ -113,6 +117,29 @@ describe('achievementsService', () => {
       })
     );
     expect(trackAchievementUnlockedMock).toHaveBeenCalledWith('user-1', 'hat_trick_hero', 'Hat-Trick Hero');
+  });
+
+  it('allows party-quiz-only achievements to unlock during party quiz matches', async () => {
+    listForUserMock.mockResolvedValue([]);
+    getMetricsForUserMock.mockResolvedValue({
+      completedMatches: 3,
+      totalWins: 2,
+      partyQuizWins: 1,
+      hasPerfectMatch: false,
+      hasLightningCounter: false,
+      hasCleanSheet: false,
+      bestWinStreak: 2,
+    });
+    upsertProgressMock.mockImplementation(async (params: unknown) => params);
+
+    const { achievementsService } = await import('../../src/modules/achievements/achievements.service.js');
+    const unlocked = await achievementsService.evaluateForMatch('match-2', ['user-1'], 'friendly_party_quiz');
+
+    expect(unlocked['user-1']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'trophy_collector', unlocked: true }),
+      ])
+    );
   });
 
   it('groups unlocked achievements by match id for replay payloads', async () => {

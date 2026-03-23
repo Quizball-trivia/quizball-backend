@@ -243,7 +243,8 @@ export const matchesService = {
       playerIds = [seat1, seat2];
     }
 
-    // For ranked matches, build placement AI context so the anchor adapts per match
+    // For ranked AI matches, store a stable AI context so matchmaking, gameplay and settlement
+    // all use the same synthetic opponent RP and difficulty profile.
     let rankedContext: RankedLobbyContext | null = null;
     if (params.mode === 'ranked') {
       const [seat1, seat2] = playerIds;
@@ -253,24 +254,25 @@ export const matchesService = {
       ]);
 
       let humanUserId: string | null = null;
-      if (user1 && !user1.is_ai) humanUserId = seat1;
-      else if (user2 && !user2.is_ai) humanUserId = seat2;
+      const hasAiOpponent = Boolean(user1?.is_ai) !== Boolean(user2?.is_ai);
+      if (hasAiOpponent) {
+        if (user1 && !user1.is_ai) humanUserId = seat1;
+        else if (user2 && !user2.is_ai) humanUserId = seat2;
+      }
 
-      if (!humanUserId) {
+      if (hasAiOpponent && !humanUserId) {
         logger.warn(
           { lobbyId: params.lobbyId, seat1, seat2 },
-          'Could not determine human player for ranked context'
+          'Could not determine human player for ranked AI context'
         );
-      } else {
+      } else if (humanUserId) {
         try {
           const profile = await rankedService.ensureProfile(humanUserId);
-          if (rankedService.isPlacementRequired(profile)) {
-            rankedContext = rankedService.buildPlacementAiContext(profile);
-            logger.info(
-              { lobbyId: params.lobbyId, humanUserId, rankedContext },
-              'Built placement AI context for ranked match'
-            );
-          }
+          rankedContext = rankedService.buildAiMatchContext(profile);
+          logger.info(
+            { lobbyId: params.lobbyId, humanUserId, rankedContext },
+            'Built ranked AI context for match'
+          );
         } catch (err) {
           if (err instanceof AppError) throw err;
           logger.error(

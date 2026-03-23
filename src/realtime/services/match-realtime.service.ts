@@ -1,8 +1,10 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 import { achievementsService } from '../../modules/achievements/index.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, resolveRound, sendMatchQuestion } from '../match-flow.js';
@@ -230,7 +232,8 @@ async function getParticipantSnapshot(matchId: string): Promise<{
 async function getOpponentInfoFromParticipants(
   participants: MatchParticipantSnapshot[],
   userId: string,
-  matchMode?: 'friendly' | 'ranked'
+  matchMode?: 'friendly' | 'ranked',
+  rankedContext?: RankedLobbyContext | null
 ): Promise<{
   id: string;
   username: string;
@@ -249,8 +252,12 @@ async function getOpponentInfoFromParticipants(
   const opponentUser = await usersRepo.getById(opponent.user_id);
   let rp: number | undefined;
   if (matchMode === 'ranked') {
-    const profile = await rankedService.ensureProfile(opponent.user_id);
-    rp = profile.rp;
+    if (opponentUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
+      rp = rankedContext.aiAnchorRp;
+    } else {
+      const profile = await rankedService.ensureProfile(opponent.user_id);
+      rp = profile.rp;
+    }
   }
   return {
     id: opponent.user_id,
@@ -289,7 +296,8 @@ function buildStandings(players: Awaited<ReturnType<typeof matchesRepo.listMatch
 
 async function buildParticipantPayloads(
   players: MatchParticipantSnapshot[],
-  matchMode: 'friendly' | 'ranked'
+  matchMode: 'friendly' | 'ranked',
+  rankedContext?: RankedLobbyContext | null
 ): Promise<Array<{
   userId: string;
   username: string;
@@ -301,8 +309,12 @@ async function buildParticipantPayloads(
   let rpByUserId = new Map<string, number>();
 
   if (matchMode === 'ranked') {
+    const nonAiPlayers = players.filter((_player, index) => {
+      const user = users[index];
+      return !(user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number');
+    });
     const profiles = await Promise.all(
-      players.map(async (player) => ({
+      nonAiPlayers.map(async (player) => ({
         userId: player.user_id,
         profile: await rankedService.ensureProfile(player.user_id),
       }))
@@ -310,13 +322,20 @@ async function buildParticipantPayloads(
     rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.profile.rp]));
   }
 
-  return players.map((player, index) => ({
-    userId: player.user_id,
-    username: users[index]?.nickname ?? 'Player',
-    avatarUrl: users[index]?.avatar_url ?? null,
-    seat: player.seat,
-    ...(rpByUserId.has(player.user_id) ? { rankPoints: rpByUserId.get(player.user_id) } : {}),
-  }));
+  return players.map((player, index) => {
+    const user = users[index];
+    const rankPoints = matchMode === 'ranked' && user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number'
+      ? rankedContext.aiAnchorRp
+      : rpByUserId.get(player.user_id);
+
+    return {
+      userId: player.user_id,
+      username: user?.nickname ?? 'Player',
+      avatarUrl: user?.avatar_url ?? null,
+      seat: player.seat,
+      ...(rankPoints != null ? { rankPoints } : {}),
+    };
+  });
 }
 
 async function emitRejoinAvailable(
@@ -699,8 +718,8 @@ export const matchRealtimeService = {
     socket.data.matchId = match.id;
 
     const { participants } = await getParticipantSnapshot(match.id);
-    const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode);
-    const participantPayloads = await buildParticipantPayloads(participants, match.mode);
+    const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode, match.ranked_context);
+    const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
     const mySeat = participants.find((player) => player.user_id === userId)?.seat;
     const variant = resolveMatchVariant(match.state_payload, match.mode);
     socket.emit('match:start', {
@@ -865,6 +884,9 @@ export const matchRealtimeService = {
           catch (err) { logger.warn({ err, matchId: activeMatch.id }, 'Ranked settlement failed in forfeit'); }
         }
 
+        try { await progressionService.awardCompletedMatchXp(activeMatch.id); }
+        catch (err) { logger.warn({ err, matchId: activeMatch.id }, 'Match XP award failed in forfeit'); }
+
         const avgTimes = await matchesService.computeAvgTimes(activeMatch.id);
         for (const player of roster) {
           await matchesRepo.updatePlayerAvgTime(
@@ -959,8 +981,8 @@ export const matchRealtimeService = {
           await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
         }
 
-        const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode);
-        const participantPayloads = await buildParticipantPayloads(participants, match.mode);
+        const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode, match.ranked_context);
+        const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
         const mySeat = participants.find((player) => player.user_id === userId)?.seat;
         const variant = resolveMatchVariant(match.state_payload, match.mode);
         socket.emit('match:start', {
@@ -1266,6 +1288,9 @@ export const matchRealtimeService = {
           try { await rankedService.settleCompletedRankedMatch(matchId); }
           catch (err) { logger.warn({ err, matchId }, 'Ranked settlement failed in grace expiry'); }
         }
+
+        try { await progressionService.awardCompletedMatchXp(matchId); }
+        catch (err) { logger.warn({ err, matchId }, 'Match XP award failed in grace expiry'); }
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);
         for (const player of roster) {

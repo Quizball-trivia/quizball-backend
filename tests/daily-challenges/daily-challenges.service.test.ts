@@ -2,33 +2,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
 
-const beginMock = vi.fn();
+const runInTransactionMock = vi.fn();
 const listConfigsMock = vi.fn();
 const listCompletionsForUserOnDayMock = vi.fn();
 const getConfigMock = vi.fn();
 const getCompletionForUserOnDayMock = vi.fn();
 const listPublishedQuestionsByTypeAndCategoriesMock = vi.fn();
-const createCompletionInTxMock = vi.fn();
-const addCoinsInTxMock = vi.fn();
+const createCompletionMock = vi.fn();
+const addCoinsMock = vi.fn();
+const grantXpMock = vi.fn();
 const deleteCompletionForUserOnDayMock = vi.fn();
 const upsertConfigMock = vi.fn();
 const listByIdsMock = vi.fn();
 
-vi.mock('../../src/db/index.js', () => ({
-  sql: {
-    begin: (...args: unknown[]) => beginMock(...args),
-  },
-}));
-
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
   dailyChallengesRepo: {
+    runInTransaction: (...args: unknown[]) => runInTransactionMock(...args),
     listConfigs: (...args: unknown[]) => listConfigsMock(...args),
     listCompletionsForUserOnDay: (...args: unknown[]) => listCompletionsForUserOnDayMock(...args),
     getConfig: (...args: unknown[]) => getConfigMock(...args),
     getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
     listPublishedQuestionsByTypeAndCategories: (...args: unknown[]) => listPublishedQuestionsByTypeAndCategoriesMock(...args),
-    createCompletionInTx: (...args: unknown[]) => createCompletionInTxMock(...args),
-    addCoinsInTx: (...args: unknown[]) => addCoinsInTxMock(...args),
     deleteCompletionForUserOnDay: (...args: unknown[]) => deleteCompletionForUserOnDayMock(...args),
     upsertConfig: (...args: unknown[]) => upsertConfigMock(...args),
   },
@@ -43,7 +37,17 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 describe('dailyChallengesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    beginMock.mockImplementation(async (callback: (tx: object) => Promise<unknown>) => callback({}));
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: {
+      getCompletionForUserOnDay: typeof getCompletionForUserOnDayMock;
+      createCompletion: typeof createCompletionMock;
+      addCoins: typeof addCoinsMock;
+      grantXp: typeof grantXpMock;
+    }) => Promise<unknown>) => callback({
+      getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
+      createCompletion: (...args: unknown[]) => createCompletionMock(...args),
+      addCoins: (...args: unknown[]) => addCoinsMock(...args),
+      grantXp: (...args: unknown[]) => grantXpMock(...args),
+    }));
   });
 
   it('lists active challenges with per-user completion flags', async () => {
@@ -242,6 +246,189 @@ describe('dailyChallengesService', () => {
     });
   });
 
+  it('builds a football jeopardy session from available categories when config categoryIds is empty', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'footballJeopardy',
+      is_active: true,
+      sort_order: 2,
+      show_on_home: true,
+      coin_reward: 400,
+      xp_reward: 100,
+      settings: {
+        categoryIds: [],
+        pickCount: 2,
+      },
+      created_at: '2026-03-15T00:00:00.000Z',
+      updated_at: '2026-03-15T00:00:00.000Z',
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'cat-1-easy',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: { en: 'Easy 1' },
+        explanation: null,
+        category_name: { en: 'Premier League' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-1-medium',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'medium',
+        prompt: { en: 'Medium 1' },
+        explanation: null,
+        category_name: { en: 'Premier League' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-1-hard',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'hard',
+        prompt: { en: 'Hard 1' },
+        explanation: null,
+        category_name: { en: 'Premier League' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-2-easy',
+        category_id: '22222222-2222-2222-2222-222222222222',
+        difficulty: 'easy',
+        prompt: { en: 'Easy 2' },
+        explanation: null,
+        category_name: { en: 'La Liga' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-2-medium',
+        category_id: '22222222-2222-2222-2222-222222222222',
+        difficulty: 'medium',
+        prompt: { en: 'Medium 2' },
+        explanation: null,
+        category_name: { en: 'La Liga' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-2-hard',
+        category_id: '22222222-2222-2222-2222-222222222222',
+        difficulty: 'hard',
+        prompt: { en: 'Hard 2' },
+        explanation: null,
+        category_name: { en: 'La Liga' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-3-easy',
+        category_id: '33333333-3333-3333-3333-333333333333',
+        difficulty: 'easy',
+        prompt: { en: 'Easy 3' },
+        explanation: null,
+        category_name: { en: 'Serie A' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-3-medium',
+        category_id: '33333333-3333-3333-3333-333333333333',
+        difficulty: 'medium',
+        prompt: { en: 'Medium 3' },
+        explanation: null,
+        category_name: { en: 'Serie A' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+      {
+        id: 'cat-3-hard',
+        category_id: '33333333-3333-3333-3333-333333333333',
+        difficulty: 'hard',
+        prompt: { en: 'Hard 3' },
+        explanation: null,
+        category_name: { en: 'Serie A' },
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'A' }, is_correct: true },
+            { id: 'b', text: { en: 'B' }, is_correct: false },
+            { id: 'c', text: { en: 'C' }, is_correct: false },
+            { id: 'd', text: { en: 'D' }, is_correct: false },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'footballJeopardy');
+
+    expect(session.challengeType).toBe('footballJeopardy');
+    expect(session.pickCount).toBe(2);
+    expect(session.categories).toHaveLength(2);
+    for (const category of session.categories) {
+      expect(category.questions).toHaveLength(3);
+    }
+  });
+
   it('completes a challenge once and awards configured coins', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'countdown',
@@ -250,19 +437,23 @@ describe('dailyChallengesService', () => {
       xp_reward: 15,
     });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    createCompletionInTxMock.mockResolvedValue({
+    createCompletionMock.mockResolvedValue({
       id: 'completion-1',
     });
-    addCoinsInTxMock.mockResolvedValue({
+    addCoinsMock.mockResolvedValue({
       coins: 1080,
       tickets: 10,
+    });
+    grantXpMock.mockResolvedValue({
+      awarded: true,
+      totalXp: 215,
     });
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
     const result = await dailyChallengesService.completeChallenge('user-1', 'countdown', 500);
 
-    expect(createCompletionInTxMock).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(runInTransactionMock).toHaveBeenCalled();
+    expect(createCompletionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-1',
         challengeType: 'countdown',
@@ -271,7 +462,17 @@ describe('dailyChallengesService', () => {
         xpAwarded: 15,
       })
     );
-    expect(addCoinsInTxMock).toHaveBeenCalledWith(expect.anything(), 'user-1', 80);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 80);
+    expect(grantXpMock).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sourceType: 'daily_challenge_completion',
+      sourceKey: expect.stringMatching(/^countdown:\d{4}-\d{2}-\d{2}$/),
+      xpDelta: 15,
+      metadata: {
+        challengeType: 'countdown',
+        challengeDay: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      },
+    });
     expect(result).toEqual({
       challengeType: 'countdown',
       completedToday: true,
@@ -292,7 +493,7 @@ describe('dailyChallengesService', () => {
       xp_reward: 15,
     });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
-    createCompletionInTxMock.mockRejectedValue({ code: '23505' });
+    createCompletionMock.mockRejectedValue({ code: '23505' });
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
 

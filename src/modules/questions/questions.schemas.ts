@@ -473,7 +473,6 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
       logger.error(
         {
           questionId: question.id,
-          payload,
           error: payloadResult.error.flatten(),
         },
         'Invalid question payload in database'

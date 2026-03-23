@@ -2,6 +2,7 @@ import { trackAchievementUnlocked } from '../../core/analytics/game-events.js';
 import { achievementsRepo } from './achievements.repo.js';
 import { ACHIEVEMENT_DEFINITIONS } from './achievements.definitions.js';
 import type {
+  AchievementMatchVariant,
   AchievementProgress,
   AchievementUnlockPayload,
   UserAchievementMetrics,
@@ -25,6 +26,20 @@ function computeProgress(achievementId: string, metrics: UserAchievementMetrics)
       return Math.min(1, metrics.partyQuizWins);
     default:
       return 0;
+  }
+}
+
+function isAchievementEligibleForVariant(
+  achievementId: string,
+  matchVariant: AchievementMatchVariant
+): boolean {
+  switch (achievementId) {
+    case 'trophy_collector':
+      return matchVariant === 'friendly_party_quiz';
+    case 'clean_sheet':
+      return matchVariant !== 'friendly_party_quiz';
+    default:
+      return true;
   }
 }
 
@@ -55,7 +70,11 @@ export const achievementsService = {
     });
   },
 
-  async evaluateForMatch(matchId: string, userIds: string[]): Promise<Record<string, AchievementUnlockPayload[]>> {
+  async evaluateForMatch(
+    matchId: string,
+    userIds: string[],
+    matchVariant: AchievementMatchVariant
+  ): Promise<Record<string, AchievementUnlockPayload[]>> {
     const uniqueUserIds = [...new Set(userIds)];
     const result: Record<string, AchievementUnlockPayload[]> = {};
 
@@ -68,6 +87,9 @@ export const achievementsService = {
       const unlockedForUser: AchievementUnlockPayload[] = [];
 
       for (const definition of ACHIEVEMENT_DEFINITIONS) {
+        if (!isAchievementEligibleForVariant(definition.id, matchVariant)) {
+          continue;
+        }
         const existing = existingById.get(definition.id);
         const progress = computeProgress(definition.id, metrics);
         const alreadyUnlocked = existing?.unlocked_at != null;

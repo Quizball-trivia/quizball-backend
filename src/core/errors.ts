@@ -13,6 +13,8 @@ export const ErrorCode = {
   EXTERNAL_SERVICE_ERROR: 'EXTERNAL_SERVICE_ERROR',
   INSUFFICIENT_TICKETS: 'INSUFFICIENT_TICKETS',
   TICKETS_FULL: 'TICKETS_FULL',
+  DAILY_CHALLENGE_ALREADY_COMPLETED: 'DAILY_CHALLENGE_ALREADY_COMPLETED',
+  DAILY_CHALLENGE_CONTENT_UNAVAILABLE: 'DAILY_CHALLENGE_CONTENT_UNAVAILABLE',
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -64,6 +66,28 @@ export class NotFoundError extends AppError {
 export class ConflictError extends AppError {
   constructor(message = 'Resource conflict', details: unknown = null) {
     super(message, 409, ErrorCode.CONFLICT, details);
+  }
+}
+
+export class DailyChallengeAlreadyCompletedError extends AppError {
+  constructor(details: unknown = null) {
+    super(
+      'Daily challenge already completed',
+      409,
+      ErrorCode.DAILY_CHALLENGE_ALREADY_COMPLETED,
+      details
+    );
+  }
+}
+
+export class DailyChallengeContentUnavailableError extends AppError {
+  constructor(details: unknown = null) {
+    super(
+      'Daily challenge content unavailable',
+      404,
+      ErrorCode.DAILY_CHALLENGE_CONTENT_UNAVAILABLE,
+      details
+    );
   }
 }
 

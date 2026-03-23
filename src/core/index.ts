@@ -5,6 +5,8 @@ export {
   AuthorizationError,
   NotFoundError,
   ConflictError,
+  DailyChallengeAlreadyCompletedError,
+  DailyChallengeContentUnavailableError,
   BadRequestError,
   ValidationError,
   RateLimitError,

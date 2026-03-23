@@ -9,13 +9,14 @@ import { config } from '../../core/config.js';
 import {
   headToHeadQuerySchema,
   headToHeadResponseSchema,
-  modeStatsSummarySchema,
   recentMatchesQuerySchema,
   recentMatchesResponseSchema,
   statsSummaryResponseSchema,
 } from '../../modules/stats/stats.schemas.js';
 import {
+  publicProfileResponseSchema,
   userIdParamSchema,
+  userResponseSchema,
 } from '../../modules/users/users.schemas.js';
 import {
   listPublicLobbiesQuerySchema,
@@ -24,6 +25,18 @@ import {
 import {
   rankedProfileResponseSchema,
 } from '../../modules/ranked/ranked.schemas.js';
+import {
+  dailyChallengeMetadataSchema,
+  listDailyChallengesResponseSchema,
+  listAdminDailyChallengesResponseSchema,
+  dailyChallengeSessionResponseSchema,
+  completeDailyChallengeBodySchema,
+  completeDailyChallengeResponseSchema,
+  resetDailyChallengeResponseSchema,
+  updateDailyChallengeConfigSchema,
+  dailyChallengeParamSchema,
+  dailyChallengeSettingsSchema,
+} from '../../modules/daily-challenges/daily-challenges.schemas.js';
 import {
   createCheckoutBodySchema,
   createCheckoutResponseSchema,
@@ -40,6 +53,10 @@ import {
   storeTransactionLogResponseSchema,
   storeWalletResponseSchema,
 } from '../../modules/store/store.schemas.js';
+import {
+  questionTypeEnum,
+} from '../../modules/questions/questions.schemas.js';
+import { progressionResponseSchema } from '../../modules/progression/progression.schemas.js';
 
 // Extend Zod with OpenAPI support
 extendZodWithOpenApi(z);
@@ -107,25 +124,20 @@ registry.register('SocialLoginResponse', socialLoginResponseSchema);
 // User Schemas
 // =============================================================================
 
-const userResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    email: z.string().email().nullable(),
-    nickname: z.string().nullable(),
-    country: z.string().nullable(),
-    avatar_url: z.string().url().nullable(),
-    favorite_club: z.string().nullable(),
-    preferred_language: z.string().nullable(),
-    onboarding_complete: z.boolean(),
-    created_at: z.string().datetime(),
-  })
-  .openapi('UserResponse');
+const progressionResponseOpenApiSchema = progressionResponseSchema.openapi('ProgressionResponse');
+const userResponseOpenApiSchema = userResponseSchema.openapi('UserResponse');
+const headToHeadResponseOpenApiSchema = headToHeadResponseSchema.openapi('HeadToHeadResponse');
+const statsSummaryResponseOpenApiSchema = statsSummaryResponseSchema.openapi('StatsSummaryResponse');
+const rankedProfileResponseOpenApiSchema = rankedProfileResponseSchema.openapi('RankedProfileResponse');
+const publicProfileResponseOpenApiSchema = publicProfileResponseSchema.openapi('PublicProfileResponse');
 
-registry.register('UserResponse', userResponseSchema);
-registry.register('HeadToHeadResponse', headToHeadResponseSchema);
+registry.register('ProgressionResponse', progressionResponseOpenApiSchema);
+registry.register('UserResponse', userResponseOpenApiSchema);
+registry.register('HeadToHeadResponse', headToHeadResponseOpenApiSchema);
 registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
-registry.register('StatsSummaryResponse', statsSummaryResponseSchema);
-registry.register('RankedProfileResponse', rankedProfileResponseSchema);
+registry.register('StatsSummaryResponse', statsSummaryResponseOpenApiSchema);
+registry.register('RankedProfileResponse', rankedProfileResponseOpenApiSchema);
+registry.register('PublicProfileResponse', publicProfileResponseOpenApiSchema);
 registry.register('StoreProductsResponse', storeProductsResponseSchema);
 registry.register('StoreWalletResponse', storeWalletResponseSchema);
 registry.register('StoreInventoryResponse', storeInventoryResponseSchema);
@@ -675,7 +687,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'User profile',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -709,7 +721,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Profile updated',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -727,7 +739,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Onboarding completed',
-      content: { 'application/json': { schema: userResponseSchema } },
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -735,44 +747,6 @@ registry.registerPath({
     },
   },
 });
-
-// Public profile response schema
-const rankPositionSchema = z.object({
-  rank: z.number().int(),
-  total: z.number().int(),
-});
-
-const publicProfileResponseSchema = z
-  .object({
-    id: z.string().uuid(),
-    nickname: z.string().nullable(),
-    avatarUrl: z.string().nullable(),
-    country: z.string().nullable(),
-    favoriteClub: z.string().nullable(),
-    ranked: z
-      .object({
-        rp: z.number().int(),
-        tier: z.string(),
-        placementStatus: z.string(),
-        placementPlayed: z.number().int().nonnegative(),
-        placementRequired: z.number().int().nonnegative(),
-        placementWins: z.number().int().nonnegative(),
-        currentWinStreak: z.number().int().nonnegative(),
-        lastRankedMatchAt: z.string().datetime().nullable(),
-      })
-      .nullable(),
-    stats: z.object({
-      overall: modeStatsSummarySchema,
-      ranked: modeStatsSummarySchema,
-      friendly: modeStatsSummarySchema,
-    }),
-    headToHead: headToHeadResponseSchema.nullable(),
-    globalRank: rankPositionSchema.nullable(),
-    countryRank: rankPositionSchema.nullable(),
-  })
-  .openapi('PublicProfileResponse');
-
-registry.register('PublicProfileResponse', publicProfileResponseSchema);
 
 registry.registerPath({
   method: 'get',
@@ -786,7 +760,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Public profile data',
-      content: { 'application/json': { schema: publicProfileResponseSchema } },
+      content: { 'application/json': { schema: publicProfileResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -862,16 +836,82 @@ registry.register('CategoryDependenciesResponse', categoryDependenciesResponseSc
 // Question Schemas
 // =============================================================================
 
+const mcqOptionOpenApiSchema = z.object({
+  id: z.string().min(1),
+  text: i18nFieldSchema,
+  is_correct: z.boolean(),
+});
+
+const mcqPayloadOpenApiSchema = z.object({
+  type: z.literal('mcq_single'),
+  options: z.array(mcqOptionOpenApiSchema).length(4),
+});
+
+const textInputPayloadOpenApiSchema = z.object({
+  type: z.literal('input_text'),
+  accepted_answers: z.array(i18nFieldSchema).min(1),
+  case_sensitive: z.boolean(),
+});
+
+const countdownPayloadOpenApiSchema = z.object({
+  type: z.literal('countdown_list'),
+  prompt: i18nFieldSchema,
+  answer_groups: z.array(
+    z.object({
+      id: z.string().min(1),
+      display: i18nFieldSchema,
+      accepted_answers: z.array(z.string().min(1)).min(1),
+    })
+  ).min(1),
+});
+
+const clueChainPayloadOpenApiSchema = z.object({
+  type: z.literal('clue_chain'),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+  clues: z.array(
+    z.object({
+      type: z.enum(['text', 'emoji']),
+      content: i18nFieldSchema,
+    })
+  ).min(1),
+});
+
+const putInOrderPayloadOpenApiSchema = z.object({
+  type: z.literal('put_in_order'),
+  prompt: i18nFieldSchema,
+  direction: z.enum(['asc', 'desc']),
+  items: z.array(
+    z.object({
+      id: z.string().min(1),
+      label: i18nFieldSchema,
+      details: i18nFieldSchema.nullable().optional(),
+      emoji: z.string().nullable().optional(),
+      sort_value: z.number(),
+    })
+  ).min(3),
+});
+
+const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
+  mcqPayloadOpenApiSchema,
+  textInputPayloadOpenApiSchema,
+  countdownPayloadOpenApiSchema,
+  clueChainPayloadOpenApiSchema,
+  putInOrderPayloadOpenApiSchema,
+]).openapi('QuestionPayload');
+
+registry.register('QuestionPayload', questionPayloadOpenApiSchema);
+
 const questionResponseSchema = z
   .object({
     id: z.string().uuid(),
     category_id: z.string().uuid(),
-    type: z.enum(['mcq_single', 'input_text']),
+    type: questionTypeEnum,
     difficulty: z.enum(['easy', 'medium', 'hard']),
     status: z.enum(['draft', 'published', 'archived']),
     prompt: i18nFieldSchema,
     explanation: i18nFieldSchema.nullable(),
-    payload: z.any().nullable(),
+    payload: z.union([questionPayloadOpenApiSchema, z.null()]),
     created_at: z.string().datetime(),
     updated_at: z.string().datetime(),
   })
@@ -1315,7 +1355,7 @@ registry.registerPath({
       category_id: z.string().uuid().optional(),
       status: z.enum(['draft', 'published', 'archived']).optional(),
       difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
-      type: z.enum(['mcq_single', 'input_text']).optional(),
+      type: questionTypeEnum.optional(),
       search: z.string().optional(),
       page: z.string().optional(),
       limit: z.string().optional(),
@@ -1363,12 +1403,12 @@ registry.registerPath({
         'application/json': {
           schema: z.object({
             category_id: z.string().uuid(),
-            type: z.enum(['mcq_single', 'input_text']),
+            type: questionTypeEnum,
             difficulty: z.enum(['easy', 'medium', 'hard']),
             status: z.enum(['draft', 'published', 'archived']).optional(),
             prompt: i18nFieldSchema,
             explanation: i18nFieldSchema.nullable().optional(),
-            payload: z.any().optional(),
+            payload: questionPayloadOpenApiSchema,
           }),
         },
       },
@@ -1429,12 +1469,12 @@ registry.registerPath({
             questions: z
               .array(
                 z.object({
-                  type: z.enum(['mcq_single', 'input_text']),
+                  type: questionTypeEnum,
                   difficulty: z.enum(['easy', 'medium', 'hard']),
                   status: z.enum(['draft', 'published', 'archived']).optional(),
                   prompt: i18nFieldSchema,
                   explanation: i18nFieldSchema.nullable().optional(),
-                  payload: z.any(),
+                  payload: questionPayloadOpenApiSchema,
                 })
               )
               .min(1)
@@ -1495,12 +1535,12 @@ registry.registerPath({
         'application/json': {
           schema: z.object({
             category_id: z.string().uuid().optional(),
-            type: z.enum(['mcq_single', 'input_text']).optional(),
+            type: questionTypeEnum.optional(),
             difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
             status: z.enum(['draft', 'published', 'archived']).optional(),
             prompt: i18nFieldSchema.optional(),
             explanation: i18nFieldSchema.nullable().optional(),
-            payload: z.any().optional(),
+            payload: questionPayloadOpenApiSchema.optional(),
           }),
         },
       },
@@ -1709,6 +1749,197 @@ registry.registerPath({
   },
 });
 
+// =============================================================================
+// Daily Challenges Schemas
+// =============================================================================
+
+const dailyChallengeSettingsOpenApiSchema = dailyChallengeSettingsSchema.openapi('DailyChallengeSettings');
+
+const adminDailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema
+  .extend({
+    sortOrder: z.number().int(),
+    isActive: z.boolean(),
+    settings: dailyChallengeSettingsOpenApiSchema,
+  })
+  .openapi('AdminDailyChallengeConfigResponse');
+
+registry.register('DailyChallengeMetadata', dailyChallengeMetadataSchema.openapi('DailyChallengeMetadata'));
+registry.register('DailyChallengeSettings', dailyChallengeSettingsOpenApiSchema);
+registry.register('DailyChallengeSessionResponse', dailyChallengeSessionResponseSchema.openapi('DailyChallengeSessionResponse'));
+registry.register('CompleteDailyChallengeResponse', completeDailyChallengeResponseSchema.openapi('CompleteDailyChallengeResponse'));
+registry.register('ResetDailyChallengeResponse', resetDailyChallengeResponseSchema.openapi('ResetDailyChallengeResponse'));
+registry.register('AdminDailyChallengeConfigResponse', adminDailyChallengeConfigResponseSchema);
+
+// =============================================================================
+// Daily Challenge Routes
+// =============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/daily-challenges',
+  summary: 'List active daily challenges for the current user',
+  tags: ['Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Active daily challenge lineup',
+      content: { 'application/json': { schema: listDailyChallengesResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/daily-challenges/{challengeType}/session',
+  summary: 'Create a playable daily challenge session',
+  tags: ['Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: dailyChallengeParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Daily challenge session payload',
+      content: { 'application/json': { schema: dailyChallengeSessionResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Challenge not available',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    409: {
+      description: 'Already completed or content unavailable',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/daily-challenges/{challengeType}/complete',
+  summary: 'Complete a daily challenge for the day',
+  tags: ['Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: dailyChallengeParamSchema,
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: completeDailyChallengeBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Completion recorded and rewards granted',
+      content: { 'application/json': { schema: completeDailyChallengeResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Challenge not available',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    409: {
+      description: 'Already completed today',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/daily-challenges/dev/{challengeType}/reset',
+  summary: 'Reset today completion for a daily challenge (dev-only)',
+  tags: ['Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: dailyChallengeParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Today completion reset',
+      content: { 'application/json': { schema: resetDailyChallengeResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Not allowed to use dev reset',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/admin/daily-challenges',
+  summary: 'List daily challenge CMS configs',
+  tags: ['Admin Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Admin daily challenge configs',
+      content: { 'application/json': { schema: listAdminDailyChallengesResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/v1/admin/daily-challenges/{challengeType}',
+  summary: 'Update one daily challenge CMS config',
+  tags: ['Admin Daily Challenges'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: dailyChallengeParamSchema,
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: updateDailyChallengeConfigSchema.extend({
+            settings: dailyChallengeSettingsOpenApiSchema,
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Updated admin daily challenge config',
+      content: { 'application/json': { schema: adminDailyChallengeConfigResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
 registry.registerPath({
   method: 'post',
   path: '/api/v1/questions/check-duplicates',
@@ -1807,8 +2038,7 @@ function buildOpenApiServers(): Array<{ url: string; description: string }> {
 
 export function generateOpenApiDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);
-
-  return generator.generateDocument({
+  const document = generator.generateDocument({
     openapi: '3.0.0',
     info: {
       title: 'QuizBall API',
@@ -1817,4 +2047,63 @@ export function generateOpenApiDocument() {
     },
     servers: buildOpenApiServers(),
   });
+
+  const questionResponse = document.components?.schemas?.QuestionResponse as
+    | {
+        properties?: {
+          payload?: unknown;
+        };
+      }
+    | undefined;
+
+  if (questionResponse?.properties) {
+    questionResponse.properties.payload = {
+      allOf: [{ $ref: '#/components/schemas/QuestionPayload' }],
+      nullable: true,
+    };
+  }
+
+  const userResponse = document.components?.schemas?.UserResponse as
+    | {
+        properties?: {
+          progression?: unknown;
+        };
+      }
+    | undefined;
+
+  if (userResponse?.properties) {
+    userResponse.properties.progression = {
+      $ref: '#/components/schemas/ProgressionResponse',
+    };
+  }
+
+  const publicProfileResponse = document.components?.schemas?.PublicProfileResponse as
+    | {
+        properties?: {
+          progression?: unknown;
+          ranked?: unknown;
+          stats?: unknown;
+          headToHead?: unknown;
+        };
+      }
+    | undefined;
+
+  if (publicProfileResponse?.properties) {
+    publicProfileResponse.properties.progression = {
+      $ref: '#/components/schemas/ProgressionResponse',
+    };
+    publicProfileResponse.properties.ranked = {
+      allOf: [{ $ref: '#/components/schemas/RankedProfileResponse' }],
+      nullable: true,
+    };
+    publicProfileResponse.properties.stats = {
+      $ref: '#/components/schemas/StatsSummaryResponse',
+    };
+    publicProfileResponse.properties.headToHead = {
+      allOf: [{ $ref: '#/components/schemas/HeadToHeadResponse' }],
+      nullable: true,
+    };
+  }
+
+  return document;
 }

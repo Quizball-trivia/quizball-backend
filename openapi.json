@@ -1,7 +1,3 @@
-
-> quizball-backend@1.0.0 api:export
-> tsx scripts/export-openapi.ts
-
 {
   "openapi": "3.0.0",
   "info": {
@@ -131,6 +127,41 @@
           "url"
         ]
       },
+      "ProgressionResponse": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "totalXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentLevelXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpForNextLevel": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "progressPct": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "level",
+          "totalXp",
+          "currentLevelXp",
+          "xpForNextLevel",
+          "progressPct"
+        ]
+      },
       "UserResponse": {
         "type": "object",
         "properties": {
@@ -142,6 +173,13 @@
             "type": "string",
             "nullable": true,
             "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "user"
+            ]
           },
           "nickname": {
             "type": "string",
@@ -167,6 +205,9 @@
           "onboarding_complete": {
             "type": "boolean"
           },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -175,12 +216,14 @@
         "required": [
           "id",
           "email",
+          "role",
           "nickname",
           "country",
           "avatar_url",
           "favorite_club",
           "preferred_language",
           "onboarding_complete",
+          "progression",
           "created_at"
         ]
       },
@@ -300,6 +343,7 @@
                   "enum": [
                     "goals",
                     "penalty_goals",
+                    "total_points",
                     "total_points_fallback",
                     "forfeit"
                   ]
@@ -531,6 +575,99 @@
           "placementWins",
           "currentWinStreak",
           "lastRankedMatchAt"
+        ]
+      },
+      "PublicProfileResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nickname": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "favoriteClub": {
+            "type": "string",
+            "nullable": true
+          },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
+          "ranked": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RankedProfileResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "stats": {
+            "$ref": "#/components/schemas/StatsSummaryResponse"
+          },
+          "headToHead": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeadToHeadResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "globalRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          },
+          "countryRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "nickname",
+          "avatarUrl",
+          "country",
+          "favoriteClub",
+          "progression",
+          "ranked",
+          "stats",
+          "headToHead",
+          "globalRank",
+          "countryRank"
         ]
       },
       "StoreProductsResponse": {
@@ -1229,6 +1366,238 @@
           "featured"
         ]
       },
+      "QuestionPayload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "mcq_single"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "text": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "is_correct": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "text",
+                    "is_correct"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "options"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "input_text"
+                ]
+              },
+              "accepted_answers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/I18nField"
+                },
+                "minItems": 1
+              },
+              "case_sensitive": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "accepted_answers",
+              "case_sensitive"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "countdown_list"
+                ]
+              },
+              "prompt": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "answer_groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "display": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "accepted_answers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "display",
+                    "accepted_answers"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "type",
+              "prompt",
+              "answer_groups"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "clue_chain"
+                ]
+              },
+              "display_answer": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "accepted_answers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "clues": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "emoji"
+                      ]
+                    },
+                    "content": {
+                      "$ref": "#/components/schemas/I18nField"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "content"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "type",
+              "display_answer",
+              "accepted_answers",
+              "clues"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "put_in_order"
+                ]
+              },
+              "prompt": {
+                "$ref": "#/components/schemas/I18nField"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "details": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/I18nField"
+                        },
+                        {
+                          "nullable": true
+                        }
+                      ]
+                    },
+                    "emoji": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "sort_value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "sort_value"
+                  ]
+                },
+                "minItems": 3
+              }
+            },
+            "required": [
+              "type",
+              "prompt",
+              "direction",
+              "items"
+            ]
+          }
+        ]
+      },
       "QuestionResponse": {
         "type": "object",
         "properties": {
@@ -1244,7 +1613,10 @@
             "type": "string",
             "enum": [
               "mcq_single",
-              "input_text"
+              "input_text",
+              "countdown_list",
+              "clue_chain",
+              "put_in_order"
             ]
           },
           "difficulty": {
@@ -1277,6 +1649,11 @@
             ]
           },
           "payload": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuestionPayload"
+              }
+            ],
             "nullable": true
           },
           "created_at": {
@@ -1296,6 +1673,7 @@
           "status",
           "prompt",
           "explanation",
+          "payload",
           "created_at",
           "updated_at"
         ]
@@ -1546,6 +1924,922 @@
         },
         "required": [
           "duplicates"
+        ]
+      },
+      "DailyChallengeMetadata": {
+        "type": "object",
+        "properties": {
+          "challengeType": {
+            "type": "string",
+            "enum": [
+              "moneyDrop",
+              "footballJeopardy",
+              "clues",
+              "countdown",
+              "putInOrder"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "iconToken": {
+            "type": "string",
+            "enum": [
+              "dollarSign",
+              "brain",
+              "lightbulb",
+              "timer",
+              "list"
+            ]
+          },
+          "coinReward": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpReward": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "showOnHome": {
+            "type": "boolean"
+          },
+          "completedToday": {
+            "type": "boolean"
+          },
+          "availableToday": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "challengeType",
+          "title",
+          "description",
+          "iconToken",
+          "coinReward",
+          "xpReward",
+          "showOnHome",
+          "completedToday",
+          "availableToday"
+        ]
+      },
+      "DailyChallengeSettings": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "secondsPerQuestion": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 120
+              },
+              "startingMoney": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 100000
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "moneyDrop"
+                ]
+              }
+            },
+            "required": [
+              "questionCount",
+              "secondsPerQuestion",
+              "startingMoney",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "pickCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "footballJeopardy"
+                ]
+              }
+            },
+            "required": [
+              "pickCount",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "roundCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "secondsPerRound": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 180
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "countdown"
+                ]
+              }
+            },
+            "required": [
+              "roundCount",
+              "secondsPerRound",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "secondsPerClueStep": {
+                "type": "integer",
+                "minimum": 3,
+                "maximum": 60
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "clues"
+                ]
+              }
+            },
+            "required": [
+              "questionCount",
+              "secondsPerClueStep",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "roundCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "itemsPerRound": {
+                "type": "integer",
+                "minimum": 3,
+                "maximum": 8
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "putInOrder"
+                ]
+              }
+            },
+            "required": [
+              "roundCount",
+              "itemsPerRound",
+              "challengeType"
+            ]
+          }
+        ]
+      },
+      "DailyChallengeSessionResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "moneyDrop"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerQuestion": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "startingMoney": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "category": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "correctAnswerIndex": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "clue": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "category",
+                    "difficulty",
+                    "prompt",
+                    "options",
+                    "correctAnswerIndex",
+                    "clue"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "questionCount",
+              "secondsPerQuestion",
+              "startingMoney",
+              "questions"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "footballJeopardy"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pickCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "categories": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "questions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "enum": [
+                                  100
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  200
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  300
+                                ]
+                              }
+                            ]
+                          },
+                          "difficulty": {
+                            "type": "string",
+                            "enum": [
+                              "easy",
+                              "medium",
+                              "hard"
+                            ]
+                          },
+                          "prompt": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "correctAnswerIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3
+                          },
+                          "clue": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "value",
+                          "difficulty",
+                          "prompt",
+                          "options",
+                          "correctAnswerIndex",
+                          "clue"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "questions"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "pickCount",
+              "categories"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "countdown"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "roundCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerRound": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "rounds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "category": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "answerGroups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "display": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "acceptedAnswers": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "display",
+                          "acceptedAnswers"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "category",
+                    "prompt",
+                    "answerGroups"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "roundCount",
+              "secondsPerRound",
+              "rounds"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "clues"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "secondsPerClueStep": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "category": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "difficulty": {
+                      "type": "string",
+                      "enum": [
+                        "easy",
+                        "medium",
+                        "hard"
+                      ]
+                    },
+                    "displayAnswer": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "acceptedAnswers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "clues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "text",
+                              "emoji"
+                            ]
+                          },
+                          "content": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "content"
+                        ]
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "category",
+                    "difficulty",
+                    "displayAnswer",
+                    "acceptedAnswers",
+                    "clues"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "questionCount",
+              "secondsPerClueStep",
+              "questions"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "putInOrder"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "roundCount": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "itemsPerRound": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "rounds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "category": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "direction": {
+                      "type": "string",
+                      "enum": [
+                        "asc",
+                        "desc"
+                      ]
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "label": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "details": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "emoji": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "sortValue": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "details",
+                          "emoji",
+                          "sortValue"
+                        ]
+                      },
+                      "minItems": 3
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "category",
+                    "prompt",
+                    "direction",
+                    "items"
+                  ]
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "challengeType",
+              "title",
+              "description",
+              "roundCount",
+              "itemsPerRound",
+              "rounds"
+            ]
+          }
+        ]
+      },
+      "CompleteDailyChallengeResponse": {
+        "type": "object",
+        "properties": {
+          "challengeType": {
+            "type": "string",
+            "enum": [
+              "moneyDrop",
+              "footballJeopardy",
+              "clues",
+              "countdown",
+              "putInOrder"
+            ]
+          },
+          "completedToday": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "coinsAwarded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpAwarded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "coins",
+              "tickets"
+            ]
+          }
+        },
+        "required": [
+          "challengeType",
+          "completedToday",
+          "coinsAwarded",
+          "xpAwarded"
+        ]
+      },
+      "ResetDailyChallengeResponse": {
+        "type": "object",
+        "properties": {
+          "challengeType": {
+            "type": "string",
+            "enum": [
+              "moneyDrop",
+              "footballJeopardy",
+              "clues",
+              "countdown",
+              "putInOrder"
+            ]
+          },
+          "reset": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "challengeType",
+          "reset"
+        ]
+      },
+      "AdminDailyChallengeConfigResponse": {
+        "type": "object",
+        "properties": {
+          "challengeType": {
+            "type": "string",
+            "enum": [
+              "moneyDrop",
+              "footballJeopardy",
+              "clues",
+              "countdown",
+              "putInOrder"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "iconToken": {
+            "type": "string",
+            "enum": [
+              "dollarSign",
+              "brain",
+              "lightbulb",
+              "timer",
+              "list"
+            ]
+          },
+          "coinReward": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpReward": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "showOnHome": {
+            "type": "boolean"
+          },
+          "completedToday": {
+            "type": "boolean"
+          },
+          "availableToday": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/DailyChallengeSettings"
+          }
+        },
+        "required": [
+          "challengeType",
+          "title",
+          "description",
+          "iconToken",
+          "coinReward",
+          "xpReward",
+          "showOnHome",
+          "completedToday",
+          "availableToday",
+          "sortOrder",
+          "isActive",
+          "settings"
         ]
       }
     },
@@ -1989,6 +3283,15 @@
             "required": false,
             "name": "limit",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "userId",
+            "in": "query"
           }
         ],
         "responses": {
@@ -2073,6 +3376,7 @@
                             "enum": [
                               "goals",
                               "penalty_goals",
+                              "total_points",
                               "total_points_fallback",
                               "forfeit"
                             ]
@@ -2350,7 +3654,8 @@
                           "gameMode": {
                             "type": "string",
                             "enum": [
-                              "friendly",
+                              "friendly_possession",
+                              "friendly_party_quiz",
                               "ranked_sim"
                             ]
                           },
@@ -3625,6 +4930,62 @@
         }
       }
     },
+    "/api/v1/users/{userId}/profile": {
+      "get": {
+        "summary": "Get public profile for a user",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public profile data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/categories": {
       "get": {
         "summary": "List all categories",
@@ -4517,7 +5878,10 @@
               "type": "string",
               "enum": [
                 "mcq_single",
-                "input_text"
+                "input_text",
+                "countdown_list",
+                "clue_chain",
+                "put_in_order"
               ]
             },
             "required": false,
@@ -4588,7 +5952,10 @@
                     "type": "string",
                     "enum": [
                       "mcq_single",
-                      "input_text"
+                      "input_text",
+                      "countdown_list",
+                      "clue_chain",
+                      "put_in_order"
                     ]
                   },
                   "difficulty": {
@@ -4621,14 +5988,15 @@
                     ]
                   },
                   "payload": {
-                    "nullable": true
+                    "$ref": "#/components/schemas/QuestionPayload"
                   }
                 },
                 "required": [
                   "category_id",
                   "type",
                   "difficulty",
-                  "prompt"
+                  "prompt",
+                  "payload"
                 ]
               }
             }
@@ -4755,7 +6123,10 @@
                     "type": "string",
                     "enum": [
                       "mcq_single",
-                      "input_text"
+                      "input_text",
+                      "countdown_list",
+                      "clue_chain",
+                      "put_in_order"
                     ]
                   },
                   "difficulty": {
@@ -4788,7 +6159,7 @@
                     ]
                   },
                   "payload": {
-                    "nullable": true
+                    "$ref": "#/components/schemas/QuestionPayload"
                   }
                 }
               }
@@ -4939,7 +6310,10 @@
                           "type": "string",
                           "enum": [
                             "mcq_single",
-                            "input_text"
+                            "input_text",
+                            "countdown_list",
+                            "clue_chain",
+                            "put_in_order"
                           ]
                         },
                         "difficulty": {
@@ -4972,13 +6346,14 @@
                           ]
                         },
                         "payload": {
-                          "nullable": true
+                          "$ref": "#/components/schemas/QuestionPayload"
                         }
                       },
                       "required": [
                         "type",
                         "difficulty",
-                        "prompt"
+                        "prompt",
+                        "payload"
                       ]
                     },
                     "minItems": 1,
@@ -5199,6 +6574,1331 @@
           },
           "403": {
             "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges": {
+      "get": {
+        "summary": "List active daily challenges for the current user",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active daily challenge lineup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "challengeType": {
+                            "type": "string",
+                            "enum": [
+                              "moneyDrop",
+                              "footballJeopardy",
+                              "clues",
+                              "countdown",
+                              "putInOrder"
+                            ]
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "iconToken": {
+                            "type": "string",
+                            "enum": [
+                              "dollarSign",
+                              "brain",
+                              "lightbulb",
+                              "timer",
+                              "list"
+                            ]
+                          },
+                          "coinReward": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "xpReward": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "showOnHome": {
+                            "type": "boolean"
+                          },
+                          "completedToday": {
+                            "type": "boolean"
+                          },
+                          "availableToday": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "challengeType",
+                          "title",
+                          "description",
+                          "iconToken",
+                          "coinReward",
+                          "xpReward",
+                          "showOnHome",
+                          "completedToday",
+                          "availableToday"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges/{challengeType}/session": {
+      "post": {
+        "summary": "Create a playable daily challenge session",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moneyDrop",
+                "footballJeopardy",
+                "clues",
+                "countdown",
+                "putInOrder"
+              ]
+            },
+            "required": true,
+            "name": "challengeType",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily challenge session payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "moneyDrop"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "questionCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerQuestion": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "startingMoney": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "questions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "category": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "options": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "correctAnswerIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 3
+                              },
+                              "clue": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "difficulty",
+                              "prompt",
+                              "options",
+                              "correctAnswerIndex",
+                              "clue"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "questionCount",
+                        "secondsPerQuestion",
+                        "startingMoney",
+                        "questions"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "footballJeopardy"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "pickCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "categories": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "questions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "enum": [
+                                            100
+                                          ]
+                                        },
+                                        {
+                                          "type": "number",
+                                          "enum": [
+                                            200
+                                          ]
+                                        },
+                                        {
+                                          "type": "number",
+                                          "enum": [
+                                            300
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    "difficulty": {
+                                      "type": "string",
+                                      "enum": [
+                                        "easy",
+                                        "medium",
+                                        "hard"
+                                      ]
+                                    },
+                                    "prompt": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "options": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "correctAnswerIndex": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 3
+                                    },
+                                    "clue": {
+                                      "type": "string",
+                                      "nullable": true
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "value",
+                                    "difficulty",
+                                    "prompt",
+                                    "options",
+                                    "correctAnswerIndex",
+                                    "clue"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "questions"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "pickCount",
+                        "categories"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "countdown"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "roundCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerRound": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "rounds": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "category": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "answerGroups": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "display": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "acceptedAnswers": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "minItems": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "display",
+                                    "acceptedAnswers"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "prompt",
+                              "answerGroups"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "roundCount",
+                        "secondsPerRound",
+                        "rounds"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "clues"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "questionCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "secondsPerClueStep": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "questions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "category": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "difficulty": {
+                                "type": "string",
+                                "enum": [
+                                  "easy",
+                                  "medium",
+                                  "hard"
+                                ]
+                              },
+                              "displayAnswer": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "acceptedAnswers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "minItems": 1
+                              },
+                              "clues": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "text",
+                                        "emoji"
+                                      ]
+                                    },
+                                    "content": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "content"
+                                  ]
+                                },
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "difficulty",
+                              "displayAnswer",
+                              "acceptedAnswers",
+                              "clues"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "questionCount",
+                        "secondsPerClueStep",
+                        "questions"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "challengeType": {
+                          "type": "string",
+                          "enum": [
+                            "putInOrder"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "roundCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "itemsPerRound": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "rounds": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "category": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "direction": {
+                                "type": "string",
+                                "enum": [
+                                  "asc",
+                                  "desc"
+                                ]
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "details": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "emoji": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "sortValue": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "label",
+                                    "details",
+                                    "emoji",
+                                    "sortValue"
+                                  ]
+                                },
+                                "minItems": 3
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "category",
+                              "prompt",
+                              "direction",
+                              "items"
+                            ]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "challengeType",
+                        "title",
+                        "description",
+                        "roundCount",
+                        "itemsPerRound",
+                        "rounds"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Challenge not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already completed or content unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges/{challengeType}/complete": {
+      "post": {
+        "summary": "Complete a daily challenge for the day",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moneyDrop",
+                "footballJeopardy",
+                "clues",
+                "countdown",
+                "putInOrder"
+              ]
+            },
+            "required": true,
+            "name": "challengeType",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "score": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Completion recorded and rewards granted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "challengeType": {
+                      "type": "string",
+                      "enum": [
+                        "moneyDrop",
+                        "footballJeopardy",
+                        "clues",
+                        "countdown",
+                        "putInOrder"
+                      ]
+                    },
+                    "completedToday": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "coinsAwarded": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "xpAwarded": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "wallet": {
+                      "type": "object",
+                      "properties": {
+                        "coins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tickets": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "coins",
+                        "tickets"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "challengeType",
+                    "completedToday",
+                    "coinsAwarded",
+                    "xpAwarded"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Challenge not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already completed today",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daily-challenges/dev/{challengeType}/reset": {
+      "delete": {
+        "summary": "Reset today completion for a daily challenge (dev-only)",
+        "tags": [
+          "Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moneyDrop",
+                "footballJeopardy",
+                "clues",
+                "countdown",
+                "putInOrder"
+              ]
+            },
+            "required": true,
+            "name": "challengeType",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Today completion reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "challengeType": {
+                      "type": "string",
+                      "enum": [
+                        "moneyDrop",
+                        "footballJeopardy",
+                        "clues",
+                        "countdown",
+                        "putInOrder"
+                      ]
+                    },
+                    "reset": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "challengeType",
+                    "reset"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed to use dev reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/daily-challenges": {
+      "get": {
+        "summary": "List daily challenge CMS configs",
+        "tags": [
+          "Admin Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Admin daily challenge configs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "challengeType": {
+                            "type": "string",
+                            "enum": [
+                              "moneyDrop",
+                              "footballJeopardy",
+                              "clues",
+                              "countdown",
+                              "putInOrder"
+                            ]
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "iconToken": {
+                            "type": "string",
+                            "enum": [
+                              "dollarSign",
+                              "brain",
+                              "lightbulb",
+                              "timer",
+                              "list"
+                            ]
+                          },
+                          "coinReward": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "xpReward": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "showOnHome": {
+                            "type": "boolean"
+                          },
+                          "completedToday": {
+                            "type": "boolean"
+                          },
+                          "availableToday": {
+                            "type": "boolean"
+                          },
+                          "settings": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "questionCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20
+                                  },
+                                  "secondsPerQuestion": {
+                                    "type": "integer",
+                                    "minimum": 5,
+                                    "maximum": 120
+                                  },
+                                  "startingMoney": {
+                                    "type": "integer",
+                                    "minimum": 100,
+                                    "maximum": 100000
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "moneyDrop"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "questionCount",
+                                  "secondsPerQuestion",
+                                  "startingMoney",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "pickCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "footballJeopardy"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "pickCount",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "roundCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 10
+                                  },
+                                  "secondsPerRound": {
+                                    "type": "integer",
+                                    "minimum": 5,
+                                    "maximum": 180
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "countdown"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "roundCount",
+                                  "secondsPerRound",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "questionCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20
+                                  },
+                                  "secondsPerClueStep": {
+                                    "type": "integer",
+                                    "minimum": 3,
+                                    "maximum": 60
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "clues"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "questionCount",
+                                  "secondsPerClueStep",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "roundCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 10
+                                  },
+                                  "itemsPerRound": {
+                                    "type": "integer",
+                                    "minimum": 3,
+                                    "maximum": 8
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "putInOrder"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "roundCount",
+                                  "itemsPerRound",
+                                  "challengeType"
+                                ]
+                              }
+                            ]
+                          },
+                          "sortOrder": {
+                            "type": "integer"
+                          },
+                          "isActive": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "challengeType",
+                          "title",
+                          "description",
+                          "iconToken",
+                          "coinReward",
+                          "xpReward",
+                          "showOnHome",
+                          "completedToday",
+                          "availableToday",
+                          "settings",
+                          "sortOrder",
+                          "isActive"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/daily-challenges/{challengeType}": {
+      "put": {
+        "summary": "Update one daily challenge CMS config",
+        "tags": [
+          "Admin Daily Challenges"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moneyDrop",
+                "footballJeopardy",
+                "clues",
+                "countdown",
+                "putInOrder"
+              ]
+            },
+            "required": true,
+            "name": "challengeType",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "isActive": {
+                    "type": "boolean"
+                  },
+                  "sortOrder": {
+                    "type": "integer"
+                  },
+                  "showOnHome": {
+                    "type": "boolean"
+                  },
+                  "coinReward": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "xpReward": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "settings": {
+                    "$ref": "#/components/schemas/DailyChallengeSettings"
+                  }
+                },
+                "required": [
+                  "isActive",
+                  "sortOrder",
+                  "showOnHome",
+                  "coinReward",
+                  "xpReward",
+                  "settings"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated admin daily challenge config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDailyChallengeConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
             "content": {
               "application/json": {
                 "schema": {

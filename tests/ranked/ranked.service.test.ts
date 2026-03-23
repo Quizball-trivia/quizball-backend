@@ -225,6 +225,25 @@ describe('rankedService', () => {
     expect(fresh.aiDelayProfile.minMs).toBeLessThanOrEqual(fresh.aiDelayProfile.maxMs);
   });
 
+  it('builds a non-placement AI context around the player RP for placed players', () => {
+    const placedProfile = createProfile({
+      user_id: 'placed',
+      rp: 525,
+      tier: 'Youth Prospect',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_wins: 2,
+    });
+
+    const context = rankedService.buildAiMatchContext(placedProfile);
+
+    expect(context.isPlacement).toBe(false);
+    expect(context.placementGameNo).toBeUndefined();
+    expect(context.aiAnchorRp).toBe(525);
+    expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.52);
+    expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
+  });
+
   it.each([
     { name: 'equal-rank win', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-1', delta: 25, newRp: 1225 },
     { name: 'equal-rank loss', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-2', delta: -25, newRp: 1175 },

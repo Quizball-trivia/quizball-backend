@@ -376,11 +376,14 @@ export async function startRankedAiForUser(
     avatarUrl: aiProfile.avatarUrl,
     isAi: true,
   });
+  const playerProfile = await rankedService.ensureProfile(userId);
+  const rankedContext = rankedService.buildAiMatchContext(playerProfile);
 
   const lobby = await lobbiesRepo.createLobby({
     mode: 'ranked',
     hostUserId: userId,
     inviteCode: null,
+    rankedContext,
   });
 
   await lobbiesRepo.addMember(lobby.id, userId, true);
@@ -414,6 +417,7 @@ export async function startRankedAiForUser(
         userId,
         aiUser,
         aiProfile,
+        rankedContext,
         lobbiesRepo,
         logger,
         foundModalMs: RANKED_SIM_FOUND_MODAL_MS,
@@ -429,12 +433,15 @@ async function handleRankedAiMatchFound(params: {
   userId: string;
   aiUser: { id: string; nickname: string | null; avatar_url: string | null };
   aiProfile: { username: string; avatarUrl: string };
+  rankedContext: {
+    aiAnchorRp: number;
+  };
   lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   foundModalMs: number;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, userId, aiUser, aiProfile, lobbiesRepo, logger, foundModalMs, startDraft } =
+  const { io, lobbyId, userId, aiUser, aiProfile, rankedContext, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
   try {
@@ -448,21 +455,6 @@ async function handleRankedAiMatchFound(params: {
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
 
-    // Compute AI opponent RP for the frontend's optimistic RP calculation.
-    // During placement: use the anchor RP from placement context.
-    // Post-placement: use 1900 (default anchor RP used in settlement).
-    let aiOpponentRp: number | undefined;
-    try {
-      const playerProfile = await rankedService.ensureProfile(userId);
-      if (rankedService.isPlacementRequired(playerProfile)) {
-        aiOpponentRp = rankedService.buildPlacementAiContext(playerProfile).aiAnchorRp;
-      } else {
-        aiOpponentRp = rankedService.DEFAULT_AI_OPPONENT_RP;
-      }
-    } catch (err) {
-      logger.warn({ err, userId }, 'Failed to compute AI opponent RP for ranked:match_found');
-    }
-
     const playerUser = await usersRepo.getById(userId);
     const aiGeo = generateRankedAiGeo(playerUser?.country);
     io.to(`user:${userId}`).emit('ranked:match_found', {
@@ -471,7 +463,7 @@ async function handleRankedAiMatchFound(params: {
         id: aiUser.id,
         username: aiUser.nickname ?? aiProfile.username,
         avatarUrl: aiUser.avatar_url ?? aiProfile.avatarUrl,
-        ...(aiOpponentRp != null ? { rp: aiOpponentRp } : {}),
+        rp: rankedContext.aiAnchorRp,
         country: aiGeo.country,
         countryCode: aiGeo.countryCode,
         city: aiGeo.city,

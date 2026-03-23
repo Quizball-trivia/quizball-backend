@@ -152,8 +152,7 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
     ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
     settleCompletedRankedMatch: (...args: unknown[]) => settleCompletedRankedMatchMock(...args),
-    isPlacementRequired: vi.fn(() => false),
-    buildPlacementAiContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
+    buildAiMatchContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
     DEFAULT_AI_OPPONENT_RP: 1900,
   },
 }));

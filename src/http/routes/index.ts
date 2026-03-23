@@ -10,6 +10,8 @@ import { lobbiesRoutes } from './lobbies.routes.js';
 import { rankedRoutes } from './ranked.routes.js';
 import { storeRoutes } from './store.routes.js';
 import { activityRoutes } from './activity.routes.js';
+import { dailyChallengesRoutes } from './daily-challenges.routes.js';
+import { adminDailyChallengesRoutes } from './admin-daily-challenges.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -33,6 +35,8 @@ router.use('/api/v1/stats', statsRoutes);
 router.use('/api/v1/lobbies', lobbiesRoutes);
 router.use('/api/v1/ranked', rankedRoutes);
 router.use('/api/v1/store', storeRoutes);
+router.use('/api/v1/daily-challenges', dailyChallengesRoutes);
 router.use('/api/v1/admin/activity', activityRoutes);
+router.use('/api/v1/admin/daily-challenges', adminDailyChallengesRoutes);
 
 export const routes = router;

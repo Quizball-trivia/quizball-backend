@@ -29,6 +29,11 @@ export interface AchievementProgress {
 
 export interface AchievementUnlockPayload extends AchievementProgress {}
 
+export type AchievementMatchVariant =
+  | 'ranked_sim'
+  | 'friendly_possession'
+  | 'friendly_party_quiz';
+
 export interface UserAchievementMetrics {
   completedMatches: number;
   totalWins: number;

@@ -186,6 +186,25 @@ describe('usersService.getPublicProfile', () => {
     expect(result.ranked).toBeNull();
   });
 
+  it('maps updated total_xp into refreshed profile progression', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      total_xp: 370,
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.getPublicProfile('user-target-id', 'viewer-id');
+
+    expect(result.user.total_xp).toBe(370);
+    expect(result.progression).toEqual({
+      level: 4,
+      totalXp: 370,
+      currentLevelXp: 33,
+      xpForNextLevel: 140,
+      progressPct: 23,
+    });
+  });
+
   it('skips H2H call when viewer is the same as target', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
 

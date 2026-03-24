@@ -37,7 +37,6 @@ import { clamp, calculatePoints } from './scoring.js';
 
 const QUESTION_TIME_MS = 10000;
 const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
-const FRONTEND_TRANSITION_MS = 3500; // Frontend round-transition overlay between questions
 const FRONTEND_TRANSITION_DELAY_MS = 1600; // Synced with frontend TRANSITION_DELAY_MS
 const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
 const FRONTEND_FIRST_QUESTION_INTRO_MS = 2000; // Synced with first-question intro overlay
@@ -77,10 +76,6 @@ function timerKey(matchId: string, qIndex: number): string {
   return `${matchId}:${qIndex}`;
 }
 
-function effectiveAnswerTimeMs(authoritativeTimeMs: number): number {
-  return Math.max(0, authoritativeTimeMs - FRONTEND_REVEAL_MS);
-}
-
 function lastMatchKey(userId: string): string {
   return `user:last_match:${userId}`;
 }
@@ -91,7 +86,7 @@ function getAiAnswerDelayMs(): number {
   return Math.floor(Math.random() * 5000) + 2000;
 }
 
-function getAiPreAnswerDelayMs(params: {
+function getQuestionPreAnswerDelayMs(params: {
   qIndex: number;
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
 }): number {
@@ -106,6 +101,19 @@ function getAiPreAnswerDelayMs(params: {
   }
   // Subsequent questions are blocked by result hold + transition overlay + reveal.
   return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
+}
+
+function buildPlayableQuestionTiming(params: {
+  qIndex: number;
+  state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
+}): {
+  playableAt: Date;
+  deadlineAt: Date;
+} {
+  const preAnswerDelayMs = getQuestionPreAnswerDelayMs(params);
+  const playableAt = new Date(Date.now() + preAnswerDelayMs);
+  const deadlineAt = new Date(playableAt.getTime() + QUESTION_TIME_MS);
+  return { playableAt, deadlineAt };
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -365,19 +373,24 @@ function clearHalftimeAiBanTimer(matchId: string): void {
   halftimeAiBanTimers.delete(matchId);
 }
 
-function scheduleQuestionTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
+function scheduleQuestionTimeout(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  deadlineAt: Date
+): void {
   const key = timerKey(matchId, qIndex);
   const existing = questionTimers.get(key);
   if (existing) {
     clearTimeout(existing);
   }
 
-  // Budget: transition overlay (3.5s) + question reveal (3s) + answer timer (10s) + grace (0.3s)
+  const delayMs = Math.max(0, deadlineAt.getTime() - Date.now()) + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS;
   const timeout = setTimeout(() => {
     void resolvePossessionRound(io, matchId, qIndex, true).catch((error) => {
       logger.error({ error, matchId, qIndex }, 'Failed to resolve possession round after timeout');
     });
-  }, QUESTION_TIME_MS + FRONTEND_REVEAL_MS + FRONTEND_TRANSITION_MS + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
+  }, delayMs);
 
   questionTimers.set(key, timeout);
 }
@@ -619,7 +632,7 @@ async function schedulePossessionAiAnswer(
   if (!expectedUserIds.includes(aiUserId)) return;
 
   const aiThinkTimeMs = getAiAnswerDelayMs();
-  const preAnswerDelayMs = getAiPreAnswerDelayMs({
+  const preAnswerDelayMs = getQuestionPreAnswerDelayMs({
     qIndex,
     state: cache.statePayload,
   });
@@ -1463,8 +1476,10 @@ export async function sendPossessionMatchQuestion(
     return null;
   }
 
-  const shownAt = new Date();
-  const deadlineAt = new Date(Date.now() + QUESTION_TIME_MS);
+  const { playableAt, deadlineAt } = buildPlayableQuestionTiming({
+    qIndex,
+    state,
+  });
 
   state.currentQuestion = {
     qIndex,
@@ -1482,7 +1497,7 @@ export async function sendPossessionMatchQuestion(
     phaseRound,
     shooterSeat,
     attackerSeat,
-    shownAt: shownAt.toISOString(),
+    shownAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
     questionDTO: payload.question,
   };
@@ -1493,9 +1508,11 @@ export async function sendPossessionMatchQuestion(
   fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
   });
-  fireAndForget('setQuestionTiming(sendQuestion)', async () => {
-    await matchesRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt);
-  });
+  try {
+    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+  } catch (error) {
+    logger.error({ error, matchId, qIndex }, 'setQuestionTiming failed before emitting match:question');
+  }
 
   await emitMatchState(io, matchId, state);
 
@@ -1504,6 +1521,7 @@ export async function sendPossessionMatchQuestion(
     qIndex,
     total: totalQuestions,
     question: cache.currentQuestion.questionDTO,
+    playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
     correctIndex: cache.currentQuestion.correctIndex,
     phaseKind: runtimePhaseKind,
@@ -1512,7 +1530,7 @@ export async function sendPossessionMatchQuestion(
     attackerSeat,
   });
 
-  scheduleQuestionTimeout(io, matchId, qIndex);
+  scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
   void schedulePossessionAiAnswer(io, matchId, qIndex, {
     correctIndex: payload.correctIndex,
     optionCount: payload.question.options.length,
@@ -1947,7 +1965,7 @@ async function handlePossessionAnswerDbPath(
   }
 
   const isCorrect = selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
-  const pointsEarned = calculatePoints(isCorrect, clientTimeMs, QUESTION_TIME_MS);
+  const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
 
   await matchesRepo.insertMatchAnswer({
     matchId,
@@ -1955,7 +1973,7 @@ async function handlePossessionAnswerDbPath(
     userId: socket.data.user.id,
     selectedIndex,
     isCorrect,
-    timeMs: clientTimeMs,
+    timeMs: authoritativeTimeMs,
     pointsEarned,
     phaseKind: questionPayload.phaseKind,
     phaseRound: questionPayload.phaseRound,
@@ -2308,13 +2326,13 @@ export async function handlePossessionAnswer(
       );
     }
     const isCorrect = selectedIndex !== null && selectedIndex === question.correctIndex;
-    const pointsEarned = calculatePoints(isCorrect, clientTimeMs, QUESTION_TIME_MS);
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
 
     const answer: CachedAnswer = {
       userId: socket.data.user.id,
       selectedIndex,
       isCorrect,
-      timeMs: clientTimeMs,
+      timeMs: authoritativeTimeMs,
       pointsEarned,
       phaseKind: question.phaseKind,
       phaseRound: question.phaseRound,
@@ -2335,7 +2353,7 @@ export async function handlePossessionAnswer(
       question,
       isCorrect,
       pointsEarned,
-      answerTimeMs: clientTimeMs,
+      answerTimeMs: authoritativeTimeMs,
       myTotalPoints: player.totalPoints,
       expectedCount,
       answerCount: currentAnswerCount,
@@ -2664,7 +2682,8 @@ export async function devSkipToPossessionPhase(
 export const __possessionInternals = {
   parsePossessionState,
   categoryIdsForCurrentHalf,
-  effectiveAnswerTimeMs,
+  buildPlayableQuestionTiming,
+  computeAuthoritativeTimeMs,
   applyDeltaAndGoalCheck,
   applyNormalResolution,
   applyLastAttackResolution,

@@ -1,30 +1,69 @@
-import { describe, expect, it } from 'vitest';
-import { calculatePoints } from '../../src/realtime/scoring.js';
+import { describe, expect, it, vi } from 'vitest';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
 
-const { effectiveAnswerTimeMs } = __possessionInternals;
+const { buildPlayableQuestionTiming, computeAuthoritativeTimeMs } = __possessionInternals;
 
-describe('possession timer fix', () => {
-  it('awards 100 points for earliest post-reveal answer', () => {
-    const effective = effectiveAnswerTimeMs(2000);
-    expect(calculatePoints(true, effective, 10000)).toBe(100);
+describe('possession authoritative timer fix', () => {
+  it('computes the same authoritative elapsed time for both clients from shared shownAt', () => {
+    const now = new Date('2026-03-24T12:00:04.000Z');
+    const shownAt = '2026-03-24T12:00:00.000Z';
+
+    const fastClientElapsed = computeAuthoritativeTimeMs(
+      { shownAt, deadlineAt: null },
+      now.getTime(),
+      9500
+    );
+    const slowClientElapsed = computeAuthoritativeTimeMs(
+      { shownAt, deadlineAt: null },
+      now.getTime(),
+      1200
+    );
+
+    expect(fastClientElapsed).toBe(4000);
+    expect(slowClientElapsed).toBe(4000);
   });
 
-  it('applies reveal offset for mid-speed answers', () => {
-    const effective = effectiveAnswerTimeMs(5000);
-    expect(effective).toBe(2000);
-    expect(calculatePoints(true, effective, 10000)).toBe(80);
+  it('falls back to deadlineAt when shownAt is missing', () => {
+    const now = new Date('2026-03-24T12:00:07.500Z');
+    const deadlineAt = '2026-03-24T12:00:10.000Z';
+
+    const elapsed = computeAuthoritativeTimeMs(
+      { shownAt: null, deadlineAt },
+      now.getTime(),
+      1200
+    );
+
+    expect(elapsed).toBe(7500);
   });
 
-  it('times out at zero points after reveal offset', () => {
-    const effective = effectiveAnswerTimeMs(12000);
-    expect(effective).toBe(9000);
-    expect(calculatePoints(true, effective, 10000)).toBe(10);
+  it('clamps to zero before the question becomes playable', () => {
+    const now = new Date('2026-03-24T11:59:59.000Z');
+    const shownAt = '2026-03-24T12:00:00.000Z';
+
+    const elapsed = computeAuthoritativeTimeMs(
+      { shownAt, deadlineAt: null },
+      now.getTime(),
+      8000
+    );
+
+    expect(elapsed).toBe(0);
   });
 
-  it('applies the same offset model to AI delays', () => {
-    const effective = effectiveAnswerTimeMs(3000);
-    expect(effective).toBe(0);
-    expect(calculatePoints(true, effective, 10000)).toBe(100);
+  it('builds a shared first-question timing window from server time', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-24T12:00:00.000Z'));
+
+    const timing = buildPlayableQuestionTiming({
+      qIndex: 0,
+      state: {
+        half: 1,
+        normalQuestionsAnsweredInHalf: 0,
+      },
+    });
+
+    expect(timing.playableAt.toISOString()).toBe('2026-03-24T12:00:05.000Z');
+    expect(timing.deadlineAt.toISOString()).toBe('2026-03-24T12:00:15.000Z');
+
+    vi.useRealTimers();
   });
 });

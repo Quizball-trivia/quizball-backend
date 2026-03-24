@@ -131,6 +131,58 @@ describe('progressionService.awardCompletedMatchXp', () => {
     );
   });
 
+  it('awards friendly win and loss XP for a completed match', async () => {
+    getMatchMock.mockResolvedValue({
+      id: 'match-friendly',
+      mode: 'friendly',
+      status: 'completed',
+      is_dev: false,
+      winner_user_id: 'user-1',
+      state_payload: {
+        winnerDecisionMethod: 'goals',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'user-1' },
+      { user_id: 'user-2' },
+    ]);
+    getUserByIdMock
+      .mockResolvedValueOnce({ id: 'user-1', is_ai: false })
+      .mockResolvedValueOnce({ id: 'user-2', is_ai: false });
+
+    const { progressionService } = await import('../../src/modules/progression/progression.service.js');
+
+    await progressionService.awardCompletedMatchXp('match-friendly');
+
+    expect(grantXpInTxMock).toHaveBeenCalledTimes(2);
+    expect(grantXpInTxMock).toHaveBeenNthCalledWith(
+      1,
+      { tx: true },
+      expect.objectContaining({
+        userId: 'user-1',
+        sourceKey: 'match-friendly',
+        xpDelta: 70,
+        metadata: expect.objectContaining({
+          mode: 'friendly',
+          result: 'win',
+        }),
+      }),
+    );
+    expect(grantXpInTxMock).toHaveBeenNthCalledWith(
+      2,
+      { tx: true },
+      expect.objectContaining({
+        userId: 'user-2',
+        sourceKey: 'match-friendly',
+        xpDelta: 50,
+        metadata: expect.objectContaining({
+          mode: 'friendly',
+          result: 'loss',
+        }),
+      }),
+    );
+  });
+
   it('uses reduced forfeit XP for the losing player', async () => {
     getMatchMock.mockResolvedValue({
       id: 'match-forfeit',
@@ -184,6 +236,40 @@ describe('progressionService.awardCompletedMatchXp', () => {
     expect(listMatchPlayersMock).not.toHaveBeenCalled();
     expect(runInTransactionMock).not.toHaveBeenCalled();
     expect(grantXpInTxMock).not.toHaveBeenCalled();
+  });
+
+  it('awards XP only to human players when AI is present', async () => {
+    getMatchMock.mockResolvedValue({
+      id: 'match-ai',
+      mode: 'ranked',
+      status: 'completed',
+      is_dev: false,
+      winner_user_id: 'user-1',
+      state_payload: {
+        winnerDecisionMethod: 'goals',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'user-1' },
+      { user_id: 'bot-1' },
+    ]);
+    getUserByIdMock
+      .mockResolvedValueOnce({ id: 'user-1', is_ai: false })
+      .mockResolvedValueOnce({ id: 'bot-1', is_ai: true });
+
+    const { progressionService } = await import('../../src/modules/progression/progression.service.js');
+
+    await progressionService.awardCompletedMatchXp('match-ai');
+
+    expect(grantXpInTxMock).toHaveBeenCalledTimes(1);
+    expect(grantXpInTxMock).toHaveBeenCalledWith(
+      { tx: true },
+      expect.objectContaining({
+        userId: 'user-1',
+        sourceKey: 'match-ai',
+        xpDelta: 120,
+      }),
+    );
   });
 
   it('skips incomplete matches', async () => {

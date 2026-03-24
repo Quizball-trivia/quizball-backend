@@ -1,23 +1,48 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
 
 const {
   categoryIdsForCurrentHalf,
+  buildPlayableQuestionTiming,
+  computeAuthoritativeTimeMs,
   applyDeltaAndGoalCheck,
   applyNormalResolution,
   applyLastAttackResolution,
   decideWinner,
-  effectiveAnswerTimeMs,
   penaltyWinnerSeat,
 } = __possessionInternals;
 
 describe('possession-match-flow internals', () => {
-  it('applies reveal offset helper for timer scoring', () => {
-    expect(effectiveAnswerTimeMs(0)).toBe(0);
-    expect(effectiveAnswerTimeMs(2000)).toBe(0);
-    expect(effectiveAnswerTimeMs(5000)).toBe(2000);
-    expect(effectiveAnswerTimeMs(12000)).toBe(9000);
+  it('uses authoritative timing instead of client fallback when shownAt is available', () => {
+    const elapsed = computeAuthoritativeTimeMs(
+      {
+        shownAt: '2026-03-24T12:00:00.000Z',
+        deadlineAt: '2026-03-24T12:00:10.000Z',
+      },
+      new Date('2026-03-24T12:00:04.200Z').getTime(),
+      9500
+    );
+
+    expect(elapsed).toBe(4200);
+  });
+
+  it('builds halftime restart timing without carrying old transition delay', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-24T12:00:00.000Z'));
+
+    const timing = buildPlayableQuestionTiming({
+      qIndex: 6,
+      state: {
+        half: 2,
+        normalQuestionsAnsweredInHalf: 0,
+      },
+    });
+
+    expect(timing.playableAt.toISOString()).toBe('2026-03-24T12:00:03.000Z');
+    expect(timing.deadlineAt.toISOString()).toBe('2026-03-24T12:00:13.000Z');
+
+    vi.useRealTimers();
   });
 
   it('checks goals on raw nextDiff before clamping', () => {

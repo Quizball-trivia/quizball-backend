@@ -14,8 +14,9 @@ export const usersController = {
    * Get current user profile.
    */
   async getMe(req: Request, res: Response): Promise<void> {
-    // req.user is set by auth middleware
-    const user = req.user!;
+    // Reload from the database so response fields like progression are not stale
+    // when req.user came from the auth middleware cache earlier in the request lifecycle.
+    const user = await usersService.getById(req.user!.id);
     res.json(toUserResponse(user));
   },
 

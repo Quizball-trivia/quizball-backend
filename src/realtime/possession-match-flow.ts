@@ -1508,9 +1508,11 @@ export async function sendPossessionMatchQuestion(
   fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
   });
-  fireAndForget('setQuestionTiming(sendQuestion)', async () => {
+  try {
     await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-  });
+  } catch (error) {
+    logger.error({ error, matchId, qIndex }, 'setQuestionTiming failed before emitting match:question');
+  }
 
   await emitMatchState(io, matchId, state);
 

@@ -184,6 +184,13 @@ export const usersService = {
   },
 
   /**
+   * Search users by nickname substring. Excludes AI bots, incomplete onboarding, and the requester.
+   */
+  async searchByNickname(query: string, excludeUserId: string) {
+    return usersRepo.searchByNickname(query, excludeUserId);
+  },
+
+  /**
    * Mark onboarding as complete.
    */
   async completeOnboarding(id: string): Promise<User> {

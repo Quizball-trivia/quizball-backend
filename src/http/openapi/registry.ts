@@ -17,6 +17,8 @@ import {
   publicProfileResponseSchema,
   userIdParamSchema,
   userResponseSchema,
+  userSearchQuerySchema,
+  userSearchResponseSchema,
 } from '../../modules/users/users.schemas.js';
 import {
   listPublicLobbiesQuerySchema,
@@ -768,6 +770,27 @@ registry.registerPath({
     },
     404: {
       description: 'User not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/users/search',
+  summary: 'Search users by nickname',
+  tags: ['Users'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: userSearchQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Search results',
+      content: { 'application/json': { schema: userSearchResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

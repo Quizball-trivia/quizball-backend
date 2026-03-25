@@ -91,6 +91,26 @@ export const usersRepo = {
     return user ?? null;
   },
 
+  async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{
+    id: string;
+    nickname: string | null;
+    avatar_url: string | null;
+    rp: number;
+  }>> {
+    const pattern = `%${query}%`;
+    return sql<Array<{ id: string; nickname: string | null; avatar_url: string | null; rp: number }>>`
+      SELECT u.id, u.nickname, u.avatar_url, COALESCE(rp.rp, 0) AS rp
+      FROM users u
+      LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
+      WHERE u.is_ai = false
+        AND u.nickname IS NOT NULL
+        AND u.id != ${excludeUserId}
+        AND u.nickname ILIKE ${pattern}
+      ORDER BY rp.rp DESC NULLS LAST
+      LIMIT ${limit}
+    `;
+  },
+
   async update(id: string, data: UpdateUserData): Promise<User | null> {
     // Use CASE to only update fields that are explicitly provided (not undefined)
     // undefined = keep existing, null = set to null, value = set to value

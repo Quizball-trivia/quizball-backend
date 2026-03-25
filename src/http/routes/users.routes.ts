@@ -1,12 +1,22 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { usersController, updateProfileSchema, userIdParamSchema } from '../../modules/users/index.js';
+import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema } from '../../modules/users/index.js';
 
 const router = Router();
 
 // All users routes require authentication
 router.use(authMiddleware);
+
+/**
+ * GET /api/v1/users/search?q=
+ * Search users by nickname.
+ */
+router.get(
+  '/search',
+  validate({ query: userSearchQuerySchema }),
+  usersController.searchUsers
+);
 
 /**
  * GET /api/v1/users/me

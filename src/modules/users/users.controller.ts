@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
-import { toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam } from './users.schemas.js';
+import { toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
 
 /**
  * Users controller.
@@ -58,6 +58,24 @@ export const usersController = {
     const { userId } = req.validated.params as UserIdParam;
     const achievements = await achievementsService.listForUser(userId);
     res.json(toAchievementsResponse(achievements));
+  },
+
+  /**
+   * GET /api/v1/users/search?q=
+   * Search users by nickname.
+   */
+  async searchUsers(req: Request, res: Response): Promise<void> {
+    const { q } = req.validated.query as UserSearchQuery;
+    const requesterId = req.user!.id;
+    const rows = await usersService.searchByNickname(q, requesterId);
+    const results = rows.map((r) => ({
+      id: r.id,
+      nickname: r.nickname,
+      avatarUrl: r.avatar_url,
+      rp: r.rp,
+      level: 1,
+    }));
+    res.json({ results });
   },
 
   /**

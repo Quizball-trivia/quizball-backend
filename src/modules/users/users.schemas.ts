@@ -171,3 +171,30 @@ export function toAchievementsResponse(data: AchievementResponse[]) {
     achievements: data,
   };
 }
+
+/**
+ * User search query schema.
+ */
+export const userSearchQuerySchema = z.object({
+  q: z.string().min(1).max(50),
+});
+
+export type UserSearchQuery = z.infer<typeof userSearchQuerySchema>;
+
+/**
+ * User search result item schema.
+ */
+export const userSearchResultSchema = z.object({
+  id: z.string().uuid(),
+  nickname: z.string().nullable(),
+  avatarUrl: z.string().url().nullable(),
+  rp: z.number().int().nonnegative(),
+  level: z.number().int().positive(),
+});
+
+export const userSearchResponseSchema = z.object({
+  results: z.array(userSearchResultSchema),
+});
+
+export type UserSearchResult = z.infer<typeof userSearchResultSchema>;
+export type UserSearchResponse = z.infer<typeof userSearchResponseSchema>;

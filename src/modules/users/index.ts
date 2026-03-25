@@ -9,6 +9,8 @@ export {
   achievementsResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
+  userSearchQuerySchema,
+  userSearchResponseSchema,
   toAchievementsResponse,
   toUserResponse,
   toPublicProfileResponse,
@@ -19,4 +21,7 @@ export {
   type UpdateProfileRequest,
   type UserIdParam,
   type PublicProfileData,
+  type UserSearchQuery,
+  type UserSearchResult,
+  type UserSearchResponse,
 } from './users.schemas.js';

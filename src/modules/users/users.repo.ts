@@ -96,10 +96,11 @@ export const usersRepo = {
     nickname: string | null;
     avatar_url: string | null;
     rp: number;
+    total_xp: number;
   }>> {
     const pattern = `%${query}%`;
-    return sql<Array<{ id: string; nickname: string | null; avatar_url: string | null; rp: number }>>`
-      SELECT u.id, u.nickname, u.avatar_url, COALESCE(rp.rp, 0) AS rp
+    return sql<Array<{ id: string; nickname: string | null; avatar_url: string | null; rp: number; total_xp: number }>>`
+      SELECT u.id, u.nickname, u.avatar_url, COALESCE(rp.rp, 0) AS rp, u.total_xp
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE u.is_ai = false

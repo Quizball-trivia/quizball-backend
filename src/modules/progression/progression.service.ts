@@ -1,5 +1,6 @@
 import { matchesRepo } from '../matches/matches.repo.js';
 import { usersRepo } from '../users/users.repo.js';
+import { trackLevelUp } from '../../core/analytics/game-events.js';
 import { getProgressionFromTotalXp, getMatchXpReward } from './progression.logic.js';
 import { progressionRepo } from './progression.repo.js';
 
@@ -60,7 +61,7 @@ export const progressionService = {
           isForfeitLoss: isHeadToHead && isForfeitDecision && result === 'loss',
         });
 
-        await progressionRepo.grantXpInTx(tx, {
+        const grantResult = await progressionRepo.grantXpInTx(tx, {
           userId: player.user_id,
           sourceType: 'match_result',
           sourceKey: match.id,
@@ -72,6 +73,14 @@ export const progressionService = {
             winnerDecisionMethod,
           },
         });
+
+        if (grantResult.awarded) {
+          const oldLevel = getProgressionFromTotalXp(grantResult.totalXp - xpDelta).level;
+          const newLevel = getProgressionFromTotalXp(grantResult.totalXp).level;
+          if (newLevel > oldLevel) {
+            trackLevelUp(player.user_id, newLevel);
+          }
+        }
       }
     });
   },

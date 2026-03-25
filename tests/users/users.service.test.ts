@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 const getByIdMock = vi.fn();
+const searchByNicknameRepoMock = vi.fn();
 const getProfileMock = vi.fn();
 const getUserRankMock = vi.fn();
 const getUserStatsSummaryMock = vi.fn();
 const getHeadToHeadMock = vi.fn();
+const getRelationshipStatusesMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -20,8 +22,15 @@ vi.mock('../../src/core/index.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
+    searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: vi.fn(),
     createWithIdentity: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/friends/friends.repo.js', () => ({
+  friendsRepo: {
+    getRelationshipStatuses: (...args: unknown[]) => getRelationshipStatusesMock(...args),
   },
 }));
 
@@ -212,5 +221,71 @@ describe('usersService.getPublicProfile', () => {
 
     expect(getHeadToHeadMock).not.toHaveBeenCalled();
     expect(result.headToHead).toBeNull();
+  });
+});
+
+describe('usersService.searchByNickname', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    searchByNicknameRepoMock.mockResolvedValue([
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        nickname: 'LevelFourUser',
+        avatar_url: 'https://example.com/a.png',
+        rp: 1420,
+        total_xp: 370,
+      },
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        nickname: 'PendingUser',
+        avatar_url: null,
+        rp: 900,
+        total_xp: 0,
+      },
+    ]);
+    getRelationshipStatusesMock.mockResolvedValue(new Map([
+      ['11111111-1111-1111-1111-111111111111', 'friends'],
+      ['22222222-2222-2222-2222-222222222222', 'pending_sent'],
+    ]));
+  });
+
+  it('maps total_xp to progression level and enriches relationship status', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.searchByNickname('user', 'viewer-id');
+
+    expect(searchByNicknameRepoMock).toHaveBeenCalledWith('user', 'viewer-id');
+    expect(getRelationshipStatusesMock).toHaveBeenCalledWith('viewer-id', [
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+    ]);
+    expect(result).toEqual([
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        nickname: 'LevelFourUser',
+        avatarUrl: 'https://example.com/a.png',
+        rp: 1420,
+        level: 4,
+        friendStatus: 'friends',
+      },
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        nickname: 'PendingUser',
+        avatarUrl: null,
+        rp: 900,
+        level: 1,
+        friendStatus: 'pending_sent',
+      },
+    ]);
+  });
+
+  it('defaults missing relationship rows to none', async () => {
+    getRelationshipStatusesMock.mockResolvedValue(new Map());
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.searchByNickname('user', 'viewer-id');
+
+    expect(result[0]?.friendStatus).toBe('none');
+    expect(result[1]?.friendStatus).toBe('none');
   });
 });

@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
 import { AuthorizationError } from './core/errors.js';
+import { analyticsMiddleware } from './http/middleware/analytics.middleware.js';
 import { createStoreWebhookRouter, stripe as storeStripe } from './modules/store/index.js';
 import {
   requestIdMiddleware,
@@ -88,6 +89,9 @@ export function createApp(): Express {
     },
   };
   app.use(pinoHttp(httpLoggerOptions));
+
+  // Analytics tracking (PostHog)
+  app.use(analyticsMiddleware);
 
   // Stripe webhook must be registered before /api/v1 rate limiter and body parsers.
   if (storeStripe && config.STRIPE_WEBHOOK_SECRET) {

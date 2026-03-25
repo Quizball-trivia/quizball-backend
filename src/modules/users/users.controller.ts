@@ -67,14 +67,7 @@ export const usersController = {
   async searchUsers(req: Request, res: Response): Promise<void> {
     const { q } = req.validated.query as UserSearchQuery;
     const requesterId = req.user!.id;
-    const rows = await usersService.searchByNickname(q, requesterId);
-    const results = rows.map((r) => ({
-      id: r.id,
-      nickname: r.nickname,
-      avatarUrl: r.avatar_url,
-      rp: r.rp,
-      level: 1,
-    }));
+    const results = await usersService.searchByNickname(q, requesterId);
     res.json({ results });
   },
 

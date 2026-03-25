@@ -14,6 +14,7 @@ import { logger } from './core/logger.js';
 import { disconnectDb } from './db/index.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
+import { shutdownPostHog } from './core/analytics.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -34,8 +35,16 @@ const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   io.close();
   server.close(async () => {
-    await closeRedisClients();
-    await disconnectDb();
+    const results = await Promise.allSettled([
+      closeRedisClients(),
+      shutdownPostHog(),
+      disconnectDb(),
+    ]);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        logger.error({ error: result.reason }, 'Shutdown cleanup step failed');
+      }
+    }
     logger.info('Server closed');
     process.exit(0);
   });

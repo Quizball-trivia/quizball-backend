@@ -1,4 +1,5 @@
 import { trackEvent } from '../core/analytics.js';
+import { trackMatchCompleted } from '../core/analytics/game-events.js';
 import { BadRequestError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
@@ -965,6 +966,19 @@ async function completePossessionMatch(
     totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
     ...(rankedOutcome ? { rankedOutcome } : {}),
   });
+
+  for (const player of refreshedPlayers) {
+    const opponentPlayer = refreshedPlayers.find((p) => p.user_id !== player.user_id);
+    trackMatchCompleted({
+      userId: player.user_id,
+      matchId,
+      mode: match.mode,
+      won: decision.winnerId === player.user_id,
+      score: player.total_points,
+      opponentScore: opponentPlayer?.total_points ?? 0,
+      durationMs,
+    });
+  }
 
   if (decision.totalPointsFallbackUsed) {
     trackEvent('match_possession_total_points_fallback_used', decision.winnerId ?? matchId, {

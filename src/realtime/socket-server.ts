@@ -17,6 +17,7 @@ import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
 import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
+import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -183,6 +184,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.on('connection', async (socket: QuizballSocket) => {
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
+    trackSocketConnected(user.id);
 
     // Register handlers immediately so early buffered client events are not dropped.
     registerLobbyHandlers(io, socket);
@@ -194,6 +196,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      trackSocketDisconnected(user.id, reason, 0);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);

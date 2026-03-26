@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 
 export const friendStatusSchema = z.enum([
   'none',
@@ -18,8 +19,8 @@ export const socialPlayerSummarySchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
-  rp: z.number().int().nonnegative(),
   level: z.number().int().positive(),
+  ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,
 });
 

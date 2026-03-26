@@ -232,15 +232,29 @@ describe('usersService.searchByNickname', () => {
         id: '11111111-1111-1111-1111-111111111111',
         nickname: 'LevelFourUser',
         avatar_url: 'https://example.com/a.png',
-        rp: 1420,
         total_xp: 370,
+        ranked_rp: 1420,
+        ranked_tier: 'Rotation',
+        ranked_placement_status: 'in_progress',
+        ranked_placement_played: 1,
+        ranked_placement_required: 3,
+        ranked_placement_wins: 1,
+        ranked_current_win_streak: 1,
+        ranked_last_ranked_match_at: '2024-01-01T00:00:00.000Z',
       },
       {
         id: '22222222-2222-2222-2222-222222222222',
         nickname: 'PendingUser',
         avatar_url: null,
-        rp: 900,
         total_xp: 0,
+        ranked_rp: null,
+        ranked_tier: null,
+        ranked_placement_status: null,
+        ranked_placement_played: null,
+        ranked_placement_required: null,
+        ranked_placement_wins: null,
+        ranked_current_win_streak: null,
+        ranked_last_ranked_match_at: null,
       },
     ]);
     getRelationshipStatusesMock.mockResolvedValue(new Map([
@@ -249,7 +263,7 @@ describe('usersService.searchByNickname', () => {
     ]));
   });
 
-  it('maps total_xp to progression level and enriches relationship status', async () => {
+  it('maps total_xp to progression level and includes ranked placement data', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
 
     const result = await usersService.searchByNickname('user', 'viewer-id');
@@ -264,16 +278,25 @@ describe('usersService.searchByNickname', () => {
         id: '11111111-1111-1111-1111-111111111111',
         nickname: 'LevelFourUser',
         avatarUrl: 'https://example.com/a.png',
-        rp: 1420,
         level: 4,
+        ranked: {
+          rp: 1420,
+          tier: 'Rotation',
+          placementStatus: 'in_progress',
+          placementPlayed: 1,
+          placementRequired: 3,
+          placementWins: 1,
+          currentWinStreak: 1,
+          lastRankedMatchAt: '2024-01-01T00:00:00.000Z',
+        },
         friendStatus: 'friends',
       },
       {
         id: '22222222-2222-2222-2222-222222222222',
         nickname: 'PendingUser',
         avatarUrl: null,
-        rp: 900,
         level: 1,
+        ranked: null,
         friendStatus: 'pending_sent',
       },
     ]);

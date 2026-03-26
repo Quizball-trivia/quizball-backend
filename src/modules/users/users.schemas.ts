@@ -189,8 +189,8 @@ export const userSearchResultSchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
-  rp: z.number().int().nonnegative(),
   level: z.number().int().positive(),
+  ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,
 });
 

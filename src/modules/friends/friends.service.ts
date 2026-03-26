@@ -2,20 +2,41 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors
 import { usersRepo } from '../users/users.repo.js';
 import { progressionService } from '../progression/progression.service.js';
 import { friendsRepo } from './friends.repo.js';
+import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 
 function toPlayerSummary(row: {
   id: string;
   nickname: string | null;
   avatar_url: string | null;
-  rp: number;
   total_xp: number;
+  ranked_rp: number | null;
+  ranked_tier: string | null;
+  ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
+  ranked_placement_played: number | null;
+  ranked_placement_required: number | null;
+  ranked_placement_wins: number | null;
+  ranked_current_win_streak: number | null;
+  ranked_last_ranked_match_at: string | null;
 }, friendStatus: 'friends' | 'pending_sent' | 'pending_received') {
+  const ranked: RankedProfileResponse | null = row.ranked_tier && row.ranked_placement_status
+    ? {
+        rp: row.ranked_rp ?? 0,
+        tier: row.ranked_tier as RankedProfileResponse['tier'],
+        placementStatus: row.ranked_placement_status,
+        placementPlayed: row.ranked_placement_played ?? 0,
+        placementRequired: row.ranked_placement_required ?? 0,
+        placementWins: row.ranked_placement_wins ?? 0,
+        currentWinStreak: row.ranked_current_win_streak ?? 0,
+        lastRankedMatchAt: row.ranked_last_ranked_match_at,
+      }
+    : null;
+
   return {
     id: row.id,
     nickname: row.nickname,
     avatarUrl: row.avatar_url,
-    rp: row.rp,
     level: progressionService.getProgression(row.total_xp).level,
+    ranked,
     friendStatus,
   };
 }

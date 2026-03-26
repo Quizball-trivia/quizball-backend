@@ -5,8 +5,15 @@ export interface SocialPlayerRow {
   id: string;
   nickname: string | null;
   avatar_url: string | null;
-  rp: number;
   total_xp: number;
+  ranked_rp: number | null;
+  ranked_tier: string | null;
+  ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
+  ranked_placement_played: number | null;
+  ranked_placement_required: number | null;
+  ranked_placement_wins: number | null;
+  ranked_current_win_streak: number | null;
+  ranked_last_ranked_match_at: string | null;
 }
 
 export interface FriendRequestRow {
@@ -81,8 +88,15 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
-        COALESCE(rp.rp, 0) AS rp,
-        u.total_xp
+        u.total_xp,
+        rp.rp AS ranked_rp,
+        rp.tier AS ranked_tier,
+        rp.placement_status AS ranked_placement_status,
+        rp.placement_played AS ranked_placement_played,
+        rp.placement_required AS ranked_placement_required,
+        rp.placement_wins AS ranked_placement_wins,
+        rp.current_win_streak AS ranked_current_win_streak,
+        rp.last_ranked_match_at AS ranked_last_ranked_match_at
       FROM friendships f
       JOIN users u
         ON u.id = CASE
@@ -104,8 +118,15 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
-        COALESCE(rp.rp, 0) AS rp,
-        u.total_xp
+        u.total_xp,
+        rp.rp AS ranked_rp,
+        rp.tier AS ranked_tier,
+        rp.placement_status AS ranked_placement_status,
+        rp.placement_played AS ranked_placement_played,
+        rp.placement_required AS ranked_placement_required,
+        rp.placement_wins AS ranked_placement_wins,
+        rp.current_win_streak AS ranked_current_win_streak,
+        rp.last_ranked_match_at AS ranked_last_ranked_match_at
       FROM friend_requests fr
       JOIN users u ON u.id = fr.sender_user_id
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
@@ -123,8 +144,15 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
-        COALESCE(rp.rp, 0) AS rp,
-        u.total_xp
+        u.total_xp,
+        rp.rp AS ranked_rp,
+        rp.tier AS ranked_tier,
+        rp.placement_status AS ranked_placement_status,
+        rp.placement_played AS ranked_placement_played,
+        rp.placement_required AS ranked_placement_required,
+        rp.placement_wins AS ranked_placement_wins,
+        rp.current_win_streak AS ranked_current_win_streak,
+        rp.last_ranked_match_at AS ranked_last_ranked_match_at
       FROM friend_requests fr
       JOIN users u ON u.id = fr.receiver_user_id
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id

@@ -18,6 +18,7 @@ import {
   moneyDropSettingsSchema,
   type DailyChallengeSettings,
   putInOrderSettingsSchema,
+  trueFalseSettingsSchema,
 } from './daily-challenges.schemas.js';
 import type {
   DailyChallengeCompletionRow,
@@ -33,6 +34,7 @@ function getUtcDay(now = new Date()): string {
 const dailyChallengeSettingsSchemas = {
   moneyDrop: moneyDropSettingsSchema,
   footballJeopardy: footballJeopardySettingsSchema,
+  trueFalse: trueFalseSettingsSchema,
   countdown: countdownSettingsSchema,
   clues: cluesSettingsSchema,
   putInOrder: putInOrderSettingsSchema,
@@ -178,7 +180,9 @@ export const dailyChallengesService = {
       dailyChallengesRepo.listCompletionsForUserOnDay(userId, day),
     ]);
     const completionByType = new Map(completions.map((item) => [item.challenge_type, item]));
-    return configs.map((config) => toListItem(config, completionByType.get(config.challenge_type)));
+    return configs
+      .filter((config) => config.challenge_type !== 'trueFalse')
+      .map((config) => toListItem(config, completionByType.get(config.challenge_type)));
   },
 
   async listAdminConfigs() {
@@ -344,6 +348,10 @@ export const dailyChallengesService = {
         pickCount: settings.pickCount,
         categories,
       };
+    }
+
+    if (challengeType === 'trueFalse') {
+      throw new NotFoundError('Daily challenge not available');
     }
 
     if (challengeType === 'countdown') {

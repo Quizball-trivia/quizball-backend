@@ -2411,6 +2411,7 @@
             "enum": [
               "moneyDrop",
               "footballJeopardy",
+              "trueFalse",
               "clues",
               "countdown",
               "putInOrder"
@@ -2429,6 +2430,7 @@
             "enum": [
               "dollarSign",
               "brain",
+              "checkCircle",
               "lightbulb",
               "timer",
               "list"
@@ -2531,6 +2533,40 @@
             },
             "required": [
               "pickCount",
+              "challengeType"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "categoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "default": []
+              },
+              "questionCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "secondsPerQuestion": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 120
+              },
+              "challengeType": {
+                "type": "string",
+                "enum": [
+                  "trueFalse"
+                ]
+              }
+            },
+            "required": [
+              "questionCount",
+              "secondsPerQuestion",
               "challengeType"
             ]
           },
@@ -3177,6 +3213,7 @@
             "enum": [
               "moneyDrop",
               "footballJeopardy",
+              "trueFalse",
               "clues",
               "countdown",
               "putInOrder"
@@ -3229,6 +3266,7 @@
             "enum": [
               "moneyDrop",
               "footballJeopardy",
+              "trueFalse",
               "clues",
               "countdown",
               "putInOrder"
@@ -3254,6 +3292,7 @@
             "enum": [
               "moneyDrop",
               "footballJeopardy",
+              "trueFalse",
               "clues",
               "countdown",
               "putInOrder"
@@ -3272,6 +3311,7 @@
             "enum": [
               "dollarSign",
               "brain",
+              "checkCircle",
               "lightbulb",
               "timer",
               "list"
@@ -8003,6 +8043,7 @@
                             "enum": [
                               "moneyDrop",
                               "footballJeopardy",
+                              "trueFalse",
                               "clues",
                               "countdown",
                               "putInOrder"
@@ -8021,6 +8062,7 @@
                             "enum": [
                               "dollarSign",
                               "brain",
+                              "checkCircle",
                               "lightbulb",
                               "timer",
                               "list"
@@ -8096,6 +8138,7 @@
               "enum": [
                 "moneyDrop",
                 "footballJeopardy",
+                "trueFalse",
                 "clues",
                 "countdown",
                 "putInOrder"
@@ -8696,6 +8739,7 @@
               "enum": [
                 "moneyDrop",
                 "footballJeopardy",
+                "trueFalse",
                 "clues",
                 "countdown",
                 "putInOrder"
@@ -8736,6 +8780,7 @@
                       "enum": [
                         "moneyDrop",
                         "footballJeopardy",
+                        "trueFalse",
                         "clues",
                         "countdown",
                         "putInOrder"
@@ -8834,6 +8879,7 @@
               "enum": [
                 "moneyDrop",
                 "footballJeopardy",
+                "trueFalse",
                 "clues",
                 "countdown",
                 "putInOrder"
@@ -8857,6 +8903,7 @@
                       "enum": [
                         "moneyDrop",
                         "footballJeopardy",
+                        "trueFalse",
                         "clues",
                         "countdown",
                         "putInOrder"
@@ -8929,6 +8976,7 @@
                             "enum": [
                               "moneyDrop",
                               "footballJeopardy",
+                              "trueFalse",
                               "clues",
                               "countdown",
                               "putInOrder"
@@ -8947,6 +8995,7 @@
                             "enum": [
                               "dollarSign",
                               "brain",
+                              "checkCircle",
                               "lightbulb",
                               "timer",
                               "list"
@@ -9036,6 +9085,40 @@
                                 },
                                 "required": [
                                   "pickCount",
+                                  "challengeType"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "categoryIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "format": "uuid"
+                                    },
+                                    "default": []
+                                  },
+                                  "questionCount": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20
+                                  },
+                                  "secondsPerQuestion": {
+                                    "type": "integer",
+                                    "minimum": 5,
+                                    "maximum": 120
+                                  },
+                                  "challengeType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "trueFalse"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "questionCount",
+                                  "secondsPerQuestion",
                                   "challengeType"
                                 ]
                               },
@@ -9215,6 +9298,7 @@
               "enum": [
                 "moneyDrop",
                 "footballJeopardy",
+                "trueFalse",
                 "clues",
                 "countdown",
                 "putInOrder"

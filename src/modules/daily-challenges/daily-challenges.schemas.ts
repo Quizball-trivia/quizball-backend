@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const dailyChallengeTypeEnum = z.enum([
   'moneyDrop',
   'footballJeopardy',
+  'trueFalse',
   'clues',
   'countdown',
   'putInOrder',
@@ -12,7 +13,7 @@ export const dailyChallengeMetadataSchema = z.object({
   challengeType: dailyChallengeTypeEnum,
   title: z.string().min(1),
   description: z.string().min(1),
-  iconToken: z.enum(['dollarSign', 'brain', 'lightbulb', 'timer', 'list']),
+  iconToken: z.enum(['dollarSign', 'brain', 'checkCircle', 'lightbulb', 'timer', 'list']),
   coinReward: z.number().int().nonnegative(),
   xpReward: z.number().int().nonnegative(),
   showOnHome: z.boolean(),
@@ -30,6 +31,12 @@ const moneyDropSettingsBaseSchema = z.object({
 const footballJeopardySettingsBaseSchema = z.object({
   categoryIds: z.array(z.string().uuid()).default([]),
   pickCount: z.number().int().min(1).max(9),
+});
+
+const trueFalseSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  questionCount: z.number().int().min(1).max(20),
+  secondsPerQuestion: z.number().int().min(5).max(120),
 });
 
 const countdownSettingsBaseSchema = z.object({
@@ -52,6 +59,7 @@ const putInOrderSettingsBaseSchema = z.object({
 
 export const moneyDropSettingsSchema = moneyDropSettingsBaseSchema;
 export const footballJeopardySettingsSchema = footballJeopardySettingsBaseSchema;
+export const trueFalseSettingsSchema = trueFalseSettingsBaseSchema;
 export const countdownSettingsSchema = countdownSettingsBaseSchema;
 export const cluesSettingsSchema = cluesSettingsBaseSchema;
 export const putInOrderSettingsSchema = putInOrderSettingsBaseSchema;
@@ -61,6 +69,9 @@ const moneyDropSettingsOpenApiSchema = moneyDropSettingsBaseSchema.extend({
 });
 const footballJeopardySettingsOpenApiSchema = footballJeopardySettingsBaseSchema.extend({
   challengeType: z.literal('footballJeopardy'),
+});
+const trueFalseSettingsOpenApiSchema = trueFalseSettingsBaseSchema.extend({
+  challengeType: z.literal('trueFalse'),
 });
 const countdownSettingsOpenApiSchema = countdownSettingsBaseSchema.extend({
   challengeType: z.literal('countdown'),
@@ -75,6 +86,7 @@ const putInOrderSettingsOpenApiSchema = putInOrderSettingsBaseSchema.extend({
 export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType', [
   moneyDropSettingsOpenApiSchema,
   footballJeopardySettingsOpenApiSchema,
+  trueFalseSettingsOpenApiSchema,
   countdownSettingsOpenApiSchema,
   cluesSettingsOpenApiSchema,
   putInOrderSettingsOpenApiSchema,
@@ -242,6 +254,7 @@ export const dailyChallengeParamSchema = z.object({
 export type DailyChallengeType = z.infer<typeof dailyChallengeTypeEnum>;
 export type MoneyDropSettings = z.infer<typeof moneyDropSettingsSchema>;
 export type FootballJeopardySettings = z.infer<typeof footballJeopardySettingsSchema>;
+export type TrueFalseSettings = z.infer<typeof trueFalseSettingsSchema>;
 export type CountdownSettings = z.infer<typeof countdownSettingsSchema>;
 export type CluesSettings = z.infer<typeof cluesSettingsSchema>;
 export type PutInOrderSettings = z.infer<typeof putInOrderSettingsSchema>;

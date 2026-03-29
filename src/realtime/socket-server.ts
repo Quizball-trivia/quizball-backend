@@ -184,6 +184,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.on('connection', async (socket: QuizballSocket) => {
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
+
+    // Store connection time for session duration tracking
+    const connectedAt = Date.now();
+    socket.data.connectedAt = connectedAt;
     trackSocketConnected(user.id);
 
     // Register handlers immediately so early buffered client events are not dropped.
@@ -196,7 +200,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
-      trackSocketDisconnected(user.id, reason, 0);
+      // Calculate actual session duration from connection time
+      const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
+      trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);

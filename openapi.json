@@ -1198,6 +1198,414 @@
           "totalPages"
         ]
       },
+      "FriendsResponse": {
+        "type": "object",
+        "properties": {
+          "friends": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "nickname": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "avatarUrl": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uri"
+                },
+                "level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "ranked": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "rp": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "Academy",
+                        "Youth Prospect",
+                        "Reserve",
+                        "Bench",
+                        "Rotation",
+                        "Starting11",
+                        "Key Player",
+                        "Captain",
+                        "World-Class",
+                        "Legend",
+                        "GOAT"
+                      ]
+                    },
+                    "placementStatus": {
+                      "type": "string",
+                      "enum": [
+                        "unplaced",
+                        "in_progress",
+                        "placed"
+                      ]
+                    },
+                    "placementPlayed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "placementRequired": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "placementWins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "currentWinStreak": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "lastRankedMatchAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "rp",
+                    "tier",
+                    "placementStatus",
+                    "placementPlayed",
+                    "placementRequired",
+                    "placementWins",
+                    "currentWinStreak",
+                    "lastRankedMatchAt"
+                  ]
+                },
+                "friendStatus": {
+                  "type": "string",
+                  "enum": [
+                    "friends"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "nickname",
+                "avatarUrl",
+                "level",
+                "ranked",
+                "friendStatus"
+              ]
+            }
+          }
+        },
+        "required": [
+          "friends"
+        ]
+      },
+      "FriendRequestsResponse": {
+        "type": "object",
+        "properties": {
+          "incoming": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "requestId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "nickname": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "avatarUrl": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uri"
+                    },
+                    "level": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "ranked": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": [
+                            "Academy",
+                            "Youth Prospect",
+                            "Reserve",
+                            "Bench",
+                            "Rotation",
+                            "Starting11",
+                            "Key Player",
+                            "Captain",
+                            "World-Class",
+                            "Legend",
+                            "GOAT"
+                          ]
+                        },
+                        "placementStatus": {
+                          "type": "string",
+                          "enum": [
+                            "unplaced",
+                            "in_progress",
+                            "placed"
+                          ]
+                        },
+                        "placementPlayed": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "placementRequired": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "placementWins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "currentWinStreak": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "lastRankedMatchAt": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "rp",
+                        "tier",
+                        "placementStatus",
+                        "placementPlayed",
+                        "placementRequired",
+                        "placementWins",
+                        "currentWinStreak",
+                        "lastRankedMatchAt"
+                      ]
+                    },
+                    "friendStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending_sent",
+                        "pending_received"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "nickname",
+                    "avatarUrl",
+                    "level",
+                    "ranked",
+                    "friendStatus"
+                  ]
+                }
+              },
+              "required": [
+                "requestId",
+                "createdAt",
+                "user"
+              ]
+            }
+          },
+          "outgoing": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "requestId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "user": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "nickname": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "avatarUrl": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uri"
+                    },
+                    "level": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "ranked": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": [
+                            "Academy",
+                            "Youth Prospect",
+                            "Reserve",
+                            "Bench",
+                            "Rotation",
+                            "Starting11",
+                            "Key Player",
+                            "Captain",
+                            "World-Class",
+                            "Legend",
+                            "GOAT"
+                          ]
+                        },
+                        "placementStatus": {
+                          "type": "string",
+                          "enum": [
+                            "unplaced",
+                            "in_progress",
+                            "placed"
+                          ]
+                        },
+                        "placementPlayed": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "placementRequired": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "placementWins": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "currentWinStreak": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "lastRankedMatchAt": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "rp",
+                        "tier",
+                        "placementStatus",
+                        "placementPlayed",
+                        "placementRequired",
+                        "placementWins",
+                        "currentWinStreak",
+                        "lastRankedMatchAt"
+                      ]
+                    },
+                    "friendStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending_sent",
+                        "pending_received"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "nickname",
+                    "avatarUrl",
+                    "level",
+                    "ranked",
+                    "friendStatus"
+                  ]
+                }
+              },
+              "required": [
+                "requestId",
+                "createdAt",
+                "user"
+              ]
+            }
+          },
+          "incomingCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "incoming",
+          "outgoing",
+          "incomingCount"
+        ]
+      },
+      "CreateFriendRequestResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
+          }
+        },
+        "required": [
+          "requestId",
+          "status"
+        ]
+      },
+      "FriendActionResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
       "I18nField": {
         "type": "object",
         "additionalProperties": {
@@ -1412,6 +1820,74 @@
               "type": {
                 "type": "string",
                 "enum": [
+                  "true_false"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "enum": [
+                            "true"
+                          ]
+                        },
+                        "text": {
+                          "$ref": "#/components/schemas/I18nField"
+                        },
+                        "is_correct": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "text",
+                        "is_correct"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "enum": [
+                            "false"
+                          ]
+                        },
+                        "text": {
+                          "$ref": "#/components/schemas/I18nField"
+                        },
+                        "is_correct": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "text",
+                        "is_correct"
+                      ]
+                    }
+                  ]
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "type",
+              "options"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
                   "input_text"
                 ]
               },
@@ -1613,6 +2089,7 @@
             "type": "string",
             "enum": [
               "mcq_single",
+              "true_false",
               "input_text",
               "countdown_list",
               "clue_chain",
@@ -4986,6 +5463,914 @@
         }
       }
     },
+    "/api/v1/users/search": {
+      "get": {
+        "summary": "Search users by nickname",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            },
+            "required": true,
+            "name": "q",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "nickname": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "avatarUrl": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uri"
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "ranked": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "rp": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "tier": {
+                                "type": "string",
+                                "enum": [
+                                  "Academy",
+                                  "Youth Prospect",
+                                  "Reserve",
+                                  "Bench",
+                                  "Rotation",
+                                  "Starting11",
+                                  "Key Player",
+                                  "Captain",
+                                  "World-Class",
+                                  "Legend",
+                                  "GOAT"
+                                ]
+                              },
+                              "placementStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "unplaced",
+                                  "in_progress",
+                                  "placed"
+                                ]
+                              },
+                              "placementPlayed": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "placementRequired": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "placementWins": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "currentWinStreak": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "lastRankedMatchAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "rp",
+                              "tier",
+                              "placementStatus",
+                              "placementPlayed",
+                              "placementRequired",
+                              "placementWins",
+                              "currentWinStreak",
+                              "lastRankedMatchAt"
+                            ]
+                          },
+                          "friendStatus": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "pending_sent",
+                              "pending_received",
+                              "friends"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "nickname",
+                          "avatarUrl",
+                          "level",
+                          "ranked",
+                          "friendStatus"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "results"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/friends": {
+      "get": {
+        "summary": "List accepted friends for the authenticated user",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Friends list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "friends": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "nickname": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "avatarUrl": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uri"
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "ranked": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "rp": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "tier": {
+                                "type": "string",
+                                "enum": [
+                                  "Academy",
+                                  "Youth Prospect",
+                                  "Reserve",
+                                  "Bench",
+                                  "Rotation",
+                                  "Starting11",
+                                  "Key Player",
+                                  "Captain",
+                                  "World-Class",
+                                  "Legend",
+                                  "GOAT"
+                                ]
+                              },
+                              "placementStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "unplaced",
+                                  "in_progress",
+                                  "placed"
+                                ]
+                              },
+                              "placementPlayed": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "placementRequired": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "placementWins": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "currentWinStreak": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "lastRankedMatchAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "rp",
+                              "tier",
+                              "placementStatus",
+                              "placementPlayed",
+                              "placementRequired",
+                              "placementWins",
+                              "currentWinStreak",
+                              "lastRankedMatchAt"
+                            ]
+                          },
+                          "friendStatus": {
+                            "type": "string",
+                            "enum": [
+                              "friends"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "nickname",
+                          "avatarUrl",
+                          "level",
+                          "ranked",
+                          "friendStatus"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "friends"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/friends/requests": {
+      "get": {
+        "summary": "List incoming and outgoing friend requests",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Friend request lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "incoming": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "requestId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "user": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "nickname": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "avatarUrl": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "uri"
+                              },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              },
+                              "ranked": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "rp": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": [
+                                      "Academy",
+                                      "Youth Prospect",
+                                      "Reserve",
+                                      "Bench",
+                                      "Rotation",
+                                      "Starting11",
+                                      "Key Player",
+                                      "Captain",
+                                      "World-Class",
+                                      "Legend",
+                                      "GOAT"
+                                    ]
+                                  },
+                                  "placementStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "unplaced",
+                                      "in_progress",
+                                      "placed"
+                                    ]
+                                  },
+                                  "placementPlayed": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "placementRequired": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "placementWins": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "currentWinStreak": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "lastRankedMatchAt": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "format": "date-time"
+                                  }
+                                },
+                                "required": [
+                                  "rp",
+                                  "tier",
+                                  "placementStatus",
+                                  "placementPlayed",
+                                  "placementRequired",
+                                  "placementWins",
+                                  "currentWinStreak",
+                                  "lastRankedMatchAt"
+                                ]
+                              },
+                              "friendStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "pending_sent",
+                                  "pending_received"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "nickname",
+                              "avatarUrl",
+                              "level",
+                              "ranked",
+                              "friendStatus"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "requestId",
+                          "createdAt",
+                          "user"
+                        ]
+                      }
+                    },
+                    "outgoing": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "requestId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "user": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "nickname": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "avatarUrl": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "uri"
+                              },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              },
+                              "ranked": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "rp": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": [
+                                      "Academy",
+                                      "Youth Prospect",
+                                      "Reserve",
+                                      "Bench",
+                                      "Rotation",
+                                      "Starting11",
+                                      "Key Player",
+                                      "Captain",
+                                      "World-Class",
+                                      "Legend",
+                                      "GOAT"
+                                    ]
+                                  },
+                                  "placementStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "unplaced",
+                                      "in_progress",
+                                      "placed"
+                                    ]
+                                  },
+                                  "placementPlayed": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "placementRequired": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "placementWins": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "currentWinStreak": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "lastRankedMatchAt": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "format": "date-time"
+                                  }
+                                },
+                                "required": [
+                                  "rp",
+                                  "tier",
+                                  "placementStatus",
+                                  "placementPlayed",
+                                  "placementRequired",
+                                  "placementWins",
+                                  "currentWinStreak",
+                                  "lastRankedMatchAt"
+                                ]
+                              },
+                              "friendStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "pending_sent",
+                                  "pending_received"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "nickname",
+                              "avatarUrl",
+                              "level",
+                              "ranked",
+                              "friendStatus"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "requestId",
+                          "createdAt",
+                          "user"
+                        ]
+                      }
+                    },
+                    "incomingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "incoming",
+                    "outgoing",
+                    "incomingCount"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Send a friend request",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "targetUserId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "targetUserId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Friend request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "requestId",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Target user not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Friend request conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/friends/requests/{requestId}/accept": {
+      "post": {
+        "summary": "Accept a received friend request",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "requestId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Friend request accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Friend request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/friends/requests/{requestId}/decline": {
+      "post": {
+        "summary": "Decline a received friend request",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "requestId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Friend request declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Friend request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/friends/{friendUserId}": {
+      "delete": {
+        "summary": "Remove an existing friend",
+        "tags": [
+          "Friends"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "friendUserId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Friend removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Friendship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/categories": {
       "get": {
         "summary": "List all categories",
@@ -5878,6 +7263,7 @@
               "type": "string",
               "enum": [
                 "mcq_single",
+                "true_false",
                 "input_text",
                 "countdown_list",
                 "clue_chain",
@@ -5952,6 +7338,7 @@
                     "type": "string",
                     "enum": [
                       "mcq_single",
+                      "true_false",
                       "input_text",
                       "countdown_list",
                       "clue_chain",
@@ -6123,6 +7510,7 @@
                     "type": "string",
                     "enum": [
                       "mcq_single",
+                      "true_false",
                       "input_text",
                       "countdown_list",
                       "clue_chain",
@@ -6310,6 +7698,7 @@
                           "type": "string",
                           "enum": [
                             "mcq_single",
+                            "true_false",
                             "input_text",
                             "countdown_list",
                             "clue_chain",

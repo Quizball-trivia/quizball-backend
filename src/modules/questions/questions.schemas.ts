@@ -14,6 +14,7 @@ import { createHash } from 'crypto';
  */
 export const questionTypeEnum = z.enum([
   'mcq_single',
+  'true_false',
   'input_text',
   'countdown_list',
   'clue_chain',
@@ -54,6 +55,14 @@ export type McqOption = z.infer<typeof mcqOptionSchema>;
 const mcqPayloadBaseSchema = z.object({
   type: z.literal('mcq_single'),
   options: z.array(mcqOptionSchema).length(4),
+});
+
+const trueFalsePayloadBaseSchema = z.object({
+  type: z.literal('true_false'),
+  options: z.tuple([
+    mcqOptionSchema.extend({ id: z.literal('true') }),
+    mcqOptionSchema.extend({ id: z.literal('false') }),
+  ]),
 });
 
 /**
@@ -208,6 +217,7 @@ export const questionPayloadSchema = z
     normalizeQuestionPayloadCandidate,
     z.discriminatedUnion('type', [
       mcqPayloadBaseSchema,
+      trueFalsePayloadBaseSchema,
       textInputPayloadBaseSchema,
       countdownPayloadBaseSchema,
       clueChainPayloadBaseSchema,
@@ -237,6 +247,17 @@ export const questionPayloadSchema = z
       }
     }
 
+    if (data.type === 'true_false') {
+      const correctCount = data.options.filter((o) => o.is_correct).length;
+      if (correctCount !== 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Exactly one option must be marked as correct',
+          path: ['options'],
+        });
+      }
+    }
+
     if (data.type === 'countdown_list') {
       const ids = data.answer_groups.map((group) => group.id);
       if (new Set(ids).size !== ids.length) {
@@ -261,6 +282,7 @@ export const questionPayloadSchema = z
   });
 
 export type McqPayload = z.infer<typeof mcqPayloadBaseSchema>;
+export type TrueFalsePayload = z.infer<typeof trueFalsePayloadBaseSchema>;
 export type TextInputPayload = z.infer<typeof textInputPayloadBaseSchema>;
 export type CountdownPayload = z.infer<typeof countdownPayloadBaseSchema>;
 export type ClueChainPayload = z.infer<typeof clueChainPayloadBaseSchema>;

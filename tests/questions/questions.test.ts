@@ -68,6 +68,14 @@ const mockMcqPayload = {
   ],
 };
 
+const mockTrueFalsePayload = {
+  type: 'true_false' as const,
+  options: [
+    { id: 'true', text: { en: 'True' }, is_correct: true },
+    { id: 'false', text: { en: 'False' }, is_correct: false },
+  ],
+};
+
 const mockQuestion = {
   id: '123e4567-e89b-12d3-a456-426614174000',
   category_id: '123e4567-e89b-12d3-a456-426614174001',
@@ -287,6 +295,29 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(201);
       expect(response.body.type).toBe('mcq_single');
+    });
+
+    it('should create true_false question with payload', async () => {
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (questionsRepo.createWithPayload as Mock).mockResolvedValue({
+        ...mockQuestion,
+        type: 'true_false',
+        payload: mockTrueFalsePayload,
+      });
+
+      const response = await request(app)
+        .post('/api/v1/questions')
+        .send({
+          category_id: mockQuestion.category_id,
+          type: 'true_false',
+          difficulty: 'easy',
+          prompt: { en: 'Real Madrid has won more Champions League titles than any other club.' },
+          payload: mockTrueFalsePayload,
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.type).toBe('true_false');
+      expect(response.body.payload.type).toBe('true_false');
     });
 
     it('should return 400 for invalid category_id', async () => {

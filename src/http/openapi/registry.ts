@@ -1038,6 +1038,14 @@ const mcqPayloadOpenApiSchema = z.object({
   options: z.array(mcqOptionOpenApiSchema).length(4),
 });
 
+const trueFalsePayloadOpenApiSchema = z.object({
+  type: z.literal('true_false'),
+  options: z.tuple([
+    mcqOptionOpenApiSchema.extend({ id: z.literal('true') }),
+    mcqOptionOpenApiSchema.extend({ id: z.literal('false') }),
+  ]),
+});
+
 const textInputPayloadOpenApiSchema = z.object({
   type: z.literal('input_text'),
   accepted_answers: z.array(i18nFieldSchema).min(1),
@@ -1085,6 +1093,7 @@ const putInOrderPayloadOpenApiSchema = z.object({
 
 const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
   mcqPayloadOpenApiSchema,
+  trueFalsePayloadOpenApiSchema,
   textInputPayloadOpenApiSchema,
   countdownPayloadOpenApiSchema,
   clueChainPayloadOpenApiSchema,

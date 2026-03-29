@@ -105,7 +105,10 @@ export const usersRepo = {
     ranked_current_win_streak: number | null;
     ranked_last_ranked_match_at: string | null;
   }>> {
-    const pattern = `%${query}%`;
+    // Escape LIKE metacharacters (% and _) to match literals, not wildcards
+    // Replace backslash first to avoid double-escaping, then escape % and _
+    const escapedQuery = query.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const pattern = `%${escapedQuery}%`;
     return sql<Array<{
       id: string;
       nickname: string | null;
@@ -138,7 +141,7 @@ export const usersRepo = {
       WHERE u.is_ai = false
         AND u.nickname IS NOT NULL
         AND u.id != ${excludeUserId}
-        AND u.nickname ILIKE ${pattern}
+        AND u.nickname ILIKE ${pattern} ESCAPE '\\'
       ORDER BY rp.rp DESC NULLS LAST
       LIMIT ${limit}
     `;

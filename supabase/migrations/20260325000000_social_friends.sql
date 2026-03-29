@@ -8,8 +8,13 @@ CREATE TABLE IF NOT EXISTS public.friend_requests (
   CONSTRAINT friend_requests_sender_receiver_distinct CHECK (sender_user_id <> receiver_user_id)
 );
 
+-- Unique index with LEAST/GREATEST prevents bidirectional pending requests
+-- Ensures only one pending request can exist between two users, regardless of direction
 CREATE UNIQUE INDEX IF NOT EXISTS friend_requests_pending_unique_pair
-  ON public.friend_requests (sender_user_id, receiver_user_id)
+  ON public.friend_requests (
+    LEAST(sender_user_id, receiver_user_id),
+    GREATEST(sender_user_id, receiver_user_id)
+  )
   WHERE status = 'pending';
 
 CREATE INDEX IF NOT EXISTS idx_friend_requests_sender_status_created

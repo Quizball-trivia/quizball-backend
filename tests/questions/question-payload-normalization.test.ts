@@ -79,6 +79,28 @@ describe('question payload normalization', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('parses true_false payloads and rejects invalid ids', () => {
+    const validPayload = {
+      type: 'true_false',
+      options: [
+        { id: 'true', text: { en: 'True' }, is_correct: true },
+        { id: 'false', text: { en: 'False' }, is_correct: false },
+      ],
+    };
+
+    expect(questionPayloadSchema.safeParse(validPayload).success).toBe(true);
+
+    const invalidPayload = {
+      type: 'true_false',
+      options: [
+        { id: 'yes', text: { en: 'True' }, is_correct: true },
+        { id: 'no', text: { en: 'False' }, is_correct: false },
+      ],
+    };
+
+    expect(questionPayloadSchema.safeParse(invalidPayload).success).toBe(false);
+  });
+
   it('parses clue_chain payloads', () => {
     const payload = {
       type: 'clue_chain',

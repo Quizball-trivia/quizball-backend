@@ -9,6 +9,7 @@ import {
   type TranslationInput,
   type TranslationOutput,
 } from './translation.provider.js';
+import { questionPayloadSchema, type QuestionPayload } from './questions.schemas.js';
 
 const BATCH_SIZE = 100;
 const TARGET_LOCALE = 'ka';
@@ -28,16 +29,143 @@ function parseI18nField(raw: Json | string | null | undefined): I18nField | null
   return null;
 }
 
-interface McqPayload {
-  type: 'mcq_single';
-  options: Array<{ id: string; text: I18nField; is_correct: boolean }>;
+function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const parsed = questionPayloadSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
-function parseMcqPayload(raw: Json | null): McqPayload | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const obj = raw as Record<string, unknown>;
-  if (obj.type !== 'mcq_single' || !Array.isArray(obj.options)) return null;
-  return obj as unknown as McqPayload;
+type TranslationFieldDescriptor =
+  | { kind: 'mcq_option'; optionIndex: number }
+  | { kind: 'true_false_option'; optionIndex: 0 | 1 }
+  | { kind: 'countdown_prompt' }
+  | { kind: 'countdown_display'; groupIndex: number }
+  | { kind: 'clue_display_answer' }
+  | { kind: 'clue_content'; clueIndex: number }
+  | { kind: 'put_prompt' }
+  | { kind: 'put_label'; itemIndex: number }
+  | { kind: 'put_details'; itemIndex: number };
+
+function normalizeAcceptedAnswer(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractTranslatableFields(payload: QuestionPayload | null): {
+  texts: string[];
+  descriptors: TranslationFieldDescriptor[];
+} {
+  if (!payload) {
+    return { texts: [], descriptors: [] };
+  }
+
+  const texts: string[] = [];
+  const descriptors: TranslationFieldDescriptor[] = [];
+
+  if (payload.type === 'mcq_single') {
+    payload.options.forEach((option, optionIndex) => {
+      if (option.text.en) {
+        texts.push(option.text.en);
+        descriptors.push({ kind: 'mcq_option', optionIndex });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'true_false') {
+    payload.options.forEach((option, optionIndex) => {
+      if (option.text.en) {
+        texts.push(option.text.en);
+        descriptors.push({ kind: 'true_false_option', optionIndex: optionIndex as 0 | 1 });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'countdown_list') {
+    if (payload.prompt.en) {
+      texts.push(payload.prompt.en);
+      descriptors.push({ kind: 'countdown_prompt' });
+    }
+    payload.answer_groups.forEach((group, groupIndex) => {
+      if (group.display.en) {
+        texts.push(group.display.en);
+        descriptors.push({ kind: 'countdown_display', groupIndex });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'clue_chain') {
+    if (payload.display_answer.en) {
+      texts.push(payload.display_answer.en);
+      descriptors.push({ kind: 'clue_display_answer' });
+    }
+    payload.clues.forEach((clue, clueIndex) => {
+      if (clue.content.en) {
+        texts.push(clue.content.en);
+        descriptors.push({ kind: 'clue_content', clueIndex });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'put_in_order') {
+    if (payload.prompt.en) {
+      texts.push(payload.prompt.en);
+      descriptors.push({ kind: 'put_prompt' });
+    }
+    payload.items.forEach((item, itemIndex) => {
+      if (item.label.en) {
+        texts.push(item.label.en);
+        descriptors.push({ kind: 'put_label', itemIndex });
+      }
+      if (item.details?.en) {
+        texts.push(item.details.en);
+        descriptors.push({ kind: 'put_details', itemIndex });
+      }
+    });
+  }
+
+  return { texts, descriptors };
+}
+
+function payloadNeedsTranslation(payload: QuestionPayload | null): boolean {
+  if (!payload) return false;
+
+  if (payload.type === 'mcq_single' || payload.type === 'true_false') {
+    return payload.options.some((option) => option.text.en && !option.text[TARGET_LOCALE]);
+  }
+
+  if (payload.type === 'countdown_list') {
+    return Boolean(
+      (payload.prompt.en && !payload.prompt[TARGET_LOCALE])
+      || payload.answer_groups.some((group) => group.display.en && !group.display[TARGET_LOCALE])
+    );
+  }
+
+  if (payload.type === 'clue_chain') {
+    return Boolean(
+      (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE])
+      || payload.clues.some((clue) => clue.content.en && !clue.content[TARGET_LOCALE])
+    );
+  }
+
+  if (payload.type === 'put_in_order') {
+    return Boolean(
+      (payload.prompt.en && !payload.prompt[TARGET_LOCALE])
+      || payload.items.some((item) =>
+        (item.label.en && !item.label[TARGET_LOCALE]) || (item.details?.en && !item.details[TARGET_LOCALE])
+      )
+    );
+  }
+
+  return false;
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -66,8 +194,8 @@ export const translationService = {
       id: string;
       prompt: I18nField;
       explanation: I18nField | null;
-      payload: McqPayload | null;
-      translatableOptionIndexes: number[];
+      payload: QuestionPayload | null;
+      translationDescriptors: TranslationFieldDescriptor[];
     }> = [];
 
     for (const id of questionIds) {
@@ -78,17 +206,26 @@ export const translationService = {
       }
 
       const prompt = parseI18nField(q.prompt);
-      if (!prompt?.en || prompt[TARGET_LOCALE]) {
+      const explanation = parseI18nField(q.explanation);
+      const payload = parseQuestionPayload(q.payload);
+
+      const needsPrompt = Boolean(prompt?.en && !prompt[TARGET_LOCALE]);
+      const needsExplanation = Boolean(explanation?.en && !explanation[TARGET_LOCALE]);
+      const needsPayload = payloadNeedsTranslation(payload);
+
+      if (!prompt?.en || (!needsPrompt && !needsExplanation && !needsPayload)) {
         skipped++;
         continue;
       }
 
+      const { descriptors } = extractTranslatableFields(payload);
+
       pending.push({
         id: q.id,
         prompt,
-        explanation: parseI18nField(q.explanation),
-        payload: parseMcqPayload(q.payload),
-        translatableOptionIndexes: [],
+        explanation,
+        payload,
+        translationDescriptors: descriptors,
       });
     }
 
@@ -97,39 +234,13 @@ export const translationService = {
       const batch = pending.slice(i, i + BATCH_SIZE);
 
       const inputs: TranslationInput[] = batch.map((q) => {
-        const translatableOptions: string[] = [];
-        const translatableOptionIndexes: number[] = [];
-
-        if (q.payload?.options) {
-          q.payload.options.forEach((option, idx) => {
-            const englishText =
-              option && typeof option === 'object' && option.text && typeof option.text === 'object'
-                ? (option.text as I18nField).en
-                : undefined;
-
-            if (englishText) {
-              translatableOptions.push(englishText);
-              translatableOptionIndexes.push(idx);
-              return;
-            }
-
-            logger.warn(
-              {
-                questionId: q.id,
-                optionId: option?.id,
-                optionIndex: idx,
-              },
-              'Skipping option translation due to missing English option text'
-            );
-          });
-        }
-
-        q.translatableOptionIndexes = translatableOptionIndexes;
+        const { texts, descriptors } = extractTranslatableFields(q.payload);
+        q.translationDescriptors = descriptors;
 
         return {
           id: q.id,
           prompt: q.prompt.en!,
-          options: translatableOptions.length > 0 ? translatableOptions : undefined,
+          options: texts.length > 0 ? texts : undefined,
           explanation: q.explanation?.en || undefined,
         };
       });
@@ -222,10 +333,16 @@ export const translationService = {
    * Get counts of items needing translation (fast query, no translation).
    */
   async getBackfillCounts(): Promise<{ questions: number; categories: number }> {
-    const [qRow] = await sql<{ count: string }[]>`
-      SELECT COUNT(*)::text as count FROM questions
-      WHERE prompt->>'en' IS NOT NULL
-        AND (prompt->>'ka' IS NULL OR prompt->>'ka' = '')
+    const questionRows = await sql<{
+      id: string;
+      prompt: Json | null;
+      explanation: Json | null;
+      payload: Json | null;
+    }[]>`
+      SELECT q.id, q.prompt, q.explanation, qp.payload
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.prompt->>'en' IS NOT NULL
     `;
     const [cRow] = await sql<{ count: string }[]>`
       SELECT COUNT(*)::text as count FROM categories
@@ -233,7 +350,17 @@ export const translationService = {
         AND (name->>'ka' IS NULL OR name->>'ka' = '')
     `;
     return {
-      questions: parseInt(qRow?.count ?? '0', 10),
+      questions: questionRows.filter((q) => {
+        const prompt = parseI18nField(q.prompt);
+        const explanation = parseI18nField(q.explanation);
+        const payload = parseQuestionPayload(q.payload);
+
+        return Boolean(
+          (prompt?.en && !prompt[TARGET_LOCALE])
+          || (explanation?.en && !explanation[TARGET_LOCALE])
+          || payloadNeedsTranslation(payload)
+        );
+      }).length,
       categories: parseInt(cRow?.count ?? '0', 10),
     };
   },
@@ -247,14 +374,32 @@ export const translationService = {
     failed: number;
     categories: number;
   }> {
-    const untranslated = await sql<{ id: string }[]>`
-      SELECT id FROM questions
-      WHERE prompt->>'en' IS NOT NULL
-        AND (prompt->>'ka' IS NULL OR prompt->>'ka' = '')
-      ORDER BY created_at ASC
+    const questionRows = await sql<{
+      id: string;
+      prompt: Json | null;
+      explanation: Json | null;
+      payload: Json | null;
+    }[]>`
+      SELECT q.id, q.prompt, q.explanation, qp.payload
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.prompt->>'en' IS NOT NULL
+      ORDER BY q.created_at ASC
     `;
 
-    const questionIds = untranslated.map((q) => q.id);
+    const questionIds = questionRows
+      .filter((q) => {
+        const prompt = parseI18nField(q.prompt);
+        const explanation = parseI18nField(q.explanation);
+        const payload = parseQuestionPayload(q.payload);
+
+        return Boolean(
+          (prompt?.en && !prompt[TARGET_LOCALE])
+          || (explanation?.en && !explanation[TARGET_LOCALE])
+          || payloadNeedsTranslation(payload)
+        );
+      })
+      .map((q) => q.id);
     logger.info({ count: questionIds.length }, 'Starting translation backfill');
 
     const result = await this.translateQuestions(questionIds);
@@ -279,8 +424,8 @@ async function applyTranslation(
     id: string;
     prompt: I18nField;
     explanation: I18nField | null;
-    payload: McqPayload | null;
-    translatableOptionIndexes?: number[];
+    payload: QuestionPayload | null;
+    translationDescriptors: TranslationFieldDescriptor[];
   },
   translation: TranslationOutput
 ): Promise<void> {
@@ -291,32 +436,106 @@ async function applyTranslation(
       ? { ...original.explanation, [TARGET_LOCALE]: translation.explanation }
       : original.explanation;
 
-  // Merge "ka" into MCQ option texts
-  let newPayload: Json | null = original.payload as Json | null;
-  if (original.payload && translation.options) {
-    const translatedByOriginalIndex = new Map<number, string>();
-    const optionIndexes = original.translatableOptionIndexes ?? [];
+  let newPayload: QuestionPayload | null = original.payload;
+  if (original.payload && translation.options?.length) {
+    const translatedEntries = original.translationDescriptors
+      .map((descriptor, index) => ({
+        descriptor,
+        text: translation.options?.[index],
+      }))
+      .filter((entry): entry is { descriptor: TranslationFieldDescriptor; text: string } => Boolean(entry.text));
 
-    optionIndexes.forEach((optionIdx, translatedIdx) => {
-      const translatedText = translation.options?.[translatedIdx];
-      if (translatedText) {
-        translatedByOriginalIndex.set(optionIdx, translatedText);
+    if (translatedEntries.length > 0) {
+      const payload = structuredClone(original.payload) as QuestionPayload;
+
+      for (const entry of translatedEntries) {
+        const translated = entry.text;
+
+        switch (entry.descriptor.kind) {
+          case 'mcq_option': {
+            if (payload.type === 'mcq_single') {
+              const option = payload.options[entry.descriptor.optionIndex];
+              if (option) {
+                option.text = { ...option.text, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          }
+          case 'true_false_option': {
+            if (payload.type === 'true_false') {
+              const option = payload.options[entry.descriptor.optionIndex];
+              if (option) {
+                option.text = { ...option.text, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          }
+          case 'countdown_prompt':
+            if (payload.type === 'countdown_list') {
+              payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
+            }
+            break;
+          case 'countdown_display':
+            if (payload.type === 'countdown_list') {
+              const group = payload.answer_groups[entry.descriptor.groupIndex];
+              if (group) {
+                group.display = { ...group.display, [TARGET_LOCALE]: translated };
+                const normalized = normalizeAcceptedAnswer(translated);
+                if (
+                  normalized
+                  && !group.accepted_answers.some((answer) => normalizeAcceptedAnswer(answer) === normalized)
+                ) {
+                  group.accepted_answers = [...group.accepted_answers, translated];
+                }
+              }
+            }
+            break;
+          case 'clue_display_answer':
+            if (payload.type === 'clue_chain') {
+              payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
+              const normalized = normalizeAcceptedAnswer(translated);
+              if (
+                normalized
+                && !payload.accepted_answers.some((answer) => normalizeAcceptedAnswer(answer) === normalized)
+              ) {
+                payload.accepted_answers = [...payload.accepted_answers, translated];
+              }
+            }
+            break;
+          case 'clue_content':
+            if (payload.type === 'clue_chain') {
+              const clue = payload.clues[entry.descriptor.clueIndex];
+              if (clue) {
+                clue.content = { ...clue.content, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          case 'put_prompt':
+            if (payload.type === 'put_in_order') {
+              payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
+            }
+            break;
+          case 'put_label':
+            if (payload.type === 'put_in_order') {
+              const item = payload.items[entry.descriptor.itemIndex];
+              if (item) {
+                item.label = { ...item.label, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          case 'put_details':
+            if (payload.type === 'put_in_order') {
+              const item = payload.items[entry.descriptor.itemIndex];
+              if (item?.details) {
+                item.details = { ...item.details, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+        }
       }
-    });
 
-    const updatedOptions = original.payload.options.map((opt, idx) => {
-      const translated = translatedByOriginalIndex.get(idx);
-      if (!translated) return opt;
-
-      return {
-        ...opt,
-        text: {
-          ...opt.text,
-          [TARGET_LOCALE]: translated,
-        },
-      };
-    });
-    newPayload = { ...original.payload, options: updatedOptions } as unknown as Json;
+      newPayload = payload;
+    }
   }
 
   // Execute both updates in a single transaction for atomicity
@@ -334,7 +553,7 @@ async function applyTranslation(
       ]
     );
 
-    if (newPayload && !isDeepStrictEqual(newPayload, original.payload as Json | null)) {
+    if (newPayload && !isDeepStrictEqual(newPayload, original.payload)) {
       await tx.unsafe(
         `UPDATE question_payloads
          SET payload = $1::jsonb,

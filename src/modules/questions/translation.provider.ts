@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT_MS = 30000; // 30 seconds for LLM requests
 const QUESTION_SYSTEM_PROMPT = `You are a professional English to Georgian translator for a football quiz app.
 Translate the following quiz questions from English to Georgian.
 Return ONLY a valid JSON object with a single key "translations" containing an array of translated items.
-Each item must have the same "id" as the input. Maintain option array order.
+Each item must have the same "id" as the input. Maintain array order for any translated string lists.
 Use natural Georgian language appropriate for a quiz/trivia context.
 Transliterate ALL proper nouns (player names, team names, tournament names) into Georgian script (e.g. "Liverpool" → "ლივერპული", "Messi" → "მესი", "Champions League" → "ჩემპიონთა ლიგა").`;
 

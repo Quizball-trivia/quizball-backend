@@ -9,6 +9,8 @@ import { rankedRepo } from '../ranked/ranked.repo.js';
 import { statsService } from '../stats/stats.service.js';
 import type { PublicProfileData } from './users.schemas.js';
 import { progressionService } from '../progression/progression.service.js';
+import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
+import { friendsRepo } from '../friends/friends.repo.js';
 
 /**
  * Users service.
@@ -184,10 +186,34 @@ export const usersService = {
   },
 
   /**
-   * Search users by nickname substring. Excludes AI bots, incomplete onboarding, and the requester.
+   * Search users by nickname substring. Excludes AI bots and the requester.
    */
   async searchByNickname(query: string, excludeUserId: string) {
-    return usersRepo.searchByNickname(query, excludeUserId);
+    const rows = await usersRepo.searchByNickname(query, excludeUserId);
+    const relationshipStatuses = await friendsRepo.getRelationshipStatuses(
+      excludeUserId,
+      rows.map((row) => row.id)
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      nickname: row.nickname,
+      avatarUrl: row.avatar_url,
+      level: progressionService.getProgression(row.total_xp).level,
+      ranked: row.ranked_tier && row.ranked_placement_status
+        ? ({
+            rp: row.ranked_rp ?? 0,
+            tier: row.ranked_tier as RankedProfileResponse['tier'],
+            placementStatus: row.ranked_placement_status,
+            placementPlayed: row.ranked_placement_played ?? 0,
+            placementRequired: row.ranked_placement_required ?? 0,
+            placementWins: row.ranked_placement_wins ?? 0,
+            currentWinStreak: row.ranked_current_win_streak ?? 0,
+            lastRankedMatchAt: row.ranked_last_ranked_match_at,
+          } satisfies RankedProfileResponse)
+        : null,
+      friendStatus: relationshipStatuses.get(row.id) ?? 'none',
+    }));
   },
 
   /**

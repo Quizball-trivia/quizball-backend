@@ -12,6 +12,7 @@ import { storeRoutes } from './store.routes.js';
 import { activityRoutes } from './activity.routes.js';
 import { dailyChallengesRoutes } from './daily-challenges.routes.js';
 import { adminDailyChallengesRoutes } from './admin-daily-challenges.routes.js';
+import { friendsRoutes } from './friends.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -28,6 +29,7 @@ if (config.DOCS_ENABLED) {
 // API v1 routes
 router.use('/api/v1/auth', authRoutes);
 router.use('/api/v1/users', usersRoutes);
+router.use('/api/v1/friends', friendsRoutes);
 router.use('/api/v1/categories', categoriesRoutes);
 router.use('/api/v1/questions', questionsRoutes);
 router.use('/api/v1/featured-categories', featuredCategoriesRoutes);

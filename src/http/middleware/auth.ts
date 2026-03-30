@@ -63,7 +63,7 @@ export async function authMiddleware(
       'Token verified'
     );
 
-    // 3. Resolve internal user (CRITICAL - don't skip this!)
+    // 3. Resolve internal user
     // Only call geo detection if the user doesn't have a country yet — avoids blocking
     // third-party HTTP call on every authenticated request
     const cached = getCachedUser(identity.provider, identity.subject);

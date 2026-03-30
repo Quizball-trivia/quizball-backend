@@ -7,6 +7,7 @@ import {
   lobbyUpdateSettingsSchema,
 } from '../schemas/lobby.schemas.js';
 import { logger } from '../../core/logger.js';
+import { trackLobbyCreated, trackLobbyJoined } from '../../core/analytics/game-events.js';
 import { lobbyRealtimeService } from '../services/lobby-realtime.service.js';
 
 export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket): void {
@@ -18,6 +19,9 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     await lobbyRealtimeService.createLobby(io, socket, parsed.data);
+    if (socket.data.lobbyId) {
+      trackLobbyCreated(socket.data.user.id, socket.data.lobbyId, 'friendly');
+    }
   });
 
   socket.on('lobby:join_by_code', async (payload) => {
@@ -28,6 +32,9 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     await lobbyRealtimeService.joinByCode(io, socket, parsed.data.inviteCode);
+    if (socket.data.lobbyId) {
+      trackLobbyJoined(socket.data.user.id, socket.data.lobbyId, parsed.data.inviteCode);
+    }
   });
 
   socket.on('lobby:ready', async (payload) => {

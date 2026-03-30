@@ -13,6 +13,12 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     description: 'Pick categories and values, then clear the board for the biggest score.',
     iconToken: 'brain',
   },
+  trueFalse: {
+    challengeType: 'trueFalse',
+    title: 'True or False',
+    description: 'Read each football statement and decide whether it is true or false.',
+    iconToken: 'checkCircle',
+  },
   clues: {
     challengeType: 'clues',
     title: 'Clues Challenge',

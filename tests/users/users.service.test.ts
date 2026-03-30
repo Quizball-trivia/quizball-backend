@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 const getByIdMock = vi.fn();
+const searchByNicknameRepoMock = vi.fn();
 const getProfileMock = vi.fn();
 const getUserRankMock = vi.fn();
 const getUserStatsSummaryMock = vi.fn();
 const getHeadToHeadMock = vi.fn();
+const getRelationshipStatusesMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -20,8 +22,15 @@ vi.mock('../../src/core/index.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
+    searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: vi.fn(),
     createWithIdentity: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/friends/friends.repo.js', () => ({
+  friendsRepo: {
+    getRelationshipStatuses: (...args: unknown[]) => getRelationshipStatusesMock(...args),
   },
 }));
 
@@ -212,5 +221,94 @@ describe('usersService.getPublicProfile', () => {
 
     expect(getHeadToHeadMock).not.toHaveBeenCalled();
     expect(result.headToHead).toBeNull();
+  });
+});
+
+describe('usersService.searchByNickname', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    searchByNicknameRepoMock.mockResolvedValue([
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        nickname: 'LevelFourUser',
+        avatar_url: 'https://example.com/a.png',
+        total_xp: 370,
+        ranked_rp: 1420,
+        ranked_tier: 'Rotation',
+        ranked_placement_status: 'in_progress',
+        ranked_placement_played: 1,
+        ranked_placement_required: 3,
+        ranked_placement_wins: 1,
+        ranked_current_win_streak: 1,
+        ranked_last_ranked_match_at: '2024-01-01T00:00:00.000Z',
+      },
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        nickname: 'PendingUser',
+        avatar_url: null,
+        total_xp: 0,
+        ranked_rp: null,
+        ranked_tier: null,
+        ranked_placement_status: null,
+        ranked_placement_played: null,
+        ranked_placement_required: null,
+        ranked_placement_wins: null,
+        ranked_current_win_streak: null,
+        ranked_last_ranked_match_at: null,
+      },
+    ]);
+    getRelationshipStatusesMock.mockResolvedValue(new Map([
+      ['11111111-1111-1111-1111-111111111111', 'friends'],
+      ['22222222-2222-2222-2222-222222222222', 'pending_sent'],
+    ]));
+  });
+
+  it('maps total_xp to progression level and includes ranked placement data', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.searchByNickname('user', 'viewer-id');
+
+    expect(searchByNicknameRepoMock).toHaveBeenCalledWith('user', 'viewer-id');
+    expect(getRelationshipStatusesMock).toHaveBeenCalledWith('viewer-id', [
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+    ]);
+    expect(result).toEqual([
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        nickname: 'LevelFourUser',
+        avatarUrl: 'https://example.com/a.png',
+        level: 4,
+        ranked: {
+          rp: 1420,
+          tier: 'Rotation',
+          placementStatus: 'in_progress',
+          placementPlayed: 1,
+          placementRequired: 3,
+          placementWins: 1,
+          currentWinStreak: 1,
+          lastRankedMatchAt: '2024-01-01T00:00:00.000Z',
+        },
+        friendStatus: 'friends',
+      },
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        nickname: 'PendingUser',
+        avatarUrl: null,
+        level: 1,
+        ranked: null,
+        friendStatus: 'pending_sent',
+      },
+    ]);
+  });
+
+  it('defaults missing relationship rows to none', async () => {
+    getRelationshipStatusesMock.mockResolvedValue(new Map());
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.searchByNickname('user', 'viewer-id');
+
+    expect(result[0]?.friendStatus).toBe('none');
+    expect(result[1]?.friendStatus).toBe('none');
   });
 });

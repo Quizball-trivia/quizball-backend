@@ -56,6 +56,15 @@ import {
   storeWalletResponseSchema,
 } from '../../modules/store/store.schemas.js';
 import {
+  createFriendRequestBodySchema,
+  createFriendRequestResponseSchema,
+  friendActionResponseSchema,
+  friendRequestIdParamSchema,
+  friendRequestsResponseSchema,
+  friendUserIdParamSchema,
+  friendsResponseSchema,
+} from '../../modules/friends/index.js';
+import {
   questionTypeEnum,
 } from '../../modules/questions/questions.schemas.js';
 import { progressionResponseSchema } from '../../modules/progression/progression.schemas.js';
@@ -148,6 +157,10 @@ registry.register('PurchaseWithCoinsResponse', purchaseWithCoinsResponseSchema);
 registry.register('ManualAdjustmentResponse', manualAdjustmentResponseSchema);
 registry.register('StoreTransactionLogResponse', storeTransactionLogResponseSchema);
 registry.register('ListStoreTransactionsResponse', listStoreTransactionsResponseSchema);
+registry.register('FriendsResponse', friendsResponseSchema);
+registry.register('FriendRequestsResponse', friendRequestsResponseSchema);
+registry.register('CreateFriendRequestResponse', createFriendRequestResponseSchema);
+registry.register('FriendActionResponse', friendActionResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -796,6 +809,177 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/friends',
+  summary: 'List accepted friends for the authenticated user',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Friends list',
+      content: { 'application/json': { schema: friendsResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/friends/requests',
+  summary: 'List incoming and outgoing friend requests',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Friend request lists',
+      content: { 'application/json': { schema: friendRequestsResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/friends/requests',
+  summary: 'Send a friend request',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: createFriendRequestBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Friend request created',
+      content: { 'application/json': { schema: createFriendRequestResponseSchema } },
+    },
+    400: {
+      description: 'Bad request',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Target user not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    409: {
+      description: 'Friend request conflict',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/friends/requests/{requestId}/accept',
+  summary: 'Accept a received friend request',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: friendRequestIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Friend request accepted',
+      content: { 'application/json': { schema: friendActionResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Friend request not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/friends/requests/{requestId}/decline',
+  summary: 'Decline a received friend request',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: friendRequestIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Friend request declined',
+      content: { 'application/json': { schema: friendActionResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Friend request not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/friends/{friendUserId}',
+  summary: 'Remove an existing friend',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: friendUserIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Friend removed',
+      content: { 'application/json': { schema: friendActionResponseSchema } },
+    },
+    400: {
+      description: 'Bad request',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Friendship not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
 // =============================================================================
 // Category Schemas
 // =============================================================================
@@ -870,6 +1054,14 @@ const mcqPayloadOpenApiSchema = z.object({
   options: z.array(mcqOptionOpenApiSchema).length(4),
 });
 
+const trueFalsePayloadOpenApiSchema = z.object({
+  type: z.literal('true_false'),
+  options: z.tuple([
+    mcqOptionOpenApiSchema.extend({ id: z.literal('true') }),
+    mcqOptionOpenApiSchema.extend({ id: z.literal('false') }),
+  ]),
+});
+
 const textInputPayloadOpenApiSchema = z.object({
   type: z.literal('input_text'),
   accepted_answers: z.array(i18nFieldSchema).min(1),
@@ -917,6 +1109,7 @@ const putInOrderPayloadOpenApiSchema = z.object({
 
 const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
   mcqPayloadOpenApiSchema,
+  trueFalsePayloadOpenApiSchema,
   textInputPayloadOpenApiSchema,
   countdownPayloadOpenApiSchema,
   clueChainPayloadOpenApiSchema,

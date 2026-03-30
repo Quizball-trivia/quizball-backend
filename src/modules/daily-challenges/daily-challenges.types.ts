@@ -3,6 +3,7 @@ import type { Json } from '../../db/types.js';
 export type DailyChallengeType =
   | 'moneyDrop'
   | 'footballJeopardy'
+  | 'trueFalse'
   | 'clues'
   | 'countdown'
   | 'putInOrder';
@@ -10,6 +11,7 @@ export type DailyChallengeType =
 export type DailyChallengeIconToken =
   | 'dollarSign'
   | 'brain'
+  | 'checkCircle'
   | 'lightbulb'
   | 'timer'
   | 'list';

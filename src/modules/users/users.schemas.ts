@@ -6,6 +6,7 @@ import { headToHeadResponseSchema, statsSummaryResponseSchema } from '../stats/s
 import { progressionResponseSchema, type ProgressionResponse } from '../progression/progression.schemas.js';
 import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
+import { friendStatusSchema } from '../friends/friends.schemas.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -188,8 +189,9 @@ export const userSearchResultSchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
-  rp: z.number().int().nonnegative(),
   level: z.number().int().positive(),
+  ranked: rankedProfileResponseSchema.nullable(),
+  friendStatus: friendStatusSchema,
 });
 
 export const userSearchResponseSchema = z.object({

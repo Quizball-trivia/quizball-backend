@@ -17,6 +17,7 @@ import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
 import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
+import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -184,6 +185,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
 
+    // Store connection time for session duration tracking
+    const connectedAt = Date.now();
+    socket.data.connectedAt = connectedAt;
+    trackSocketConnected(user.id);
+
     // Register handlers immediately so early buffered client events are not dropped.
     registerLobbyHandlers(io, socket);
     registerRankedHandlers(io, socket);
@@ -194,6 +200,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      // Calculate actual session duration from connection time
+      const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
+      trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);

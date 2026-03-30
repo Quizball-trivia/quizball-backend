@@ -882,6 +882,10 @@ registry.registerPath({
       description: 'Friend request conflict',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
   },
 });
 
@@ -907,6 +911,10 @@ registry.registerPath({
       description: 'Friend request not found',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
   },
 });
 
@@ -930,6 +938,10 @@ registry.registerPath({
     },
     404: {
       description: 'Friend request not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },
@@ -959,6 +971,10 @@ registry.registerPath({
     },
     404: {
       description: 'Friendship not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

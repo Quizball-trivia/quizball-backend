@@ -131,5 +131,25 @@ describe('friendsService', () => {
     await expect(friendsService.removeFriend('user-a', 'user-b')).resolves.toEqual({
       success: true,
     });
+    expect(removeFriendMock).toHaveBeenCalledWith('user-a', 'user-b');
+  });
+
+  it('rejects when trying to remove yourself', async () => {
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.removeFriend('same-id', 'same-id')).rejects.toThrow(
+      'You cannot remove yourself'
+    );
+    expect(removeFriendMock).not.toHaveBeenCalled();
+  });
+
+  it('throws when friendship does not exist', async () => {
+    removeFriendMock.mockResolvedValue(false);
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.removeFriend('user-a', 'user-b')).rejects.toThrow(
+      'Friendship not found'
+    );
+    expect(removeFriendMock).toHaveBeenCalledWith('user-a', 'user-b');
   });
 });

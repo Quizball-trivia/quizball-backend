@@ -6,6 +6,7 @@ import express, { type Express } from 'express';
 import '../setup.js';
 import { requestIdMiddleware, errorHandler } from '../../src/http/middleware/index.js';
 import { friendsRoutes } from '../../src/http/routes/friends.routes.js';
+import { BadRequestError, NotFoundError } from '../../src/core/errors.js';
 
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
@@ -145,5 +146,34 @@ describe('friendsRoutes', () => {
       'viewer-id',
       '33333333-3333-3333-3333-333333333333'
     );
+  });
+
+  it('DELETE /api/v1/friends/:friendUserId returns 404 when friendship not found', async () => {
+    (friendsService.removeFriend as Mock).mockRejectedValue(
+      new NotFoundError('Friendship not found')
+    );
+
+    const response = await request(app)
+      .delete('/api/v1/friends/33333333-3333-3333-3333-333333333333');
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('NOT_FOUND');
+    expect(friendsService.removeFriend).toHaveBeenCalledWith(
+      'viewer-id',
+      '33333333-3333-3333-3333-333333333333'
+    );
+  });
+
+  it('DELETE /api/v1/friends/:friendUserId returns 400 when trying to remove yourself', async () => {
+    (friendsService.removeFriend as Mock).mockRejectedValue(
+      new BadRequestError('You cannot remove yourself')
+    );
+
+    const response = await request(app)
+      .delete('/api/v1/friends/22222222-2222-2222-2222-222222222222');
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('BAD_REQUEST');
+    expect(friendsService.removeFriend).toHaveBeenCalled();
   });
 });

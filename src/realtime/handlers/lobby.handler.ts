@@ -19,7 +19,9 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     await lobbyRealtimeService.createLobby(io, socket, parsed.data);
-    trackLobbyCreated(socket.data.user.id, '', 'friendly');
+    if (socket.data.lobbyId) {
+      trackLobbyCreated(socket.data.user.id, socket.data.lobbyId, 'friendly');
+    }
   });
 
   socket.on('lobby:join_by_code', async (payload) => {
@@ -30,7 +32,9 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     await lobbyRealtimeService.joinByCode(io, socket, parsed.data.inviteCode);
-    trackLobbyJoined(socket.data.user.id, '', parsed.data.inviteCode);
+    if (socket.data.lobbyId) {
+      trackLobbyJoined(socket.data.user.id, socket.data.lobbyId, parsed.data.inviteCode);
+    }
   });
 
   socket.on('lobby:ready', async (payload) => {

@@ -10,6 +10,7 @@ export interface SocketAuthData {
   identity: AuthIdentity;
   lobbyId?: string;
   matchId?: string;
+  connectedAt?: number;
 }
 
 function safeDecode(value: string): string {

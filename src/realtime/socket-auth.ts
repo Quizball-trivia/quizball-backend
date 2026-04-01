@@ -2,6 +2,7 @@ import type { Socket } from 'socket.io';
 import { getAuthProvider } from '../modules/auth/index.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
+import { withSpan } from '../core/tracing.js';
 import type { AuthIdentity } from '../core/types.js';
 import type { User as DbUser } from '../db/types.js';
 
@@ -51,21 +52,29 @@ export async function socketAuthMiddleware(
   next: (err?: Error) => void
 ): Promise<void> {
   try {
-    const token = extractToken(socket);
-    if (!token) {
-      logger.warn({ socketId: socket.id }, 'Socket authentication missing token');
-      return next(new Error('Authentication required'));
-    }
+    await withSpan('realtime.socket_auth', {
+      'quizball.socket_id': socket.id,
+    }, async (span) => {
+      const token = extractToken(socket);
+      if (!token) {
+        span.setAttribute('quizball.auth_token_present', false);
+        logger.warn({ socketId: socket.id }, 'Socket authentication missing token');
+        next(new Error('Authentication required'));
+        return;
+      }
 
-    const authProvider = getAuthProvider();
-    const identity = await authProvider.verifyToken(token);
-    const user = await usersService.getOrCreateFromIdentity(identity);
+      span.setAttribute('quizball.auth_token_present', true);
+      const authProvider = getAuthProvider();
+      const identity = await authProvider.verifyToken(token);
+      const user = await usersService.getOrCreateFromIdentity(identity);
 
-    const data: SocketAuthData = { user, identity };
-    socket.data = { ...(socket.data ?? {}), ...data };
+      span.setAttribute('quizball.user_id', user.id);
+      const data: SocketAuthData = { user, identity };
+      socket.data = { ...(socket.data ?? {}), ...data };
 
-    logger.info({ userId: user.id, socketId: socket.id }, 'Socket authenticated');
-    next();
+      logger.info({ userId: user.id, socketId: socket.id }, 'Socket authenticated');
+      next();
+    });
   } catch (error) {
     logger.warn(
       { error: error instanceof Error ? error.message : error, socketId: socket.id },

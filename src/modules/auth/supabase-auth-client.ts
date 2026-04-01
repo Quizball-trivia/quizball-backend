@@ -5,6 +5,7 @@ import {
   BadRequestError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { withSpan } from '../../core/tracing.js';
 import type { AuthClient } from './auth.client.js';
 import type { AuthSession } from './auth.schemas.js';
 
@@ -25,55 +26,75 @@ export class SupabaseAuthClient implements AuthClient {
   }
 
   async signUp(email: string, password: string): Promise<AuthSession> {
-    const response = await this.request('/auth/v1/signup', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+    return withSpan('auth.signup', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request('/auth/v1/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
 
-    return this.normalizeSession(response);
+      return this.normalizeSession(response);
+    });
   }
 
   async signIn(email: string, password: string): Promise<AuthSession> {
-    const response = await this.request(
-      '/auth/v1/token?grant_type=password',
-      {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      }
-    );
+    return withSpan('auth.signin', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request(
+        '/auth/v1/token?grant_type=password',
+        {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        }
+      );
 
-    return this.normalizeSession(response);
+      return this.normalizeSession(response);
+    });
   }
 
   async refresh(refreshToken: string): Promise<AuthSession> {
-    const response = await this.request(
-      '/auth/v1/token?grant_type=refresh_token',
-      {
-        method: 'POST',
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      }
-    );
+    return withSpan('auth.refresh', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request(
+        '/auth/v1/token?grant_type=refresh_token',
+        {
+          method: 'POST',
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        }
+      );
 
-    return this.normalizeSession(response);
+      return this.normalizeSession(response);
+    });
   }
 
   async forgotPassword(email: string, redirectTo?: string): Promise<void> {
-    await this.request('/auth/v1/recover', {
-      method: 'POST',
-      body: JSON.stringify({
-        email,
-        ...(redirectTo && { redirect_to: redirectTo }),
-      }),
+    await withSpan('auth.forgot_password', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/recover', {
+        method: 'POST',
+        body: JSON.stringify({
+          email,
+          ...(redirectTo && { redirect_to: redirectTo }),
+        }),
+      });
     });
   }
 
   async resetPassword(accessToken: string, newPassword: string): Promise<void> {
-    await this.request('/auth/v1/user', {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ password: newPassword }),
+    await withSpan('auth.reset_password', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/user', {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ password: newPassword }),
+      });
     });
   }
 
@@ -103,40 +124,46 @@ export class SupabaseAuthClient implements AuthClient {
     path: string,
     options: { method?: string; body?: string; headers?: Record<string, string> } = {}
   ): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      apikey: this.anonKey,
-    };
+    return withSpan('auth.supabase.request', {
+      'quizball.auth_provider': 'supabase',
+      'http.request.method': options.method ?? 'GET',
+      'url.path': path,
+    }, async (span) => {
+      const url = `${this.baseUrl}${path}`;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        apikey: this.anonKey,
+      };
 
-    // Merge additional headers
-    if (options.headers) {
-      Object.assign(headers, options.headers);
-    }
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        this.handleError(response.status, data);
+      if (options.headers) {
+        Object.assign(headers, options.headers);
       }
 
-      return data;
-    } catch (error) {
-      if (error instanceof ExternalServiceError ||
-          error instanceof AuthenticationError ||
-          error instanceof BadRequestError) {
-        throw error;
-      }
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers,
+        });
 
-      logger.error({ error, url }, 'Supabase request failed');
-      throw new ExternalServiceError('Failed to communicate with auth service');
-    }
+        span.setAttribute('http.response.status_code', response.status);
+        const data = await response.json();
+
+        if (!response.ok) {
+          this.handleError(response.status, data);
+        }
+
+        return data;
+      } catch (error) {
+        if (error instanceof ExternalServiceError ||
+            error instanceof AuthenticationError ||
+            error instanceof BadRequestError) {
+          throw error;
+        }
+
+        logger.error({ error, url }, 'Supabase request failed');
+        throw new ExternalServiceError('Failed to communicate with auth service');
+      }
+    });
   }
 
   /**

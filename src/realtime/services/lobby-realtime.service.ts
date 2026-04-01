@@ -30,6 +30,7 @@ import {
 } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
+import { withSpan } from '../../core/tracing.js';
 
 const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
 const DRAFT_START_GUARD_TTL_SEC = 15;
@@ -283,83 +284,98 @@ async function abortRankedDraftStartForTickets(
 }
 
 export async function startDraft(io: QuizballServer, lobbyId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
+  await withSpan('lobby.start_draft', {
+    'quizball.lobby_id': lobbyId,
+  }, async (span) => {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby) {
+      span.setAttribute('quizball.lobby_found', false);
+      return;
+    }
+    span.setAttribute('quizball.lobby_found', true);
+    span.setAttribute('quizball.lobby_mode', lobby.mode);
 
-  const lockKey = `lock:lobby:${lobbyId}`;
-  const lock = await acquireLock(lockKey, 3000);
-  if (!lock.acquired || !lock.token) {
-    logger.warn({ lobbyId }, 'Draft start skipped: lobby lock not acquired');
-    return;
-  }
-
-  try {
-    let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
-    let rankedAiUserId: string | null = null;
-
-    const categories = await lobbiesService.selectRandomCategories(3);
-    if (categories.length < 3) {
-      logger.warn(
-        { lobbyId, categoryCount: categories.length },
-        'Draft start failed: insufficient categories with questions'
-      );
-      await lobbiesRepo.setAllReady(lobbyId, false);
-      await emitLobbyState(io, lobbyId);
-      io.to(`lobby:${lobbyId}`).emit('error', {
-        code: 'INSUFFICIENT_CATEGORIES',
-        message: 'Not enough categories with questions to start the game',
-      });
+    const lockKey = `lock:lobby:${lobbyId}`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) {
+      span.setAttribute('quizball.lock_acquired', false);
+      logger.warn({ lobbyId }, 'Draft start skipped: lobby lock not acquired');
       return;
     }
 
-    if (lobby.mode === 'ranked') {
-      rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-      rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
-      const ticketUserIds = rankedMembers
-        .filter((member) => member.user_id !== rankedAiUserId)
-        .map((member) => member.user_id);
+    span.setAttribute('quizball.lock_acquired', true);
+    try {
+      let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
+      let rankedAiUserId: string | null = null;
 
-      const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
-      if (!consumedTickets) {
-        await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
+      const categories = await lobbiesService.selectRandomCategories(3);
+      span.setAttribute('quizball.category_count', categories.length);
+      if (categories.length < 3) {
+        logger.warn(
+          { lobbyId, categoryCount: categories.length },
+          'Draft start failed: insufficient categories with questions'
+        );
+        await lobbiesRepo.setAllReady(lobbyId, false);
+        await emitLobbyState(io, lobbyId);
+        io.to(`lobby:${lobbyId}`).emit('error', {
+          code: 'INSUFFICIENT_CATEGORIES',
+          message: 'Not enough categories with questions to start the game',
+        });
         return;
       }
-    }
 
-    await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
-    await lobbiesRepo.clearLobbyCategories(lobbyId);
-    await lobbiesRepo.insertLobbyCategories(
-      lobbyId,
-      categories.map((category, index) => ({
-        slot: index + 1,
-        categoryId: category.id,
-      }))
-    );
-    await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
-    await warmupRealtimeService.cleanupLobby(lobbyId);
+      if (lobby.mode === 'ranked') {
+        rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+        rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
+        const ticketUserIds = rankedMembers
+          .filter((member) => member.user_id !== rankedAiUserId)
+          .map((member) => member.user_id);
 
-    let turnUserId = lobby.host_user_id;
-    if (lobby.mode === 'ranked') {
-      const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
-      const aiUserId = rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members);
-      if (aiUserId) {
-        turnUserId =
-          members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
+        const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
+        span.setAttribute('quizball.ticket_users_count', ticketUserIds.length);
+        span.setAttribute('quizball.tickets_consumed', Boolean(consumedTickets));
+        if (!consumedTickets) {
+          await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
+          return;
+        }
       }
-    }
 
-    io.to(`lobby:${lobbyId}`).emit('draft:start', {
-      lobbyId,
-      categories,
-      turnUserId,
-    });
-    logger.info(
-      { lobbyId, hostUserId: lobby.host_user_id, turnUserId, categoryCount: categories.length },
-      'Draft started'
-    );
-  } finally {
-    await releaseLock(lockKey, lock.token);
-  }
+      await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
+      await lobbiesRepo.clearLobbyCategories(lobbyId);
+      await lobbiesRepo.insertLobbyCategories(
+        lobbyId,
+        categories.map((category, index) => ({
+          slot: index + 1,
+          categoryId: category.id,
+        }))
+      );
+      await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+      await warmupRealtimeService.cleanupLobby(lobbyId);
+
+      let turnUserId = lobby.host_user_id;
+      if (lobby.mode === 'ranked') {
+        const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+        const aiUserId = rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members);
+        if (aiUserId) {
+          turnUserId =
+            members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
+        }
+      }
+
+      span.setAttribute('quizball.turn_user_id', turnUserId);
+      io.to(`lobby:${lobbyId}`).emit('draft:start', {
+        lobbyId,
+        categories,
+        turnUserId,
+      });
+      logger.info(
+        { lobbyId, hostUserId: lobby.host_user_id, turnUserId, categoryCount: categories.length },
+        'Draft started'
+      );
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
+  });
 }
 
 export async function startRankedAiForUser(
@@ -370,61 +386,68 @@ export async function startRankedAiForUser(
     searchDurationMs?: number;
   }
 ): Promise<void> {
-  const aiProfile = generateRankedAiProfile();
-  const aiUser = await usersRepo.create({
-    nickname: aiProfile.username,
-    avatarUrl: aiProfile.avatarUrl,
-    isAi: true,
+  await withSpan('ranked.match_found.ai.prepare', {
+    'quizball.user_id': userId,
+  }, async (span) => {
+    const aiProfile = generateRankedAiProfile();
+    const aiUser = await usersRepo.create({
+      nickname: aiProfile.username,
+      avatarUrl: aiProfile.avatarUrl,
+      isAi: true,
+    });
+    const playerProfile = await rankedService.ensureProfile(userId);
+    const rankedContext = rankedService.buildAiMatchContext(playerProfile);
+
+    const lobby = await lobbiesRepo.createLobby({
+      mode: 'ranked',
+      hostUserId: userId,
+      inviteCode: null,
+      rankedContext,
+    });
+
+    span.setAttribute('quizball.lobby_id', lobby.id);
+    span.setAttribute('quizball.ai_user_id', aiUser.id);
+
+    await lobbiesRepo.addMember(lobby.id, userId, true);
+    await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
+
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
+    }
+
+    await attachUserSocketsToLobby(io, userId, lobby.id);
+    await emitLobbyState(io, lobby.id);
+
+    const searchDurationMs =
+      options?.searchDurationMs ??
+      randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS);
+    span.setAttribute('quizball.search_duration_ms', searchDurationMs);
+    if (!options?.skipSearchEmit) {
+      io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+    }
+    logger.info(
+      { lobbyId: lobby.id, userId, searchDurationMs, skipSearchEmit: options?.skipSearchEmit ?? false },
+      'Ranked AI search started'
+    );
+
+    setTimeout(
+      () =>
+        void handleRankedAiMatchFound({
+          io,
+          lobbyId: lobby.id,
+          userId,
+          aiUser,
+          aiProfile,
+          rankedContext,
+          lobbiesRepo,
+          logger,
+          foundModalMs: RANKED_SIM_FOUND_MODAL_MS,
+          startDraft,
+        }),
+      searchDurationMs
+    );
   });
-  const playerProfile = await rankedService.ensureProfile(userId);
-  const rankedContext = rankedService.buildAiMatchContext(playerProfile);
-
-  const lobby = await lobbiesRepo.createLobby({
-    mode: 'ranked',
-    hostUserId: userId,
-    inviteCode: null,
-    rankedContext,
-  });
-
-  await lobbiesRepo.addMember(lobby.id, userId, true);
-  await lobbiesRepo.addMember(lobby.id, aiUser.id, true);
-
-  const redis = getRedisClient();
-  if (redis) {
-    await redis.set(rankedAiLobbyKey(lobby.id), aiUser.id, { EX: RANKED_AI_KEY_TTL_SEC });
-  }
-
-  await attachUserSocketsToLobby(io, userId, lobby.id);
-
-  await emitLobbyState(io, lobby.id);
-
-  const searchDurationMs =
-    options?.searchDurationMs ??
-    randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS);
-  if (!options?.skipSearchEmit) {
-    io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
-  }
-  logger.info(
-    { lobbyId: lobby.id, userId, searchDurationMs, skipSearchEmit: options?.skipSearchEmit ?? false },
-    'Ranked AI search started'
-  );
-
-  setTimeout(
-    () =>
-      void handleRankedAiMatchFound({
-        io,
-        lobbyId: lobby.id,
-        userId,
-        aiUser,
-        aiProfile,
-        rankedContext,
-        lobbiesRepo,
-        logger,
-        foundModalMs: RANKED_SIM_FOUND_MODAL_MS,
-        startDraft,
-      }),
-    searchDurationMs
-  );
 }
 
 async function handleRankedAiMatchFound(params: {

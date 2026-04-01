@@ -1,4 +1,6 @@
 import { logger } from '../core/logger.js';
+import { appMetrics } from '../core/metrics.js';
+import { withSpan } from '../core/tracing.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPossessionState,
@@ -258,99 +260,152 @@ export function buildInitialCache(params: {
 }
 
 export async function getMatchCache(matchId: string): Promise<MatchCache | null> {
-  const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return null;
+  return withSpan('match.cache.get', {
+    'quizball.match_id': matchId,
+  }, async (span) => {
+    const redis = getRedisClient();
+    if (!redis || !redis.isOpen) {
+      span.setAttribute('quizball.cache_backend_available', false);
+      return null;
+    }
 
-  const raw = await redis.get(matchCacheKey(matchId));
-  if (!raw) return null;
+    const raw = await redis.get(matchCacheKey(matchId));
+    if (!raw) {
+      span.setAttribute('quizball.cache_hit', false);
+      return null;
+    }
 
-  try {
-    const parsed = JSON.parse(raw) as Partial<MatchCache>;
-    const chanceCardUses =
-      parsed.chanceCardUses &&
-      typeof parsed.chanceCardUses === 'object' &&
-      !Array.isArray(parsed.chanceCardUses)
-        ? parsed.chanceCardUses
-        : {};
-    return {
-      ...(parsed as MatchCache),
-      chanceCardUses,
-    };
-  } catch (error) {
-    logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');
-    await redis.del(matchCacheKey(matchId));
-    return null;
-  }
+    try {
+      const parsed = JSON.parse(raw) as Partial<MatchCache>;
+      const chanceCardUses =
+        parsed.chanceCardUses &&
+        typeof parsed.chanceCardUses === 'object' &&
+        !Array.isArray(parsed.chanceCardUses)
+          ? parsed.chanceCardUses
+          : {};
+      span.setAttribute('quizball.cache_hit', true);
+      return {
+        ...(parsed as MatchCache),
+        chanceCardUses,
+      };
+    } catch (error) {
+      span.setAttribute('quizball.cache_parse_failed', true);
+      logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');
+      await redis.del(matchCacheKey(matchId));
+      return null;
+    }
+  });
 }
 
 export async function setMatchCache(cache: MatchCache): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return;
-  try {
-    await redis.set(matchCacheKey(cache.matchId), JSON.stringify(cache), {
-      EX: MATCH_CACHE_TTL_SEC,
-    });
-  } catch (error) {
-    logger.error({ error, matchId: cache.matchId }, 'Failed to write match cache');
-  }
+  await withSpan('match.cache.set', {
+    'quizball.match_id': cache.matchId,
+    'quizball.current_q_index': cache.currentQIndex,
+  }, async (span) => {
+    const redis = getRedisClient();
+    if (!redis || !redis.isOpen) {
+      span.setAttribute('quizball.cache_backend_available', false);
+      return;
+    }
+    try {
+      await redis.set(matchCacheKey(cache.matchId), JSON.stringify(cache), {
+        EX: MATCH_CACHE_TTL_SEC,
+      });
+    } catch (error) {
+      span.setAttribute('quizball.cache_write_failed', true);
+      logger.error({ error, matchId: cache.matchId }, 'Failed to write match cache');
+    }
+  });
 }
 
 export async function deleteMatchCache(matchId: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis || !redis.isOpen) return;
-  await redis.del(matchCacheKey(matchId));
+  await withSpan('match.cache.delete', {
+    'quizball.match_id': matchId,
+  }, async (span) => {
+    const redis = getRedisClient();
+    if (!redis || !redis.isOpen) {
+      span.setAttribute('quizball.cache_backend_available', false);
+      return;
+    }
+    await redis.del(matchCacheKey(matchId));
+  });
 }
 
 export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | null> {
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match) return null;
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  const state = sanitizePossessionState(match.state_payload, match.mode);
+  return withSpan('match.cache.rebuild', {
+    'quizball.match_id': matchId,
+  }, async (span) => {
+    const startedAt = Date.now();
+    const match = await matchesRepo.getMatch(matchId);
+    if (!match) {
+      span.setAttribute('quizball.match_found', false);
+      return null;
+    }
+    const players = await matchesRepo.listMatchPlayers(matchId);
+    const state = sanitizePossessionState(match.state_payload, match.mode);
 
-  const cache = buildInitialCache({
-    match,
-    players,
-    state,
+    const cache = buildInitialCache({
+      match,
+      players,
+      state,
+    });
+
+    const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
+    span.setAttribute('quizball.current_q_index', currentQuestionIndex);
+    const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
+    const timing = questionPayload
+      ? await matchesRepo.getMatchQuestionTiming(matchId, currentQuestionIndex)
+      : null;
+
+    if (questionPayload) {
+      cache.currentQuestion = {
+        qIndex: currentQuestionIndex,
+        questionId: questionPayload.question.id,
+        correctIndex: questionPayload.correctIndex,
+        phaseKind: questionPayload.phaseKind,
+        phaseRound: questionPayload.phaseRound,
+        shooterSeat: questionPayload.shooterSeat,
+        attackerSeat: questionPayload.attackerSeat,
+        shownAt: timing?.shown_at ?? null,
+        deadlineAt: timing?.deadline_at ?? null,
+        questionDTO: questionPayload.question,
+      };
+      const answers = await matchesRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
+      cache.answers = toCachedAnswer(answers);
+    } else {
+      cache.currentQuestion = null;
+      cache.answers = {};
+    }
+
+    appMetrics.cacheRebuilds.add(1, { match_mode: match.mode });
+    appMetrics.questionGenerationDuration.record(Date.now() - startedAt, {
+      match_mode: match.mode,
+      source: 'cache_rebuild',
+    });
+    return cache;
   });
-
-  const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
-  const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
-  const timing = questionPayload
-    ? await matchesRepo.getMatchQuestionTiming(matchId, currentQuestionIndex)
-    : null;
-
-  if (questionPayload) {
-    cache.currentQuestion = {
-      qIndex: currentQuestionIndex,
-      questionId: questionPayload.question.id,
-      correctIndex: questionPayload.correctIndex,
-      phaseKind: questionPayload.phaseKind,
-      phaseRound: questionPayload.phaseRound,
-      shooterSeat: questionPayload.shooterSeat,
-      attackerSeat: questionPayload.attackerSeat,
-      shownAt: timing?.shown_at ?? null,
-      deadlineAt: timing?.deadline_at ?? null,
-      questionDTO: questionPayload.question,
-    };
-    const answers = await matchesRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
-    cache.answers = toCachedAnswer(answers);
-  } else {
-    cache.currentQuestion = null;
-    cache.answers = {};
-  }
-
-  return cache;
 }
 
 export async function getMatchCacheOrRebuild(matchId: string): Promise<MatchCache | null> {
-  const cached = await getMatchCache(matchId);
-  if (cached) return cached;
+  return withSpan('match.cache.get_or_rebuild', {
+    'quizball.match_id': matchId,
+  }, async (span) => {
+    const cached = await getMatchCache(matchId);
+    if (cached) {
+      span.setAttribute('quizball.cache_source', 'redis');
+      return cached;
+    }
 
-  const rebuilt = await rebuildCacheFromDB(matchId);
-  if (!rebuilt) return null;
+    const rebuilt = await rebuildCacheFromDB(matchId);
+    if (!rebuilt) {
+      span.setAttribute('quizball.cache_source', 'missing');
+      return null;
+    }
 
-  await setMatchCache(rebuilt);
-  return rebuilt;
+    span.setAttribute('quizball.cache_source', 'db_rebuild');
+    await setMatchCache(rebuilt);
+    return rebuilt;
+  });
 }
 
 export function getCachedPlayer(cache: MatchCache, userId: string): CachedPlayer | null {

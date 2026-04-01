@@ -2,15 +2,15 @@
   "name": "quizball-backend",
   "version": "1.0.0",
   "description": "QuizBall Backend - Express + TypeScript",
-  "main": "dist/main.js",
+  "main": "dist/bootstrap.js",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch src/bootstrap.ts",
     "build": "tsc",
-    "start": "node dist/main.js",
+    "start": "node dist/bootstrap.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -36,6 +36,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.65.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.206.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+    "@opentelemetry/resources": "^2.1.0",
+    "@opentelemetry/sdk-metrics": "^2.1.0",
+    "@opentelemetry/sdk-node": "^0.206.0",
+    "@opentelemetry/semantic-conventions": "^1.36.0",
     "@asteasolutions/zod-to-openapi": "^7.0.0",
     "@newrelic/browser-agent": "^1.309.0",
     "@socket.io/redis-adapter": "^8.3.0",

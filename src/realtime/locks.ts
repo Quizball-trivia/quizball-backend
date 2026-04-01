@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { withSpan } from '../core/tracing.js';
 import { getRedisClient } from './redis.js';
 
 // Store tokens for local locks: key -> { token, timeout }
@@ -25,25 +26,35 @@ export interface LockResult {
  * The token MUST be passed to releaseLock() to release the lock.
  */
 export async function acquireLock(key: string, ttlMs: number): Promise<LockResult> {
-  const token = randomUUID();
-  const client = getRedisClient();
+  return withSpan('redis.lock.acquire', {
+    'quizball.lock_key': key,
+    'quizball.lock_ttl_ms': ttlMs,
+  }, async (span) => {
+    const token = randomUUID();
+    const client = getRedisClient();
 
-  if (client && client.isOpen) {
-    const result = await client.set(key, token, { NX: true, PX: ttlMs });
-    if (result === 'OK') {
-      return { acquired: true, token };
+    if (client && client.isOpen) {
+      span.setAttribute('quizball.lock_backend', 'redis');
+      const result = await client.set(key, token, { NX: true, PX: ttlMs });
+      const acquired = result === 'OK';
+      span.setAttribute('quizball.lock_acquired', acquired);
+      if (acquired) {
+        return { acquired: true, token };
+      }
+      return { acquired: false };
     }
-    return { acquired: false };
-  }
 
-  // Fallback to local locks (single instance mode)
-  if (localLocks.has(key)) {
-    return { acquired: false };
-  }
+    span.setAttribute('quizball.lock_backend', 'local');
+    if (localLocks.has(key)) {
+      span.setAttribute('quizball.lock_acquired', false);
+      return { acquired: false };
+    }
 
-  const timeout = setTimeout(() => localLocks.delete(key), ttlMs);
-  localLocks.set(key, { token, timeout });
-  return { acquired: true, token };
+    const timeout = setTimeout(() => localLocks.delete(key), ttlMs);
+    localLocks.set(key, { token, timeout });
+    span.setAttribute('quizball.lock_acquired', true);
+    return { acquired: true, token };
+  });
 }
 
 /**
@@ -51,32 +62,41 @@ export async function acquireLock(key: string, ttlMs: number): Promise<LockResul
  * This prevents accidentally releasing another process's lock.
  */
 export async function releaseLock(key: string, token: string): Promise<boolean> {
-  const client = getRedisClient();
+  return withSpan('redis.lock.release', {
+    'quizball.lock_key': key,
+  }, async (span) => {
+    const client = getRedisClient();
 
-  if (client && client.isOpen) {
-    if (typeof client.eval !== 'function') {
-      // Test/mocked Redis clients may not implement eval; keep a safe fallback.
-      const currentToken = await client.get(key);
-      if (currentToken !== token) {
-        return false;
+    if (client && client.isOpen) {
+      span.setAttribute('quizball.lock_backend', 'redis');
+      if (typeof client.eval !== 'function') {
+        const currentToken = await client.get(key);
+        const released = currentToken === token;
+        span.setAttribute('quizball.lock_released', released);
+        if (!released) {
+          return false;
+        }
+        await client.del(key);
+        return true;
       }
-      await client.del(key);
+      const result = await client.eval(RELEASE_LOCK_SCRIPT, {
+        keys: [key],
+        arguments: [token],
+      });
+      const released = result === 1;
+      span.setAttribute('quizball.lock_released', released);
+      return released;
+    }
+
+    span.setAttribute('quizball.lock_backend', 'local');
+    const lock = localLocks.get(key);
+    const released = Boolean(lock && lock.token === token);
+    span.setAttribute('quizball.lock_released', released);
+    if (released && lock) {
+      clearTimeout(lock.timeout);
+      localLocks.delete(key);
       return true;
     }
-    // Atomic compare-and-delete using Lua script
-    const result = await client.eval(RELEASE_LOCK_SCRIPT, {
-      keys: [key],
-      arguments: [token],
-    });
-    return result === 1;
-  }
-
-  // Fallback to local locks
-  const lock = localLocks.get(key);
-  if (lock && lock.token === token) {
-    clearTimeout(lock.timeout);
-    localLocks.delete(key);
-    return true;
-  }
-  return false;
+    return false;
+  });
 }

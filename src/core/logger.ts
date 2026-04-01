@@ -1,6 +1,8 @@
 import pino, { type LoggerOptions } from 'pino';
+import { trace } from '@opentelemetry/api';
 import { config } from './config.js';
 import { getRequestId } from './request-context.js';
+import { getLokiLogStream } from './loki.js';
 
 /**
  * Determine if pretty printing should be enabled:
@@ -20,8 +22,11 @@ const baseOptions: LoggerOptions = {
 
   // Mixin runs on EVERY log call, injecting request_id from AsyncLocalStorage
   mixin() {
+    const spanContext = trace.getActiveSpan()?.spanContext();
     return {
       request_id: getRequestId() ?? undefined,
+      trace_id: spanContext?.traceId,
+      span_id: spanContext?.spanId,
     };
   },
 
@@ -59,12 +64,18 @@ if (usePrettyPrint) {
     },
   });
 } else {
-  // Production: JSON logs (New Relic will automatically forward these)
-  loggerInstance = pino(baseOptions);
+  const streams: Array<{ stream: NodeJS.WritableStream }> = [
+    { stream: process.stdout },
+  ];
+  const lokiStream = getLokiLogStream();
+  if (lokiStream) {
+    streams.push({ stream: lokiStream });
+  }
 
-  // New Relic automatically decorates logs with trace.id and span.id
-  // when application_logging.local_decorating.enabled is true in newrelic.cjs
-  // No additional setup required here - enrichment happens at the New Relic agent level
+  // Production: JSON logs to stdout, optionally mirrored to Grafana Loki.
+  loggerInstance = pino(baseOptions, pino.multistream(streams));
+
+  // Trace/span IDs are injected from the active OpenTelemetry context in mixin().
 }
 
 export const logger = loggerInstance;

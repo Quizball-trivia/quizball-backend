@@ -1,6 +1,7 @@
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
+import { withSpan } from '../../core/tracing.js';
 import type {
   MatchRow,
   MatchPlayerRow,
@@ -95,9 +96,12 @@ export const matchesRepo = {
   },
 
   async listMatchPlayers(matchId: string): Promise<MatchPlayerRow[]> {
-    return sql<MatchPlayerRow[]>`
+    return withSpan('db.matches.list_players', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+    }, async () => sql<MatchPlayerRow[]>`
       SELECT * FROM match_players WHERE match_id = ${matchId} ORDER BY seat ASC
-    `;
+    `);
   },
 
   async getPlayerTotalPoints(matchId: string, userId: string): Promise<number> {
@@ -151,25 +155,33 @@ export const matchesRepo = {
     shooterSeat?: number | null;
     attackerSeat?: number | null;
   }): Promise<MatchQuestionRow | null> {
-    const [row] = await sql<MatchQuestionRow[]>`
-      INSERT INTO match_questions (
-        match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
-      )
-      VALUES (
-        ${question.matchId},
-        ${question.qIndex},
-        ${question.questionId},
-        ${question.categoryId},
-        ${question.correctIndex},
-        ${question.phaseKind ?? 'normal'},
-        ${question.phaseRound ?? null},
-        ${question.shooterSeat ?? null},
-        ${question.attackerSeat ?? null}
-      )
-      ON CONFLICT (match_id, q_index) DO NOTHING
-      RETURNING *
-    `;
-    return row ?? null;
+    return withSpan('db.matches.insert_question_if_missing', {
+      'db.operation.name': 'insert',
+      'quizball.match_id': question.matchId,
+      'quizball.q_index': question.qIndex,
+      'quizball.phase_kind': question.phaseKind ?? 'normal',
+    }, async (span) => {
+      const [row] = await sql<MatchQuestionRow[]>`
+        INSERT INTO match_questions (
+          match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
+        )
+        VALUES (
+          ${question.matchId},
+          ${question.qIndex},
+          ${question.questionId},
+          ${question.categoryId},
+          ${question.correctIndex},
+          ${question.phaseKind ?? 'normal'},
+          ${question.phaseRound ?? null},
+          ${question.shooterSeat ?? null},
+          ${question.attackerSeat ?? null}
+        )
+        ON CONFLICT (match_id, q_index) DO NOTHING
+        RETURNING *
+      `;
+      span.setAttribute('quizball.question_inserted', Boolean(row));
+      return row ?? null;
+    });
   },
 
   async getRandomQuestionsForCategory(
@@ -277,58 +289,80 @@ export const matchesRepo = {
     category_id: string;
     payload: unknown;
   } | null> {
-    const rows = await sql.unsafe<{
-      id: string;
-      prompt: Record<string, string>;
-      difficulty: string;
-      category_id: string;
-      payload: unknown;
-    }[]>(
-      `
-      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-      FROM questions q
-      JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = ANY($2::uuid[])
-        AND q.difficulty = ANY($3::text[])
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-        ${VALID_PAYLOAD_CONDITIONS}
-        AND NOT EXISTS (
-          SELECT 1
-          FROM match_questions mq
-          WHERE mq.match_id = $1
-            AND mq.question_id = q.id
-        )
-      ORDER BY RANDOM()
-      LIMIT 1
-      `,
-      [params.matchId, params.categoryIds, params.difficulties]
-    );
-    return rows[0] ?? null;
+    return withSpan('db.matches.get_random_question_for_match', {
+      'db.operation.name': 'select',
+      'quizball.match_id': params.matchId,
+      'quizball.category_count': params.categoryIds.length,
+      'quizball.difficulty_count': params.difficulties.length,
+    }, async (span) => {
+      const rows = await sql.unsafe<{
+        id: string;
+        prompt: Record<string, string>;
+        difficulty: string;
+        category_id: string;
+        payload: unknown;
+      }[]>(
+        `
+        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+        FROM questions q
+        JOIN question_payloads qp ON qp.question_id = q.id
+        WHERE q.category_id = ANY($2::uuid[])
+          AND q.difficulty = ANY($3::text[])
+          AND q.status = 'published'
+          AND q.type = 'mcq_single'
+          ${VALID_PAYLOAD_CONDITIONS}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM match_questions mq
+            WHERE mq.match_id = $1
+              AND mq.question_id = q.id
+          )
+        ORDER BY RANDOM()
+        LIMIT 1
+        `,
+        [params.matchId, params.categoryIds, params.difficulties]
+      );
+      span.setAttribute('quizball.question_found', rows.length > 0);
+      return rows[0] ?? null;
+    });
   },
 
   async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {
-    const [row] = await sql<MatchQuestionWithCategory[]>`
-      SELECT mq.question_id, mq.q_index, mq.category_id, mq.correct_index,
-             mq.phase_kind, mq.phase_round, mq.shooter_seat, mq.attacker_seat,
-             q.prompt, q.difficulty, qp.payload,
-             c.name as category_name, c.icon as category_icon
-      FROM match_questions mq
-      JOIN questions q ON q.id = mq.question_id
-      LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      JOIN categories c ON c.id = mq.category_id
-      WHERE mq.match_id = ${matchId} AND mq.q_index = ${qIndex}
-    `;
-    return row ?? null;
+    return withSpan('db.matches.get_question', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+      'quizball.q_index': qIndex,
+    }, async (span) => {
+      const [row] = await sql<MatchQuestionWithCategory[]>`
+        SELECT mq.question_id, mq.q_index, mq.category_id, mq.correct_index,
+               mq.phase_kind, mq.phase_round, mq.shooter_seat, mq.attacker_seat,
+               q.prompt, q.difficulty, qp.payload,
+               c.name as category_name, c.icon as category_icon
+        FROM match_questions mq
+        JOIN questions q ON q.id = mq.question_id
+        LEFT JOIN question_payloads qp ON qp.question_id = q.id
+        JOIN categories c ON c.id = mq.category_id
+        WHERE mq.match_id = ${matchId} AND mq.q_index = ${qIndex}
+      `;
+      span.setAttribute('quizball.question_found', Boolean(row));
+      return row ?? null;
+    });
   },
 
   async getMatchQuestionTiming(matchId: string, qIndex: number): Promise<MatchQuestionTimingRow | null> {
-    const [row] = await sql<MatchQuestionTimingRow[]>`
-      SELECT shown_at, deadline_at
-      FROM match_questions
-      WHERE match_id = ${matchId} AND q_index = ${qIndex}
-    `;
-    return row ?? null;
+    return withSpan('db.matches.get_question_timing', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+      'quizball.q_index': qIndex,
+    }, async (span) => {
+      const [row] = await sql<MatchQuestionTimingRow[]>`
+        SELECT shown_at, deadline_at
+        FROM match_questions
+        WHERE match_id = ${matchId} AND q_index = ${qIndex}
+      `;
+      span.setAttribute('quizball.question_timing_found', Boolean(row));
+      return row ?? null;
+    });
   },
 
   async setQuestionTiming(matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date): Promise<void> {
@@ -380,28 +414,45 @@ export const matchesRepo = {
     phaseRound?: number | null;
     shooterSeat?: number | null;
   }): Promise<MatchAnswerRow | null> {
-    try {
-      const [row] = await sql<MatchAnswerRow[]>`
-        INSERT INTO match_answers (
-          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
-        )
-        VALUES (
-          ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-        )
-        ON CONFLICT (match_id, q_index, user_id) DO NOTHING
-        RETURNING *
-      `;
-      return row ?? null;
-    } catch (err) {
-      throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
-    }
+    return withSpan('db.matches.insert_answer_if_missing', {
+      'db.operation.name': 'insert',
+      'quizball.match_id': data.matchId,
+      'quizball.q_index': data.qIndex,
+      'quizball.user_id': data.userId,
+      'quizball.phase_kind': data.phaseKind ?? 'normal',
+    }, async (span) => {
+      try {
+        const [row] = await sql<MatchAnswerRow[]>`
+          INSERT INTO match_answers (
+            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
+          )
+          VALUES (
+            ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
+            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
+          )
+          ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+          RETURNING *
+        `;
+        span.setAttribute('quizball.answer_inserted', Boolean(row));
+        return row ?? null;
+      } catch (err) {
+        throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
+      }
+    });
   },
 
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
-    return sql<MatchAnswerRow[]>`
-      SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
-    `;
+    return withSpan('db.matches.list_answers_for_question', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+      'quizball.q_index': qIndex,
+    }, async (span) => {
+      const rows = await sql<MatchAnswerRow[]>`
+        SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
+      `;
+      span.setAttribute('quizball.answer_count', rows.length);
+      return rows;
+    });
   },
 
   async getAnswerForUser(matchId: string, qIndex: number, userId: string): Promise<MatchAnswerRow | null> {
@@ -459,22 +510,28 @@ export const matchesRepo = {
     statePayload: unknown,
     qIndex?: number
   ): Promise<void> {
-    const jsonPayload = sql.json(statePayload as Json ?? null);
-    if (qIndex === undefined) {
+    await withSpan('db.matches.set_state_payload', {
+      'db.operation.name': 'update',
+      'quizball.match_id': matchId,
+      'quizball.q_index': qIndex ?? -1,
+    }, async () => {
+      const jsonPayload = sql.json(statePayload as Json ?? null);
+      if (qIndex === undefined) {
+        await sql`
+          UPDATE matches
+          SET state_payload = ${jsonPayload}
+          WHERE id = ${matchId}
+        `;
+        return;
+      }
+
       await sql`
         UPDATE matches
-        SET state_payload = ${jsonPayload}
+        SET state_payload = ${jsonPayload},
+            current_q_index = GREATEST(current_q_index, ${qIndex})
         WHERE id = ${matchId}
       `;
-      return;
-    }
-
-    await sql`
-      UPDATE matches
-      SET state_payload = ${jsonPayload},
-          current_q_index = GREATEST(current_q_index, ${qIndex})
-      WHERE id = ${matchId}
-    `;
+    });
   },
 
   async setMatchCategoryB(matchId: string, categoryBId: string | null): Promise<void> {

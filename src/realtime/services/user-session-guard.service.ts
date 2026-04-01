@@ -9,6 +9,7 @@ import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
+import { withSpan } from '../../core/tracing.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -63,24 +64,32 @@ function isStaleActiveMatch(startedAt: string): boolean {
 }
 
 async function resolveContext(userId: string): Promise<ResolveContext> {
-  const redis = getRedisClient();
-  const queueSearchIdPromise = redis
-    ? redis.hGet(RANKED_USER_MAP_KEY, userId)
-    : Promise.resolve<string | null>(null);
+  return withSpan('session.resolve_context', {
+    'quizball.user_id': userId,
+  }, async (span) => {
+    const redis = getRedisClient();
+    const queueSearchIdPromise = redis
+      ? redis.hGet(RANKED_USER_MAP_KEY, userId)
+      : Promise.resolve<string | null>(null);
 
-  const [activeMatch, openLobbies, queueSearchId] = await Promise.all([
-    matchesRepo.getActiveMatchForUser(userId),
-    lobbiesRepo.listOpenLobbiesForUser(userId),
-    queueSearchIdPromise,
-  ]);
+    const [activeMatch, openLobbies, queueSearchId] = await Promise.all([
+      matchesRepo.getActiveMatchForUser(userId),
+      lobbiesRepo.listOpenLobbiesForUser(userId),
+      queueSearchIdPromise,
+    ]);
 
-  return {
-    activeMatch,
-    queueSearchId: queueSearchId ?? null,
-    waitingLobbies: openLobbies.filter((lobby) => lobby.status === 'waiting'),
-    activeLobbies: openLobbies.filter((lobby) => lobby.status === 'active'),
-    openLobbies,
-  };
+    span.setAttribute('quizball.has_active_match', Boolean(activeMatch?.id));
+    span.setAttribute('quizball.open_lobby_count', openLobbies.length);
+    span.setAttribute('quizball.in_ranked_queue', Boolean(queueSearchId));
+
+    return {
+      activeMatch,
+      queueSearchId: queueSearchId ?? null,
+      waitingLobbies: openLobbies.filter((lobby) => lobby.status === 'waiting'),
+      activeLobbies: openLobbies.filter((lobby) => lobby.status === 'active'),
+      openLobbies,
+    };
+  });
 }
 
 async function cleanupStaleOrphanActiveMatch(
@@ -205,12 +214,20 @@ async function removeUserFromLobby(
 }
 
 async function cancelRankedQueueSearch(userId: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
+  await withSpan('ranked.queue_cancel', {
+    'quizball.user_id': userId,
+  }, async (span) => {
+    const redis = getRedisClient();
+    if (!redis) {
+      span.setAttribute('quizball.redis_available', false);
+      return;
+    }
 
-  await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-    keys: [RANKED_QUEUE_KEY, RANKED_TIMEOUTS_KEY, RANKED_USER_MAP_KEY],
-    arguments: [RANKED_SEARCH_KEY_PREFIX, userId, String(Date.now())],
+    span.setAttribute('quizball.redis_available', true);
+    await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
+      keys: [RANKED_QUEUE_KEY, RANKED_TIMEOUTS_KEY, RANKED_USER_MAP_KEY],
+      arguments: [RANKED_SEARCH_KEY_PREFIX, userId, String(Date.now())],
+    });
   });
 }
 
@@ -265,30 +282,37 @@ export const userSessionGuardService = {
     work: () => Promise<T>,
     options?: { waitMs?: number }
   ): Promise<T | null> {
-    const lockKey = `lock:user:session:${userId}`;
-    const waitMs = Math.max(0, options?.waitMs ?? 0);
-    const deadlineMs = Date.now() + waitMs;
+    return withSpan('session.user_lock', {
+      'quizball.user_id': userId,
+    }, async (span) => {
+      const lockKey = `lock:user:session:${userId}`;
+      const waitMs = Math.max(0, options?.waitMs ?? 0);
+      const deadlineMs = Date.now() + waitMs;
+      span.setAttribute('quizball.wait_ms', waitMs);
 
-    while (true) {
-      const lock = await acquireLock(lockKey, SESSION_LOCK_TTL_MS);
-      if (lock.acquired && lock.token) {
-        try {
-          return await work();
-        } finally {
-          await releaseLock(lockKey, lock.token);
+      while (true) {
+        const lock = await acquireLock(lockKey, SESSION_LOCK_TTL_MS);
+        if (lock.acquired && lock.token) {
+          span.setAttribute('quizball.lock_acquired', true);
+          try {
+            return await work();
+          } finally {
+            await releaseLock(lockKey, lock.token);
+          }
+        }
+
+        if (Date.now() >= deadlineMs) {
+          span.setAttribute('quizball.lock_acquired', false);
+          return null;
+        }
+
+        const remainingMs = deadlineMs - Date.now();
+        const sleepMs = Math.min(SESSION_LOCK_RETRY_INTERVAL_MS, remainingMs);
+        if (sleepMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, sleepMs));
         }
       }
-
-      if (Date.now() >= deadlineMs) {
-        return null;
-      }
-
-      const remainingMs = deadlineMs - Date.now();
-      const sleepMs = Math.min(SESSION_LOCK_RETRY_INTERVAL_MS, remainingMs);
-      if (sleepMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, sleepMs));
-      }
-    }
+    });
   },
 
   async withUserAndLobbyLock<T>(

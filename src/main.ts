@@ -1,16 +1,9 @@
-// New Relic must be imported first in production
-if (process.env.NEW_RELIC_ENABLED === 'true' && process.env.NODE_ENV === 'prod') {
-  try {
-    await import('newrelic');
-  } catch (error) {
-    console.error('Failed to import newrelic; continuing without APM', error);
-  }
-}
-
 import { createServer } from 'http';
 import { createApp } from './app.js';
 import { config } from './core/config.js';
 import { logger } from './core/logger.js';
+import { shutdownLokiLogStream } from './core/loki.js';
+import { shutdownTelemetry } from './core/otel.js';
 import { disconnectDb } from './db/index.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
@@ -38,6 +31,8 @@ const shutdown = async (signal: string) => {
     const results = await Promise.allSettled([
       closeRedisClients(),
       shutdownPostHog(),
+      shutdownLokiLogStream(),
+      shutdownTelemetry(),
       disconnectDb(),
     ]);
     for (const result of results) {

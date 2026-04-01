@@ -72,6 +72,12 @@ const configSchema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_SUCCESS_URL: z.string().url().optional(),
   STRIPE_CANCEL_URL: z.string().url().optional(),
+
+  // Grafana Loki log shipping
+  GRAFANA_LOKI_URL: z.string().url().optional(),
+  GRAFANA_LOKI_USER: z.string().optional(),
+  GRAFANA_LOKI_API_KEY: z.string().optional(),
+  GRAFANA_LOKI_JOB: z.string().default('quizball-backend'),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;
@@ -128,6 +134,32 @@ function loadConfig(): Config {
     if (missing.length > 0) {
       console.error(
         `Invalid configuration: missing required Stripe vars: ${missing.join(', ')}`
+      );
+      process.exit(1);
+    }
+  }
+
+  const hasAnyLokiConfig = Boolean(
+    result.data.GRAFANA_LOKI_URL
+    || result.data.GRAFANA_LOKI_USER
+    || result.data.GRAFANA_LOKI_API_KEY
+  );
+
+  if (hasAnyLokiConfig) {
+    const requiredLokiVars = [
+      'GRAFANA_LOKI_URL',
+      'GRAFANA_LOKI_USER',
+      'GRAFANA_LOKI_API_KEY',
+    ] as const;
+
+    const missing = requiredLokiVars.filter((name) => {
+      const value = result.data[name];
+      return typeof value !== 'string' || value.trim() === '';
+    });
+
+    if (missing.length > 0) {
+      console.error(
+        `Invalid configuration: missing required Grafana Loki vars: ${missing.join(', ')}`
       );
       process.exit(1);
     }

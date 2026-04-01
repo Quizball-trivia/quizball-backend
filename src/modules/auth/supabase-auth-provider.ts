@@ -2,6 +2,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { config } from '../../core/config.js';
 import { AuthenticationError, ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { withSpan } from '../../core/tracing.js';
 import type { AuthIdentity } from '../../core/types.js';
 import type { AuthProvider } from './auth.provider.js';
 
@@ -38,33 +39,41 @@ export class SupabaseAuthProvider implements AuthProvider {
   }
 
   async verifyToken(token: string): Promise<AuthIdentity> {
-    if (this.jwks) {
-      return this.verifyWithJwks(token);
-    }
-    return this.verifyWithIntrospection(token);
+    return withSpan('auth.verify_token', {
+      'quizball.auth_provider': 'supabase',
+      'quizball.auth_verify_method': this.jwks ? 'jwks' : 'introspection',
+    }, async () => {
+      if (this.jwks) {
+        return this.verifyWithJwks(token);
+      }
+      return this.verifyWithIntrospection(token);
+    });
   }
 
   /**
    * Verify token using JWKS (preferred method).
    */
   private async verifyWithJwks(token: string): Promise<AuthIdentity> {
-    try {
-      // Build verification options - only verify if configured
-      const options: { issuer?: string; audience?: string } = {};
-      if (this.issuer) {
-        options.issuer = this.issuer;
-      }
-      if (this.audience) {
-        options.audience = this.audience;
-      }
+    return withSpan('auth.verify_token.jwks', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      try {
+        const options: { issuer?: string; audience?: string } = {};
+        if (this.issuer) {
+          options.issuer = this.issuer;
+        }
+        if (this.audience) {
+          options.audience = this.audience;
+        }
 
-      const { payload } = await jwtVerify(token, this.jwks!, options);
+        const { payload } = await jwtVerify(token, this.jwks!, options);
 
-      return this.extractIdentity(payload);
-    } catch (error) {
-      logger.warn({ error }, 'JWKS verification failed');
-      throw new AuthenticationError('Invalid or expired token');
-    }
+        return this.extractIdentity(payload);
+      } catch (error) {
+        logger.warn({ error }, 'JWKS verification failed');
+        throw new AuthenticationError('Invalid or expired token');
+      }
+    });
   }
 
   /**
@@ -72,46 +81,51 @@ export class SupabaseAuthProvider implements AuthProvider {
    * Calls Supabase /auth/v1/user endpoint.
    */
   private async verifyWithIntrospection(token: string): Promise<AuthIdentity> {
-    try {
-      const response = await fetch(`${this.baseUrl}/auth/v1/user`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          apikey: this.anonKey,
-        },
-      });
+    return withSpan('auth.verify_token.introspection', {
+      'quizball.auth_provider': 'supabase',
+    }, async (span) => {
+      try {
+        const response = await fetch(`${this.baseUrl}/auth/v1/user`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: this.anonKey,
+          },
+        });
 
-      if (!response.ok) {
-        logger.warn({ status: response.status }, 'Token introspection failed');
-        throw new AuthenticationError('Invalid or expired token');
+        span.setAttribute('http.response.status_code', response.status);
+        if (!response.ok) {
+          logger.warn({ status: response.status }, 'Token introspection failed');
+          throw new AuthenticationError('Invalid or expired token');
+        }
+
+        const user = (await response.json()) as {
+          id?: string;
+          email?: string;
+          app_metadata?: Record<string, unknown>;
+          user_metadata?: Record<string, unknown>;
+        };
+
+        if (!user.id) {
+          throw new AuthenticationError('Invalid token: no user ID');
+        }
+
+        return {
+          provider: 'supabase',
+          subject: user.id,
+          email: user.email,
+          claims: {
+            app_metadata: user.app_metadata,
+            user_metadata: user.user_metadata,
+          },
+        };
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          throw error;
+        }
+        logger.error({ error }, 'Token introspection request failed');
+        throw new ExternalServiceError('Failed to verify token');
       }
-
-      const user = (await response.json()) as {
-        id?: string;
-        email?: string;
-        app_metadata?: Record<string, unknown>;
-        user_metadata?: Record<string, unknown>;
-      };
-
-      if (!user.id) {
-        throw new AuthenticationError('Invalid token: no user ID');
-      }
-
-      return {
-        provider: 'supabase',
-        subject: user.id,
-        email: user.email,
-        claims: {
-          app_metadata: user.app_metadata,
-          user_metadata: user.user_metadata,
-        },
-      };
-    } catch (error) {
-      if (error instanceof AuthenticationError) {
-        throw error;
-      }
-      logger.error({ error }, 'Token introspection request failed');
-      throw new ExternalServiceError('Failed to verify token');
-    }
+    });
   }
 
   /**

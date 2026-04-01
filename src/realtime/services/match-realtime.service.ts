@@ -15,6 +15,7 @@ import type {
   MatchPlayAgainPayload,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
+import { appMetrics } from '../../core/metrics.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import {
@@ -749,6 +750,7 @@ export const matchRealtimeService = {
     const wasDisconnected = (await redis.exists(disconnectKey)) === 1;
 
     if (isPaused && wasDisconnected) {
+      appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
       await this.resumePausedMatch(io, match.id, userId);
     }
   },
@@ -1180,6 +1182,7 @@ export const matchRealtimeService = {
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'active') return;
     const variant = resolveMatchVariant(match.state_payload, match.mode);
+    appMetrics.matchPauses.add(1, { match_mode: match.mode, variant });
 
     const redis = getRedisClient();
     if (!redis) return;

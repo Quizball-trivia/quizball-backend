@@ -22,6 +22,11 @@ export interface TrackMatchCompletedOptions {
   score: number;
   opponentScore: number;
   durationMs: number;
+  goalsFor?: number;
+  goalsAgainst?: number;
+  penaltyGoalsFor?: number;
+  penaltyGoalsAgainst?: number;
+  winnerDecisionMethod?: string | null;
 }
 
 export function trackMatchCompleted({
@@ -32,6 +37,11 @@ export function trackMatchCompleted({
   score,
   opponentScore,
   durationMs,
+  goalsFor,
+  goalsAgainst,
+  penaltyGoalsFor,
+  penaltyGoalsAgainst,
+  winnerDecisionMethod,
 }: TrackMatchCompletedOptions): void {
   trackEvent('match_completed', userId, {
     match_id: matchId,
@@ -40,6 +50,11 @@ export function trackMatchCompleted({
     score,
     opponent_score: opponentScore,
     duration_ms: durationMs,
+    goals_for: goalsFor,
+    goals_against: goalsAgainst,
+    penalty_goals_for: penaltyGoalsFor,
+    penalty_goals_against: penaltyGoalsAgainst,
+    winner_decision_method: winnerDecisionMethod,
   });
 }
 

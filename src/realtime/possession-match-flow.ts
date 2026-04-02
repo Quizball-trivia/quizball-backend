@@ -969,18 +969,23 @@ async function completePossessionMatch(
     ...(rankedOutcome ? { rankedOutcome } : {}),
   });
 
-  for (const player of refreshedPlayers) {
-    const opponentPlayer = refreshedPlayers.find((p) => p.user_id !== player.user_id);
-    trackMatchCompleted({
-      userId: player.user_id,
-      matchId,
-      mode: match.mode,
-      won: decision.winnerId === player.user_id,
-      score: player.total_points,
-      opponentScore: opponentPlayer?.total_points ?? 0,
-      durationMs,
-    });
-  }
+    for (const player of refreshedPlayers) {
+      const opponentPlayer = refreshedPlayers.find((p) => p.user_id !== player.user_id);
+      trackMatchCompleted({
+        userId: player.user_id,
+        matchId,
+        mode: match.mode,
+        won: decision.winnerId === player.user_id,
+        score: player.total_points,
+        opponentScore: opponentPlayer?.total_points ?? 0,
+        durationMs,
+        goalsFor: player.goals,
+        goalsAgainst: opponentPlayer?.goals ?? 0,
+        penaltyGoalsFor: player.penalty_goals,
+        penaltyGoalsAgainst: opponentPlayer?.penalty_goals ?? 0,
+        winnerDecisionMethod: decision.method,
+      });
+    }
 
   if (decision.totalPointsFallbackUsed) {
     trackEvent('match_possession_total_points_fallback_used', decision.winnerId ?? matchId, {

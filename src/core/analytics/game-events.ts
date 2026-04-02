@@ -27,6 +27,8 @@ export interface TrackMatchCompletedOptions {
   penaltyGoalsFor?: number;
   penaltyGoalsAgainst?: number;
   winnerDecisionMethod?: string | null;
+  totalQuestions?: number;
+  correctAnswers?: number;
 }
 
 export function trackMatchCompleted({
@@ -42,7 +44,14 @@ export function trackMatchCompleted({
   penaltyGoalsFor,
   penaltyGoalsAgainst,
   winnerDecisionMethod,
+  totalQuestions,
+  correctAnswers,
 }: TrackMatchCompletedOptions): void {
+  const accuracy =
+    totalQuestions != null && totalQuestions > 0 && correctAnswers != null
+      ? Math.round((correctAnswers / totalQuestions) * 100)
+      : undefined;
+
   trackEvent('match_completed', userId, {
     match_id: matchId,
     mode,
@@ -55,6 +64,9 @@ export function trackMatchCompleted({
     penalty_goals_for: penaltyGoalsFor,
     penalty_goals_against: penaltyGoalsAgainst,
     winner_decision_method: winnerDecisionMethod,
+    total_questions: totalQuestions,
+    correct_answers: correctAnswers,
+    accuracy,
   });
 }
 

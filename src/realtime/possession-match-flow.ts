@@ -984,6 +984,8 @@ async function completePossessionMatch(
         penaltyGoalsFor: player.penalty_goals,
         penaltyGoalsAgainst: opponentPlayer?.penalty_goals ?? 0,
         winnerDecisionMethod: decision.method,
+        totalQuestions: cache?.totalQuestions,
+        correctAnswers: player.correct_answers,
       });
     }
 

@@ -86,12 +86,11 @@ export interface Config extends Omit<ConfigSchema, 'DOCS_ENABLED'> {
   DOCS_ENABLED: boolean;
 }
 
-function loadConfig(): Config {
-  const result = configSchema.safeParse(process.env);
+export function parseConfig(env: NodeJS.ProcessEnv): Config {
+  const result = configSchema.safeParse(env);
 
   if (!result.success) {
-    console.error('Invalid configuration:', result.error.flatten().fieldErrors);
-    process.exit(1);
+    throw new Error(`Invalid configuration: ${JSON.stringify(result.error.flatten().fieldErrors)}`);
   }
 
   // Auto-disable docs in production unless explicitly enabled
@@ -104,10 +103,9 @@ function loadConfig(): Config {
     const hasDocsUsername = !!result.data.DOCS_USERNAME?.trim();
     const hasDocsPassword = !!result.data.DOCS_PASSWORD?.trim();
     if (!hasDocsUsername || !hasDocsPassword) {
-      console.error(
+      throw new Error(
         'Invalid configuration: DOCS_USERNAME and DOCS_PASSWORD are required when DOCS_ENABLED is true outside local environment.'
       );
-      process.exit(1);
     }
   }
 
@@ -132,10 +130,9 @@ function loadConfig(): Config {
     });
 
     if (missing.length > 0) {
-      console.error(
+      throw new Error(
         `Invalid configuration: missing required Stripe vars: ${missing.join(', ')}`
       );
-      process.exit(1);
     }
   }
 
@@ -158,10 +155,9 @@ function loadConfig(): Config {
     });
 
     if (missing.length > 0) {
-      console.error(
+      throw new Error(
         `Invalid configuration: missing required Grafana Loki vars: ${missing.join(', ')}`
       );
-      process.exit(1);
     }
   }
 
@@ -171,4 +167,4 @@ function loadConfig(): Config {
   };
 }
 
-export const config = loadConfig();
+export const config = parseConfig(process.env);

@@ -46,6 +46,14 @@ import {
   handlePartyQuizAnswer,
 } from '../party-quiz-match-flow.js';
 import type { AchievementUnlockPayload } from '../socket.types.js';
+import {
+  matchPresenceKey,
+  matchDisconnectKey,
+  matchPauseKey,
+  matchGraceKey,
+  lastMatchKey,
+} from '../match-keys.js';
+import { buildStandings } from '../match-utils.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MATCH_START_COUNTDOWN_SEC = 5;
@@ -72,28 +80,8 @@ type MatchParticipantSnapshot = {
 
 const rematchLobbyByMatchId = new Map<string, { lobbyId: string; createdAt: number }>();
 
-function matchPresenceKey(matchId: string, userId: string): string {
-  return `match:presence:${matchId}:${userId}`;
-}
-
-function matchDisconnectKey(matchId: string, userId: string): string {
-  return `match:disconnect:${matchId}:${userId}`;
-}
-
-function matchPauseKey(matchId: string): string {
-  return `match:pause:${matchId}`;
-}
-
-function matchGraceKey(matchId: string): string {
-  return `match:grace:${matchId}`;
-}
-
 function matchForfeitKey(matchId: string): string {
   return `match:forfeit:${matchId}`;
-}
-
-function lastMatchKey(userId: string): string {
-  return `user:last_match:${userId}`;
 }
 
 function pruneExpiredRematchLobby(matchId: string): void {
@@ -266,33 +254,6 @@ async function getOpponentInfoFromParticipants(
     avatarUrl: opponentUser?.avatar_url ?? null,
     ...(rp != null ? { rp } : {}),
   };
-}
-
-function buildStandings(players: Awaited<ReturnType<typeof matchesRepo.listMatchPlayers>>): Array<{
-  userId: string;
-  rank: number;
-  totalPoints: number;
-  correctAnswers: number;
-  avgTimeMs: number | null;
-}> {
-  const ordered = [...players].sort((a, b) => {
-    if (b.total_points !== a.total_points) return b.total_points - a.total_points;
-    if (b.correct_answers !== a.correct_answers) return b.correct_answers - a.correct_answers;
-
-    const avgA = a.avg_time_ms ?? Number.MAX_SAFE_INTEGER;
-    const avgB = b.avg_time_ms ?? Number.MAX_SAFE_INTEGER;
-    if (avgA !== avgB) return avgA - avgB;
-
-    return a.seat - b.seat;
-  });
-
-  return ordered.map((player, index) => ({
-    userId: player.user_id,
-    rank: index + 1,
-    totalPoints: player.total_points,
-    correctAnswers: player.correct_answers,
-    avgTimeMs: player.avg_time_ms,
-  }));
 }
 
 async function buildParticipantPayloads(

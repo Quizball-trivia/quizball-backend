@@ -5,13 +5,15 @@ import type {
   ActivityUser,
   CategoryBreakdownItem,
   RecentActivityItem,
+  DailyQuestionCategoryCount,
 } from './activity.types.js';
 
 export const activityService = {
   async getActivity(userId: string, from: string, to: string): Promise<ActivityResponse> {
-    const [dailyCounts, actionCounts] = await Promise.all([
+    const [dailyCounts, actionCounts, dailyCategoryCounts] = await Promise.all([
       activityRepo.getDailyActivityCounts(userId, from, to),
       activityRepo.getActionCounts(userId, from, to),
+      activityRepo.getDailyQuestionCategoryCounts(userId, from, to),
     ]);
 
     // Merge into a single days array
@@ -32,8 +34,38 @@ export const activityService = {
           questions_created: row.action === 'create' && row.entity_type === 'question' ? row.count : 0,
           categories_created: row.action === 'create' && row.entity_type === 'category' ? row.count : 0,
           total: row.count,
+          question_categories: [],
         });
       }
+    }
+
+    for (const row of dailyCategoryCounts) {
+      const existing = dayMap.get(row.date);
+      const category: DailyQuestionCategoryCount = {
+        id: row.category_id,
+        name: row.category_name,
+        count: row.count,
+      };
+
+      if (existing) {
+        existing.question_categories.push(category);
+        continue;
+      }
+
+      dayMap.set(row.date, {
+        date: row.date,
+        questions_created: 0,
+        categories_created: 0,
+        total: 0,
+        question_categories: [category],
+      });
+    }
+
+    for (const day of dayMap.values()) {
+      day.question_categories.sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return a.name.localeCompare(b.name);
+      });
     }
 
     const days = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -56,8 +88,8 @@ export const activityService = {
     return activityRepo.getAdminUsers();
   },
 
-  async getCategoryBreakdown(userId: string): Promise<CategoryBreakdownItem[]> {
-    return activityRepo.getCategoryBreakdown(userId);
+  async getCategoryBreakdown(userId: string, from: string, to: string): Promise<CategoryBreakdownItem[]> {
+    return activityRepo.getCategoryBreakdown(userId, from, to);
   },
 
   async getRecentActivity(userId: string, limit: number): Promise<RecentActivityItem[]> {

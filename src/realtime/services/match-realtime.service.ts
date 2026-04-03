@@ -80,6 +80,16 @@ type MatchParticipantSnapshot = {
 
 const rematchLobbyByMatchId = new Map<string, { lobbyId: string; createdAt: number }>();
 
+// Proactively prune expired rematch entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [matchId, entry] of rematchLobbyByMatchId) {
+    if (now - entry.createdAt > FRIENDLY_REMATCH_LOBBY_TTL_MS) {
+      rematchLobbyByMatchId.delete(matchId);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 function matchForfeitKey(matchId: string): string {
   return `match:forfeit:${matchId}`;
 }

@@ -32,8 +32,8 @@ export const activityController = {
 
   async getByCategory(req: Request, res: Response): Promise<void> {
     assertBighead(req);
-    const { user_id } = req.validated.query as ActivityByCategoryQuery;
-    const breakdown = await activityService.getCategoryBreakdown(user_id);
+    const { user_id, from, to } = req.validated.query as ActivityByCategoryQuery;
+    const breakdown = await activityService.getCategoryBreakdown(user_id, from, to);
     res.json({ categories: breakdown });
   },
 

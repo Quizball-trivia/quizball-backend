@@ -13,10 +13,6 @@ interface AchievementMetricsRow {
   has_clean_sheet: boolean;
 }
 
-interface MatchOutcomeRow {
-  winner_user_id: string | null;
-}
-
 export const achievementsRepo = {
   async listForUser(userId: string): Promise<UserAchievementRow[]> {
     return sql<UserAchievementRow[]>`
@@ -72,39 +68,27 @@ export const achievementsRepo = {
 
   async getMetricsForUser(userId: string): Promise<UserAchievementMetrics> {
     const [row] = await sql<AchievementMetricsRow[]>`
+      WITH user_matches AS (
+        SELECT
+          m.id,
+          m.winner_user_id,
+          m.total_questions,
+          COALESCE(m.state_payload->>'variant', '') AS variant,
+          mp.correct_answers,
+          mp.goals AS self_goals,
+          mp.penalty_goals AS self_penalty_goals
+        FROM matches m
+        JOIN match_players mp ON mp.match_id = m.id AND mp.user_id = ${userId}
+        WHERE m.status = 'completed'
+      )
       SELECT
-        (
-          SELECT COUNT(*)::int
-          FROM matches m
-          JOIN match_players mp ON mp.match_id = m.id
-          WHERE mp.user_id = ${userId}
-            AND m.status = 'completed'
-        ) AS completed_matches,
-        (
-          SELECT COUNT(*)::int
-          FROM matches m
-          JOIN match_players mp ON mp.match_id = m.id
-          WHERE mp.user_id = ${userId}
-            AND m.status = 'completed'
-            AND m.winner_user_id = ${userId}
-        ) AS total_wins,
-        (
-          SELECT COUNT(*)::int
-          FROM matches m
-          JOIN match_players mp ON mp.match_id = m.id
-          WHERE mp.user_id = ${userId}
-            AND m.status = 'completed'
-            AND m.winner_user_id = ${userId}
-            AND COALESCE(m.state_payload->>'variant', '') = 'friendly_party_quiz'
-        ) AS party_quiz_wins,
-        EXISTS (
-          SELECT 1
-          FROM matches m
-          JOIN match_players mp ON mp.match_id = m.id
-          WHERE mp.user_id = ${userId}
-            AND m.status = 'completed'
-            AND mp.correct_answers >= m.total_questions
-        ) AS has_perfect_match,
+        COUNT(*)::int AS completed_matches,
+        COUNT(*) FILTER (WHERE winner_user_id = ${userId})::int AS total_wins,
+        COUNT(*) FILTER (
+          WHERE winner_user_id = ${userId}
+            AND variant = 'friendly_party_quiz'
+        )::int AS party_quiz_wins,
+        bool_or(correct_answers >= total_questions) AS has_perfect_match,
         EXISTS (
           SELECT 1
           FROM match_answers ma
@@ -112,23 +96,18 @@ export const achievementsRepo = {
             AND ma.is_correct = true
             AND ma.time_ms <= 2000
         ) AS has_lightning_counter,
-        EXISTS (
-          SELECT 1
-          FROM matches m
-          JOIN match_players mp_self
-            ON mp_self.match_id = m.id
-           AND mp_self.user_id = ${userId}
-          WHERE m.status = 'completed'
-            AND m.winner_user_id = ${userId}
-            AND COALESCE(m.state_payload->>'variant', 'friendly_possession') <> 'friendly_party_quiz'
-            AND NOT EXISTS (
-              SELECT 1
-              FROM match_players mp_opp
-              WHERE mp_opp.match_id = m.id
-                AND mp_opp.user_id <> ${userId}
-                AND (mp_opp.goals > 0 OR mp_opp.penalty_goals > 0)
-            )
+        bool_or(
+          winner_user_id = ${userId}
+          AND variant <> 'friendly_party_quiz'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM match_players mp_opp
+            WHERE mp_opp.match_id = user_matches.id
+              AND mp_opp.user_id <> ${userId}
+              AND (mp_opp.goals > 0 OR mp_opp.penalty_goals > 0)
+          )
         ) AS has_clean_sheet
+      FROM user_matches
     `;
 
     const bestWinStreak = await this.getBestWinStreak(userId);
@@ -145,27 +124,23 @@ export const achievementsRepo = {
   },
 
   async getBestWinStreak(userId: string): Promise<number> {
-    const rows = await sql<MatchOutcomeRow[]>`
-      SELECT m.winner_user_id
-      FROM matches m
-      JOIN match_players mp
-        ON mp.match_id = m.id
-       AND mp.user_id = ${userId}
-      WHERE m.status = 'completed'
-      ORDER BY COALESCE(m.ended_at, m.started_at) ASC, m.id ASC
+    const [row] = await sql<{ best_win_streak: number }[]>`
+      SELECT COALESCE(MAX(streak_len), 0)::int AS best_win_streak
+      FROM (
+        SELECT COUNT(*) AS streak_len
+        FROM (
+          SELECT
+            m.winner_user_id,
+            SUM(CASE WHEN m.winner_user_id <> ${userId} OR m.winner_user_id IS NULL THEN 1 ELSE 0 END)
+              OVER (ORDER BY COALESCE(m.ended_at, m.started_at) ASC, m.id ASC) AS grp
+          FROM matches m
+          JOIN match_players mp ON mp.match_id = m.id AND mp.user_id = ${userId}
+          WHERE m.status = 'completed'
+        ) sub
+        WHERE winner_user_id = ${userId}
+        GROUP BY grp
+      ) streaks
     `;
-
-    let current = 0;
-    let best = 0;
-    for (const row of rows) {
-      if (row.winner_user_id === userId) {
-        current += 1;
-        if (current > best) best = current;
-      } else {
-        current = 0;
-      }
-    }
-
-    return best;
+    return row?.best_win_streak ?? 0;
   },
 };

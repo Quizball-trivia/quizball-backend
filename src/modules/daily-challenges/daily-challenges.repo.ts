@@ -199,10 +199,15 @@ export const dailyChallengesRepo = {
 
   async listPublishedQuestionsByTypeAndCategories(
     questionType: string,
-    categoryIds: string[]
+    categoryIds: string[],
+    options?: { limit?: number }
   ): Promise<QuestionContentRow[]> {
     const categoryFilter = categoryIds.length > 0
       ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
+      : sql``;
+
+    const limitClause = options?.limit
+      ? sql`ORDER BY RANDOM() LIMIT ${options.limit}`
       : sql``;
 
     return sql<QuestionContentRow[]>`
@@ -221,6 +226,7 @@ export const dailyChallengesRepo = {
         AND q.type = ${questionType}
         AND c.is_active = true
         ${categoryFilter}
+      ${limitClause}
     `;
   },
 };

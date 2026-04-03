@@ -10,6 +10,7 @@ import { categoriesRepo } from '../categories/categories.repo.js';
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import { translationService } from './translation.service.js';
 import { logger } from '../../core/logger.js';
+import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
 import type {
   BulkCreateResponse,
   CreateQuestionRequest,
@@ -86,6 +87,7 @@ export const questionsService = {
     // Create question with payload atomically
     const question = await questionsRepo.createWithPayload(data, normalizedPayload);
 
+    invalidateCategoryCache();
     logger.info(
       { questionId: question.id, categoryId: data.categoryId, type: data.type },
       'Created new question'
@@ -98,6 +100,7 @@ export const questionsService = {
         entityType: 'question',
         entityId: question.id,
         metadata: {
+          category_id: data.categoryId,
           category_name: getLocalizedString(category.name),
           type: data.type,
           difficulty: data.difficulty,
@@ -177,6 +180,7 @@ export const questionsService = {
       throw new NotFoundError('Question not found');
     }
 
+    invalidateCategoryCache();
     logger.debug({ questionId: id }, 'Updated question');
 
     if (userId) {
@@ -213,8 +217,10 @@ export const questionsService = {
     if (!existing) {
       throw new NotFoundError('Question not found');
     }
+    const category = userId ? await categoriesRepo.getById(existing.category_id) : null;
 
     await questionsRepo.updateStatus(id, status);
+    invalidateCategoryCache();
 
     logger.info({ questionId: id, status }, 'Updated question status');
 
@@ -235,6 +241,9 @@ export const questionsService = {
           old_status: existing.status,
           new_status: status,
           title: getLocalizedString(updated.prompt),
+          type: updated.type,
+          category_id: updated.category_id,
+          category_name: category ? getLocalizedString(category.name) : null,
         },
       });
     }
@@ -257,6 +266,7 @@ export const questionsService = {
     const category = await categoriesRepo.getById(existing.category_id);
 
     await questionsRepo.delete(id);
+    invalidateCategoryCache();
 
     logger.info({ questionId: id }, 'Deleted question');
 
@@ -357,6 +367,10 @@ export const questionsService = {
       }
     }
 
+    if (results.successful > 0) {
+      invalidateCategoryCache();
+    }
+
     logger.info(
       {
         total: results.total,
@@ -374,6 +388,7 @@ export const questionsService = {
         entityType: 'question',
         metadata: {
           category_name: getLocalizedString(category.name),
+          category_id: categoryId,
           count: results.total,
           successful: results.successful,
           failed: results.failed,
@@ -391,6 +406,7 @@ export const questionsService = {
           metadata: {
             title: created.prompt?.en || created.prompt?.ka || created.type,
             category_name: getLocalizedString(category.name),
+            category_id: categoryId,
             bulk_import: true,
           },
         });

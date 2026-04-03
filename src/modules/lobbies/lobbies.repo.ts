@@ -298,6 +298,21 @@ export const lobbiesRepo = {
     return inserted;
   },
 
+  async listAllValidCategories(
+    minQuestions: number
+  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
+      SELECT c.id, c.name, c.icon, c.image_url
+      FROM categories c
+      JOIN questions q ON q.category_id = c.id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE c.is_active = true
+        AND ${MCQ_VALIDATION_CONDITIONS}
+      GROUP BY c.id, c.name, c.icon, c.image_url
+      HAVING COUNT(*) >= ${minQuestions}
+    `;
+  },
+
   async selectRandomActiveCategories(
     minQuestions: number,
     limit: number

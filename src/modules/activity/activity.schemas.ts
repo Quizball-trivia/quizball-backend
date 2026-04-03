@@ -10,6 +10,8 @@ export type ActivityQuery = z.infer<typeof activityQuerySchema>;
 
 export const activityByCategoryQuerySchema = z.object({
   user_id: z.string().uuid('Invalid user ID'),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format'),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format'),
 });
 
 export type ActivityByCategoryQuery = z.infer<typeof activityByCategoryQuerySchema>;

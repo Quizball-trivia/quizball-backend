@@ -78,13 +78,22 @@ export const achievementsService = {
     const uniqueUserIds = [...new Set(userIds)];
     const result: Record<string, AchievementUnlockPayload[]> = {};
 
-    for (const userId of uniqueUserIds) {
-      const [rows, metrics] = await Promise.all([
-        achievementsRepo.listForUser(userId),
-        achievementsRepo.getMetricsForUser(userId),
-      ]);
+    // Batch: fetch all user data in parallel instead of sequentially per user
+    const allData = await Promise.all(
+      uniqueUserIds.map((userId) =>
+        Promise.all([
+          achievementsRepo.listForUser(userId),
+          achievementsRepo.getMetricsForUser(userId),
+        ])
+      )
+    );
+
+    for (let i = 0; i < uniqueUserIds.length; i++) {
+      const userId = uniqueUserIds[i];
+      const [rows, metrics] = allData[i];
       const existingById = new Map(rows.map((row) => [row.achievement_id, row]));
       const unlockedForUser: AchievementUnlockPayload[] = [];
+      const upsertBatch: Parameters<typeof achievementsRepo.upsertProgress>[0][] = [];
 
       for (const definition of ACHIEVEMENT_DEFINITIONS) {
         if (!isAchievementEligibleForVariant(definition.id, matchVariant)) {
@@ -107,7 +116,7 @@ export const achievementsService = {
             ? new Date().toISOString()
             : null;
 
-        await achievementsRepo.upsertProgress({
+        upsertBatch.push({
           userId,
           achievementId: definition.id,
           progress,
@@ -129,6 +138,11 @@ export const achievementsService = {
           unlockedForUser.push(payload);
           trackAchievementUnlocked(userId, definition.id, definition.title);
         }
+      }
+
+      // Batch upsert all achievements for this user in parallel
+      if (upsertBatch.length > 0) {
+        await Promise.all(upsertBatch.map((params) => achievementsRepo.upsertProgress(params)));
       }
 
       result[userId] = unlockedForUser;

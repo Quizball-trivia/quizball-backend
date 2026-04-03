@@ -71,29 +71,161 @@ export const activityRepo = {
     `;
   },
 
-  async getCategoryBreakdown(userId: string): Promise<CategoryBreakdownItem[]> {
+  async getDailyQuestionCategoryCounts(
+    userId: string,
+    from: string,
+    to: string
+  ): Promise<{ date: string; category_id: string | null; category_name: string; count: number }[]> {
+    return sql<{ date: string; category_id: string | null; category_name: string; count: number }[]>`
+      WITH question_creates AS (
+        SELECT
+          DATE(al.created_at)::text AS date,
+          COALESCE(al.metadata->>'category_id', q.category_id::text) AS category_id,
+          COALESCE(
+            NULLIF(al.metadata->>'category_name', ''),
+            NULLIF(c.name->>'en', ''),
+            NULLIF(c.name->>'ka', ''),
+            'Unknown category'
+          ) AS category_name
+        FROM audit_logs al
+        LEFT JOIN questions q
+          ON q.id = al.entity_id
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+        LEFT JOIN categories c ON c.id = q.category_id
+        WHERE al.user_id = ${userId}
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+          AND al.created_at >= ${from}::date
+          AND al.created_at < (${to}::date + interval '1 day')
+
+        UNION ALL
+
+        SELECT
+          DATE(q.created_at)::text AS date,
+          q.category_id::text AS category_id,
+          COALESCE(NULLIF(c.name->>'en', ''), NULLIF(c.name->>'ka', ''), 'Unknown category') AS category_name
+        FROM questions q
+        JOIN categories c ON c.id = q.category_id
+        WHERE q.created_by = ${userId}
+          AND q.created_at >= ${from}::date
+          AND q.created_at < (${to}::date + interval '1 day')
+          AND NOT EXISTS (
+            SELECT 1 FROM audit_logs al
+            WHERE al.entity_id = q.id AND al.entity_type = 'question' AND al.action = 'create'
+          )
+      )
+      SELECT
+        date,
+        category_id,
+        category_name,
+        COUNT(*)::int AS count
+      FROM question_creates
+      GROUP BY date, category_id, category_name
+      ORDER BY date, count DESC, category_name ASC
+    `;
+  },
+
+  async getCategoryBreakdown(userId: string, from: string, to: string): Promise<CategoryBreakdownItem[]> {
     return sql<CategoryBreakdownItem[]>`
-      SELECT c.id, c.name->>'en' as name, COUNT(q.id)::int as question_count, c.is_active
-      FROM categories c
-      LEFT JOIN questions q ON q.category_id = c.id AND q.created_by = ${userId}
-      WHERE c.created_by = ${userId}
-      GROUP BY c.id, c.name->>'en', c.is_active
-      ORDER BY question_count DESC
+      WITH question_creates AS (
+        SELECT
+          COALESCE(al.metadata->>'category_id', q.category_id::text, 'category-name:' || COALESCE(al.metadata->>'category_name', 'unknown')) AS category_id,
+          COALESCE(
+            NULLIF(al.metadata->>'category_name', ''),
+            NULLIF(c.name->>'en', ''),
+            NULLIF(c.name->>'ka', ''),
+            'Unknown category'
+          ) AS category_name,
+          COALESCE(cat.is_active, c.is_active, false) AS is_active,
+          al.created_at
+        FROM audit_logs al
+        LEFT JOIN questions q
+          ON q.id = al.entity_id
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+        LEFT JOIN categories c ON c.id = q.category_id
+        LEFT JOIN categories cat ON cat.id::text = al.metadata->>'category_id'
+        WHERE al.user_id = ${userId}
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+          AND al.created_at >= ${from}::date
+          AND al.created_at < (${to}::date + interval '1 day')
+
+        UNION ALL
+
+        SELECT
+          q.category_id::text AS category_id,
+          COALESCE(NULLIF(c.name->>'en', ''), NULLIF(c.name->>'ka', ''), 'Unknown category') AS category_name,
+          c.is_active,
+          q.created_at
+        FROM questions q
+        JOIN categories c ON c.id = q.category_id
+        WHERE q.created_by = ${userId}
+          AND q.created_at >= ${from}::date
+          AND q.created_at < (${to}::date + interval '1 day')
+          AND NOT EXISTS (
+            SELECT 1 FROM audit_logs al
+            WHERE al.entity_id = q.id AND al.entity_type = 'question' AND al.action = 'create'
+          )
+      )
+      SELECT
+        category_id AS id,
+        category_name AS name,
+        COUNT(*)::int AS question_count,
+        COALESCE(BOOL_OR(is_active), false) AS is_active,
+        MAX(created_at)::text AS last_question_created_at
+      FROM question_creates
+      GROUP BY category_id, category_name
+      ORDER BY question_count DESC, MAX(created_at) DESC, category_name ASC
+      LIMIT 12
     `;
   },
 
   async getRecentActivity(userId: string, limit: number): Promise<RecentActivityItem[]> {
     return sql<RecentActivityItem[]>`
       (
-        SELECT id, action, entity_type, entity_id, metadata, created_at
-        FROM audit_logs
-        WHERE user_id = ${userId}
+        SELECT
+          al.id,
+          al.action,
+          al.entity_type,
+          al.entity_id,
+          CASE
+            WHEN al.entity_type = 'question' THEN
+              COALESCE(al.metadata, '{}'::jsonb) || jsonb_strip_nulls(
+                jsonb_build_object(
+                  'title', COALESCE(
+                    NULLIF(q.prompt->>'en', ''),
+                    NULLIF(q.prompt->>'ka', ''),
+                    NULLIF(al.metadata->>'title', ''),
+                    q.type
+                  ),
+                  'type', COALESCE(NULLIF(al.metadata->>'type', ''), q.type),
+                  'category_id', COALESCE(NULLIF(al.metadata->>'category_id', ''), q.category_id::text),
+                  'category_name', COALESCE(
+                    NULLIF(al.metadata->>'category_name', ''),
+                    NULLIF(c.name->>'en', ''),
+                    NULLIF(c.name->>'ka', '')
+                  )
+                )
+              )
+            ELSE COALESCE(al.metadata, '{}'::jsonb)
+          END AS metadata,
+          al.created_at
+        FROM audit_logs al
+        LEFT JOIN questions q
+          ON q.id = al.entity_id
+          AND al.entity_type = 'question'
+        LEFT JOIN categories c ON c.id = q.category_id
+        WHERE al.user_id = ${userId}
       )
       UNION ALL
       (
         SELECT q.id, 'create' as action, 'question' as entity_type, q.id as entity_id,
           jsonb_build_object(
             'title', COALESCE(NULLIF(q.prompt->>'en', ''), NULLIF(q.prompt->>'ka', ''), q.type),
+            'type', q.type,
+            'category_id', q.category_id,
             'category_name', COALESCE(NULLIF(c.name->>'en', ''), NULLIF(c.name->>'ka', '')),
             'legacy', true
           ) as metadata,

@@ -280,7 +280,10 @@ export const questionsService = {
     );
 
     try {
-      await questionsRepo.delete(id);
+      const deleted = await questionsRepo.delete(id);
+      if (!deleted) {
+        throw new NotFoundError('Question was already deleted');
+      }
       invalidateCategoryCache();
 
       logger.info({ questionId: id }, 'Deleted question');

@@ -9,6 +9,12 @@ import {
 import { getRequestId } from '../../core/request-context.js';
 import { logger } from '../../core/logger.js';
 
+/** Extract keys only from an object to avoid logging sensitive values. */
+function redactValues(obj: Record<string, unknown> | undefined): string[] {
+  if (!obj) return [];
+  return Object.keys(obj);
+}
+
 /**
  * Central error handler middleware.
  * Converts all errors to standard ErrorResponse format.
@@ -36,7 +42,7 @@ export function errorHandler(
         err,
         response,
         method: req.method,
-        path: req.originalUrl,
+        path: req.path,
         userId: req.user?.id ?? null,
         userRole: req.user?.role ?? null,
       },
@@ -65,7 +71,7 @@ export function errorHandler(
         err,
         response,
         method: req.method,
-        path: req.originalUrl,
+        path: req.path,
         userId: req.user?.id ?? null,
         userRole: req.user?.role ?? null,
       },
@@ -80,11 +86,11 @@ export function errorHandler(
     {
       err,
       method: req.method,
-      path: req.originalUrl,
+      path: req.path,
       userId: req.user?.id ?? null,
       userRole: req.user?.role ?? null,
-      params: req.params,
-      query: req.query,
+      paramKeys: redactValues(req.params),
+      queryKeys: redactValues(req.query as Record<string, unknown>),
     },
     'Unhandled error'
   );

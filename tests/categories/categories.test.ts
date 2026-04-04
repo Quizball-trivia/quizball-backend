@@ -2,6 +2,7 @@ import 'express-async-errors';
 import { describe, it, expect, beforeAll, beforeEach, vi, Mock } from 'vitest';
 import request from 'supertest';
 import express, { Express } from 'express';
+import postgres from 'postgres';
 import {
   requestIdMiddleware,
   errorHandler,
@@ -30,6 +31,7 @@ vi.mock('../../src/modules/questions/questions.repo.js', () => ({
   questionsRepo: {
     getByCategoryId: vi.fn(),
     deleteByCategoryId: vi.fn(),
+    archiveByCategoryId: vi.fn(),
   },
 }));
 
@@ -365,7 +367,13 @@ describe('Categories API', () => {
         `/api/v1/categories/${mockCategory.id}`
       );
 
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        action: 'deleted',
+        entity_type: 'category',
+        entity_id: mockCategory.id,
+        message: 'Category deleted',
+      });
     });
 
     it('should return 404 for non-existent category', async () => {
@@ -413,7 +421,13 @@ describe('Categories API', () => {
       const response = await request(app)
         .delete(`/api/v1/categories/${mockCategory.id}?cascade=true`);
 
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        action: 'deleted',
+        entity_type: 'category',
+        entity_id: mockCategory.id,
+        message: 'Category deleted',
+      });
       expect(questionsRepo.deleteByCategoryId).toHaveBeenCalledWith(mockCategory.id);
       expect(categoriesRepo.delete).toHaveBeenCalledWith(mockCategory.id);
     });
@@ -428,6 +442,35 @@ describe('Categories API', () => {
       expect(response.status).toBe(409);
       expect(response.body.code).toBe('CONFLICT');
       expect(response.body.message).toContain('child categories');
+    });
+
+    it('should archive category when delete is blocked by history references', async () => {
+      const foreignKeyError = new postgres.PostgresError({
+        message: 'update or delete on table "categories" violates foreign key constraint',
+        code: '23503',
+      });
+
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (categoriesRepo.hasChildren as Mock).mockResolvedValue(false);
+      (categoriesRepo.hasQuestions as Mock).mockResolvedValue(false);
+      (categoriesRepo.delete as Mock).mockRejectedValue(foreignKeyError);
+      (categoriesRepo.update as Mock).mockResolvedValue({
+        ...mockCategory,
+        is_active: false,
+      });
+
+      const response = await request(app).delete(
+        `/api/v1/categories/${mockCategory.id}`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        action: 'archived',
+        entity_type: 'category',
+        entity_id: mockCategory.id,
+        message: 'Category was used in history and has been archived instead of deleted',
+      });
+      expect(categoriesRepo.update).toHaveBeenCalledWith(mockCategory.id, { isActive: false });
     });
   });
 

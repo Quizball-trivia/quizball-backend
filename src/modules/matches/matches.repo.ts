@@ -157,8 +157,12 @@ export const matchesRepo = {
     const [{ count }] = await sql.unsafe<{ count: number }[]>(`
       SELECT COUNT(*)::int as count
       FROM questions q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
     `, [categoryId]);
 
@@ -175,8 +179,12 @@ export const matchesRepo = {
       }[]>(`
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
         FROM questions q
+        JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
-        WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+        WHERE q.category_id = $1
+          AND c.is_active = true
+          AND q.status = 'published'
+          AND q.type = 'mcq_single'
         ${VALID_PAYLOAD_CONDITIONS}
         ORDER BY RANDOM()
         LIMIT $2
@@ -199,8 +207,12 @@ export const matchesRepo = {
       FROM (
         SELECT * FROM questions TABLESAMPLE SYSTEM (${samplePercent})
       ) AS q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
       ORDER BY RANDOM()
       LIMIT $2
@@ -225,8 +237,12 @@ export const matchesRepo = {
       `
       SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
       FROM questions q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
       ${excludeCondition}
       ORDER BY RANDOM()
@@ -265,9 +281,11 @@ export const matchesRepo = {
         `
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
         FROM questions q
+        JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
         WHERE q.category_id = ANY($2::uuid[])
           AND q.difficulty = ANY($3::text[])
+          AND c.is_active = true
           AND q.status = 'published'
           AND q.type = 'mcq_single'
           ${VALID_PAYLOAD_CONDITIONS}

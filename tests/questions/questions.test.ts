@@ -2,6 +2,7 @@ import 'express-async-errors';
 import { describe, it, expect, beforeAll, beforeEach, vi, Mock } from 'vitest';
 import request from 'supertest';
 import express, { Express } from 'express';
+import postgres from 'postgres';
 import {
   requestIdMiddleware,
   errorHandler,
@@ -446,7 +447,13 @@ describe('Questions API', () => {
         `/api/v1/questions/${mockQuestion.id}`
       );
 
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        action: 'deleted',
+        entity_type: 'question',
+        entity_id: mockQuestion.id,
+        message: 'Question deleted',
+      });
     });
 
     it('should return 404 for non-existent question', async () => {
@@ -458,6 +465,33 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.code).toBe('NOT_FOUND');
+    });
+
+    it('should archive question when delete is blocked by history references', async () => {
+      const foreignKeyError = Object.create(postgres.PostgresError.prototype) as postgres.PostgresError;
+      foreignKeyError.code = '23503';
+      foreignKeyError.message = 'violates foreign key constraint';
+
+      (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
+      (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
+      (questionsRepo.delete as Mock).mockRejectedValue(foreignKeyError);
+      (questionsRepo.updateStatus as Mock).mockResolvedValue({
+        ...mockQuestion,
+        status: 'archived',
+      });
+
+      const response = await request(app).delete(
+        `/api/v1/questions/${mockQuestion.id}`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        action: 'archived',
+        entity_type: 'question',
+        entity_id: mockQuestion.id,
+        message: 'Question was used in game history and has been archived instead of deleted',
+      });
+      expect(questionsRepo.updateStatus).toHaveBeenCalledWith(mockQuestion.id, 'archived');
     });
   });
 

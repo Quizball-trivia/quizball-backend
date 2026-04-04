@@ -390,6 +390,16 @@ export const questionsRepo = {
     return result.count;
   },
 
+  async archiveByCategoryId(categoryId: string): Promise<number> {
+    const result = await sql`
+      UPDATE questions
+      SET status = 'archived', updated_at = NOW()
+      WHERE category_id = ${categoryId}
+        AND status <> 'archived'
+    `;
+    return result.count;
+  },
+
   /**
    * Find duplicate questions using SQL GROUP BY aggregation.
    * More efficient than in-memory processing - scales to 100k+ questions.

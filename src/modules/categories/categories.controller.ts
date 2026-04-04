@@ -116,8 +116,8 @@ export const categoriesController = {
     const { id } = req.validated.params as UuidParam;
     const query = req.validated.query as DeleteCategoryQuery | undefined;
 
-    await categoriesService.delete(id, { cascade: query?.cascade, userId: req.user?.id });
+    const result = await categoriesService.delete(id, { cascade: query?.cascade, userId: req.user?.id });
 
-    res.status(204).send();
+    res.status(200).json(result);
   },
 };

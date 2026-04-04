@@ -126,9 +126,9 @@ export const questionsController = {
   async delete(req: Request, res: Response): Promise<void> {
     const { id } = req.validated.params as UuidParam;
 
-    await questionsService.delete(id, req.user?.id);
+    const result = await questionsService.delete(id, req.user?.id);
 
-    res.status(204).send();
+    res.status(200).json(result);
   },
 
   /**

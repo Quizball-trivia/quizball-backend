@@ -16,7 +16,7 @@ import { logger } from '../../core/logger.js';
  */
 export function errorHandler(
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ): void {
@@ -31,7 +31,17 @@ export function errorHandler(
       request_id: requestId,
     };
 
-    logger.warn({ err, response }, 'Application error');
+    logger.warn(
+      {
+        err,
+        response,
+        method: req.method,
+        path: req.originalUrl,
+        userId: req.user?.id ?? null,
+        userRole: req.user?.role ?? null,
+      },
+      'Application error'
+    );
     res.status(err.statusCode).json(response);
     return;
   }
@@ -50,13 +60,34 @@ export function errorHandler(
       request_id: requestId,
     };
 
-    logger.warn({ err, response }, 'Zod validation error');
+    logger.warn(
+      {
+        err,
+        response,
+        method: req.method,
+        path: req.originalUrl,
+        userId: req.user?.id ?? null,
+        userRole: req.user?.role ?? null,
+      },
+      'Zod validation error'
+    );
     res.status(validationError.statusCode).json(response);
     return;
   }
 
   // Handle generic/unexpected errors
-  logger.error({ err }, 'Unhandled error');
+  logger.error(
+    {
+      err,
+      method: req.method,
+      path: req.originalUrl,
+      userId: req.user?.id ?? null,
+      userRole: req.user?.role ?? null,
+      params: req.params,
+      query: req.query,
+    },
+    'Unhandled error'
+  );
 
   const response: ErrorResponse = {
     code: ErrorCode.INTERNAL_ERROR,

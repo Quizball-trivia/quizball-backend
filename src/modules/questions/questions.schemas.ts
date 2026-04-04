@@ -34,6 +34,14 @@ export type Difficulty = z.infer<typeof difficultyEnum>;
 export const statusEnum = z.enum(['draft', 'published', 'archived']);
 export type Status = z.infer<typeof statusEnum>;
 
+export const deleteQuestionResultSchema = z.object({
+  action: z.enum(['deleted', 'archived']),
+  entity_type: z.literal('question'),
+  entity_id: z.string().uuid(),
+  message: z.string(),
+});
+export type DeleteQuestionResult = z.infer<typeof deleteQuestionResultSchema>;
+
 // =============================================================================
 // Payload Schemas
 // =============================================================================

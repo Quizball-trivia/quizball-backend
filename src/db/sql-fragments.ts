@@ -68,7 +68,7 @@ const NORMALIZED_MCQ_OPTIONS_RAW = `(${NORMALIZED_MCQ_PAYLOAD_RAW}->'options')`;
  * Raw SQL string for JSONB MCQ validation, for use with sql.unsafe().
  * Validates published mcq_single questions with well-formed payloads.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
- * Does NOT include leading AND — callers must prefix with AND if needed.
+ * Includes leading AND — callers should append directly to a WHERE clause.
  */
 export const VALID_PAYLOAD_CONDITIONS_RAW = `
   AND (${NORMALIZED_MCQ_PAYLOAD_RAW}) ? 'options'

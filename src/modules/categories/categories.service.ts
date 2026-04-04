@@ -12,6 +12,7 @@ import { NotFoundError, ConflictError, BadRequestError } from '../../core/errors
 import { logger } from '../../core/logger.js';
 import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
+import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
 
 export interface CategoryDependencies {
   children: { id: string; name: I18nField; slug: string }[];
@@ -223,6 +224,7 @@ export const categoriesService = {
     }
 
     await categoriesRepo.delete(id);
+    invalidateCategoryCache();
 
     logger.info({ categoryId: id, cascade: options?.cascade ?? false }, 'Deleted category');
 

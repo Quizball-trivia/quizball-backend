@@ -19,11 +19,13 @@ import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
+import { acquireLock, releaseLock } from './locks.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
 
 const ONLINE_COUNT_KEY = 'presence:online_users';
+const PRESENCE_LOCK_TTL_MS = 3000;
 const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
 const POST_CONNECT_RETRY_MS = 350;
@@ -46,6 +48,18 @@ async function trackUserOnline(userId: string): Promise<void> {
 async function trackUserOffline(io: QuizballServer, userId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
+
+  const lockKey = `presence:user:${userId}`;
+  let lockResult;
+  try {
+    lockResult = await acquireLock(lockKey, PRESENCE_LOCK_TTL_MS);
+  } catch (error) {
+    logger.warn({ error, userId }, 'Failed to acquire presence lock');
+    return;
+  }
+
+  if (!lockResult.acquired) return;
+
   try {
     // Only remove if user has no other connected sockets
     const userSockets = await io.in(`user:${userId}`).fetchSockets();
@@ -54,6 +68,8 @@ async function trackUserOffline(io: QuizballServer, userId: string): Promise<voi
     }
   } catch (error) {
     logger.warn({ error, userId }, 'Failed to track user offline in Redis');
+  } finally {
+    await releaseLock(lockKey, lockResult.token!).catch(() => {});
   }
 }
 

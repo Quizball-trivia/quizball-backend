@@ -1,5 +1,6 @@
 import { config as dotenvConfig } from 'dotenv';
 import { z } from 'zod';
+import { AppError, ErrorCode } from './errors.js';
 
 // Load .env file
 dotenvConfig();
@@ -86,11 +87,21 @@ export interface Config extends Omit<ConfigSchema, 'DOCS_ENABLED'> {
   DOCS_ENABLED: boolean;
 }
 
+class ConfigError extends AppError {
+  constructor(message: string, details: unknown = null) {
+    super(message, 500, ErrorCode.INTERNAL_ERROR, details);
+  }
+}
+
 export function parseConfig(env: NodeJS.ProcessEnv): Config {
   const result = configSchema.safeParse(env);
 
   if (!result.success) {
-    throw new Error(`Invalid configuration: ${JSON.stringify(result.error.flatten().fieldErrors)}`);
+    const fieldErrors = result.error.flatten().fieldErrors;
+    throw new ConfigError(
+      `Invalid configuration: ${JSON.stringify(fieldErrors)}`,
+      { fieldErrors }
+    );
   }
 
   // Auto-disable docs in production unless explicitly enabled
@@ -103,8 +114,14 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     const hasDocsUsername = !!result.data.DOCS_USERNAME?.trim();
     const hasDocsPassword = !!result.data.DOCS_PASSWORD?.trim();
     if (!hasDocsUsername || !hasDocsPassword) {
-      throw new Error(
-        'Invalid configuration: DOCS_USERNAME and DOCS_PASSWORD are required when DOCS_ENABLED is true outside local environment.'
+      throw new ConfigError(
+        'Invalid configuration: DOCS_USERNAME and DOCS_PASSWORD are required when DOCS_ENABLED is true outside local environment.',
+        {
+          docsEnabled,
+          nodeEnv: result.data.NODE_ENV,
+          hasDocsUsername,
+          hasDocsPassword,
+        }
       );
     }
   }
@@ -130,8 +147,9 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     });
 
     if (missing.length > 0) {
-      throw new Error(
-        `Invalid configuration: missing required Stripe vars: ${missing.join(', ')}`
+      throw new ConfigError(
+        `Invalid configuration: missing required Stripe vars: ${missing.join(', ')}`,
+        { missing }
       );
     }
   }
@@ -155,8 +173,9 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     });
 
     if (missing.length > 0) {
-      throw new Error(
-        `Invalid configuration: missing required Grafana Loki vars: ${missing.join(', ')}`
+      throw new ConfigError(
+        `Invalid configuration: missing required Grafana Loki vars: ${missing.join(', ')}`,
+        { missing }
       );
     }
   }

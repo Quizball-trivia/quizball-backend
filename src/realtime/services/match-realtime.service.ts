@@ -54,6 +54,7 @@ import {
   lastMatchKey,
 } from '../match-keys.js';
 import { buildStandings } from '../match-utils.js';
+import { acquireLock, releaseLock } from '../locks.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MATCH_START_COUNTDOWN_SEC = 5;
@@ -62,6 +63,7 @@ const DISCONNECT_TTL_SEC = 60;
 const GRACE_TTL_SEC = 35;
 const FORFEIT_TTL_SEC = 600;
 const FRIENDLY_REMATCH_LOBBY_TTL_MS = 30 * 60 * 1000;
+const FRIENDLY_REMATCH_LOCK_TTL_MS = 5000;
 
 type LastMatchReplay = {
   matchId: string;
@@ -94,6 +96,10 @@ function matchForfeitKey(matchId: string): string {
   return `match:forfeit:${matchId}`;
 }
 
+function rematchLobbyKey(matchId: string): string {
+  return `rematch:${matchId}`;
+}
+
 function pruneExpiredRematchLobby(matchId: string): void {
   const entry = rematchLobbyByMatchId.get(matchId);
   if (!entry) return;
@@ -104,22 +110,59 @@ function pruneExpiredRematchLobby(matchId: string): void {
 async function getWaitingRematchLobbyId(matchId: string): Promise<string | null> {
   pruneExpiredRematchLobby(matchId);
   const entry = rematchLobbyByMatchId.get(matchId);
-  if (!entry) return null;
+  let lobbyId = entry?.lobbyId ?? null;
 
-  const lobby = await lobbiesRepo.getById(entry.lobbyId);
+  if (!lobbyId) {
+    const redis = getRedisClient();
+    if (redis && redis.isOpen) {
+      const raw = await redis.get(rematchLobbyKey(matchId));
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as Partial<{ lobbyId: string; createdAt: number }>;
+          if (typeof parsed.lobbyId === 'string') {
+            lobbyId = parsed.lobbyId;
+            rematchLobbyByMatchId.set(matchId, {
+              lobbyId: parsed.lobbyId,
+              createdAt: typeof parsed.createdAt === 'number' ? parsed.createdAt : Date.now(),
+            });
+          }
+        } catch {
+          await redis.del(rematchLobbyKey(matchId));
+        }
+      }
+    }
+  }
+
+  if (!lobbyId) return null;
+
+  const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.mode !== 'friendly' || lobby.status !== 'waiting') {
     rematchLobbyByMatchId.delete(matchId);
+    const redis = getRedisClient();
+    if (redis && redis.isOpen) {
+      await redis.del(rematchLobbyKey(matchId));
+    }
     return null;
   }
 
-  return entry.lobbyId;
+  return lobbyId;
 }
 
-function setWaitingRematchLobbyId(matchId: string, lobbyId: string): void {
+async function setWaitingRematchLobbyId(matchId: string, lobbyId: string): Promise<void> {
+  const createdAt = Date.now();
   rematchLobbyByMatchId.set(matchId, {
     lobbyId,
-    createdAt: Date.now(),
+    createdAt,
   });
+
+  const redis = getRedisClient();
+  if (redis && redis.isOpen) {
+    await redis.set(
+      rematchLobbyKey(matchId),
+      JSON.stringify({ lobbyId, createdAt }),
+      { PX: FRIENDLY_REMATCH_LOBBY_TTL_MS }
+    );
+  }
 }
 
 async function detachUserSocketsFromMatch(
@@ -485,20 +528,36 @@ async function createOrJoinFriendlyRematchLobby(
   }
 
   if (!rematchLobbyId) {
-    const sourceLobby = match.lobby_id ? await lobbiesRepo.getById(match.lobby_id) : null;
-    const rematchLobby = await lobbiesRepo.createLobby({
-      mode: 'friendly',
-      hostUserId: userId,
-      inviteCode: generateInviteCode(6),
-      isPublic: sourceLobby?.is_public ?? false,
-      displayName: generateLobbyName(),
-      gameMode: 'friendly_possession',
-      friendlyRandom: true,
-      friendlyCategoryAId: null,
-      friendlyCategoryBId: null,
-    });
-    rematchLobbyId = rematchLobby.id;
-    setWaitingRematchLobbyId(matchId, rematchLobby.id);
+    const lockKey = `lock:rematch:${matchId}`;
+    const lock = await acquireLock(lockKey, FRIENDLY_REMATCH_LOCK_TTL_MS);
+    if (!lock.acquired || !lock.token) {
+      rematchLobbyId = await getWaitingRematchLobbyId(matchId);
+      if (!rematchLobbyId) {
+        return null;
+      }
+    } else {
+      try {
+        rematchLobbyId = await getWaitingRematchLobbyId(matchId);
+        if (!rematchLobbyId) {
+          const sourceLobby = match.lobby_id ? await lobbiesRepo.getById(match.lobby_id) : null;
+          const rematchLobby = await lobbiesRepo.createLobby({
+            mode: 'friendly',
+            hostUserId: userId,
+            inviteCode: generateInviteCode(6),
+            isPublic: sourceLobby?.is_public ?? false,
+            displayName: generateLobbyName(),
+            gameMode: 'friendly_possession',
+            friendlyRandom: true,
+            friendlyCategoryAId: null,
+            friendlyCategoryBId: null,
+          });
+          rematchLobbyId = rematchLobby.id;
+          await setWaitingRematchLobbyId(matchId, rematchLobby.id);
+        }
+      } finally {
+        await releaseLock(lockKey, lock.token);
+      }
+    }
   }
 
   const members = await lobbiesRepo.listMembersWithUser(rematchLobbyId);

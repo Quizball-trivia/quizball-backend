@@ -80,7 +80,7 @@ export const activityRepo = {
       WITH question_creates AS (
         SELECT
           DATE(al.created_at)::text AS date,
-          COALESCE(al.metadata->>'category_id', q.category_id::text) AS category_id,
+          COALESCE(NULLIF(al.metadata->>'category_id', ''), q.category_id::text) AS category_id,
           COALESCE(
             NULLIF(al.metadata->>'category_name', ''),
             NULLIF(c.name->>'en', ''),
@@ -175,7 +175,7 @@ export const activityRepo = {
     return sql<CategoryBreakdownItem[]>`
       WITH question_creates AS (
         SELECT
-          COALESCE(al.metadata->>'category_id', q.category_id::text, 'category-name:' || COALESCE(al.metadata->>'category_name', 'unknown')) AS category_id,
+          COALESCE(NULLIF(al.metadata->>'category_id', ''), q.category_id::text, 'category-name:' || COALESCE(NULLIF(al.metadata->>'category_name', ''), 'unknown')) AS category_id,
           COALESCE(
             NULLIF(al.metadata->>'category_name', ''),
             NULLIF(c.name->>'en', ''),
@@ -216,13 +216,13 @@ export const activityRepo = {
       )
       SELECT
         category_id AS id,
-        category_name AS name,
+        MAX(category_name) AS name,
         COUNT(*)::int AS question_count,
         COALESCE(BOOL_OR(is_active), false) AS is_active,
         MAX(created_at)::text AS last_question_created_at
       FROM question_creates
-      GROUP BY category_id, category_name
-      ORDER BY question_count DESC, MAX(created_at) DESC, category_name ASC
+      GROUP BY category_id
+      ORDER BY question_count DESC, last_question_created_at DESC, name ASC
       LIMIT 12
     `;
   },

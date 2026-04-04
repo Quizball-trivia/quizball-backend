@@ -39,9 +39,20 @@ export type ExpectedAnswerInfo = {
 // ── Phase validation ──
 
 const VALID_PHASE_KINDS: ReadonlySet<MatchPhaseKind> = new Set(['normal', 'last_attack', 'penalty']);
+const VALID_WINNER_DECISION_METHODS: ReadonlySet<NonNullable<PossessionStatePayload['winnerDecisionMethod']>> = new Set([
+  'goals',
+  'penalty_goals',
+  'total_points_fallback',
+]);
 
 export function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
   return typeof value === 'string' && VALID_PHASE_KINDS.has(value as MatchPhaseKind);
+}
+
+function isValidWinnerDecisionMethod(
+  value: unknown
+): value is NonNullable<PossessionStatePayload['winnerDecisionMethod']> {
+  return typeof value === 'string' && VALID_WINNER_DECISION_METHODS.has(value as NonNullable<PossessionStatePayload['winnerDecisionMethod']>);
 }
 
 // ── Seat helpers ──
@@ -189,7 +200,7 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
       }
       : null,
     winnerDecisionMethod:
-      (candidate.winnerDecisionMethod as PossessionStatePayload['winnerDecisionMethod']) ?? null,
+      isValidWinnerDecisionMethod(candidate.winnerDecisionMethod) ? candidate.winnerDecisionMethod : null,
   };
 }
 

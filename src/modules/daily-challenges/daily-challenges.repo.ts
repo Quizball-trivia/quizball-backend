@@ -206,7 +206,7 @@ export const dailyChallengesRepo = {
       ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
       : sql``;
 
-    const limitClause = options?.limit
+    const limitClause = options?.limit != null
       ? sql`ORDER BY RANDOM() LIMIT ${options.limit}`
       : sql``;
 

@@ -126,6 +126,51 @@ export const activityRepo = {
     `;
   },
 
+  async getDailyQuestionTypeCounts(
+    userId: string,
+    from: string,
+    to: string
+  ): Promise<{ date: string; question_type: string; count: number }[]> {
+    return sql<{ date: string; question_type: string; count: number }[]>`
+      WITH question_creates AS (
+        SELECT
+          DATE(al.created_at)::text AS date,
+          COALESCE(NULLIF(al.metadata->>'type', ''), q.type, 'unknown') AS question_type
+        FROM audit_logs al
+        LEFT JOIN questions q
+          ON q.id = al.entity_id
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+        WHERE al.user_id = ${userId}
+          AND al.entity_type = 'question'
+          AND al.action = 'create'
+          AND al.created_at >= ${from}::date
+          AND al.created_at < (${to}::date + interval '1 day')
+
+        UNION ALL
+
+        SELECT
+          DATE(q.created_at)::text AS date,
+          COALESCE(q.type, 'unknown') AS question_type
+        FROM questions q
+        WHERE q.created_by = ${userId}
+          AND q.created_at >= ${from}::date
+          AND q.created_at < (${to}::date + interval '1 day')
+          AND NOT EXISTS (
+            SELECT 1 FROM audit_logs al
+            WHERE al.entity_id = q.id AND al.entity_type = 'question' AND al.action = 'create'
+          )
+      )
+      SELECT
+        date,
+        question_type,
+        COUNT(*)::int AS count
+      FROM question_creates
+      GROUP BY date, question_type
+      ORDER BY date, count DESC, question_type ASC
+    `;
+  },
+
   async getCategoryBreakdown(userId: string, from: string, to: string): Promise<CategoryBreakdownItem[]> {
     return sql<CategoryBreakdownItem[]>`
       WITH question_creates AS (

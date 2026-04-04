@@ -405,6 +405,7 @@ export const questionsService = {
           entityId: created.id,
           metadata: {
             title: created.prompt?.en || created.prompt?.ka || created.type,
+            type: created.type,
             category_name: getLocalizedString(category.name),
             category_id: categoryId,
             bulk_import: true,

@@ -6,14 +6,16 @@ import type {
   CategoryBreakdownItem,
   RecentActivityItem,
   DailyQuestionCategoryCount,
+  DailyQuestionTypeCount,
 } from './activity.types.js';
 
 export const activityService = {
   async getActivity(userId: string, from: string, to: string): Promise<ActivityResponse> {
-    const [dailyCounts, actionCounts, dailyCategoryCounts] = await Promise.all([
+    const [dailyCounts, actionCounts, dailyCategoryCounts, dailyTypeCounts] = await Promise.all([
       activityRepo.getDailyActivityCounts(userId, from, to),
       activityRepo.getActionCounts(userId, from, to),
       activityRepo.getDailyQuestionCategoryCounts(userId, from, to),
+      activityRepo.getDailyQuestionTypeCounts(userId, from, to),
     ]);
 
     // Merge into a single days array
@@ -35,6 +37,7 @@ export const activityService = {
           categories_created: row.action === 'create' && row.entity_type === 'category' ? row.count : 0,
           total: row.count,
           question_categories: [],
+          question_types: [],
         });
       }
     }
@@ -58,6 +61,29 @@ export const activityService = {
         categories_created: 0,
         total: 0,
         question_categories: [category],
+        question_types: [],
+      });
+    }
+
+    for (const row of dailyTypeCounts) {
+      const existing = dayMap.get(row.date);
+      const questionType: DailyQuestionTypeCount = {
+        type: row.question_type,
+        count: row.count,
+      };
+
+      if (existing) {
+        existing.question_types.push(questionType);
+        continue;
+      }
+
+      dayMap.set(row.date, {
+        date: row.date,
+        questions_created: 0,
+        categories_created: 0,
+        total: 0,
+        question_categories: [],
+        question_types: [questionType],
       });
     }
 
@@ -65,6 +91,10 @@ export const activityService = {
       day.question_categories.sort((a, b) => {
         if (b.count !== a.count) return b.count - a.count;
         return a.name.localeCompare(b.name);
+      });
+      day.question_types.sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return a.type.localeCompare(b.type);
       });
     }
 

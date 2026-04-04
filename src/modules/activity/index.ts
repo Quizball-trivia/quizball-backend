@@ -13,6 +13,7 @@ export {
 export type {
   DayActivity,
   DailyQuestionCategoryCount,
+  DailyQuestionTypeCount,
   ActionCounts,
   ActivitySummary,
   ActivityResponse,

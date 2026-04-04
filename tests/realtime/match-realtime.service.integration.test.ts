@@ -644,7 +644,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         started_at: nowIso,
         lobby_id: 'l1',
       })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         id: 'm1',
         mode: 'friendly',
         status: 'completed',
@@ -839,8 +839,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
         matchId: 'm1',
         qIndex: 0,
         userId: 'u1',
-        timeMs: 50,
-        pointsEarned: 100,
+        timeMs: 2400,
+        pointsEarned: 80,
       })
     );
 

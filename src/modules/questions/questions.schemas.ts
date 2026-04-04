@@ -34,6 +34,14 @@ export type Difficulty = z.infer<typeof difficultyEnum>;
 export const statusEnum = z.enum(['draft', 'published', 'archived']);
 export type Status = z.infer<typeof statusEnum>;
 
+export const deleteQuestionResultSchema = z.object({
+  action: z.enum(['deleted', 'archived']),
+  entity_type: z.literal('question'),
+  entity_id: z.string().uuid(),
+  message: z.string(),
+});
+export type DeleteQuestionResult = z.infer<typeof deleteQuestionResultSchema>;
+
 // =============================================================================
 // Payload Schemas
 // =============================================================================
@@ -411,7 +419,7 @@ export type UuidParam = z.infer<typeof uuidParamSchema>;
  */
 export function toQuestionResponse(question: QuestionWithPayload): QuestionResponse {
   // Parse JSON strings to objects (postgres.js may return JSON as strings)
-  const parseJsonField = (field: any, fieldName: string, isRequired: boolean): any => {
+  const parseJsonField = (field: unknown, fieldName: string, isRequired: boolean): unknown => {
     // Only treat null/undefined as null (not empty strings or other falsy values)
     if (field == null) {
       if (isRequired) {
@@ -483,8 +491,8 @@ export function toQuestionResponse(question: QuestionWithPayload): QuestionRespo
     throw new InternalError('Data integrity error: invalid status');
   }
 
-  const prompt = parseJsonField(question.prompt, 'prompt', true);
-  const explanation = parseJsonField(question.explanation, 'explanation', false);
+  const prompt = parseJsonField(question.prompt, 'prompt', true) as Record<string, string>;
+  const explanation = parseJsonField(question.explanation, 'explanation', false) as Record<string, string> | null;
   const payload = parseJsonField(question.payload, 'payload', false);
   let validatedPayload: QuestionPayload | null = null;
   if (payload != null) {

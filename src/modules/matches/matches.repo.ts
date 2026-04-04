@@ -2,6 +2,7 @@ import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import { withSpan } from '../../core/tracing.js';
+import { VALID_PAYLOAD_CONDITIONS_RAW as VALID_PAYLOAD_CONDITIONS } from '../../db/sql-fragments.js';
 import type {
   MatchRow,
   MatchPlayerRow,
@@ -12,47 +13,6 @@ import type {
   MatchQuestionPhaseKind,
 } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
-
-// Reusable SQL fragment for validating question payload structure
-const NORMALIZED_PAYLOAD_SQL = `
-  (
-    CASE
-      WHEN jsonb_typeof(qp.payload) = 'object' THEN qp.payload
-      WHEN jsonb_typeof(qp.payload) = 'string'
-        AND (qp.payload #>> '{}') ~ '^\\s*\\{.*\\}\\s*$'
-      THEN (qp.payload #>> '{}')::jsonb
-      ELSE '{}'::jsonb
-    END
-  )
-`;
-
-const NORMALIZED_OPTIONS_SQL = `(${NORMALIZED_PAYLOAD_SQL}->'options')`;
-
-const VALID_PAYLOAD_CONDITIONS = `
-  AND (${NORMALIZED_PAYLOAD_SQL}) ? 'options'
-  AND jsonb_typeof(${NORMALIZED_OPTIONS_SQL}) = 'array'
-  AND jsonb_array_length(${NORMALIZED_OPTIONS_SQL}) = 4
-  AND NOT EXISTS (
-    SELECT 1
-    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
-    WHERE jsonb_typeof(opt) <> 'object'
-       OR NOT (opt ? 'id')
-       OR jsonb_typeof(opt->'id') <> 'string'
-       OR NOT (opt ? 'text')
-       OR jsonb_typeof(opt->'text') <> 'object'
-       OR NOT (opt ? 'is_correct')
-       OR (opt->>'is_correct') NOT IN ('true', 'false')
-  )
-  AND (
-    SELECT COUNT(*)
-    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
-    WHERE opt->>'is_correct' = 'true'
-  ) = 1
-  AND (
-    SELECT COUNT(DISTINCT opt->>'id')
-    FROM jsonb_array_elements(${NORMALIZED_OPTIONS_SQL}) opt
-  ) = 4
-`;
 
 export interface CreateMatchData {
   lobbyId: string | null;
@@ -197,8 +157,12 @@ export const matchesRepo = {
     const [{ count }] = await sql.unsafe<{ count: number }[]>(`
       SELECT COUNT(*)::int as count
       FROM questions q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
     `, [categoryId]);
 
@@ -215,8 +179,12 @@ export const matchesRepo = {
       }[]>(`
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
         FROM questions q
+        JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
-        WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+        WHERE q.category_id = $1
+          AND c.is_active = true
+          AND q.status = 'published'
+          AND q.type = 'mcq_single'
         ${VALID_PAYLOAD_CONDITIONS}
         ORDER BY RANDOM()
         LIMIT $2
@@ -239,8 +207,12 @@ export const matchesRepo = {
       FROM (
         SELECT * FROM questions TABLESAMPLE SYSTEM (${samplePercent})
       ) AS q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
       ORDER BY RANDOM()
       LIMIT $2
@@ -265,8 +237,12 @@ export const matchesRepo = {
       `
       SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
       FROM questions q
+      JOIN categories c ON c.id = q.category_id
       JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1 AND q.status = 'published' AND q.type = 'mcq_single'
+      WHERE q.category_id = $1
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
       ${excludeCondition}
       ORDER BY RANDOM()
@@ -305,9 +281,11 @@ export const matchesRepo = {
         `
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
         FROM questions q
+        JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
         WHERE q.category_id = ANY($2::uuid[])
           AND q.difficulty = ANY($3::text[])
+          AND c.is_active = true
           AND q.status = 'published'
           AND q.type = 'mcq_single'
           ${VALID_PAYLOAD_CONDITIONS}
@@ -599,32 +577,34 @@ export const matchesRepo = {
         [matchId]
       );
 
-      for (const player of matchPlayers) {
-        const isDraw = winnerId === null;
-        const isWinner = winnerId !== null && winnerId === player.user_id;
+      if (matchPlayers.length > 0) {
+        // Build a single multi-row upsert instead of one INSERT per player
+        const values: (string | number | Date | null)[] = [];
+        const placeholders: string[] = [];
+        for (let i = 0; i < matchPlayers.length; i++) {
+          const player = matchPlayers[i];
+          const isDraw = winnerId === null;
+          const isWinner = winnerId !== null && winnerId === player.user_id;
+          const offset = i * 6;
+          placeholders.push(
+            `($${offset + 1}, $${offset + 2}, 1, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, NOW())`
+          );
+          values.push(
+            player.user_id,
+            completedMatch.mode,
+            isWinner ? 1 : 0,
+            !isDraw && !isWinner ? 1 : 0,
+            isDraw ? 1 : 0,
+            completedMatch.ended_at,
+          );
+        }
 
         await tx.unsafe(
           `
           INSERT INTO user_mode_match_stats (
-            user_id,
-            mode,
-            games_played,
-            wins,
-            losses,
-            draws,
-            last_match_at,
-            updated_at
+            user_id, mode, games_played, wins, losses, draws, last_match_at, updated_at
           )
-          VALUES (
-            $1,
-            $2,
-            1,
-            $3,
-            $4,
-            $5,
-            $6,
-            NOW()
-          )
+          VALUES ${placeholders.join(', ')}
           ON CONFLICT (user_id, mode) DO UPDATE
           SET
             games_played = user_mode_match_stats.games_played + 1,
@@ -638,14 +618,7 @@ export const matchesRepo = {
             ),
             updated_at = NOW()
           `,
-          [
-            player.user_id,
-            completedMatch.mode,
-            isWinner ? 1 : 0,
-            !isDraw && !isWinner ? 1 : 0,
-            isDraw ? 1 : 0,
-            completedMatch.ended_at,
-          ]
+          values
         );
       }
     });

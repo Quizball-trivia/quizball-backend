@@ -9,6 +9,12 @@ import {
 import { getRequestId } from '../../core/request-context.js';
 import { logger } from '../../core/logger.js';
 
+/** Extract keys only from an object to avoid logging sensitive values. */
+function redactValues(obj: Record<string, unknown> | undefined): string[] {
+  if (!obj) return [];
+  return Object.keys(obj);
+}
+
 /**
  * Central error handler middleware.
  * Converts all errors to standard ErrorResponse format.
@@ -16,7 +22,7 @@ import { logger } from '../../core/logger.js';
  */
 export function errorHandler(
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ): void {
@@ -31,7 +37,17 @@ export function errorHandler(
       request_id: requestId,
     };
 
-    logger.warn({ err, response }, 'Application error');
+    logger.warn(
+      {
+        err,
+        response,
+        method: req.method,
+        path: req.path,
+        userId: req.user?.id ?? null,
+        userRole: req.user?.role ?? null,
+      },
+      'Application error'
+    );
     res.status(err.statusCode).json(response);
     return;
   }
@@ -50,13 +66,34 @@ export function errorHandler(
       request_id: requestId,
     };
 
-    logger.warn({ err, response }, 'Zod validation error');
+    logger.warn(
+      {
+        err,
+        response,
+        method: req.method,
+        path: req.path,
+        userId: req.user?.id ?? null,
+        userRole: req.user?.role ?? null,
+      },
+      'Zod validation error'
+    );
     res.status(validationError.statusCode).json(response);
     return;
   }
 
   // Handle generic/unexpected errors
-  logger.error({ err }, 'Unhandled error');
+  logger.error(
+    {
+      err,
+      method: req.method,
+      path: req.path,
+      userId: req.user?.id ?? null,
+      userRole: req.user?.role ?? null,
+      paramKeys: redactValues(req.params),
+      queryKeys: redactValues(req.query as Record<string, unknown>),
+    },
+    'Unhandled error'
+  );
 
   const response: ErrorResponse = {
     code: ErrorCode.INTERNAL_ERROR,

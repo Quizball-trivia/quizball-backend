@@ -14,6 +14,15 @@ import { questionPayloadSchema } from '../modules/questions/questions.schemas.js
 import { acquireLock, releaseLock } from './locks.js';
 import { calculatePoints } from './scoring.js';
 import { getRedisClient } from './redis.js';
+import {
+  questionTimerKey,
+  matchPresenceKey,
+  matchDisconnectKey,
+  matchPauseKey,
+  matchGraceKey,
+  lastMatchKey,
+} from './match-keys.js';
+import { buildStandings, bumpStateVersion } from './match-utils.js';
 import { deleteMatchCache } from './match-cache.js';
 import type { MatchAnswerPayload } from './schemas/match.schemas.js';
 import type {
@@ -21,7 +30,6 @@ import type {
   MatchFinalResultsPayload,
   MatchPartyStatePayload,
   MatchRoundResultPayload,
-  MatchStandingPayload,
 } from './socket.types.js';
 
 const PARTY_QUESTION_TIME_MS = 10000;
@@ -29,30 +37,6 @@ const PARTY_ROUND_RESULT_DELAY_MS = 2500;
 const FORFEIT_TTL_SEC = 600;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
-
-function questionTimerKey(matchId: string, qIndex: number): string {
-  return `${matchId}:${qIndex}`;
-}
-
-function matchPresenceKey(matchId: string, userId: string): string {
-  return `match:presence:${matchId}:${userId}`;
-}
-
-function matchDisconnectKey(matchId: string, userId: string): string {
-  return `match:disconnect:${matchId}:${userId}`;
-}
-
-function matchPauseKey(matchId: string): string {
-  return `match:pause:${matchId}`;
-}
-
-function matchGraceKey(matchId: string): string {
-  return `match:grace:${matchId}`;
-}
-
-function lastMatchKey(userId: string): string {
-  return `user:last_match:${userId}`;
-}
 
 function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
   const fallback = createInitialPartyQuizState(totalQuestions);
@@ -78,31 +62,6 @@ function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuiz
         : null,
     stateVersionCounter: Math.max(0, Number(candidate.stateVersionCounter ?? 0)),
   };
-}
-
-function bumpStateVersion(state: PartyQuizStatePayload): void {
-  state.stateVersionCounter += 1;
-}
-
-function buildStandings(players: Awaited<ReturnType<typeof matchesRepo.listMatchPlayers>>): MatchStandingPayload[] {
-  const ordered = [...players].sort((a, b) => {
-    if (b.total_points !== a.total_points) return b.total_points - a.total_points;
-    if (b.correct_answers !== a.correct_answers) return b.correct_answers - a.correct_answers;
-
-    const avgA = a.avg_time_ms ?? Number.MAX_SAFE_INTEGER;
-    const avgB = b.avg_time_ms ?? Number.MAX_SAFE_INTEGER;
-    if (avgA !== avgB) return avgA - avgB;
-
-    return a.seat - b.seat;
-  });
-
-  return ordered.map((player, index) => ({
-    userId: player.user_id,
-    rank: index + 1,
-    totalPoints: player.total_points,
-    correctAnswers: player.correct_answers,
-    avgTimeMs: player.avg_time_ms,
-  }));
 }
 
 async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {

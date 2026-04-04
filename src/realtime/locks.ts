@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
 import { getRedisClient } from './redis.js';
 
@@ -70,14 +71,8 @@ export async function releaseLock(key: string, token: string): Promise<boolean> 
     if (client && client.isOpen) {
       span.setAttribute('quizball.lock_backend', 'redis');
       if (typeof client.eval !== 'function') {
-        const currentToken = await client.get(key);
-        const released = currentToken === token;
-        span.setAttribute('quizball.lock_released', released);
-        if (!released) {
-          return false;
-        }
-        await client.del(key);
-        return true;
+        logger.warn({ key }, 'Redis client missing eval; skipping lock release');
+        return false;
       }
       const result = await client.eval(RELEASE_LOCK_SCRIPT, {
         keys: [key],

@@ -10,6 +10,7 @@ import { categoriesRepo } from '../categories/categories.repo.js';
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import { translationService } from './translation.service.js';
 import { logger } from '../../core/logger.js';
+import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
 import type {
   BulkCreateResponse,
   CreateQuestionRequest,
@@ -18,11 +19,13 @@ import type {
   DuplicateType,
   CategorySummary,
   Status,
+  DeleteQuestionResult,
 } from './questions.schemas.js';
 import { normalizeQuestionPayloadCandidate, toQuestionResponse } from './questions.schemas.js';
 import { createHash } from 'crypto';
 import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
+import postgres from 'postgres';
 
 const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
@@ -86,6 +89,7 @@ export const questionsService = {
     // Create question with payload atomically
     const question = await questionsRepo.createWithPayload(data, normalizedPayload);
 
+    invalidateCategoryCache();
     logger.info(
       { questionId: question.id, categoryId: data.categoryId, type: data.type },
       'Created new question'
@@ -98,6 +102,7 @@ export const questionsService = {
         entityType: 'question',
         entityId: question.id,
         metadata: {
+          category_id: data.categoryId,
           category_name: getLocalizedString(category.name),
           type: data.type,
           difficulty: data.difficulty,
@@ -177,6 +182,7 @@ export const questionsService = {
       throw new NotFoundError('Question not found');
     }
 
+    invalidateCategoryCache();
     logger.debug({ questionId: id }, 'Updated question');
 
     if (userId) {
@@ -213,8 +219,10 @@ export const questionsService = {
     if (!existing) {
       throw new NotFoundError('Question not found');
     }
+    const category = userId ? await categoriesRepo.getById(existing.category_id) : null;
 
     await questionsRepo.updateStatus(id, status);
+    invalidateCategoryCache();
 
     logger.info({ questionId: id, status }, 'Updated question status');
 
@@ -235,6 +243,9 @@ export const questionsService = {
           old_status: existing.status,
           new_status: status,
           title: getLocalizedString(updated.prompt),
+          type: updated.type,
+          category_id: updated.category_id,
+          category_name: category ? getLocalizedString(category.name) : null,
         },
       });
     }
@@ -246,7 +257,7 @@ export const questionsService = {
    * Delete a question.
    * Payload will be deleted via CASCADE.
    */
-  async delete(id: string, userId?: string): Promise<void> {
+  async delete(id: string, userId?: string): Promise<DeleteQuestionResult> {
     // Fetch question details for audit before deleting
     const existing = await questionsRepo.getById(id);
     if (!existing) {
@@ -256,21 +267,103 @@ export const questionsService = {
     // Look up category name for audit before deleting
     const category = await categoriesRepo.getById(existing.category_id);
 
-    await questionsRepo.delete(id);
+    logger.info(
+      {
+        questionId: id,
+        userId: userId ?? null,
+        categoryId: existing.category_id,
+        categoryName: category ? getLocalizedString(category.name) : null,
+        questionType: existing.type,
+        questionStatus: existing.status,
+      },
+      'Attempting to delete question'
+    );
 
-    logger.info({ questionId: id }, 'Deleted question');
+    try {
+      const deleted = await questionsRepo.delete(id);
+      if (!deleted) {
+        throw new NotFoundError('Question was already deleted');
+      }
+      invalidateCategoryCache();
 
-    if (userId) {
-      logAudit({
-        userId,
-        action: 'delete',
-        entityType: 'question',
-        entityId: id,
-        metadata: {
-          title: getLocalizedString(existing.prompt),
-          category_name: category ? getLocalizedString(category.name) : null,
-        },
-      });
+      logger.info({ questionId: id }, 'Deleted question');
+
+      if (userId) {
+        logAudit({
+          userId,
+          action: 'delete',
+          entityType: 'question',
+          entityId: id,
+          metadata: {
+            title: getLocalizedString(existing.prompt),
+            category_name: category ? getLocalizedString(category.name) : null,
+          },
+        });
+      }
+
+      return {
+        action: 'deleted',
+        entity_type: 'question',
+        entity_id: id,
+        message: 'Question deleted',
+      };
+    } catch (error) {
+      if (error instanceof postgres.PostgresError && error.code === '23503') {
+        logger.warn(
+          {
+            deleteTarget: 'question',
+            dbCode: error.code,
+            constraint: error.constraint_name ?? null,
+            table: error.table_name ?? null,
+            detail: error.detail ?? null,
+            schema: error.schema_name ?? null,
+          },
+          'Question delete blocked by foreign key reference'
+        );
+
+        const archived = await questionsRepo.updateStatus(id, 'archived');
+        if (!archived) {
+          throw new NotFoundError('Question not found');
+        }
+
+        invalidateCategoryCache();
+
+        logger.info(
+          {
+            questionId: id,
+            previousStatus: existing.status,
+            newStatus: 'archived',
+          },
+          'Archived question because delete was blocked by historical references'
+        );
+
+        if (userId) {
+          logAudit({
+            userId,
+            action: 'status_change',
+            entityType: 'question',
+            entityId: id,
+            metadata: {
+              old_status: existing.status,
+              new_status: 'archived',
+              title: getLocalizedString(existing.prompt),
+              type: existing.type,
+              category_id: existing.category_id,
+              category_name: category ? getLocalizedString(category.name) : null,
+              reason: 'delete_blocked_by_history',
+            },
+          });
+        }
+
+        return {
+          action: 'archived',
+          entity_type: 'question',
+          entity_id: id,
+          message: 'Question was used in game history and has been archived instead of deleted',
+        };
+      }
+
+      throw error;
     }
   },
 
@@ -357,6 +450,10 @@ export const questionsService = {
       }
     }
 
+    if (results.successful > 0) {
+      invalidateCategoryCache();
+    }
+
     logger.info(
       {
         total: results.total,
@@ -374,6 +471,7 @@ export const questionsService = {
         entityType: 'question',
         metadata: {
           category_name: getLocalizedString(category.name),
+          category_id: categoryId,
           count: results.total,
           successful: results.successful,
           failed: results.failed,
@@ -390,7 +488,9 @@ export const questionsService = {
           entityId: created.id,
           metadata: {
             title: created.prompt?.en || created.prompt?.ka || created.type,
+            type: created.type,
             category_name: getLocalizedString(category.name),
+            category_id: categoryId,
             bulk_import: true,
           },
         });

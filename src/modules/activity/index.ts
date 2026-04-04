@@ -12,6 +12,8 @@ export {
 } from './activity.schemas.js';
 export type {
   DayActivity,
+  DailyQuestionCategoryCount,
+  DailyQuestionTypeCount,
   ActionCounts,
   ActivitySummary,
   ActivityResponse,

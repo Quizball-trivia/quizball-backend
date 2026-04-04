@@ -4,22 +4,19 @@ import { BadRequestError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
-import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { progressionService } from '../modules/progression/progression.service.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { storeService } from '../modules/store/store.service.js';
-import { usersRepo } from '../modules/users/users.repo.js';
 import {
-  createInitialPossessionState,
   matchesService,
   POSSESSION_QUESTIONS_PER_HALF,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
 import { acquireLock, releaseLock } from './locks.js';
-import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
+import { rankedAiMatchKey } from './ai-ranked.constants.js';
 import {
   answerCount,
   deleteMatchCache,
@@ -34,116 +31,71 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { getRedisClient } from './redis.js';
+import { questionTimerKey, lastMatchKey } from './match-keys.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
-import type { DraftCategory, MatchPhaseKind, MatchRoundResultDeltas, MatchStatePayload } from './socket.types.js';
+import type { MatchRoundResultDeltas } from './socket.types.js';
 import { clamp, calculatePoints } from './scoring.js';
 
-const QUESTION_TIME_MS = 10000;
-const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
-const FRONTEND_TRANSITION_DELAY_MS = 1600; // Synced with frontend TRANSITION_DELAY_MS
-const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
-const FRONTEND_FIRST_QUESTION_INTRO_MS = 2000; // Synced with first-question intro overlay
-const ROUND_RESULT_DELAY_MS = 0;
-const PENALTY_INTRO_DELAY_MS = 1000;
-const TIMEOUT_RESOLVE_GRACE_MS = 250;
-const TIMEOUT_RESOLVE_BUFFER_MS = 50;
-const HALFTIME_DURATION_MS = 20000;
-const HALFTIME_POST_BAN_REVEAL_MS = 2000;
-const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
-const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
-const LAST_MATCH_REPLAY_TTL_SEC = 600;
-const TIMING_DISCREPANCY_WARN_MS = 500;
+// ── Re-exports from extracted sub-modules ──
+import {
+  QUESTION_TIME_MS,
+  ROUND_RESULT_DELAY_MS,
+  PENALTY_INTRO_DELAY_MS,
+  TIMEOUT_RESOLVE_GRACE_MS,
+  TIMEOUT_RESOLVE_BUFFER_MS,
+  LAST_MATCH_REPLAY_TTL_SEC,
+  TIMING_DISCREPANCY_WARN_MS,
+  type Seat,
+  type ResolutionDecision,
+  type ExpectedAnswerInfo,
+  asSeat,
+  nextSeat,
+  getSeatFromUserId,
+  getUserIdBySeat,
+  seatToBanKey,
+  buildPlayableQuestionTiming,
+  parsePossessionState,
+  phaseKindFromState,
+  getDifficultyForState,
+  toMatchStatePayload,
+  bumpStateVersion,
+} from './possession-state.js';
+
+import { createPossessionAi } from './possession-ai.js';
+import { createPossessionHalftime, HALFTIME_DURATION_MS, HALFTIME_POST_BAN_REVEAL_MS } from './possession-halftime.js';
+
+// ── Module-scoped Maps for timers ──
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
-const halftimeTimers = new Map<string, NodeJS.Timeout>();
-const halftimeAiBanTimers = new Map<string, NodeJS.Timeout>();
-const aiAnswerTimers = new Map<string, NodeJS.Timeout>();
-const aiUserIdByMatch = new Map<string, string | null>();
-const aiCorrectnessForMatch = new Map<string, number>();
 
-type Seat = 1 | 2;
+// ── Initialize AI sub-module ──
+// Forward declaration resolved: resolvePossessionRound is defined below and passed as callback.
+const possessionAi = createPossessionAi(
+  (io, matchId, qIndex, isTimeout) => resolvePossessionRound(io, matchId, qIndex, isTimeout)
+);
+const {
+  resolveAiUserIdForMatch,
+  schedulePossessionAiAnswer,
+  clearAiAnswerTimer,
+  clearAiMaps,
+} = possessionAi;
 
-type ResolutionDecision = {
-  winnerId: string | null;
-  method: 'goals' | 'penalty_goals' | 'total_points_fallback';
-  totalPointsFallbackUsed: boolean;
-};
+// ── Initialize Halftime sub-module ──
+const possessionHalftime = createPossessionHalftime({
+  sendQuestion: (io, matchId, qIndex, opts) => sendPossessionMatchQuestion(io, matchId, qIndex, opts),
+  resolveAiUserId: (matchId) => resolveAiUserIdForMatch(matchId),
+});
+const {
+  clearHalftimeTimer,
+  getHalftimeTurnSeat,
+  ensureHalftimeCategories,
+  resolveHalftimeResult,
+  scheduleFinalizeHalftime,
+  scheduleHalftimeTimeout,
+  schedulePossessionAiHalftimeBan,
+} = possessionHalftime;
 
-type ExpectedAnswerInfo = {
-  expectedUserIds: string[];
-  shooterSeat: Seat | null;
-  attackerSeat: Seat | null;
-};
-
-function timerKey(matchId: string, qIndex: number): string {
-  return `${matchId}:${qIndex}`;
-}
-
-function lastMatchKey(userId: string): string {
-  return `user:last_match:${userId}`;
-}
-
-function getAiAnswerDelayMs(): number {
-  // AI "thinking" time after options become visible to players.
-  // Range: 2–7s => 80..30 points on correct answers.
-  return Math.floor(Math.random() * 5000) + 2000;
-}
-
-function getQuestionPreAnswerDelayMs(params: {
-  qIndex: number;
-  state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
-}): number {
-  const { qIndex, state } = params;
-  // First question has a dedicated intro overlay before reveal.
-  if (qIndex === 0) {
-    return FRONTEND_FIRST_QUESTION_INTRO_MS + FRONTEND_REVEAL_MS;
-  }
-  // First question after halftime does not have round-result transition blockers.
-  if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
-    return FRONTEND_REVEAL_MS;
-  }
-  // Subsequent questions are blocked by result hold + transition overlay + reveal.
-  return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
-}
-
-function buildPlayableQuestionTiming(params: {
-  qIndex: number;
-  state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
-}): {
-  playableAt: Date;
-  deadlineAt: Date;
-} {
-  const preAnswerDelayMs = getQuestionPreAnswerDelayMs(params);
-  const playableAt = new Date(Date.now() + preAnswerDelayMs);
-  const deadlineAt = new Date(playableAt.getTime() + QUESTION_TIME_MS);
-  return { playableAt, deadlineAt };
-}
-
-function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
-  const candidates = Array.from({ length: optionCount }, (_, index) => index).filter(
-    (index) => index !== correctIndex
-  );
-  const picked = candidates[Math.floor(Math.random() * candidates.length)];
-  return picked ?? correctIndex;
-}
-
-function asSeat(value: number | null | undefined): Seat | null {
-  if (value === 1 || value === 2) return value;
-  return null;
-}
-
-function nextSeat(seat: Seat): Seat {
-  return seat === 1 ? 2 : 1;
-}
-
-function getSeatFromUserId(players: Array<{ user_id: string; seat: number }>, userId: string): Seat | null {
-  const seat = players.find((player) => player.user_id === userId)?.seat;
-  return asSeat(seat);
-}
-
-function getUserIdBySeat(players: Array<{ user_id: string; seat: number }>, seat: Seat): string | null {
-  return players.find((player) => player.seat === seat)?.user_id ?? null;
-}
+// ── Helpers that stay in the main file ──
 
 function emitChanceCardError(
   socket: QuizballSocket,
@@ -166,162 +118,6 @@ function emitChanceCardError(
   });
 }
 
-const VALID_PHASE_KINDS: ReadonlySet<MatchPhaseKind> = new Set(['normal', 'last_attack', 'penalty']);
-
-function isMatchPhaseKind(value: unknown): value is MatchPhaseKind {
-  return typeof value === 'string' && VALID_PHASE_KINDS.has(value as MatchPhaseKind);
-}
-
-function parsePossessionState(raw: unknown): PossessionStatePayload {
-  const fallbackVariant =
-    raw && typeof raw === 'object' && (raw as Partial<PossessionStatePayload>).variant === 'ranked_sim'
-      ? 'ranked_sim'
-      : 'friendly_possession';
-  if (typeof raw === 'string') {
-    try { raw = JSON.parse(raw); } catch { return createInitialPossessionState(fallbackVariant); }
-  }
-  if (!raw || typeof raw !== 'object') {
-    return createInitialPossessionState(fallbackVariant);
-  }
-
-  const candidate = raw as Partial<PossessionStatePayload>;
-  const fallback = createInitialPossessionState(fallbackVariant);
-
-  if (!candidate.phase || !candidate.half || !candidate.goals || !candidate.penaltyGoals) {
-    return fallback;
-  }
-
-  return {
-    ...fallback,
-    ...candidate,
-    goals: {
-      seat1: Math.max(0, Number(candidate.goals.seat1 ?? fallback.goals.seat1)),
-      seat2: Math.max(0, Number(candidate.goals.seat2 ?? fallback.goals.seat2)),
-    },
-    penaltyGoals: {
-      seat1: Math.max(0, Number(candidate.penaltyGoals.seat1 ?? fallback.penaltyGoals.seat1)),
-      seat2: Math.max(0, Number(candidate.penaltyGoals.seat2 ?? fallback.penaltyGoals.seat2)),
-    },
-    possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
-    kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
-    normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
-    normalQuestionsAnsweredInHalf: Math.max(0, Number(candidate.normalQuestionsAnsweredInHalf ?? 0)),
-    normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),
-    halftime: {
-      deadlineAt: candidate.halftime?.deadlineAt ?? null,
-      categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
-        ? candidate.halftime.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
-          if (!category || typeof category !== 'object') return acc;
-          if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
-          const legacyImageUrl = (category as { image_url?: unknown }).image_url;
-          acc.push({
-            id: category.id,
-            name: category.name,
-            icon: typeof category.icon === 'string' ? category.icon : null,
-            imageUrl:
-              typeof category.imageUrl === 'string'
-                ? category.imageUrl
-                : typeof legacyImageUrl === 'string'
-                  ? legacyImageUrl
-                  : null,
-          });
-          return acc;
-        }, [])
-        : [],
-      firstHalfShownCategoryIds: Array.isArray(candidate.halftime?.firstHalfShownCategoryIds)
-        ? candidate.halftime.firstHalfShownCategoryIds.filter((categoryId): categoryId is string => typeof categoryId === 'string')
-        : [],
-      firstBanSeat: asSeat(candidate.halftime?.firstBanSeat),
-      bans: {
-        seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
-        seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
-      },
-    },
-    lastAttack: {
-      attackerSeat: asSeat(candidate.lastAttack?.attackerSeat),
-    },
-    penalty: {
-      round: Math.max(0, Number(candidate.penalty?.round ?? 0)),
-      shooterSeat: asSeat(candidate.penalty?.shooterSeat) ?? 1,
-      suddenDeath: Boolean(candidate.penalty?.suddenDeath),
-      kicksTaken: {
-        seat1: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat1 ?? 0)),
-        seat2: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat2 ?? 0)),
-      },
-    },
-    currentQuestion: candidate.currentQuestion
-      ? {
-        qIndex: Number(candidate.currentQuestion.qIndex ?? 0),
-        phaseKind: isMatchPhaseKind(candidate.currentQuestion.phaseKind) ? candidate.currentQuestion.phaseKind : 'normal',
-        phaseRound: Number(candidate.currentQuestion.phaseRound ?? 0),
-        shooterSeat: asSeat(candidate.currentQuestion.shooterSeat),
-        attackerSeat: asSeat(candidate.currentQuestion.attackerSeat),
-      }
-      : null,
-    winnerDecisionMethod:
-      (candidate.winnerDecisionMethod as PossessionStatePayload['winnerDecisionMethod']) ?? null,
-  };
-}
-
-function phaseKindFromState(state: PossessionStatePayload): MatchPhaseKind {
-  if (state.phase === 'LAST_ATTACK') return 'last_attack';
-  if (state.phase === 'PENALTY_SHOOTOUT') return 'penalty';
-  return 'normal';
-}
-
-function getDifficultyForState(state: PossessionStatePayload): Array<'easy' | 'medium' | 'hard'> {
-  const phaseKind = phaseKindFromState(state);
-  if (phaseKind === 'penalty') return ['hard'];
-
-  const p = Math.abs(state.possessionDiff);
-  if (p <= 20) return ['easy'];
-  if (p <= 45) return ['easy', 'medium'];
-  if (p <= 70) return ['medium'];
-  return ['medium', 'hard'];
-}
-
-function toMatchStatePayload(matchId: string, state: PossessionStatePayload): MatchStatePayload {
-  const phaseKind = state.currentQuestion?.phaseKind ?? phaseKindFromState(state);
-  const phaseRound = state.currentQuestion?.phaseRound
-    ?? (state.phase === 'PENALTY_SHOOTOUT' ? Math.ceil(state.penalty.round / 2) : 0);
-  return {
-    matchId,
-    phase: state.phase,
-    half: state.half,
-    possessionDiff: state.possessionDiff,
-    normalQuestionsAnsweredInHalf: state.normalQuestionsAnsweredInHalf,
-    attackerSeat: state.lastAttack.attackerSeat,
-    kickOffSeat: state.kickOffSeat,
-    goals: {
-      seat1: state.goals.seat1,
-      seat2: state.goals.seat2,
-    },
-    penaltyGoals: {
-      seat1: state.penaltyGoals.seat1,
-      seat2: state.penaltyGoals.seat2,
-    },
-    phaseKind,
-    phaseRound,
-    shooterSeat: state.currentQuestion?.shooterSeat ?? (state.phase === 'PENALTY_SHOOTOUT' ? state.penalty.shooterSeat : null),
-    halftime: {
-      deadlineAt: state.halftime.deadlineAt,
-      categoryOptions: state.halftime.categoryOptions,
-      firstBanSeat: state.halftime.firstBanSeat,
-      bans: {
-        seat1: state.halftime.bans.seat1,
-        seat2: state.halftime.bans.seat2,
-      },
-    },
-    penaltySuddenDeath: state.penalty.suddenDeath,
-    stateVersion: state.stateVersionCounter,
-  };
-}
-
-function bumpStateVersion(state: PossessionStatePayload): void {
-  const next = Number(state.stateVersionCounter);
-  state.stateVersionCounter = Number.isFinite(next) ? next + 1 : 1;
-}
-
 async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
 }
@@ -340,40 +136,11 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
 }
 
 function clearQuestionTimer(matchId: string, qIndex: number): void {
-  const key = timerKey(matchId, qIndex);
+  const key = questionTimerKey(matchId, qIndex);
   const timer = questionTimers.get(key);
   if (!timer) return;
   clearTimeout(timer);
   questionTimers.delete(key);
-}
-
-function clearAiAnswerTimer(matchId: string, qIndex: number): void {
-  const key = timerKey(matchId, qIndex);
-  const timer = aiAnswerTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  aiAnswerTimers.delete(key);
-}
-
-function clearHalftimeTimer(matchId: string): void {
-  const timer = halftimeTimers.get(matchId);
-  if (timer) {
-    clearTimeout(timer);
-    halftimeTimers.delete(matchId);
-  }
-  clearHalftimeAiBanTimer(matchId);
-}
-
-function getHalftimeAiBanDelayMs(): number {
-  return Math.floor(Math.random() * (HALFTIME_AI_BAN_DELAY_MAX_MS - HALFTIME_AI_BAN_DELAY_MIN_MS + 1))
-    + HALFTIME_AI_BAN_DELAY_MIN_MS;
-}
-
-function clearHalftimeAiBanTimer(matchId: string): void {
-  const timer = halftimeAiBanTimers.get(matchId);
-  if (!timer) return;
-  clearTimeout(timer);
-  halftimeAiBanTimers.delete(matchId);
 }
 
 function scheduleQuestionTimeout(
@@ -382,7 +149,7 @@ function scheduleQuestionTimeout(
   qIndex: number,
   deadlineAt: Date
 ): void {
-  const key = timerKey(matchId, qIndex);
+  const key = questionTimerKey(matchId, qIndex);
   const existing = questionTimers.get(key);
   if (existing) {
     clearTimeout(existing);
@@ -559,214 +326,6 @@ async function getExpectedAnswersForQuestion(matchId: string, qIndex: number): P
     shooterSeat,
     attackerSeat,
   };
-}
-
-async function resolveAiUserIdForMatch(matchId: string): Promise<string | null> {
-  if (aiUserIdByMatch.has(matchId)) {
-    return aiUserIdByMatch.get(matchId) ?? null;
-  }
-
-  const redis = getRedisClient();
-  if (redis) {
-    const aiUserId = await redis.get(rankedAiMatchKey(matchId));
-    if (aiUserId) {
-      aiUserIdByMatch.set(matchId, aiUserId);
-      return aiUserId;
-    }
-  }
-
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  for (const player of players) {
-    const user = await usersRepo.getById(player.user_id);
-    if (user?.is_ai) {
-      aiUserIdByMatch.set(matchId, user.id);
-      return user.id;
-    }
-  }
-
-  aiUserIdByMatch.set(matchId, null);
-  return null;
-}
-
-async function resolveAiCorrectnessForMatch(matchId: string): Promise<number> {
-  const cached = aiCorrectnessForMatch.get(matchId);
-  if (cached !== undefined) return cached;
-
-  const match = await matchesRepo.getMatch(matchId);
-  const ctx = match?.ranked_context;
-  if (ctx && typeof ctx === 'object' && 'aiCorrectness' in ctx) {
-    const val = (ctx as { aiCorrectness?: unknown }).aiCorrectness;
-    if (typeof val === 'number') {
-      aiCorrectnessForMatch.set(matchId, val);
-      return val;
-    }
-  }
-
-  aiCorrectnessForMatch.set(matchId, RANKED_AI_CORRECTNESS);
-  return RANKED_AI_CORRECTNESS;
-}
-
-async function schedulePossessionAiAnswer(
-  io: QuizballServer,
-  matchId: string,
-  qIndex: number,
-  options: {
-    correctIndex: number;
-    optionCount: number;
-    phaseKind: MatchPhaseKind;
-    phaseRound: number;
-    shooterSeat: Seat | null;
-  }
-): Promise<void> {
-  const key = timerKey(matchId, qIndex);
-  clearAiAnswerTimer(matchId, qIndex);
-  const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return;
-  if (cache.currentQIndex !== qIndex) return;
-  if (!cache.currentQuestion) return;
-
-  const aiUserId = await resolveAiUserIdForMatch(matchId);
-  if (!aiUserId) return;
-
-  const hasAi = cache.players.some((player) => player.userId === aiUserId);
-  if (!hasAi) return;
-
-  const expectedUserIds = getExpectedUserIds(cache);
-  if (!expectedUserIds.includes(aiUserId)) return;
-
-  const aiThinkTimeMs = getAiAnswerDelayMs();
-  const preAnswerDelayMs = getQuestionPreAnswerDelayMs({
-    qIndex,
-    state: cache.statePayload,
-  });
-  const delayMs = preAnswerDelayMs + aiThinkTimeMs;
-  const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
-  const timeout = setTimeout(() => {
-    const stored = aiAnswerTimers.get(key);
-    if (stored) {
-      clearTimeout(stored);
-      aiAnswerTimers.delete(key);
-    }
-
-    void (async () => {
-      try {
-        const lockKey = `lock:match:${matchId}:answer`;
-        const lock = await acquireLock(lockKey, 2000);
-        if (!lock.acquired || !lock.token) return;
-
-        let committed: {
-          selectedIndex: number | null;
-          isCorrect: boolean;
-          answerTimeMs: number;
-          pointsEarned: number;
-          totalPoints: number;
-          phaseKind: MatchPhaseKind;
-          phaseRound: number | null;
-          shooterSeat: Seat | null;
-          answerCount: number;
-          expectedCount: number;
-        } | null = null;
-
-        try {
-          const fresh = await getMatchCacheOrRebuild(matchId);
-          if (!fresh || fresh.status !== 'active') return;
-          if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) return;
-          if (hasUserAnswered(fresh, aiUserId)) return;
-
-          const expected = getExpectedUserIds(fresh);
-          if (!expected.includes(aiUserId)) return;
-
-          const isCorrect = Math.random() < aiCorrectness;
-          const selectedIndex = isCorrect
-            ? options.correctIndex
-            : pickIncorrectIndex(options.correctIndex, options.optionCount);
-          const answerTimeMs = clamp(aiThinkTimeMs, 0, QUESTION_TIME_MS);
-          const pointsEarned = calculatePoints(isCorrect, answerTimeMs, QUESTION_TIME_MS);
-          const question = fresh.currentQuestion;
-          const aiPlayer = getCachedPlayer(fresh, aiUserId);
-          if (!aiPlayer) return;
-
-          const answer: CachedAnswer = {
-            userId: aiUserId,
-            selectedIndex,
-            isCorrect,
-            timeMs: answerTimeMs,
-            pointsEarned,
-            phaseKind: question.phaseKind,
-            phaseRound: question.phaseRound,
-            shooterSeat: question.shooterSeat,
-            answeredAt: new Date().toISOString(),
-          };
-
-          fresh.answers[aiUserId] = answer;
-          aiPlayer.totalPoints += pointsEarned;
-          if (isCorrect) aiPlayer.correctAnswers += 1;
-
-          await setMatchCache(fresh);
-
-          committed = {
-            selectedIndex,
-            isCorrect,
-            answerTimeMs,
-            pointsEarned,
-            totalPoints: aiPlayer.totalPoints,
-            phaseKind: question.phaseKind,
-            phaseRound: question.phaseRound,
-            shooterSeat: question.shooterSeat,
-            answerCount: answerCount(fresh),
-            expectedCount: expected.length,
-          };
-        } finally {
-          await releaseLock(lockKey, lock.token);
-        }
-
-        if (!committed) return;
-
-        fireAndForget('insertMatchAnswer(ai)', async () => {
-          await matchesRepo.insertMatchAnswerIfMissing({
-            matchId,
-            qIndex,
-            userId: aiUserId,
-            selectedIndex: committed.selectedIndex,
-            isCorrect: committed.isCorrect,
-            timeMs: committed.answerTimeMs,
-            pointsEarned: committed.pointsEarned,
-            phaseKind: committed.phaseKind,
-            phaseRound: committed.phaseRound,
-            shooterSeat: committed.shooterSeat,
-          });
-        });
-
-        fireAndForget('updatePlayerTotals(ai)', async () => {
-          await matchesRepo.updatePlayerTotals(
-            matchId,
-            aiUserId,
-            committed.pointsEarned,
-            committed.isCorrect
-          );
-        });
-
-        if (committed.phaseKind !== 'penalty') {
-          io.to(`match:${matchId}`).emit('match:opponent_answered', {
-            matchId,
-            qIndex,
-            opponentTotalPoints: committed.totalPoints,
-            pointsEarned: committed.pointsEarned,
-            isCorrect: committed.isCorrect,
-            selectedIndex: committed.selectedIndex,
-          });
-        }
-
-        if (committed.answerCount >= committed.expectedCount) {
-          await resolvePossessionRound(io, matchId, qIndex, false);
-        }
-      } catch (error) {
-        logger.warn({ error, matchId, qIndex }, 'Possession AI answer scheduling failed');
-      }
-    })();
-  }, delayMs);
-
-  aiAnswerTimers.set(key, timeout);
 }
 
 function applyDeltaAndGoalCheck(
@@ -1012,8 +571,7 @@ async function completePossessionMatch(
     );
   }
 
-  aiUserIdByMatch.delete(matchId);
-  aiCorrectnessForMatch.delete(matchId);
+  clearAiMaps(matchId);
   clearHalftimeTimer(matchId);
   await deleteMatchCache(matchId);
 }
@@ -1066,268 +624,6 @@ function categoryIdsForCurrentHalf(
 ): string[] {
   if (state.half === 1) return [cache.categoryAId];
   return cache.categoryBId ? [cache.categoryBId] : [cache.categoryAId];
-}
-
-function seatToBanKey(seat: Seat): 'seat1' | 'seat2' {
-  return seat === 1 ? 'seat1' : 'seat2';
-}
-
-function getHalftimeTurnSeat(state: PossessionStatePayload): Seat | null {
-  const firstSeat = state.halftime.firstBanSeat ?? 2;
-  const secondSeat = nextSeat(firstSeat);
-  const firstKey = seatToBanKey(firstSeat);
-  const secondKey = seatToBanKey(secondSeat);
-
-  if (!state.halftime.bans[firstKey]) return firstSeat;
-  if (!state.halftime.bans[secondKey]) return secondSeat;
-  return null;
-}
-
-function uniqueDraftCategories(categories: DraftCategory[]): DraftCategory[] {
-  const seen = new Set<string>();
-  const unique: DraftCategory[] = [];
-  for (const category of categories) {
-    if (seen.has(category.id)) continue;
-    seen.add(category.id);
-    unique.push(category);
-  }
-  return unique;
-}
-
-async function ensureHalftimeCategories(
-  state: PossessionStatePayload,
-  categoryAId: string,
-  matchId: string
-): Promise<void> {
-  if (state.halftime.categoryOptions.length >= 3) return;
-  try {
-    const match = await matchesRepo.getMatch(matchId);
-    const lobbyId = match?.lobby_id ?? null;
-
-    if (!state.halftime.firstBanSeat) {
-      state.halftime.firstBanSeat = match?.is_dev
-        ? (Math.random() < 0.5 ? 1 : 2)
-        : 2;
-    }
-
-    if (!Array.isArray(state.halftime.firstHalfShownCategoryIds) || state.halftime.firstHalfShownCategoryIds.length === 0) {
-      if (lobbyId) {
-        const firstHalfOptions = await lobbiesService.getLobbyCategories(lobbyId);
-        state.halftime.firstHalfShownCategoryIds = uniqueDraftCategories(firstHalfOptions).map((category) => category.id);
-      } else {
-        state.halftime.firstHalfShownCategoryIds = [];
-      }
-    }
-
-    const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
-    const primary = await lobbiesService.selectRandomCategoriesExcluding(3, Array.from(excludedIds));
-    let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
-
-    if (categories.length < 3) {
-      const fallback = await lobbiesService.selectRandomCategories(9);
-      categories = uniqueDraftCategories([...categories, ...fallback]).filter((category) => !excludedIds.has(category.id));
-    }
-
-    if (categories.length < 3) {
-      logger.warn(
-        {
-          matchId,
-          firstHalfShownCategoryIds: state.halftime.firstHalfShownCategoryIds,
-          categoryAId,
-          availableCount: categories.length,
-        },
-        'Insufficient unique halftime categories excluding first-half draft categories; relaxing exclusion'
-      );
-      const relaxed = await lobbiesService.selectRandomCategoriesExcluding(3, [categoryAId]);
-      categories = uniqueDraftCategories([...categories, ...relaxed]).filter((category) => category.id !== categoryAId);
-    }
-
-    state.halftime.categoryOptions = categories.slice(0, 3);
-    state.halftime.bans = { seat1: null, seat2: null };
-  } catch (error) {
-    logger.error({ error }, 'Failed to initialize halftime category options');
-    state.halftime.categoryOptions = [];
-    state.halftime.bans = { seat1: null, seat2: null };
-  }
-}
-
-function pickRandomCategoryId(
-  categoryIds: string[],
-  excludedCategoryIds: Set<string>
-): string | null {
-  const candidates = categoryIds.filter((categoryId) => !excludedCategoryIds.has(categoryId));
-  if (candidates.length === 0) return null;
-  return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
-}
-
-function resolveHalftimeResult(
-  state: PossessionStatePayload
-): {
-  seat1Ban: string | null;
-  seat2Ban: string | null;
-  remainingCategoryId: string | null;
-} {
-  const categoryIds = state.halftime.categoryOptions.map((category) => category.id);
-  if (categoryIds.length === 0) {
-    return { seat1Ban: null, seat2Ban: null, remainingCategoryId: null };
-  }
-
-  const validCategoryIds = new Set(categoryIds);
-  let seat1Ban = validCategoryIds.has(state.halftime.bans.seat1 ?? '') ? state.halftime.bans.seat1 : null;
-  let seat2Ban = validCategoryIds.has(state.halftime.bans.seat2 ?? '') ? state.halftime.bans.seat2 : null;
-
-  if (!seat1Ban) {
-    seat1Ban = pickRandomCategoryId(categoryIds, new Set()) ?? null;
-  }
-
-  const seat2Preferred = seat2Ban && seat2Ban !== seat1Ban ? seat2Ban : null;
-  if (!seat2Preferred) {
-    seat2Ban = pickRandomCategoryId(categoryIds, new Set(seat1Ban ? [seat1Ban] : []));
-    if (!seat2Ban) {
-      seat2Ban = pickRandomCategoryId(categoryIds, new Set()) ?? seat2Ban;
-    }
-  } else {
-    seat2Ban = seat2Preferred;
-  }
-
-  const remaining = categoryIds.filter((categoryId) => categoryId !== seat1Ban && categoryId !== seat2Ban);
-  const remainingCategoryId = remaining[0]
-    ?? categoryIds.find((categoryId) => categoryId !== seat1Ban)
-    ?? categoryIds[0]
-    ?? null;
-
-  return {
-    seat1Ban: seat1Ban ?? null,
-    seat2Ban: seat2Ban ?? null,
-    remainingCategoryId,
-  };
-}
-
-async function finalizeHalftime(io: QuizballServer, matchId: string): Promise<void> {
-  const lockKey = `lock:match:${matchId}:halftime`;
-  const lock = await acquireLock(lockKey, 5000);
-  if (!lock.acquired || !lock.token) return;
-
-  try {
-    const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return;
-    const state = cache.statePayload;
-    if (state.phase !== 'HALFTIME') return;
-
-    const halftimeResult = resolveHalftimeResult(state);
-    state.halftime.bans.seat1 = halftimeResult.seat1Ban;
-    state.halftime.bans.seat2 = halftimeResult.seat2Ban;
-    state.halftime.deadlineAt = null;
-
-    const halfTwoCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryAId;
-    cache.categoryBId = halfTwoCategoryId;
-    fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
-      await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
-    });
-
-    state.half = 2;
-    state.phase = 'NORMAL_PLAY';
-    state.possessionDiff = 0;
-    state.kickOffSeat = nextSeat(state.kickOffSeat);
-    state.lastAttack.attackerSeat = null;
-    state.halftime.firstBanSeat = null;
-    state.currentQuestion = null;
-    state.normalQuestionsAnsweredInHalf = 0;
-    bumpStateVersion(state);
-
-    cache.currentQuestion = null;
-    cache.answers = {};
-    await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(finalizeHalftime)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
-    });
-    await emitMatchState(io, matchId, state);
-
-    await sendPossessionMatchQuestion(io, matchId, cache.currentQIndex, { cache });
-  } finally {
-    clearHalftimeTimer(matchId);
-    await releaseLock(lockKey, lock.token);
-  }
-}
-
-function scheduleFinalizeHalftime(io: QuizballServer, matchId: string, delayMs: number): void {
-  clearHalftimeTimer(matchId);
-  const timer = setTimeout(() => {
-    void finalizeHalftime(io, matchId).catch((error) => {
-      logger.error({ error, matchId }, 'Failed to finalize halftime after both bans');
-    });
-  }, delayMs);
-  halftimeTimers.set(matchId, timer);
-}
-
-function scheduleHalftimeTimeout(io: QuizballServer, matchId: string): void {
-  clearHalftimeTimer(matchId);
-  const timer = setTimeout(() => {
-    void finalizeHalftime(io, matchId).catch((error) => {
-      logger.error({ error, matchId }, 'Failed to finalize halftime timer');
-    });
-  }, HALFTIME_DURATION_MS);
-  halftimeTimers.set(matchId, timer);
-}
-
-function schedulePossessionAiHalftimeBan(io: QuizballServer, matchId: string): void {
-  clearHalftimeAiBanTimer(matchId);
-  const delayMs = getHalftimeAiBanDelayMs();
-
-  const timer = setTimeout(() => {
-    void (async () => {
-      const lockKey = `lock:match:${matchId}:halftime_ban`;
-      const lock = await acquireLock(lockKey, 3000);
-      if (!lock.acquired || !lock.token) return;
-
-      try {
-        const cache = await getMatchCacheOrRebuild(matchId);
-        if (!cache || cache.status !== 'active') return;
-        const state = cache.statePayload;
-        if (state.phase !== 'HALFTIME') return;
-
-        const aiUserId = await resolveAiUserIdForMatch(matchId);
-        if (!aiUserId) return;
-        const aiPlayer = getCachedPlayer(cache, aiUserId);
-        if (!aiPlayer) return;
-
-        const aiSeatKey = seatToBanKey(aiPlayer.seat);
-        if (state.halftime.bans[aiSeatKey]) return;
-        const turnSeat = getHalftimeTurnSeat(state);
-        if (!turnSeat || aiPlayer.seat !== turnSeat) return;
-
-        const options = state.halftime.categoryOptions.map((category) => category.id);
-        if (options.length === 0) return;
-        const otherSeatKey = aiSeatKey === 'seat1' ? 'seat2' : 'seat1';
-        const otherBan = state.halftime.bans[otherSeatKey];
-        const excluded = new Set<string>();
-        if (otherBan) excluded.add(otherBan);
-        const aiCategoryId = pickRandomCategoryId(options, excluded);
-        if (!aiCategoryId) return;
-
-        state.halftime.bans[aiSeatKey] = aiCategoryId;
-        bumpStateVersion(state);
-
-        await setMatchCache(cache);
-        fireAndForget('setMatchStatePayload(halftimeAiBan)', async () => {
-          await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
-        });
-        await emitMatchState(io, matchId, state);
-
-        if (state.halftime.bans.seat1 && state.halftime.bans.seat2) {
-          scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
-        }
-      } finally {
-        await releaseLock(lockKey, lock.token);
-      }
-    })().catch((error) => {
-      logger.warn({ error, matchId }, 'Failed to process halftime AI ban');
-    }).finally(() => {
-      halftimeAiBanTimers.delete(matchId);
-    });
-  }, delayMs);
-
-  halftimeAiBanTimers.set(matchId, timer);
 }
 
 export async function handlePossessionHalftimeBan(
@@ -2667,8 +1963,7 @@ export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): 
 
 export function cancelPossessionHalftimeTimer(matchId: string): void {
   clearHalftimeTimer(matchId);
-  aiUserIdByMatch.delete(matchId);
-  aiCorrectnessForMatch.delete(matchId);
+  clearAiMaps(matchId);
 }
 
 export async function devSkipToPossessionPhase(

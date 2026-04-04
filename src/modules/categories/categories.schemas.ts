@@ -97,6 +97,16 @@ export const deleteCategoryQuerySchema = z.object({
 
 export type DeleteCategoryQuery = z.infer<typeof deleteCategoryQuerySchema>;
 
+export const deleteCategoryResultSchema = z.object({
+  action: z.enum(['deleted', 'archived']),
+  entity_type: z.literal('category'),
+  entity_id: z.string().uuid(),
+  message: z.string(),
+  archived_questions: z.number().int().nonnegative().optional(),
+});
+
+export type DeleteCategoryResult = z.infer<typeof deleteCategoryResultSchema>;
+
 /**
  * Category dependencies response schema.
  */

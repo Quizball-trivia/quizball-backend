@@ -15,6 +15,37 @@ function toLobbyMember(row: LobbyMemberWithUser, hostUserId: string): LobbyMembe
 
 export const MIN_QUESTIONS_PER_CATEGORY = 5;
 
+// ── Valid category cache ──
+// Caches the expensive JSONB-validated category query results for 5 minutes.
+// Categories/questions change infrequently, so a short TTL is safe.
+const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CategoryCacheEntry {
+  rows: Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>;
+  expiresAt: number;
+}
+
+let validCategoryCache: CategoryCacheEntry | null = null;
+
+async function getValidCategories(
+  minQuestions: number
+): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+  const now = Date.now();
+  if (validCategoryCache && validCategoryCache.expiresAt > now) {
+    return validCategoryCache.rows;
+  }
+  // Fetch ALL valid categories (no LIMIT, no randomization) and cache the full set.
+  // Callers shuffle/filter/slice from this cached set.
+  const rows = await lobbiesRepo.listAllValidCategories(minQuestions);
+  validCategoryCache = { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS };
+  return rows;
+}
+
+/** Invalidate the category cache (e.g., after question import). */
+export function invalidateCategoryCache(): void {
+  validCategoryCache = null;
+}
+
 export const lobbiesService = {
   async buildLobbyState(lobby: LobbyRow): Promise<LobbyState> {
     const members = await lobbiesRepo.listMembersWithUser(lobby.id);
@@ -45,12 +76,12 @@ export const lobbiesService = {
   },
 
   async selectRandomCategories(count: number): Promise<DraftCategory[]> {
-    const rows = await lobbiesRepo.selectRandomActiveCategories(
-      MIN_QUESTIONS_PER_CATEGORY,
-      count
-    );
+    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
+    // Shuffle and take `count` from cached set
+    const shuffled = [...allValid].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, count);
 
-    return rows.map((row) => ({
+    return selected.map((row) => ({
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,
@@ -59,13 +90,13 @@ export const lobbiesService = {
   },
 
   async selectRandomCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
-    const rows = await lobbiesRepo.selectRandomActiveCategoriesExcluding(
-      MIN_QUESTIONS_PER_CATEGORY,
-      count,
-      excludeCategoryIds
-    );
+    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
+    const excludeSet = new Set(excludeCategoryIds);
+    const filtered = allValid.filter((row) => !excludeSet.has(row.id));
+    const shuffled = filtered.sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, count);
 
-    return rows.map((row) => ({
+    return selected.map((row) => ({
       id: row.id,
       name: pickI18nText(row.name),
       icon: row.icon ?? null,

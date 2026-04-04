@@ -253,7 +253,7 @@ export const dailyChallengesService = {
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('mcq_single', settings.categoryIds);
+      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('mcq_single', settings.categoryIds, { limit: settings.questionCount * 5 });
       const valid = rows
         .map((row) => ({ row, payload: parsePayload(row) }))
         .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'mcq_single' }> } => item.payload?.type === 'mcq_single')
@@ -357,7 +357,7 @@ export const dailyChallengesService = {
     if (challengeType === 'countdown') {
       const settings = countdownSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('countdown_list', settings.categoryIds);
+      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('countdown_list', settings.categoryIds, { limit: settings.roundCount * 5 });
       const valid = rows
         .map((row) => ({ row, payload: parsePayload(row) }))
         .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'countdown_list' }> } => item.payload?.type === 'countdown_list');
@@ -388,7 +388,7 @@ export const dailyChallengesService = {
     if (challengeType === 'clues') {
       const settings = cluesSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('clue_chain', settings.categoryIds);
+      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('clue_chain', settings.categoryIds, { limit: settings.questionCount * 5 });
       const valid = rows
         .map((row) => ({ row, payload: parsePayload(row) }))
         .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'clue_chain' }> } => item.payload?.type === 'clue_chain');
@@ -419,7 +419,7 @@ export const dailyChallengesService = {
 
     const settings = putInOrderSettingsSchema.parse(config.settings);
     await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-    const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('put_in_order', settings.categoryIds);
+    const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('put_in_order', settings.categoryIds, { limit: settings.roundCount * 5 });
     const valid = rows
       .map((row) => ({ row, payload: parsePayload(row) }))
       .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'put_in_order' }> } => item.payload?.type === 'put_in_order')

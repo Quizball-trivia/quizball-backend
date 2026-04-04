@@ -12,6 +12,9 @@ import { NotFoundError, ConflictError, BadRequestError } from '../../core/errors
 import { logger } from '../../core/logger.js';
 import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
+import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
+import postgres from 'postgres';
+import type { DeleteCategoryResult } from './categories.schemas.js';
 
 export interface CategoryDependencies {
   children: { id: string; name: I18nField; slug: string }[];
@@ -194,23 +197,64 @@ export const categoriesService = {
    * Delete a category.
    * Prevents deletion if category has children or questions (unless cascade is true).
    */
-  async delete(id: string, options?: { cascade?: boolean; userId?: string }): Promise<void> {
+  async delete(id: string, options?: { cascade?: boolean; userId?: string }): Promise<DeleteCategoryResult> {
     // Check category exists
     const existing = await categoriesRepo.getById(id);
     if (!existing) {
       throw new NotFoundError('Category not found');
     }
 
+    logger.info(
+      {
+        categoryId: id,
+        userId: options?.userId ?? null,
+        cascade: options?.cascade ?? false,
+        categorySlug: existing.slug,
+        categoryName: getLocalizedString(existing.name),
+        isActive: existing.is_active,
+      },
+      'Attempting to delete category'
+    );
+
     // Check for children - always blocked, even with cascade
     const hasChildren = await categoriesRepo.hasChildren(id);
     if (hasChildren) {
+      logger.warn(
+        { categoryId: id, cascade: options?.cascade ?? false },
+        'Category delete blocked because category has children'
+      );
       throw new ConflictError('Cannot delete category with child categories');
     }
 
     // Handle cascade delete of questions
     let deletedQuestionCount = 0;
+    let archivedQuestionCount = 0;
     if (options?.cascade) {
-      deletedQuestionCount = await questionsRepo.deleteByCategoryId(id);
+      try {
+        deletedQuestionCount = await questionsRepo.deleteByCategoryId(id);
+      } catch (error) {
+        if (error instanceof postgres.PostgresError && error.code === '23503') {
+          logger.warn(
+            {
+              deleteTarget: 'category-questions',
+              dbCode: error.code,
+              constraint: error.constraint_name ?? null,
+              table: error.table_name ?? null,
+              detail: error.detail ?? null,
+              schema: error.schema_name ?? null,
+              categoryId: id,
+            },
+            'Category cascade delete blocked by foreign key reference, archiving questions instead'
+          );
+          archivedQuestionCount = await questionsRepo.archiveByCategoryId(id);
+          logger.info(
+            { categoryId: id, archivedQuestions: archivedQuestionCount },
+            'Archived category questions because cascade delete was blocked by historical references'
+          );
+        } else {
+          throw error;
+        }
+      }
       if (deletedQuestionCount > 0) {
         logger.info({ categoryId: id, questionsDeleted: deletedQuestionCount }, 'Cascade deleted questions');
       }
@@ -218,26 +262,102 @@ export const categoriesService = {
       // Check for questions only when not cascading
       const hasQuestions = await categoriesRepo.hasQuestions(id);
       if (hasQuestions) {
+        logger.warn(
+          { categoryId: id, cascade: false },
+          'Category delete blocked because category still has questions'
+        );
         throw new ConflictError('Cannot delete category with questions');
       }
     }
 
-    await categoriesRepo.delete(id);
+    try {
+      await categoriesRepo.delete(id);
+      invalidateCategoryCache();
 
-    logger.info({ categoryId: id, cascade: options?.cascade ?? false }, 'Deleted category');
+      logger.info({ categoryId: id, cascade: options?.cascade ?? false }, 'Deleted category');
 
-    if (options?.userId) {
-      logAudit({
-        userId: options.userId,
-        action: 'delete',
-        entityType: 'category',
-        entityId: id,
-        metadata: {
-          name: getLocalizedString(existing.name),
-          cascade: options.cascade ?? false,
-          deleted_questions: deletedQuestionCount,
-        },
-      });
+      if (options?.userId) {
+        logAudit({
+          userId: options.userId,
+          action: 'delete',
+          entityType: 'category',
+          entityId: id,
+          metadata: {
+            name: getLocalizedString(existing.name),
+            cascade: options.cascade ?? false,
+            deleted_questions: deletedQuestionCount,
+            archived_questions: archivedQuestionCount,
+          },
+        });
+      }
+
+      return {
+        action: 'deleted',
+        entity_type: 'category',
+        entity_id: id,
+        message: 'Category deleted',
+        ...(archivedQuestionCount > 0 ? { archived_questions: archivedQuestionCount } : {}),
+      };
+    } catch (error) {
+      if (error instanceof postgres.PostgresError && error.code === '23503') {
+        logger.warn(
+          {
+            deleteTarget: 'category',
+            dbCode: error.code,
+            constraint: error.constraint_name ?? null,
+            table: error.table_name ?? null,
+            detail: error.detail ?? null,
+            schema: error.schema_name ?? null,
+          },
+          'Category delete blocked by foreign key reference'
+        );
+
+        const archivedCategory = await categoriesRepo.update(id, { isActive: false });
+        if (!archivedCategory) {
+          throw new NotFoundError('Category not found');
+        }
+
+        invalidateCategoryCache();
+
+        logger.info(
+          {
+            categoryId: id,
+            archivedQuestions: archivedQuestionCount,
+            previousIsActive: existing.is_active,
+            newIsActive: false,
+          },
+          'Archived category because delete was blocked by historical references'
+        );
+
+        if (options?.userId) {
+          logAudit({
+            userId: options.userId,
+            action: 'update',
+            entityType: 'category',
+            entityId: id,
+            metadata: {
+              changed_fields: ['is_active'],
+              name: getLocalizedString(existing.name),
+              old_is_active: existing.is_active,
+              new_is_active: false,
+              archived_questions: archivedQuestionCount,
+              reason: 'delete_blocked_by_history',
+            },
+          });
+        }
+
+        return {
+          action: 'archived',
+          entity_type: 'category',
+          entity_id: id,
+          message: options?.cascade
+            ? 'Category was used in history and has been archived instead of deleted. Its questions were archived where needed.'
+            : 'Category was used in history and has been archived instead of deleted',
+          ...(archivedQuestionCount > 0 ? { archived_questions: archivedQuestionCount } : {}),
+        };
+      }
+
+      throw error;
     }
   },
 };

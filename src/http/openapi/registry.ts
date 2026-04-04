@@ -66,7 +66,9 @@ import {
 } from '../../modules/friends/index.js';
 import {
   questionTypeEnum,
+  deleteQuestionResultSchema,
 } from '../../modules/questions/questions.schemas.js';
+import { deleteCategoryResultSchema } from '../../modules/categories/categories.schemas.js';
 import { progressionResponseSchema } from '../../modules/progression/progression.schemas.js';
 
 // Extend Zod with OpenAPI support
@@ -1014,6 +1016,7 @@ const paginatedCategoriesResponseSchema = z
 
 registry.register('I18nField', i18nFieldSchema);
 registry.register('CategoryResponse', categoryResponseSchema);
+registry.register('DeleteCategoryResult', deleteCategoryResultSchema);
 registry.register('PaginatedCategoriesResponse', paginatedCategoriesResponseSchema);
 
 const categoryDependenciesResponseSchema = z
@@ -1144,6 +1147,7 @@ const paginatedQuestionsResponseSchema = z
   .openapi('PaginatedQuestionsResponse');
 
 registry.register('QuestionResponse', questionResponseSchema);
+registry.register('DeleteQuestionResult', deleteQuestionResultSchema);
 registry.register('PaginatedQuestionsResponse', paginatedQuestionsResponseSchema);
 
 // =============================================================================
@@ -1325,8 +1329,9 @@ registry.registerPath({
     }),
   },
   responses: {
-    204: {
-      description: 'Category deleted',
+    200: {
+      description: 'Category deleted or archived',
+      content: { 'application/json': { schema: deleteCategoryResultSchema } },
     },
     401: {
       description: 'Not authenticated',
@@ -1797,8 +1802,9 @@ registry.registerPath({
     params: z.object({ id: z.string().uuid() }),
   },
   responses: {
-    204: {
-      description: 'Question deleted',
+    200: {
+      description: 'Question deleted or archived',
+      content: { 'application/json': { schema: deleteQuestionResultSchema } },
     },
     401: {
       description: 'Not authenticated',

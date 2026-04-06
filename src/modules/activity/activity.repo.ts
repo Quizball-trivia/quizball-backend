@@ -135,12 +135,26 @@ export const activityRepo = {
       WITH question_creates AS (
         SELECT
           DATE(al.created_at)::text AS date,
-          COALESCE(NULLIF(al.metadata->>'type', ''), q.type, 'unknown') AS question_type
+          COALESCE(
+            NULLIF(al.metadata->>'type', ''),
+            q.type,
+            related_type.type_hint,
+            'unknown'
+          ) AS question_type
         FROM audit_logs al
         LEFT JOIN questions q
           ON q.id = al.entity_id
           AND al.entity_type = 'question'
           AND al.action = 'create'
+        LEFT JOIN LATERAL (
+          SELECT NULLIF(al_related.metadata->>'type', '') AS type_hint
+          FROM audit_logs al_related
+          WHERE al_related.entity_type = 'question'
+            AND al_related.entity_id = al.entity_id
+            AND NULLIF(al_related.metadata->>'type', '') IS NOT NULL
+          ORDER BY al_related.created_at DESC
+          LIMIT 1
+        ) related_type ON TRUE
         WHERE al.user_id = ${userId}
           AND al.entity_type = 'question'
           AND al.action = 'create'

@@ -27,6 +27,7 @@
     "db:diff:remote": "supabase db diff --linked",
     "db:types": "supabase gen types typescript --local > src/db/database.types.ts",
     "db:types:remote": "supabase gen types typescript --linked > src/db/database.types.ts",
+    "audit:backfill-question-types": "tsx scripts/backfill-question-audit-types.ts",
     "docker:start": "./scripts/docker-start.sh",
     "docker:stop": "./scripts/docker-stop.sh",
     "docker:logs": "docker compose logs -f api",

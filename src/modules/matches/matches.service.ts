@@ -5,7 +5,16 @@ import { usersRepo } from '../users/users.repo.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
-import type { DraftCategory, GameQuestionDTO, MatchVariant } from '../../realtime/socket.types.js';
+import type {
+  ClueItemDTO,
+  CountdownQuestionDTO,
+  DraftCategory,
+  GameQuestionDTO,
+  MatchRoundReveal,
+  MatchVariant,
+  MultipleChoiceQuestionDTO,
+  PutInOrderQuestionDTO,
+} from '../../realtime/socket.types.js';
 import type {
   MatchRow,
   MatchQuestionWithCategory,
@@ -26,6 +35,220 @@ function ensureI18nObject(field: unknown): Record<string, string> {
     return { en: field };
   }
   return {};
+}
+
+const PUT_IN_ORDER_INSTRUCTION_I18N = {
+  desc: {
+    en: 'highest to lowest',
+    ka: 'მაღლიდან დაბლისკენ',
+  },
+  asc: {
+    en: 'lowest to highest',
+    ka: 'დაბლიდან მაღლისკენ',
+  },
+} as const satisfies Record<'asc' | 'desc', Record<string, string>>;
+
+function getPutInOrderInstruction(direction: 'asc' | 'desc'): Record<string, string> {
+  return { ...PUT_IN_ORDER_INSTRUCTION_I18N[direction] };
+}
+
+interface CountdownAnswerGroupEvaluation {
+  id: string;
+  display: Record<string, string>;
+  acceptedAnswers: string[];
+}
+
+interface PutInOrderEvaluationItem {
+  id: string;
+  label: Record<string, string>;
+  details?: Record<string, string> | null;
+  emoji?: string | null;
+  sortValue: number;
+}
+
+export type MatchQuestionEvaluation =
+  | {
+      kind: 'multipleChoice';
+      correctIndex: number;
+    }
+  | {
+      kind: 'countdown';
+      answerGroups: CountdownAnswerGroupEvaluation[];
+    }
+  | {
+      kind: 'putInOrder';
+      direction: 'asc' | 'desc';
+      items: PutInOrderEvaluationItem[];
+    }
+  | {
+      kind: 'clues';
+      acceptedAnswers: string[];
+      displayAnswer: Record<string, string>;
+      clues: ClueItemDTO[];
+    };
+
+export interface BuiltMatchQuestionPayload {
+  question: GameQuestionDTO;
+  evaluation: MatchQuestionEvaluation;
+  reveal: MatchRoundReveal;
+  categoryId: string;
+  phaseKind: 'normal' | 'shot' | 'last_attack' | 'penalty';
+  phaseRound: number | null;
+  shooterSeat: 1 | 2 | null;
+  attackerSeat: 1 | 2 | null;
+}
+
+function buildQuestionAssets(row: MatchQuestionWithCategory): {
+  question: GameQuestionDTO;
+  evaluation: MatchQuestionEvaluation;
+  reveal: MatchRoundReveal;
+} | null {
+  const parsed = questionPayloadSchema.safeParse(row.payload);
+  if (!parsed.success) {
+    logger.warn({ questionId: row.question_id, errors: parsed.error.flatten() }, 'Malformed question payload');
+    return null;
+  }
+
+  const common = {
+    id: row.question_id,
+    categoryId: row.category_id,
+    categoryName: ensureI18nObject(row.category_name),
+    difficulty: row.difficulty,
+  };
+
+  switch (parsed.data.type) {
+    case 'mcq_single': {
+      const correctIndex = parsed.data.options.findIndex((option) => option.is_correct);
+      if (correctIndex < 0) {
+        logger.warn({ questionId: row.question_id }, 'MCQ question has no correct option');
+        return null;
+      }
+
+      const question: MultipleChoiceQuestionDTO = {
+        kind: 'multipleChoice',
+        ...common,
+        prompt: ensureI18nObject(row.prompt),
+        options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
+        explanation: null,
+      };
+
+      return {
+        question,
+        evaluation: {
+          kind: 'multipleChoice',
+          correctIndex,
+        },
+        reveal: {
+          kind: 'multipleChoice',
+          correctIndex,
+        },
+      };
+    }
+
+    case 'countdown_list': {
+      const answerGroups = parsed.data.answer_groups.map((group) => ({
+        id: group.id,
+        display: ensureI18nObject(group.display),
+        acceptedAnswers: group.accepted_answers,
+      }));
+
+      const question: CountdownQuestionDTO = {
+        kind: 'countdown',
+        ...common,
+        prompt: ensureI18nObject(parsed.data.prompt),
+        answerSlotCount: answerGroups.length,
+      };
+
+      return {
+        question,
+        evaluation: {
+          kind: 'countdown',
+          answerGroups,
+        },
+        reveal: {
+          kind: 'countdown',
+          answerGroups: answerGroups.map((group) => ({
+            id: group.id,
+            display: group.display,
+          })),
+        },
+      };
+    }
+
+    case 'put_in_order': {
+      const direction = parsed.data.direction;
+      const items = parsed.data.items.map((item) => ({
+        id: item.id,
+        label: ensureI18nObject(item.label),
+        details: item.details ? ensureI18nObject(item.details) : null,
+        emoji: item.emoji ?? null,
+        sortValue: item.sort_value,
+      }));
+
+      const question: PutInOrderQuestionDTO = {
+        kind: 'putInOrder',
+        ...common,
+        prompt: ensureI18nObject(parsed.data.prompt),
+        instruction: getPutInOrderInstruction(direction),
+        direction,
+        items: items.map((item) => ({
+          id: item.id,
+          label: item.label,
+          details: item.details,
+          emoji: item.emoji,
+        })),
+      };
+
+      const correctOrder = [...items].sort((left, right) =>
+        direction === 'desc'
+          ? right.sortValue - left.sortValue
+          : left.sortValue - right.sortValue
+      );
+
+      return {
+        question,
+        evaluation: {
+          kind: 'putInOrder',
+          direction,
+          items,
+        },
+        reveal: {
+          kind: 'putInOrder',
+          correctOrder,
+        },
+      };
+    }
+
+    case 'clue_chain': {
+      const clues = parsed.data.clues.map((clue) => ({
+        type: clue.type,
+        content: ensureI18nObject(clue.content),
+      }));
+
+      return {
+        question: {
+          kind: 'clues',
+          ...common,
+          prompt: ensureI18nObject(row.prompt),
+          clues,
+        },
+        evaluation: {
+          kind: 'clues',
+          acceptedAnswers: parsed.data.accepted_answers,
+          displayAnswer: ensureI18nObject(parsed.data.display_answer),
+          clues,
+        },
+        reveal: {
+          kind: 'clues',
+          displayAnswer: ensureI18nObject(parsed.data.display_answer),
+        },
+      };
+    }
+
+    default:
+      logger.warn({ questionId: row.question_id, type: (parsed.data as { type: string }).type }, 'Unknown question type');
+      return null;
+  }
 }
 
 export const POSSESSION_QUESTIONS_PER_HALF = 6;
@@ -319,32 +542,10 @@ export const matchesService = {
   async buildGameQuestion(matchId: string, qIndex: number): Promise<GameQuestionDTO | null> {
     const row = await matchesRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
-
-    const parsed = questionPayloadSchema.safeParse(row.payload);
-    if (!parsed.success || parsed.data.type !== 'mcq_single') {
-      return null;
-    }
-
-    return {
-      id: row.question_id,
-      prompt: ensureI18nObject(row.prompt),
-      options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
-      categoryId: row.category_id,
-      categoryName: ensureI18nObject(row.category_name),
-      difficulty: row.difficulty,
-      explanation: null,
-    };
+    return buildQuestionAssets(row)?.question ?? null;
   },
 
-  async buildMatchQuestionPayload(matchId: string, qIndex: number): Promise<{
-    question: GameQuestionDTO;
-    correctIndex: number;
-    categoryId: string;
-    phaseKind: 'normal' | 'shot' | 'last_attack' | 'penalty';
-    phaseRound: number | null;
-    shooterSeat: 1 | 2 | null;
-    attackerSeat: 1 | 2 | null;
-  } | null> {
+  async buildMatchQuestionPayload(matchId: string, qIndex: number): Promise<BuiltMatchQuestionPayload | null> {
     const row: MatchQuestionWithCategory | null = await matchesRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
 
@@ -354,22 +555,15 @@ export const matchesService = {
       questionId: row.question_id,
     }, 'Building match question payload');
 
-    const parsed = questionPayloadSchema.safeParse(row.payload);
-    if (!parsed.success || parsed.data.type !== 'mcq_single') {
+    const assets = buildQuestionAssets(row);
+    if (!assets) {
       return null;
     }
 
     return {
-      question: {
-        id: row.question_id,
-        prompt: ensureI18nObject(row.prompt),
-        options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
-        categoryId: row.category_id,
-        categoryName: ensureI18nObject(row.category_name),
-        difficulty: row.difficulty,
-        explanation: null,
-      },
-      correctIndex: row.correct_index,
+      question: assets.question,
+      evaluation: assets.evaluation,
+      reveal: assets.reveal,
       categoryId: row.category_id,
       phaseKind: row.phase_kind,
       phaseRound: row.phase_round,

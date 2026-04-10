@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { usersRepo } from '../modules/users/users.repo.js';
 import { acquireLock, releaseLock } from './locks.js';
@@ -15,10 +16,10 @@ import {
 import { getRedisClient } from './redis.js';
 import { questionTimerKey } from './match-keys.js';
 import type { QuizballServer } from './socket-server.js';
-import type { MatchPhaseKind } from './socket.types.js';
+import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints } from './scoring.js';
 import {
-  QUESTION_TIME_MS,
+  getQuestionDurationMs,
   getQuestionPreAnswerDelayMs,
   type Seat,
 } from './possession-state.js';
@@ -37,6 +38,20 @@ function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
   );
   const picked = candidates[Math.floor(Math.random() * candidates.length)];
   return picked ?? correctIndex;
+}
+
+function getAiCountdownFoundCount(totalAnswers: number, aiCorrectness: number): number {
+  const cappedAnswers = Math.max(1, totalAnswers);
+  const baseline = Math.round(cappedAnswers * aiCorrectness * 0.75);
+  const variance = Math.floor(Math.random() * 3) - 1;
+  return clamp(baseline + variance, 0, cappedAnswers);
+}
+
+function getAiClueIndex(clueCount: number, aiCorrectness: number): number {
+  const maxIndex = Math.max(0, clueCount - 1);
+  const weighted = Math.round((1 - aiCorrectness) * maxIndex);
+  const variance = Math.floor(Math.random() * 2);
+  return clamp(weighted + variance, 0, maxIndex);
 }
 
 export function createPossessionAi(resolveRound: ResolveRoundFn) {
@@ -108,8 +123,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     matchId: string,
     qIndex: number,
     options: {
-      correctIndex: number;
-      optionCount: number;
+      questionKind: MatchQuestionKind;
+      evaluation: MatchQuestionEvaluation;
       phaseKind: MatchPhaseKind;
       phaseRound: number;
       shooterSeat: Seat | null;
@@ -152,6 +167,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           if (!lock.acquired || !lock.token) return;
 
           let committed: {
+            questionKind: MatchQuestionKind;
             selectedIndex: number | null;
             isCorrect: boolean;
             answerTimeMs: number;
@@ -162,6 +178,9 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             shooterSeat: Seat | null;
             answerCount: number;
             expectedCount: number;
+            foundCount?: number;
+            foundAnswerIds?: string[];
+            clueIndex?: number | null;
           } | null = null;
 
           try {
@@ -173,18 +192,56 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             const expected = getExpectedUserIds(fresh);
             if (!expected.includes(aiUserId)) return;
 
-            const isCorrect = Math.random() < aiCorrectness;
-            const selectedIndex = isCorrect
-              ? options.correctIndex
-              : pickIncorrectIndex(options.correctIndex, options.optionCount);
-            const answerTimeMs = clamp(aiThinkTimeMs, 0, QUESTION_TIME_MS);
-            const pointsEarned = calculatePoints(isCorrect, answerTimeMs, QUESTION_TIME_MS);
             const question = fresh.currentQuestion;
             const aiPlayer = getCachedPlayer(fresh, aiUserId);
             if (!aiPlayer) return;
 
+            const questionTimeMs = getQuestionDurationMs(options.questionKind);
+            let answerTimeMs = clamp(aiThinkTimeMs, 0, questionTimeMs);
+            let isCorrect = false;
+            let selectedIndex: number | null = null;
+            let pointsEarned = 0;
+            let foundCount: number | undefined;
+            let foundAnswerIds: string[] | undefined;
+            let clueIndex: number | null | undefined;
+
+            if (options.questionKind === 'multipleChoice' && options.evaluation.kind === 'multipleChoice') {
+              const optionCount = question.questionDTO.kind === 'multipleChoice'
+                ? question.questionDTO.options.length
+                : 4;
+              isCorrect = Math.random() < aiCorrectness;
+              selectedIndex = isCorrect
+                ? options.evaluation.correctIndex
+                : pickIncorrectIndex(options.evaluation.correctIndex, optionCount);
+              pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
+            } else if (options.questionKind === 'countdown' && options.evaluation.kind === 'countdown') {
+              foundCount = getAiCountdownFoundCount(options.evaluation.answerGroups.length, aiCorrectness);
+              foundAnswerIds = options.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
+              selectedIndex = foundCount;
+              pointsEarned = foundCount * 25;
+              isCorrect = false;
+            } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
+              isCorrect = Math.random() < aiCorrectness;
+              selectedIndex = null;
+              pointsEarned = isCorrect ? calculatePoints(true, answerTimeMs, questionTimeMs) : 0;
+            } else if (options.questionKind === 'clues' && options.evaluation.kind === 'clues') {
+              isCorrect = Math.random() < aiCorrectness;
+              clueIndex = getAiClueIndex(options.evaluation.clues.length, aiCorrectness);
+              selectedIndex = null;
+              if (options.evaluation.clues.length > 0) {
+                const clueSliceMs = questionTimeMs / options.evaluation.clues.length;
+                answerTimeMs = clamp(
+                  Math.round(clueSliceMs * clueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
+                  0,
+                  questionTimeMs
+                );
+              }
+              pointsEarned = isCorrect ? [200, 150, 100, 50, 25][clueIndex] ?? 25 : 0;
+            }
+
             const answer: CachedAnswer = {
               userId: aiUserId,
+              questionKind: question.kind,
               selectedIndex,
               isCorrect,
               timeMs: answerTimeMs,
@@ -193,15 +250,21 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               phaseRound: question.phaseRound,
               shooterSeat: question.shooterSeat,
               answeredAt: new Date().toISOString(),
+              foundCount,
+              foundAnswerIds,
+              clueIndex,
             };
 
             fresh.answers[aiUserId] = answer;
-            aiPlayer.totalPoints += pointsEarned;
-            if (isCorrect) aiPlayer.correctAnswers += 1;
+            if (options.questionKind === 'multipleChoice') {
+              aiPlayer.totalPoints += pointsEarned;
+              if (isCorrect) aiPlayer.correctAnswers += 1;
+            }
 
             await setMatchCache(fresh);
 
             committed = {
+              questionKind: question.kind,
               selectedIndex,
               isCorrect,
               answerTimeMs,
@@ -212,6 +275,9 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               shooterSeat: question.shooterSeat,
               answerCount: answerCount(fresh),
               expectedCount: expected.length,
+              foundCount,
+              foundAnswerIds,
+              clueIndex,
             };
           } finally {
             await releaseLock(lockKey, lock.token);
@@ -219,34 +285,37 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
           if (!committed) return;
 
-          fireAndForget('insertMatchAnswer(ai)', async () => {
-            await matchesRepo.insertMatchAnswerIfMissing({
-              matchId,
-              qIndex,
-              userId: aiUserId,
-              selectedIndex: committed.selectedIndex,
-              isCorrect: committed.isCorrect,
-              timeMs: committed.answerTimeMs,
-              pointsEarned: committed.pointsEarned,
-              phaseKind: committed.phaseKind,
-              phaseRound: committed.phaseRound,
-              shooterSeat: committed.shooterSeat,
+          if (committed.questionKind === 'multipleChoice') {
+            fireAndForget('insertMatchAnswer(ai)', async () => {
+              await matchesRepo.insertMatchAnswerIfMissing({
+                matchId,
+                qIndex,
+                userId: aiUserId,
+                selectedIndex: committed.selectedIndex,
+                isCorrect: committed.isCorrect,
+                timeMs: committed.answerTimeMs,
+                pointsEarned: committed.pointsEarned,
+                phaseKind: committed.phaseKind,
+                phaseRound: committed.phaseRound,
+                shooterSeat: committed.shooterSeat,
+              });
             });
-          });
 
-          fireAndForget('updatePlayerTotals(ai)', async () => {
-            await matchesRepo.updatePlayerTotals(
-              matchId,
-              aiUserId,
-              committed.pointsEarned,
-              committed.isCorrect
-            );
-          });
+            fireAndForget('updatePlayerTotals(ai)', async () => {
+              await matchesRepo.updatePlayerTotals(
+                matchId,
+                aiUserId,
+                committed.pointsEarned,
+                committed.isCorrect
+              );
+            });
+          }
 
-          if (committed.phaseKind !== 'penalty') {
+          if (committed.phaseKind !== 'penalty' && committed.questionKind !== 'countdown') {
             io.to(`match:${matchId}`).emit('match:opponent_answered', {
               matchId,
               qIndex,
+              questionKind: committed.questionKind,
               opponentTotalPoints: committed.totalPoints,
               pointsEarned: committed.pointsEarned,
               isCorrect: committed.isCorrect,
@@ -254,7 +323,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             });
           }
 
-          if (committed.answerCount >= committed.expectedCount) {
+          if (committed.questionKind !== 'countdown' && committed.answerCount >= committed.expectedCount) {
             await resolveRound(io, matchId, qIndex, false);
           }
         } catch (error) {

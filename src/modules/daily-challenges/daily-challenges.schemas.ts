@@ -21,6 +21,16 @@ export const dailyChallengeMetadataSchema = z.object({
   availableToday: z.boolean(),
 });
 
+export const adminDailyChallengeCategoryOptionSchema = z.object({
+  id: z.string().uuid(),
+  slug: z.string().min(1),
+  name: z.record(z.string(), z.string().min(1)),
+  questionCount: z.number().int().nonnegative(),
+  easyCount: z.number().int().nonnegative(),
+  mediumCount: z.number().int().nonnegative(),
+  hardCount: z.number().int().nonnegative(),
+});
+
 const moneyDropSettingsBaseSchema = z.object({
   categoryIds: z.array(z.string().uuid()).default([]),
   questionCount: z.number().int().min(1).max(20),
@@ -96,6 +106,7 @@ export const dailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema.e
   settings: dailyChallengeSettingsSchema,
   sortOrder: z.number().int(),
   isActive: z.boolean(),
+  availableCategories: z.array(adminDailyChallengeCategoryOptionSchema),
 });
 
 export const listDailyChallengesResponseSchema = z.object({
@@ -259,6 +270,7 @@ export type CountdownSettings = z.infer<typeof countdownSettingsSchema>;
 export type CluesSettings = z.infer<typeof cluesSettingsSchema>;
 export type PutInOrderSettings = z.infer<typeof putInOrderSettingsSchema>;
 export type DailyChallengeSettings = z.infer<typeof dailyChallengeSettingsSchema>;
+export type AdminDailyChallengeCategoryOption = z.infer<typeof adminDailyChallengeCategoryOptionSchema>;
 export type DailyChallengeSessionResponse = z.infer<typeof dailyChallengeSessionResponseSchema>;
 export type DailyChallengeConfigResponse = z.infer<typeof dailyChallengeConfigResponseSchema>;
 export type CompleteDailyChallengeBody = z.infer<typeof completeDailyChallengeBodySchema>;

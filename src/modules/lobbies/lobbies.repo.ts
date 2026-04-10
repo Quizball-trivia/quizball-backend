@@ -1,6 +1,6 @@
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
-import { MCQ_VALIDATION_CONDITIONS } from '../../db/sql-fragments.js';
+import { MCQ_VALIDATION_CONDITIONS, RANKED_ELIGIBILITY_HAVING } from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -313,6 +313,25 @@ export const lobbiesRepo = {
     `;
   },
 
+  async listAllRankedEligibleCategories(): Promise<Array<{
+    id: string;
+    name: Record<string, string>;
+    icon: string | null;
+    image_url: string | null;
+  }>> {
+    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
+      SELECT c.id, c.name, c.icon, c.image_url
+      FROM categories c
+      JOIN questions q ON q.category_id = c.id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE c.is_active = true
+        AND q.status = 'published'
+        AND q.type IN ('mcq_single', 'countdown_list', 'put_in_order', 'clue_chain')
+      GROUP BY c.id, c.name, c.icon, c.image_url
+      ${RANKED_ELIGIBILITY_HAVING}
+    `;
+  },
+
   async selectRandomActiveCategories(
     minQuestions: number,
     limit: number
@@ -371,6 +390,25 @@ export const lobbiesRepo = {
         AND ${MCQ_VALIDATION_CONDITIONS}
       GROUP BY c.id
       HAVING COUNT(*) >= ${minQuestions}
+    `;
+
+    return rows.map((row) => row.id);
+  },
+
+  async listRankedEligibleCategoryIds(categoryIds: string[]): Promise<string[]> {
+    if (categoryIds.length === 0) return [];
+
+    const rows = await sql<{ id: string }[]>`
+      SELECT c.id
+      FROM categories c
+      JOIN questions q ON q.category_id = c.id
+      JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
+        AND c.is_active = true
+        AND q.status = 'published'
+        AND q.type IN ('mcq_single', 'countdown_list', 'put_in_order', 'clue_chain')
+      GROUP BY c.id
+      ${RANKED_ELIGIBILITY_HAVING}
     `;
 
     return rows.map((row) => row.id);

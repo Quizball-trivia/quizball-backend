@@ -216,9 +216,15 @@ describe('party quiz realtime flow', () => {
     });
     buildMatchQuestionPayloadMock.mockResolvedValue({
       question: {
+        kind: 'multipleChoice',
         id: 'question-1',
         prompt: { en: 'Who scored?' },
-        options: [{ en: 'A' }, { en: 'B' }, { en: 'C' }, { en: 'D' }],
+        options: [
+          { id: 'a', text: { en: 'A' }, is_correct: false },
+          { id: 'b', text: { en: 'B' }, is_correct: false },
+          { id: 'c', text: { en: 'C' }, is_correct: true },
+          { id: 'd', text: { en: 'D' }, is_correct: false },
+        ],
         categoryId: 'cat-1',
         categoryName: { en: 'Football' },
         difficulty: 'easy',

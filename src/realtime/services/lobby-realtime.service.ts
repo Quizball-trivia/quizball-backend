@@ -308,7 +308,9 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
       let rankedAiUserId: string | null = null;
 
-      const categories = await lobbiesService.selectRandomCategories(3);
+      const categories = lobby.mode === 'ranked'
+        ? await lobbiesService.selectRandomRankedCategories(3)
+        : await lobbiesService.selectRandomCategories(3);
       span.setAttribute('quizball.category_count', categories.length);
       if (categories.length < 3) {
         logger.warn(

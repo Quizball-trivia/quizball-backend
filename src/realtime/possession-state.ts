@@ -4,11 +4,13 @@ import {
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { clamp } from './scoring.js';
-import type { DraftCategory, MatchPhaseKind, MatchStatePayload } from './socket.types.js';
+import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayload } from './socket.types.js';
 
 // ── Constants ──
 
 export const QUESTION_TIME_MS = 10000;
+export const COUNTDOWN_QUESTION_TIME_MS = 15000;
+export const CLUES_QUESTION_TIME_MS = 20000;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
 export const FRONTEND_TRANSITION_DELAY_MS = 1600; // Synced with frontend TRANSITION_DELAY_MS
 export const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
@@ -98,16 +100,31 @@ export function getQuestionPreAnswerDelayMs(params: {
   return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
 }
 
+export function getQuestionDurationMs(questionKind: MatchQuestionKind): number {
+  switch (questionKind) {
+    case 'countdown':
+      return COUNTDOWN_QUESTION_TIME_MS;
+    case 'clues':
+      return CLUES_QUESTION_TIME_MS;
+    case 'multipleChoice':
+    case 'putInOrder':
+    default:
+      return QUESTION_TIME_MS;
+  }
+}
+
+
 export function buildPlayableQuestionTiming(params: {
   qIndex: number;
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
+  questionKind?: MatchQuestionKind;
 }): {
   playableAt: Date;
   deadlineAt: Date;
 } {
   const preAnswerDelayMs = getQuestionPreAnswerDelayMs(params);
   const playableAt = new Date(Date.now() + preAnswerDelayMs);
-  const deadlineAt = new Date(playableAt.getTime() + QUESTION_TIME_MS);
+  const deadlineAt = new Date(playableAt.getTime() + getQuestionDurationMs(params.questionKind ?? 'multipleChoice'));
   return { playableAt, deadlineAt };
 }
 

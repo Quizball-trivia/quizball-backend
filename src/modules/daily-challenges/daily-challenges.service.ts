@@ -8,6 +8,7 @@ import {
 } from '../../core/errors.js';
 import { getLocalizedString } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
+import type { QuestionType } from '../questions/questions.schemas.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import { DAILY_CHALLENGE_DEFINITIONS } from './daily-challenges.definitions.js';
 import { dailyChallengesRepo } from './daily-challenges.repo.js';
@@ -21,6 +22,7 @@ import {
   trueFalseSettingsSchema,
 } from './daily-challenges.schemas.js';
 import type {
+  DailyChallengeAvailableCategoryRow,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
   DailyChallengeType,
@@ -92,6 +94,34 @@ async function ensureActiveCategories(
 
 function getDefinition(challengeType: DailyChallengeType) {
   return DAILY_CHALLENGE_DEFINITIONS[challengeType];
+}
+
+function getQuestionTypeForChallenge(challengeType: DailyChallengeType): QuestionType {
+  switch (challengeType) {
+    case 'moneyDrop':
+    case 'footballJeopardy':
+      return 'mcq_single';
+    case 'trueFalse':
+      return 'true_false';
+    case 'countdown':
+      return 'countdown_list';
+    case 'clues':
+      return 'clue_chain';
+    case 'putInOrder':
+      return 'put_in_order';
+  }
+}
+
+function toAvailableCategoryOption(row: DailyChallengeAvailableCategoryRow) {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    questionCount: row.question_count,
+    easyCount: row.easy_count,
+    mediumCount: row.medium_count,
+    hardCount: row.hard_count,
+  };
 }
 
 function parsePayload(row: QuestionContentRow) {
@@ -172,6 +202,35 @@ function hasUsableQuestionPrompt(row: QuestionContentRow): boolean {
   return getQuestionPrompt(row) !== 'Question';
 }
 
+async function listAvailableCategoriesForChallenge(challengeType: DailyChallengeType) {
+  const rows = await dailyChallengesRepo.listAvailableCategoriesByQuestionType(
+    getQuestionTypeForChallenge(challengeType),
+    { requireDifficultyCoverage: challengeType === 'footballJeopardy' }
+  );
+  return rows.map(toAvailableCategoryOption);
+}
+
+async function ensureEligibleCategories(
+  challengeType: DailyChallengeType,
+  categoryIds: string[]
+): Promise<void> {
+  if (categoryIds.length === 0) {
+    return;
+  }
+
+  const availableCategories = await listAvailableCategoriesForChallenge(challengeType);
+  const availableCategoryIds = new Set(availableCategories.map((category) => category.id));
+  const invalidIds = categoryIds.filter((categoryId) => !availableCategoryIds.has(categoryId));
+
+  if (invalidIds.length > 0) {
+    throw new ValidationError('Daily challenge references categories without eligible question content', {
+      challengeType,
+      invalidCategoryIds: invalidIds,
+      requiredQuestionType: getQuestionTypeForChallenge(challengeType),
+    });
+  }
+}
+
 export const dailyChallengesService = {
   async listActiveChallenges(userId: string) {
     const day = getUtcDay();
@@ -187,11 +246,21 @@ export const dailyChallengesService = {
 
   async listAdminConfigs() {
     const configs = await dailyChallengesRepo.listConfigs(false);
+    const categoryOptionsByType = new Map(
+      await Promise.all(
+        configs.map(async (config) => [
+          config.challenge_type,
+          await listAvailableCategoriesForChallenge(config.challenge_type),
+        ] as const)
+      )
+    );
+
     return configs.map((config) => ({
       ...toListItem(config, undefined),
       isActive: config.is_active,
       sortOrder: config.sort_order,
       settings: this.parseSettings(config.challenge_type, config.settings),
+      availableCategories: categoryOptionsByType.get(config.challenge_type) ?? [],
     }));
   },
 
@@ -207,7 +276,10 @@ export const dailyChallengesService = {
     }
   ) {
     const settings = this.parseSettings(challengeType, input.settings);
-    await ensureActiveCategories(challengeType, this.extractCategoryIds(challengeType, settings));
+    const categoryIds = this.extractCategoryIds(challengeType, settings);
+
+    await ensureActiveCategories(challengeType, categoryIds);
+    await ensureEligibleCategories(challengeType, categoryIds);
 
     const config = await dailyChallengesRepo.upsertConfig({
       challengeType,
@@ -215,11 +287,14 @@ export const dailyChallengesService = {
       settings,
     });
 
+    const availableCategories = await listAvailableCategoriesForChallenge(challengeType);
+
     return {
       ...toListItem(config, undefined),
       isActive: config.is_active,
       sortOrder: config.sort_order,
-      settings: config.settings,
+      settings: this.parseSettings(config.challenge_type, config.settings),
+      availableCategories,
     };
   },
 

@@ -4,15 +4,21 @@ import { withSpan } from '../core/tracing.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPossessionState,
+  matchesService,
   POSSESSION_QUESTIONS_PER_HALF,
+  type MatchQuestionEvaluation,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
-import { matchesService } from '../modules/matches/matches.service.js';
 import { getRedisClient } from './redis.js';
+import { acquireLock, releaseLock } from './locks.js';
+import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
-import type { GameQuestionDTO, MatchPhaseKind, MatchMode } from './socket.types.js';
+import type { GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
+const MATCH_CACHE_REBUILD_LOCK_TTL_MS = 5000;
+const MATCH_CACHE_REBUILD_RETRY_ATTEMPTS = 3;
+const MATCH_CACHE_REBUILD_RETRY_DELAY_MS = 50;
 
 export type CachedSeat = 1 | 2;
 
@@ -28,6 +34,7 @@ export interface CachedPlayer {
 
 export interface CachedAnswer {
   userId: string;
+  questionKind: MatchQuestionKind;
   selectedIndex: number | null;
   isCorrect: boolean;
   timeMs: number;
@@ -36,10 +43,15 @@ export interface CachedAnswer {
   phaseRound: number | null;
   shooterSeat: CachedSeat | null;
   answeredAt: string | null;
+  foundCount?: number;
+  foundAnswerIds?: string[];
+  submittedOrderIds?: string[];
+  clueIndex?: number | null;
 }
 
 export interface CachedQuestion {
   qIndex: number;
+  kind: MatchQuestionKind;
   questionId: string;
   correctIndex: number;
   phaseKind: MatchPhaseKind;
@@ -49,6 +61,8 @@ export interface CachedQuestion {
   shownAt: string | null;
   deadlineAt: string | null;
   questionDTO: GameQuestionDTO;
+  evaluation: MatchQuestionEvaluation;
+  reveal: MatchRoundReveal;
 }
 
 export interface CachedChanceCardUse {
@@ -195,6 +209,7 @@ function toCachedAnswer(rows: {
   for (const row of rows) {
     answers[row.user_id] = {
       userId: row.user_id,
+      questionKind: 'multipleChoice',
       selectedIndex: row.selected_index,
       isCorrect: row.is_correct,
       timeMs: row.time_ms,
@@ -352,16 +367,23 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
 
     const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
     span.setAttribute('quizball.current_q_index', currentQuestionIndex);
-    const questionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
+    const rawQuestionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
+    const questionPayload = normalizeMatchQuestionPayload(rawQuestionPayload);
     const timing = questionPayload
       ? await matchesRepo.getMatchQuestionTiming(matchId, currentQuestionIndex)
       : null;
 
     if (questionPayload) {
+      const correctIndex = getCachedMultipleChoiceCorrectIndex({
+        kind: questionPayload.question.kind,
+        evaluation: questionPayload.evaluation,
+        questionDTO: questionPayload.question,
+      }) ?? 0;
       cache.currentQuestion = {
         qIndex: currentQuestionIndex,
+        kind: questionPayload.question.kind,
         questionId: questionPayload.question.id,
-        correctIndex: questionPayload.correctIndex,
+        correctIndex,
         phaseKind: questionPayload.phaseKind,
         phaseRound: questionPayload.phaseRound,
         shooterSeat: questionPayload.shooterSeat,
@@ -369,6 +391,8 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
         shownAt: timing?.shown_at ?? null,
         deadlineAt: timing?.deadline_at ?? null,
         questionDTO: questionPayload.question,
+        evaluation: questionPayload.evaluation,
+        reveal: questionPayload.reveal,
       };
       const answers = await matchesRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
       cache.answers = toCachedAnswer(answers);
@@ -396,15 +420,52 @@ export async function getMatchCacheOrRebuild(matchId: string): Promise<MatchCach
       return cached;
     }
 
-    const rebuilt = await rebuildCacheFromDB(matchId);
-    if (!rebuilt) {
-      span.setAttribute('quizball.cache_source', 'missing');
-      return null;
+    const rebuildLockKey = `match:cache:rebuild:${matchId}`;
+
+    for (let attempt = 0; attempt < MATCH_CACHE_REBUILD_RETRY_ATTEMPTS; attempt += 1) {
+      const lock = await acquireLock(rebuildLockKey, MATCH_CACHE_REBUILD_LOCK_TTL_MS);
+      if (!lock.acquired || !lock.token) {
+        const retryCached = await getMatchCache(matchId);
+        if (retryCached) {
+          span.setAttribute('quizball.cache_source', 'redis_retry');
+          return retryCached;
+        }
+
+        if (attempt < MATCH_CACHE_REBUILD_RETRY_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, MATCH_CACHE_REBUILD_RETRY_DELAY_MS));
+        }
+        continue;
+      }
+
+      try {
+        const cachedAfterLock = await getMatchCache(matchId);
+        if (cachedAfterLock) {
+          span.setAttribute('quizball.cache_source', 'redis_retry');
+          return cachedAfterLock;
+        }
+
+        const rebuilt = await rebuildCacheFromDB(matchId);
+        if (!rebuilt) {
+          span.setAttribute('quizball.cache_source', 'missing');
+          return null;
+        }
+
+        span.setAttribute('quizball.cache_source', 'db_rebuild');
+        await setMatchCache(rebuilt);
+        return rebuilt;
+      } finally {
+        await releaseLock(rebuildLockKey, lock.token);
+      }
     }
 
-    span.setAttribute('quizball.cache_source', 'db_rebuild');
-    await setMatchCache(rebuilt);
-    return rebuilt;
+    const finalRetryCached = await getMatchCache(matchId);
+    if (finalRetryCached) {
+      span.setAttribute('quizball.cache_source', 'redis_retry');
+      return finalRetryCached;
+    }
+
+    span.setAttribute('quizball.cache_source', 'missing');
+    return null;
   });
 }
 

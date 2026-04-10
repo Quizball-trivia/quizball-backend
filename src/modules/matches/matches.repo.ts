@@ -13,6 +13,7 @@ import type {
   MatchQuestionPhaseKind,
 } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
+import type { QuestionType } from '../questions/questions.schemas.js';
 
 export interface CreateMatchData {
   lobbyId: string | null;
@@ -254,23 +255,31 @@ export const matchesRepo = {
     return [...sampled, ...fallback];
   },
 
-  async getRandomQuestionForMatch(params: {
+  async getRandomQuestionCandidatesForMatch(params: {
     matchId: string;
     categoryIds: string[];
-    difficulties: Array<'easy' | 'medium' | 'hard'>;
+    difficulties?: Array<'easy' | 'medium' | 'hard'>;
+    questionTypes?: QuestionType[];
+    limit?: number;
   }): Promise<{
     id: string;
     prompt: Record<string, string>;
     difficulty: string;
     category_id: string;
     payload: unknown;
-  } | null> {
-    return withSpan('db.matches.get_random_question_for_match', {
+  }[]> {
+    return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
       'db.operation.name': 'select',
       'quizball.match_id': params.matchId,
       'quizball.category_count': params.categoryIds.length,
-      'quizball.difficulty_count': params.difficulties.length,
+      'quizball.difficulty_count': params.difficulties?.length ?? 0,
     }, async (span) => {
+      const questionTypes = params.questionTypes?.length
+        ? params.questionTypes
+        : ['mcq_single'];
+      const includesMcq = questionTypes.includes('mcq_single');
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+
       const rows = await sql.unsafe<{
         id: string;
         prompt: Record<string, string>;
@@ -284,11 +293,11 @@ export const matchesRepo = {
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
         WHERE q.category_id = ANY($2::uuid[])
-          AND q.difficulty = ANY($3::text[])
           AND c.is_active = true
           AND q.status = 'published'
-          AND q.type = 'mcq_single'
-          ${VALID_PAYLOAD_CONDITIONS}
+          AND q.type = ANY($3::text[])
+          ${includesMcq ? `AND (q.type <> 'mcq_single' OR (${perRowMcqPayloadValidation}))` : ''}
+          ${params.difficulties?.length ? 'AND q.difficulty = ANY($4::text[])' : ''}
           AND NOT EXISTS (
             SELECT 1
             FROM match_questions mq
@@ -296,13 +305,36 @@ export const matchesRepo = {
               AND mq.question_id = q.id
           )
         ORDER BY RANDOM()
-        LIMIT 1
+        LIMIT $${params.difficulties?.length ? 5 : 4}
         `,
-        [params.matchId, params.categoryIds, params.difficulties]
+        [
+          params.matchId,
+          params.categoryIds,
+          questionTypes,
+          ...(params.difficulties?.length ? [params.difficulties] : []),
+          params.limit ?? 1,
+        ]
       );
       span.setAttribute('quizball.question_found', rows.length > 0);
-      return rows[0] ?? null;
+      span.setAttribute('quizball.question_candidate_count', rows.length);
+      return rows;
     });
+  },
+
+  async getRandomQuestionForMatch(params: {
+    matchId: string;
+    categoryIds: string[];
+    difficulties?: Array<'easy' | 'medium' | 'hard'>;
+    questionTypes?: QuestionType[];
+  }): Promise<{
+    id: string;
+    prompt: Record<string, string>;
+    difficulty: string;
+    category_id: string;
+    payload: unknown;
+  } | null> {
+    const rows = await this.getRandomQuestionCandidatesForMatch({ ...params, limit: 1 });
+    return rows[0] ?? null;
   },
 
   async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {

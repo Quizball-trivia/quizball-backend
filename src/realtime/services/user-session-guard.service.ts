@@ -10,6 +10,9 @@ import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
+import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
+import { matchDisconnectKey, matchPresenceKey } from '../match-keys.js';
+import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -111,6 +114,50 @@ async function cleanupStaleOrphanActiveMatch(
   }
 
   if (!staleByAge && !staleByNoSockets) return;
+
+  if (activeMatch.mode === 'ranked') {
+    const players = await matchesRepo.listMatchPlayers(activeMatch.id);
+    const finalized = await finalizeMatchAsForfeit({
+      matchId: activeMatch.id,
+      forfeitingUserId: userId,
+      activeMatch,
+      cleanupRedisKeys: [
+        rankedAiMatchKey(activeMatch.id),
+        ...players.flatMap((player) => [
+          matchDisconnectKey(activeMatch.id, player.user_id),
+          matchPresenceKey(activeMatch.id, player.user_id),
+        ]),
+      ],
+    });
+
+    if (finalized.completed) {
+      logger.warn(
+        {
+          userId,
+          matchId: activeMatch.id,
+          lobbyId: activeMatch.lobby_id,
+          startedAt: activeMatch.started_at,
+          staleByAge,
+          staleByNoSockets,
+        },
+        'Session guard finalized stale orphan ranked match as forfeit'
+      );
+      return;
+    }
+
+    logger.warn(
+      {
+        userId,
+        matchId: activeMatch.id,
+        lobbyId: activeMatch.lobby_id,
+        startedAt: activeMatch.started_at,
+        staleByAge,
+        staleByNoSockets,
+      },
+      'Session guard skipped ranked abandon fallback because forfeit finalization did not complete'
+    );
+    return;
+  }
 
   const abandoned = await matchesRepo.abandonMatch(activeMatch.id);
   if (!abandoned) return;

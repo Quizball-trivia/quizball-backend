@@ -4,6 +4,7 @@ import { progressionRepo, type GrantXpInput, type GrantXpResult } from '../progr
 import { storeRepo } from '../store/store.repo.js';
 import type { WalletRow } from '../store/store.types.js';
 import type {
+  DailyChallengeAvailableCategoryRow,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
   DailyChallengeType,
@@ -227,6 +228,39 @@ export const dailyChallengesRepo = {
         AND c.is_active = true
         ${categoryFilter}
       ${limitClause}
+    `;
+  },
+
+  async listAvailableCategoriesByQuestionType(
+    questionType: string,
+    options?: { requireDifficultyCoverage?: boolean }
+  ): Promise<DailyChallengeAvailableCategoryRow[]> {
+    const difficultyCoverageClause = options?.requireDifficultyCoverage
+      ? sql`
+        HAVING
+          COUNT(*) FILTER (WHERE q.difficulty = 'easy') > 0
+          AND COUNT(*) FILTER (WHERE q.difficulty = 'medium') > 0
+          AND COUNT(*) FILTER (WHERE q.difficulty = 'hard') > 0
+      `
+      : sql``;
+
+    return sql<DailyChallengeAvailableCategoryRow[]>`
+      SELECT
+        c.id,
+        c.slug,
+        c.name,
+        COUNT(*)::int AS question_count,
+        COUNT(*) FILTER (WHERE q.difficulty = 'easy')::int AS easy_count,
+        COUNT(*) FILTER (WHERE q.difficulty = 'medium')::int AS medium_count,
+        COUNT(*) FILTER (WHERE q.difficulty = 'hard')::int AS hard_count
+      FROM questions q
+      JOIN categories c ON c.id = q.category_id
+      WHERE q.status = 'published'
+        AND q.type = ${questionType}
+        AND c.is_active = true
+      GROUP BY c.id, c.slug, c.name
+      ${difficultyCoverageClause}
+      ORDER BY COUNT(*) DESC, c.slug ASC
     `;
   },
 };

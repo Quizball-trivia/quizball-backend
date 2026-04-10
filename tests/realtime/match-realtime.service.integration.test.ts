@@ -4,6 +4,10 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
+const resumePossessionMatchQuestionMock = vi.fn();
+const resumePartyQuizQuestionMock = vi.fn();
+const emitPossessionStateToSocketMock = vi.fn();
+const emitPartyQuizStateToSocketMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const getLobbyByIdMock = vi.fn();
 const createLobbyMock = vi.fn();
@@ -17,16 +21,27 @@ const prepareForLobbyEntryMock = vi.fn();
 
 type FakeRedisStore = {
   values: Map<string, string>;
+  ttls: Map<string, number>;
 };
 
 const fakeRedisStore: FakeRedisStore = {
   values: new Map(),
+  ttls: new Map(),
 };
 
 const fakeRedis = {
   isOpen: false,
-  async set(key: string, value: string): Promise<'OK'> {
+  async set(key: string, value: string, options?: { EX?: number; PX?: number; NX?: boolean }): Promise<'OK' | null> {
+    if (options?.NX && fakeRedisStore.values.has(key)) {
+      return null;
+    }
     fakeRedisStore.values.set(key, value);
+    const ttlSeconds = options?.EX ?? (options?.PX ? Math.ceil(options.PX / 1000) : null);
+    if (ttlSeconds) {
+      fakeRedisStore.ttls.set(key, ttlSeconds);
+    } else {
+      fakeRedisStore.ttls.delete(key);
+    }
     return 'OK';
   },
   async get(key: string): Promise<string | null> {
@@ -43,8 +58,17 @@ const fakeRedis = {
   async exists(key: string): Promise<number> {
     return fakeRedisStore.values.has(key) ? 1 : 0;
   },
-  async ttl(_key: string): Promise<number> {
-    return 30;
+  async ttl(key: string): Promise<number> {
+    return fakeRedisStore.ttls.get(key) ?? -1;
+  },
+  async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
+    const key = payload.keys[0];
+    const token = payload.arguments[0];
+    if (!key || !token) return 0;
+    if (fakeRedisStore.values.get(key) !== token) return 0;
+    fakeRedisStore.values.delete(key);
+    fakeRedisStore.ttls.delete(key);
+    return 1;
   },
 };
 
@@ -181,6 +205,24 @@ vi.mock('../../src/realtime/match-flow.js', () => ({
   sendMatchQuestion: (...args: unknown[]) => sendMatchQuestionMock(...args),
 }));
 
+vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/possession-match-flow.js')>();
+  return {
+    ...actual,
+    emitPossessionStateToSocket: (...args: unknown[]) => emitPossessionStateToSocketMock(...args),
+    resumePossessionMatchQuestion: (...args: unknown[]) => resumePossessionMatchQuestionMock(...args),
+  };
+});
+
+vi.mock('../../src/realtime/party-quiz-match-flow.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/party-quiz-match-flow.js')>();
+  return {
+    ...actual,
+    emitPartyQuizStateToSocket: (...args: unknown[]) => emitPartyQuizStateToSocketMock(...args),
+    resumePartyQuizQuestion: (...args: unknown[]) => resumePartyQuizQuestionMock(...args),
+  };
+});
+
 function createIoMock(): QuizballServer {
   const emit = vi.fn();
   const to = vi.fn(() => ({ emit }));
@@ -226,9 +268,14 @@ describe('match-realtime.service high-risk integration behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fakeRedisStore.values.clear();
+    fakeRedisStore.ttls.clear();
     fakeRedis.isOpen = false;
     resolveRoundMock.mockResolvedValue(undefined);
     sendMatchQuestionMock.mockResolvedValue(undefined);
+    resumePossessionMatchQuestionMock.mockResolvedValue(false);
+    resumePartyQuizQuestionMock.mockResolvedValue(false);
+    emitPossessionStateToSocketMock.mockResolvedValue(undefined);
+    emitPartyQuizStateToSocketMock.mockResolvedValue(undefined);
     listMembersWithUserMock.mockResolvedValue([
       { user_id: 'u1', nickname: 'u1', avatar_url: null },
       { user_id: 'u2', nickname: 'u2', avatar_url: null },
@@ -376,12 +423,317 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 30000,
+        graceMs: 60000,
+        remainingReconnects: 2,
       })
     );
 
     const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
+  });
+
+  it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+      const socket = createSocketMock('u1', 'm1');
+      const nowIso = new Date().toISOString();
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 0,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'ranked_sim',
+          winnerDecisionMethod: null,
+        },
+      });
+
+      await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+      fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+      expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
+      expect(abandonMatchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u1');
+    const io = createIoWithUserSocket('u1', socket);
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+    getMatchQuestionMock.mockResolvedValue({
+      match_id: 'm1',
+      q_index: 3,
+    });
+    resumePossessionMatchQuestionMock.mockResolvedValue(true);
+
+    await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
+
+    expect(resumePossessionMatchQuestionMock).toHaveBeenCalledWith(
+      io,
+      'm1',
+      3,
+      expect.any(Number)
+    );
+    expect(resolveRoundMock).not.toHaveBeenCalled();
+    expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15d: fourth disconnect forfeits immediately without emitting rejoin_available', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '3');
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+        winnerDecisionMethod: null,
+      },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.anything()
+    );
+  });
+
+  it('S15e: rejoin while opponent is still disconnected keeps the match paused and reports remaining reconnects', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u1');
+    const io = createIoWithUserSocket('u1', socket);
+    const nowIso = new Date().toISOString();
+    const userRoomEmit = vi.fn();
+    (io.to as unknown as ReturnType<typeof vi.fn>).mockImplementation((room: string) => ({
+      emit: room === 'user:u1' ? userRoomEmit : vi.fn(),
+    }));
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 4_000));
+    fakeRedisStore.values.set('match:reconnect_count:m1:u2', '2');
+    fakeRedisStore.ttls.set('match:grace:m1', 42);
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+
+    await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
+
+    expect(userRoomEmit).toHaveBeenCalledWith(
+      'match:opponent_disconnected',
+      expect.objectContaining({
+        matchId: 'm1',
+        opponentId: 'u2',
+        graceMs: 42_000,
+        remainingReconnects: 1,
+      })
+    );
+    expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
+    expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15f: leave during halftime still enters ranked pause/rejoin flow', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 6,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+        phase: 'HALFTIME',
+      },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.objectContaining({
+        matchId: 'm1',
+        graceMs: 60000,
+        remainingReconnects: 2,
+      })
+    );
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15g: leave during penalties still enters ranked pause/rejoin flow', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 14,
+      total_questions: 15,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+        phase: 'PENALTY_SHOOTOUT',
+      },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.objectContaining({
+        matchId: 'm1',
+        graceMs: 60000,
+        remainingReconnects: 2,
+      })
+    );
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15h: special ranked answer handlers reject submissions while the match is paused', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const countdownSocket = createSocketMock('u1', 'm1');
+    const putInOrderSocket = createSocketMock('u1', 'm1');
+    const cluesSocket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now()));
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+    });
+
+    await matchRealtimeService.handleCountdownGuess(countdownSocket, {
+      matchId: 'm1',
+      qIndex: 3,
+      guess: 'Henry',
+    });
+    await matchRealtimeService.handlePutInOrderAnswer(io, putInOrderSocket, {
+      matchId: 'm1',
+      qIndex: 4,
+      orderedItemIds: ['a', 'b', 'c'],
+      timeMs: 1200,
+    });
+    await matchRealtimeService.handleCluesAnswer(io, cluesSocket, {
+      matchId: 'm1',
+      qIndex: 5,
+      guess: 'Didier Drogba',
+      timeMs: 1400,
+    });
+
+    expect(countdownSocket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PAUSED',
+      message: 'Match is paused. Please wait for your opponent to return.',
+    });
+    expect(putInOrderSocket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PAUSED',
+      message: 'Match is paused. Please wait for your opponent to return.',
+    });
+    expect(cluesSocket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PAUSED',
+      message: 'Match is paused. Please wait for your opponent to return.',
+    });
   });
 
   it('S14: emits ack/opponent event after persisted answer and resolves when both answered', async () => {

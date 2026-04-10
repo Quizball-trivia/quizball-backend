@@ -3,6 +3,15 @@ import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
 import { NotFoundError, pickI18nText } from '../../core/index.js';
 
+/** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 function toLobbyMember(row: LobbyMemberWithUser, hostUserId: string): LobbyMember {
   return {
     userId: row.user_id,
@@ -26,6 +35,7 @@ interface CategoryCacheEntry {
 }
 
 let validCategoryCache: CategoryCacheEntry | null = null;
+let rankedCategoryCache: CategoryCacheEntry | null = null;
 
 async function getValidCategories(
   minQuestions: number
@@ -41,9 +51,21 @@ async function getValidCategories(
   return rows;
 }
 
+async function getRankedCategories(): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+  const now = Date.now();
+  if (rankedCategoryCache && rankedCategoryCache.expiresAt > now) {
+    return rankedCategoryCache.rows;
+  }
+
+  const rows = await lobbiesRepo.listAllRankedEligibleCategories();
+  rankedCategoryCache = { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS };
+  return rows;
+}
+
 /** Invalidate the category cache (e.g., after question import). */
 export function invalidateCategoryCache(): void {
   validCategoryCache = null;
+  rankedCategoryCache = null;
 }
 
 export const lobbiesService = {
@@ -78,7 +100,7 @@ export const lobbiesService = {
   async selectRandomCategories(count: number): Promise<DraftCategory[]> {
     const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
     // Shuffle and take `count` from cached set
-    const shuffled = [...allValid].sort(() => Math.random() - 0.5);
+    const shuffled = shuffle([...allValid]);
     const selected = shuffled.slice(0, count);
 
     return selected.map((row) => ({
@@ -102,6 +124,36 @@ export const lobbiesService = {
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
+  },
+
+  async selectRandomRankedCategories(count: number): Promise<DraftCategory[]> {
+    const allRanked = await getRankedCategories();
+    const shuffled = shuffle([...allRanked]);
+    return shuffled.slice(0, count).map((row) => ({
+      id: row.id,
+      name: pickI18nText(row.name),
+      icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
+    }));
+  },
+
+  async selectRandomRankedCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
+    const allRanked = await getRankedCategories();
+    const excludeSet = new Set(excludeCategoryIds);
+    const filtered = allRanked.filter((row) => !excludeSet.has(row.id));
+    const shuffled = shuffle([...filtered]);
+    const selected = shuffled.slice(0, count);
+
+    return selected.map((row) => ({
+      id: row.id,
+      name: pickI18nText(row.name),
+      icon: row.icon ?? null,
+      imageUrl: row.image_url ?? null,
+    }));
+  },
+
+  async listRankedEligibleCategoryIds(categoryIds: string[]): Promise<string[]> {
+    return lobbiesRepo.listRankedEligibleCategoryIds(categoryIds);
   },
 
   async getLobbyCategories(lobbyId: string): Promise<DraftCategory[]> {

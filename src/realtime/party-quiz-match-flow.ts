@@ -24,6 +24,7 @@ import {
 } from './match-keys.js';
 import { buildStandings, bumpStateVersion } from './match-utils.js';
 import { deleteMatchCache } from './match-cache.js';
+import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import type { MatchAnswerPayload } from './schemas/match.schemas.js';
 import type {
   MatchAnswerAckPayload,
@@ -120,13 +121,40 @@ export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): v
 }
 
 function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
+  schedulePartyQuizTimeoutAt(io, matchId, qIndex, new Date(Date.now() + PARTY_QUESTION_TIME_MS));
+}
+
+function schedulePartyQuizTimeoutAt(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  deadlineAt: Date
+): void {
   cancelPartyQuizQuestionTimer(matchId, qIndex);
   const timer = setTimeout(() => {
     void resolvePartyQuizRound(io, matchId, qIndex, true).catch((error) => {
       logger.error({ error, matchId, qIndex }, 'Failed to resolve party quiz round from timeout');
     });
-  }, PARTY_QUESTION_TIME_MS);
+  }, Math.max(0, deadlineAt.getTime() - Date.now()));
   questionTimers.set(questionTimerKey(matchId, qIndex), timer);
+}
+
+function computeResumedDeadlineAt(
+  shownAtRaw: string | null,
+  deadlineAtRaw: string | null,
+  pauseStartedAtMs: number,
+  resumedAtMs: number
+): Date {
+  const shownAtMs = shownAtRaw ? new Date(shownAtRaw).getTime() : Number.NaN;
+  const deadlineAtMs = deadlineAtRaw ? new Date(deadlineAtRaw).getTime() : Number.NaN;
+
+  if (!Number.isFinite(shownAtMs) || !Number.isFinite(deadlineAtMs) || deadlineAtMs <= shownAtMs) {
+    return new Date(resumedAtMs + PARTY_QUESTION_TIME_MS);
+  }
+
+  const effectivePauseStartMs = Math.min(Math.max(pauseStartedAtMs, shownAtMs), deadlineAtMs);
+  const remainingMs = Math.max(0, deadlineAtMs - effectivePauseStartMs);
+  return new Date(resumedAtMs + remainingMs);
 }
 
 function buildAnswerAckPayload(params: {
@@ -141,6 +169,7 @@ function buildAnswerAckPayload(params: {
   return {
     matchId: params.matchId,
     qIndex: params.qIndex,
+    questionKind: 'multipleChoice',
     selectedIndex: params.selectedIndex,
     isCorrect: params.isCorrect,
     correctIndex: params.correctIndex,
@@ -151,6 +180,16 @@ function buildAnswerAckPayload(params: {
     phaseRound: null,
     shooterSeat: null,
   };
+}
+
+function getValidatedPartyQuizCorrectIndex(
+  payload: Awaited<ReturnType<typeof matchesService.buildMatchQuestionPayload>> | ReturnType<typeof normalizeMatchQuestionPayload>
+): number | null {
+  if (!payload || payload.question.kind !== 'multipleChoice') {
+    return null;
+  }
+
+  return getMultipleChoiceCorrectIndexFromPayload(payload);
 }
 
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<MatchFinalResultsPayload | null> {
@@ -285,7 +324,7 @@ export async function sendPartyQuizQuestion(
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-    let payload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
+    let payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
     let questionSource: 'existing' | 'picked' = 'existing';
     if (!payload) {
       const picked = await matchesRepo.getRandomQuestionForMatch({
@@ -321,7 +360,7 @@ export async function sendPartyQuizQuestion(
       });
 
       questionSource = 'picked';
-      payload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
+      payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
     }
 
     if (!payload) {
@@ -346,7 +385,6 @@ export async function sendPartyQuizQuestion(
       total: match.total_questions,
       question: payload.question,
       deadlineAt: deadlineAt.toISOString(),
-      correctIndex: payload.correctIndex,
       phaseKind: 'normal',
       phaseRound: qIndex + 1,
       shooterSeat: null,
@@ -361,8 +399,62 @@ export async function sendPartyQuizQuestion(
       source: questionSource,
     });
     schedulePartyQuizTimeout(io, matchId, qIndex);
-    return { correctIndex: payload.correctIndex };
+    const correctIndex = getValidatedPartyQuizCorrectIndex(payload);
+    if (correctIndex === null) {
+      logger.error({ matchId, qIndex }, 'Party quiz question payload is invalid after normalization');
+      return null;
+    }
+    return {
+      correctIndex,
+    };
   });
+}
+
+export async function resumePartyQuizQuestion(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  pauseStartedAtMs: number
+): Promise<boolean> {
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match || match.status !== 'active') return false;
+  if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    return false;
+  }
+
+  const question = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
+  if (!question) {
+    logger.warn({ matchId, qIndex }, 'Unable to resume party quiz question without payload');
+    return false;
+  }
+
+  const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
+  const nowMs = Date.now();
+  const shownAt = new Date(nowMs);
+  const deadlineAt = computeResumedDeadlineAt(
+    timing?.shown_at ?? null,
+    timing?.deadline_at ?? null,
+    pauseStartedAtMs,
+    nowMs
+  );
+
+  await matchesRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt);
+  await emitPartyQuizState(io, matchId);
+
+  io.to(`match:${matchId}`).emit('match:question', {
+    matchId,
+    qIndex,
+    total: match.total_questions,
+    question: question.question,
+    deadlineAt: deadlineAt.toISOString(),
+    phaseKind: 'normal',
+    phaseRound: qIndex + 1,
+    shooterSeat: null,
+    attackerSeat: null,
+  });
+
+  schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
+  return true;
 }
 
 export async function resolvePartyQuizRound(
@@ -401,6 +493,11 @@ export async function resolvePartyQuizRound(
         logger.error({ matchId, qIndex }, 'Party quiz round resolve failed: question payload missing');
         return;
       }
+      const correctIndex = getValidatedPartyQuizCorrectIndex(question);
+      if (correctIndex === null) {
+        logger.error({ matchId, qIndex }, 'Party quiz round resolve failed: question payload is not a valid MCQ');
+        return;
+      }
 
       const players = await matchesRepo.listMatchPlayers(matchId);
       const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
@@ -431,7 +528,12 @@ export async function resolvePartyQuizRound(
       io.to(`match:${matchId}`).emit('match:round_result', {
         matchId,
         qIndex,
-        correctIndex: question.correctIndex,
+        questionKind: 'multipleChoice',
+        correctIndex,
+        reveal: {
+          kind: 'multipleChoice',
+          correctIndex,
+        },
         players: roundPlayers,
         rankingOrder: standings.map((standing) => standing.userId),
         phaseKind: 'normal',
@@ -527,7 +629,9 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    const question = await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex);
+    const question = normalizeMatchQuestionPayload(
+      await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
+    );
     if (!question) {
       socket.emit('error', {
         code: 'INVALID_QUESTION',
@@ -536,7 +640,16 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    const isCorrect = payload.selectedIndex === question.correctIndex;
+    const correctIndex = getMultipleChoiceCorrectIndexFromPayload(question);
+    if (correctIndex === null) {
+      socket.emit('error', {
+        code: 'INVALID_QUESTION',
+        message: 'Party quiz only supports multiple-choice questions',
+      });
+      return;
+    }
+
+    const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
     const inserted = await matchesRepo.insertMatchAnswerIfMissing({
@@ -596,7 +709,7 @@ export async function handlePartyQuizAnswer(
           qIndex: payload.qIndex,
           selectedIndex: payload.selectedIndex,
           isCorrect,
-          correctIndex: question.correctIndex,
+          correctIndex,
           myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
           pointsEarned,
         })

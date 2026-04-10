@@ -28,7 +28,9 @@ import {
   rankedProfileResponseSchema,
 } from '../../modules/ranked/ranked.schemas.js';
 import {
+  adminDailyChallengeCategoryOptionSchema,
   dailyChallengeMetadataSchema,
+  dailyChallengeConfigResponseSchema,
   listDailyChallengesResponseSchema,
   listAdminDailyChallengesResponseSchema,
   dailyChallengeSessionResponseSchema,
@@ -1976,21 +1978,18 @@ registry.registerPath({
 // =============================================================================
 
 const dailyChallengeSettingsOpenApiSchema = dailyChallengeSettingsSchema.openapi('DailyChallengeSettings');
-
-const adminDailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema
-  .extend({
-    sortOrder: z.number().int(),
-    isActive: z.boolean(),
-    settings: dailyChallengeSettingsOpenApiSchema,
-  })
-  .openapi('AdminDailyChallengeConfigResponse');
+const adminDailyChallengeCategoryOptionOpenApiSchema =
+  adminDailyChallengeCategoryOptionSchema.openapi('AdminDailyChallengeCategoryOption');
+const adminDailyChallengeConfigResponseOpenApiSchema =
+  dailyChallengeConfigResponseSchema.openapi('AdminDailyChallengeConfigResponse');
 
 registry.register('DailyChallengeMetadata', dailyChallengeMetadataSchema.openapi('DailyChallengeMetadata'));
 registry.register('DailyChallengeSettings', dailyChallengeSettingsOpenApiSchema);
+registry.register('AdminDailyChallengeCategoryOption', adminDailyChallengeCategoryOptionOpenApiSchema);
 registry.register('DailyChallengeSessionResponse', dailyChallengeSessionResponseSchema.openapi('DailyChallengeSessionResponse'));
 registry.register('CompleteDailyChallengeResponse', completeDailyChallengeResponseSchema.openapi('CompleteDailyChallengeResponse'));
 registry.register('ResetDailyChallengeResponse', resetDailyChallengeResponseSchema.openapi('ResetDailyChallengeResponse'));
-registry.register('AdminDailyChallengeConfigResponse', adminDailyChallengeConfigResponseSchema);
+registry.register('AdminDailyChallengeConfigResponse', adminDailyChallengeConfigResponseOpenApiSchema);
 
 // =============================================================================
 // Daily Challenge Routes
@@ -2149,7 +2148,7 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Updated admin daily challenge config',
-      content: { 'application/json': { schema: adminDailyChallengeConfigResponseSchema } },
+      content: { 'application/json': { schema: adminDailyChallengeConfigResponseOpenApiSchema } },
     },
     401: {
       description: 'Not authenticated',

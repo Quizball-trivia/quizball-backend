@@ -112,12 +112,20 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         }
       }
 
+      const useRankedCategories = state.variant === 'ranked_sim';
+      const selectExcluding = useRankedCategories
+        ? lobbiesService.selectRandomRankedCategoriesExcluding.bind(lobbiesService)
+        : lobbiesService.selectRandomCategoriesExcluding.bind(lobbiesService);
+      const selectAny = useRankedCategories
+        ? lobbiesService.selectRandomRankedCategories.bind(lobbiesService)
+        : lobbiesService.selectRandomCategories.bind(lobbiesService);
+
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
-      const primary = await lobbiesService.selectRandomCategoriesExcluding(3, Array.from(excludedIds));
+      const primary = await selectExcluding(3, Array.from(excludedIds));
       let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
 
       if (categories.length < 3) {
-        const fallback = await lobbiesService.selectRandomCategories(9);
+        const fallback = await selectAny(9);
         categories = uniqueDraftCategories([...categories, ...fallback]).filter((category) => !excludedIds.has(category.id));
       }
 
@@ -131,7 +139,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           },
           'Insufficient unique halftime categories excluding first-half draft categories; relaxing exclusion'
         );
-        const relaxed = await lobbiesService.selectRandomCategoriesExcluding(3, [categoryAId]);
+        const relaxed = await selectExcluding(3, [categoryAId]);
         categories = uniqueDraftCategories([...categories, ...relaxed]).filter((category) => category.id !== categoryAId);
       }
 

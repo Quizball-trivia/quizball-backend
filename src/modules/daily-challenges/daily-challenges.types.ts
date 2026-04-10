@@ -56,6 +56,16 @@ export interface QuestionContentRow {
   category_name: Json;
 }
 
+export interface DailyChallengeAvailableCategoryRow {
+  id: string;
+  slug: string;
+  name: Json;
+  question_count: number;
+  easy_count: number;
+  medium_count: number;
+  hard_count: number;
+}
+
 export interface ResetDailyChallengeResult {
   challengeType: DailyChallengeType;
   reset: true;

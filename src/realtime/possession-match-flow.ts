@@ -12,9 +12,10 @@ import { storeService } from '../modules/store/store.service.js';
 import {
   matchesService,
   POSSESSION_QUESTIONS_PER_HALF,
+  type MatchQuestionEvaluation,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
-import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
+import { questionPayloadSchema, type QuestionType } from '../modules/questions/questions.schemas.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { rankedAiMatchKey } from './ai-ranked.constants.js';
 import {
@@ -30,15 +31,22 @@ import {
   type CachedSeat,
   type MatchCache,
 } from './match-cache.js';
+import { getCachedMultipleChoiceCorrectIndex, getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { getRedisClient } from './redis.js';
 import { questionTimerKey, lastMatchKey } from './match-keys.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
-import type { MatchRoundResultDeltas } from './socket.types.js';
+import type {
+  MatchCluesGuessAckPayload,
+  MatchCountdownGuessAckPayload,
+  MatchQuestionKind,
+  MatchRoundResultDeltas,
+} from './socket.types.js';
 import { clamp, calculatePoints } from './scoring.js';
 
 // ── Re-exports from extracted sub-modules ──
 import {
   QUESTION_TIME_MS,
+  getQuestionDurationMs,
   ROUND_RESULT_DELAY_MS,
   PENALTY_INTRO_DELAY_MS,
   TIMEOUT_RESOLVE_GRACE_MS,
@@ -67,6 +75,32 @@ import { createPossessionHalftime, HALFTIME_DURATION_MS, HALFTIME_POST_BAN_REVEA
 // ── Module-scoped Maps for timers ──
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
+
+const NORMAL_HALF_SEQUENCE: QuestionType[] = [
+  'mcq_single',
+  'mcq_single',
+  'mcq_single',
+  'countdown_list',
+  'put_in_order',
+  'clue_chain',
+];
+const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
+const GOAL_ROUND_NEXT_QUESTION_EXTRA_DELAY_MS = 2500;
+
+const CLUES_POINTS_BY_INDEX = [200, 150, 100, 50, 25] as const;
+
+function getNextQuestionDelayMs(params: {
+  phase: PossessionStatePayload['phase'];
+  goalScoredBySeat: Seat | null;
+}): number {
+  if (params.phase === 'PENALTY_SHOOTOUT') {
+    return PENALTY_INTRO_DELAY_MS;
+  }
+
+  return params.goalScoredBySeat
+    ? ROUND_RESULT_DELAY_MS + GOAL_ROUND_NEXT_QUESTION_EXTRA_DELAY_MS
+    : ROUND_RESULT_DELAY_MS;
+}
 
 // ── Initialize AI sub-module ──
 // Forward declaration resolved: resolvePossessionRound is defined below and passed as callback.
@@ -165,18 +199,50 @@ function scheduleQuestionTimeout(
   questionTimers.set(key, timeout);
 }
 
+function computeResumedPossessionTiming(params: {
+  shownAtRaw: string | null;
+  deadlineAtRaw: string | null;
+  pauseStartedAtMs: number;
+  resumedAtMs: number;
+  qIndex: number;
+  state: PossessionStatePayload;
+  questionKind: MatchQuestionKind;
+}): { playableAt: Date; deadlineAt: Date } {
+  const shownAtMs = params.shownAtRaw ? new Date(params.shownAtRaw).getTime() : Number.NaN;
+  const deadlineAtMs = params.deadlineAtRaw ? new Date(params.deadlineAtRaw).getTime() : Number.NaN;
+
+  if (!Number.isFinite(shownAtMs) || !Number.isFinite(deadlineAtMs) || deadlineAtMs <= shownAtMs) {
+    return buildPlayableQuestionTiming({
+      qIndex: params.qIndex,
+      state: params.state,
+      questionKind: params.questionKind,
+    });
+  }
+
+  const effectivePauseStartMs = Math.min(params.pauseStartedAtMs, deadlineAtMs);
+  const revealRemainingMs = Math.max(0, shownAtMs - effectivePauseStartMs);
+  const answerRemainingMs = Math.max(0, deadlineAtMs - effectivePauseStartMs);
+
+  return {
+    playableAt: new Date(params.resumedAtMs + revealRemainingMs),
+    deadlineAt: new Date(params.resumedAtMs + answerRemainingMs),
+  };
+}
+
 function toAuthoritativeTimeMs(
   questionTiming: {
     shown_at: string | null;
     deadline_at: string | null;
   },
   nowMs: number,
-  fallbackTimeMs: number
+  fallbackTimeMs: number,
+  questionTimeMs = QUESTION_TIME_MS
 ): number {
   return computeAuthoritativeTimeMs(
     { shownAt: questionTiming.shown_at, deadlineAt: questionTiming.deadline_at },
     nowMs,
-    fallbackTimeMs
+    fallbackTimeMs,
+    questionTimeMs
   );
 }
 
@@ -186,9 +252,10 @@ function toAuthoritativeTimeMsFromCache(
     deadlineAt: string | null;
   },
   nowMs: number,
-  fallbackTimeMs: number
+  fallbackTimeMs: number,
+  questionTimeMs = QUESTION_TIME_MS
 ): number {
-  return computeAuthoritativeTimeMs(questionTiming, nowMs, fallbackTimeMs);
+  return computeAuthoritativeTimeMs(questionTiming, nowMs, fallbackTimeMs, questionTimeMs);
 }
 
 function computeAuthoritativeTimeMs(
@@ -197,23 +264,24 @@ function computeAuthoritativeTimeMs(
     deadlineAt: string | null;
   },
   nowMs: number,
-  fallbackTimeMs: number
+  fallbackTimeMs: number,
+  questionTimeMs = QUESTION_TIME_MS
 ): number {
   if (questionTiming.shownAt) {
     const shownAtMs = new Date(questionTiming.shownAt).getTime();
     if (Number.isFinite(shownAtMs)) {
-      return clamp(Math.round(nowMs - shownAtMs), 0, QUESTION_TIME_MS);
+      return clamp(Math.round(nowMs - shownAtMs), 0, questionTimeMs);
     }
   }
 
   if (questionTiming.deadlineAt) {
     const deadlineMs = new Date(questionTiming.deadlineAt).getTime();
     if (Number.isFinite(deadlineMs)) {
-      return clamp(Math.round(QUESTION_TIME_MS - (deadlineMs - nowMs)), 0, QUESTION_TIME_MS);
+      return clamp(Math.round(questionTimeMs - (deadlineMs - nowMs)), 0, questionTimeMs);
     }
   }
 
-  return clamp(Math.round(fallbackTimeMs), 0, QUESTION_TIME_MS);
+  return clamp(Math.round(fallbackTimeMs), 0, questionTimeMs);
 }
 
 function fireAndForget(label: string, fn: () => Promise<unknown>): void {
@@ -244,6 +312,8 @@ function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, {
   timeMs: number;
   pointsEarned: number;
   totalPoints: number;
+  foundCount?: number;
+  clueIndex?: number | null;
 }> {
   const payload: Record<string, {
     selectedIndex: number | null;
@@ -251,6 +321,8 @@ function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, {
     timeMs: number;
     pointsEarned: number;
     totalPoints: number;
+    foundCount?: number;
+    clueIndex?: number | null;
   }> = {};
 
   for (const player of cache.players) {
@@ -262,9 +334,106 @@ function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, {
       timeMs: answer.timeMs,
       pointsEarned: answer.pointsEarned,
       totalPoints: player.totalPoints,
+      foundCount: answer.foundCount,
+      clueIndex: answer.clueIndex ?? null,
     };
   }
   return payload;
+}
+
+function questionTypeForState(state: PossessionStatePayload): QuestionType {
+  if (state.phase === 'NORMAL_PLAY') {
+    const slot = state.normalQuestionsAnsweredInHalf % POSSESSION_QUESTIONS_PER_HALF;
+    return NORMAL_HALF_SEQUENCE[slot] ?? 'mcq_single';
+  }
+
+  return 'mcq_single';
+}
+
+function questionKindForType(type: QuestionType): MatchQuestionKind {
+  switch (type) {
+    case 'countdown_list':
+      return 'countdown';
+    case 'put_in_order':
+      return 'putInOrder';
+    case 'clue_chain':
+      return 'clues';
+    case 'mcq_single':
+    case 'true_false':
+    case 'input_text':
+    default:
+      return 'multipleChoice';
+  }
+}
+
+function normalizeAnswer(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function levenshtein(left: string, right: string): number {
+  const matrix: number[][] = [];
+  for (let row = 0; row <= right.length; row += 1) {
+    matrix[row] = [row];
+  }
+  for (let column = 0; column <= left.length; column += 1) {
+    matrix[0][column] = column;
+  }
+  for (let row = 1; row <= right.length; row += 1) {
+    for (let column = 1; column <= left.length; column += 1) {
+      matrix[row][column] = right[row - 1] === left[column - 1]
+        ? matrix[row - 1][column - 1]
+        : Math.min(
+            matrix[row - 1][column - 1] + 1,
+            matrix[row][column - 1] + 1,
+            matrix[row - 1][column] + 1
+          );
+    }
+  }
+  return matrix[right.length][left.length];
+}
+
+function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
+  const normalizedInput = normalizeAnswer(input);
+  if (!normalizedInput) return false;
+
+  return acceptedAnswers.some((acceptedAnswer) => {
+    const normalizedAccepted = normalizeAnswer(acceptedAnswer);
+    if (!normalizedAccepted) return false;
+    if (normalizedInput === normalizedAccepted) return true;
+    if (normalizedInput.length >= 4 && normalizedAccepted.includes(normalizedInput)) return true;
+    const maxDistance = normalizedAccepted.length > 6 ? 2 : 1;
+    return levenshtein(normalizedInput, normalizedAccepted) <= maxDistance;
+  });
+}
+
+function countdownMatch(
+  evaluation: Extract<MatchQuestionEvaluation, { kind: 'countdown' }>,
+  guess: string,
+  foundIds: Set<string>
+): { id: string; display: Record<string, string> } | null {
+  for (const answerGroup of evaluation.answerGroups) {
+    if (foundIds.has(answerGroup.id)) continue;
+    if (fuzzyMatchesAnswer(guess, answerGroup.acceptedAnswers)) {
+      return {
+        id: answerGroup.id,
+        display: answerGroup.display,
+      };
+    }
+  }
+
+  return null;
+}
+
+function clueIndexForTimeMs(clueCount: number, timeMs: number, questionTimeMs: number): number {
+  if (clueCount <= 1) return 0;
+  const sliceMs = questionTimeMs / clueCount;
+  return clamp(Math.floor(timeMs / sliceMs), 0, clueCount - 1);
 }
 
 function toCachedPlayers(rows: Array<{
@@ -354,8 +523,31 @@ function applyDeltaAndGoalCheck(
   return { delta, goalScoredBySeat: null };
 }
 
-function transitionAfterHalfBoundary(state: PossessionStatePayload): void {
+function beginSecondHalf(state: PossessionStatePayload): void {
+  state.half = 2;
+  state.phase = 'NORMAL_PLAY';
+  state.possessionDiff = 0;
+  state.kickOffSeat = nextSeat(state.kickOffSeat);
+  state.lastAttack.attackerSeat = null;
+  state.halftime.deadlineAt = null;
+  state.halftime.categoryOptions = [];
+  state.halftime.firstHalfShownCategoryIds = [];
+  state.halftime.firstBanSeat = null;
+  state.halftime.bans = { seat1: null, seat2: null };
+  state.currentQuestion = null;
+  state.normalQuestionsAnsweredInHalf = 0;
+}
+
+function transitionAfterHalfBoundary(
+  state: PossessionStatePayload,
+  options?: { presetSecondHalfCategoryId?: string | null }
+): void {
   if (state.half === 1) {
+    if (options?.presetSecondHalfCategoryId) {
+      beginSecondHalf(state);
+      return;
+    }
+
     state.phase = 'HALFTIME';
     state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
     return;
@@ -584,38 +776,57 @@ async function maybePickQuestionForState(
   questionId: string;
   categoryId: string;
   correctIndex: number;
+  questionKind: MatchQuestionKind;
 } | null> {
-  const preferredDifficulties = getDifficultyForState(state);
-
-  let row = await matchesRepo.getRandomQuestionForMatch({
-    matchId,
-    categoryIds,
-    difficulties: preferredDifficulties,
-  });
-
-  if (!row) {
-    row = await matchesRepo.getRandomQuestionForMatch({
+  const questionType = questionTypeForState(state);
+  const useDifficulty = questionType === 'mcq_single';
+  const preferredDifficulties = useDifficulty ? getDifficultyForState(state) : undefined;
+  const pickValidCandidate = async (
+    difficulties?: Array<'easy' | 'medium' | 'hard'>
+  ): Promise<{
+    questionId: string;
+    categoryId: string;
+    correctIndex: number;
+    questionKind: MatchQuestionKind;
+  } | null> => {
+    const rows = await matchesRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
-      difficulties: ['easy', 'medium', 'hard'],
+      difficulties,
+      questionTypes: [questionType],
+      limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
-  }
 
-  if (!row) return null;
+    for (const row of rows) {
+      const parsed = questionPayloadSchema.safeParse(row.payload);
+      if (!parsed.success || parsed.data.type !== questionType) {
+        continue;
+      }
 
-  const parsed = questionPayloadSchema.safeParse(row.payload);
-  if (!parsed.success || parsed.data.type !== 'mcq_single') {
+      const correctIndex = parsed.data.type === 'mcq_single'
+        ? parsed.data.options.findIndex((option) => option.is_correct)
+        : 0;
+      if (parsed.data.type === 'mcq_single' && correctIndex < 0) {
+        continue;
+      }
+
+      return {
+        questionId: row.id,
+        categoryId: row.category_id,
+        correctIndex,
+        questionKind: questionKindForType(questionType),
+      };
+    }
+
     return null;
+  };
+
+  let picked = await pickValidCandidate(preferredDifficulties);
+  if (!picked && useDifficulty) {
+    picked = await pickValidCandidate(['easy', 'medium', 'hard']);
   }
 
-  const correctIndex = parsed.data.options.findIndex((option) => option.is_correct);
-  if (correctIndex < 0) return null;
-
-  return {
-    questionId: row.id,
-    categoryId: row.category_id,
-    correctIndex,
-  };
+  return picked;
 }
 
 function categoryIdsForCurrentHalf(
@@ -810,15 +1021,17 @@ export async function sendPossessionMatchQuestion(
       span.setAttribute('quizball.question_row_preexisting', true);
     }
 
-    const payload = await matchesService.buildMatchQuestionPayload(matchId, qIndex);
+    const payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
     if (!payload) {
       logger.error({ matchId, qIndex }, 'Unable to build possession match question payload');
       return null;
     }
+    const correctIndex = getMultipleChoiceCorrectIndexFromPayload(payload) ?? 0;
 
     const { playableAt, deadlineAt } = buildPlayableQuestionTiming({
       qIndex,
       state,
+      questionKind: payload.question.kind,
     });
 
     state.currentQuestion = {
@@ -831,8 +1044,9 @@ export async function sendPossessionMatchQuestion(
     cache.currentQIndex = qIndex;
     cache.currentQuestion = {
       qIndex,
+      kind: payload.question.kind,
       questionId: payload.question.id,
-      correctIndex: payload.correctIndex,
+      correctIndex,
       phaseKind: runtimePhaseKind,
       phaseRound,
       shooterSeat,
@@ -840,6 +1054,8 @@ export async function sendPossessionMatchQuestion(
       shownAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
       questionDTO: payload.question,
+      evaluation: payload.evaluation,
+      reveal: payload.reveal,
     };
     cache.answers = {};
     bumpStateVersion(state);
@@ -863,7 +1079,6 @@ export async function sendPossessionMatchQuestion(
       question: cache.currentQuestion.questionDTO,
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
-      correctIndex: cache.currentQuestion.correctIndex,
       phaseKind: runtimePhaseKind,
       phaseRound,
       shooterSeat,
@@ -878,8 +1093,8 @@ export async function sendPossessionMatchQuestion(
 
     scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
     void schedulePossessionAiAnswer(io, matchId, qIndex, {
-      correctIndex: payload.correctIndex,
-      optionCount: payload.question.options.length,
+      questionKind: payload.question.kind,
+      evaluation: payload.evaluation,
       phaseKind: runtimePhaseKind,
       phaseRound,
       shooterSeat,
@@ -887,8 +1102,70 @@ export async function sendPossessionMatchQuestion(
       logger.warn({ error, matchId, qIndex }, 'Failed to schedule possession AI answer');
     });
 
-    return { correctIndex: payload.correctIndex };
+    return { correctIndex: cache.currentQuestion.correctIndex };
   });
+}
+
+export async function resumePossessionMatchQuestion(
+  io: QuizballServer,
+  matchId: string,
+  qIndex: number,
+  pauseStartedAtMs: number
+): Promise<boolean> {
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return false;
+
+  const currentQuestion = cache.currentQuestion;
+  if (!currentQuestion || currentQuestion.qIndex !== qIndex) {
+    return false;
+  }
+
+  const resumedAtMs = Date.now();
+  const { playableAt, deadlineAt } = computeResumedPossessionTiming({
+    shownAtRaw: currentQuestion.shownAt,
+    deadlineAtRaw: currentQuestion.deadlineAt,
+    pauseStartedAtMs,
+    resumedAtMs,
+    qIndex,
+    state: cache.statePayload,
+    questionKind: currentQuestion.kind,
+  });
+
+  currentQuestion.shownAt = playableAt.toISOString();
+  currentQuestion.deadlineAt = deadlineAt.toISOString();
+  cache.currentQIndex = qIndex;
+
+  await setMatchCache(cache);
+  fireAndForget('setQuestionTiming(resumeQuestion)', async () => {
+    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+  });
+
+  await emitMatchState(io, matchId, cache.statePayload);
+  io.to(`match:${matchId}`).emit('match:question', {
+    matchId,
+    qIndex,
+    total: cache.totalQuestions,
+    question: currentQuestion.questionDTO,
+    playableAt: playableAt.toISOString(),
+    deadlineAt: deadlineAt.toISOString(),
+    phaseKind: currentQuestion.phaseKind,
+    phaseRound: currentQuestion.phaseRound,
+    shooterSeat: currentQuestion.shooterSeat,
+    attackerSeat: currentQuestion.attackerSeat,
+  });
+
+  scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
+  void schedulePossessionAiAnswer(io, matchId, qIndex, {
+    questionKind: currentQuestion.kind,
+    evaluation: currentQuestion.evaluation,
+    phaseKind: currentQuestion.phaseKind,
+    phaseRound: currentQuestion.phaseRound ?? 0,
+    shooterSeat: currentQuestion.shooterSeat,
+  }).catch((error) => {
+    logger.warn({ error, matchId, qIndex }, 'Failed to reschedule possession AI answer after resume');
+  });
+
+  return true;
 }
 
 function applyNormalResolution(
@@ -896,7 +1173,8 @@ function applyNormalResolution(
   seat1Points: number,
   seat2Points: number,
   seat1Correct: boolean,
-  seat2Correct: boolean
+  seat2Correct: boolean,
+  presetSecondHalfCategoryId?: string | null
 ): { delta: number; goalScoredBySeat: Seat | null } {
   const result = applyDeltaAndGoalCheck(state, seat1Points, seat2Points);
   state.normalQuestionsAnsweredInHalf += 1;
@@ -920,7 +1198,7 @@ function applyNormalResolution(
       }
     }
     state.lastAttack.attackerSeat = null;
-    transitionAfterHalfBoundary(state);
+    transitionAfterHalfBoundary(state, { presetSecondHalfCategoryId });
     return result;
   }
 
@@ -932,11 +1210,12 @@ function applyNormalResolution(
 function applyLastAttackResolution(
   state: PossessionStatePayload,
   seat1Points: number,
-  seat2Points: number
+  seat2Points: number,
+  presetSecondHalfCategoryId?: string | null
 ): { delta: number; goalScoredBySeat: Seat | null } {
   const result = applyDeltaAndGoalCheck(state, seat1Points, seat2Points);
   state.lastAttack.attackerSeat = null;
-  transitionAfterHalfBoundary(state);
+  transitionAfterHalfBoundary(state, { presetSecondHalfCategoryId });
   return result;
 }
 
@@ -1092,7 +1371,7 @@ async function resolvePossessionRoundDbPath(
           userId,
           selectedIndex: null,
           isCorrect: false,
-          timeMs: QUESTION_TIME_MS,
+          timeMs: getQuestionDurationMs(questionPayload.question.kind),
           pointsEarned: 0,
           phaseKind: questionPayload.phaseKind,
           phaseRound: questionPayload.phaseRound,
@@ -1167,9 +1446,10 @@ async function resolvePossessionRoundDbPath(
             seat1Points,
             seat2Points,
             seat1Answer?.is_correct ?? false,
-            seat2Answer?.is_correct ?? false
+            seat2Answer?.is_correct ?? false,
+            match.category_b_id
           )
-          : applyLastAttackResolution(state, seat1Points, seat2Points);
+          : applyLastAttackResolution(state, seat1Points, seat2Points, match.category_b_id);
         possessionDelta = result.delta;
         goalScoredBySeat = result.goalScoredBySeat;
         if (result.goalScoredBySeat) {
@@ -1214,7 +1494,8 @@ async function resolvePossessionRoundDbPath(
     io.to(`match:${matchId}`).emit('match:round_result', {
       matchId,
       qIndex,
-      correctIndex: questionPayload.correctIndex,
+      questionKind: questionPayload.question.kind,
+      reveal: questionPayload.reveal,
       players: playersPayload,
       phaseKind: questionPayload.phaseKind,
       phaseRound: questionPayload.phaseRound,
@@ -1252,9 +1533,10 @@ async function resolvePossessionRoundDbPath(
       return;
     }
 
-    const nextQuestionDelay = state.phase === 'PENALTY_SHOOTOUT'
-      ? PENALTY_INTRO_DELAY_MS
-      : ROUND_RESULT_DELAY_MS;
+    const nextQuestionDelay = getNextQuestionDelayMs({
+      phase: state.phase,
+      goalScoredBySeat,
+    });
 
       setTimeout(() => {
         void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
@@ -1291,7 +1573,7 @@ async function handlePossessionAnswerDbPath(
   }
 
   // Parallelize independent reads: players, question payload, duplicate check, timing
-  const [players, questionPayload, existing, questionTiming] = await Promise.all([
+  const [players, rawQuestionPayload, existing, questionTiming] = await Promise.all([
     matchesRepo.listMatchPlayers(matchId),
     matchesService.buildMatchQuestionPayload(matchId, qIndex),
     matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id),
@@ -1299,6 +1581,7 @@ async function handlePossessionAnswerDbPath(
   ]);
 
   const mySeat = getSeatFromUserId(players, socket.data.user.id);
+  const questionPayload = normalizeMatchQuestionPayload(rawQuestionPayload);
   if (!mySeat) return;
   if (!questionPayload) return;
   if (existing) return;
@@ -1315,10 +1598,19 @@ async function handlePossessionAnswerDbPath(
     }
   }
 
+  const correctIndex = getMultipleChoiceCorrectIndexFromPayload(questionPayload);
+  if (correctIndex === null) {
+    socket.emit('error', {
+      code: 'MATCH_NOT_ALLOWED',
+      message: 'This question type requires a dedicated answer event.',
+    });
+    return;
+  }
+
   const authoritativeTimeMs = questionTiming
-    ? toAuthoritativeTimeMs(questionTiming, Date.now(), timeMs)
-    : clamp(timeMs, 0, QUESTION_TIME_MS);
-  const clientTimeMs = clamp(timeMs, 0, QUESTION_TIME_MS);
+    ? toAuthoritativeTimeMs(questionTiming, Date.now(), timeMs, getQuestionDurationMs(questionPayload.question.kind))
+    : clamp(timeMs, 0, getQuestionDurationMs(questionPayload.question.kind));
+  const clientTimeMs = clamp(timeMs, 0, getQuestionDurationMs(questionPayload.question.kind));
   const diffMs = Math.abs(authoritativeTimeMs - clientTimeMs);
   if (diffMs > TIMING_DISCREPANCY_WARN_MS) {
     logger.warn(
@@ -1334,8 +1626,12 @@ async function handlePossessionAnswerDbPath(
     );
   }
 
-  const isCorrect = selectedIndex !== null && selectedIndex === questionPayload.correctIndex;
-  const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
+  const isCorrect = selectedIndex !== null && selectedIndex === correctIndex;
+  const pointsEarned = calculatePoints(
+    isCorrect,
+    authoritativeTimeMs,
+    getQuestionDurationMs(questionPayload.question.kind)
+  );
 
   await matchesRepo.insertMatchAnswer({
     matchId,
@@ -1371,9 +1667,10 @@ async function handlePossessionAnswerDbPath(
   socket.emit('match:answer_ack', {
     matchId,
     qIndex,
+    questionKind: questionPayload.question.kind,
     selectedIndex,
     isCorrect,
-    correctIndex: questionPayload.correctIndex,
+    correctIndex,
     myTotalPoints: updatedPlayer.total_points,
     oppAnswered: !shouldWaitForOpponent,
     pointsEarned,
@@ -1386,6 +1683,7 @@ async function handlePossessionAnswerDbPath(
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
       qIndex,
+      questionKind: questionPayload.question.kind,
       opponentTotalPoints: updatedPlayer.total_points,
       pointsEarned,
       isCorrect,
@@ -1433,14 +1731,18 @@ export async function resolvePossessionRound(
         if (cache.answers[userId]) continue;
         const backfill: CachedAnswer = {
           userId,
+          questionKind: question.kind,
           selectedIndex: null,
           isCorrect: false,
-          timeMs: QUESTION_TIME_MS,
+          timeMs: getQuestionDurationMs(question.kind),
           pointsEarned: 0,
           phaseKind: question.phaseKind,
           phaseRound: question.phaseRound,
           shooterSeat: question.shooterSeat,
           answeredAt: new Date().toISOString(),
+          foundCount: question.kind === 'countdown' ? 0 : undefined,
+          foundAnswerIds: question.kind === 'countdown' ? [] : undefined,
+          clueIndex: question.kind === 'clues' ? null : undefined,
         };
         cache.answers[userId] = backfill;
         fireAndForget('insertMatchAnswerIfMissing(timeout)', async () => {
@@ -1450,12 +1752,66 @@ export async function resolvePossessionRound(
             userId,
             selectedIndex: null,
             isCorrect: false,
-            timeMs: QUESTION_TIME_MS,
+            timeMs: getQuestionDurationMs(question.kind),
             pointsEarned: 0,
             phaseKind: question.phaseKind,
             phaseRound: question.phaseRound,
             shooterSeat: question.shooterSeat,
           });
+        });
+      }
+    }
+
+    if (question.kind === 'countdown') {
+      const seat1UserId = getUserIdByCachedSeat(cache.players, 1);
+      const seat2UserId = getUserIdByCachedSeat(cache.players, 2);
+      const seat1FoundCount = seat1UserId ? cache.answers[seat1UserId]?.foundAnswerIds?.length ?? 0 : 0;
+      const seat2FoundCount = seat2UserId ? cache.answers[seat2UserId]?.foundAnswerIds?.length ?? 0 : 0;
+
+      for (const userId of expectedUserIds) {
+        const answer = cache.answers[userId];
+        if (!answer) continue;
+        const foundCount = answer.foundAnswerIds?.length ?? 0;
+        answer.foundCount = foundCount;
+        answer.selectedIndex = foundCount;
+        answer.pointsEarned = foundCount * 25;
+        answer.isCorrect = userId === seat1UserId
+          ? foundCount > seat2FoundCount
+          : foundCount > seat1FoundCount;
+      }
+    }
+
+    if (question.kind !== 'multipleChoice') {
+      for (const player of cache.players) {
+        const answer = cache.answers[player.userId];
+        if (!answer) continue;
+
+        player.totalPoints += answer.pointsEarned;
+        if (answer.isCorrect) {
+          player.correctAnswers += 1;
+        }
+
+        fireAndForget('insertMatchAnswerIfMissing(resolve:special)', async () => {
+          await matchesRepo.insertMatchAnswerIfMissing({
+            matchId,
+            qIndex,
+            userId: player.userId,
+            selectedIndex: answer.selectedIndex,
+            isCorrect: answer.isCorrect,
+            timeMs: answer.timeMs,
+            pointsEarned: answer.pointsEarned,
+            phaseKind: question.phaseKind,
+            phaseRound: question.phaseRound,
+            shooterSeat: question.shooterSeat,
+          });
+        });
+        fireAndForget('updatePlayerTotals(resolve:special)', async () => {
+          await matchesRepo.updatePlayerTotals(
+            matchId,
+            player.userId,
+            answer.pointsEarned,
+            answer.isCorrect
+          );
         });
       }
     }
@@ -1490,9 +1846,10 @@ export async function resolvePossessionRound(
           seat1Points,
           seat2Points,
           seat1Answer?.isCorrect ?? false,
-          seat2Answer?.isCorrect ?? false
+          seat2Answer?.isCorrect ?? false,
+          cache.categoryBId
         )
-        : applyLastAttackResolution(state, seat1Points, seat2Points);
+        : applyLastAttackResolution(state, seat1Points, seat2Points, cache.categoryBId);
       possessionDelta = result.delta;
       goalScoredBySeat = result.goalScoredBySeat;
       if (result.goalScoredBySeat) {
@@ -1560,7 +1917,8 @@ export async function resolvePossessionRound(
     io.to(`match:${matchId}`).emit('match:round_result', {
       matchId,
       qIndex,
-      correctIndex: question.correctIndex,
+      questionKind: question.kind,
+      reveal: question.reveal,
       players: playersPayload,
       phaseKind: question.phaseKind,
       phaseRound: question.phaseRound,
@@ -1596,9 +1954,10 @@ export async function resolvePossessionRound(
       return;
     }
 
-    const nextQuestionDelay = state.phase === 'PENALTY_SHOOTOUT'
-      ? PENALTY_INTRO_DELAY_MS
-      : ROUND_RESULT_DELAY_MS;
+    const nextQuestionDelay = getNextQuestionDelayMs({
+      phase: state.phase,
+      goalScoredBySeat,
+    });
 
     setTimeout(() => {
       void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
@@ -1672,15 +2031,24 @@ export async function handlePossessionAnswer(
       }
     }
 
+    if (question.kind !== 'multipleChoice' || question.evaluation.kind !== 'multipleChoice') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'This question type requires a dedicated answer event.',
+      });
+      return;
+    }
+
     const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
       {
         shownAt: question.shownAt,
         deadlineAt: question.deadlineAt,
       },
       Date.now(),
-      timeMs
+      timeMs,
+      getQuestionDurationMs(question.kind)
     );
-    const clientTimeMs = clamp(timeMs, 0, QUESTION_TIME_MS);
+    const clientTimeMs = clamp(timeMs, 0, getQuestionDurationMs(question.kind));
     const diffMs = Math.abs(authoritativeTimeMs - clientTimeMs);
     if (diffMs > TIMING_DISCREPANCY_WARN_MS) {
       logger.warn(
@@ -1695,11 +2063,12 @@ export async function handlePossessionAnswer(
         'Match answer timing discrepancy detected'
       );
     }
-    const isCorrect = selectedIndex !== null && selectedIndex === question.correctIndex;
-    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, QUESTION_TIME_MS);
+    const isCorrect = selectedIndex !== null && selectedIndex === question.evaluation.correctIndex;
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, getQuestionDurationMs(question.kind));
 
     const answer: CachedAnswer = {
       userId: socket.data.user.id,
+      questionKind: question.kind,
       selectedIndex,
       isCorrect,
       timeMs: authoritativeTimeMs,
@@ -1762,9 +2131,10 @@ export async function handlePossessionAnswer(
   socket.emit('match:answer_ack', {
     matchId,
     qIndex,
+    questionKind: committed.question.kind,
     selectedIndex,
     isCorrect: committed.isCorrect,
-    correctIndex: committed.question.correctIndex,
+    correctIndex: getCachedMultipleChoiceCorrectIndex(committed.question) ?? undefined,
     myTotalPoints: committed.myTotalPoints,
     oppAnswered: !shouldWaitForOpponent,
     pointsEarned: committed.pointsEarned,
@@ -1777,10 +2147,448 @@ export async function handlePossessionAnswer(
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
       qIndex,
+      questionKind: committed.question.kind,
       opponentTotalPoints: committed.myTotalPoints,
       pointsEarned: committed.pointsEarned,
       isCorrect: committed.isCorrect,
       selectedIndex,
+    });
+  }
+
+  if (committed.answerCount >= committed.expectedCount) {
+    await resolvePossessionRound(io, matchId, qIndex, false);
+  }
+}
+
+export async function handlePossessionCountdownGuess(
+  socket: QuizballSocket,
+  payload: {
+    matchId: string;
+    qIndex: number;
+    guess: string;
+  }
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    socket.emit('error', {
+      code: 'MATCH_UNAVAILABLE',
+      message: 'Countdown questions require Redis-backed realtime state.',
+    });
+    return;
+  }
+
+  const { matchId, qIndex, guess } = payload;
+  const lockKey = `lock:match:${matchId}:countdown_guess`;
+  const lock = await acquireLock(lockKey, 2000);
+  if (!lock.acquired || !lock.token) {
+    socket.emit('error', {
+      code: 'MATCH_BUSY',
+      message: 'Match is busy. Please retry your guess.',
+    });
+    return;
+  }
+
+  let guessAck: MatchCountdownGuessAckPayload | null = null;
+
+  try {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    if (!player) return;
+
+    const question = cache.currentQuestion;
+    if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'The active question is not a countdown round.',
+      });
+      return;
+    }
+
+    const foundIds = new Set(cache.answers[socket.data.user.id]?.foundAnswerIds ?? []);
+    const matched = countdownMatch(question.evaluation, guess, foundIds);
+    if (!matched) {
+      guessAck = {
+        matchId,
+        qIndex,
+        accepted: false,
+        duplicate: false,
+        foundCount: foundIds.size,
+      };
+      return;
+    }
+
+    if (foundIds.has(matched.id)) {
+      guessAck = {
+        matchId,
+        qIndex,
+        accepted: false,
+        duplicate: true,
+        foundCount: foundIds.size,
+      };
+      return;
+    }
+
+    const answer = cache.answers[socket.data.user.id] ?? {
+      userId: socket.data.user.id,
+      questionKind: 'countdown' as const,
+      selectedIndex: 0,
+      isCorrect: false,
+      timeMs: getQuestionDurationMs(question.kind),
+      pointsEarned: 0,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      answeredAt: new Date().toISOString(),
+      foundCount: 0,
+      foundAnswerIds: [],
+    };
+
+    const nowMs = Date.now();
+    answer.timeMs = toAuthoritativeTimeMsFromCache(
+      {
+        shownAt: question.shownAt,
+        deadlineAt: question.deadlineAt,
+      },
+      nowMs,
+      answer.timeMs,
+      getQuestionDurationMs(question.kind)
+    );
+    answer.foundAnswerIds = [...new Set([...(answer.foundAnswerIds ?? []), matched.id])];
+    answer.foundCount = answer.foundAnswerIds.length;
+    answer.selectedIndex = answer.foundCount;
+    answer.pointsEarned = answer.foundCount * 25;
+    answer.answeredAt = new Date().toISOString();
+
+    cache.answers[socket.data.user.id] = answer;
+    await setMatchCache(cache);
+
+    guessAck = {
+      matchId,
+      qIndex,
+      accepted: true,
+      duplicate: false,
+      foundCount: answer.foundCount,
+      acceptedDisplay: matched.display,
+    };
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
+
+  if (guessAck) {
+    socket.emit('match:countdown_guess_ack', guessAck);
+  }
+}
+
+export async function handlePossessionPutInOrderAnswer(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload: {
+    matchId: string;
+    qIndex: number;
+    orderedItemIds: string[];
+    timeMs: number;
+  }
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    socket.emit('error', {
+      code: 'MATCH_UNAVAILABLE',
+      message: 'Put-in-order questions require Redis-backed realtime state.',
+    });
+    return;
+  }
+
+  const { matchId, qIndex, orderedItemIds, timeMs } = payload;
+  const lockKey = `lock:match:${matchId}:put_in_order_answer`;
+  const lock = await acquireLock(lockKey, 2000);
+  if (!lock.acquired || !lock.token) {
+    socket.emit('error', {
+      code: 'MATCH_BUSY',
+      message: 'Match is busy. Please retry answer submission.',
+    });
+    return;
+  }
+
+  let committed: {
+    question: NonNullable<MatchCache['currentQuestion']>;
+    isCorrect: boolean;
+    pointsEarned: number;
+    answerTimeMs: number;
+    myTotalPoints: number;
+    expectedCount: number;
+    answerCount: number;
+  } | null = null;
+
+  try {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    if (!player) return;
+    if (hasUserAnswered(cache, socket.data.user.id)) return;
+
+    const question = cache.currentQuestion;
+    if (question.kind !== 'putInOrder' || question.evaluation.kind !== 'putInOrder') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'The active question is not a put-in-order round.',
+      });
+      return;
+    }
+
+    const evaluation = question.evaluation;
+    const correctOrderIds = [...evaluation.items]
+      .sort((left, right) =>
+        evaluation.direction === 'desc'
+          ? right.sortValue - left.sortValue
+          : left.sortValue - right.sortValue
+      )
+      .map((item) => item.id);
+    const isCorrect = orderedItemIds.length === correctOrderIds.length
+      && orderedItemIds.every((itemId, index) => correctOrderIds[index] === itemId);
+
+    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
+      {
+        shownAt: question.shownAt,
+        deadlineAt: question.deadlineAt,
+      },
+      Date.now(),
+      timeMs,
+      getQuestionDurationMs(question.kind)
+    );
+    const pointsEarned = isCorrect
+      ? calculatePoints(true, authoritativeTimeMs, getQuestionDurationMs(question.kind))
+      : 0;
+
+    cache.answers[socket.data.user.id] = {
+      userId: socket.data.user.id,
+      questionKind: question.kind,
+      selectedIndex: null,
+      isCorrect,
+      timeMs: authoritativeTimeMs,
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      answeredAt: new Date().toISOString(),
+      submittedOrderIds: orderedItemIds,
+    };
+
+    const expectedCount = getExpectedUserIds(cache).length;
+    const currentAnswerCount = answerCount(cache);
+    await setMatchCache(cache);
+
+    committed = {
+      question,
+      isCorrect,
+      pointsEarned,
+      answerTimeMs: authoritativeTimeMs,
+      myTotalPoints: player.totalPoints,
+      expectedCount,
+      answerCount: currentAnswerCount,
+    };
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
+
+  if (!committed) return;
+
+  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
+
+  socket.emit('match:answer_ack', {
+    matchId,
+    qIndex,
+    questionKind: committed.question.kind,
+    selectedIndex: null,
+    isCorrect: committed.isCorrect,
+    myTotalPoints: committed.myTotalPoints,
+    oppAnswered: !shouldWaitForOpponent,
+    pointsEarned: committed.pointsEarned,
+    phaseKind: committed.question.phaseKind,
+    phaseRound: committed.question.phaseRound,
+    shooterSeat: committed.question.shooterSeat,
+  });
+
+  if (committed.question.phaseKind !== 'penalty') {
+    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+      matchId,
+      qIndex,
+      questionKind: committed.question.kind,
+      opponentTotalPoints: committed.myTotalPoints,
+      pointsEarned: committed.pointsEarned,
+      isCorrect: committed.isCorrect,
+      selectedIndex: null,
+    });
+  }
+
+  if (committed.answerCount >= committed.expectedCount) {
+    await resolvePossessionRound(io, matchId, qIndex, false);
+  }
+}
+
+export async function handlePossessionCluesAnswer(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload:
+    | {
+        kind: 'guess';
+        matchId: string;
+        qIndex: number;
+        guess: string;
+        timeMs: number;
+      }
+    | {
+        kind: 'giveUp';
+        matchId: string;
+        qIndex: number;
+        giveUp: true;
+        timeMs: number;
+      }
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    socket.emit('error', {
+      code: 'MATCH_UNAVAILABLE',
+      message: 'Clues questions require Redis-backed realtime state.',
+    });
+    return;
+  }
+
+  const { matchId, qIndex, timeMs } = payload;
+  const giveUp = payload.kind === 'giveUp';
+  const guess = payload.kind === 'guess' ? payload.guess : '';
+  const lockKey = `lock:match:${matchId}:clues_answer`;
+  const lock = await acquireLock(lockKey, 2000);
+  if (!lock.acquired || !lock.token) {
+    socket.emit('error', {
+      code: 'MATCH_BUSY',
+      message: 'Match is busy. Please retry answer submission.',
+    });
+    return;
+  }
+
+  let committed: {
+    question: NonNullable<MatchCache['currentQuestion']>;
+    isCorrect: boolean;
+    pointsEarned: number;
+    answerTimeMs: number;
+    clueIndex: number;
+    myTotalPoints: number;
+    expectedCount: number;
+    answerCount: number;
+  } | null = null;
+  let wrongGuessAck: MatchCluesGuessAckPayload | null = null;
+
+  try {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+
+    const player = getCachedPlayer(cache, socket.data.user.id);
+    if (!player) return;
+    if (hasUserAnswered(cache, socket.data.user.id)) return;
+
+    const question = cache.currentQuestion;
+    if (question.kind !== 'clues' || question.evaluation.kind !== 'clues') {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'The active question is not a clues round.',
+      });
+      return;
+    }
+
+    const questionDurationMs = getQuestionDurationMs(question.kind);
+    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
+      {
+        shownAt: question.shownAt,
+        deadlineAt: question.deadlineAt,
+      },
+      Date.now(),
+      timeMs,
+      questionDurationMs
+    );
+    const clueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
+    const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
+    if (!isCorrect && !giveUp) {
+      wrongGuessAck = {
+        matchId,
+        qIndex,
+        clueIndex,
+        revealCount: clamp(clueIndex + 2, 1, question.evaluation.clues.length),
+      };
+      return;
+    }
+    const pointsEarned = isCorrect ? (CLUES_POINTS_BY_INDEX[clueIndex] ?? 25) : 0;
+
+    cache.answers[socket.data.user.id] = {
+      userId: socket.data.user.id,
+      questionKind: question.kind,
+      selectedIndex: null,
+      isCorrect,
+      timeMs: authoritativeTimeMs,
+      pointsEarned,
+      phaseKind: question.phaseKind,
+      phaseRound: question.phaseRound,
+      shooterSeat: question.shooterSeat,
+      answeredAt: new Date().toISOString(),
+      clueIndex,
+    };
+
+    const expectedCount = getExpectedUserIds(cache).length;
+    const currentAnswerCount = answerCount(cache);
+    await setMatchCache(cache);
+
+    committed = {
+      question,
+      isCorrect,
+      pointsEarned,
+      answerTimeMs: authoritativeTimeMs,
+      clueIndex,
+      myTotalPoints: player.totalPoints,
+      expectedCount,
+      answerCount: currentAnswerCount,
+    };
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
+
+  if (wrongGuessAck) {
+    socket.emit('match:clues_guess_ack', wrongGuessAck);
+    return;
+  }
+
+  if (!committed) return;
+
+  const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
+
+  socket.emit('match:answer_ack', {
+    matchId,
+    qIndex,
+    questionKind: committed.question.kind,
+    selectedIndex: null,
+    isCorrect: committed.isCorrect,
+    myTotalPoints: committed.myTotalPoints,
+    oppAnswered: !shouldWaitForOpponent,
+    pointsEarned: committed.pointsEarned,
+    phaseKind: committed.question.phaseKind,
+    phaseRound: committed.question.phaseRound,
+    shooterSeat: committed.question.shooterSeat,
+    clueIndex: committed.clueIndex,
+  });
+
+  if (committed.question.phaseKind !== 'penalty') {
+    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+      matchId,
+      qIndex,
+      questionKind: committed.question.kind,
+      opponentTotalPoints: committed.myTotalPoints,
+      pointsEarned: committed.pointsEarned,
+      isCorrect: committed.isCorrect,
+      selectedIndex: null,
     });
   }
 
@@ -1855,6 +2663,22 @@ export async function handlePossessionChanceCardUse(
       return;
     }
 
+    const correctIndex = getCachedMultipleChoiceCorrectIndex(cache.currentQuestion);
+    const questionKind = cache.currentQuestion.kind ?? (
+      Array.isArray((cache.currentQuestion.questionDTO as { options?: unknown[] } | undefined)?.options)
+        ? 'multipleChoice'
+        : null
+    );
+    if (questionKind !== 'multipleChoice' || correctIndex === null) {
+      emitChanceCardError(
+        socket,
+        payload,
+        'CHANCE_CARD_NOT_ALLOWED',
+        '50-50 card is only available for multiple-choice rounds.'
+      );
+      return;
+    }
+
     const player = getCachedPlayer(cache, socket.data.user.id);
     if (!player) {
       socket.emit('error', {
@@ -1882,9 +2706,14 @@ export async function handlePossessionChanceCardUse(
       return;
     }
 
-    const optionCount = cache.currentQuestion.questionDTO.options.length;
+    const optionCount = (
+      cache.currentQuestion.questionDTO.kind === 'multipleChoice'
+      || Array.isArray((cache.currentQuestion.questionDTO as { options?: unknown[] }).options)
+    )
+      ? ((cache.currentQuestion.questionDTO as { options?: unknown[] }).options?.length ?? 0)
+      : 0;
     const wrongIndices = Array.from({ length: optionCount }, (_, index) => index).filter(
-      (index) => index !== cache.currentQuestion!.correctIndex
+      (index) => index !== correctIndex
     );
     if (wrongIndices.length < 2) {
       emitChanceCardError(
@@ -2051,7 +2880,10 @@ export async function devSkipToPossessionPhase(
 export const __possessionInternals = {
   parsePossessionState,
   categoryIdsForCurrentHalf,
+  questionTypeForState,
   buildPlayableQuestionTiming,
+  computeResumedPossessionTiming,
+  clueIndexForTimeMs,
   computeAuthoritativeTimeMs,
   applyDeltaAndGoalCheck,
   applyNormalResolution,

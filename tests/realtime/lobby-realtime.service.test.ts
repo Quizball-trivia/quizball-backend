@@ -12,6 +12,7 @@ const insertLobbyCategoriesMock = vi.fn();
 const setLobbyStatusMock = vi.fn();
 const deleteLobbyMock = vi.fn();
 const selectRandomCategoriesMock = vi.fn();
+const selectRandomRankedCategoriesMock = vi.fn();
 const cleanupLobbyMock = vi.fn();
 const consumeRankedTicketsMock = vi.fn();
 const emitStateMock = vi.fn();
@@ -55,6 +56,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
     selectRandomCategories: (...args: unknown[]) => selectRandomCategoriesMock(...args),
+    selectRandomRankedCategories: (...args: unknown[]) => selectRandomRankedCategoriesMock(...args),
   },
 }));
 
@@ -122,6 +124,11 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
     releaseLockMock.mockResolvedValue(true);
     selectRandomCategoriesMock.mockResolvedValue([
+      { id: 'cat-1', name: 'One' },
+      { id: 'cat-2', name: 'Two' },
+      { id: 'cat-3', name: 'Three' },
+    ]);
+    selectRandomRankedCategoriesMock.mockResolvedValue([
       { id: 'cat-1', name: 'One' },
       { id: 'cat-2', name: 'Two' },
       { id: 'cat-3', name: 'Three' },

@@ -2,10 +2,13 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   matchAnswerSchema,
   matchChanceCardUseSchema,
+  matchCluesAnswerSchema,
+  matchCountdownGuessSchema,
   matchHalftimeBanSchema,
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
+  matchPutInOrderAnswerSchema,
   matchPlayAgainSchema,
   matchRejoinSchema,
 } from '../schemas/match.schemas.js';
@@ -35,6 +38,84 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
       socket.emit('error', {
         code: 'MATCH_ANSWER_ERROR',
         message: 'Failed to process answer',
+      });
+    }
+  });
+
+  socket.on('match:countdown_guess', async (payload) => {
+    const parsed = matchCountdownGuessSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:countdown_guess payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleCountdownGuess(socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:countdown_guess'
+      );
+      socket.emit('error', {
+        code: 'MATCH_COUNTDOWN_GUESS_ERROR',
+        message: 'Failed to process countdown guess',
+      });
+    }
+  });
+
+  socket.on('match:put_in_order_answer', async (payload) => {
+    const parsed = matchPutInOrderAnswerSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:put_in_order_answer payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handlePutInOrderAnswer(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:put_in_order_answer'
+      );
+      socket.emit('error', {
+        code: 'MATCH_PUT_IN_ORDER_ERROR',
+        message: 'Failed to process ordering answer',
+      });
+    }
+  });
+
+  socket.on('match:clues_answer', async (payload) => {
+    const parsed = matchCluesAnswerSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:clues_answer payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleCluesAnswer(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:clues_answer'
+      );
+      socket.emit('error', {
+        code: 'MATCH_CLUES_ANSWER_ERROR',
+        message: 'Failed to process clue answer',
       });
     }
   });

@@ -441,7 +441,7 @@ describe('Questions API', () => {
     it('should delete question and cascade payload', async () => {
       (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
       (categoriesRepo.getById as Mock).mockResolvedValue(mockCategory);
-      (questionsRepo.delete as Mock).mockResolvedValue(undefined);
+      (questionsRepo.delete as Mock).mockResolvedValue(true);
 
       const response = await request(app).delete(
         `/api/v1/questions/${mockQuestion.id}`

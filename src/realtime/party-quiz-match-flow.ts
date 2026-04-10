@@ -428,6 +428,11 @@ export async function resumePartyQuizQuestion(
     return false;
   }
 
+  if (question.question.kind !== 'multipleChoice') {
+    logger.warn({ matchId, qIndex, kind: question.question.kind }, 'Skipping party quiz resume: question is not MCQ');
+    return false;
+  }
+
   const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
   const nowMs = Date.now();
   const shownAt = new Date(nowMs);

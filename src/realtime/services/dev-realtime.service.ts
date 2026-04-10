@@ -27,6 +27,7 @@ async function cleanupFailedQuickMatchLobby(
       lobbiesRepo.removeMember(lobbyId, aiUserId),
     ]);
     await lobbiesRepo.deleteLobby(lobbyId);
+    await usersRepo.deleteAiUser(aiUserId);
   } catch (err) {
     logger.warn({ err, lobbyId, userId, aiUserId }, 'Failed to fully clean up dev quick-match lobby');
   } finally {

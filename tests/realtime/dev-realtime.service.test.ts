@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 
 const createUserMock = vi.fn();
+const deleteAiUserMock = vi.fn();
 const createLobbyMock = vi.fn();
 const addMemberMock = vi.fn();
 const removeMemberMock = vi.fn();
@@ -17,6 +18,7 @@ const emitBlockedMock = vi.fn();
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     create: (...args: unknown[]) => createUserMock(...args),
+    deleteAiUser: (...args: unknown[]) => deleteAiUserMock(...args),
   },
 }));
 
@@ -76,6 +78,7 @@ describe('devRealtimeService.handleQuickMatch', () => {
     addMemberMock.mockResolvedValue(undefined);
     removeMemberMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
+    deleteAiUserMock.mockResolvedValue(true);
     selectRandomRankedCategoriesMock.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'match-1' } });
     beginMatchForLobbyMock.mockResolvedValue(undefined);
@@ -141,6 +144,7 @@ describe('devRealtimeService.handleQuickMatch', () => {
     expect(removeMemberMock).toHaveBeenCalledWith('lobby-1', 'u1');
     expect(removeMemberMock).toHaveBeenCalledWith('lobby-1', 'ai-1');
     expect(deleteLobbyMock).toHaveBeenCalledWith('lobby-1');
+    expect(deleteAiUserMock).toHaveBeenCalledWith('ai-1');
     expect(socket.leave).toHaveBeenCalledWith('lobby:lobby-1');
     expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
     expect(beginMatchForLobbyMock).not.toHaveBeenCalled();

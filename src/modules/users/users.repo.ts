@@ -147,6 +147,17 @@ export const usersRepo = {
     `;
   },
 
+  /**
+   * Delete an AI-only user. Refuses to delete non-AI rows as a safety guard.
+   * Used during dev quick-match cleanup when the match was never created.
+   */
+  async deleteAiUser(id: string): Promise<boolean> {
+    const result = await sql`
+      DELETE FROM users WHERE id = ${id} AND is_ai = true
+    `;
+    return result.count > 0;
+  },
+
   async update(id: string, data: UpdateUserData): Promise<User | null> {
     // Use CASE to only update fields that are explicitly provided (not undefined)
     // undefined = keep existing, null = set to null, value = set to value

@@ -129,9 +129,9 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { id: 'cat-3', name: 'Three' },
     ]);
     selectRandomRankedCategoriesMock.mockResolvedValue([
-      { id: 'cat-1', name: 'One' },
-      { id: 'cat-2', name: 'Two' },
-      { id: 'cat-3', name: 'Three' },
+      { id: 'ranked-cat-1', name: 'Ranked One' },
+      { id: 'ranked-cat-2', name: 'Ranked Two' },
+      { id: 'ranked-cat-3', name: 'Ranked Three' },
     ]);
     clearLobbyCategoryBansMock.mockResolvedValue(undefined);
     clearLobbyCategoriesMock.mockResolvedValue(undefined);
@@ -169,6 +169,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
     await startDraft(io, 'lobby-1');
 
+    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
+    expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
     expect(setLobbyStatusMock).toHaveBeenCalledWith('lobby-1', 'active');
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
@@ -203,6 +205,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
     await startDraft(io, 'lobby-1');
 
+    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
+    expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1']);
   });
 
@@ -224,6 +228,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
     await startDraft(io, 'lobby-1');
 
+    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
+    expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(deleteLobbyMock).toHaveBeenCalledWith('lobby-1');
     expect(roomEmit).not.toHaveBeenCalledWith('draft:start', expect.anything());
     expect(userEmit).toHaveBeenCalledWith('ranked:queue_left');

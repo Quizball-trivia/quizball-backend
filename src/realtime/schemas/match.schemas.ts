@@ -21,7 +21,11 @@ export const matchCountdownGuessSchema = z.object({
 export const matchPutInOrderAnswerSchema = z.object({
   matchId: z.string().uuid(),
   qIndex: z.number().int().min(0).max(999),
-  orderedItemIds: z.array(z.string().min(1).max(120)).min(3).max(12),
+  orderedItemIds: z.array(z.string().min(1).max(120)).min(3).max(12)
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      { message: 'orderedItemIds must not contain duplicates' },
+    ),
   timeMs: z.number().int().min(0).max(MAX_TIME_MS),
 });
 

@@ -10,11 +10,15 @@ import {
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { getRedisClient } from './redis.js';
+import { acquireLock, releaseLock } from './locks.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
 import type { GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
+const MATCH_CACHE_REBUILD_LOCK_TTL_MS = 5000;
+const MATCH_CACHE_REBUILD_RETRY_ATTEMPTS = 3;
+const MATCH_CACHE_REBUILD_RETRY_DELAY_MS = 50;
 
 export type CachedSeat = 1 | 2;
 
@@ -416,15 +420,52 @@ export async function getMatchCacheOrRebuild(matchId: string): Promise<MatchCach
       return cached;
     }
 
-    const rebuilt = await rebuildCacheFromDB(matchId);
-    if (!rebuilt) {
-      span.setAttribute('quizball.cache_source', 'missing');
-      return null;
+    const rebuildLockKey = `match:cache:rebuild:${matchId}`;
+
+    for (let attempt = 0; attempt < MATCH_CACHE_REBUILD_RETRY_ATTEMPTS; attempt += 1) {
+      const lock = await acquireLock(rebuildLockKey, MATCH_CACHE_REBUILD_LOCK_TTL_MS);
+      if (!lock.acquired || !lock.token) {
+        const retryCached = await getMatchCache(matchId);
+        if (retryCached) {
+          span.setAttribute('quizball.cache_source', 'redis_retry');
+          return retryCached;
+        }
+
+        if (attempt < MATCH_CACHE_REBUILD_RETRY_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, MATCH_CACHE_REBUILD_RETRY_DELAY_MS));
+        }
+        continue;
+      }
+
+      try {
+        const cachedAfterLock = await getMatchCache(matchId);
+        if (cachedAfterLock) {
+          span.setAttribute('quizball.cache_source', 'redis_retry');
+          return cachedAfterLock;
+        }
+
+        const rebuilt = await rebuildCacheFromDB(matchId);
+        if (!rebuilt) {
+          span.setAttribute('quizball.cache_source', 'missing');
+          return null;
+        }
+
+        span.setAttribute('quizball.cache_source', 'db_rebuild');
+        await setMatchCache(rebuilt);
+        return rebuilt;
+      } finally {
+        await releaseLock(rebuildLockKey, lock.token);
+      }
     }
 
-    span.setAttribute('quizball.cache_source', 'db_rebuild');
-    await setMatchCache(rebuilt);
-    return rebuilt;
+    const finalRetryCached = await getMatchCache(matchId);
+    if (finalRetryCached) {
+      span.setAttribute('quizball.cache_source', 'redis_retry');
+      return finalRetryCached;
+    }
+
+    span.setAttribute('quizball.cache_source', 'missing');
+    return null;
   });
 }
 

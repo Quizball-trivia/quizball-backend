@@ -35,6 +35,12 @@ export const friendsController = {
     res.json(result);
   },
 
+  async cancelRequest(req: Request, res: Response): Promise<void> {
+    const { requestId } = req.validated.params as FriendRequestIdParam;
+    const result = await friendsService.cancelRequest(req.user!.id, requestId);
+    res.json(result);
+  },
+
   async removeFriend(req: Request, res: Response): Promise<void> {
     const { friendUserId } = req.validated.params as FriendUserIdParam;
     const result = await friendsService.removeFriend(req.user!.id, friendUserId);

@@ -23,6 +23,7 @@ vi.mock('../../src/modules/friends/friends.service.js', () => ({
     createRequest: vi.fn(),
     acceptRequest: vi.fn(),
     declineRequest: vi.fn(),
+    cancelRequest: vi.fn(),
     removeFriend: vi.fn(),
   },
 }));
@@ -175,5 +176,40 @@ describe('friendsRoutes', () => {
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('BAD_REQUEST');
     expect(friendsService.removeFriend).toHaveBeenCalled();
+  });
+
+  it('POST /api/v1/friends/requests/:requestId/cancel cancels a sent request', async () => {
+    (friendsService.cancelRequest as Mock).mockResolvedValue({ success: true });
+
+    const response = await request(app)
+      .post('/api/v1/friends/requests/66666666-6666-6666-6666-666666666666/cancel');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true });
+    expect(friendsService.cancelRequest).toHaveBeenCalledWith(
+      'viewer-id',
+      '66666666-6666-6666-6666-666666666666'
+    );
+  });
+
+  it('POST /api/v1/friends/requests/:requestId/cancel returns 404 when request not found', async () => {
+    (friendsService.cancelRequest as Mock).mockRejectedValue(
+      new NotFoundError('Friend request not found')
+    );
+
+    const response = await request(app)
+      .post('/api/v1/friends/requests/77777777-7777-7777-7777-777777777777/cancel');
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('NOT_FOUND');
+  });
+
+  it('POST /api/v1/friends/requests/:requestId/cancel validates params', async () => {
+    const response = await request(app)
+      .post('/api/v1/friends/requests/not-a-uuid/cancel');
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(friendsService.cancelRequest).not.toHaveBeenCalled();
   });
 });

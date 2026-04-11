@@ -115,6 +115,14 @@ export const friendsService = {
     return { success: true as const };
   },
 
+  async cancelRequest(userId: string, requestId: string) {
+    const success = await friendsRepo.cancelRequest(requestId, userId);
+    if (!success) {
+      throw new NotFoundError('Friend request not found');
+    }
+    return { success: true as const };
+  },
+
   async removeFriend(userId: string, friendUserId: string) {
     if (userId === friendUserId) {
       throw new BadRequestError('You cannot remove yourself');

@@ -29,6 +29,11 @@ router.post(
   validate({ params: friendRequestIdParamSchema }),
   friendsController.declineRequest
 );
+router.post(
+  '/requests/:requestId/cancel',
+  validate({ params: friendRequestIdParamSchema }),
+  friendsController.cancelRequest
+);
 router.delete(
   '/:friendUserId',
   validate({ params: friendUserIdParamSchema }),

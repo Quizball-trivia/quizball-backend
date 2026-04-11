@@ -11,6 +11,7 @@ import {
   type PartyQuizStatePayload,
 } from '../modules/matches/matches.service.js';
 import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
+import { progressionService } from '../modules/progression/progression.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { calculatePoints } from './scoring.js';
 import { getRedisClient } from './redis.js';
@@ -270,6 +271,12 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
         players.map((player) => player.user_id),
         'friendly_party_quiz'
       );
+
+      try {
+        await progressionService.awardCompletedMatchXp(matchId);
+      } catch (err) {
+        logger.warn({ err, matchId }, 'Party quiz match XP award failed after completion');
+      }
 
       const resultVersion = Date.now();
       const payload = await buildFinalResultsPayload(matchId, resultVersion);

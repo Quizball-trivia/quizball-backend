@@ -1045,6 +1045,21 @@ export const matchRealtimeService = {
       return;
     }
 
+    // Retry idempotent post-completion writes that may have been missed
+    // (e.g. player disconnected before they fired after match completion).
+    try {
+      if (lastMatch.mode === 'ranked') {
+        const existing = await rankedService.getMatchOutcome(replay.matchId);
+        if (!existing) {
+          await rankedService.settleCompletedRankedMatch(replay.matchId);
+        }
+      }
+    } catch (err) { logger.warn({ err, matchId: replay.matchId }, 'Failed to settle ranked outcome during replay'); }
+
+    try {
+      await progressionService.awardCompletedMatchXp(replay.matchId);
+    } catch (err) { logger.warn({ err, matchId: replay.matchId }, 'Failed to retry XP award during replay'); }
+
     const payload = await buildFinalResultsPayload(replay.matchId, replay.resultVersion);
     if (payload) {
       socket.emit('match:final_results', payload);

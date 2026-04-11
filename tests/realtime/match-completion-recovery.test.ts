@@ -126,6 +126,8 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
 vi.mock('../../src/realtime/match-flow.js', () => ({
   QUESTION_TIME_MS: 10000,
   cancelMatchQuestionTimer: vi.fn(),
+  sendMatchQuestion: vi.fn(),
+  resolveRound: vi.fn(),
 }));
 
 vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) => {

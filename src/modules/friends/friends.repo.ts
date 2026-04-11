@@ -278,6 +278,18 @@ export const friendsRepo = {
     return Boolean(row);
   },
 
+  async cancelRequest(requestId: string, senderUserId: string): Promise<boolean> {
+    const [row] = await sql<Array<{ id: string }>>`
+      UPDATE friend_requests
+      SET status = 'cancelled', updated_at = NOW()
+      WHERE id = ${requestId}
+        AND sender_user_id = ${senderUserId}
+        AND status = 'pending'
+      RETURNING id
+    `;
+    return Boolean(row);
+  },
+
   async removeFriend(userId: string, friendUserId: string): Promise<boolean> {
     const { userLowId, userHighId } = normalizePair(userId, friendUserId);
     const [row] = await sql<Array<{ id: string }>>`

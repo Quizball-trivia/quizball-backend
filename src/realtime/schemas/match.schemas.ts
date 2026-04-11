@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { QUESTION_TIME_MS } from '../match-flow.js';
-import { CLUES_QUESTION_TIME_MS, COUNTDOWN_QUESTION_TIME_MS } from '../possession-state.js';
+import { CLUES_QUESTION_TIME_MS, COUNTDOWN_QUESTION_TIME_MS, PUT_IN_ORDER_QUESTION_TIME_MS } from '../possession-state.js';
 
 // Allow slight buffer over question time for network latency
-const MAX_TIME_MS = Math.max(QUESTION_TIME_MS, COUNTDOWN_QUESTION_TIME_MS, CLUES_QUESTION_TIME_MS) + 1000;
+const MAX_TIME_MS = Math.max(QUESTION_TIME_MS, PUT_IN_ORDER_QUESTION_TIME_MS, COUNTDOWN_QUESTION_TIME_MS, CLUES_QUESTION_TIME_MS) + 1000;
 
 export const matchAnswerSchema = z.object({
   matchId: z.string().uuid(),

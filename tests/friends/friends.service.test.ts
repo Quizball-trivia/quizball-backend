@@ -11,6 +11,7 @@ const getPendingRequestBetweenMock = vi.fn();
 const createFriendRequestMock = vi.fn();
 const acceptRequestMock = vi.fn();
 const declineRequestMock = vi.fn();
+const cancelRequestMock = vi.fn();
 const removeFriendMock = vi.fn();
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
@@ -29,6 +30,7 @@ vi.mock('../../src/modules/friends/friends.repo.js', () => ({
     createFriendRequest: (...args: unknown[]) => createFriendRequestMock(...args),
     acceptRequest: (...args: unknown[]) => acceptRequestMock(...args),
     declineRequest: (...args: unknown[]) => declineRequestMock(...args),
+    cancelRequest: (...args: unknown[]) => cancelRequestMock(...args),
     removeFriend: (...args: unknown[]) => removeFriendMock(...args),
   },
 }));
@@ -151,5 +153,24 @@ describe('friendsService', () => {
       'Friendship not found'
     );
     expect(removeFriendMock).toHaveBeenCalledWith('user-a', 'user-b');
+  });
+
+  it('cancels a pending sent request', async () => {
+    cancelRequestMock.mockResolvedValue(true);
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.cancelRequest('sender-id', 'request-id')).resolves.toEqual({
+      success: true,
+    });
+    expect(cancelRequestMock).toHaveBeenCalledWith('request-id', 'sender-id');
+  });
+
+  it('throws when cancelling a request that does not exist or is not owned by sender', async () => {
+    cancelRequestMock.mockResolvedValue(false);
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.cancelRequest('sender-id', 'missing-request')).rejects.toThrow(
+      'Friend request not found'
+    );
   });
 });

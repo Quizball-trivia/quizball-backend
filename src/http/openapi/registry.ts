@@ -952,6 +952,35 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/v1/friends/requests/{requestId}/cancel',
+  summary: 'Cancel a sent friend request',
+  tags: ['Friends'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: friendRequestIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Friend request cancelled',
+      content: { 'application/json': { schema: friendActionResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'Friend request not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    422: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
   method: 'delete',
   path: '/api/v1/friends/{friendUserId}',
   summary: 'Remove an existing friend',

@@ -9,6 +9,7 @@ import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayloa
 // ── Constants ──
 
 export const QUESTION_TIME_MS = 10000;
+export const PUT_IN_ORDER_QUESTION_TIME_MS = 15000;
 export const COUNTDOWN_QUESTION_TIME_MS = 15000;
 export const CLUES_QUESTION_TIME_MS = 20000;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
@@ -102,12 +103,13 @@ export function getQuestionPreAnswerDelayMs(params: {
 
 export function getQuestionDurationMs(questionKind: MatchQuestionKind): number {
   switch (questionKind) {
+    case 'putInOrder':
+      return PUT_IN_ORDER_QUESTION_TIME_MS;
     case 'countdown':
       return COUNTDOWN_QUESTION_TIME_MS;
     case 'clues':
       return CLUES_QUESTION_TIME_MS;
     case 'multipleChoice':
-    case 'putInOrder':
     default:
       return QUESTION_TIME_MS;
   }

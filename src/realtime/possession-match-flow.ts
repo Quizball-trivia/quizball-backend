@@ -43,7 +43,7 @@ import type {
   MatchQuestionKind,
   MatchRoundResultDeltas,
 } from './socket.types.js';
-import { clamp, calculatePoints } from './scoring.js';
+import { clamp, calculatePoints, calculateCountdownScore } from './scoring.js';
 
 // ── Re-exports from extracted sub-modules ──
 import {
@@ -1817,9 +1817,7 @@ export async function resolvePossessionRound(
         answer.foundAnswerIds = playerFoundIds;
         answer.foundCount = playerFoundIds.length;
         answer.selectedIndex = playerFoundIds.length;
-        answer.pointsEarned = totalGroups > 0
-          ? Math.round((playerFoundIds.length / totalGroups) * 100)
-          : 0;
+        answer.pointsEarned = calculateCountdownScore(playerFoundIds.length, totalGroups);
         cache.answers[userId] = answer;
       }
 

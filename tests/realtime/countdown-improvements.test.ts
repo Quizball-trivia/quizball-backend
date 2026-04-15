@@ -6,6 +6,7 @@ import {
   PUT_IN_ORDER_QUESTION_TIME_MS,
   getQuestionDurationMs,
 } from '../../src/realtime/possession-state.js';
+import { calculateCountdownScore } from '../../src/realtime/scoring.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -207,24 +208,31 @@ describe('countdownMatch — exact and fuzzy matching', () => {
 
 // ── Scoring formula tests ──
 
-describe('countdown scoring formula', () => {
+describe('calculateCountdownScore', () => {
   it('computes proportional score capped at 100', () => {
-    expect(Math.round((3 / 5) * 100)).toBe(60);
-    expect(Math.round((5 / 5) * 100)).toBe(100);
-    expect(Math.round((0 / 5) * 100)).toBe(0);
-    expect(Math.round((1 / 10) * 100)).toBe(10);
-    expect(Math.round((7 / 10) * 100)).toBe(70);
+    expect(calculateCountdownScore(3, 5)).toBe(60);
+    expect(calculateCountdownScore(5, 5)).toBe(100);
+    expect(calculateCountdownScore(0, 5)).toBe(0);
+    expect(calculateCountdownScore(1, 10)).toBe(10);
+    expect(calculateCountdownScore(7, 10)).toBe(70);
   });
 
   it('handles single answer group (all-or-nothing)', () => {
-    expect(Math.round((1 / 1) * 100)).toBe(100);
-    expect(Math.round((0 / 1) * 100)).toBe(0);
+    expect(calculateCountdownScore(1, 1)).toBe(100);
+    expect(calculateCountdownScore(0, 1)).toBe(0);
   });
 
   it('rounds correctly for non-even divisions', () => {
-    // 1 out of 3 = 33.333... → rounds to 33
-    expect(Math.round((1 / 3) * 100)).toBe(33);
-    // 2 out of 3 = 66.666... → rounds to 67
-    expect(Math.round((2 / 3) * 100)).toBe(67);
+    expect(calculateCountdownScore(1, 3)).toBe(33);
+    expect(calculateCountdownScore(2, 3)).toBe(67);
+  });
+
+  it('returns 0 when totalGroups is 0', () => {
+    expect(calculateCountdownScore(0, 0)).toBe(0);
+    expect(calculateCountdownScore(5, 0)).toBe(0);
+  });
+
+  it('returns 0 when totalGroups is negative', () => {
+    expect(calculateCountdownScore(1, -1)).toBe(0);
   });
 });

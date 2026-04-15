@@ -17,7 +17,7 @@ import { getRedisClient } from './redis.js';
 import { questionTimerKey, countdownPlayerKey } from './match-keys.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
-import { clamp, calculatePoints } from './scoring.js';
+import { clamp, calculatePoints, calculateCountdownScore } from './scoring.js';
 import {
   getQuestionDurationMs,
   getQuestionPreAnswerDelayMs,
@@ -219,7 +219,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
               foundAnswerIds = options.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
               selectedIndex = foundCount;
-              pointsEarned = totalGroups > 0 ? Math.round((foundCount / totalGroups) * 100) : 0;
+              pointsEarned = calculateCountdownScore(foundCount, totalGroups);
               isCorrect = false;
             } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
               isCorrect = Math.random() < aiCorrectness;

@@ -11,6 +11,7 @@ import {
 } from '../modules/matches/matches.service.js';
 import { getRedisClient } from './redis.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
 import type { GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
@@ -499,4 +500,79 @@ export function getExpectedUserIds(cache: MatchCache): string[] {
   }
 
   return cache.players.map((player) => player.userId);
+}
+
+// ── Per-player countdown Redis state ──
+// Each player's found answer group IDs are stored in a separate Redis Set,
+// avoiding lock contention between players during concurrent guessing.
+
+const COUNTDOWN_PLAYER_TTL_SEC = 120; // Auto-expire after 2 minutes (safety net)
+
+/**
+ * Lua script: atomically check if an answer group ID is already in the set,
+ * add it if not, refresh TTL, and return [wasAdded, count].
+ * wasAdded: 0 = duplicate, 1 = newly added.
+ */
+const COUNTDOWN_ADD_FOUND_SCRIPT = `
+  local added = redis.call("SADD", KEYS[1], ARGV[1])
+  redis.call("EXPIRE", KEYS[1], ARGV[2])
+  local count = redis.call("SCARD", KEYS[1])
+  return { added, count }
+`;
+
+export interface CountdownAddResult {
+  /** Whether the answer group was newly added (not a duplicate). */
+  added: boolean;
+  /** Total number of found answer groups after this operation. */
+  foundCount: number;
+}
+
+/**
+ * Atomically add a found answer group ID for a player's countdown round.
+ * Returns { added: false, foundCount } if the ID was already present.
+ */
+export async function countdownAddFound(
+  matchId: string,
+  userId: string,
+  answerGroupId: string
+): Promise<CountdownAddResult> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    throw new Error('Redis unavailable for countdown state');
+  }
+  const key = countdownPlayerKey(matchId, userId);
+  const [wasAdded, count] = await redis.eval(COUNTDOWN_ADD_FOUND_SCRIPT, {
+    keys: [key],
+    arguments: [answerGroupId, String(COUNTDOWN_PLAYER_TTL_SEC)],
+  }) as [number, number];
+
+  return { added: wasAdded === 1, foundCount: count };
+}
+
+/**
+ * Get all found answer group IDs for a player in the current countdown round.
+ */
+export async function countdownGetFound(
+  matchId: string,
+  userId: string
+): Promise<string[]> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return [];
+  const key = countdownPlayerKey(matchId, userId);
+  return redis.sMembers(key);
+}
+
+/**
+ * Delete per-player countdown keys after round resolution.
+ */
+export async function deleteCountdownPlayerKeys(
+  matchId: string,
+  userIds: string[]
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return;
+  const keys = userIds.map((uid) => countdownPlayerKey(matchId, uid));
+  if (keys.length > 0) {
+    await redis.del(keys);
+  }
 }

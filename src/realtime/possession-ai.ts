@@ -14,7 +14,7 @@ import {
   type CachedAnswer,
 } from './match-cache.js';
 import { getRedisClient } from './redis.js';
-import { questionTimerKey } from './match-keys.js';
+import { questionTimerKey, countdownPlayerKey } from './match-keys.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints } from './scoring.js';
@@ -215,10 +215,11 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
                 : pickIncorrectIndex(options.evaluation.correctIndex, optionCount);
               pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
             } else if (options.questionKind === 'countdown' && options.evaluation.kind === 'countdown') {
-              foundCount = getAiCountdownFoundCount(options.evaluation.answerGroups.length, aiCorrectness);
+              const totalGroups = options.evaluation.answerGroups.length;
+              foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
               foundAnswerIds = options.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
               selectedIndex = foundCount;
-              pointsEarned = foundCount * 25;
+              pointsEarned = totalGroups > 0 ? Math.round((foundCount / totalGroups) * 100) : 0;
               isCorrect = false;
             } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
               isCorrect = Math.random() < aiCorrectness;
@@ -259,6 +260,17 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             if (options.questionKind === 'multipleChoice') {
               aiPlayer.totalPoints += pointsEarned;
               if (isCorrect) aiPlayer.correctAnswers += 1;
+            }
+
+            // Write AI countdown found answers to per-player Redis Set
+            // so resolution can merge them alongside the human player's Set.
+            if (options.questionKind === 'countdown' && foundAnswerIds && foundAnswerIds.length > 0) {
+              const redisClient = getRedisClient();
+              if (redisClient?.isOpen) {
+                const countdownKey = countdownPlayerKey(matchId, aiUserId);
+                await redisClient.sAdd(countdownKey, foundAnswerIds);
+                await redisClient.expire(countdownKey, 120);
+              }
             }
 
             await setMatchCache(fresh);

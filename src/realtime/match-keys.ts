@@ -25,3 +25,8 @@ export function matchReconnectCountKey(matchId: string, userId: string): string 
 export function lastMatchKey(userId: string): string {
   return `user:last_match:${userId}`;
 }
+
+/** Per-player Redis Set storing found answer group IDs during a countdown round. */
+export function countdownPlayerKey(matchId: string, userId: string): string {
+  return `match:cdown:${matchId}:${userId}`;
+}

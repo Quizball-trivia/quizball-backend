@@ -20,6 +20,9 @@ import { acquireLock, releaseLock } from './locks.js';
 import { rankedAiMatchKey } from './ai-ranked.constants.js';
 import {
   answerCount,
+  countdownAddFound,
+  countdownGetFound,
+  deleteCountdownPlayerKeys,
   deleteMatchCache,
   getCachedPlayer,
   getExpectedUserIds,
@@ -37,11 +40,10 @@ import { questionTimerKey, lastMatchKey } from './match-keys.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type {
   MatchCluesGuessAckPayload,
-  MatchCountdownGuessAckPayload,
   MatchQuestionKind,
   MatchRoundResultDeltas,
 } from './socket.types.js';
-import { clamp, calculatePoints } from './scoring.js';
+import { clamp, calculatePoints, calculateCountdownScore } from './scoring.js';
 
 // ── Re-exports from extracted sub-modules ──
 import {
@@ -412,11 +414,17 @@ function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
   });
 }
 
+const MIN_PREFIX_LENGTH = 3;
+
 function countdownMatch(
   evaluation: Extract<MatchQuestionEvaluation, { kind: 'countdown' }>,
   guess: string,
   foundIds: Set<string>
 ): { id: string; display: Record<string, string> } | null {
+  const normalizedGuess = normalizeAnswer(guess);
+  if (!normalizedGuess) return null;
+
+  // Priority 1: exact match or existing fuzzy match (fast path for full answers)
   for (const answerGroup of evaluation.answerGroups) {
     if (foundIds.has(answerGroup.id)) continue;
     if (fuzzyMatchesAnswer(guess, answerGroup.acceptedAnswers)) {
@@ -424,6 +432,23 @@ function countdownMatch(
         id: answerGroup.id,
         display: answerGroup.display,
       };
+    }
+  }
+
+  // Priority 2: unique prefix match (3+ chars, must match exactly one unfound group)
+  if (normalizedGuess.length >= MIN_PREFIX_LENGTH) {
+    const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
+    for (const answerGroup of evaluation.answerGroups) {
+      if (foundIds.has(answerGroup.id)) continue;
+      const hasPrefix = answerGroup.acceptedAnswers.some((accepted) =>
+        normalizeAnswer(accepted).startsWith(normalizedGuess)
+      );
+      if (hasPrefix) {
+        prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
+      }
+    }
+    if (prefixCandidates.length === 1) {
+      return prefixCandidates[0];
     }
   }
 
@@ -1028,10 +1053,12 @@ export async function sendPossessionMatchQuestion(
     }
     const correctIndex = getMultipleChoiceCorrectIndexFromPayload(payload) ?? 0;
 
+    const previousQuestionKind = cache.currentQuestion?.kind;
     const { playableAt, deadlineAt } = buildPlayableQuestionTiming({
       qIndex,
       state,
       questionKind: payload.question.kind,
+      previousQuestionKind,
     });
 
     state.currentQuestion = {
@@ -1762,23 +1789,51 @@ export async function resolvePossessionRound(
       }
     }
 
-    if (question.kind === 'countdown') {
+    if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
+      const totalGroups = question.evaluation.answerGroups.length;
       const seat1UserId = getUserIdByCachedSeat(cache.players, 1);
       const seat2UserId = getUserIdByCachedSeat(cache.players, 2);
-      const seat1FoundCount = seat1UserId ? cache.answers[seat1UserId]?.foundAnswerIds?.length ?? 0 : 0;
-      const seat2FoundCount = seat2UserId ? cache.answers[seat2UserId]?.foundAnswerIds?.length ?? 0 : 0;
+
+      // Merge per-player Redis Sets into cache answers for resolution.
+      const playerFoundIdsList = await Promise.all(
+        expectedUserIds.map((userId) => countdownGetFound(matchId, userId))
+      );
+      for (const [index, userId] of expectedUserIds.entries()) {
+        const playerFoundIds = playerFoundIdsList[index] ?? [];
+        const answer = cache.answers[userId] ?? {
+          userId,
+          questionKind: 'countdown' as const,
+          selectedIndex: 0,
+          isCorrect: false,
+          timeMs: getQuestionDurationMs(question.kind),
+          pointsEarned: 0,
+          phaseKind: question.phaseKind,
+          phaseRound: question.phaseRound,
+          shooterSeat: question.shooterSeat,
+          answeredAt: new Date().toISOString(),
+          foundCount: 0,
+          foundAnswerIds: [],
+        };
+        answer.foundAnswerIds = playerFoundIds;
+        answer.foundCount = playerFoundIds.length;
+        answer.selectedIndex = playerFoundIds.length;
+        answer.pointsEarned = calculateCountdownScore(playerFoundIds.length, totalGroups);
+        cache.answers[userId] = answer;
+      }
+
+      const seat1FoundCount = seat1UserId ? cache.answers[seat1UserId]?.foundCount ?? 0 : 0;
+      const seat2FoundCount = seat2UserId ? cache.answers[seat2UserId]?.foundCount ?? 0 : 0;
 
       for (const userId of expectedUserIds) {
         const answer = cache.answers[userId];
         if (!answer) continue;
-        const foundCount = answer.foundAnswerIds?.length ?? 0;
-        answer.foundCount = foundCount;
-        answer.selectedIndex = foundCount;
-        answer.pointsEarned = foundCount * 25;
         answer.isCorrect = userId === seat1UserId
-          ? foundCount > seat2FoundCount
-          : foundCount > seat1FoundCount;
+          ? (answer.foundCount ?? 0) > seat2FoundCount
+          : (answer.foundCount ?? 0) > seat1FoundCount;
       }
+
+      // Clean up per-player countdown keys after merging.
+      await deleteCountdownPlayerKeys(matchId, expectedUserIds);
     }
 
     if (question.kind !== 'multipleChoice') {
@@ -2178,108 +2233,62 @@ export async function handlePossessionCountdownGuess(
   }
 
   const { matchId, qIndex, guess } = payload;
-  const lockKey = `lock:match:${matchId}:countdown_guess`;
-  const lock = await acquireLock(lockKey, 2000);
-  if (!lock.acquired || !lock.token) {
+  const userId = socket.data.user.id;
+
+  // Read shared cache (read-only) to get question data and validate state.
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return;
+  if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+
+  const player = getCachedPlayer(cache, userId);
+  if (!player) return;
+
+  const question = cache.currentQuestion;
+  if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') {
     socket.emit('error', {
-      code: 'MATCH_BUSY',
-      message: 'Match is busy. Please retry your guess.',
+      code: 'MATCH_NOT_ALLOWED',
+      message: 'The active question is not a countdown round.',
     });
     return;
   }
 
-  let guessAck: MatchCountdownGuessAckPayload | null = null;
+  // Read this player's per-player countdown state (Redis Set — no lock needed between players).
+  const alreadyFound = await countdownGetFound(matchId, userId);
+  const foundIds = new Set(alreadyFound);
 
-  try {
-    const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return;
-    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
-
-    const player = getCachedPlayer(cache, socket.data.user.id);
-    if (!player) return;
-
-    const question = cache.currentQuestion;
-    if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'The active question is not a countdown round.',
-      });
-      return;
-    }
-
-    const foundIds = new Set(cache.answers[socket.data.user.id]?.foundAnswerIds ?? []);
-    const matched = countdownMatch(question.evaluation, guess, foundIds);
-    if (!matched) {
-      guessAck = {
-        matchId,
-        qIndex,
-        accepted: false,
-        duplicate: false,
-        foundCount: foundIds.size,
-      };
-      return;
-    }
-
-    if (foundIds.has(matched.id)) {
-      guessAck = {
-        matchId,
-        qIndex,
-        accepted: false,
-        duplicate: true,
-        foundCount: foundIds.size,
-      };
-      return;
-    }
-
-    const answer = cache.answers[socket.data.user.id] ?? {
-      userId: socket.data.user.id,
-      questionKind: 'countdown' as const,
-      selectedIndex: 0,
-      isCorrect: false,
-      timeMs: getQuestionDurationMs(question.kind),
-      pointsEarned: 0,
-      phaseKind: question.phaseKind,
-      phaseRound: question.phaseRound,
-      shooterSeat: question.shooterSeat,
-      answeredAt: new Date().toISOString(),
-      foundCount: 0,
-      foundAnswerIds: [],
-    };
-
-    const nowMs = Date.now();
-    answer.timeMs = toAuthoritativeTimeMsFromCache(
-      {
-        shownAt: question.shownAt,
-        deadlineAt: question.deadlineAt,
-      },
-      nowMs,
-      answer.timeMs,
-      getQuestionDurationMs(question.kind)
-    );
-    answer.foundAnswerIds = [...new Set([...(answer.foundAnswerIds ?? []), matched.id])];
-    answer.foundCount = answer.foundAnswerIds.length;
-    answer.selectedIndex = answer.foundCount;
-    answer.pointsEarned = answer.foundCount * 25;
-    answer.answeredAt = new Date().toISOString();
-
-    cache.answers[socket.data.user.id] = answer;
-    await setMatchCache(cache);
-
-    guessAck = {
+  const matched = countdownMatch(question.evaluation, guess, foundIds);
+  if (!matched) {
+    socket.emit('match:countdown_guess_ack', {
       matchId,
       qIndex,
-      accepted: true,
+      accepted: false,
       duplicate: false,
-      foundCount: answer.foundCount,
-      acceptedDisplay: matched.display,
-    };
-  } finally {
-    await releaseLock(lockKey, lock.token);
+      foundCount: foundIds.size,
+    });
+    return;
   }
 
-  if (guessAck) {
-    socket.emit('match:countdown_guess_ack', guessAck);
+  // Atomically add the found answer group ID via Lua script (handles duplicates).
+  const addResult = await countdownAddFound(matchId, userId, matched.id);
+  if (!addResult.added) {
+    socket.emit('match:countdown_guess_ack', {
+      matchId,
+      qIndex,
+      accepted: false,
+      duplicate: true,
+      foundCount: addResult.foundCount,
+    });
+    return;
   }
+
+  socket.emit('match:countdown_guess_ack', {
+    matchId,
+    qIndex,
+    accepted: true,
+    duplicate: false,
+    foundCount: addResult.foundCount,
+    acceptedDisplay: matched.display,
+  });
 }
 
 export async function handlePossessionPutInOrderAnswer(
@@ -2341,12 +2350,9 @@ export async function handlePossessionPutInOrderAnswer(
     }
 
     const evaluation = question.evaluation;
+    // sort_value represents rank/position (1 = first in correct order).
     const correctOrderIds = [...evaluation.items]
-      .sort((left, right) =>
-        evaluation.direction === 'desc'
-          ? right.sortValue - left.sortValue
-          : left.sortValue - right.sortValue
-      )
+      .sort((left, right) => left.sortValue - right.sortValue)
       .map((item) => item.id);
     const isCorrect = orderedItemIds.length === correctOrderIds.length
       && orderedItemIds.every((itemId, index) => correctOrderIds[index] === itemId);
@@ -2891,4 +2897,6 @@ export const __possessionInternals = {
   resolveHalftimeResult,
   penaltyWinnerSeat,
   decideWinner,
+  normalizeAnswer,
+  countdownMatch,
 };

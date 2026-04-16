@@ -9,12 +9,13 @@ import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayloa
 // ── Constants ──
 
 export const QUESTION_TIME_MS = 10000;
-export const PUT_IN_ORDER_QUESTION_TIME_MS = 15000;
-export const COUNTDOWN_QUESTION_TIME_MS = 15000;
+export const PUT_IN_ORDER_QUESTION_TIME_MS = 30000;
+export const COUNTDOWN_QUESTION_TIME_MS = 30000;
 export const CLUES_QUESTION_TIME_MS = 20000;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
-export const FRONTEND_TRANSITION_DELAY_MS = 1600; // Synced with frontend TRANSITION_DELAY_MS
+export const FRONTEND_TRANSITION_DELAY_MS = 2500; // Synced with frontend TRANSITION_DELAY_MS
 export const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
+export const FRONTEND_SPECIAL_RESULT_EXTRA_MS = 3000; // Extra hold for special question reveals (countdown, put-in-order, clues)
 export const FRONTEND_FIRST_QUESTION_INTRO_MS = 2000; // Synced with first-question intro overlay
 export const ROUND_RESULT_DELAY_MS = 0;
 export const PENALTY_INTRO_DELAY_MS = 1000;
@@ -87,8 +88,9 @@ export function seatToBanKey(seat: Seat): 'seat1' | 'seat2' {
 export function getQuestionPreAnswerDelayMs(params: {
   qIndex: number;
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
+  previousQuestionKind?: MatchQuestionKind;
 }): number {
-  const { qIndex, state } = params;
+  const { qIndex, state, previousQuestionKind } = params;
   // First question has a dedicated intro overlay before reveal.
   if (qIndex === 0) {
     return FRONTEND_FIRST_QUESTION_INTRO_MS + FRONTEND_REVEAL_MS;
@@ -97,8 +99,14 @@ export function getQuestionPreAnswerDelayMs(params: {
   if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
     return FRONTEND_REVEAL_MS;
   }
+  // Special question reveals (countdown, put-in-order, clues) need extra hold time
+  // so players can read the correct answers before transitioning to the next round.
+  const isSpecialPrevious = previousQuestionKind === 'countdown'
+    || previousQuestionKind === 'putInOrder'
+    || previousQuestionKind === 'clues';
+  const specialExtra = isSpecialPrevious ? FRONTEND_SPECIAL_RESULT_EXTRA_MS : 0;
   // Subsequent questions are blocked by result hold + transition overlay + reveal.
-  return FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
+  return FRONTEND_RESULT_HOLD_MS + specialExtra + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
 }
 
 export function getQuestionDurationMs(questionKind: MatchQuestionKind): number {
@@ -120,6 +128,7 @@ export function buildPlayableQuestionTiming(params: {
   qIndex: number;
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
   questionKind?: MatchQuestionKind;
+  previousQuestionKind?: MatchQuestionKind;
 }): {
   playableAt: Date;
   deadlineAt: Date;

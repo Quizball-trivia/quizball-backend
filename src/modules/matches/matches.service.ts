@@ -199,10 +199,10 @@ function buildQuestionAssets(row: MatchQuestionWithCategory): {
         })),
       };
 
+      // sort_value represents rank/position (1 = first in correct order).
+      // The direction field is a display hint for the player, not a sort modifier.
       const correctOrder = [...items].sort((left, right) =>
-        direction === 'desc'
-          ? right.sortValue - left.sortValue
-          : left.sortValue - right.sortValue
+        left.sortValue - right.sortValue
       );
 
       return {

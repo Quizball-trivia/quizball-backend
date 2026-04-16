@@ -17,3 +17,12 @@ export function calculatePoints(isCorrect: boolean, timeMs: number, questionTime
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   return remainingSeconds * 10;
 }
+
+/**
+ * Calculate countdown round points based on how many answer groups were found.
+ * Points are proportional to the fraction found, capped at 100.
+ */
+export function calculateCountdownScore(foundCount: number, totalGroups: number): number {
+  if (totalGroups <= 0) return 0;
+  return Math.round((foundCount / totalGroups) * 100);
+}

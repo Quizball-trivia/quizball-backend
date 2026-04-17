@@ -10,10 +10,12 @@ import {
   matchLeaveSchema,
   matchPutInOrderAnswerSchema,
   matchPlayAgainSchema,
+  matchReadyForNextQuestionSchema,
   matchRejoinSchema,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { matchRealtimeService } from '../services/match-realtime.service.js';
+import { handlePossessionReadyForNextQuestion } from '../possession-match-flow.js';
 
 export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('match:answer', async (payload) => {
@@ -321,5 +323,16 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
         },
       });
     }
+  });
+
+  socket.on('match:ready_for_next_question', (payload) => {
+    const parsed = matchReadyForNextQuestionSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:ready_for_next_question payload');
+      return;
+    }
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+    handlePossessionReadyForNextQuestion(userId, parsed.data.matchId, parsed.data.qIndex);
   });
 }

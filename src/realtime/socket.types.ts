@@ -592,6 +592,7 @@ export interface ClientToServerEvents {
   'match:forfeit': (data?: { matchId?: string }) => void;
   'match:play_again': (data: MatchPlayAgainPayload) => void;
   'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
+  'match:ready_for_next_question': (data: { matchId: string; qIndex: number }) => void;
   'warmup:tap': (data: WarmupTapPayload) => void;
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;

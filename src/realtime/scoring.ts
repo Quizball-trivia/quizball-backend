@@ -7,13 +7,22 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * GRACE_MS: any correct answer with elapsed time ≤ GRACE_MS earns full points.
+ * Covers typical RTT + reaction so "instant" clicks reliably hit the max.
+ */
+const GRACE_MS = 300;
+
+/**
  * Calculate points for a round answer.
- * Faster correct answers earn more points (10 per remaining second).
+ * Stepped 10-point buckets based on remaining seconds (100, 90, 80, …, 10, 0)
+ * with a GRACE_MS full-points window at the start so the top bucket is reachable
+ * despite network latency.
  */
 export function calculatePoints(isCorrect: boolean, timeMs: number, questionTimeMs: number): number {
   if (!isCorrect) return 0;
   const clamped = clamp(timeMs, 0, questionTimeMs);
-  const remainingMs = Math.max(0, questionTimeMs - clamped);
+  const effectiveTime = Math.max(0, clamped - GRACE_MS);
+  const remainingMs = Math.max(0, questionTimeMs - effectiveTime);
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   return remainingSeconds * 10;
 }

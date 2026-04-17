@@ -9,12 +9,6 @@ vi.mock('../../src/core/logger.js', () => ({
   },
 }));
 
-vi.mock('../../src/core/config.js', () => ({
-  config: {
-    RANKED_RP_V1_ENABLED: true,
-  },
-}));
-
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: vi.fn(),

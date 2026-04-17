@@ -50,8 +50,13 @@ describe('timer constants', () => {
     expect(getQuestionDurationMs('multipleChoice')).toBe(10000);
   });
 
-  it('clues duration is unchanged at 20 seconds', () => {
-    expect(getQuestionDurationMs('clues')).toBe(20000);
+  it('clues duration scales with clue count at 10s per clue', () => {
+    // Default (no clue count) uses CLUES_MAX_CLUES (5) × 10s = 50s as upper bound
+    expect(getQuestionDurationMs('clues')).toBe(50000);
+    expect(getQuestionDurationMs('clues', 3)).toBe(30000);
+    expect(getQuestionDurationMs('clues', 5)).toBe(50000);
+    // Clue counts above the max are clamped to CLUES_MAX_CLUES
+    expect(getQuestionDurationMs('clues', 8)).toBe(50000);
   });
 });
 

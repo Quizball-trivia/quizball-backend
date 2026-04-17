@@ -1,5 +1,4 @@
 import { logger } from '../../core/logger.js';
-import { config } from '../../core/config.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { rankedRepo } from './ranked.repo.js';
@@ -200,11 +199,6 @@ export const rankedService = {
   },
 
   async settleCompletedRankedMatch(matchId: string): Promise<RankedMatchOutcome | null> {
-    if (!config.RANKED_RP_V1_ENABLED) {
-      logger.debug({ matchId, flag: config.RANKED_RP_V1_ENABLED }, 'Ranked settlement skipped: RANKED_RP_V1_ENABLED is off');
-      return null;
-    }
-
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.mode !== 'ranked' || match.status !== 'completed') {
       logger.debug({ matchId, mode: match?.mode, status: match?.status }, 'Ranked settlement skipped: match not eligible');

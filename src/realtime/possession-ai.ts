@@ -196,7 +196,10 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             const aiPlayer = getCachedPlayer(fresh, aiUserId);
             if (!aiPlayer) return;
 
-            const questionTimeMs = getQuestionDurationMs(options.questionKind);
+            const clueCountForDuration = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
+              ? options.evaluation.clues.length
+              : undefined;
+            const questionTimeMs = getQuestionDurationMs(options.questionKind, clueCountForDuration);
             let answerTimeMs = clamp(aiThinkTimeMs, 0, questionTimeMs);
             let isCorrect = false;
             let selectedIndex: number | null = null;

@@ -24,10 +24,14 @@ export const HALFTIME_DURATION_MS = 20000;
 export const HALFTIME_POST_BAN_REVEAL_MS = 2000;
 const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
 const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
+// Matches FRONTEND HALFTIME_INTRO_MS — the client hides ban cards for this long
+// while showing the score card. Without this extra delay on the first AI ban of
+// a halftime, the AI bans before the player can even see the cards.
+const HALFTIME_INTRO_DELAY_MS = 3000;
 
 // ── Types ──
 
-type SendQuestionFn = (io: QuizballServer, matchId: string, qIndex: number, opts?: { cache: import('./match-cache.js').MatchCache }) => Promise<{ correctIndex: number } | null>;
+type SendQuestionFn = (io: QuizballServer, matchId: string, qIndex: number, opts?: { cache?: import('./match-cache.js').MatchCache; postReadyAck?: boolean }) => Promise<{ correctIndex: number } | null>;
 type ResolveAiUserFn = (matchId: string) => Promise<string | null>;
 
 export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; resolveAiUserId: ResolveAiUserFn }) {
@@ -273,62 +277,81 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
   function schedulePossessionAiHalftimeBan(io: QuizballServer, matchId: string): void {
     clearHalftimeAiBanTimer(matchId);
-    const delayMs = getHalftimeAiBanDelayMs();
 
-    const timer = setTimeout(() => {
-      void (async () => {
-        const lockKey = `lock:match:${matchId}:halftime_ban`;
-        const lock = await acquireLock(lockKey, 3000);
-        if (!lock.acquired || !lock.token) return;
+    const runBan = async () => {
+      const lockKey = `lock:match:${matchId}:halftime_ban`;
+      const lock = await acquireLock(lockKey, 3000);
+      if (!lock.acquired || !lock.token) return;
 
-        try {
-          const cache = await getMatchCacheOrRebuild(matchId);
-          if (!cache || cache.status !== 'active') return;
-          const state = cache.statePayload;
-          if (state.phase !== 'HALFTIME') return;
+      try {
+        const cache = await getMatchCacheOrRebuild(matchId);
+        if (!cache || cache.status !== 'active') return;
+        const state = cache.statePayload;
+        if (state.phase !== 'HALFTIME') return;
 
-          const aiUserId = await deps.resolveAiUserId(matchId);
-          if (!aiUserId) return;
-          const aiPlayer = getCachedPlayer(cache, aiUserId);
-          if (!aiPlayer) return;
+        const aiUserId = await deps.resolveAiUserId(matchId);
+        if (!aiUserId) return;
+        const aiPlayer = getCachedPlayer(cache, aiUserId);
+        if (!aiPlayer) return;
 
-          const aiSeatKey = seatToBanKey(aiPlayer.seat);
-          if (state.halftime.bans[aiSeatKey]) return;
-          const turnSeat = getHalftimeTurnSeat(state);
-          if (!turnSeat || aiPlayer.seat !== turnSeat) return;
+        const aiSeatKey = seatToBanKey(aiPlayer.seat);
+        if (state.halftime.bans[aiSeatKey]) return;
+        const turnSeat = getHalftimeTurnSeat(state);
+        if (!turnSeat || aiPlayer.seat !== turnSeat) return;
 
-          const options = state.halftime.categoryOptions.map((category) => category.id);
-          if (options.length === 0) return;
-          const otherSeatKey = aiSeatKey === 'seat1' ? 'seat2' : 'seat1';
-          const otherBan = state.halftime.bans[otherSeatKey];
-          const excluded = new Set<string>();
-          if (otherBan) excluded.add(otherBan);
-          const aiCategoryId = pickRandomCategoryId(options, excluded);
-          if (!aiCategoryId) return;
+        const options = state.halftime.categoryOptions.map((category) => category.id);
+        if (options.length === 0) return;
+        const otherSeatKey = aiSeatKey === 'seat1' ? 'seat2' : 'seat1';
+        const otherBan = state.halftime.bans[otherSeatKey];
+        const excluded = new Set<string>();
+        if (otherBan) excluded.add(otherBan);
+        const aiCategoryId = pickRandomCategoryId(options, excluded);
+        if (!aiCategoryId) return;
 
-          state.halftime.bans[aiSeatKey] = aiCategoryId;
-          bumpStateVersion(state);
+        state.halftime.bans[aiSeatKey] = aiCategoryId;
+        bumpStateVersion(state);
 
-          await setMatchCache(cache);
-          fireAndForget('setMatchStatePayload(halftimeAiBan)', async () => {
-            await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
-          });
-          await emitMatchState(io, matchId, state);
+        await setMatchCache(cache);
+        fireAndForget('setMatchStatePayload(halftimeAiBan)', async () => {
+          await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+        });
+        await emitMatchState(io, matchId, state);
 
-          if (state.halftime.bans.seat1 && state.halftime.bans.seat2) {
-            scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
-          }
-        } finally {
-          await releaseLock(lockKey, lock.token);
+        if (state.halftime.bans.seat1 && state.halftime.bans.seat2) {
+          scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
         }
-      })().catch((error) => {
-        logger.warn({ error, matchId }, 'Failed to process halftime AI ban');
-      }).finally(() => {
-        halftimeAiBanTimers.delete(matchId);
-      });
-    }, delayMs);
+      } finally {
+        await releaseLock(lockKey, lock.token);
+      }
+    };
 
-    halftimeAiBanTimers.set(matchId, timer);
+    void (async () => {
+      // If no bans have been placed yet, this is the first AI ban of the halftime.
+      // The client hides ban cards for HALFTIME_INTRO_DELAY_MS while showing the
+      // score card, so add that to the thinking delay — otherwise the AI bans
+      // before the player can see the cards.
+      const cache = await getMatchCacheOrRebuild(matchId);
+      const state = cache?.statePayload;
+      const isInitialBan = Boolean(
+        state && state.phase === 'HALFTIME' && !state.halftime.bans.seat1 && !state.halftime.bans.seat2
+      );
+      const baseDelay = isInitialBan ? HALFTIME_INTRO_DELAY_MS : 0;
+      const delayMs = baseDelay + getHalftimeAiBanDelayMs();
+
+      const timer = setTimeout(() => {
+        runBan()
+          .catch((error) => {
+            logger.warn({ error, matchId }, 'Failed to process halftime AI ban');
+          })
+          .finally(() => {
+            halftimeAiBanTimers.delete(matchId);
+          });
+      }, delayMs);
+
+      halftimeAiBanTimers.set(matchId, timer);
+    })().catch((error) => {
+      logger.warn({ error, matchId }, 'Failed to schedule halftime AI ban');
+    });
   }
 
   return {

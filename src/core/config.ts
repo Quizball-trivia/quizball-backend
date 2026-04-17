@@ -25,10 +25,6 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-  RANKED_RP_V1_ENABLED: z
-    .enum(["true", "false", "1", "0", ""])
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
   RANKED_PLACEMENT_AI_ONLY: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")

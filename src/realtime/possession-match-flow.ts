@@ -87,21 +87,111 @@ const NORMAL_HALF_SEQUENCE: QuestionType[] = [
   'clue_chain',
 ];
 const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
-const GOAL_ROUND_NEXT_QUESTION_EXTRA_DELAY_MS = 2500;
+// Safety ceiling: if a client never acks ready (dropped, bug, slow device), send
+// the next question anyway so the match doesn't stall.
+const GOAL_ROUND_READY_ACK_CEILING_MS = 12000;
 
 const CLUES_POINTS_BY_INDEX = [200, 150, 100, 50, 25] as const;
 
+// ── Ready-ack gate for goal rounds ───────────────────────────────────────────
+// When a goal is scored, the client runs a celebration + transition sequence
+// whose total length is animation-dependent. Instead of the server guessing
+// that length with a fixed setTimeout (fragile), we wait for both players to
+// emit 'match:ready_for_next_question' and then send the next question with
+// playableAt = sendTime + REVEAL_MS only (no extra hold/transition buffer,
+// since the client has already completed those). A ceiling timeout guards
+// against a client never acking.
+type ReadyGate = {
+  qIndex: number;
+  waitingUserIds: Set<string>;
+  timeoutId: ReturnType<typeof setTimeout>;
+  dispatch: () => void;
+};
+const pendingReadyGates = new Map<string, ReadyGate>();
+
+function clearPendingReadyGate(matchId: string): void {
+  const gate = pendingReadyGates.get(matchId);
+  if (!gate) return;
+  clearTimeout(gate.timeoutId);
+  pendingReadyGates.delete(matchId);
+}
+
+export function handlePossessionReadyForNextQuestion(
+  userId: string,
+  matchId: string,
+  qIndex: number
+): void {
+  const gate = pendingReadyGates.get(matchId);
+  if (!gate || gate.qIndex !== qIndex) return;
+  if (!gate.waitingUserIds.delete(userId)) return;
+  if (gate.waitingUserIds.size === 0) {
+    clearTimeout(gate.timeoutId);
+    pendingReadyGates.delete(matchId);
+    gate.dispatch();
+  }
+}
+
 function getNextQuestionDelayMs(params: {
   phase: PossessionStatePayload['phase'];
-  goalScoredBySeat: Seat | null;
 }): number {
   if (params.phase === 'PENALTY_SHOOTOUT') {
     return PENALTY_INTRO_DELAY_MS;
   }
+  return ROUND_RESULT_DELAY_MS;
+}
 
-  return params.goalScoredBySeat
-    ? ROUND_RESULT_DELAY_MS + GOAL_ROUND_NEXT_QUESTION_EXTRA_DELAY_MS
-    : ROUND_RESULT_DELAY_MS;
+async function scheduleNextPossessionQuestion(
+  io: QuizballServer,
+  matchId: string,
+  cache: MatchCache | null,
+  params: {
+    phase: PossessionStatePayload['phase'];
+    resolvedQIndex: number;
+    nextIndex: number;
+    goalScoredBySeat: Seat | null;
+  }
+): Promise<void> {
+  const { phase, resolvedQIndex, nextIndex, goalScoredBySeat } = params;
+  const dispatch = (opts?: { postReadyAck?: boolean }) => {
+    void sendPossessionMatchQuestion(io, matchId, nextIndex, opts).catch((error) => {
+      logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
+    });
+  };
+
+  if (goalScoredBySeat && phase !== 'PENALTY_SHOOTOUT') {
+    // Wait for both human players to ack ready; ceiling timeout guards against
+    // a client that never acks (drop, bug, slow device).
+    const humanUserIds: string[] = [];
+    if (cache) {
+      const aiUserId = await resolveAiUserIdForMatch(matchId);
+      for (const player of cache.players) {
+        if (player.userId !== aiUserId) humanUserIds.push(player.userId);
+      }
+    }
+    if (humanUserIds.length === 0) {
+      // No humans to wait on (shouldn't happen, but be safe).
+      setTimeout(() => dispatch({ postReadyAck: true }), 0);
+      return;
+    }
+
+    clearPendingReadyGate(matchId);
+    const waitingUserIds = new Set(humanUserIds);
+    const timeoutId = setTimeout(() => {
+      pendingReadyGates.delete(matchId);
+      logger.info({ matchId, resolvedQIndex, missing: [...waitingUserIds] }, 'Ready-ack ceiling reached — sending next question anyway');
+      dispatch({ postReadyAck: true });
+    }, GOAL_ROUND_READY_ACK_CEILING_MS);
+    pendingReadyGates.set(matchId, {
+      qIndex: resolvedQIndex,
+      waitingUserIds,
+      timeoutId,
+      dispatch: () => dispatch({ postReadyAck: true }),
+    });
+    return;
+  }
+
+  const delay = getNextQuestionDelayMs({ phase });
+  setTimeout(() => dispatch(), delay);
 }
 
 // ── Initialize AI sub-module ──
@@ -964,7 +1054,7 @@ export async function sendPossessionMatchQuestion(
   io: QuizballServer,
   matchId: string,
   qIndex: number,
-  preloaded?: { cache: MatchCache }
+  preloaded?: { cache?: MatchCache; postReadyAck?: boolean }
 ): Promise<{ correctIndex: number } | null> {
   return withSpan('match.possession.send_question', {
     'quizball.match_id': matchId,
@@ -1054,11 +1144,14 @@ export async function sendPossessionMatchQuestion(
     const correctIndex = getMultipleChoiceCorrectIndexFromPayload(payload) ?? 0;
 
     const previousQuestionKind = cache.currentQuestion?.kind;
+    const clueCount = payload.question.kind === 'clues' ? payload.question.clues.length : undefined;
     const { playableAt, deadlineAt } = buildPlayableQuestionTiming({
       qIndex,
       state,
       questionKind: payload.question.kind,
       previousQuestionKind,
+      clueCount,
+      postReadyAck: preloaded?.postReadyAck,
     });
 
     state.currentQuestion = {
@@ -1398,7 +1491,10 @@ async function resolvePossessionRoundDbPath(
           userId,
           selectedIndex: null,
           isCorrect: false,
-          timeMs: getQuestionDurationMs(questionPayload.question.kind),
+          timeMs: getQuestionDurationMs(
+            questionPayload.question.kind,
+            questionPayload.question.kind === 'clues' ? questionPayload.question.clues.length : undefined
+          ),
           pointsEarned: 0,
           phaseKind: questionPayload.phaseKind,
           phaseRound: questionPayload.phaseRound,
@@ -1560,16 +1656,12 @@ async function resolvePossessionRoundDbPath(
       return;
     }
 
-    const nextQuestionDelay = getNextQuestionDelayMs({
+    await scheduleNextPossessionQuestion(io, matchId, null, {
       phase: state.phase,
+      resolvedQIndex: qIndex,
+      nextIndex,
       goalScoredBySeat,
     });
-
-      setTimeout(() => {
-        void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
-          logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
-        });
-      }, nextQuestionDelay);
     } finally {
       await releaseLock(lockKey, lock.token);
       clearQuestionTimer(matchId, qIndex);
@@ -1754,6 +1846,10 @@ export async function resolvePossessionRound(
     }
 
     if (fromTimeout) {
+      const timeoutDurationMs = getQuestionDurationMs(
+        question.kind,
+        question.evaluation.kind === 'clues' ? question.evaluation.clues.length : undefined
+      );
       for (const userId of expectedUserIds) {
         if (cache.answers[userId]) continue;
         const backfill: CachedAnswer = {
@@ -1761,7 +1857,7 @@ export async function resolvePossessionRound(
           questionKind: question.kind,
           selectedIndex: null,
           isCorrect: false,
-          timeMs: getQuestionDurationMs(question.kind),
+          timeMs: timeoutDurationMs,
           pointsEarned: 0,
           phaseKind: question.phaseKind,
           phaseRound: question.phaseRound,
@@ -1779,7 +1875,7 @@ export async function resolvePossessionRound(
             userId,
             selectedIndex: null,
             isCorrect: false,
-            timeMs: getQuestionDurationMs(question.kind),
+            timeMs: timeoutDurationMs,
             pointsEarned: 0,
             phaseKind: question.phaseKind,
             phaseRound: question.phaseRound,
@@ -2009,16 +2105,12 @@ export async function resolvePossessionRound(
       return;
     }
 
-    const nextQuestionDelay = getNextQuestionDelayMs({
+    await scheduleNextPossessionQuestion(io, matchId, cache, {
       phase: state.phase,
+      resolvedQIndex: qIndex,
+      nextIndex,
       goalScoredBySeat,
     });
-
-    setTimeout(() => {
-      void sendPossessionMatchQuestion(io, matchId, nextIndex).catch((error) => {
-        logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
-      });
-    }, nextQuestionDelay);
   } finally {
     await releaseLock(lockKey, lock.token);
     clearQuestionTimer(matchId, qIndex);
@@ -2507,7 +2599,7 @@ export async function handlePossessionCluesAnswer(
       return;
     }
 
-    const questionDurationMs = getQuestionDurationMs(question.kind);
+    const questionDurationMs = getQuestionDurationMs(question.kind, question.evaluation.clues.length);
     const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
       {
         shownAt: question.shownAt,

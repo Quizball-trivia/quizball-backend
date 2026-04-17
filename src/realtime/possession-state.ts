@@ -11,7 +11,12 @@ import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayloa
 export const QUESTION_TIME_MS = 10000;
 export const PUT_IN_ORDER_QUESTION_TIME_MS = 30000;
 export const COUNTDOWN_QUESTION_TIME_MS = 30000;
-export const CLUES_QUESTION_TIME_MS = 20000;
+// Clues questions: 10 seconds per clue. Total duration scales with the number of
+// clues in the question; CLUES_QUESTION_TIME_MS is used as a fallback / hard cap
+// for callers that don't have the clue count available.
+export const CLUES_PER_CLUE_MS = 10000;
+export const CLUES_MAX_CLUES = 5;
+export const CLUES_QUESTION_TIME_MS = CLUES_PER_CLUE_MS * CLUES_MAX_CLUES;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
 export const FRONTEND_TRANSITION_DELAY_MS = 2500; // Synced with frontend TRANSITION_DELAY_MS
 export const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
@@ -89,11 +94,17 @@ export function getQuestionPreAnswerDelayMs(params: {
   qIndex: number;
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
   previousQuestionKind?: MatchQuestionKind;
+  postReadyAck?: boolean;
 }): number {
-  const { qIndex, state, previousQuestionKind } = params;
+  const { qIndex, state, previousQuestionKind, postReadyAck } = params;
   // First question has a dedicated intro overlay before reveal.
   if (qIndex === 0) {
     return FRONTEND_FIRST_QUESTION_INTRO_MS + FRONTEND_REVEAL_MS;
+  }
+  // Client already completed its hold + celebration + transition before sending
+  // the ready ack; only the pre-answer reveal window remains.
+  if (postReadyAck) {
+    return FRONTEND_REVEAL_MS;
   }
   // First question after halftime does not have round-result transition blockers.
   if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
@@ -109,14 +120,18 @@ export function getQuestionPreAnswerDelayMs(params: {
   return FRONTEND_RESULT_HOLD_MS + specialExtra + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
 }
 
-export function getQuestionDurationMs(questionKind: MatchQuestionKind): number {
+export function getQuestionDurationMs(questionKind: MatchQuestionKind, clueCount?: number): number {
   switch (questionKind) {
     case 'putInOrder':
       return PUT_IN_ORDER_QUESTION_TIME_MS;
     case 'countdown':
       return COUNTDOWN_QUESTION_TIME_MS;
-    case 'clues':
-      return CLUES_QUESTION_TIME_MS;
+    case 'clues': {
+      const count = typeof clueCount === 'number' && clueCount > 0
+        ? Math.min(clueCount, CLUES_MAX_CLUES)
+        : CLUES_MAX_CLUES;
+      return CLUES_PER_CLUE_MS * count;
+    }
     case 'multipleChoice':
     default:
       return QUESTION_TIME_MS;
@@ -129,13 +144,16 @@ export function buildPlayableQuestionTiming(params: {
   state: Pick<PossessionStatePayload, 'half' | 'normalQuestionsAnsweredInHalf'>;
   questionKind?: MatchQuestionKind;
   previousQuestionKind?: MatchQuestionKind;
+  clueCount?: number;
+  postReadyAck?: boolean;
 }): {
   playableAt: Date;
   deadlineAt: Date;
 } {
   const preAnswerDelayMs = getQuestionPreAnswerDelayMs(params);
   const playableAt = new Date(Date.now() + preAnswerDelayMs);
-  const deadlineAt = new Date(playableAt.getTime() + getQuestionDurationMs(params.questionKind ?? 'multipleChoice'));
+  const durationMs = getQuestionDurationMs(params.questionKind ?? 'multipleChoice', params.clueCount);
+  const deadlineAt = new Date(playableAt.getTime() + durationMs);
   return { playableAt, deadlineAt };
 }
 

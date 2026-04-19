@@ -24,10 +24,6 @@ export const HALFTIME_DURATION_MS = 20000;
 export const HALFTIME_POST_BAN_REVEAL_MS = 2000;
 const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
 const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
-// Matches FRONTEND HALFTIME_INTRO_MS — the client hides ban cards for this long
-// while showing the score card. Without this extra delay on the first AI ban of
-// a halftime, the AI bans before the player can even see the cards.
-const HALFTIME_INTRO_DELAY_MS = 3000;
 
 // ── Types ──
 
@@ -37,6 +33,7 @@ type ResolveAiUserFn = (matchId: string) => Promise<string | null>;
 export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; resolveAiUserId: ResolveAiUserFn }) {
   const halftimeTimers = new Map<string, NodeJS.Timeout>();
   const halftimeAiBanTimers = new Map<string, NodeJS.Timeout>();
+  const halftimeUiReadyByMatch = new Map<string, string>();
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
     fn().catch((error) => {
@@ -58,6 +55,15 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     if (!timer) return;
     clearTimeout(timer);
     halftimeAiBanTimers.delete(matchId);
+  }
+
+  function markHalftimeUiReady(matchId: string, deadlineAt: string): void {
+    halftimeUiReadyByMatch.set(matchId, deadlineAt);
+  }
+
+  function isHalftimeUiReady(matchId: string, deadlineAt: string | null | undefined): boolean {
+    if (!deadlineAt) return false;
+    return halftimeUiReadyByMatch.get(matchId) === deadlineAt;
   }
 
   function clearHalftimeTimer(matchId: string): void {
@@ -223,6 +229,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
+      halftimeUiReadyByMatch.delete(matchId);
 
       const halfTwoCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryAId;
       cache.categoryBId = halfTwoCategoryId;
@@ -326,17 +333,15 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     };
 
     void (async () => {
-      // If no bans have been placed yet, this is the first AI ban of the halftime.
-      // The client hides ban cards for HALFTIME_INTRO_DELAY_MS while showing the
-      // score card, so add that to the thinking delay — otherwise the AI bans
-      // before the player can see the cards.
       const cache = await getMatchCacheOrRebuild(matchId);
       const state = cache?.statePayload;
       const isInitialBan = Boolean(
         state && state.phase === 'HALFTIME' && !state.halftime.bans.seat1 && !state.halftime.bans.seat2
       );
-      const baseDelay = isInitialBan ? HALFTIME_INTRO_DELAY_MS : 0;
-      const delayMs = baseDelay + getHalftimeAiBanDelayMs();
+      if (isInitialBan && !isHalftimeUiReady(matchId, state?.halftime.deadlineAt)) {
+        return;
+      }
+      const delayMs = getHalftimeAiBanDelayMs();
 
       const timer = setTimeout(() => {
         runBan()
@@ -354,6 +359,24 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     });
   }
 
+  async function handlePossessionHalftimeUiReady(
+    io: QuizballServer,
+    userId: string,
+    matchId: string
+  ): Promise<void> {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (!cache || cache.status !== 'active') return;
+    const state = cache.statePayload;
+    if (state.phase !== 'HALFTIME') return;
+    if (!state.halftime.deadlineAt) return;
+
+    const player = getCachedPlayer(cache, userId);
+    if (!player) return;
+
+    markHalftimeUiReady(matchId, state.halftime.deadlineAt);
+    schedulePossessionAiHalftimeBan(io, matchId);
+  }
+
   return {
     clearHalftimeTimer,
     clearHalftimeAiBanTimer,
@@ -366,5 +389,6 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     scheduleFinalizeHalftime,
     scheduleHalftimeTimeout,
     schedulePossessionAiHalftimeBan,
+    handlePossessionHalftimeUiReady,
   };
 }

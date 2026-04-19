@@ -587,6 +587,7 @@ export interface ClientToServerEvents {
   'match:clues_answer': (data: MatchCluesAnswerPayload) => void;
   'match:chance_card_use': (data: MatchChanceCardUsePayload) => void;
   'match:halftime_ban': (data: { matchId: string; categoryId: string }) => void;
+  'match:halftime_ui_ready': (data: { matchId: string }) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;

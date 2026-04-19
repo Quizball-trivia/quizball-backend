@@ -16,6 +16,7 @@ import type {
   MatchFinalResultsAckPayload,
   MatchPutInOrderAnswerPayload,
   MatchPlayAgainPayload,
+  MatchReadyForNextQuestionPayload,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -46,12 +47,14 @@ import {
   handlePossessionChanceCardUse,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
+  handlePossessionReadyForNextQuestion,
   resumePossessionMatchQuestion,
 } from '../possession-match-flow.js';
 import {
   emitPartyQuizState,
   emitPartyQuizStateToSocket,
   handlePartyQuizAnswer,
+  handlePartyQuizReadyForNextQuestion,
   resumePartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
 import type { AchievementUnlockPayload } from '../socket.types.js';
@@ -1653,5 +1656,24 @@ export const matchRealtimeService = {
     }
 
     await handlePossessionChanceCardUse(io, socket, payload);
+  },
+
+  async handleReadyForNextQuestion(
+    socket: QuizballSocket,
+    payload: MatchReadyForNextQuestionPayload
+  ): Promise<void> {
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+
+    const match = await matchesRepo.getMatch(payload.matchId);
+    if (!match || match.status !== 'active') return;
+
+    const variant = resolveMatchVariant(match.state_payload, match.mode);
+    if (variant === 'friendly_party_quiz') {
+      handlePartyQuizReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
+      return;
+    }
+
+    handlePossessionReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
   },
 };

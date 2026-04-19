@@ -36,6 +36,7 @@ import {
 } from './match-cache.js';
 import { getCachedMultipleChoiceCorrectIndex, getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { getRedisClient } from './redis.js';
+import { createReadyGateRegistry } from './ready-gate.js';
 import { questionTimerKey, lastMatchKey } from './match-keys.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type {
@@ -101,34 +102,22 @@ const CLUES_POINTS_BY_INDEX = [200, 150, 100, 50, 25] as const;
 // playableAt = sendTime + REVEAL_MS only (no extra hold/transition buffer,
 // since the client has already completed those). A ceiling timeout guards
 // against a client never acking.
-type ReadyGate = {
-  qIndex: number;
-  waitingUserIds: Set<string>;
-  timeoutId: ReturnType<typeof setTimeout>;
-  dispatch: () => void;
-};
-const pendingReadyGates = new Map<string, ReadyGate>();
-
-function clearPendingReadyGate(matchId: string): void {
-  const gate = pendingReadyGates.get(matchId);
-  if (!gate) return;
-  clearTimeout(gate.timeoutId);
-  pendingReadyGates.delete(matchId);
-}
+const pendingReadyGates = createReadyGateRegistry<number>();
 
 export function handlePossessionReadyForNextQuestion(
   userId: string,
   matchId: string,
   qIndex: number
 ): void {
-  const gate = pendingReadyGates.get(matchId);
-  if (!gate || gate.qIndex !== qIndex) return;
-  if (!gate.waitingUserIds.delete(userId)) return;
-  if (gate.waitingUserIds.size === 0) {
-    clearTimeout(gate.timeoutId);
-    pendingReadyGates.delete(matchId);
-    gate.dispatch();
-  }
+  pendingReadyGates.acknowledge(userId, matchId, qIndex);
+}
+
+export async function handlePossessionHalftimeUiReady(
+  io: QuizballServer,
+  userId: string,
+  matchId: string
+): Promise<void> {
+  await handlePossessionHalftimeUiReadyInternal(io, userId, matchId);
 }
 
 function getNextQuestionDelayMs(params: {
@@ -174,18 +163,15 @@ async function scheduleNextPossessionQuestion(
       return;
     }
 
-    clearPendingReadyGate(matchId);
-    const waitingUserIds = new Set(humanUserIds);
-    const timeoutId = setTimeout(() => {
-      pendingReadyGates.delete(matchId);
-      logger.info({ matchId, resolvedQIndex, missing: [...waitingUserIds] }, 'Ready-ack ceiling reached — sending next question anyway');
-      dispatch({ postReadyAck: true });
-    }, GOAL_ROUND_READY_ACK_CEILING_MS);
-    pendingReadyGates.set(matchId, {
-      qIndex: resolvedQIndex,
-      waitingUserIds,
-      timeoutId,
+    pendingReadyGates.open({
+      scopeId: matchId,
+      token: resolvedQIndex,
+      waitingUserIds: humanUserIds,
+      ceilingMs: GOAL_ROUND_READY_ACK_CEILING_MS,
       dispatch: () => dispatch({ postReadyAck: true }),
+      onTimeout: (missing) => {
+        logger.info({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
+      },
     });
     return;
   }
@@ -219,6 +205,7 @@ const {
   scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
   schedulePossessionAiHalftimeBan,
+  handlePossessionHalftimeUiReady: handlePossessionHalftimeUiReadyInternal,
 } = possessionHalftime;
 
 // ── Helpers that stay in the main file ──

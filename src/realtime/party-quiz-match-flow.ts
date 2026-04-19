@@ -15,6 +15,7 @@ import { progressionService } from '../modules/progression/progression.service.j
 import { acquireLock, releaseLock } from './locks.js';
 import { calculatePoints } from './scoring.js';
 import { getRedisClient } from './redis.js';
+import { createReadyGateRegistry } from './ready-gate.js';
 import {
   questionTimerKey,
   matchPresenceKey,
@@ -35,10 +36,12 @@ import type {
 } from './socket.types.js';
 
 const PARTY_QUESTION_TIME_MS = 10000;
-const PARTY_ROUND_RESULT_DELAY_MS = 2500;
+const PARTY_QUESTION_REVEAL_MS = 3000;
+const PARTY_ROUND_READY_ACK_CEILING_MS = 8000;
 const FORFEIT_TTL_SEC = 600;
 
 const questionTimers = new Map<string, NodeJS.Timeout>();
+const pendingReadyGates = createReadyGateRegistry<number>();
 
 function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
   const fallback = createInitialPartyQuizState(totalQuestions);
@@ -119,6 +122,14 @@ export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): v
   if (!timer) return;
   clearTimeout(timer);
   questionTimers.delete(key);
+}
+
+export function handlePartyQuizReadyForNextQuestion(
+  userId: string,
+  matchId: string,
+  qIndex: number
+): void {
+  pendingReadyGates.acknowledge(userId, matchId, qIndex);
 }
 
 function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
@@ -310,6 +321,24 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
   });
 }
 
+function schedulePartyQuizPostRoundAdvance(
+  matchId: string,
+  resolvedQIndex: number,
+  participantUserIds: string[],
+  dispatch: () => void
+): void {
+  pendingReadyGates.open({
+    scopeId: matchId,
+    token: resolvedQIndex,
+    waitingUserIds: participantUserIds,
+    ceilingMs: PARTY_ROUND_READY_ACK_CEILING_MS,
+    dispatch,
+    onTimeout: (missing) => {
+      logger.info({ matchId, resolvedQIndex, missing }, 'Party ready-ack ceiling reached — advancing anyway');
+    },
+  });
+}
+
 export async function sendPartyQuizQuestion(
   io: QuizballServer,
   matchId: string,
@@ -375,15 +404,15 @@ export async function sendPartyQuizQuestion(
       return null;
     }
 
-    const shownAt = new Date();
-    const deadlineAt = new Date(Date.now() + PARTY_QUESTION_TIME_MS);
+    const playableAt = new Date(Date.now() + PARTY_QUESTION_REVEAL_MS);
+    const deadlineAt = new Date(playableAt.getTime() + PARTY_QUESTION_TIME_MS);
 
     state.currentQuestion = { qIndex };
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    await matchesRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt);
+    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
     await emitPartyQuizState(io, matchId);
 
     io.to(`match:${matchId}`).emit('match:question', {
@@ -391,6 +420,7 @@ export async function sendPartyQuizQuestion(
       qIndex,
       total: match.total_questions,
       question: payload.question,
+      playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
       phaseKind: 'normal',
       phaseRound: qIndex + 1,
@@ -442,15 +472,15 @@ export async function resumePartyQuizQuestion(
 
   const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
   const nowMs = Date.now();
-  const shownAt = new Date(nowMs);
+  const playableAt = new Date(nowMs + PARTY_QUESTION_REVEAL_MS);
   const deadlineAt = computeResumedDeadlineAt(
     timing?.shown_at ?? null,
     timing?.deadline_at ?? null,
     pauseStartedAtMs,
-    nowMs
+    playableAt.getTime()
   );
 
-  await matchesRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt);
+  await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
   await emitPartyQuizState(io, matchId);
 
   io.to(`match:${matchId}`).emit('match:question', {
@@ -458,6 +488,7 @@ export async function resumePartyQuizQuestion(
     qIndex,
     total: match.total_questions,
     question: question.question,
+    playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
     phaseKind: 'normal',
     phaseRound: qIndex + 1,
@@ -563,20 +594,21 @@ export async function resolvePartyQuizRound(
         variant: 'friendly_party_quiz',
       });
 
+      const participantUserIds = players.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
-        setTimeout(() => {
+        schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
           void completePartyQuizMatch(io, matchId).catch((error) => {
             logger.error({ error, matchId }, 'Failed to complete party quiz match');
           });
-        }, PARTY_ROUND_RESULT_DELAY_MS);
+        });
         return;
       }
 
-      setTimeout(() => {
+      schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
         void sendPartyQuizQuestion(io, matchId, nextIndex).catch((error) => {
           logger.error({ error, matchId, nextIndex, fromTimeout }, 'Failed to send next party quiz question');
         });
-      }, PARTY_ROUND_RESULT_DELAY_MS);
+      });
     } finally {
       cancelPartyQuizQuestionTimer(matchId, qIndex);
       await releaseLock(lockKey, lock.token);

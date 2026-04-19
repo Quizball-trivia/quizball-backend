@@ -5,6 +5,7 @@ import {
   matchCluesAnswerSchema,
   matchCountdownGuessSchema,
   matchHalftimeBanSchema,
+  matchHalftimeUiReadySchema,
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
@@ -15,7 +16,7 @@ import {
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { matchRealtimeService } from '../services/match-realtime.service.js';
-import { handlePossessionReadyForNextQuestion } from '../possession-match-flow.js';
+import { handlePossessionHalftimeUiReady } from '../possession-match-flow.js';
 
 export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket): void {
   socket.on('match:answer', async (payload) => {
@@ -145,6 +146,29 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
         code: 'MATCH_HALFTIME_BAN_ERROR',
         message: 'Failed to apply halftime ban',
       });
+    }
+  });
+
+  socket.on('match:halftime_ui_ready', async (payload) => {
+    const parsed = matchHalftimeUiReadySchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:halftime_ui_ready payload');
+      return;
+    }
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+
+    try {
+      await handlePossessionHalftimeUiReady(io, userId, parsed.data.matchId);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId,
+          matchId: parsed.data.matchId,
+        },
+        'Error handling match:halftime_ui_ready'
+      );
     }
   });
 
@@ -325,14 +349,25 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
     }
   });
 
-  socket.on('match:ready_for_next_question', (payload) => {
+  socket.on('match:ready_for_next_question', async (payload) => {
     const parsed = matchReadyForNextQuestionSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:ready_for_next_question payload');
       return;
     }
-    const userId = socket.data.user?.id;
-    if (!userId) return;
-    handlePossessionReadyForNextQuestion(userId, parsed.data.matchId, parsed.data.qIndex);
+
+    try {
+      await matchRealtimeService.handleReadyForNextQuestion(socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:ready_for_next_question'
+      );
+    }
   });
 }

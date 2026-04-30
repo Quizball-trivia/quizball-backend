@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 export const listPublicLobbiesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
@@ -18,6 +19,7 @@ export const publicLobbyResponseSchema = z.object({
     id: z.string().uuid(),
     username: z.string().nullable(),
     avatarUrl: z.string().url().nullable(),
+    avatarCustomization: avatarCustomizationSchema.nullable(),
   }),
 });
 

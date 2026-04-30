@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 export const headToHeadQuerySchema = z.object({
   userA: z.string().uuid(),
@@ -53,6 +54,7 @@ export const recentMatchResponseSchema = z.object({
     id: z.string().uuid().nullable(),
     username: z.string(),
     avatarUrl: z.string().url().nullable(),
+    avatarCustomization: avatarCustomizationSchema.nullable(),
     isAi: z.boolean(),
   }),
 });

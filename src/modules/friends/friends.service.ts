@@ -3,11 +3,13 @@ import { usersRepo } from '../users/users.repo.js';
 import { progressionService } from '../progression/progression.service.js';
 import { friendsRepo } from './friends.repo.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 function toPlayerSummary(row: {
   id: string;
   nickname: string | null;
   avatar_url: string | null;
+  avatar_customization?: unknown;
   total_xp: number;
   ranked_rp: number | null;
   ranked_tier: string | null;
@@ -35,6 +37,7 @@ function toPlayerSummary(row: {
     id: row.id,
     nickname: row.nickname,
     avatarUrl: row.avatar_url,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(row.avatar_customization ?? null),
     level: progressionService.getProgression(row.total_xp).level,
     ranked,
     friendStatus,

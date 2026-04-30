@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 export const friendStatusSchema = z.enum([
   'none',
@@ -19,6 +20,7 @@ export const socialPlayerSummarySchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
+  avatarCustomization: avatarCustomizationSchema.nullable(),
   level: z.number().int().positive(),
   ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,

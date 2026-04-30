@@ -231,6 +231,28 @@ export const dailyChallengesRepo = {
     `;
   },
 
+  async countPublishedQuestionsByTypeAndCategories(
+    questionType: string,
+    categoryIds: string[]
+  ): Promise<number> {
+    const categoryFilter = categoryIds.length > 0
+      ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
+      : sql``;
+
+    const [row] = await sql<Array<{ count: number }>>`
+      SELECT COUNT(*)::int AS count
+      FROM questions q
+      JOIN question_payloads qp ON qp.question_id = q.id
+      JOIN categories c ON c.id = q.category_id
+      WHERE q.status = 'published'
+        AND q.type = ${questionType}
+        AND c.is_active = true
+        ${categoryFilter}
+    `;
+
+    return row?.count ?? 0;
+  },
+
   async listAvailableCategoriesByQuestionType(
     questionType: string,
     options?: { requireDifficultyCoverage?: boolean }

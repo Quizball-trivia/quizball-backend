@@ -2,6 +2,7 @@ import { lobbiesRepo } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
 import { NotFoundError, pickI18nText } from '../../core/index.js';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
@@ -17,6 +18,7 @@ function toLobbyMember(row: LobbyMemberWithUser, hostUserId: string): LobbyMembe
     userId: row.user_id,
     username: row.nickname ?? 'Player',
     avatarUrl: row.avatar_url,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(row.avatar_customization ?? null),
     isReady: row.is_ready,
     isHost: row.user_id === hostUserId,
   };
@@ -181,6 +183,7 @@ export const lobbiesService = {
         id: row.host_user_id,
         username: row.host_nickname ?? 'Player',
         avatarUrl: row.host_avatar_url ?? null,
+        avatarCustomization: avatarCustomizationSchema.nullable().parse(row.host_avatar_customization ?? null),
       },
     }));
   },

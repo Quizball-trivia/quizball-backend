@@ -1,3 +1,5 @@
+import type { Json } from '../../db/types.js';
+
 export interface RankedLobbyContext {
   isPlacement?: boolean;
   placementGameNo?: number;
@@ -57,6 +59,7 @@ export interface LobbyMemberWithUser {
   joined_at: string;
   nickname: string | null;
   avatar_url: string | null;
+  avatar_customization: Json | null;
 }
 
 export interface LobbyCategoryWithDetails {

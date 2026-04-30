@@ -1,3 +1,5 @@
+import type { AvatarCustomization } from '../modules/users/avatar-customization.js';
+
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
 export type MatchVariant = LobbyGameMode;
@@ -33,6 +35,7 @@ export interface LobbyMember {
   userId: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization?: AvatarCustomization | null;
   isReady: boolean;
   isHost: boolean;
 }
@@ -41,6 +44,7 @@ export interface MatchParticipant {
   userId: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization?: AvatarCustomization | null;
   seat: number;
   rankPoints?: number;
 }
@@ -81,6 +85,7 @@ export interface OpponentInfo {
   id: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization?: AvatarCustomization | null;
   rp?: number;
   country?: string;
   countryCode?: string;

@@ -790,9 +790,38 @@ async function completePossessionMatch(
 
   let rankedOutcome = null;
   if (match.mode === 'ranked') {
+    logger.info({
+      matchId,
+      winnerId: decision.winnerId,
+      winnerDecisionMethod: decision.method,
+      totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
+      players: refreshedPlayers.map((player) => ({
+        userId: player.user_id,
+        totalPoints: player.total_points,
+        correctAnswers: player.correct_answers,
+        goals: player.goals,
+        penaltyGoals: player.penalty_goals,
+      })),
+    }, 'Finalizing ranked possession match before settlement');
     try {
       rankedOutcome = await rankedService.settleCompletedRankedMatch(matchId);
-      logger.info({ matchId, hasOutcome: rankedOutcome != null, userIds: rankedOutcome ? Object.keys(rankedOutcome.byUserId) : [] }, 'Ranked settlement result for final_results emit');
+      logger.info({
+        matchId,
+        hasOutcome: rankedOutcome != null,
+        userIds: rankedOutcome ? Object.keys(rankedOutcome.byUserId) : [],
+        outcome: rankedOutcome
+          ? Object.values(rankedOutcome.byUserId).map((entry) => ({
+            userId: entry.userId,
+            oldRp: entry.oldRp,
+            newRp: entry.newRp,
+            deltaRp: entry.deltaRp,
+            placementStatus: entry.placementStatus,
+            placementPlayed: entry.placementPlayed,
+            placementRequired: entry.placementRequired,
+            isPlacement: entry.isPlacement,
+          }))
+          : [],
+      }, 'Ranked settlement result for final_results emit');
     } catch (err) {
       logger.warn({ err, matchId }, 'Ranked settlement failed — emitting results without rankedOutcome');
     }
@@ -810,7 +839,7 @@ async function completePossessionMatch(
     match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
   );
 
-  io.to(`match:${matchId}`).emit('match:final_results', {
+  const finalResultsPayload = {
     matchId,
     winnerId: decision.winnerId,
     players: payloadPlayers,
@@ -820,7 +849,17 @@ async function completePossessionMatch(
     winnerDecisionMethod: decision.method,
     totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
     ...(rankedOutcome ? { rankedOutcome } : {}),
-  });
+  };
+
+  logger.info({
+    matchId,
+    hasRankedOutcome: rankedOutcome != null,
+    winnerId: decision.winnerId,
+    winnerDecisionMethod: decision.method,
+    resultVersion,
+  }, 'Emitting match:final_results payload');
+
+  io.to(`match:${matchId}`).emit('match:final_results', finalResultsPayload);
 
     for (const player of refreshedPlayers) {
       const opponentPlayer = refreshedPlayers.find((p) => p.user_id !== player.user_id);

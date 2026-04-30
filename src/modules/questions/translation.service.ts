@@ -38,13 +38,22 @@ function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
 type TranslationFieldDescriptor =
   | { kind: 'mcq_option'; optionIndex: number }
   | { kind: 'true_false_option'; optionIndex: 0 | 1 }
+  | { kind: 'imposter_option'; optionIndex: number }
   | { kind: 'countdown_prompt' }
   | { kind: 'countdown_display'; groupIndex: number }
   | { kind: 'clue_display_answer' }
   | { kind: 'clue_content'; clueIndex: number }
   | { kind: 'put_prompt' }
   | { kind: 'put_label'; itemIndex: number }
-  | { kind: 'put_details'; itemIndex: number };
+  | { kind: 'put_details'; itemIndex: number }
+  | { kind: 'career_path_club'; clubIndex: number }
+  | { kind: 'career_path_display_answer' }
+  | { kind: 'high_low_stat_label' }
+  | { kind: 'high_low_left_name'; matchupIndex: number }
+  | { kind: 'high_low_right_name'; matchupIndex: number }
+  | { kind: 'football_logic_prompt' }
+  | { kind: 'football_logic_display_answer' }
+  | { kind: 'football_logic_explanation' };
 
 function normalizeAcceptedAnswer(value: string): string {
   return value
@@ -82,6 +91,16 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
       if (option.text.en) {
         texts.push(option.text.en);
         descriptors.push({ kind: 'true_false_option', optionIndex: optionIndex as 0 | 1 });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'imposter_multi_select') {
+    payload.options.forEach((option, optionIndex) => {
+      if (option.text.en) {
+        texts.push(option.text.en);
+        descriptors.push({ kind: 'imposter_option', optionIndex });
       }
     });
     return { texts, descriptors };
@@ -132,13 +151,60 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
     });
   }
 
+  if (payload.type === 'career_path') {
+    payload.clubs.forEach((club, clubIndex) => {
+      if (club.en) {
+        texts.push(club.en);
+        descriptors.push({ kind: 'career_path_club', clubIndex });
+      }
+    });
+    if (payload.display_answer.en) {
+      texts.push(payload.display_answer.en);
+      descriptors.push({ kind: 'career_path_display_answer' });
+    }
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'high_low') {
+    if (payload.stat_label.en) {
+      texts.push(payload.stat_label.en);
+      descriptors.push({ kind: 'high_low_stat_label' });
+    }
+    payload.matchups.forEach((matchup, matchupIndex) => {
+      if (matchup.left_name.en) {
+        texts.push(matchup.left_name.en);
+        descriptors.push({ kind: 'high_low_left_name', matchupIndex });
+      }
+      if (matchup.right_name.en) {
+        texts.push(matchup.right_name.en);
+        descriptors.push({ kind: 'high_low_right_name', matchupIndex });
+      }
+    });
+    return { texts, descriptors };
+  }
+
+  if (payload.type === 'football_logic') {
+    if (payload.prompt?.en) {
+      texts.push(payload.prompt.en);
+      descriptors.push({ kind: 'football_logic_prompt' });
+    }
+    if (payload.display_answer.en) {
+      texts.push(payload.display_answer.en);
+      descriptors.push({ kind: 'football_logic_display_answer' });
+    }
+    if (payload.explanation?.en) {
+      texts.push(payload.explanation.en);
+      descriptors.push({ kind: 'football_logic_explanation' });
+    }
+  }
+
   return { texts, descriptors };
 }
 
 function payloadNeedsTranslation(payload: QuestionPayload | null): boolean {
   if (!payload) return false;
 
-  if (payload.type === 'mcq_single' || payload.type === 'true_false') {
+  if (payload.type === 'mcq_single' || payload.type === 'true_false' || payload.type === 'imposter_multi_select') {
     return payload.options.some((option) => option.text.en && !option.text[TARGET_LOCALE]);
   }
 
@@ -162,6 +228,31 @@ function payloadNeedsTranslation(payload: QuestionPayload | null): boolean {
       || payload.items.some((item) =>
         (item.label.en && !item.label[TARGET_LOCALE]) || (item.details?.en && !item.details[TARGET_LOCALE])
       )
+    );
+  }
+
+  if (payload.type === 'career_path') {
+    return Boolean(
+      (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE])
+      || payload.clubs.some((club) => club.en && !club[TARGET_LOCALE])
+    );
+  }
+
+  if (payload.type === 'high_low') {
+    return Boolean(
+      (payload.stat_label.en && !payload.stat_label[TARGET_LOCALE])
+      || payload.matchups.some((matchup) =>
+        (matchup.left_name.en && !matchup.left_name[TARGET_LOCALE])
+        || (matchup.right_name.en && !matchup.right_name[TARGET_LOCALE])
+      )
+    );
+  }
+
+  if (payload.type === 'football_logic') {
+    return Boolean(
+      (payload.prompt?.en && !payload.prompt[TARGET_LOCALE])
+      || (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE])
+      || (payload.explanation?.en && !payload.explanation[TARGET_LOCALE])
     );
   }
 
@@ -470,6 +561,15 @@ async function applyTranslation(
             }
             break;
           }
+          case 'imposter_option': {
+            if (payload.type === 'imposter_multi_select') {
+              const option = payload.options[entry.descriptor.optionIndex];
+              if (option) {
+                option.text = { ...option.text, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          }
           case 'countdown_prompt':
             if (payload.type === 'countdown_list') {
               payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
@@ -529,6 +629,69 @@ async function applyTranslation(
               if (item?.details) {
                 item.details = { ...item.details, [TARGET_LOCALE]: translated };
               }
+            }
+            break;
+          case 'career_path_club':
+            if (payload.type === 'career_path') {
+              const club = payload.clubs[entry.descriptor.clubIndex];
+              if (club) {
+                payload.clubs[entry.descriptor.clubIndex] = { ...club, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          case 'career_path_display_answer':
+            if (payload.type === 'career_path') {
+              payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
+              const normalized = normalizeAcceptedAnswer(translated);
+              if (
+                normalized
+                && !payload.accepted_answers.some((answer) => normalizeAcceptedAnswer(answer) === normalized)
+              ) {
+                payload.accepted_answers = [...payload.accepted_answers, translated];
+              }
+            }
+            break;
+          case 'high_low_stat_label':
+            if (payload.type === 'high_low') {
+              payload.stat_label = { ...payload.stat_label, [TARGET_LOCALE]: translated };
+            }
+            break;
+          case 'high_low_left_name':
+            if (payload.type === 'high_low') {
+              const matchup = payload.matchups[entry.descriptor.matchupIndex];
+              if (matchup) {
+                matchup.left_name = { ...matchup.left_name, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          case 'high_low_right_name':
+            if (payload.type === 'high_low') {
+              const matchup = payload.matchups[entry.descriptor.matchupIndex];
+              if (matchup) {
+                matchup.right_name = { ...matchup.right_name, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          case 'football_logic_prompt':
+            if (payload.type === 'football_logic' && payload.prompt) {
+              payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
+            }
+            break;
+          case 'football_logic_display_answer':
+            if (payload.type === 'football_logic') {
+              payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
+              const normalized = normalizeAcceptedAnswer(translated);
+              if (
+                normalized
+                && !payload.accepted_answers.some((answer) => normalizeAcceptedAnswer(answer) === normalized)
+              ) {
+                payload.accepted_answers = [...payload.accepted_answers, translated];
+              }
+            }
+            break;
+          case 'football_logic_explanation':
+            if (payload.type === 'football_logic' && payload.explanation) {
+              payload.explanation = { ...payload.explanation, [TARGET_LOCALE]: translated };
             }
             break;
         }

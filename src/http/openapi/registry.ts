@@ -15,6 +15,7 @@ import {
 } from '../../modules/stats/stats.schemas.js';
 import {
   publicProfileResponseSchema,
+  updateProfileSchema,
   userIdParamSchema,
   userResponseSchema,
   userSearchQuerySchema,
@@ -726,13 +727,7 @@ registry.registerPath({
       required: true,
       content: {
         'application/json': {
-          schema: z.object({
-            nickname: z.string().min(1).max(50).optional(),
-            country: z.string().min(2).max(100).optional(),
-            avatar_url: z.string().url().optional(),
-            favorite_club: z.string().min(1).max(100).optional(),
-            preferred_language: z.string().min(2).max(10).optional(),
-          }),
+          schema: updateProfileSchema,
         },
       },
     },
@@ -1096,6 +1091,11 @@ const trueFalsePayloadOpenApiSchema = z.object({
   ]),
 });
 
+const imposterMultiSelectPayloadOpenApiSchema = z.object({
+  type: z.literal('imposter_multi_select'),
+  options: z.array(mcqOptionOpenApiSchema).min(4).max(12),
+});
+
 const textInputPayloadOpenApiSchema = z.object({
   type: z.literal('input_text'),
   accepted_answers: z.array(i18nFieldSchema).min(1),
@@ -1141,13 +1141,48 @@ const putInOrderPayloadOpenApiSchema = z.object({
   ).min(3),
 });
 
+const careerPathPayloadOpenApiSchema = z.object({
+  type: z.literal('career_path'),
+  clubs: z.array(i18nFieldSchema).min(2),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+});
+
+const highLowPayloadOpenApiSchema = z.object({
+  type: z.literal('high_low'),
+  stat_label: i18nFieldSchema,
+  matchups: z.array(
+    z.object({
+      id: z.string().min(1),
+      left_name: i18nFieldSchema,
+      left_value: z.number(),
+      right_name: i18nFieldSchema,
+      right_value: z.number(),
+    })
+  ).min(1),
+});
+
+const footballLogicPayloadOpenApiSchema = z.object({
+  type: z.literal('football_logic'),
+  image_a_url: z.string().url(),
+  image_b_url: z.string().url(),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+  prompt: i18nFieldSchema.optional(),
+  explanation: i18nFieldSchema.nullable().optional(),
+});
+
 const questionPayloadOpenApiSchema = z.discriminatedUnion('type', [
   mcqPayloadOpenApiSchema,
   trueFalsePayloadOpenApiSchema,
+  imposterMultiSelectPayloadOpenApiSchema,
   textInputPayloadOpenApiSchema,
   countdownPayloadOpenApiSchema,
   clueChainPayloadOpenApiSchema,
   putInOrderPayloadOpenApiSchema,
+  careerPathPayloadOpenApiSchema,
+  highLowPayloadOpenApiSchema,
+  footballLogicPayloadOpenApiSchema,
 ]).openapi('QuestionPayload');
 
 registry.register('QuestionPayload', questionPayloadOpenApiSchema);
@@ -2020,6 +2055,10 @@ registry.register('CompleteDailyChallengeResponse', completeDailyChallengeRespon
 registry.register('ResetDailyChallengeResponse', resetDailyChallengeResponseSchema.openapi('ResetDailyChallengeResponse'));
 registry.register('AdminDailyChallengeConfigResponse', adminDailyChallengeConfigResponseOpenApiSchema);
 
+const dailyChallengeLocaleOpenApiQuerySchema = z.object({
+  locale: z.string().min(2).max(16).optional(),
+});
+
 // =============================================================================
 // Daily Challenge Routes
 // =============================================================================
@@ -2030,6 +2069,9 @@ registry.registerPath({
   summary: 'List active daily challenges for the current user',
   tags: ['Daily Challenges'],
   security: [{ bearerAuth: [] }],
+  request: {
+    query: dailyChallengeLocaleOpenApiQuerySchema,
+  },
   responses: {
     200: {
       description: 'Active daily challenge lineup',
@@ -2050,6 +2092,7 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     params: dailyChallengeParamSchema,
+    query: dailyChallengeLocaleOpenApiQuerySchema,
   },
   responses: {
     200: {

@@ -1,10 +1,12 @@
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 import type { FriendStatus, FriendRequestStatus } from './friends.schemas.js';
 
 export interface SocialPlayerRow {
   id: string;
   nickname: string | null;
   avatar_url: string | null;
+  avatar_customization: Json | null;
   total_xp: number;
   ranked_rp: number | null;
   ranked_tier: string | null;
@@ -88,6 +90,7 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
+        u.avatar_customization,
         u.total_xp,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
@@ -118,6 +121,7 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
+        u.avatar_customization,
         u.total_xp,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
@@ -144,6 +148,7 @@ export const friendsRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
+        u.avatar_customization,
         u.total_xp,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,

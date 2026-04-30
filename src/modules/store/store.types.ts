@@ -116,6 +116,8 @@ export interface TicketPackMetadata {
 
 export interface AvatarMetadata {
   avatarKey: string;
+  avatarPartId?: string;
+  slot?: 'skin' | 'jersey' | 'hair' | 'glasses' | 'facialHair';
   assetUrl: string;
 }
 

@@ -200,7 +200,7 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
-             u.nickname, u.avatar_url
+             u.nickname, u.avatar_url, u.avatar_customization
       FROM lobby_members lm
       JOIN users u ON u.id = lm.user_id
       WHERE lm.lobby_id = ${lobbyId}
@@ -246,6 +246,7 @@ export const lobbiesRepo = {
     host_user_id: string;
     host_nickname: string | null;
     host_avatar_url: string | null;
+    host_avatar_customization: unknown;
     member_count: number;
   }>> {
     return sql<Array<{
@@ -258,6 +259,7 @@ export const lobbiesRepo = {
       host_user_id: string;
       host_nickname: string | null;
       host_avatar_url: string | null;
+      host_avatar_customization: unknown;
       member_count: number;
     }>>`
       SELECT
@@ -270,6 +272,7 @@ export const lobbiesRepo = {
         l.host_user_id,
         u.nickname as host_nickname,
         u.avatar_url as host_avatar_url,
+        u.avatar_customization as host_avatar_customization,
         COUNT(lm.user_id)::int as member_count
       FROM lobbies l
       JOIN users u ON u.id = l.host_user_id
@@ -277,7 +280,7 @@ export const lobbiesRepo = {
       WHERE l.status = 'waiting'
         AND l.mode = 'friendly'
         AND l.is_public = true
-      GROUP BY l.id, u.nickname, u.avatar_url
+      GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
       HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 6)
       ORDER BY l.created_at DESC
       LIMIT ${params.limit}

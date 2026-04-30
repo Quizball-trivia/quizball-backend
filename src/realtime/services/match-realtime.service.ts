@@ -7,6 +7,7 @@ import { matchesService, resolveMatchVariant } from '../../modules/matches/match
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { avatarCustomizationSchema, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
   MatchAnswerPayload,
@@ -215,6 +216,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
   id: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization: AvatarCustomization | null;
 }> {
   const players = await matchesRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
@@ -223,6 +225,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
       id: 'opponent',
       username: 'Opponent',
       avatarUrl: null,
+      avatarCustomization: null,
     };
   }
 
@@ -231,6 +234,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(opponentUser?.avatar_customization ?? null),
   };
 }
 
@@ -294,6 +298,7 @@ async function getOpponentInfoFromParticipants(
   id: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization: AvatarCustomization | null;
   rp?: number;
 }> {
   const opponent = participants.find((player) => player.user_id !== userId);
@@ -302,6 +307,7 @@ async function getOpponentInfoFromParticipants(
       id: 'opponent',
       username: 'Opponent',
       avatarUrl: null,
+      avatarCustomization: null,
     };
   }
 
@@ -319,6 +325,7 @@ async function getOpponentInfoFromParticipants(
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(opponentUser?.avatar_customization ?? null),
     ...(rp != null ? { rp } : {}),
   };
 }
@@ -331,6 +338,7 @@ async function buildParticipantPayloads(
   userId: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization: AvatarCustomization | null;
   seat: number;
   rankPoints?: number;
 }>> {
@@ -361,6 +369,7 @@ async function buildParticipantPayloads(
       userId: player.user_id,
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
+      avatarCustomization: avatarCustomizationSchema.nullable().parse(user?.avatar_customization ?? null),
       seat: player.seat,
       ...(rankPoints != null ? { rankPoints } : {}),
     };
@@ -386,6 +395,7 @@ async function emitRejoinAvailable(
       userId: player.user_id,
       username: users[index]?.nickname ?? 'Player',
       avatarUrl: users[index]?.avatar_url ?? null,
+      avatarCustomization: avatarCustomizationSchema.nullable().parse(users[index]?.avatar_customization ?? null),
       seat: player.seat,
     })),
     graceMs,
@@ -626,7 +636,7 @@ export async function beginMatchForLobby(
   const countdownMs = countdownSec * 1000;
 
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url'>;
+  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization'>;
   const match = await matchesRepo.getMatch(matchId);
   const players = await matchesRepo.listMatchPlayers(matchId);
   if (!match || players.length === 0) {
@@ -639,10 +649,11 @@ export async function beginMatchForLobby(
   const variant = resolveMatchVariant(match.state_payload, match.mode);
 
   let members: MatchStartMember[] = lobbyMembers.map((member) => ({
-    user_id: member.user_id,
-    nickname: member.nickname,
-    avatar_url: member.avatar_url,
-  }));
+      user_id: member.user_id,
+      nickname: member.nickname,
+      avatar_url: member.avatar_url,
+      avatar_customization: member.avatar_customization,
+    }));
   if (members.length !== players.length) {
     logger.warn(
       { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
@@ -653,6 +664,7 @@ export async function beginMatchForLobby(
       user_id: player.user_id,
       nickname: users[index]?.nickname ?? 'Player',
       avatar_url: users[index]?.avatar_url ?? null,
+      avatar_customization: users[index]?.avatar_customization ?? null,
     }));
   }
 
@@ -702,6 +714,7 @@ export async function beginMatchForLobby(
     userId: member.user_id,
     username: member.nickname ?? 'Player',
     avatarUrl: member.avatar_url,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(member.avatar_customization ?? null),
     seat: seatByUserId.get(member.user_id) ?? 0,
     ...(rpByUserId.has(member.user_id) ? { rankPoints: rpByUserId.get(member.user_id) } : {}),
   }));
@@ -718,6 +731,7 @@ export async function beginMatchForLobby(
           id: opponent.user_id,
           username: opponent.nickname ?? 'Player',
           avatarUrl: opponent.avatar_url,
+          avatarCustomization: avatarCustomizationSchema.nullable().parse(opponent.avatar_customization ?? null),
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
         },
         participants,

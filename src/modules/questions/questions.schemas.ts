@@ -19,6 +19,10 @@ export const questionTypeEnum = z.enum([
   'countdown_list',
   'clue_chain',
   'put_in_order',
+  'imposter_multi_select',
+  'career_path',
+  'high_low',
+  'football_logic',
 ]);
 export type QuestionType = z.infer<typeof questionTypeEnum>;
 
@@ -73,6 +77,11 @@ const trueFalsePayloadBaseSchema = z.object({
   ]),
 });
 
+const imposterMultiSelectPayloadBaseSchema = z.object({
+  type: z.literal('imposter_multi_select'),
+  options: z.array(mcqOptionSchema).min(4).max(12),
+});
+
 /**
  * Text Input Payload schema - user types answer
  */
@@ -119,6 +128,37 @@ const putInOrderPayloadBaseSchema = z.object({
   prompt: i18nFieldSchema,
   direction: z.enum(['asc', 'desc']),
   items: z.array(putInOrderItemSchema).min(3),
+});
+
+const careerPathPayloadBaseSchema = z.object({
+  type: z.literal('career_path'),
+  clubs: z.array(i18nFieldSchema).min(2),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+});
+
+const highLowMatchupSchema = z.object({
+  id: z.string().min(1),
+  left_name: i18nFieldSchema,
+  left_value: z.number(),
+  right_name: i18nFieldSchema,
+  right_value: z.number(),
+});
+
+const highLowPayloadBaseSchema = z.object({
+  type: z.literal('high_low'),
+  stat_label: i18nFieldSchema,
+  matchups: z.array(highLowMatchupSchema).min(1),
+});
+
+const footballLogicPayloadBaseSchema = z.object({
+  type: z.literal('football_logic'),
+  image_a_url: z.string().url(),
+  image_b_url: z.string().url(),
+  display_answer: i18nFieldSchema,
+  accepted_answers: z.array(z.string().min(1)).min(1),
+  prompt: i18nFieldSchema.optional(),
+  explanation: i18nFieldSchema.nullish(),
 });
 
 function parseNestedJsonString(value: unknown): unknown {
@@ -209,7 +249,7 @@ export function normalizeQuestionPayloadCandidate(payload: unknown): unknown {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
 
   const candidate = parsed as Record<string, unknown>;
-  if (candidate.type === 'mcq_single') {
+  if (candidate.type === 'mcq_single' || candidate.type === 'imposter_multi_select') {
     return normalizeMcqOptions(candidate);
   }
 
@@ -226,20 +266,35 @@ export const questionPayloadSchema = z
     z.discriminatedUnion('type', [
       mcqPayloadBaseSchema,
       trueFalsePayloadBaseSchema,
+      imposterMultiSelectPayloadBaseSchema,
       textInputPayloadBaseSchema,
       countdownPayloadBaseSchema,
       clueChainPayloadBaseSchema,
       putInOrderPayloadBaseSchema,
+      careerPathPayloadBaseSchema,
+      highLowPayloadBaseSchema,
+      footballLogicPayloadBaseSchema,
     ])
   )
   .superRefine((data, ctx) => {
-    if (data.type === 'mcq_single') {
+    if (data.type === 'mcq_single' || data.type === 'imposter_multi_select') {
       // Check exactly one correct answer
       const correctCount = data.options.filter((o) => o.is_correct).length;
-      if (correctCount !== 1) {
+      const expectedMessage = data.type === 'mcq_single'
+        ? 'Exactly one option must be marked as correct'
+        : 'At least one option must be marked as correct';
+      if ((data.type === 'mcq_single' && correctCount !== 1) || (data.type === 'imposter_multi_select' && correctCount < 1)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Exactly one option must be marked as correct',
+          message: expectedMessage,
+          path: ['options'],
+        });
+      }
+
+      if (data.type === 'imposter_multi_select' && correctCount === data.options.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'At least one option must be incorrect',
           path: ['options'],
         });
       }
@@ -287,14 +342,39 @@ export const questionPayloadSchema = z
         });
       }
     }
+
+    if (data.type === 'high_low') {
+      const ids = data.matchups.map((matchup) => matchup.id);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Matchup IDs must be unique',
+          path: ['matchups'],
+        });
+      }
+
+      data.matchups.forEach((matchup, matchupIndex) => {
+        if (matchup.left_value === matchup.right_value) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'High low matchup values must not tie',
+            path: ['matchups', matchupIndex],
+          });
+        }
+      });
+    }
   });
 
 export type McqPayload = z.infer<typeof mcqPayloadBaseSchema>;
 export type TrueFalsePayload = z.infer<typeof trueFalsePayloadBaseSchema>;
+export type ImposterMultiSelectPayload = z.infer<typeof imposterMultiSelectPayloadBaseSchema>;
 export type TextInputPayload = z.infer<typeof textInputPayloadBaseSchema>;
 export type CountdownPayload = z.infer<typeof countdownPayloadBaseSchema>;
 export type ClueChainPayload = z.infer<typeof clueChainPayloadBaseSchema>;
 export type PutInOrderPayload = z.infer<typeof putInOrderPayloadBaseSchema>;
+export type CareerPathPayload = z.infer<typeof careerPathPayloadBaseSchema>;
+export type HighLowPayload = z.infer<typeof highLowPayloadBaseSchema>;
+export type FootballLogicPayload = z.infer<typeof footballLogicPayloadBaseSchema>;
 export type QuestionPayload = z.infer<typeof questionPayloadSchema>;
 
 /**

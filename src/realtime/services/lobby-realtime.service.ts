@@ -531,6 +531,14 @@ async function startRankedAiDraft(params: {
     await startDraft(io, lobbyId);
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
+    io.to(`lobby:${lobbyId}`).emit('error', {
+      code: 'MATCH_PREPARATION_FAILED',
+      message: 'Match preparation got stuck. Please restart ranked matchmaking.',
+      meta: {
+        lobbyId,
+        source: 'ranked_ai_draft_start',
+      },
+    });
   }
 }
 

@@ -7,6 +7,7 @@ import { progressionResponseSchema, type ProgressionResponse } from '../progress
 import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 import { friendStatusSchema } from '../friends/friends.schemas.js';
+import { avatarCustomizationSchema } from './avatar-customization.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -30,6 +31,7 @@ export const userResponseSchema = z.object({
   nickname: z.string().nullable(),
   country: z.string().nullable(),
   avatar_url: z.string().url().nullable(),
+  avatar_customization: avatarCustomizationSchema.nullable(),
   favorite_club: z.string().nullable(),
   preferred_language: z.string().nullable(),
   onboarding_complete: z.boolean(),
@@ -45,7 +47,8 @@ export type UserResponse = z.infer<typeof userResponseSchema>;
 export const updateProfileSchema = z.object({
   nickname: z.string().min(1).max(50).optional(),
   country: z.string().min(2).max(100).optional(),
-  avatar_url: z.string().url().optional(),
+  avatar_url: z.string().url().nullable().optional(),
+  avatar_customization: avatarCustomizationSchema.nullable().optional(),
   favorite_club: z.string().min(1).max(100).optional(),
   preferred_language: z.string().min(2).max(10).optional(),
 });
@@ -62,6 +65,7 @@ export function toUserResponse(user: {
   nickname: string | null;
   country: string | null;
   avatar_url: string | null;
+  avatar_customization?: unknown;
   favorite_club: string | null;
   preferred_language: string | null;
   onboarding_complete: boolean;
@@ -75,6 +79,7 @@ export function toUserResponse(user: {
     nickname: user.nickname,
     country: user.country,
     avatar_url: user.avatar_url,
+    avatar_customization: avatarCustomizationSchema.nullable().parse(user.avatar_customization ?? null),
     favorite_club: user.favorite_club,
     preferred_language: user.preferred_language,
     onboarding_complete: user.onboarding_complete,
@@ -91,6 +96,7 @@ export interface PublicProfileData {
     id: string;
     nickname: string | null;
     avatar_url: string | null;
+    avatar_customization?: unknown;
     country: string | null;
     favorite_club: string | null;
     total_xp: number;
@@ -121,6 +127,7 @@ export const publicProfileResponseSchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
+  avatarCustomization: avatarCustomizationSchema.nullable(),
   country: z.string().nullable(),
   favoriteClub: z.string().nullable(),
   progression: progressionResponseSchema,
@@ -156,6 +163,7 @@ export function toPublicProfileResponse(data: PublicProfileData) {
     id: data.user.id,
     nickname: data.user.nickname,
     avatarUrl: data.user.avatar_url,
+    avatarCustomization: avatarCustomizationSchema.nullable().parse(data.user.avatar_customization ?? null),
     country: data.user.country,
     favoriteClub: data.user.favorite_club,
     progression: data.progression,
@@ -189,6 +197,7 @@ export const userSearchResultSchema = z.object({
   id: z.string().uuid(),
   nickname: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
+  avatarCustomization: avatarCustomizationSchema.nullable(),
   level: z.number().int().positive(),
   ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,

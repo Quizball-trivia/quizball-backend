@@ -253,6 +253,14 @@ export const rankedService = {
 
     const rankedContext = parseRankedContext(match.ranked_context);
     const winnerDecisionMethod = parseWinnerDecisionMethod(match.state_payload);
+    logger.info({
+      matchId,
+      winnerUserId: match.winner_user_id,
+      winnerDecisionMethod,
+      humanPlayerIds: humanPlayers.map((player) => player.user_id),
+      reusedExistingOutcome: existing.length >= humanPlayers.length,
+      rankedContext,
+    }, 'Ranked settlement started');
     const profiles = await Promise.all(humanPlayers.map((player) => rankedRepo.ensureProfile(player.user_id)));
     const profileByUser = new Map(profiles.map((profile) => [profile.user_id, profile]));
 
@@ -322,6 +330,7 @@ export const rankedService = {
       let placementAnchorRp: number | null = null;
       let placementPerfScore: number | null = null;
       let calculationMethod: 'placement_seed' | 'ranked_formula' = 'ranked_formula';
+      let formulaDeltaRp: number | null = null;
 
       if (isPlacement) {
         calculationMethod = 'placement_seed';
@@ -365,15 +374,36 @@ export const rankedService = {
           newTier = oldTier;
         }
       } else {
-        deltaRp = computeRankedDelta(
+        formulaDeltaRp = computeRankedDelta(
           oldRp,
           opponentRp,
           isWin,
           !isWin && winnerDecisionMethod === 'forfeit'
         );
-        newRp = Math.max(0, oldRp + deltaRp);
+        newRp = Math.max(0, oldRp + formulaDeltaRp);
+        deltaRp = newRp - oldRp;
         newTier = tierFromRp(newRp);
       }
+
+      logger.info({
+        matchId,
+        userId: player.user_id,
+        opponentUserId: opponent?.user_id ?? null,
+        result,
+        winnerDecisionMethod,
+        isPlacement,
+        calculationMethod,
+        oldRp,
+        formulaDeltaRp,
+        appliedDeltaRp: deltaRp,
+        newRp,
+        clampedByFloor: formulaDeltaRp !== null && formulaDeltaRp !== deltaRp,
+        oldTier,
+        newTier,
+        placementStatus,
+        placementPlayed,
+        placementRequired: profile.placement_required,
+      }, 'Ranked settlement computed player outcome');
 
       settlementEntries.push({
         profile: {
@@ -419,10 +449,20 @@ export const rankedService = {
       });
     }
 
+    logger.info({
+      matchId,
+      entryCount: settlementEntries.length,
+      userIds: settlementEntries.map((entry) => entry.outcome.userId),
+    }, 'Ranked settlement applying persistence');
     await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
     })));
+    logger.info({
+      matchId,
+      entryCount: settlementEntries.length,
+      userIds: settlementEntries.map((entry) => entry.outcome.userId),
+    }, 'Ranked settlement persistence applied');
 
     const outcome = {
       isPlacement: settlementEntries.some((entry) => entry.outcome.isPlacement),

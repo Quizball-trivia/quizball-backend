@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 const getByIdMock = vi.fn();
+const updateMock = vi.fn();
 const searchByNicknameRepoMock = vi.fn();
 const getProfileMock = vi.fn();
 const getUserRankMock = vi.fn();
 const getUserStatsSummaryMock = vi.fn();
 const getHeadToHeadMock = vi.fn();
 const getRelationshipStatusesMock = vi.fn();
+const listInventoryWithProductsMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -23,8 +25,14 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
     searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
-    update: vi.fn(),
+    update: (...args: unknown[]) => updateMock(...args),
     createWithIdentity: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/store/store.repo.js', () => ({
+  storeRepo: {
+    listInventoryWithProducts: (...args: unknown[]) => listInventoryWithProductsMock(...args),
   },
 }));
 
@@ -79,6 +87,7 @@ const MOCK_USER = {
   nickname: 'TargetUser',
   country: 'US',
   avatar_url: 'https://example.com/avatar.png',
+  avatar_customization: null,
   favorite_club: 'Arsenal',
   preferred_language: 'en',
   onboarding_complete: true,
@@ -121,6 +130,8 @@ describe('usersService.getPublicProfile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getByIdMock.mockResolvedValue(MOCK_USER);
+    updateMock.mockResolvedValue({ ...MOCK_USER, avatar_customization: { skin: 'skin_male_white' } });
+    listInventoryWithProductsMock.mockResolvedValue([]);
     getProfileMock.mockResolvedValue(MOCK_RANKED_PROFILE);
     getUserRankMock.mockImplementation((_userId: string, country?: string) =>
       Promise.resolve(country ? MOCK_COUNTRY_RANK : MOCK_GLOBAL_RANK),
@@ -143,6 +154,7 @@ describe('usersService.getPublicProfile', () => {
       id: 'user-target-id',
       nickname: 'TargetUser',
       avatar_url: 'https://example.com/avatar.png',
+      avatar_customization: null,
       country: 'US',
       favorite_club: 'Arsenal',
       total_xp: 250,
@@ -222,6 +234,63 @@ describe('usersService.getPublicProfile', () => {
     expect(getHeadToHeadMock).not.toHaveBeenCalled();
     expect(result.headToHead).toBeNull();
   });
+
+  it('rejects avatar customization with unowned paid items', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        hair: 'hair_ramos',
+      },
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Avatar customization includes unowned items',
+    });
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('allows local admin avatar customization preview with unowned paid items', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white_alt',
+        hair: 'hair_ramos',
+      },
+    }, {
+      requesterRole: 'admin',
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white_alt',
+        hair: 'hair_ramos',
+      },
+    });
+  });
+
+  it('allows avatar customization with free and owned paid items', async () => {
+    listInventoryWithProductsMock.mockResolvedValue([
+      { product_slug: 'avatar_hair_ramos' },
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        hair: 'hair_ramos',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        hair: 'hair_ramos',
+      },
+    });
+  });
 });
 
 describe('usersService.searchByNickname', () => {
@@ -278,6 +347,7 @@ describe('usersService.searchByNickname', () => {
         id: '11111111-1111-1111-1111-111111111111',
         nickname: 'LevelFourUser',
         avatarUrl: 'https://example.com/a.png',
+        avatarCustomization: null,
         level: 4,
         ranked: {
           rp: 1420,
@@ -295,6 +365,7 @@ describe('usersService.searchByNickname', () => {
         id: '22222222-2222-2222-2222-222222222222',
         nickname: 'PendingUser',
         avatarUrl: null,
+        avatarCustomization: null,
         level: 1,
         ranked: null,
         friendStatus: 'pending_sent',

@@ -11,6 +11,48 @@ import type { PublicProfileData } from './users.schemas.js';
 import { progressionService } from '../progression/progression.service.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { friendsRepo } from '../friends/friends.repo.js';
+import { BadRequestError } from '../../core/errors.js';
+import { storeRepo } from '../store/store.repo.js';
+import { config } from '../../core/config.js';
+import {
+  avatarCustomizationSchema,
+  getRequiredAvatarProductSlugs,
+  type AvatarCustomization,
+} from './avatar-customization.js';
+
+interface UpdateProfileOptions {
+  requesterRole?: string | null;
+}
+
+async function assertAvatarCustomizationAllowed(
+  userId: string,
+  customization: AvatarCustomization | null | undefined,
+  options?: UpdateProfileOptions
+): Promise<void> {
+  if (!customization) {
+    return;
+  }
+
+  // Local-only admin bypass keeps development preview flows fast without weakening staging/prod.
+  if (config.NODE_ENV === 'local' && options?.requesterRole === 'admin') {
+    return;
+  }
+
+  const requiredSlugs = getRequiredAvatarProductSlugs(customization);
+  if (requiredSlugs.length === 0) {
+    return;
+  }
+
+  const inventory = await storeRepo.listInventoryWithProducts(userId);
+  const ownedSlugs = new Set(inventory.map((item) => item.product_slug));
+  const missingSlugs = requiredSlugs.filter((slug) => !ownedSlugs.has(slug));
+
+  if (missingSlugs.length > 0) {
+    throw new BadRequestError('Avatar customization includes unowned items', {
+      missingProductSlugs: missingSlugs,
+    });
+  }
+}
 
 /**
  * Users service.
@@ -124,8 +166,11 @@ export const usersService = {
    */
   async updateProfile(
     id: string,
-    data: Pick<UpdateUserData, 'nickname' | 'country' | 'avatarUrl' | 'favoriteClub' | 'preferredLanguage'>
+    data: Pick<UpdateUserData, 'nickname' | 'country' | 'avatarUrl' | 'avatarCustomization' | 'favoriteClub' | 'preferredLanguage'>,
+    options?: UpdateProfileOptions
   ): Promise<User> {
+    await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
+
     const user = await usersRepo.update(id, data);
 
     if (!user) {
@@ -163,6 +208,7 @@ export const usersService = {
         id: user.id,
         nickname: user.nickname,
         avatar_url: user.avatar_url,
+        avatar_customization: user.avatar_customization,
         country: user.country,
         favorite_club: user.favorite_club,
         total_xp: user.total_xp,
@@ -199,6 +245,7 @@ export const usersService = {
       id: row.id,
       nickname: row.nickname,
       avatarUrl: row.avatar_url,
+      avatarCustomization: avatarCustomizationSchema.nullable().parse(row.avatar_customization ?? null),
       level: progressionService.getProgression(row.total_xp).level,
       ranked: row.ranked_tier && row.ranked_placement_status
         ? ({

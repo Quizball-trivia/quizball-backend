@@ -4,6 +4,7 @@ import { requireRole } from '../middleware/require-role.js';
 import { validate } from '../middleware/validate.js';
 import {
   completeDailyChallengeBodySchema,
+  dailyChallengeLocaleQuerySchema,
   dailyChallengeParamSchema,
   dailyChallengesController,
 } from '../../modules/daily-challenges/index.js';
@@ -12,11 +13,15 @@ const router = Router();
 
 router.use(authMiddleware);
 
-router.get('/', dailyChallengesController.list);
+router.get(
+  '/',
+  validate({ query: dailyChallengeLocaleQuerySchema }),
+  dailyChallengesController.list
+);
 
 router.post(
   '/:challengeType/session',
-  validate({ params: dailyChallengeParamSchema }),
+  validate({ params: dailyChallengeParamSchema, query: dailyChallengeLocaleQuerySchema }),
   dailyChallengesController.createSession
 );
 

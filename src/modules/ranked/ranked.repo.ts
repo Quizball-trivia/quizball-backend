@@ -1,5 +1,6 @@
 import { sql } from '../../db/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 import type {
   PlacementStatus,
   RankedLeaderboardEntry,
@@ -125,78 +126,109 @@ export const rankedRepo = {
   async applySettlement(entries: RankedSettlementEntry[]): Promise<void> {
     if (entries.length === 0) return;
 
-    await sql.begin(async (tx) => {
-      for (const entry of entries) {
-        await tx.unsafe(
-          `
-          WITH inserted AS (
-            INSERT INTO ranked_rp_changes (
-              match_id,
-              user_id,
-              opponent_user_id,
-              opponent_is_ai,
-              old_rp,
-              delta_rp,
-              new_rp,
-              result,
-              is_placement,
-              placement_game_no,
-              placement_anchor_rp,
-              placement_perf_score,
-              calculation_method
+    try {
+      logger.info({
+        entryCount: entries.length,
+        matchIds: [...new Set(entries.map((entry) => entry.change.matchId))],
+        userIds: entries.map((entry) => entry.change.userId),
+      }, 'Ranked settlement DB transaction starting');
+
+      await sql.begin(async (tx) => {
+        for (const entry of entries) {
+          await tx.unsafe(
+            `
+            WITH inserted AS (
+              INSERT INTO ranked_rp_changes (
+                match_id,
+                user_id,
+                opponent_user_id,
+                opponent_is_ai,
+                old_rp,
+                delta_rp,
+                new_rp,
+                result,
+                is_placement,
+                placement_game_no,
+                placement_anchor_rp,
+                placement_perf_score,
+                calculation_method
+              )
+              VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+              )
+              ON CONFLICT (match_id, user_id) DO NOTHING
+              RETURNING 1
             )
-            VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
-            )
-            ON CONFLICT (match_id, user_id) DO NOTHING
-            RETURNING 1
-          )
-          UPDATE ranked_profiles
-          SET
-            rp = $14,
-            tier = $15,
-            placement_status = $16,
-            placement_played = $17,
-            placement_wins = $18,
-            placement_seed_rp = $19,
-            placement_perf_sum = $20,
-            placement_points_for_sum = $21,
-            placement_points_against_sum = $22,
-            current_win_streak = $23,
-            last_ranked_match_at = NOW(),
-            updated_at = NOW()
-          WHERE user_id = $24
-            AND EXISTS (SELECT 1 FROM inserted)
-          `,
-          [
-            entry.change.matchId,
-            entry.change.userId,
-            entry.change.opponentUserId,
-            entry.change.opponentIsAi,
-            entry.change.oldRp,
-            entry.change.deltaRp,
-            entry.change.newRp,
-            entry.change.result,
-            entry.change.isPlacement,
-            entry.change.placementGameNo,
-            entry.change.placementAnchorRp,
-            entry.change.placementPerfScore,
-            entry.change.calculationMethod,
-            entry.profile.rp,
-            entry.profile.tier,
-            entry.profile.placementStatus,
-            entry.profile.placementPlayed,
-            entry.profile.placementWins,
-            entry.profile.placementSeedRp,
-            entry.profile.placementPerfSum,
-            entry.profile.placementPointsForSum,
-            entry.profile.placementPointsAgainstSum,
-            entry.profile.currentWinStreak,
-            entry.profile.userId,
-          ]
-        );
-      }
-    });
+            UPDATE ranked_profiles
+            SET
+              rp = $14,
+              tier = $15,
+              placement_status = $16,
+              placement_played = $17,
+              placement_wins = $18,
+              placement_seed_rp = $19,
+              placement_perf_sum = $20,
+              placement_points_for_sum = $21,
+              placement_points_against_sum = $22,
+              current_win_streak = $23,
+              last_ranked_match_at = NOW(),
+              updated_at = NOW()
+            WHERE user_id = $24
+              AND EXISTS (SELECT 1 FROM inserted)
+            `,
+            [
+              entry.change.matchId,
+              entry.change.userId,
+              entry.change.opponentUserId,
+              entry.change.opponentIsAi,
+              entry.change.oldRp,
+              entry.change.deltaRp,
+              entry.change.newRp,
+              entry.change.result,
+              entry.change.isPlacement,
+              entry.change.placementGameNo,
+              entry.change.placementAnchorRp,
+              entry.change.placementPerfScore,
+              entry.change.calculationMethod,
+              entry.profile.rp,
+              entry.profile.tier,
+              entry.profile.placementStatus,
+              entry.profile.placementPlayed,
+              entry.profile.placementWins,
+              entry.profile.placementSeedRp,
+              entry.profile.placementPerfSum,
+              entry.profile.placementPointsForSum,
+              entry.profile.placementPointsAgainstSum,
+              entry.profile.currentWinStreak,
+              entry.profile.userId,
+            ]
+          );
+        }
+      });
+
+      logger.info({
+        entryCount: entries.length,
+        matchIds: [...new Set(entries.map((entry) => entry.change.matchId))],
+        userIds: entries.map((entry) => entry.change.userId),
+      }, 'Ranked settlement DB transaction committed');
+    } catch (error) {
+      logger.error({
+        error,
+        entryCount: entries.length,
+        entries: entries.map((entry) => ({
+          matchId: entry.change.matchId,
+          userId: entry.change.userId,
+          opponentUserId: entry.change.opponentUserId,
+          oldRp: entry.change.oldRp,
+          deltaRp: entry.change.deltaRp,
+          newRp: entry.change.newRp,
+          result: entry.change.result,
+          isPlacement: entry.change.isPlacement,
+          calculationMethod: entry.change.calculationMethod,
+        })),
+      }, 'Ranked settlement DB transaction failed');
+      throw error;
+    }
   },
 
   async listLeaderboard(limit: number, offset: number, country?: string): Promise<RankedLeaderboardEntry[]> {
@@ -206,6 +238,7 @@ export const rankedRepo = {
           rp.user_id AS "userId",
           COALESCE(u.nickname, 'Player') AS "username",
           u.avatar_url AS "avatarUrl",
+          u.avatar_customization AS "avatarCustomization",
           rp.rp,
           rp.tier,
           u.country,
@@ -234,6 +267,7 @@ export const rankedRepo = {
         rp.user_id AS "userId",
         COALESCE(u.nickname, 'Player') AS "username",
         u.avatar_url AS "avatarUrl",
+        u.avatar_customization AS "avatarCustomization",
         rp.rp,
         rp.tier,
         u.country,

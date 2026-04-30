@@ -8,6 +8,8 @@ const listCompletionsForUserOnDayMock = vi.fn();
 const getConfigMock = vi.fn();
 const getCompletionForUserOnDayMock = vi.fn();
 const listPublishedQuestionsByTypeAndCategoriesMock = vi.fn();
+const listAvailableCategoriesByQuestionTypeMock = vi.fn();
+const countPublishedQuestionsByTypeAndCategoriesMock = vi.fn();
 const createCompletionMock = vi.fn();
 const addCoinsMock = vi.fn();
 const grantXpMock = vi.fn();
@@ -23,6 +25,8 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     getConfig: (...args: unknown[]) => getConfigMock(...args),
     getCompletionForUserOnDay: (...args: unknown[]) => getCompletionForUserOnDayMock(...args),
     listPublishedQuestionsByTypeAndCategories: (...args: unknown[]) => listPublishedQuestionsByTypeAndCategoriesMock(...args),
+    listAvailableCategoriesByQuestionType: (...args: unknown[]) => listAvailableCategoriesByQuestionTypeMock(...args),
+    countPublishedQuestionsByTypeAndCategories: (...args: unknown[]) => countPublishedQuestionsByTypeAndCategoriesMock(...args),
     deleteCompletionForUserOnDay: (...args: unknown[]) => deleteCompletionForUserOnDayMock(...args),
     upsertConfig: (...args: unknown[]) => upsertConfigMock(...args),
   },
@@ -99,6 +103,46 @@ describe('dailyChallengesService', () => {
         showOnHome: false,
       }),
     ]);
+  });
+
+  it('ignores legacy daily challenge configs that are no longer supported', async () => {
+    listConfigsMock.mockResolvedValue([
+      {
+        challenge_type: 'footballJeopardy',
+        is_active: true,
+        sort_order: 1,
+        show_on_home: true,
+        coin_reward: 100,
+        xp_reward: 20,
+        settings: {},
+        created_at: '2026-03-15T00:00:00.000Z',
+        updated_at: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        challenge_type: 'footballLogic',
+        is_active: true,
+        sort_order: 2,
+        show_on_home: true,
+        coin_reward: 100,
+        xp_reward: 20,
+        settings: {
+          categoryIds: [],
+          questionCount: 1,
+          secondsPerQuestion: 30,
+        },
+        created_at: '2026-03-15T00:00:00.000Z',
+        updated_at: '2026-03-15T00:00:00.000Z',
+      },
+    ]);
+    listAvailableCategoriesByQuestionTypeMock.mockResolvedValue([]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.listAdminConfigs();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.challengeType).toBe('footballLogic');
+    expect(listAvailableCategoriesByQuestionTypeMock).toHaveBeenCalledTimes(1);
+    expect(listAvailableCategoriesByQuestionTypeMock).toHaveBeenCalledWith('football_logic');
   });
 
   it('builds a money drop session from published mcq questions', async () => {
@@ -246,9 +290,9 @@ describe('dailyChallengesService', () => {
     });
   });
 
-  it('builds a football jeopardy session from available categories when config categoryIds is empty', async () => {
+  it('builds a true false session from available categories when config categoryIds is empty', async () => {
     getConfigMock.mockResolvedValue({
-      challenge_type: 'footballJeopardy',
+      challenge_type: 'trueFalse',
       is_active: true,
       sort_order: 2,
       show_on_home: true,
@@ -256,7 +300,8 @@ describe('dailyChallengesService', () => {
       xp_reward: 100,
       settings: {
         categoryIds: [],
-        pickCount: 2,
+        questionCount: 2,
+        secondsPerQuestion: 12,
       },
       created_at: '2026-03-15T00:00:00.000Z',
       updated_at: '2026-03-15T00:00:00.000Z',
@@ -271,12 +316,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Premier League' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
           ],
         },
       },
@@ -288,12 +331,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Premier League' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: false },
+            { id: 'false', text: { en: 'False' }, is_correct: true },
           ],
         },
       },
@@ -305,12 +346,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Premier League' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
           ],
         },
       },
@@ -322,12 +361,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'La Liga' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: false },
+            { id: 'false', text: { en: 'False' }, is_correct: true },
           ],
         },
       },
@@ -339,12 +376,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'La Liga' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
           ],
         },
       },
@@ -356,12 +391,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'La Liga' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: false },
+            { id: 'false', text: { en: 'False' }, is_correct: true },
           ],
         },
       },
@@ -373,12 +406,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Serie A' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
           ],
         },
       },
@@ -390,12 +421,10 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Serie A' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: false },
+            { id: 'false', text: { en: 'False' }, is_correct: true },
           ],
         },
       },
@@ -407,26 +436,488 @@ describe('dailyChallengesService', () => {
         explanation: null,
         category_name: { en: 'Serie A' },
         payload: {
-          type: 'mcq_single',
+          type: 'true_false',
           options: [
-            { id: 'a', text: { en: 'A' }, is_correct: true },
-            { id: 'b', text: { en: 'B' }, is_correct: false },
-            { id: 'c', text: { en: 'C' }, is_correct: false },
-            { id: 'd', text: { en: 'D' }, is_correct: false },
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
           ],
         },
       },
     ]);
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
-    const session = await dailyChallengesService.getChallengeSession('user-1', 'footballJeopardy');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
 
-    expect(session.challengeType).toBe('footballJeopardy');
-    expect(session.pickCount).toBe(2);
-    expect(session.categories).toHaveLength(2);
-    for (const category of session.categories) {
-      expect(category.questions).toHaveLength(3);
-    }
+    expect(session.challengeType).toBe('trueFalse');
+    expect(session.questionCount).toBe(2);
+    expect(session.questions).toHaveLength(2);
+    expect(session.questions[0]).toEqual(
+      expect.objectContaining({
+        trueLabel: expect.any(String),
+        falseLabel: expect.any(String),
+        correctAnswer: expect.any(Boolean),
+      })
+    );
+  });
+
+  it('uses plain string prompts for true false sessions instead of the fallback label', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'trueFalse',
+      is_active: true,
+      sort_order: 2,
+      show_on_home: true,
+      coin_reward: 400,
+      xp_reward: 100,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerQuestion: 12,
+      },
+      created_at: '2026-03-15T00:00:00.000Z',
+      updated_at: '2026-03-15T00:00:00.000Z',
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    countPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue(1);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'true-false-plain-prompt',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: 'Paris Saint-Germain won the UEFA Champions League in 2025.',
+        explanation: null,
+        category_name: { en: 'True or False' },
+        payload: {
+          type: 'true_false',
+          options: [
+            { id: 'true', text: { en: 'True' }, is_correct: true },
+            { id: 'false', text: { en: 'False' }, is_correct: false },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+
+    expect(session.questions).toHaveLength(1);
+    expect(session.questions[0]?.prompt).toBe('Paris Saint-Germain won the UEFA Champions League in 2025.');
+    expect(session.questions[0]?.prompt).not.toBe('Question');
+  });
+
+  it('unwraps stringified localized prompts for true false sessions', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'trueFalse',
+      is_active: true,
+      sort_order: 2,
+      show_on_home: true,
+      coin_reward: 400,
+      xp_reward: 100,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerQuestion: 12,
+      },
+      created_at: '2026-03-15T00:00:00.000Z',
+      updated_at: '2026-03-15T00:00:00.000Z',
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    countPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue(1);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'true-false-stringified-prompt',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: JSON.stringify({
+          en: 'Lionel Messi won the 2022 World Cup Golden Boot.',
+          ka: 'ლიონელ მესიმ 2022 წლის მსოფლიო ჩემპიონატის ოქროს ბუცი მოიგო.',
+        }),
+        explanation: null,
+        category_name: { en: 'True or False' },
+        payload: {
+          type: 'true_false',
+          options: [
+            { id: 'true', text: { en: 'True' }, is_correct: false },
+            { id: 'false', text: { en: 'False' }, is_correct: true },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse', 'en');
+
+    expect(session.questions).toHaveLength(1);
+    expect(session.questions[0]?.prompt).toBe('Lionel Messi won the 2022 World Cup Golden Boot.');
+  });
+
+  it('builds a countdown session from uploaded countdown list content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'countdown',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        roundCount: 1,
+        secondsPerRound: 45,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'countdown-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: { en: 'Name Ballon d’Or winners' },
+        explanation: null,
+        category_name: { en: 'Awards' },
+        payload: {
+          type: 'countdown_list',
+          prompt: { en: 'Ballon d’Or winners' },
+          answer_groups: [
+            {
+              id: 'messi',
+              display: { en: 'Lionel Messi' },
+              accepted_answers: ['Lionel Messi', 'Messi'],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'countdown');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'countdown',
+        roundCount: 1,
+        secondsPerRound: 45,
+        rounds: [
+          expect.objectContaining({
+            id: 'countdown-1',
+            prompt: 'Ballon d’Or winners',
+            answerGroups: [
+              {
+                id: 'messi',
+                display: 'Lionel Messi',
+                acceptedAnswers: ['Lionel Messi', 'Messi'],
+              },
+            ],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('builds a clues session from uploaded clue chain content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'clues',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerClueStep: 10,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'clue-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'medium',
+        prompt: { en: 'Guess the player' },
+        explanation: null,
+        category_name: { en: 'Players' },
+        payload: {
+          type: 'clue_chain',
+          display_answer: { en: 'Petr Cech' },
+          accepted_answers: ['Petr Cech', 'Cech'],
+          clues: [
+            { type: 'text', content: { en: 'Protective headgear' } },
+            { type: 'text', content: { en: 'Drummer' } },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'clues');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'clues',
+        questionCount: 1,
+        secondsPerClueStep: 10,
+        questions: [
+          expect.objectContaining({
+            displayAnswer: 'Petr Cech',
+            acceptedAnswers: ['Petr Cech', 'Cech'],
+            clues: [
+              { type: 'text', content: 'Protective headgear' },
+              { type: 'text', content: 'Drummer' },
+            ],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('builds a put in order session from uploaded ordering content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'putInOrder',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        roundCount: 1,
+        itemsPerRound: 3,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'order-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'hard',
+        prompt: { en: 'Order by transfer year' },
+        explanation: null,
+        category_name: { en: 'Transfers' },
+        payload: {
+          type: 'put_in_order',
+          prompt: { en: 'Order by transfer year' },
+          direction: 'asc',
+          items: [
+            { id: 'ronaldo', label: { en: 'Ronaldo to Real Madrid' }, details: null, emoji: null, sort_value: 2009 },
+            { id: 'neymar', label: { en: 'Neymar to PSG' }, details: null, emoji: null, sort_value: 2017 },
+            { id: 'mbappe', label: { en: 'Mbappe to Real Madrid' }, details: null, emoji: null, sort_value: 2024 },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'putInOrder');
+
+    expect(session.challengeType).toBe('putInOrder');
+    expect(session.rounds).toHaveLength(1);
+    expect(session.rounds[0]).toEqual(
+      expect.objectContaining({
+        id: 'order-1',
+        prompt: 'Order by transfer year',
+        direction: 'asc',
+        items: expect.arrayContaining([
+          expect.objectContaining({ id: 'ronaldo', label: 'Ronaldo to Real Madrid', sortValue: 2009 }),
+          expect.objectContaining({ id: 'neymar', label: 'Neymar to PSG', sortValue: 2017 }),
+          expect.objectContaining({ id: 'mbappe', label: 'Mbappe to Real Madrid', sortValue: 2024 }),
+        ]),
+      })
+    );
+  });
+
+  it('builds an imposter session from uploaded multi-select content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'imposter',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerQuestion: 20,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'imposter-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'medium',
+        prompt: { en: "Which players have won the Ballon d'Or?" },
+        explanation: null,
+        category_name: { en: 'Awards' },
+        payload: {
+          type: 'imposter_multi_select',
+          options: [
+            { id: 'messi', text: { en: 'Lionel Messi' }, is_correct: true },
+            { id: 'ronaldo', text: { en: 'Cristiano Ronaldo' }, is_correct: true },
+            { id: 'xavi', text: { en: 'Xavi Hernandez' }, is_correct: false },
+            { id: 'henry', text: { en: 'Thierry Henry' }, is_correct: false },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'imposter');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'imposter',
+        questions: [
+          expect.objectContaining({
+            prompt: "Which players have won the Ballon d'Or?",
+            options: [
+              { id: 'messi', text: 'Lionel Messi' },
+              { id: 'ronaldo', text: 'Cristiano Ronaldo' },
+              { id: 'xavi', text: 'Xavi Hernandez' },
+              { id: 'henry', text: 'Thierry Henry' },
+            ],
+            correctOptionIds: ['messi', 'ronaldo'],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('builds a career path session from uploaded club path content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'careerPath',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerQuestion: 25,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'career-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'easy',
+        prompt: { en: 'Who followed this path?' },
+        explanation: null,
+        category_name: { en: 'Careers' },
+        payload: {
+          type: 'career_path',
+          clubs: [{ en: 'Birmingham City' }, { en: 'Borussia Dortmund' }, { en: 'Real Madrid' }],
+          display_answer: { en: 'Jude Bellingham' },
+          accepted_answers: ['Jude Bellingham', 'Bellingham'],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'careerPath');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'careerPath',
+        questions: [
+          expect.objectContaining({
+            clubs: ['Birmingham City', 'Borussia Dortmund', 'Real Madrid'],
+            displayAnswer: 'Jude Bellingham',
+            acceptedAnswers: ['Jude Bellingham', 'Bellingham'],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('builds a high low session from uploaded matchup content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'highLow',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        roundCount: 1,
+        secondsPerRound: 30,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'high-low-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'medium',
+        prompt: { en: 'Who has more Premier League goals?' },
+        explanation: null,
+        category_name: { en: 'Premier League' },
+        payload: {
+          type: 'high_low',
+          stat_label: { en: 'All-time Premier League goals' },
+          matchups: [
+            {
+              id: 'owen-v-rvp',
+              left_name: { en: 'Michael Owen' },
+              left_value: 150,
+              right_name: { en: 'Robin van Persie' },
+              right_value: 144,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'highLow');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'highLow',
+        rounds: [
+          expect.objectContaining({
+            statLabel: 'All-time Premier League goals',
+            matchups: [
+              {
+                id: 'owen-v-rvp',
+                leftName: 'Michael Owen',
+                leftValue: 150,
+                rightName: 'Robin van Persie',
+                rightValue: 144,
+              },
+            ],
+          }),
+        ],
+      })
+    );
+  });
+
+  it('builds a football logic session from uploaded image clue content', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'footballLogic',
+      is_active: true,
+      settings: {
+        categoryIds: [],
+        questionCount: 1,
+        secondsPerQuestion: 30,
+      },
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      {
+        id: 'logic-1',
+        category_id: '11111111-1111-1111-1111-111111111111',
+        difficulty: 'hard',
+        prompt: { en: 'Decode the player' },
+        explanation: { en: 'Five goals in nine minutes.' },
+        category_name: { en: 'Logic' },
+        payload: {
+          type: 'football_logic',
+          image_a_url: 'https://cdn.example.com/stopwatch.png',
+          image_b_url: 'https://cdn.example.com/five.png',
+          display_answer: { en: 'Robert Lewandowski' },
+          accepted_answers: ['Robert Lewandowski', 'Lewandowski'],
+          prompt: { en: 'Who is this?' },
+          explanation: { en: 'Bundesliga record: five goals in nine minutes.' },
+        },
+      },
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'footballLogic');
+
+    expect(session).toEqual(
+      expect.objectContaining({
+        challengeType: 'footballLogic',
+        questions: [
+          expect.objectContaining({
+            prompt: 'Decode the player',
+            imageAUrl: 'https://cdn.example.com/stopwatch.png',
+            imageBUrl: 'https://cdn.example.com/five.png',
+            displayAnswer: 'Robert Lewandowski',
+            acceptedAnswers: ['Robert Lewandowski', 'Lewandowski'],
+            explanation: 'Bundesliga record: five goals in nine minutes.',
+          }),
+        ],
+      })
+    );
   });
 
   it('completes a challenge once and awards configured coins', async () => {

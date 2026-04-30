@@ -1,11 +1,13 @@
 import { sql } from '../../db/index.js';
-import type { User } from '../../db/types.js';
+import type { Json, User } from '../../db/types.js';
+import type { AvatarCustomization } from './avatar-customization.js';
 
 export interface CreateUserData {
   email?: string | null;
   nickname?: string | null;
   country?: string | null;
   avatarUrl?: string | null;
+  avatarCustomization?: AvatarCustomization | null;
   isAi?: boolean;
 }
 
@@ -19,6 +21,7 @@ export interface UpdateUserData {
   nickname?: string | null;
   country?: string | null;
   avatarUrl?: string | null;
+  avatarCustomization?: AvatarCustomization | null;
   favoriteClub?: string | null;
   preferredLanguage?: string | null;
   onboardingComplete?: boolean;
@@ -29,14 +32,16 @@ export const usersRepo = {
     id: string;
     nickname: string;
     avatarUrl?: string | null;
+    avatarCustomization?: AvatarCustomization | null;
   }): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
-      VALUES (${data.id}, null, ${data.nickname}, null, ${data.avatarUrl ?? null}, false, false)
+      INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
+      VALUES (${data.id}, null, ${data.nickname}, null, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, false)
       ON CONFLICT (id)
       DO UPDATE SET
         nickname = EXCLUDED.nickname,
         avatar_url = EXCLUDED.avatar_url,
+        avatar_customization = EXCLUDED.avatar_customization,
         updated_at = NOW()
       RETURNING *
     `;
@@ -45,8 +50,8 @@ export const usersRepo = {
 
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, false, ${data.isAi ?? false})
+      INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
       RETURNING *
     `;
     return user;
@@ -62,14 +67,15 @@ export const usersRepo = {
   ): Promise<User> {
     return sql.begin(async (tx) => {
       const result = await tx.unsafe<User[]>(
-        `INSERT INTO users (id, email, nickname, country, avatar_url, onboarding_complete, is_ai)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, false, false)
+        `INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb, false, false)
          RETURNING *`,
         [
           userData.email ?? null,
           userData.nickname ?? null,
           userData.country ?? null,
           userData.avatarUrl ?? null,
+          JSON.stringify(userData.avatarCustomization ?? null),
         ]
       );
       const user = result[0];
@@ -93,9 +99,10 @@ export const usersRepo = {
 
   async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{
     id: string;
-    nickname: string | null;
-    avatar_url: string | null;
-    total_xp: number;
+  nickname: string | null;
+  avatar_url: string | null;
+  avatar_customization: Json | null;
+  total_xp: number;
     ranked_rp: number | null;
     ranked_tier: string | null;
     ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -113,6 +120,7 @@ export const usersRepo = {
       id: string;
       nickname: string | null;
       avatar_url: string | null;
+      avatar_customization: Json | null;
       total_xp: number;
       ranked_rp: number | null;
       ranked_tier: string | null;
@@ -127,6 +135,7 @@ export const usersRepo = {
         u.id,
         u.nickname,
         u.avatar_url,
+        u.avatar_customization,
         u.total_xp,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
@@ -167,6 +176,7 @@ export const usersRepo = {
         nickname = CASE WHEN ${data.nickname !== undefined} THEN ${data.nickname ?? null} ELSE nickname END,
         country = CASE WHEN ${data.country !== undefined} THEN ${data.country ?? null} ELSE country END,
         avatar_url = CASE WHEN ${data.avatarUrl !== undefined} THEN ${data.avatarUrl ?? null} ELSE avatar_url END,
+        avatar_customization = CASE WHEN ${data.avatarCustomization !== undefined} THEN ${sql.json((data.avatarCustomization ?? null) as Json)}::jsonb ELSE avatar_customization END,
         favorite_club = CASE WHEN ${data.favoriteClub !== undefined} THEN ${data.favoriteClub ?? null} ELSE favorite_club END,
         preferred_language = CASE WHEN ${data.preferredLanguage !== undefined} THEN ${data.preferredLanguage ?? null} ELSE preferred_language END,
         onboarding_complete = CASE WHEN ${data.onboardingComplete !== undefined} THEN ${data.onboardingComplete ?? false} ELSE onboarding_complete END,

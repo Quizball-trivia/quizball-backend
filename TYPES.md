@@ -109,6 +109,27 @@ If TypeScript passes in all projects, types are in sync.
 
 ## Common Patterns
 
+### Layered Avatar Customization
+
+`users.avatar_url` is reserved for external image URLs. Layered avatar equipment is stored in
+`users.avatar_customization` as JSONB and exposed through the API as `avatar_customization`.
+
+Canonical slots:
+
+```typescript
+{
+  skin?: "skin_male_white" | "skin_male_white_alt" | "skin_male_dark" | "skin_male_dark_alt";
+  jersey?: "jersey_green" | "jersey_blue" | "jersey_yellow" | "jersey_red" | "jersey_violet" | "jersey_pink" | "jersey_real" | "jersey_liverpool" | "jersey_barcelona" | "jersey_milan" | "jersey_bayern" | "jersey_brazil_retro" | "jersey_argentina_retro" | "jersey_france_retro" | "jersey_germany_retro" | "jersey_netherlands_retro";
+  hair?: "hair_boy_basic" | "hair_girl_basic" | "hair_hamsik" | "hair_ramos" | "hair_ronaldo_brazil" | "hair_ronaldo_goat";
+  glasses?: "glasses_wayfarer" | "glasses_round" | "glasses_aviator";
+  facialHair?: "stache" | "beard";
+}
+```
+
+Backend validation lives in `src/modules/users/avatar-customization.ts`. Any paid part must map to
+a `store_products.slug`, and the user must own that slug in `user_inventory` before saving. Local
+admin users may bypass this ownership check for design/dev preview only.
+
 ### I18n Field (Multi-language)
 
 ```typescript

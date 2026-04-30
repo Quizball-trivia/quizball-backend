@@ -247,6 +247,7 @@ describe('rankedService', () => {
     { name: 'loss vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-2', delta: -35, newRp: 1465 },
     { name: 'clamp upper win', playerRp: 200, opponentRp: 4000, winnerUserId: 'u-1', delta: 45, newRp: 245 },
     { name: 'clamp lower win (big gap)', playerRp: 4000, opponentRp: 200, winnerUserId: 'u-1', delta: 10, newRp: 4010 },
+    { name: 'clamp loss at zero RP floor', playerRp: 7, opponentRp: 1200, winnerUserId: 'u-2', delta: -7, newRp: 0 },
   ])('applies ranked RP formula correctly: $name', async ({ playerRp, opponentRp, winnerUserId, delta, newRp }) => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', winnerUserId));
     (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
@@ -323,6 +324,65 @@ describe('rankedService', () => {
     expect(userOutcome).toBeDefined();
     expect(userOutcome?.deltaRp).toBe(-35);
     expect(userOutcome?.newRp).toBe(1165);
+  });
+
+  it('clamps forfeit loss at zero and persists the applied delta', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'u-2', undefined, 'forfeit')
+    );
+    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('u-1', 1, 400),
+      createPlayer('u-2', 2, 900),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: false,
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => {
+      if (userId === 'u-1') {
+        return createProfile({
+          user_id: 'u-1',
+          rp: 5,
+          tier: rankedService.tierFromRp(5),
+          placement_status: 'placed',
+          placement_played: 3,
+        });
+      }
+      return createProfile({
+        user_id: 'u-2',
+        rp: 1200,
+        tier: rankedService.tierFromRp(1200),
+        placement_status: 'placed',
+        placement_played: 3,
+      });
+    });
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+    const userOutcome = outcome?.byUserId['u-1'];
+    expect(userOutcome).toBeDefined();
+    expect(userOutcome?.deltaRp).toBe(-5);
+    expect(userOutcome?.newRp).toBe(0);
+  });
+
+  it('returns null for completed ranked match without winner_user_id', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', null));
+    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('u-1', 1, 800),
+      createPlayer('u-2', 2, 700),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: false,
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    expect(outcome).toBeNull();
+    expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
   });
 
   it('keeps RP unchanged during placement game 1 and updates placement counters', async () => {

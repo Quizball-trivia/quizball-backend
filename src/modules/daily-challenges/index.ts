@@ -3,6 +3,7 @@ export { dailyChallengesService } from './daily-challenges.service.js';
 export { dailyChallengesController } from './daily-challenges.controller.js';
 export {
   dailyChallengeTypeEnum,
+  dailyChallengeLocaleQuerySchema,
   dailyChallengeParamSchema,
   updateDailyChallengeConfigSchema,
   completeDailyChallengeBodySchema,
@@ -12,6 +13,7 @@ export {
   completeDailyChallengeResponseSchema,
   resetDailyChallengeResponseSchema,
   type DailyChallengeType,
+  type DailyChallengeLocaleQuery,
   type DailyChallengeParam,
   type UpdateDailyChallengeConfigBody,
   type CompleteDailyChallengeBody,

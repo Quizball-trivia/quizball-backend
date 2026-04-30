@@ -7,6 +7,7 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { avatarCustomizationSchema } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -113,6 +114,7 @@ async function startHumanRankedMatch(
         id: userB.id,
         username: userB.nickname ?? 'Player',
         avatarUrl: userB.avatar_url,
+        avatarCustomization: avatarCustomizationSchema.nullable().parse(userB.avatar_customization ?? null),
         rp: profileB.rp,
       },
     });
@@ -122,6 +124,7 @@ async function startHumanRankedMatch(
         id: userA.id,
         username: userA.nickname ?? 'Player',
         avatarUrl: userA.avatar_url,
+        avatarCustomization: avatarCustomizationSchema.nullable().parse(userA.avatar_customization ?? null),
         rp: profileA.rp,
       },
     });

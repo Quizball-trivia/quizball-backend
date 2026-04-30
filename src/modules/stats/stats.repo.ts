@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 
 export interface HeadToHeadRow {
   wins_a: number;
@@ -27,6 +28,7 @@ export interface RecentMatchRow {
   opponent_id: string | null;
   opponent_username: string | null;
   opponent_avatar_url: string | null;
+  opponent_avatar_customization: Json | null;
   opponent_is_ai: boolean;
 }
 
@@ -95,6 +97,7 @@ export const statsRepo = {
         opp.id AS opponent_id,
         opp.nickname AS opponent_username,
         opp.avatar_url AS opponent_avatar_url,
+        opp.avatar_customization AS opponent_avatar_customization,
         false AS opponent_is_ai
       FROM matches m
       JOIN match_players mp_self

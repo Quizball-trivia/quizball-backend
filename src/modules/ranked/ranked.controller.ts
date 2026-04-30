@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { rankedService } from './ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
 import type { RankedProfileResponse } from './ranked.schemas.js';
+import { avatarCustomizationSchema } from '../users/avatar-customization.js';
 
 function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
   if (total === 0) return { trend: 'same', trendValue: 0 };
@@ -44,6 +45,7 @@ export const rankedController = {
       const { trendWins, trendTotal, ...rest } = entry;
       return {
         ...rest,
+        avatarCustomization: avatarCustomizationSchema.nullable().parse(entry.avatarCustomization ?? null),
         rank: offset + i + 1,
         ...computeTrend(trendWins, trendTotal),
       };
@@ -78,6 +80,7 @@ export const rankedController = {
       userId,
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
+      avatarCustomization: avatarCustomizationSchema.nullable().parse(user?.avatar_customization ?? null),
       country: user?.country ?? null,
       rp: profile.rp,
       tier: profile.tier,

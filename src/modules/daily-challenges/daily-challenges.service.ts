@@ -8,23 +8,31 @@ import {
 } from '../../core/errors.js';
 import { getLocalizedString } from '../../lib/localization.js';
 import { categoriesRepo } from '../categories/categories.repo.js';
-import type { QuestionType } from '../questions/questions.schemas.js';
-import { questionPayloadSchema } from '../questions/questions.schemas.js';
+import {
+  questionPayloadSchema,
+  type QuestionPayload,
+  type QuestionType,
+} from '../questions/questions.schemas.js';
 import { DAILY_CHALLENGE_DEFINITIONS } from './daily-challenges.definitions.js';
 import { dailyChallengesRepo } from './daily-challenges.repo.js';
 import {
+  careerPathSettingsSchema,
   cluesSettingsSchema,
   countdownSettingsSchema,
-  footballJeopardySettingsSchema,
+  footballLogicSettingsSchema,
+  highLowSettingsSchema,
+  imposterSettingsSchema,
   moneyDropSettingsSchema,
-  type DailyChallengeSettings,
   putInOrderSettingsSchema,
   trueFalseSettingsSchema,
+  dailyChallengeTypeEnum,
+  type DailyChallengeSettings,
 } from './daily-challenges.schemas.js';
 import type {
   DailyChallengeAvailableCategoryRow,
   DailyChallengeCompletionRow,
   DailyChallengeConfigRow,
+  DailyChallengeLocalizedText,
   DailyChallengeType,
   QuestionContentRow,
 } from './daily-challenges.types.js';
@@ -35,12 +43,60 @@ function getUtcDay(now = new Date()): string {
 
 const dailyChallengeSettingsSchemas = {
   moneyDrop: moneyDropSettingsSchema,
-  footballJeopardy: footballJeopardySettingsSchema,
   trueFalse: trueFalseSettingsSchema,
   countdown: countdownSettingsSchema,
   clues: cluesSettingsSchema,
   putInOrder: putInOrderSettingsSchema,
+  imposter: imposterSettingsSchema,
+  careerPath: careerPathSettingsSchema,
+  highLow: highLowSettingsSchema,
+  footballLogic: footballLogicSettingsSchema,
 } as const;
+
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka'] as const;
+
+type QuestionPayloadType = QuestionPayload['type'];
+type PayloadOfType<TType extends QuestionPayloadType> = Extract<QuestionPayload, { type: TType }>;
+type DailyChallengeLocale = (typeof SUPPORTED_DAILY_CHALLENGE_LOCALES)[number];
+type ContentAvailabilityDetails = {
+  categoryIds: string[];
+  questionType: QuestionPayloadType;
+  rawPublishedInSelectedCategories?: number;
+  validPublishedInSelectedCategories?: number;
+  rawPublishedAcrossAllCategories?: number;
+  validPublishedAcrossAllCategories?: number;
+};
+
+function isDailyChallengeType(value: unknown): value is DailyChallengeType {
+  return dailyChallengeTypeEnum.safeParse(value).success;
+}
+
+function isKnownDailyChallengeConfig(config: DailyChallengeConfigRow): boolean {
+  return isDailyChallengeType(config.challenge_type);
+}
+
+function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
+  const normalized = locale?.trim().toLowerCase();
+  if (!normalized) {
+    return 'en';
+  }
+  if (normalized === 'ka' || normalized.startsWith('ka-')) {
+    return 'ka';
+  }
+  return 'en';
+}
+
+function getLocalePreferences(locale?: string): string[] {
+  const normalized = normalizeDailyChallengeLocale(locale);
+  return normalized === 'en' ? ['en'] : [normalized, 'en'];
+}
+
+function getLocalizationOptions(locale?: string, fallback?: string) {
+  return {
+    preferredLocales: getLocalePreferences(locale),
+    ...(fallback !== undefined ? { fallback } : {}),
+  };
+}
 
 function throwAlreadyCompleted(challengeType: DailyChallengeType): never {
   throw new DailyChallengeAlreadyCompletedError({ challengeType });
@@ -48,9 +104,9 @@ function throwAlreadyCompleted(challengeType: DailyChallengeType): never {
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
   return copy;
 }
@@ -63,14 +119,14 @@ function ensureEnough<T>(
   items: T[],
   needed: number,
   challengeType: DailyChallengeType,
-  details: unknown
+  details: object
 ): T[] {
   if (items.length < needed) {
     throw new DailyChallengeContentUnavailableError({
       challengeType,
       needed,
       available: items.length,
-      ...((details ?? {}) as Record<string, unknown>),
+      ...details,
     });
   }
   return items;
@@ -80,10 +136,14 @@ async function ensureActiveCategories(
   challengeType: DailyChallengeType,
   categoryIds: string[]
 ): Promise<void> {
-  if (categoryIds.length === 0) return;
+  if (categoryIds.length === 0) {
+    return;
+  }
+
   const categories = await categoriesRepo.listByIds(categoryIds);
   const activeIds = new Set(categories.filter((row) => row.is_active).map((row) => row.id));
-  const invalidIds = categoryIds.filter((id) => !activeIds.has(id));
+  const invalidIds = categoryIds.filter((categoryId) => !activeIds.has(categoryId));
+
   if (invalidIds.length > 0) {
     throw new ValidationError('Daily challenge references inactive or missing categories', {
       challengeType,
@@ -96,10 +156,21 @@ function getDefinition(challengeType: DailyChallengeType) {
   return DAILY_CHALLENGE_DEFINITIONS[challengeType];
 }
 
+function getDefinitionText(value: DailyChallengeLocalizedText, locale?: string): string {
+  return getLocalizedString(value as unknown as Json, getLocalizationOptions(locale, value.en));
+}
+
+function getDefinitionTitle(challengeType: DailyChallengeType, locale?: string): string {
+  return getDefinitionText(getDefinition(challengeType).title, locale);
+}
+
+function getDefinitionDescription(challengeType: DailyChallengeType, locale?: string): string {
+  return getDefinitionText(getDefinition(challengeType).description, locale);
+}
+
 function getQuestionTypeForChallenge(challengeType: DailyChallengeType): QuestionType {
   switch (challengeType) {
     case 'moneyDrop':
-    case 'footballJeopardy':
       return 'mcq_single';
     case 'trueFalse':
       return 'true_false';
@@ -109,6 +180,14 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
       return 'clue_chain';
     case 'putInOrder':
       return 'put_in_order';
+    case 'imposter':
+      return 'imposter_multi_select';
+    case 'careerPath':
+      return 'career_path';
+    case 'highLow':
+      return 'high_low';
+    case 'footballLogic':
+      return 'football_logic';
   }
 }
 
@@ -124,34 +203,22 @@ function toAvailableCategoryOption(row: DailyChallengeAvailableCategoryRow) {
   };
 }
 
-function parsePayload(row: QuestionContentRow) {
+function parsePayloadOfType<TType extends QuestionPayloadType>(
+  row: QuestionContentRow,
+  questionType: TType
+): PayloadOfType<TType> | null {
   const parsed = questionPayloadSchema.safeParse(row.payload);
-  if (!parsed.success) {
+  if (!parsed.success || parsed.data.type !== questionType) {
     return null;
   }
-  return parsed.data;
+  return parsed.data as PayloadOfType<TType>;
 }
 
-function toListItem(config: DailyChallengeConfigRow, completion: DailyChallengeCompletionRow | undefined) {
-  const definition = getDefinition(config.challenge_type);
-  return {
-    challengeType: config.challenge_type,
-    title: definition.title,
-    description: definition.description,
-    iconToken: definition.iconToken,
-    coinReward: config.coin_reward,
-    xpReward: config.xp_reward,
-    showOnHome: config.show_on_home,
-    completedToday: completion != null,
-    availableToday: completion == null,
-  };
+function getQuestionCategory(row: QuestionContentRow, locale?: string): string {
+  return getLocalizedString(row.category_name, getLocalizationOptions(locale, 'Football'));
 }
 
-function getQuestionCategory(row: QuestionContentRow): string {
-  return getLocalizedString(row.category_name, { fallback: 'Football' });
-}
-
-function getLegacyPayloadPrompt(payload: Json | null): string | null {
+function getLegacyPayloadPrompt(payload: Json | null, locale?: string): string | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return null;
   }
@@ -169,20 +236,58 @@ function getLegacyPayloadPrompt(payload: Json | null): string | null {
   }
 
   if (promptValue && typeof promptValue === 'object' && !Array.isArray(promptValue)) {
-    const localized = getLocalizedString(promptValue as Json, { fallback: '' }).trim();
-    return localized.length > 0 ? localized : null;
+    const localizedPrompt = getLocalizedString(promptValue as Json, getLocalizationOptions(locale, '')).trim();
+    return localizedPrompt.length > 0 ? localizedPrompt : null;
   }
 
   return null;
 }
 
-function getQuestionPrompt(row: QuestionContentRow): string {
-  const prompt = getLocalizedString(row.prompt, { fallback: '' }).trim();
-  if (prompt.length > 0) {
+function parseStringifiedLocalizedPrompt(value: string, locale?: string): string | null {
+  const normalized = value.trim();
+  if (!normalized.startsWith('{') || !normalized.endsWith('}')) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(normalized);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const prompt = getLocalizedString(parsed as Json, getLocalizationOptions(locale, '')).trim();
+    return prompt.length > 0 ? prompt : null;
+  } catch {
+    return null;
+  }
+}
+
+function getPromptText(value: Json | null, locale?: string): string | null {
+  if (typeof value === 'string') {
+    const localizedPrompt = parseStringifiedLocalizedPrompt(value, locale);
+    if (localizedPrompt) {
+      return localizedPrompt;
+    }
+
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const prompt = getLocalizedString(value, getLocalizationOptions(locale, '')).trim();
+  return prompt.length > 0 ? prompt : null;
+}
+
+function getQuestionPrompt(row: QuestionContentRow, locale?: string): string {
+  const prompt = getPromptText(row.prompt, locale);
+  if (prompt) {
     return prompt;
   }
 
-  const legacyPrompt = getLegacyPayloadPrompt(row.payload);
+  const legacyPrompt = getLegacyPayloadPrompt(row.payload, locale);
   if (legacyPrompt) {
     return legacyPrompt;
   }
@@ -190,22 +295,33 @@ function getQuestionPrompt(row: QuestionContentRow): string {
   return 'Question';
 }
 
-function getQuestionClue(explanation: Json | null): string | null {
+function getOptionalQuestionPrompt(row: QuestionContentRow, locale?: string): string | null {
+  const prompt = getQuestionPrompt(row, locale);
+  return prompt === 'Question' ? null : prompt;
+}
+
+function getQuestionPromptOrFallback(row: QuestionContentRow, fallback: string, locale?: string): string {
+  const prompt = getOptionalQuestionPrompt(row, locale);
+  return prompt ?? fallback;
+}
+
+function getLocalizedText(value: Json, fallback: string, locale?: string): string {
+  const localized = getLocalizedString(value, getLocalizationOptions(locale, fallback)).trim();
+  return localized.length > 0 ? localized : fallback;
+}
+
+function getQuestionClue(explanation: Json | null, locale?: string): string | null {
   if (!explanation) {
     return null;
   }
-  const clue = getLocalizedString(explanation, { fallback: '' }).trim();
-  return clue.length > 0 ? clue : null;
-}
 
-function hasUsableQuestionPrompt(row: QuestionContentRow): boolean {
-  return getQuestionPrompt(row) !== 'Question';
+  const clue = getLocalizedString(explanation, getLocalizationOptions(locale, '')).trim();
+  return clue.length > 0 ? clue : null;
 }
 
 async function listAvailableCategoriesForChallenge(challengeType: DailyChallengeType) {
   const rows = await dailyChallengesRepo.listAvailableCategoriesByQuestionType(
-    getQuestionTypeForChallenge(challengeType),
-    { requireDifficultyCoverage: challengeType === 'footballJeopardy' }
+    getQuestionTypeForChallenge(challengeType)
   );
   return rows.map(toAvailableCategoryOption);
 }
@@ -231,21 +347,90 @@ async function ensureEligibleCategories(
   }
 }
 
+function toListItem(
+  config: DailyChallengeConfigRow,
+  completion: DailyChallengeCompletionRow | undefined,
+  locale?: string
+) {
+  const definition = getDefinition(config.challenge_type);
+  return {
+    challengeType: config.challenge_type,
+    title: getDefinitionText(definition.title, locale),
+    description: getDefinitionText(definition.description, locale),
+    iconToken: definition.iconToken,
+    coinReward: config.coin_reward,
+    xpReward: config.xp_reward,
+    showOnHome: config.show_on_home,
+    completedToday: completion != null,
+    availableToday: completion == null,
+  };
+}
+
+async function listTypedQuestionRows<TType extends QuestionPayloadType>(
+  categoryIds: string[],
+  questionType: TType,
+  options?: { limit?: number }
+): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
+  const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
+    questionType,
+    categoryIds,
+    options
+  );
+
+  return rows
+    .map((row) => {
+      const payload = parsePayloadOfType(row, questionType);
+      return payload ? { row, payload } : null;
+    })
+    .filter((item): item is { row: QuestionContentRow; payload: PayloadOfType<TType> } => item !== null);
+}
+
+async function getContentAvailabilityDetails<TType extends QuestionPayloadType>(
+  categoryIds: string[],
+  questionType: TType,
+  validRows: Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>
+): Promise<ContentAvailabilityDetails> {
+  const rawPublishedInSelectedCategories =
+    await dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(questionType, categoryIds);
+
+  if (categoryIds.length === 0) {
+    return {
+      categoryIds,
+      questionType,
+      rawPublishedInSelectedCategories,
+      validPublishedInSelectedCategories: validRows.length,
+    };
+  }
+
+  const allValidRows = await listTypedQuestionRows([], questionType);
+  const rawPublishedAcrossAllCategories =
+    await dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(questionType, []);
+
+  return {
+    categoryIds,
+    questionType,
+    rawPublishedInSelectedCategories,
+    validPublishedInSelectedCategories: validRows.length,
+    rawPublishedAcrossAllCategories,
+    validPublishedAcrossAllCategories: allValidRows.length,
+  };
+}
+
 export const dailyChallengesService = {
-  async listActiveChallenges(userId: string) {
+  async listActiveChallenges(userId: string, locale?: string) {
     const day = getUtcDay();
     const [configs, completions] = await Promise.all([
       dailyChallengesRepo.listConfigs(true),
       dailyChallengesRepo.listCompletionsForUserOnDay(userId, day),
     ]);
+    const knownConfigs = configs.filter(isKnownDailyChallengeConfig);
     const completionByType = new Map(completions.map((item) => [item.challenge_type, item]));
-    return configs
-      .filter((config) => config.challenge_type !== 'trueFalse')
-      .map((config) => toListItem(config, completionByType.get(config.challenge_type)));
+
+    return knownConfigs.map((config) => toListItem(config, completionByType.get(config.challenge_type), locale));
   },
 
   async listAdminConfigs() {
-    const configs = await dailyChallengesRepo.listConfigs(false);
+    const configs = (await dailyChallengesRepo.listConfigs(false)).filter(isKnownDailyChallengeConfig);
     const categoryOptionsByType = new Map(
       await Promise.all(
         configs.map(async (config) => [
@@ -305,6 +490,7 @@ export const dailyChallengesService = {
     if (!parsed.success) {
       throw new ValidationError('Invalid daily challenge settings', parsed.error.flatten());
     }
+
     return { challengeType, ...parsed.data } as DailyChallengeSettings;
   },
 
@@ -313,7 +499,7 @@ export const dailyChallengesService = {
     return parsed.categoryIds;
   },
 
-  async getChallengeSession(userId: string, challengeType: DailyChallengeType) {
+  async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string) {
     const day = getUtcDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
@@ -328,132 +514,101 @@ export const dailyChallengesService = {
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('mcq_single', settings.categoryIds, { limit: settings.questionCount * 5 });
-      const valid = rows
-        .map((row) => ({ row, payload: parsePayload(row) }))
-        .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'mcq_single' }> } => item.payload?.type === 'mcq_single')
-        .filter((item) => hasUsableQuestionPrompt(item.row));
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'mcq_single',
+        { limit: settings.questionCount * 5 }
+      );
+      const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
       const selected = pickRandom(
-        ensureEnough(valid, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+        ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount
       );
 
       return {
         challengeType,
-        title: getDefinition(challengeType).title,
-        description: getDefinition(challengeType).description,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
         questionCount: settings.questionCount,
         secondsPerQuestion: settings.secondsPerQuestion,
         startingMoney: settings.startingMoney,
         questions: selected.map(({ row, payload }) => ({
           id: row.id,
-          category: getQuestionCategory(row),
+          category: getQuestionCategory(row, locale),
           difficulty: row.difficulty,
-          prompt: getQuestionPrompt(row),
-          options: payload.options.map((option) => getLocalizedString(option.text, { fallback: 'Option' })),
+          prompt: getQuestionPrompt(row, locale),
+          options: payload.options.map((option) => getLocalizedText(option.text as Json, 'Option', locale)),
           correctAnswerIndex: payload.options.findIndex((option) => option.is_correct),
-          clue: getQuestionClue(row.explanation),
+          clue: getQuestionClue(row.explanation, locale),
         })),
       };
     }
 
-    if (challengeType === 'footballJeopardy') {
-      const settings = footballJeopardySettingsSchema.parse(config.settings);
+    if (challengeType === 'trueFalse') {
+      const settings = trueFalseSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('mcq_single', settings.categoryIds);
-      const valid = rows
-        .map((row) => ({ row, payload: parsePayload(row) }))
-        .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'mcq_single' }> } => item.payload?.type === 'mcq_single')
-        .filter((item) => hasUsableQuestionPrompt(item.row));
-      const byCategory = new Map<string, typeof valid>();
-      for (const item of valid) {
-        byCategory.set(item.row.category_id, [...(byCategory.get(item.row.category_id) ?? []), item]);
-      }
 
-      const resolvedCategoryIds = settings.categoryIds.length > 0
-        ? settings.categoryIds
-        : [...byCategory.keys()];
-      const eligibleCategoryIds = resolvedCategoryIds.filter((categoryId) => {
-        const categoryRows = byCategory.get(categoryId) ?? [];
-        return categoryRows.some((item) => item.row.difficulty === 'easy')
-          && categoryRows.some((item) => item.row.difficulty === 'medium')
-          && categoryRows.some((item) => item.row.difficulty === 'hard');
-      });
-      const selectedCategoryIds = pickRandom(
-        ensureEnough(eligibleCategoryIds, 1, challengeType, {
-          configuredCategoryIds: settings.categoryIds,
-          resolvedCategoryIds,
-          pickCount: settings.pickCount,
-        }),
-        Math.min(settings.pickCount, eligibleCategoryIds.length)
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'true_false',
+        { limit: settings.questionCount * 5 }
       );
-
-      const categories = selectedCategoryIds.map((categoryId) => {
-        const categoryRows = byCategory.get(categoryId) ?? [];
-        const easy = pickRandom(categoryRows.filter((item) => item.row.difficulty === 'easy'), 1)[0];
-        const medium = pickRandom(categoryRows.filter((item) => item.row.difficulty === 'medium'), 1)[0];
-        const hard = pickRandom(categoryRows.filter((item) => item.row.difficulty === 'hard'), 1)[0];
-        if (!easy || !medium || !hard) {
-          throw new DailyChallengeContentUnavailableError({ challengeType, categoryId });
-        }
-        const selected = [
-          { value: 100 as const, item: easy },
-          { value: 200 as const, item: medium },
-          { value: 300 as const, item: hard },
-        ];
-        return {
-          id: categoryId,
-          name: getQuestionCategory(selected[0].item.row),
-          questions: selected.map(({ value, item }) => ({
-            id: item.row.id,
-            value,
-            difficulty: item.row.difficulty,
-            prompt: getQuestionPrompt(item.row),
-            options: item.payload.options.map((option) => getLocalizedString(option.text, { fallback: 'Option' })),
-            correctAnswerIndex: item.payload.options.findIndex((option) => option.is_correct),
-            clue: getQuestionClue(item.row.explanation),
-          })),
-        };
-      });
+      const availabilityDetails = await getContentAvailabilityDetails(
+        settings.categoryIds,
+        'true_false',
+        validRows
+      );
+      const selected = pickRandom(
+        ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails),
+        settings.questionCount
+      );
 
       return {
         challengeType,
-        title: getDefinition(challengeType).title,
-        description: getDefinition(challengeType).description,
-        pickCount: settings.pickCount,
-        categories,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        questionCount: settings.questionCount,
+        secondsPerQuestion: settings.secondsPerQuestion,
+        questions: selected.map(({ row, payload }) => ({
+          id: row.id,
+          category: getQuestionCategory(row, locale),
+          difficulty: row.difficulty,
+          prompt: getQuestionPrompt(row, locale),
+          trueLabel: getLocalizedText(payload.options[0].text as Json, 'True', locale),
+          falseLabel: getLocalizedText(payload.options[1].text as Json, 'False', locale),
+          correctAnswer: payload.options[0].is_correct,
+        })),
       };
-    }
-
-    if (challengeType === 'trueFalse') {
-      throw new NotFoundError('Daily challenge not available');
     }
 
     if (challengeType === 'countdown') {
       const settings = countdownSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('countdown_list', settings.categoryIds, { limit: settings.roundCount * 5 });
-      const valid = rows
-        .map((row) => ({ row, payload: parsePayload(row) }))
-        .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'countdown_list' }> } => item.payload?.type === 'countdown_list');
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'countdown_list',
+        { limit: settings.roundCount * 5 }
+      );
       const selected = pickRandom(
-        ensureEnough(valid, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
+        ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.roundCount
       );
 
       return {
         challengeType,
-        title: getDefinition(challengeType).title,
-        description: getDefinition(challengeType).description,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
         roundCount: settings.roundCount,
         secondsPerRound: settings.secondsPerRound,
         rounds: selected.map(({ row, payload }) => ({
           id: row.id,
-          category: getQuestionCategory(row),
-          prompt: getLocalizedString(payload.prompt, { fallback: 'Countdown' }),
+          category: getQuestionCategory(row, locale),
+          prompt: getLocalizedText(payload.prompt as Json, 'Countdown', locale),
           answerGroups: payload.answer_groups.map((group) => ({
             id: group.id,
-            display: getLocalizedString(group.display as Json, { fallback: 'Answer' }),
+            display: getLocalizedText(group.display as Json, 'Answer', locale),
             acceptedAnswers: group.accepted_answers,
           })),
         })),
@@ -463,69 +618,221 @@ export const dailyChallengesService = {
     if (challengeType === 'clues') {
       const settings = cluesSettingsSchema.parse(config.settings);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-      const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('clue_chain', settings.categoryIds, { limit: settings.questionCount * 5 });
-      const valid = rows
-        .map((row) => ({ row, payload: parsePayload(row) }))
-        .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'clue_chain' }> } => item.payload?.type === 'clue_chain');
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'clue_chain',
+        { limit: settings.questionCount * 5 }
+      );
       const selected = pickRandom(
-        ensureEnough(valid, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+        ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
         settings.questionCount
       );
 
       return {
         challengeType,
-        title: getDefinition(challengeType).title,
-        description: getDefinition(challengeType).description,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
         questionCount: settings.questionCount,
         secondsPerClueStep: settings.secondsPerClueStep,
         questions: selected.map(({ row, payload }) => ({
           id: row.id,
-          category: getQuestionCategory(row),
+          category: getQuestionCategory(row, locale),
           difficulty: row.difficulty,
-          displayAnswer: getLocalizedString(payload.display_answer, { fallback: 'Answer' }),
+          displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
           acceptedAnswers: payload.accepted_answers,
           clues: payload.clues.map((clue) => ({
             type: clue.type,
-            content: getLocalizedString(clue.content as Json, { fallback: 'Clue' }),
+            content: getLocalizedText(clue.content as Json, 'Clue', locale),
           })),
         })),
       };
     }
 
-    const settings = putInOrderSettingsSchema.parse(config.settings);
+    if (challengeType === 'putInOrder') {
+      const settings = putInOrderSettingsSchema.parse(config.settings);
+      await ensureActiveCategories(config.challenge_type, settings.categoryIds);
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'put_in_order',
+        { limit: settings.roundCount * 5 }
+      );
+      const validRounds = validRows.filter(({ payload }) => payload.items.length >= settings.itemsPerRound);
+      const selected = pickRandom(
+        ensureEnough(validRounds, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
+        settings.roundCount
+      );
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        roundCount: settings.roundCount,
+        itemsPerRound: settings.itemsPerRound,
+        rounds: selected.map(({ row, payload }) => {
+          const subset = pickRandom(payload.items, settings.itemsPerRound);
+          return {
+            id: row.id,
+            category: getQuestionCategory(row, locale),
+            prompt: getLocalizedText(payload.prompt as Json, 'Put in order', locale),
+            direction: payload.direction,
+            items: shuffle(subset).map((item) => ({
+              id: item.id,
+              label: getLocalizedText(item.label as Json, 'Item', locale),
+              details: item.details ? getLocalizedText(item.details as Json, '', locale) : null,
+              emoji: item.emoji ?? null,
+              sortValue: item.sort_value,
+            })),
+          };
+        }),
+      };
+    }
+
+    if (challengeType === 'imposter') {
+      const settings = imposterSettingsSchema.parse(config.settings);
+      await ensureActiveCategories(config.challenge_type, settings.categoryIds);
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'imposter_multi_select',
+        { limit: settings.questionCount * 5 }
+      );
+      const validQuestions = validRows.filter(({ row }) => getOptionalQuestionPrompt(row, locale) !== null);
+      const selected = pickRandom(
+        ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+        settings.questionCount
+      );
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        questionCount: settings.questionCount,
+        secondsPerQuestion: settings.secondsPerQuestion,
+        questions: selected.map(({ row, payload }) => ({
+          id: row.id,
+          category: getQuestionCategory(row, locale),
+          difficulty: row.difficulty,
+          prompt: getQuestionPrompt(row, locale),
+          options: payload.options.map((option) => ({
+            id: option.id,
+            text: getLocalizedText(option.text as Json, 'Option', locale),
+          })),
+          correctOptionIds: payload.options.filter((option) => option.is_correct).map((option) => option.id),
+        })),
+      };
+    }
+
+    if (challengeType === 'careerPath') {
+      const settings = careerPathSettingsSchema.parse(config.settings);
+      await ensureActiveCategories(config.challenge_type, settings.categoryIds);
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'career_path',
+        { limit: settings.questionCount * 5 }
+      );
+      const selected = pickRandom(
+        ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+        settings.questionCount
+      );
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        questionCount: settings.questionCount,
+        secondsPerQuestion: settings.secondsPerQuestion,
+        questions: selected.map(({ row, payload }) => {
+          const clubs = payload.clubs.map((club) => getLocalizedText(club as Json, 'Club', locale));
+          return {
+            id: row.id,
+            category: getQuestionCategory(row, locale),
+            difficulty: row.difficulty,
+            prompt: getQuestionPromptOrFallback(row, clubs.join(' ➔ '), locale),
+            clubs,
+            displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
+            acceptedAnswers: payload.accepted_answers,
+          };
+        }),
+      };
+    }
+
+    if (challengeType === 'highLow') {
+      const settings = highLowSettingsSchema.parse(config.settings);
+      await ensureActiveCategories(config.challenge_type, settings.categoryIds);
+
+      const validRows = await listTypedQuestionRows(
+        settings.categoryIds,
+        'high_low',
+        { limit: settings.roundCount * 5 }
+      );
+      const selected = pickRandom(
+        ensureEnough(validRows, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
+        settings.roundCount
+      );
+
+      return {
+        challengeType,
+        title: getDefinitionTitle(challengeType, locale),
+        description: getDefinitionDescription(challengeType, locale),
+        roundCount: settings.roundCount,
+        secondsPerRound: settings.secondsPerRound,
+        rounds: selected.map(({ row, payload }) => ({
+          id: row.id,
+          category: getQuestionCategory(row, locale),
+          difficulty: row.difficulty,
+          prompt: getQuestionPromptOrFallback(
+            row,
+            getLocalizedText(payload.stat_label as Json, 'High Low', locale),
+            locale
+          ),
+          statLabel: getLocalizedText(payload.stat_label as Json, 'Stat', locale),
+          matchups: payload.matchups.map((matchup) => ({
+            id: matchup.id,
+            leftName: getLocalizedText(matchup.left_name as Json, 'Left', locale),
+            leftValue: matchup.left_value,
+            rightName: getLocalizedText(matchup.right_name as Json, 'Right', locale),
+            rightValue: matchup.right_value,
+          })),
+        })),
+      };
+    }
+
+    const settings = footballLogicSettingsSchema.parse(config.settings);
     await ensureActiveCategories(config.challenge_type, settings.categoryIds);
-    const rows = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories('put_in_order', settings.categoryIds, { limit: settings.roundCount * 5 });
-    const valid = rows
-      .map((row) => ({ row, payload: parsePayload(row) }))
-      .filter((item): item is { row: QuestionContentRow; payload: Extract<ReturnType<typeof parsePayload>, { type: 'put_in_order' }> } => item.payload?.type === 'put_in_order')
-      .filter((item) => item.payload.items.length >= settings.itemsPerRound);
+
+    const validRows = await listTypedQuestionRows(
+      settings.categoryIds,
+      'football_logic',
+      { limit: settings.questionCount * 5 }
+    );
     const selected = pickRandom(
-      ensureEnough(valid, settings.roundCount, challengeType, { categoryIds: settings.categoryIds }),
-      settings.roundCount
+      ensureEnough(validRows, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+      settings.questionCount
     );
 
     return {
       challengeType,
-      title: getDefinition(challengeType).title,
-      description: getDefinition(challengeType).description,
-      roundCount: settings.roundCount,
-      itemsPerRound: settings.itemsPerRound,
-      rounds: selected.map(({ row, payload }) => {
-        const subset = pickRandom(payload.items, settings.itemsPerRound);
-        return {
-          id: row.id,
-          category: getQuestionCategory(row),
-          prompt: getLocalizedString(payload.prompt, { fallback: 'Put in order' }),
-          direction: payload.direction,
-          items: shuffle(subset).map((item) => ({
-            id: item.id,
-            label: getLocalizedString(item.label as Json, { fallback: 'Item' }),
-            details: item.details ? getLocalizedString(item.details as Json, { fallback: '' }) : null,
-            emoji: item.emoji ?? null,
-            sortValue: item.sort_value,
-          })),
-        };
-      }),
+      title: getDefinitionTitle(challengeType, locale),
+      description: getDefinitionDescription(challengeType, locale),
+      questionCount: settings.questionCount,
+      secondsPerQuestion: settings.secondsPerQuestion,
+      questions: selected.map(({ row, payload }) => ({
+        id: row.id,
+        category: getQuestionCategory(row, locale),
+        difficulty: row.difficulty,
+        prompt: getOptionalQuestionPrompt(row, locale) ?? (payload.prompt ? getLocalizedText(payload.prompt as Json, 'Football Logic', locale) : null),
+        imageAUrl: payload.image_a_url,
+        imageBUrl: payload.image_b_url,
+        displayAnswer: getLocalizedText(payload.display_answer as Json, 'Answer', locale),
+        acceptedAnswers: payload.accepted_answers,
+        explanation:
+          payload.explanation
+            ? getLocalizedText(payload.explanation as Json, '', locale)
+            : getQuestionClue(row.explanation, locale),
+      })),
     };
   },
 

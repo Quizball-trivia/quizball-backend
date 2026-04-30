@@ -1,3 +1,5 @@
+import type { Json } from '../../db/types.js';
+
 export type RankedTier =
   | 'Academy'
   | 'Youth Prospect'
@@ -88,6 +90,7 @@ export interface RankedLeaderboardEntry {
   userId: string;
   username: string;
   avatarUrl: string | null;
+  avatarCustomization: Json | null;
   rp: number;
   tier: RankedTier;
   country: string | null;

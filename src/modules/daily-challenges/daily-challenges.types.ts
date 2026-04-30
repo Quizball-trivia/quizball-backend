@@ -2,24 +2,35 @@ import type { Json } from '../../db/types.js';
 
 export type DailyChallengeType =
   | 'moneyDrop'
-  | 'footballJeopardy'
   | 'trueFalse'
   | 'clues'
   | 'countdown'
-  | 'putInOrder';
+  | 'putInOrder'
+  | 'imposter'
+  | 'careerPath'
+  | 'highLow'
+  | 'footballLogic';
 
 export type DailyChallengeIconToken =
   | 'dollarSign'
-  | 'brain'
   | 'checkCircle'
   | 'lightbulb'
   | 'timer'
-  | 'list';
+  | 'list'
+  | 'users'
+  | 'route'
+  | 'trendingUp'
+  | 'image';
+
+export interface DailyChallengeLocalizedText {
+  en: string;
+  ka: string;
+}
 
 export interface DailyChallengeDefinition {
   challengeType: DailyChallengeType;
-  title: string;
-  description: string;
+  title: DailyChallengeLocalizedText;
+  description: DailyChallengeLocalizedText;
   iconToken: DailyChallengeIconToken;
 }
 

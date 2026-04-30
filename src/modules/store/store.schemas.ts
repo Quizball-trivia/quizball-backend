@@ -18,10 +18,22 @@ export const ticketPackMetadataSchema = z.object({
   bonusPercent: z.number().int().min(0).max(100).optional(),
 });
 
-export const avatarMetadataSchema = z.object({
-  avatarKey: z.string().min(1),
-  assetUrl: z.string().min(1),
-});
+export const avatarMetadataSchema = z
+  .object({
+    avatarKey: z.string().min(1).optional(),
+    avatarPartId: z.string().min(1).optional(),
+    slot: z.enum(['skin', 'jersey', 'hair', 'glasses', 'facialHair']).optional(),
+    assetUrl: z.string().min(1),
+  })
+  .refine((metadata) => metadata.avatarKey || metadata.avatarPartId, {
+    message: 'Avatar metadata requires avatarKey or avatarPartId',
+  })
+  .transform((metadata) => ({
+    avatarKey: metadata.avatarKey ?? metadata.avatarPartId!,
+    avatarPartId: metadata.avatarPartId,
+    slot: metadata.slot,
+    assetUrl: metadata.assetUrl,
+  }));
 
 export const chanceCardMetadataSchema = z.object({
   effect: z.literal('fifty_fifty'),

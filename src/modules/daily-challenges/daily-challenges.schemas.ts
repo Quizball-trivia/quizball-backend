@@ -2,18 +2,31 @@ import { z } from 'zod';
 
 export const dailyChallengeTypeEnum = z.enum([
   'moneyDrop',
-  'footballJeopardy',
   'trueFalse',
   'clues',
   'countdown',
   'putInOrder',
+  'imposter',
+  'careerPath',
+  'highLow',
+  'footballLogic',
 ]);
 
 export const dailyChallengeMetadataSchema = z.object({
   challengeType: dailyChallengeTypeEnum,
   title: z.string().min(1),
   description: z.string().min(1),
-  iconToken: z.enum(['dollarSign', 'brain', 'checkCircle', 'lightbulb', 'timer', 'list']),
+  iconToken: z.enum([
+    'dollarSign',
+    'checkCircle',
+    'lightbulb',
+    'timer',
+    'list',
+    'users',
+    'route',
+    'trendingUp',
+    'image',
+  ]),
   coinReward: z.number().int().nonnegative(),
   xpReward: z.number().int().nonnegative(),
   showOnHome: z.boolean(),
@@ -36,11 +49,6 @@ const moneyDropSettingsBaseSchema = z.object({
   questionCount: z.number().int().min(1).max(20),
   secondsPerQuestion: z.number().int().min(5).max(120),
   startingMoney: z.number().int().min(100).max(100000),
-});
-
-const footballJeopardySettingsBaseSchema = z.object({
-  categoryIds: z.array(z.string().uuid()).default([]),
-  pickCount: z.number().int().min(1).max(9),
 });
 
 const trueFalseSettingsBaseSchema = z.object({
@@ -67,18 +75,42 @@ const putInOrderSettingsBaseSchema = z.object({
   itemsPerRound: z.number().int().min(3).max(8),
 });
 
+const imposterSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  questionCount: z.number().int().min(1).max(20),
+  secondsPerQuestion: z.number().int().min(5).max(120),
+});
+
+const careerPathSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  questionCount: z.number().int().min(1).max(20),
+  secondsPerQuestion: z.number().int().min(5).max(120),
+});
+
+const highLowSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  roundCount: z.number().int().min(1).max(10),
+  secondsPerRound: z.number().int().min(5).max(180),
+});
+
+const footballLogicSettingsBaseSchema = z.object({
+  categoryIds: z.array(z.string().uuid()).default([]),
+  questionCount: z.number().int().min(1).max(20),
+  secondsPerQuestion: z.number().int().min(5).max(120),
+});
+
 export const moneyDropSettingsSchema = moneyDropSettingsBaseSchema;
-export const footballJeopardySettingsSchema = footballJeopardySettingsBaseSchema;
 export const trueFalseSettingsSchema = trueFalseSettingsBaseSchema;
 export const countdownSettingsSchema = countdownSettingsBaseSchema;
 export const cluesSettingsSchema = cluesSettingsBaseSchema;
 export const putInOrderSettingsSchema = putInOrderSettingsBaseSchema;
+export const imposterSettingsSchema = imposterSettingsBaseSchema;
+export const careerPathSettingsSchema = careerPathSettingsBaseSchema;
+export const highLowSettingsSchema = highLowSettingsBaseSchema;
+export const footballLogicSettingsSchema = footballLogicSettingsBaseSchema;
 
 const moneyDropSettingsOpenApiSchema = moneyDropSettingsBaseSchema.extend({
   challengeType: z.literal('moneyDrop'),
-});
-const footballJeopardySettingsOpenApiSchema = footballJeopardySettingsBaseSchema.extend({
-  challengeType: z.literal('footballJeopardy'),
 });
 const trueFalseSettingsOpenApiSchema = trueFalseSettingsBaseSchema.extend({
   challengeType: z.literal('trueFalse'),
@@ -92,14 +124,29 @@ const cluesSettingsOpenApiSchema = cluesSettingsBaseSchema.extend({
 const putInOrderSettingsOpenApiSchema = putInOrderSettingsBaseSchema.extend({
   challengeType: z.literal('putInOrder'),
 });
+const imposterSettingsOpenApiSchema = imposterSettingsBaseSchema.extend({
+  challengeType: z.literal('imposter'),
+});
+const careerPathSettingsOpenApiSchema = careerPathSettingsBaseSchema.extend({
+  challengeType: z.literal('careerPath'),
+});
+const highLowSettingsOpenApiSchema = highLowSettingsBaseSchema.extend({
+  challengeType: z.literal('highLow'),
+});
+const footballLogicSettingsOpenApiSchema = footballLogicSettingsBaseSchema.extend({
+  challengeType: z.literal('footballLogic'),
+});
 
 export const dailyChallengeSettingsSchema = z.discriminatedUnion('challengeType', [
   moneyDropSettingsOpenApiSchema,
-  footballJeopardySettingsOpenApiSchema,
   trueFalseSettingsOpenApiSchema,
   countdownSettingsOpenApiSchema,
   cluesSettingsOpenApiSchema,
   putInOrderSettingsOpenApiSchema,
+  imposterSettingsOpenApiSchema,
+  careerPathSettingsOpenApiSchema,
+  highLowSettingsOpenApiSchema,
+  footballLogicSettingsOpenApiSchema,
 ]);
 
 export const dailyChallengeConfigResponseSchema = dailyChallengeMetadataSchema.extend({
@@ -127,14 +174,28 @@ const moneyDropQuestionSchema = z.object({
   clue: z.string().nullable(),
 });
 
-const jeopardyQuestionSchema = z.object({
+const trueFalseQuestionSchema = z.object({
   id: z.string().uuid(),
-  value: z.union([z.literal(100), z.literal(200), z.literal(300)]),
+  category: z.string().min(1),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   prompt: z.string().min(1),
-  options: z.array(z.string().min(1)).length(4),
-  correctAnswerIndex: z.number().int().min(0).max(3),
-  clue: z.string().nullable(),
+  trueLabel: z.string().min(1),
+  falseLabel: z.string().min(1),
+  correctAnswer: z.boolean(),
+});
+
+const imposterQuestionSchema = z.object({
+  id: z.string().uuid(),
+  category: z.string().min(1),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  prompt: z.string().min(1),
+  options: z.array(
+    z.object({
+      id: z.string().min(1),
+      text: z.string().min(1),
+    })
+  ).min(4),
+  correctOptionIds: z.array(z.string().min(1)).min(1),
 });
 
 const countdownRoundSchema = z.object({
@@ -180,6 +241,45 @@ const putInOrderRoundSchema = z.object({
   ).min(3),
 });
 
+const careerPathQuestionSchema = z.object({
+  id: z.string().uuid(),
+  category: z.string().min(1),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  prompt: z.string().min(1),
+  clubs: z.array(z.string().min(1)).min(2),
+  displayAnswer: z.string().min(1),
+  acceptedAnswers: z.array(z.string().min(1)).min(1),
+});
+
+const highLowRoundSchema = z.object({
+  id: z.string().uuid(),
+  category: z.string().min(1),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  prompt: z.string().min(1),
+  statLabel: z.string().min(1),
+  matchups: z.array(
+    z.object({
+      id: z.string().min(1),
+      leftName: z.string().min(1),
+      leftValue: z.number(),
+      rightName: z.string().min(1),
+      rightValue: z.number(),
+    })
+  ).min(1),
+});
+
+const footballLogicQuestionSchema = z.object({
+  id: z.string().uuid(),
+  category: z.string().min(1),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  prompt: z.string().min(1).nullable(),
+  imageAUrl: z.string().url(),
+  imageBUrl: z.string().url(),
+  displayAnswer: z.string().min(1),
+  acceptedAnswers: z.array(z.string().min(1)).min(1),
+  explanation: z.string().nullable(),
+});
+
 export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challengeType', [
   z.object({
     challengeType: z.literal('moneyDrop'),
@@ -191,17 +291,12 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     questions: z.array(moneyDropQuestionSchema).min(1),
   }),
   z.object({
-    challengeType: z.literal('footballJeopardy'),
+    challengeType: z.literal('trueFalse'),
     title: z.string().min(1),
     description: z.string().min(1),
-    pickCount: z.number().int().positive(),
-    categories: z.array(
-      z.object({
-        id: z.string().uuid(),
-        name: z.string().min(1),
-        questions: z.array(jeopardyQuestionSchema).length(3),
-      })
-    ).min(1),
+    questionCount: z.number().int().positive(),
+    secondsPerQuestion: z.number().int().positive(),
+    questions: z.array(trueFalseQuestionSchema).min(1),
   }),
   z.object({
     challengeType: z.literal('countdown'),
@@ -226,6 +321,38 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     roundCount: z.number().int().positive(),
     itemsPerRound: z.number().int().positive(),
     rounds: z.array(putInOrderRoundSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('imposter'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    questionCount: z.number().int().positive(),
+    secondsPerQuestion: z.number().int().positive(),
+    questions: z.array(imposterQuestionSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('careerPath'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    questionCount: z.number().int().positive(),
+    secondsPerQuestion: z.number().int().positive(),
+    questions: z.array(careerPathQuestionSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('highLow'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    roundCount: z.number().int().positive(),
+    secondsPerRound: z.number().int().positive(),
+    rounds: z.array(highLowRoundSchema).min(1),
+  }),
+  z.object({
+    challengeType: z.literal('footballLogic'),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    questionCount: z.number().int().positive(),
+    secondsPerQuestion: z.number().int().positive(),
+    questions: z.array(footballLogicQuestionSchema).min(1),
   }),
 ]);
 
@@ -262,13 +389,20 @@ export const dailyChallengeParamSchema = z.object({
   challengeType: dailyChallengeTypeEnum,
 });
 
+export const dailyChallengeLocaleQuerySchema = z.object({
+  locale: z.string().min(2).max(16).optional(),
+});
+
 export type DailyChallengeType = z.infer<typeof dailyChallengeTypeEnum>;
 export type MoneyDropSettings = z.infer<typeof moneyDropSettingsSchema>;
-export type FootballJeopardySettings = z.infer<typeof footballJeopardySettingsSchema>;
 export type TrueFalseSettings = z.infer<typeof trueFalseSettingsSchema>;
 export type CountdownSettings = z.infer<typeof countdownSettingsSchema>;
 export type CluesSettings = z.infer<typeof cluesSettingsSchema>;
 export type PutInOrderSettings = z.infer<typeof putInOrderSettingsSchema>;
+export type ImposterSettings = z.infer<typeof imposterSettingsSchema>;
+export type CareerPathSettings = z.infer<typeof careerPathSettingsSchema>;
+export type HighLowSettings = z.infer<typeof highLowSettingsSchema>;
+export type FootballLogicSettings = z.infer<typeof footballLogicSettingsSchema>;
 export type DailyChallengeSettings = z.infer<typeof dailyChallengeSettingsSchema>;
 export type AdminDailyChallengeCategoryOption = z.infer<typeof adminDailyChallengeCategoryOptionSchema>;
 export type DailyChallengeSessionResponse = z.infer<typeof dailyChallengeSessionResponseSchema>;
@@ -276,3 +410,4 @@ export type DailyChallengeConfigResponse = z.infer<typeof dailyChallengeConfigRe
 export type CompleteDailyChallengeBody = z.infer<typeof completeDailyChallengeBodySchema>;
 export type UpdateDailyChallengeConfigBody = z.infer<typeof updateDailyChallengeConfigSchema>;
 export type DailyChallengeParam = z.infer<typeof dailyChallengeParamSchema>;
+export type DailyChallengeLocaleQuery = z.infer<typeof dailyChallengeLocaleQuerySchema>;

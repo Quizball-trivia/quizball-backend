@@ -60,7 +60,16 @@ describe('Daily Challenges Routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.items).toHaveLength(1);
-    expect(dailyChallengesService.listActiveChallenges).toHaveBeenCalledWith('test-user-id');
+    expect(dailyChallengesService.listActiveChallenges).toHaveBeenCalledWith('test-user-id', undefined);
+  });
+
+  it('GET /api/v1/daily-challenges forwards a requested locale', async () => {
+    (dailyChallengesService.listActiveChallenges as Mock).mockResolvedValue([]);
+
+    const response = await request(app).get('/api/v1/daily-challenges?locale=ka');
+
+    expect(response.status).toBe(200);
+    expect(dailyChallengesService.listActiveChallenges).toHaveBeenCalledWith('test-user-id', 'ka');
   });
 
   it('POST /api/v1/daily-challenges/:challengeType/session validates params and returns session', async () => {
@@ -77,7 +86,23 @@ describe('Daily Challenges Routes', () => {
     const response = await request(app).post('/api/v1/daily-challenges/moneyDrop/session').send({});
 
     expect(response.status).toBe(200);
-    expect(dailyChallengesService.getChallengeSession).toHaveBeenCalledWith('test-user-id', 'moneyDrop');
+    expect(dailyChallengesService.getChallengeSession).toHaveBeenCalledWith('test-user-id', 'moneyDrop', undefined);
+  });
+
+  it('POST /api/v1/daily-challenges/:challengeType/session forwards a requested locale', async () => {
+    (dailyChallengesService.getChallengeSession as Mock).mockResolvedValue({
+      challengeType: 'trueFalse',
+      title: 'მართალია თუ მცდარი',
+      description: 'desc',
+      questionCount: 1,
+      secondsPerQuestion: 30,
+      questions: [],
+    });
+
+    const response = await request(app).post('/api/v1/daily-challenges/trueFalse/session?locale=ka').send({});
+
+    expect(response.status).toBe(200);
+    expect(dailyChallengesService.getChallengeSession).toHaveBeenCalledWith('test-user-id', 'trueFalse', 'ka');
   });
 
   it('POST /api/v1/daily-challenges/:challengeType/complete rejects invalid body', async () => {
@@ -102,25 +127,26 @@ describe('Daily Challenges Routes', () => {
 
   it('PUT /api/v1/admin/daily-challenges/:challengeType validates settings and forwards the update', async () => {
     (dailyChallengesService.updateConfig as Mock).mockResolvedValue({
-      challengeType: 'footballJeopardy',
+      challengeType: 'imposter',
       isActive: true,
       sortOrder: 1,
       showOnHome: true,
       coinReward: 100,
       xpReward: 20,
       settings: {
-        challengeType: 'footballJeopardy',
+        challengeType: 'imposter',
         categoryIds: [
           '11111111-1111-1111-1111-111111111111',
           '22222222-2222-2222-2222-222222222222',
           '33333333-3333-3333-3333-333333333333',
         ],
-        pickCount: 9,
+        questionCount: 9,
+        secondsPerQuestion: 25,
       },
     });
 
     const response = await request(app)
-      .put('/api/v1/admin/daily-challenges/footballJeopardy')
+      .put('/api/v1/admin/daily-challenges/imposter')
       .send({
         isActive: true,
         sortOrder: 1,
@@ -128,19 +154,20 @@ describe('Daily Challenges Routes', () => {
         coinReward: 100,
         xpReward: 20,
         settings: {
-          challengeType: 'footballJeopardy',
+          challengeType: 'imposter',
           categoryIds: [
             '11111111-1111-1111-1111-111111111111',
             '22222222-2222-2222-2222-222222222222',
             '33333333-3333-3333-3333-333333333333',
           ],
-          pickCount: 9,
+          questionCount: 9,
+          secondsPerQuestion: 25,
         },
       });
 
     expect(response.status).toBe(200);
     expect(dailyChallengesService.updateConfig).toHaveBeenCalledWith(
-      'footballJeopardy',
+      'imposter',
       expect.objectContaining({
         isActive: true,
         sortOrder: 1,
@@ -148,13 +175,14 @@ describe('Daily Challenges Routes', () => {
         coinReward: 100,
         xpReward: 20,
         settings: expect.objectContaining({
-          challengeType: 'footballJeopardy',
+          challengeType: 'imposter',
           categoryIds: [
             '11111111-1111-1111-1111-111111111111',
             '22222222-2222-2222-2222-222222222222',
             '33333333-3333-3333-3333-333333333333',
           ],
-          pickCount: 9,
+          questionCount: 9,
+          secondsPerQuestion: 25,
         }),
       })
     );

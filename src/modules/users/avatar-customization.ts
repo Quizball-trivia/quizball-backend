@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-const freeSkins = ['skin_male_white'] as const;
-const paidSkinProductSlugs = {
-  skin_male_white_alt: 'avatar_skin_white_alt',
-  skin_male_dark: 'avatar_skin_dark',
-  skin_male_dark_alt: 'avatar_skin_dark_alt',
-} as const;
+const freeSkins = [
+  'skin_male_white',
+  'skin_male_white_alt',
+  'skin_male_dark',
+  'skin_male_dark_alt',
+] as const;
 
 const freeJerseys = [
   'jersey_green',
@@ -50,7 +50,6 @@ const paidFacialHairProductSlugs = {
 
 const skinIds = [
   ...freeSkins,
-  ...Object.keys(paidSkinProductSlugs),
 ] as [string, ...string[]];
 const jerseyIds = [
   ...freeJerseys,
@@ -73,8 +72,16 @@ export const avatarCustomizationSchema = z.object({
 
 export type AvatarCustomization = z.infer<typeof avatarCustomizationSchema>;
 
+export function parseStoredAvatarCustomization(value: unknown): AvatarCustomization | null {
+  if (value == null) {
+    return null;
+  }
+
+  const result = avatarCustomizationSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
 const partProductSlugById: Record<string, string | undefined> = {
-  ...paidSkinProductSlugs,
   ...paidJerseyProductSlugs,
   ...paidHairProductSlugs,
   ...paidGlassesProductSlugs,

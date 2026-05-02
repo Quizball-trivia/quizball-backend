@@ -291,6 +291,22 @@ describe('usersService.getPublicProfile', () => {
       },
     });
   });
+
+  it('allows all skin tones without inventory ownership', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_dark_alt',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_dark_alt',
+      },
+    });
+  });
 });
 
 describe('usersService.searchByNickname', () => {

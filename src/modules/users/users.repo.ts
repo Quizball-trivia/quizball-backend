@@ -66,6 +66,9 @@ export const usersRepo = {
     identityData: CreateIdentityData
   ): Promise<User> {
     return sql.begin(async (tx) => {
+      const avatarCustomizationJson = userData.avatarCustomization == null
+        ? null
+        : JSON.stringify(userData.avatarCustomization);
       const result = await tx.unsafe<User[]>(
         `INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb, false, false)
@@ -75,7 +78,7 @@ export const usersRepo = {
           userData.nickname ?? null,
           userData.country ?? null,
           userData.avatarUrl ?? null,
-          JSON.stringify(userData.avatarCustomization ?? null),
+          avatarCustomizationJson,
         ]
       );
       const user = result[0];

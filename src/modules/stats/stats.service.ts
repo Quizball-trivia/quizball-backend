@@ -1,7 +1,7 @@
 import { statsRepo } from './stats.repo.js';
 import { BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import { avatarCustomizationSchema, type AvatarCustomization } from '../users/avatar-customization.js';
+import { parseStoredAvatarCustomization, type AvatarCustomization } from '../users/avatar-customization.js';
 
 export interface HeadToHeadSummary {
   userAId: string;
@@ -130,7 +130,7 @@ export const statsService = {
           id: row.opponent_id,
           username: row.opponent_username ?? 'Opponent',
           avatarUrl: row.opponent_avatar_url,
-          avatarCustomization: avatarCustomizationSchema.nullable().parse(row.opponent_avatar_customization ?? null),
+          avatarCustomization: parseStoredAvatarCustomization(row.opponent_avatar_customization),
           isAi: row.opponent_is_ai ?? false,
         },
       };

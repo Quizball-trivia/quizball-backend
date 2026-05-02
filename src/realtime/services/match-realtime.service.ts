@@ -7,7 +7,7 @@ import { matchesService, resolveMatchVariant } from '../../modules/matches/match
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import { avatarCustomizationSchema, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
+import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
   MatchAnswerPayload,
@@ -234,7 +234,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
-    avatarCustomization: avatarCustomizationSchema.nullable().parse(opponentUser?.avatar_customization ?? null),
+    avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
   };
 }
 
@@ -325,7 +325,7 @@ async function getOpponentInfoFromParticipants(
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
-    avatarCustomization: avatarCustomizationSchema.nullable().parse(opponentUser?.avatar_customization ?? null),
+    avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     ...(rp != null ? { rp } : {}),
   };
 }
@@ -369,7 +369,7 @@ async function buildParticipantPayloads(
       userId: player.user_id,
       username: user?.nickname ?? 'Player',
       avatarUrl: user?.avatar_url ?? null,
-      avatarCustomization: avatarCustomizationSchema.nullable().parse(user?.avatar_customization ?? null),
+      avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
       seat: player.seat,
       ...(rankPoints != null ? { rankPoints } : {}),
     };
@@ -395,7 +395,7 @@ async function emitRejoinAvailable(
       userId: player.user_id,
       username: users[index]?.nickname ?? 'Player',
       avatarUrl: users[index]?.avatar_url ?? null,
-      avatarCustomization: avatarCustomizationSchema.nullable().parse(users[index]?.avatar_customization ?? null),
+      avatarCustomization: parseStoredAvatarCustomization(users[index]?.avatar_customization),
       seat: player.seat,
     })),
     graceMs,
@@ -714,7 +714,7 @@ export async function beginMatchForLobby(
     userId: member.user_id,
     username: member.nickname ?? 'Player',
     avatarUrl: member.avatar_url,
-    avatarCustomization: avatarCustomizationSchema.nullable().parse(member.avatar_customization ?? null),
+    avatarCustomization: parseStoredAvatarCustomization(member.avatar_customization),
     seat: seatByUserId.get(member.user_id) ?? 0,
     ...(rpByUserId.has(member.user_id) ? { rankPoints: rpByUserId.get(member.user_id) } : {}),
   }));
@@ -731,7 +731,7 @@ export async function beginMatchForLobby(
           id: opponent.user_id,
           username: opponent.nickname ?? 'Player',
           avatarUrl: opponent.avatar_url,
-          avatarCustomization: avatarCustomizationSchema.nullable().parse(opponent.avatar_customization ?? null),
+          avatarCustomization: parseStoredAvatarCustomization(opponent.avatar_customization),
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
         },
         participants,

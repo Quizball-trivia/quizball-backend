@@ -3,39 +3,6 @@
 INSERT INTO public.store_products (slug, type, name, description, price_cents, currency, metadata, is_active, sort_order)
 VALUES
   (
-    'avatar_skin_white_alt',
-    'avatar',
-    '{"en":"Tan Skin"}'::jsonb,
-    '{"en":"Layered avatar skin tone"}'::jsonb,
-    500,
-    'coins',
-    '{"avatarPartId":"skin_male_white_alt","slot":"skin","assetUrl":"/assets/store/avatars/avatar_male_white_alt.webp"}'::jsonb,
-    true,
-    300
-  ),
-  (
-    'avatar_skin_dark',
-    'avatar',
-    '{"en":"Brown Skin"}'::jsonb,
-    '{"en":"Layered avatar skin tone"}'::jsonb,
-    500,
-    'coins',
-    '{"avatarPartId":"skin_male_dark","slot":"skin","assetUrl":"/assets/store/avatars/avatar_male_dark.webp"}'::jsonb,
-    true,
-    301
-  ),
-  (
-    'avatar_skin_dark_alt',
-    'avatar',
-    '{"en":"Dark Skin"}'::jsonb,
-    '{"en":"Layered avatar skin tone"}'::jsonb,
-    500,
-    'coins',
-    '{"avatarPartId":"skin_male_dark_alt","slot":"skin","assetUrl":"/assets/store/avatars/avatar_male_dark_alt.webp"}'::jsonb,
-    true,
-    302
-  ),
-  (
     'avatar_hair_girl_basic',
     'avatar',
     '{"en":"Girl Basic Hair"}'::jsonb,

@@ -7,7 +7,7 @@ import { progressionResponseSchema, type ProgressionResponse } from '../progress
 import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 import { friendStatusSchema } from '../friends/friends.schemas.js';
-import { avatarCustomizationSchema } from './avatar-customization.js';
+import { avatarCustomizationSchema, parseStoredAvatarCustomization } from './avatar-customization.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -79,7 +79,7 @@ export function toUserResponse(user: {
     nickname: user.nickname,
     country: user.country,
     avatar_url: user.avatar_url,
-    avatar_customization: avatarCustomizationSchema.nullable().parse(user.avatar_customization ?? null),
+    avatar_customization: parseStoredAvatarCustomization(user.avatar_customization),
     favorite_club: user.favorite_club,
     preferred_language: user.preferred_language,
     onboarding_complete: user.onboarding_complete,
@@ -163,7 +163,7 @@ export function toPublicProfileResponse(data: PublicProfileData) {
     id: data.user.id,
     nickname: data.user.nickname,
     avatarUrl: data.user.avatar_url,
-    avatarCustomization: avatarCustomizationSchema.nullable().parse(data.user.avatar_customization ?? null),
+    avatarCustomization: parseStoredAvatarCustomization(data.user.avatar_customization),
     country: data.user.country,
     favoriteClub: data.user.favorite_club,
     progression: data.progression,

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { toPublicProfileResponse, userIdParamSchema, type PublicProfileData } from '../../src/modules/users/users.schemas.js';
+import {
+  toPublicProfileResponse,
+  toUserResponse,
+  userIdParamSchema,
+  type PublicProfileData,
+} from '../../src/modules/users/users.schemas.js';
 
 describe('userIdParamSchema', () => {
   it('accepts a valid UUID', () => {
@@ -135,5 +140,43 @@ describe('toPublicProfileResponse', () => {
     expect(result.avatarUrl).toBeNull();
     expect(result.country).toBeNull();
     expect(result.favoriteClub).toBeNull();
+  });
+});
+
+describe('toUserResponse', () => {
+  const baseUser = {
+    id: '550e8400-e29b-41d4-a716-446655440000',
+    email: 'player@example.com',
+    role: 'user',
+    nickname: 'Player',
+    country: 'US',
+    avatar_url: null,
+    favorite_club: null,
+    preferred_language: 'en',
+    onboarding_complete: false,
+    total_xp: 0,
+    created_at: '2024-06-01T00:00:00.000Z',
+  };
+
+  it('maps structured avatar customization', () => {
+    const result = toUserResponse({
+      ...baseUser,
+      avatar_customization: { skin: 'skin_male_dark', jersey: 'jersey_green', hair: 'hair_boy_basic' },
+    });
+
+    expect(result.avatar_customization).toEqual({
+      skin: 'skin_male_dark',
+      jersey: 'jersey_green',
+      hair: 'hair_boy_basic',
+    });
+  });
+
+  it('normalizes invalid stored avatar customization to null instead of failing auth bootstrap', () => {
+    const result = toUserResponse({
+      ...baseUser,
+      avatar_customization: 'null',
+    });
+
+    expect(result.avatar_customization).toBeNull();
   });
 });

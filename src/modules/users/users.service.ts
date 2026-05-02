@@ -15,8 +15,8 @@ import { BadRequestError } from '../../core/errors.js';
 import { storeRepo } from '../store/store.repo.js';
 import { config } from '../../core/config.js';
 import {
-  avatarCustomizationSchema,
   getRequiredAvatarProductSlugs,
+  parseStoredAvatarCustomization,
   type AvatarCustomization,
 } from './avatar-customization.js';
 
@@ -77,7 +77,6 @@ export const usersService = {
       // Backfill missing fields for existing users
       const backfill: Record<string, string> = {};
       if (!cached.country && detectedCountry) backfill.country = detectedCountry;
-      if (!cached.avatar_url && identity.avatarUrl) backfill.avatarUrl = identity.avatarUrl;
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
@@ -102,7 +101,6 @@ export const usersService = {
       // Backfill missing fields for existing users
       const backfill: Record<string, string> = {};
       if (!existingUser.country && detectedCountry) backfill.country = detectedCountry;
-      if (!existingUser.avatar_url && identity.avatarUrl) backfill.avatarUrl = identity.avatarUrl;
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);
@@ -127,7 +125,6 @@ export const usersService = {
       {
         email: identity.email,
         nickname: identity.name,
-        avatarUrl: identity.avatarUrl,
         country: detectedCountry ?? undefined,
       },
       {
@@ -245,7 +242,7 @@ export const usersService = {
       id: row.id,
       nickname: row.nickname,
       avatarUrl: row.avatar_url,
-      avatarCustomization: avatarCustomizationSchema.nullable().parse(row.avatar_customization ?? null),
+      avatarCustomization: parseStoredAvatarCustomization(row.avatar_customization),
       level: progressionService.getProgression(row.total_xp).level,
       ranked: row.ranked_tier && row.ranked_placement_status
         ? ({

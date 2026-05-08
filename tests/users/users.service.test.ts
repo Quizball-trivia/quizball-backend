@@ -4,7 +4,15 @@ import '../setup.js';
 
 const getByIdMock = vi.fn();
 const updateMock = vi.fn();
+const requestDeletionMock = vi.fn();
+const cancelPendingDeletionMock = vi.fn();
+const createWithIdentityMock = vi.fn();
 const searchByNicknameRepoMock = vi.fn();
+const getByProviderSubjectMock = vi.fn();
+const getCachedUserMock = vi.fn();
+const setCachedUserMock = vi.fn();
+const updateCachedUserMock = vi.fn();
+const invalidateByUserIdMock = vi.fn();
 const getProfileMock = vi.fn();
 const getUserRankMock = vi.fn();
 const getUserStatsSummaryMock = vi.fn();
@@ -26,8 +34,12 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     getById: (...args: unknown[]) => getByIdMock(...args),
     searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
-    createWithIdentity: vi.fn(),
+    requestDeletion: (...args: unknown[]) => requestDeletionMock(...args),
+    cancelPendingDeletion: (...args: unknown[]) => cancelPendingDeletionMock(...args),
+    createWithIdentity: (...args: unknown[]) => createWithIdentityMock(...args),
   },
+  isUserAccountInactive: (user: { is_deleted?: boolean; deleted_at?: string | null; pending_deletion_at?: string | null }) =>
+    Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at),
 }));
 
 vi.mock('../../src/modules/store/store.repo.js', () => ({
@@ -44,14 +56,20 @@ vi.mock('../../src/modules/friends/friends.repo.js', () => ({
 
 vi.mock('../../src/modules/users/identities.repo.js', () => ({
   identitiesRepo: {
-    getByProviderSubject: vi.fn(),
+    getByProviderSubject: (...args: unknown[]) => getByProviderSubjectMock(...args),
   },
 }));
 
 vi.mock('../../src/modules/users/user-cache.js', () => ({
-  getCachedUser: vi.fn(),
-  setCachedUser: vi.fn(),
-  updateCachedUser: vi.fn(),
+  getCachedUser: (...args: unknown[]) => getCachedUserMock(...args),
+  setCachedUser: (...args: unknown[]) => setCachedUserMock(...args),
+  updateCachedUser: (...args: unknown[]) => updateCachedUserMock(...args),
+  invalidateByUserId: (...args: unknown[]) => invalidateByUserIdMock(...args),
+}));
+
+const disconnectUserSocketsMock = vi.fn();
+vi.mock('../../src/realtime/services/auth-realtime.service.js', () => ({
+  disconnectUserSockets: (...args: unknown[]) => disconnectUserSocketsMock(...args),
 }));
 
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
@@ -93,6 +111,10 @@ const MOCK_USER = {
   onboarding_complete: true,
   total_xp: 250,
   created_at: '2024-01-01T00:00:00.000Z',
+  deletion_requested_at: null,
+  pending_deletion_at: null,
+  deleted_at: null,
+  is_deleted: false,
 };
 
 const MOCK_RANKED_PROFILE = {
@@ -196,6 +218,21 @@ describe('usersService.getPublicProfile', () => {
     await expect(usersService.getPublicProfile('nonexistent-id', 'viewer-id'))
       .rejects
       .toThrow(NotFoundError);
+  });
+
+  it('hides users pending deletion from public profiles', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      deletion_requested_at: '2026-05-07T12:00:00.000Z',
+      pending_deletion_at: '2026-06-06T12:00:00.000Z',
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    const { NotFoundError } = await import('../../src/core/errors.js');
+
+    await expect(usersService.getPublicProfile('user-target-id', 'viewer-id'))
+      .rejects
+      .toThrow(NotFoundError);
+    expect(getProfileMock).not.toHaveBeenCalled();
   });
 
   it('returns null ranked when user has no ranked profile', async () => {
@@ -365,6 +402,7 @@ describe('usersService.searchByNickname', () => {
         avatarUrl: 'https://example.com/a.png',
         avatarCustomization: null,
         level: 4,
+        pendingDeletion: false,
         ranked: {
           rp: 1420,
           tier: 'Rotation',
@@ -383,6 +421,7 @@ describe('usersService.searchByNickname', () => {
         avatarUrl: null,
         avatarCustomization: null,
         level: 1,
+        pendingDeletion: false,
         ranked: null,
         friendStatus: 'pending_sent',
       },
@@ -397,5 +436,80 @@ describe('usersService.searchByNickname', () => {
 
     expect(result[0]?.friendStatus).toBe('none');
     expect(result[1]?.friendStatus).toBe('none');
+  });
+});
+
+describe('usersService account deletion', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('schedules deletion and invalidates cached auth state', async () => {
+    requestDeletionMock.mockResolvedValue({
+      ...MOCK_USER,
+      deletion_requested_at: '2026-05-07T12:00:00.000Z',
+      pending_deletion_at: '2026-06-06T12:00:00.000Z',
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    const result = await usersService.requestAccountDeletion('user-target-id');
+
+    expect(requestDeletionMock).toHaveBeenCalledWith('user-target-id');
+    expect(invalidateByUserIdMock).toHaveBeenCalledWith('user-target-id');
+    expect(disconnectUserSocketsMock).toHaveBeenCalledWith('user-target-id', 'account_deleted');
+    expect(result).toEqual({
+      deletionRequestedAt: '2026-05-07T12:00:00.000Z',
+      pendingDeletionAt: '2026-06-06T12:00:00.000Z',
+    });
+  });
+
+  it('restores pending deletion before the grace period expires', async () => {
+    cancelPendingDeletionMock.mockResolvedValue(MOCK_USER);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletion('user-target-id')).resolves.toEqual(MOCK_USER);
+
+    expect(cancelPendingDeletionMock).toHaveBeenCalledWith('user-target-id');
+    expect(invalidateByUserIdMock).toHaveBeenCalledWith('user-target-id');
+  });
+
+  it('rejects restore when the account is not restorable', async () => {
+    cancelPendingDeletionMock.mockResolvedValue(null);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletion('user-target-id')).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Account is not pending deletion or grace period has expired',
+    });
+  });
+
+  it('blocks auth resolution for pending deletion identities', async () => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue({
+      id: 'identity-id',
+      provider: 'supabase',
+      subject: 'provider-sub',
+      user_id: 'user-target-id',
+      email: 'target@example.com',
+      created_at: '2026-05-07T12:00:00.000Z',
+      user: {
+        ...MOCK_USER,
+        pending_deletion_at: '2026-06-06T12:00:00.000Z',
+      },
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    })).rejects.toMatchObject({
+      statusCode: 401,
+      message: 'Account is scheduled for deletion',
+    });
+
+    expect(setCachedUserMock).not.toHaveBeenCalled();
+    expect(updateCachedUserMock).not.toHaveBeenCalled();
   });
 });

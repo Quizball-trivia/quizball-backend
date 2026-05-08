@@ -27,6 +27,10 @@ export interface UpdateUserData {
   onboardingComplete?: boolean;
 }
 
+export function isUserAccountInactive(user: Pick<User, 'is_deleted' | 'deleted_at' | 'pending_deletion_at'>): boolean {
+  return Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at);
+}
+
 export const usersRepo = {
   async ensureFixedUser(data: {
     id: string;
@@ -151,6 +155,9 @@ export const usersRepo = {
       FROM users u
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE u.is_ai = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
         AND u.nickname IS NOT NULL
         AND u.id != ${excludeUserId}
         AND u.nickname ILIKE ${pattern} ESCAPE '\\'
@@ -185,6 +192,43 @@ export const usersRepo = {
         onboarding_complete = CASE WHEN ${data.onboardingComplete !== undefined} THEN ${data.onboardingComplete ?? false} ELSE onboarding_complete END,
         updated_at = NOW()
       WHERE id = ${id}
+      RETURNING *
+    `;
+    return user ?? null;
+  },
+
+  async requestDeletion(id: string): Promise<User | null> {
+    // Idempotent: re-calling on a user already pending deletion returns the existing
+    // timestamps unchanged. updated_at only bumps on the first scheduling so we don't
+    // create spurious audit entries or invalidate caches on no-op repeats.
+    const [user] = await sql<User[]>`
+      UPDATE users
+      SET
+        deletion_requested_at = COALESCE(deletion_requested_at, NOW()),
+        pending_deletion_at = COALESCE(pending_deletion_at, NOW() + INTERVAL '30 days'),
+        updated_at = CASE WHEN pending_deletion_at IS NULL THEN NOW() ELSE updated_at END
+      WHERE id = ${id}
+        AND is_deleted = false
+        AND deleted_at IS NULL
+      RETURNING *
+    `;
+    return user ?? null;
+  },
+
+  async cancelPendingDeletion(id: string): Promise<User | null> {
+    // Cancellable until the row is actually finalized (is_deleted=true). Don't gate on
+    // pending_deletion_at > NOW(): the cron may run hourly/nightly, and if it's late we
+    // still want the user/admin to be able to recover the account.
+    const [user] = await sql<User[]>`
+      UPDATE users
+      SET
+        deletion_requested_at = NULL,
+        pending_deletion_at = NULL,
+        updated_at = NOW()
+      WHERE id = ${id}
+        AND pending_deletion_at IS NOT NULL
+        AND deleted_at IS NULL
+        AND is_deleted = false
       RETURNING *
     `;
     return user ?? null;

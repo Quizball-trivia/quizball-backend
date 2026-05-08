@@ -699,12 +699,16 @@ export type Database = {
           avatar_url: string | null
           country: string | null
           created_at: string
+          deleted_at: string | null
+          deletion_requested_at: string | null
           email: string | null
           favorite_club: string | null
           id: string
           is_ai: boolean
+          is_deleted: boolean
           nickname: string | null
           onboarding_complete: boolean
+          pending_deletion_at: string | null
           preferred_language: string
           role: string
           total_xp: number
@@ -715,12 +719,16 @@ export type Database = {
           avatar_url?: string | null
           country?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deletion_requested_at?: string | null
           email?: string | null
           favorite_club?: string | null
           id?: string
           is_ai?: boolean
+          is_deleted?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
+          pending_deletion_at?: string | null
           preferred_language?: string
           role?: string
           total_xp?: number
@@ -731,12 +739,16 @@ export type Database = {
           avatar_url?: string | null
           country?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deletion_requested_at?: string | null
           email?: string | null
           favorite_club?: string | null
           id?: string
           is_ai?: boolean
+          is_deleted?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
+          pending_deletion_at?: string | null
           preferred_language?: string
           role?: string
           total_xp?: number

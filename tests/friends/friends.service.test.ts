@@ -18,6 +18,8 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
   },
+  isUserAccountInactive: (user: { is_deleted?: boolean; deleted_at?: string | null; pending_deletion_at?: string | null }) =>
+    Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at),
 }));
 
 vi.mock('../../src/modules/friends/friends.repo.js', () => ({
@@ -64,6 +66,20 @@ describe('friendsService', () => {
     expect(createFriendRequestMock).not.toHaveBeenCalled();
   });
 
+  it('rejects requests to users pending deletion', async () => {
+    getByIdMock.mockResolvedValue({
+      id: 'target-user-id',
+      pending_deletion_at: '2026-06-06T12:00:00.000Z',
+    });
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.createRequest('sender-id', 'target-user-id')).rejects.toThrow(
+      'Target user not found'
+    );
+    expect(friendshipExistsMock).not.toHaveBeenCalled();
+    expect(createFriendRequestMock).not.toHaveBeenCalled();
+  });
+
   it('rejects duplicate pending requests from the same sender', async () => {
     getByIdMock.mockResolvedValue({ id: 'target-user-id' });
     friendshipExistsMock.mockResolvedValue(false);
@@ -105,7 +121,7 @@ describe('friendsService', () => {
   });
 
   it('accepts and declines only existing pending requests', async () => {
-    acceptRequestMock.mockResolvedValue(true);
+    acceptRequestMock.mockResolvedValue('accepted');
     declineRequestMock.mockResolvedValue(true);
     const { friendsService } = await import('../../src/modules/friends/friends.service.js');
 
@@ -118,12 +134,22 @@ describe('friendsService', () => {
   });
 
   it('throws when accepting a missing request', async () => {
-    acceptRequestMock.mockResolvedValue(false);
+    acceptRequestMock.mockResolvedValue('not_found');
     const { friendsService } = await import('../../src/modules/friends/friends.service.js');
 
     await expect(friendsService.acceptRequest('receiver-id', 'missing-request')).rejects.toThrow(
       'Friend request not found'
     );
+  });
+
+  it('rejects accept when either party is pending deletion (race-safe)', async () => {
+    acceptRequestMock.mockResolvedValue('inactive_user');
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.acceptRequest('receiver-id', 'request-id')).rejects.toThrow(
+      'One of the accounts is no longer available'
+    );
+    expect(acceptRequestMock).toHaveBeenCalledWith('request-id', 'receiver-id');
   });
 
   it('removes an existing friend', async () => {

@@ -47,6 +47,12 @@ router.put(
 router.post('/me/complete-onboarding', usersController.completeOnboarding);
 
 /**
+ * POST /api/v1/users/me/deletion
+ * Schedule current user account for deletion after a 30-day grace period.
+ */
+router.post('/me/deletion', usersController.requestAccountDeletion);
+
+/**
  * GET /api/v1/users/:userId/profile
  * Get public profile for a user.
  */

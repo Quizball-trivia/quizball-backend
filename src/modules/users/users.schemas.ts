@@ -41,6 +41,13 @@ export const userResponseSchema = z.object({
 
 export type UserResponse = z.infer<typeof userResponseSchema>;
 
+export const accountDeletionResponseSchema = z.object({
+  deletionRequestedAt: z.string().datetime(),
+  pendingDeletionAt: z.string().datetime(),
+});
+
+export type AccountDeletionResponse = z.infer<typeof accountDeletionResponseSchema>;
+
 /**
  * Update profile request schema.
  */
@@ -181,6 +188,16 @@ export function toAchievementsResponse(data: AchievementResponse[]) {
   };
 }
 
+export function toAccountDeletionResponse(data: {
+  deletionRequestedAt: string;
+  pendingDeletionAt: string;
+}): AccountDeletionResponse {
+  return {
+    deletionRequestedAt: data.deletionRequestedAt,
+    pendingDeletionAt: data.pendingDeletionAt,
+  };
+}
+
 /**
  * User search query schema.
  */
@@ -199,6 +216,9 @@ export const userSearchResultSchema = z.object({
   avatarUrl: z.string().url().nullable(),
   avatarCustomization: avatarCustomizationSchema.nullable(),
   level: z.number().int().positive(),
+  // Search filters out deleted/pending users so this is always false here, but the
+  // field stays in the shape so frontend types stay consistent across endpoints.
+  pendingDeletion: z.boolean(),
   ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,
 });

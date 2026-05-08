@@ -280,6 +280,9 @@ export const lobbiesRepo = {
       WHERE l.status = 'waiting'
         AND l.mode = 'friendly'
         AND l.is_public = true
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
       GROUP BY l.id, u.nickname, u.avatar_url, u.avatar_customization
       HAVING (${params.joinableOnly}::boolean = false OR COUNT(lm.user_id) < 6)
       ORDER BY l.created_at DESC

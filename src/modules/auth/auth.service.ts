@@ -1,5 +1,6 @@
 import { getAuthClient } from './supabase-auth-client.js';
 import { usersService } from '../users/index.js';
+import { AuthenticationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
 import type { AuthSession, RegisterRequest, LoginRequest } from './auth.schemas.js';
@@ -7,6 +8,11 @@ import type { AuthSession, RegisterRequest, LoginRequest } from './auth.schemas.
 /**
  * Provision user identity in our database.
  * Called after successful auth to ensure user record exists.
+ *
+ * Best-effort: transient infrastructure errors (DB hiccup, network blip) are logged and
+ * swallowed so a flaky DB doesn't lock everyone out of login. AuthenticationError is the
+ * only typed error that propagates — it signals an account-state problem (e.g. scheduled
+ * deletion) that MUST block the auth flow.
  */
 async function provisionIdentity(session: AuthSession): Promise<void> {
   await withSpan('auth.provision_identity', {
@@ -30,6 +36,11 @@ async function provisionIdentity(session: AuthSession): Promise<void> {
         claims: {},
       });
     } catch (error) {
+      if (error instanceof AuthenticationError) {
+        // Account-state errors (deletion etc.) MUST block auth.
+        throw error;
+      }
+      // Transient errors are logged but don't break the auth flow.
       span.setAttribute('quizball.identity_provision_warning', true);
       logger.warn(
         { error: error instanceof Error ? error.message : error, provider: session.provider, userId: session.user.providerSub },
@@ -60,5 +71,14 @@ export const authService = {
       await provisionIdentity(session);
       return session;
     });
+  },
+
+  /**
+   * Verifies the session belongs to an account that is still allowed to authenticate.
+   * Reuses the provisioning flow because it already loads the user and runs the deletion check.
+   * Only AuthenticationError propagates — transient errors are swallowed inside provisionIdentity.
+   */
+  async ensureSessionAccountActive(session: AuthSession): Promise<void> {
+    await provisionIdentity(session);
   },
 };

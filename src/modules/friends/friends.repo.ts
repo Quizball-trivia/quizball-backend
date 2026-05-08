@@ -8,6 +8,7 @@ export interface SocialPlayerRow {
   avatar_url: string | null;
   avatar_customization: Json | null;
   total_xp: number;
+  pending_deletion_at: string | null;
   ranked_rp: number | null;
   ranked_tier: string | null;
   ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -92,6 +93,7 @@ export const friendsRepo = {
         u.avatar_url,
         u.avatar_customization,
         u.total_xp,
+        u.pending_deletion_at,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
         rp.placement_status AS ranked_placement_status,
@@ -107,8 +109,10 @@ export const friendsRepo = {
           ELSE f.user_low_id
         END
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
-      WHERE f.user_low_id = ${userId}::uuid
-        OR f.user_high_id = ${userId}::uuid
+      WHERE (f.user_low_id = ${userId}::uuid
+        OR f.user_high_id = ${userId}::uuid)
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
       ORDER BY rp.rp DESC NULLS LAST, u.nickname ASC NULLS LAST
     `;
   },
@@ -123,6 +127,7 @@ export const friendsRepo = {
         u.avatar_url,
         u.avatar_customization,
         u.total_xp,
+        u.pending_deletion_at,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
         rp.placement_status AS ranked_placement_status,
@@ -136,6 +141,8 @@ export const friendsRepo = {
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE fr.receiver_user_id = ${userId}
         AND fr.status = 'pending'
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
       ORDER BY fr.created_at DESC
     `;
   },
@@ -150,6 +157,7 @@ export const friendsRepo = {
         u.avatar_url,
         u.avatar_customization,
         u.total_xp,
+        u.pending_deletion_at,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
         rp.placement_status AS ranked_placement_status,
@@ -163,6 +171,8 @@ export const friendsRepo = {
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE fr.sender_user_id = ${userId}
         AND fr.status = 'pending'
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
       ORDER BY fr.created_at DESC
     `;
   },
@@ -214,8 +224,11 @@ export const friendsRepo = {
     return row ?? null;
   },
 
-  async acceptRequest(requestId: string, receiverUserId: string): Promise<boolean> {
-    return sql.begin(async (tx) => {
+  async acceptRequest(
+    requestId: string,
+    receiverUserId: string
+  ): Promise<'accepted' | 'not_found' | 'inactive_user'> {
+    return sql.begin<'accepted' | 'not_found' | 'inactive_user'>(async (tx) => {
       const requestRows = await tx.unsafe<FriendRequestRow[]>(
         `
         SELECT *
@@ -230,7 +243,26 @@ export const friendsRepo = {
 
       const request = requestRows[0];
       if (!request) {
-        return false;
+        return 'not_found';
+      }
+
+      // Lock both users so a deletion request racing with this accept can't slip
+      // through between the SELECT and the INSERT.
+      const userRows = await tx.unsafe<Array<{ id: string; is_deleted: boolean; deleted_at: string | null; pending_deletion_at: string | null }>>(
+        `
+        SELECT id, is_deleted, deleted_at, pending_deletion_at
+        FROM users
+        WHERE id IN ($1, $2)
+        FOR UPDATE
+        `,
+        [request.sender_user_id, request.receiver_user_id]
+      );
+
+      const eitherInactive =
+        userRows.length < 2 ||
+        userRows.some((u) => u.is_deleted || u.deleted_at !== null || u.pending_deletion_at !== null);
+      if (eitherInactive) {
+        return 'inactive_user';
       }
 
       const { userLowId, userHighId } = normalizePair(request.sender_user_id, request.receiver_user_id);
@@ -267,7 +299,7 @@ export const friendsRepo = {
         [requestId, request.sender_user_id, request.receiver_user_id]
       );
 
-      return true;
+      return 'accepted';
     });
   },
 

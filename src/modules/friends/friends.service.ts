@@ -1,5 +1,5 @@
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
-import { usersRepo } from '../users/users.repo.js';
+import { isUserAccountInactive, usersRepo } from '../users/users.repo.js';
 import { progressionService } from '../progression/progression.service.js';
 import { friendsRepo } from './friends.repo.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
@@ -11,6 +11,7 @@ function toPlayerSummary(row: {
   avatar_url: string | null;
   avatar_customization?: unknown;
   total_xp: number;
+  pending_deletion_at?: string | null;
   ranked_rp: number | null;
   ranked_tier: string | null;
   ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -39,6 +40,7 @@ function toPlayerSummary(row: {
     avatarUrl: row.avatar_url,
     avatarCustomization: parseStoredAvatarCustomization(row.avatar_customization),
     level: progressionService.getProgression(row.total_xp).level,
+    pendingDeletion: row.pending_deletion_at != null,
     ranked,
     friendStatus,
   };
@@ -79,7 +81,7 @@ export const friendsService = {
     }
 
     const targetUser = await usersRepo.getById(targetUserId);
-    if (!targetUser) {
+    if (!targetUser || isUserAccountInactive(targetUser)) {
       throw new NotFoundError('Target user not found');
     }
 
@@ -103,11 +105,15 @@ export const friendsService = {
   },
 
   async acceptRequest(userId: string, requestId: string) {
-    const success = await friendsRepo.acceptRequest(requestId, userId);
-    if (!success) {
-      throw new NotFoundError('Friend request not found');
+    const result = await friendsRepo.acceptRequest(requestId, userId);
+    switch (result) {
+      case 'accepted':
+        return { success: true as const };
+      case 'not_found':
+        throw new NotFoundError('Friend request not found');
+      case 'inactive_user':
+        throw new BadRequestError('One of the accounts is no longer available');
     }
-    return { success: true as const };
   },
 
   async declineRequest(userId: string, requestId: string) {

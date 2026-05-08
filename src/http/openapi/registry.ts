@@ -15,6 +15,7 @@ import {
 } from '../../modules/stats/stats.schemas.js';
 import {
   publicProfileResponseSchema,
+  accountDeletionResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
   userResponseSchema,
@@ -146,6 +147,7 @@ const headToHeadResponseOpenApiSchema = headToHeadResponseSchema.openapi('HeadTo
 const statsSummaryResponseOpenApiSchema = statsSummaryResponseSchema.openapi('StatsSummaryResponse');
 const rankedProfileResponseOpenApiSchema = rankedProfileResponseSchema.openapi('RankedProfileResponse');
 const publicProfileResponseOpenApiSchema = publicProfileResponseSchema.openapi('PublicProfileResponse');
+const accountDeletionResponseOpenApiSchema = accountDeletionResponseSchema.openapi('AccountDeletionResponse');
 
 registry.register('ProgressionResponse', progressionResponseOpenApiSchema);
 registry.register('UserResponse', userResponseOpenApiSchema);
@@ -154,6 +156,7 @@ registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
 registry.register('StatsSummaryResponse', statsSummaryResponseOpenApiSchema);
 registry.register('RankedProfileResponse', rankedProfileResponseOpenApiSchema);
 registry.register('PublicProfileResponse', publicProfileResponseOpenApiSchema);
+registry.register('AccountDeletionResponse', accountDeletionResponseOpenApiSchema);
 registry.register('StoreProductsResponse', storeProductsResponseSchema);
 registry.register('StoreWalletResponse', storeWalletResponseSchema);
 registry.register('StoreInventoryResponse', storeInventoryResponseSchema);
@@ -763,6 +766,24 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/v1/users/me/deletion',
+  summary: 'Schedule current user account for deletion',
+  tags: ['Users'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Account deletion scheduled',
+      content: { 'application/json': { schema: accountDeletionResponseOpenApiSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
   method: 'get',
   path: '/api/v1/users/{userId}/profile',
   summary: 'Get public profile for a user',
@@ -778,6 +799,40 @@ registry.registerPath({
     },
     401: {
       description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'User not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/admin/users/{userId}/deletion/restore',
+  summary: 'Restore a user account pending deletion',
+  description: 'Requires admin role. Only works before the 30-day grace period expires.',
+  tags: ['Admin Users'],
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: userIdParamSchema,
+  },
+  responses: {
+    200: {
+      description: 'Account deletion cancelled',
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
+    },
+    400: {
+      description: 'Account is not restorable',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
     404: {

@@ -1,17 +1,17 @@
 import type { User } from '../../db/types.js';
-import { usersRepo, type UpdateUserData } from './users.repo.js';
+import { isUserAccountInactive, usersRepo, type UpdateUserData } from './users.repo.js';
 import { identitiesRepo } from './identities.repo.js';
-import { NotFoundError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
-import { getCachedUser, setCachedUser, updateCachedUser } from './user-cache.js';
+import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
+import { disconnectUserSockets } from '../../realtime/services/auth-realtime.service.js';
 import { rankedRepo } from '../ranked/ranked.repo.js';
 import { statsService } from '../stats/stats.service.js';
 import type { PublicProfileData } from './users.schemas.js';
 import { progressionService } from '../progression/progression.service.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { friendsRepo } from '../friends/friends.repo.js';
-import { BadRequestError } from '../../core/errors.js';
 import { storeRepo } from '../store/store.repo.js';
 import { config } from '../../core/config.js';
 import {
@@ -22,6 +22,17 @@ import {
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
+}
+
+export interface AccountDeletionStatus {
+  deletionRequestedAt: string;
+  pendingDeletionAt: string;
+}
+
+function assertUserAccountActive(user: User): void {
+  if (isUserAccountInactive(user)) {
+    throw new AuthenticationError('Account is scheduled for deletion');
+  }
 }
 
 async function assertAvatarCustomizationAllowed(
@@ -74,6 +85,8 @@ export const usersService = {
     // 1. Check cache first
     const cached = getCachedUser(identity.provider, identity.subject);
     if (cached) {
+      assertUserAccountActive(cached);
+
       // Backfill missing fields for existing users
       const backfill: Record<string, string> = {};
       if (!cached.country && detectedCountry) backfill.country = detectedCountry;
@@ -97,6 +110,7 @@ export const usersService = {
 
     if (existingIdentity) {
       const existingUser = existingIdentity.user;
+      assertUserAccountActive(existingUser);
 
       // Backfill missing fields for existing users
       const backfill: Record<string, string> = {};
@@ -157,6 +171,13 @@ export const usersService = {
     return user;
   },
 
+  async assertPublicUserVisible(id: string): Promise<void> {
+    const user = await usersRepo.getById(id);
+    if (!user || isUserAccountInactive(user)) {
+      throw new NotFoundError('User not found');
+    }
+  },
+
   /**
    * Update user profile.
    * Only allows updating: nickname, country, avatarUrl, favoriteClub, preferredLanguage
@@ -186,7 +207,7 @@ export const usersService = {
    */
   async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
     const user = await usersRepo.getById(targetUserId);
-    if (!user) {
+    if (!user || isUserAccountInactive(user)) {
       throw new NotFoundError('User not found');
     }
 
@@ -244,6 +265,9 @@ export const usersService = {
       avatarUrl: row.avatar_url,
       avatarCustomization: parseStoredAvatarCustomization(row.avatar_customization),
       level: progressionService.getProgression(row.total_xp).level,
+      // Always false here — searchByNickname already filters deleted/pending rows.
+      // The field exists for API shape parity with friend list / friend request results.
+      pendingDeletion: false,
       ranked: row.ranked_tier && row.ranked_placement_status
         ? ({
             rp: row.ranked_rp ?? 0,
@@ -274,6 +298,45 @@ export const usersService = {
     updateCachedUser(id, user);
 
     logger.info({ userId: id }, 'User completed onboarding');
+    return user;
+  },
+
+  async requestAccountDeletion(id: string): Promise<AccountDeletionStatus> {
+    const user = await usersRepo.requestDeletion(id);
+
+    if (!user || !user.deletion_requested_at || !user.pending_deletion_at) {
+      throw new NotFoundError('User not found');
+    }
+
+    await invalidateByUserId(id);
+
+    // Best-effort: kick any open WebSocket sessions for this user so an open
+    // browser tab can't keep playing matches after the account is locked.
+    // Wrapped in try/catch defensively; the helper itself already swallows
+    // its own errors but a future change might surface them.
+    try {
+      await disconnectUserSockets(id, 'account_deleted');
+    } catch (err) {
+      logger.warn({ err, userId: id }, 'Force-disconnect failed (non-fatal)');
+    }
+
+    logger.info({ userId: id, pendingDeletionAt: user.pending_deletion_at }, 'User requested account deletion');
+
+    return {
+      deletionRequestedAt: user.deletion_requested_at,
+      pendingDeletionAt: user.pending_deletion_at,
+    };
+  },
+
+  async restorePendingDeletion(id: string): Promise<User> {
+    const user = await usersRepo.cancelPendingDeletion(id);
+
+    if (!user) {
+      throw new BadRequestError('Account is not pending deletion or grace period has expired');
+    }
+
+    await invalidateByUserId(id);
+    logger.info({ userId: id }, 'Admin restored pending account deletion');
     return user;
   },
 };

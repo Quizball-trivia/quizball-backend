@@ -22,6 +22,7 @@ export const socialPlayerSummarySchema = z.object({
   avatarUrl: z.string().url().nullable(),
   avatarCustomization: avatarCustomizationSchema.nullable(),
   level: z.number().int().positive(),
+  pendingDeletion: z.boolean(),
   ranked: rankedProfileResponseSchema.nullable(),
   friendStatus: friendStatusSchema,
 });

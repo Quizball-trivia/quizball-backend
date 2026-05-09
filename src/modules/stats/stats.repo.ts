@@ -94,10 +94,22 @@ export const statsRepo = {
         m.state_payload->>'winnerDecisionMethod' AS winner_decision_method,
         rrc.delta_rp AS ranked_delta_rp,
         rrc.is_placement AS ranked_is_placement,
-        opp.id AS opponent_id,
-        opp.nickname AS opponent_username,
-        opp.avatar_url AS opponent_avatar_url,
-        opp.avatar_customization AS opponent_avatar_customization,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
+          ELSE opp.id
+        END AS opponent_id,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN 'Deleted Player'
+          ELSE opp.nickname
+        END AS opponent_username,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
+          ELSE opp.avatar_url
+        END AS opponent_avatar_url,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
+          ELSE opp.avatar_customization
+        END AS opponent_avatar_customization,
         false AS opponent_is_ai
       FROM matches m
       JOIN match_players mp_self

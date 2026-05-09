@@ -1,7 +1,23 @@
 import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
-import { toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
+import { config } from '../../core/config.js';
+import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
+
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: config.NODE_ENV === 'prod',
+  sameSite: (config.NODE_ENV === 'prod' ? 'none' : 'lax') as
+    | 'lax'
+    | 'strict'
+    | 'none',
+  path: '/',
+};
+
+function clearAuthCookies(res: Response): void {
+  res.clearCookie('qb_access_token', COOKIE_OPTIONS);
+  res.clearCookie('qb_refresh_token', COOKIE_OPTIONS);
+}
 
 /**
  * Users controller.
@@ -59,6 +75,7 @@ export const usersController = {
 
   async getUserAchievements(req: Request, res: Response): Promise<void> {
     const { userId } = req.validated.params as UserIdParam;
+    await usersService.assertPublicUserVisible(userId);
     const achievements = await achievementsService.listForUser(userId);
     res.json(toAchievementsResponse(achievements));
   },
@@ -84,5 +101,25 @@ export const usersController = {
     const updatedUser = await usersService.completeOnboarding(userId);
 
     res.json(toUserResponse(updatedUser));
+  },
+
+  /**
+   * POST /api/v1/users/me/deletion
+   * Schedule current user account for deletion after a 30-day grace period.
+   */
+  async requestAccountDeletion(req: Request, res: Response): Promise<void> {
+    const result = await usersService.requestAccountDeletion(req.user!.id);
+    clearAuthCookies(res);
+    res.json(toAccountDeletionResponse(result));
+  },
+
+  /**
+   * POST /api/v1/admin/users/:userId/deletion/restore
+   * Restore a user account while it is still inside the deletion grace period.
+   */
+  async restorePendingDeletion(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const user = await usersService.restorePendingDeletion(userId);
+    res.json(toUserResponse(user));
   },
 };

@@ -97,6 +97,7 @@ export const authController = {
     }
 
     const session = await authClient.refresh(refreshToken);
+    await authService.ensureSessionAccountActive(session);
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));

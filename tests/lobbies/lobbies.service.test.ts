@@ -97,6 +97,7 @@ describe('lobbiesService public/friendly helpers', () => {
           id: 'host-2',
           username: 'Captain',
           avatarUrl: null,
+          avatarCustomization: null,
         },
       },
     ]);

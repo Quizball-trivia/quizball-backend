@@ -256,7 +256,12 @@ export const rankedRepo = {
             ORDER BY created_at DESC LIMIT 3
           ) sub
         ) trend ON true
-        WHERE u.is_ai = false AND rp.placement_status = 'placed' AND u.country = ${country}
+        WHERE u.is_ai = false
+          AND u.is_deleted = false
+          AND u.deleted_at IS NULL
+          AND u.pending_deletion_at IS NULL
+          AND rp.placement_status = 'placed'
+          AND u.country = ${country}
         ORDER BY rp.rp DESC, rp.updated_at ASC
         LIMIT ${limit}
         OFFSET ${offset}
@@ -285,7 +290,11 @@ export const rankedRepo = {
           ORDER BY created_at DESC LIMIT 3
         ) sub
       ) trend ON true
-      WHERE u.is_ai = false AND rp.placement_status = 'placed'
+      WHERE u.is_ai = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND rp.placement_status = 'placed'
       ORDER BY rp.rp DESC, rp.updated_at ASC
       LIMIT ${limit}
       OFFSET ${offset}
@@ -311,13 +320,21 @@ export const rankedRepo = {
         (SELECT COUNT(*)::int + 1
          FROM ranked_profiles rp2
          JOIN users u ON u.id = rp2.user_id
-         WHERE u.is_ai = false AND rp2.placement_status = 'placed' ${countryFilter}
+         WHERE u.is_ai = false
+           AND u.is_deleted = false
+           AND u.deleted_at IS NULL
+           AND u.pending_deletion_at IS NULL
+           AND rp2.placement_status = 'placed' ${countryFilter}
            AND (rp2.rp > ${profile.rp} OR (rp2.rp = ${profile.rp} AND rp2.updated_at < ${profile.updated_at}))
         ) AS rank,
         (SELECT COUNT(*)::int
          FROM ranked_profiles rp3
          JOIN users u ON u.id = rp3.user_id
-         WHERE u.is_ai = false AND rp3.placement_status = 'placed' ${countryFilter}
+         WHERE u.is_ai = false
+           AND u.is_deleted = false
+           AND u.deleted_at IS NULL
+           AND u.pending_deletion_at IS NULL
+           AND rp3.placement_status = 'placed' ${countryFilter}
         ) AS total,
         (SELECT COUNT(*) FILTER (WHERE result = 'win') FROM recent_matches)::int AS "trendWins",
         (SELECT COUNT(*) FROM recent_matches)::int AS "trendTotal"

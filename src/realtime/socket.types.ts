@@ -613,11 +613,16 @@ export interface ErrorPayload {
   meta?: Record<string, unknown>;
 }
 
+export interface ForceLogoutPayload {
+  reason: 'account_deleted' | 'admin_revoked';
+}
+
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
   'presence:online_count': (data: PresenceOnlineCountPayload) => void;
   'session:state': (data: SessionStatePayload) => void;
   'session:blocked': (data: SessionBlockedPayload) => void;
+  'auth:force_logout': (data: ForceLogoutPayload) => void;
   'lobby:state': (data: LobbyState) => void;
   'draft:start': (data: DraftState) => void;
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;

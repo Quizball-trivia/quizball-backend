@@ -60,6 +60,9 @@ import {
   storeWalletResponseSchema,
 } from '../../modules/store/store.schemas.js';
 import {
+  objectivesResponseSchema,
+} from '../../modules/objectives/objectives.schemas.js';
+import {
   createFriendRequestBodySchema,
   createFriendRequestResponseSchema,
   friendActionResponseSchema,
@@ -169,6 +172,7 @@ registry.register('FriendsResponse', friendsResponseSchema);
 registry.register('FriendRequestsResponse', friendRequestsResponseSchema);
 registry.register('CreateFriendRequestResponse', createFriendRequestResponseSchema);
 registry.register('FriendActionResponse', friendActionResponseSchema);
+registry.register('ObjectivesResponse', objectivesResponseSchema);
 
 // =============================================================================
 // Security Schemes
@@ -2226,6 +2230,24 @@ registry.registerPath({
     },
     403: {
       description: 'Not allowed to use dev reset',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/objectives',
+  summary: 'List current daily and weekly objectives for the current user',
+  tags: ['Objectives'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Current objective progress',
+      content: { 'application/json': { schema: objectivesResponseSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

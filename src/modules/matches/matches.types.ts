@@ -86,3 +86,15 @@ export interface MatchQuestionTimingRow {
   shown_at: string | null;
   deadline_at: string | null;
 }
+
+export interface MatchGoalEventRow {
+  id: string;
+  match_id: string;
+  user_id: string;
+  seat: number;
+  half: number;
+  phase_kind: MatchQuestionPhaseKind;
+  q_index: number | null;
+  is_penalty: boolean;
+  created_at: string;
+}

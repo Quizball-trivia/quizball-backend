@@ -8,6 +8,7 @@ import type {
   MatchPlayerRow,
   MatchQuestionRow,
   MatchAnswerRow,
+  MatchGoalEventRow,
   MatchQuestionWithCategory,
   MatchQuestionTimingRow,
   MatchQuestionPhaseKind,
@@ -563,6 +564,40 @@ export const matchesRepo = {
         goals = goals + ${changes.goals ?? 0},
         penalty_goals = penalty_goals + ${changes.penaltyGoals ?? 0}
       WHERE match_id = ${matchId} AND user_id = ${userId}
+      RETURNING *
+    `;
+    return row ?? null;
+  },
+
+  async insertGoalEventIfMissing(data: {
+    matchId: string;
+    userId: string;
+    seat: 1 | 2;
+    half: 1 | 2;
+    phaseKind: MatchQuestionPhaseKind;
+    qIndex: number | null;
+    isPenalty: boolean;
+  }): Promise<MatchGoalEventRow | null> {
+    const [row] = await sql<MatchGoalEventRow[]>`
+      INSERT INTO match_goal_events (
+        match_id,
+        user_id,
+        seat,
+        half,
+        phase_kind,
+        q_index,
+        is_penalty
+      )
+      VALUES (
+        ${data.matchId},
+        ${data.userId},
+        ${data.seat},
+        ${data.half},
+        ${data.phaseKind},
+        ${data.qIndex},
+        ${data.isPenalty}
+      )
+      ON CONFLICT (match_id, user_id, phase_kind, q_index, is_penalty) DO NOTHING
       RETURNING *
     `;
     return row ?? null;

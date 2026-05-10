@@ -4,6 +4,7 @@ import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { objectivesService } from '../modules/objectives/index.js';
 import {
   createInitialPartyQuizState,
   matchesService,
@@ -287,6 +288,12 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
         await progressionService.awardCompletedMatchXp(matchId);
       } catch (err) {
         logger.warn({ err, matchId }, 'Party quiz match XP award failed after completion');
+      }
+
+      try {
+        await objectivesService.evaluateForMatchBestEffort(matchId);
+      } catch (err) {
+        logger.warn({ err, matchId }, 'Party quiz match objectives evaluation failed after completion');
       }
 
       const resultVersion = Date.now();

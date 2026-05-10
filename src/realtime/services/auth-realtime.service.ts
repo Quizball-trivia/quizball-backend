@@ -1,6 +1,7 @@
 import type { QuizballServer } from '../socket-server.js';
 import type { ForceLogoutPayload } from '../socket.types.js';
 import { logger } from '../../core/logger.js';
+import { InternalError } from '../../core/errors.js';
 
 /**
  * Module-local reference to the Socket.IO server. Set once at boot from
@@ -15,7 +16,7 @@ const EMIT_FLUSH_DELAY_MS = 100;
 
 export function setAuthRealtimeServer(io: QuizballServer): void {
   if (!io) {
-    throw new Error('setAuthRealtimeServer: io must not be null/undefined');
+    throw new InternalError('setAuthRealtimeServer: QuizballServer instance must not be null/undefined');
   }
   if (ioRef && ioRef !== io) {
     // Test harnesses re-init repeatedly; warn but allow rebind.
@@ -52,8 +53,12 @@ export async function disconnectUserSockets(
   try {
     ioRef.to(room).emit('auth:force_logout', { reason });
     await new Promise<void>((resolve) => setTimeout(resolve, EMIT_FLUSH_DELAY_MS));
+  } catch (emitErr) {
+    logger.warn({ err: emitErr, userId, reason }, 'Failed to emit force_logout');
+  }
+  try {
     ioRef.in(room).disconnectSockets(true);
-  } catch (err) {
-    logger.warn({ err, userId, reason }, 'Failed to force-disconnect user sockets');
+  } catch (disconnectErr) {
+    logger.warn({ err: disconnectErr, userId, reason }, 'Failed to disconnect user sockets');
   }
 }

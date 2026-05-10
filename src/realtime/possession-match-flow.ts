@@ -6,6 +6,7 @@ import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { objectivesService } from '../modules/objectives/index.js';
 import { progressionService } from '../modules/progression/progression.service.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { storeService } from '../modules/store/store.service.js';
@@ -839,6 +840,12 @@ async function completePossessionMatch(
     match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
   );
 
+  try {
+    await objectivesService.evaluateForMatchBestEffort(matchId);
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Objectives evaluation failed after match completion');
+  }
+
   const finalResultsPayload = {
     matchId,
     winnerId: decision.winnerId,
@@ -1605,6 +1612,15 @@ async function resolvePossessionRoundDbPath(
           const goalScoredByUserId = getUserIdBySeat(players, result.goalScoredBySeat);
           if (goalScoredByUserId) {
             await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, { goals: 1 });
+            await matchesRepo.insertGoalEventIfMissing({
+              matchId,
+              userId: goalScoredByUserId,
+              seat: result.goalScoredBySeat,
+              half: state.half,
+              phaseKind: questionPayload.phaseKind,
+              qIndex,
+              isPenalty: false,
+            });
           }
         }
       } else {
@@ -1616,6 +1632,18 @@ async function resolvePossessionRoundDbPath(
         );
         if (penaltyOutcome.goalScoredByUserId) {
           await matchesRepo.updatePlayerGoalTotals(matchId, penaltyOutcome.goalScoredByUserId, { penaltyGoals: 1 });
+          const scorer = players.find((player) => player.user_id === penaltyOutcome.goalScoredByUserId);
+          if (scorer?.seat === 1 || scorer?.seat === 2) {
+            await matchesRepo.insertGoalEventIfMissing({
+              matchId,
+              userId: penaltyOutcome.goalScoredByUserId,
+              seat: scorer.seat,
+              half: state.half,
+              phaseKind: questionPayload.phaseKind,
+              qIndex,
+              isPenalty: true,
+            });
+          }
         }
       }
 
@@ -2052,26 +2080,37 @@ export async function resolvePossessionRound(
     if (goalScoredBySeat) {
       const goalScoredByUserId = getUserIdByCachedSeat(cache.players, goalScoredBySeat);
       const delta = question.phaseKind === 'penalty' ? { penaltyGoals: 1 } : { goals: 1 };
-      fireAndForget('updatePlayerGoalTotals(resolve)', async () => {
-        const MAX_RETRIES = 3;
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-          try {
-            if (goalScoredByUserId) {
+      const MAX_RETRIES = 3;
+      let goalTotalsUpdated = false;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          if (goalScoredByUserId) {
+            if (!goalTotalsUpdated) {
               await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, delta);
+              goalTotalsUpdated = true;
             }
-            return;
-          } catch (err) {
-            if (attempt === MAX_RETRIES) {
-              logger.error(
-                { error: err, matchId, userId: goalScoredByUserId, delta, phaseKind: question.phaseKind },
-                'updatePlayerGoalTotals failed after retries'
-              );
-              return;
-            }
-            await new Promise((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
+            await matchesRepo.insertGoalEventIfMissing({
+              matchId,
+              userId: goalScoredByUserId,
+              seat: goalScoredBySeat,
+              half: state.half,
+              phaseKind: question.phaseKind,
+              qIndex,
+              isPenalty: question.phaseKind === 'penalty',
+            });
           }
+          break;
+        } catch (err) {
+          if (attempt === MAX_RETRIES) {
+            logger.error(
+              { error: err, matchId, userId: goalScoredByUserId, delta, phaseKind: question.phaseKind },
+              'updatePlayerGoalTotals failed after retries'
+            );
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 100 * 2 ** (attempt - 1)));
         }
-      });
+      }
     }
 
     const deltas: MatchRoundResultDeltas = {

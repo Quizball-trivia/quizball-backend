@@ -83,7 +83,7 @@ export const usersService = {
    */
   async getOrCreateFromIdentity(identity: AuthIdentity, detectedCountry?: string | null): Promise<User> {
     // 1. Check cache first
-    const cached = getCachedUser(identity.provider, identity.subject);
+    const cached = await getCachedUser(identity.provider, identity.subject);
     if (cached) {
       assertUserAccountActive(cached);
 
@@ -94,7 +94,7 @@ export const usersService = {
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
         if (updated) {
-          updateCachedUser(cached.id, updated);
+          await updateCachedUser(cached.id, updated);
           logger.info({ userId: cached.id, ...backfill }, 'Backfilled user fields');
           return updated;
         }
@@ -119,13 +119,21 @@ export const usersService = {
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);
         if (updated) {
-          setCachedUser(identity.provider, identity.subject, updated);
+          try {
+            await setCachedUser(identity.provider, identity.subject, updated);
+          } catch (err) {
+            logger.warn({ err, userId: existingUser.id }, 'Cache update failed (non-fatal)');
+          }
           logger.info({ userId: existingUser.id, ...backfill }, 'Backfilled user fields');
           return updated;
         }
       }
 
-      setCachedUser(identity.provider, identity.subject, existingUser);
+      try {
+        await setCachedUser(identity.provider, identity.subject, existingUser);
+      } catch (err) {
+        logger.warn({ err, userId: existingUser.id }, 'Cache population failed (non-fatal)');
+      }
       return existingUser;
     }
 
@@ -153,7 +161,11 @@ export const usersService = {
       'Created new user and identity'
     );
 
-    setCachedUser(identity.provider, identity.subject, newUser);
+    try {
+      await setCachedUser(identity.provider, identity.subject, newUser);
+    } catch (err) {
+      logger.warn({ err, userId: newUser.id }, 'Cache population failed (non-fatal)');
+    }
     return newUser;
   },
 
@@ -196,7 +208,7 @@ export const usersService = {
     }
 
     // Update cache with new user data
-    updateCachedUser(id, user);
+    await updateCachedUser(id, user);
 
     logger.debug({ userId: id }, 'Updated user profile');
     return user;
@@ -295,7 +307,7 @@ export const usersService = {
     }
 
     // Update cache with new user data
-    updateCachedUser(id, user);
+    await updateCachedUser(id, user);
 
     logger.info({ userId: id }, 'User completed onboarding');
     return user;

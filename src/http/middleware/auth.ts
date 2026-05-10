@@ -66,7 +66,7 @@ export async function authMiddleware(
     // 3. Resolve internal user
     // Only call geo detection if the user doesn't have a country yet — avoids blocking
     // third-party HTTP call on every authenticated request
-    const cached = getCachedUser(identity.provider, identity.subject);
+    const cached = await getCachedUser(identity.provider, identity.subject);
     const detectedCountry = cached?.country ? null : await detectCountryFromRequest(req);
     const user = await usersService.getOrCreateFromIdentity(identity, detectedCountry);
 

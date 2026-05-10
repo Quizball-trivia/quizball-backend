@@ -2,6 +2,7 @@ import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
+import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { QUESTION_TIME_MS } from '../match-flow.js';
@@ -122,6 +123,12 @@ export async function finalizeMatchAsForfeit(
       await progressionService.awardCompletedMatchXp(params.matchId);
     } catch (error) {
       logger.warn({ error, matchId: params.matchId }, 'Match XP award failed during forfeit finalization');
+    }
+
+    try {
+      await objectivesService.evaluateForMatchBestEffort(params.matchId);
+    } catch (error) {
+      logger.warn({ error, matchId: params.matchId }, 'Objectives evaluation failed during forfeit finalization');
     }
 
     const avgTimes = await matchesService.computeAvgTimes(params.matchId);

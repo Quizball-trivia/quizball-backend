@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { requireRole } from '../middleware/require-role.js';
 import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema } from '../../modules/users/index.js';
 
 const router = Router();
@@ -45,6 +46,13 @@ router.put(
  * Mark onboarding as complete.
  */
 router.post('/me/complete-onboarding', usersController.completeOnboarding);
+
+/**
+ * POST /api/v1/users/me/reset-onboarding
+ * Admin-only self-service: flip onboarding_complete back to false so the
+ * onboarding flow can be re-tested. Operates on the caller's own user.
+ */
+router.post('/me/reset-onboarding', requireRole('admin'), usersController.resetOwnOnboarding);
 
 /**
  * POST /api/v1/users/me/deletion

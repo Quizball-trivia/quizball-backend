@@ -814,10 +814,10 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/v1/admin/users/me/reset-onboarding',
+  path: '/api/v1/users/me/reset-onboarding',
   summary: 'Reset onboarding flag for the current admin (dev-only)',
-  description: 'Requires admin role. Flips onboarding_complete back to false so the onboarding flow can be re-tested.',
-  tags: ['Admin Users'],
+  description: 'Requires admin role. Flips onboarding_complete back to false so the onboarding flow can be re-tested. Operates on the caller\'s own user.',
+  tags: ['Users'],
   security: [{ bearerAuth: [] }],
   responses: {
     200: {
@@ -830,10 +830,6 @@ registry.registerPath({
     },
     403: {
       description: 'Insufficient permissions',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    404: {
-      description: 'User not found',
       content: { 'application/json': { schema: errorResponseSchema } },
     },
   },

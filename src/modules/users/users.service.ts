@@ -352,6 +352,19 @@ export const usersService = {
     };
   },
 
+  async resetOnboarding(id: string): Promise<User> {
+    const user = await usersRepo.update(id, { onboardingComplete: false });
+
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    await invalidateByUserId(id);
+
+    logger.info({ userId: id }, 'Admin reset onboarding');
+    return user;
+  },
+
   async restorePendingDeletion(id: string): Promise<User> {
     const user = await usersRepo.cancelPendingDeletion(id);
 

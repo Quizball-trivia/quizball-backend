@@ -14,4 +14,6 @@ router.post(
   usersController.restorePendingDeletion
 );
 
+router.post('/me/reset-onboarding', usersController.resetOwnOnboarding);
+
 export const adminUsersRoutes = router;

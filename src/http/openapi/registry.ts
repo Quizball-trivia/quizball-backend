@@ -814,6 +814,33 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/v1/admin/users/me/reset-onboarding',
+  summary: 'Reset onboarding flag for the current admin (dev-only)',
+  description: 'Requires admin role. Flips onboarding_complete back to false so the onboarding flow can be re-tested.',
+  tags: ['Admin Users'],
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: 'Onboarding reset',
+      content: { 'application/json': { schema: userResponseOpenApiSchema } },
+    },
+    401: {
+      description: 'Not authenticated',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    403: {
+      description: 'Insufficient permissions',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+    404: {
+      description: 'User not found',
+      content: { 'application/json': { schema: errorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
   path: '/api/v1/admin/users/{userId}/deletion/restore',
   summary: 'Restore a user account pending deletion',
   description: 'Requires admin role. Only works before the 30-day grace period expires.',

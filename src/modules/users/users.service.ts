@@ -94,7 +94,11 @@ export const usersService = {
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
         if (updated) {
-          await updateCachedUser(cached.id, updated);
+          try {
+            await updateCachedUser(cached.id, updated);
+          } catch (err) {
+            logger.warn({ err, userId: cached.id }, 'Cache update failed (non-fatal)');
+          }
           logger.info({ userId: cached.id, ...backfill }, 'Backfilled user fields');
           return updated;
         }
@@ -207,8 +211,12 @@ export const usersService = {
       throw new NotFoundError('User not found');
     }
 
-    // Update cache with new user data
-    await updateCachedUser(id, user);
+    // Update cache with new user data (best-effort — don't fail the write).
+    try {
+      await updateCachedUser(id, user);
+    } catch (err) {
+      logger.warn({ err, userId: id }, 'Cache update failed (non-fatal)');
+    }
 
     logger.debug({ userId: id }, 'Updated user profile');
     return user;
@@ -306,8 +314,12 @@ export const usersService = {
       throw new NotFoundError('User not found');
     }
 
-    // Update cache with new user data
-    await updateCachedUser(id, user);
+    // Update cache with new user data (best-effort).
+    try {
+      await updateCachedUser(id, user);
+    } catch (err) {
+      logger.warn({ err, userId: id }, 'Cache update failed (non-fatal)');
+    }
 
     logger.info({ userId: id }, 'User completed onboarding');
     return user;

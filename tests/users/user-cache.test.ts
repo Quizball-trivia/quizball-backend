@@ -89,8 +89,9 @@ class FakeRedis {
     const keyList = Array.isArray(keys) ? keys : [keys];
     let deleted = 0;
     for (const key of keyList) {
-      if (this.strings.delete(key)) deleted += 1;
-      if (this.sets.delete(key)) deleted += 1;
+      const removedFromStrings = this.strings.delete(key);
+      const removedFromSets = this.sets.delete(key);
+      if (removedFromStrings || removedFromSets) deleted += 1;
       this.expirations.delete(key);
     }
     return deleted;

@@ -5,7 +5,10 @@ import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../../realtime/redis.js';
 
 const USER_CACHE_TTL_SECONDS = 60;
-const USER_CACHE_INDEX_TTL_SECONDS = 120;
+// Identity keys expire at USER_CACHE_TTL_SECONDS. Keep the index TTL aligned so
+// updateCachedUser can't resurrect already-expired identity keys (the index
+// would otherwise outlive its members for up to TTL_SECONDS).
+const USER_CACHE_INDEX_TTL_SECONDS = USER_CACHE_TTL_SECONDS;
 const USER_CACHE_KEY_PREFIX = 'user-cache:identity:';
 const USER_CACHE_INDEX_PREFIX = 'user-cache:user:';
 const USER_CACHE_SCAN_PATTERN = 'user-cache:*';

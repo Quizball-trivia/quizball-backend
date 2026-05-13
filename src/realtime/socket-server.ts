@@ -17,7 +17,6 @@ import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
 import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
-import { subscribeToUserInvalidations } from '../modules/users/user-cache.js';
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
@@ -214,10 +213,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   io.adapter(createAdapter(pubClient, subClient));
-
-  // Cross-pod user-cache invalidation: any pod that mutates a user (deletion request,
-  // profile update, etc.) publishes the user id; every other pod clears its local LRU.
-  await subscribeToUserInvalidations(subClient);
 
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).

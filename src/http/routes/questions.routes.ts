@@ -89,7 +89,7 @@ router.post(
   '/translate/backfill',
   authMiddleware,
   requireRole('admin'),
-  validate({ body: z.object({}).strict() }),
+  validate({ body: z.object({}).strict().optional() }),
   questionsController.translateBackfill
 );
 

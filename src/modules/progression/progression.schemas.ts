@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const xpEventSourceTypeEnum = z.enum([
   'daily_challenge_completion',
   'match_result',
+  'objective_reward',
 ]);
 
 export const progressionResponseSchema = z.object({

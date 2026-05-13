@@ -4,6 +4,7 @@ import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js'
 import { achievementsService } from '../../modules/achievements/index.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -1416,6 +1417,9 @@ export const matchRealtimeService = {
 
         try { await progressionService.awardCompletedMatchXp(matchId); }
         catch (err) { logger.warn({ err, matchId }, 'Match XP award failed in grace expiry'); }
+
+        try { await objectivesService.evaluateForMatchBestEffort(matchId); }
+        catch (err) { logger.warn({ err, matchId }, 'Objectives evaluation failed in grace expiry'); }
 
         const avgTimes = await matchesService.computeAvgTimes(matchId);
         for (const player of roster) {

@@ -39,6 +39,20 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
   },
 }));
 
+// Mock the translation service used by bulk uploads and translation endpoints
+vi.mock('../../src/modules/questions/translation.service.js', () => ({
+  translationService: {
+    translateInBackground: vi.fn().mockResolvedValue(undefined),
+    getBackfillCounts: vi.fn().mockResolvedValue({ questions: 0, categories: 0 }),
+    backfillAll: vi.fn().mockResolvedValue({
+      translated: 0,
+      skipped: 0,
+      failed: 0,
+      categories: 0,
+    }),
+  },
+}));
+
 // Mock the auth middleware
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
@@ -58,6 +72,7 @@ vi.mock('../../src/http/middleware/require-role.js', () => ({
 
 import { questionsRepo } from '../../src/modules/questions/questions.repo.js';
 import { categoriesRepo } from '../../src/modules/categories/categories.repo.js';
+import { translationService } from '../../src/modules/questions/translation.service.js';
 
 const mockMcqPayload = {
   type: 'mcq_single' as const,
@@ -108,6 +123,14 @@ describe('Questions API', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (translationService.translateInBackground as Mock).mockResolvedValue(undefined);
+    (translationService.getBackfillCounts as Mock).mockResolvedValue({ questions: 0, categories: 0 });
+    (translationService.backfillAll as Mock).mockResolvedValue({
+      translated: 0,
+      skipped: 0,
+      failed: 0,
+      categories: 0,
+    });
   });
 
   describe('GET /api/v1/questions', () => {
@@ -686,6 +709,46 @@ describe('Questions API', () => {
 
       expect(response.status).toBe(422);
       expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('POST /api/v1/questions/translate/backfill', () => {
+    it('should start translation backfill without requiring a request body', async () => {
+      (translationService.getBackfillCounts as Mock).mockResolvedValue({
+        questions: 3,
+        categories: 1,
+      });
+
+      const response = await request(app).post('/api/v1/questions/translate/backfill');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        status: 'started',
+        total: 3,
+        remaining: 3,
+        categories: 1,
+      });
+      expect(translationService.backfillAll).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return done when there is nothing to translate', async () => {
+      (translationService.getBackfillCounts as Mock).mockResolvedValue({
+        questions: 0,
+        categories: 0,
+      });
+
+      const response = await request(app)
+        .post('/api/v1/questions/translate/backfill')
+        .send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        status: 'done',
+        total: 0,
+        remaining: 0,
+        categories: 0,
+      });
+      expect(translationService.backfillAll).not.toHaveBeenCalled();
     });
   });
 

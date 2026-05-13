@@ -30,6 +30,13 @@ function parseI18nField(raw: Json | string | null | undefined): I18nField | null
 }
 
 function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
+  if (typeof raw === 'string') {
+    try {
+      return parseQuestionPayload(JSON.parse(raw) as Json);
+    } catch {
+      return null;
+    }
+  }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const parsed = questionPayloadSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
@@ -39,6 +46,7 @@ type TranslationFieldDescriptor =
   | { kind: 'mcq_option'; optionIndex: number }
   | { kind: 'true_false_option'; optionIndex: 0 | 1 }
   | { kind: 'imposter_option'; optionIndex: number }
+  | { kind: 'text_input_answer'; answerIndex: number }
   | { kind: 'countdown_prompt' }
   | { kind: 'countdown_display'; groupIndex: number }
   | { kind: 'clue_display_answer' }
@@ -78,7 +86,7 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
 
   if (payload.type === 'mcq_single') {
     payload.options.forEach((option, optionIndex) => {
-      if (option.text.en) {
+      if (option.text.en && !option.text[TARGET_LOCALE]) {
         texts.push(option.text.en);
         descriptors.push({ kind: 'mcq_option', optionIndex });
       }
@@ -88,7 +96,7 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
 
   if (payload.type === 'true_false') {
     payload.options.forEach((option, optionIndex) => {
-      if (option.text.en) {
+      if (option.text.en && !option.text[TARGET_LOCALE]) {
         texts.push(option.text.en);
         descriptors.push({ kind: 'true_false_option', optionIndex: optionIndex as 0 | 1 });
       }
@@ -98,7 +106,7 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
 
   if (payload.type === 'imposter_multi_select') {
     payload.options.forEach((option, optionIndex) => {
-      if (option.text.en) {
+      if (option.text.en && !option.text[TARGET_LOCALE]) {
         texts.push(option.text.en);
         descriptors.push({ kind: 'imposter_option', optionIndex });
       }
@@ -106,13 +114,23 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
     return { texts, descriptors };
   }
 
+  if (payload.type === 'input_text') {
+    payload.accepted_answers.forEach((answer, answerIndex) => {
+      if (answer.en && !answer[TARGET_LOCALE]) {
+        texts.push(answer.en);
+        descriptors.push({ kind: 'text_input_answer', answerIndex });
+      }
+    });
+    return { texts, descriptors };
+  }
+
   if (payload.type === 'countdown_list') {
-    if (payload.prompt.en) {
+    if (payload.prompt.en && !payload.prompt[TARGET_LOCALE]) {
       texts.push(payload.prompt.en);
       descriptors.push({ kind: 'countdown_prompt' });
     }
     payload.answer_groups.forEach((group, groupIndex) => {
-      if (group.display.en) {
+      if (group.display.en && !group.display[TARGET_LOCALE]) {
         texts.push(group.display.en);
         descriptors.push({ kind: 'countdown_display', groupIndex });
       }
@@ -121,12 +139,12 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
   }
 
   if (payload.type === 'clue_chain') {
-    if (payload.display_answer.en) {
+    if (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE]) {
       texts.push(payload.display_answer.en);
       descriptors.push({ kind: 'clue_display_answer' });
     }
     payload.clues.forEach((clue, clueIndex) => {
-      if (clue.content.en) {
+      if (clue.content.en && !clue.content[TARGET_LOCALE]) {
         texts.push(clue.content.en);
         descriptors.push({ kind: 'clue_content', clueIndex });
       }
@@ -135,16 +153,16 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
   }
 
   if (payload.type === 'put_in_order') {
-    if (payload.prompt.en) {
+    if (payload.prompt.en && !payload.prompt[TARGET_LOCALE]) {
       texts.push(payload.prompt.en);
       descriptors.push({ kind: 'put_prompt' });
     }
     payload.items.forEach((item, itemIndex) => {
-      if (item.label.en) {
+      if (item.label.en && !item.label[TARGET_LOCALE]) {
         texts.push(item.label.en);
         descriptors.push({ kind: 'put_label', itemIndex });
       }
-      if (item.details?.en) {
+      if (item.details?.en && !item.details[TARGET_LOCALE]) {
         texts.push(item.details.en);
         descriptors.push({ kind: 'put_details', itemIndex });
       }
@@ -153,12 +171,12 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
 
   if (payload.type === 'career_path') {
     payload.clubs.forEach((club, clubIndex) => {
-      if (club.en) {
+      if (club.en && !club[TARGET_LOCALE]) {
         texts.push(club.en);
         descriptors.push({ kind: 'career_path_club', clubIndex });
       }
     });
-    if (payload.display_answer.en) {
+    if (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE]) {
       texts.push(payload.display_answer.en);
       descriptors.push({ kind: 'career_path_display_answer' });
     }
@@ -166,16 +184,16 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
   }
 
   if (payload.type === 'high_low') {
-    if (payload.stat_label.en) {
+    if (payload.stat_label.en && !payload.stat_label[TARGET_LOCALE]) {
       texts.push(payload.stat_label.en);
       descriptors.push({ kind: 'high_low_stat_label' });
     }
     payload.matchups.forEach((matchup, matchupIndex) => {
-      if (matchup.left_name.en) {
+      if (matchup.left_name.en && !matchup.left_name[TARGET_LOCALE]) {
         texts.push(matchup.left_name.en);
         descriptors.push({ kind: 'high_low_left_name', matchupIndex });
       }
-      if (matchup.right_name.en) {
+      if (matchup.right_name.en && !matchup.right_name[TARGET_LOCALE]) {
         texts.push(matchup.right_name.en);
         descriptors.push({ kind: 'high_low_right_name', matchupIndex });
       }
@@ -184,15 +202,15 @@ function extractTranslatableFields(payload: QuestionPayload | null): {
   }
 
   if (payload.type === 'football_logic') {
-    if (payload.prompt?.en) {
+    if (payload.prompt?.en && !payload.prompt[TARGET_LOCALE]) {
       texts.push(payload.prompt.en);
       descriptors.push({ kind: 'football_logic_prompt' });
     }
-    if (payload.display_answer.en) {
+    if (payload.display_answer.en && !payload.display_answer[TARGET_LOCALE]) {
       texts.push(payload.display_answer.en);
       descriptors.push({ kind: 'football_logic_display_answer' });
     }
-    if (payload.explanation?.en) {
+    if (payload.explanation?.en && !payload.explanation[TARGET_LOCALE]) {
       texts.push(payload.explanation.en);
       descriptors.push({ kind: 'football_logic_explanation' });
     }
@@ -206,6 +224,10 @@ function payloadNeedsTranslation(payload: QuestionPayload | null): boolean {
 
   if (payload.type === 'mcq_single' || payload.type === 'true_false' || payload.type === 'imposter_multi_select') {
     return payload.options.some((option) => option.text.en && !option.text[TARGET_LOCALE]);
+  }
+
+  if (payload.type === 'input_text') {
+    return payload.accepted_answers.some((answer) => answer.en && !answer[TARGET_LOCALE]);
   }
 
   if (payload.type === 'countdown_list') {
@@ -433,12 +455,9 @@ export const translationService = {
       SELECT q.id, q.prompt, q.explanation, qp.payload
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.prompt->>'en' IS NOT NULL
     `;
-    const [cRow] = await sql<{ count: string }[]>`
-      SELECT COUNT(*)::text as count FROM categories
-      WHERE name->>'en' IS NOT NULL
-        AND (name->>'ka' IS NULL OR name->>'ka' = '')
+    const categoryRows = await sql<{ id: string; name: Json | null }[]>`
+      SELECT id, name FROM categories
     `;
     return {
       questions: questionRows.filter((q) => {
@@ -452,7 +471,10 @@ export const translationService = {
           || payloadNeedsTranslation(payload)
         );
       }).length,
-      categories: parseInt(cRow?.count ?? '0', 10),
+      categories: categoryRows.filter((c) => {
+        const name = parseI18nField(c.name);
+        return Boolean(name?.en && !name[TARGET_LOCALE]);
+      }).length,
     };
   },
 
@@ -474,7 +496,6 @@ export const translationService = {
       SELECT q.id, q.prompt, q.explanation, qp.payload
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.prompt->>'en' IS NOT NULL
       ORDER BY q.created_at ASC
     `;
 
@@ -496,11 +517,13 @@ export const translationService = {
     const result = await this.translateQuestions(questionIds);
 
     // Also backfill categories
-    const untranslatedCats = await sql<{ id: string }[]>`
-      SELECT id FROM categories
-      WHERE name->>'en' IS NOT NULL
-        AND (name->>'ka' IS NULL OR name->>'ka' = '')
+    const categoryRows = await sql<{ id: string; name: Json | null }[]>`
+      SELECT id, name FROM categories
     `;
+    const untranslatedCats = categoryRows.filter((c) => {
+      const name = parseI18nField(c.name);
+      return Boolean(name?.en && !name[TARGET_LOCALE]);
+    });
 
     const catCount = await this.translateCategories(untranslatedCats.map((c) => c.id));
 
@@ -520,10 +543,12 @@ async function applyTranslation(
   },
   translation: TranslationOutput
 ): Promise<void> {
-  const newPrompt = { ...original.prompt, [TARGET_LOCALE]: translation.prompt };
+  const newPrompt = original.prompt[TARGET_LOCALE]
+    ? original.prompt
+    : { ...original.prompt, [TARGET_LOCALE]: translation.prompt };
 
   const newExplanation =
-    translation.explanation && original.explanation
+    translation.explanation && original.explanation && !original.explanation[TARGET_LOCALE]
       ? { ...original.explanation, [TARGET_LOCALE]: translation.explanation }
       : original.explanation;
 
@@ -566,6 +591,18 @@ async function applyTranslation(
               const option = payload.options[entry.descriptor.optionIndex];
               if (option) {
                 option.text = { ...option.text, [TARGET_LOCALE]: translated };
+              }
+            }
+            break;
+          }
+          case 'text_input_answer': {
+            if (payload.type === 'input_text') {
+              const answer = payload.accepted_answers[entry.descriptor.answerIndex];
+              if (answer) {
+                payload.accepted_answers[entry.descriptor.answerIndex] = {
+                  ...answer,
+                  [TARGET_LOCALE]: translated,
+                };
               }
             }
             break;

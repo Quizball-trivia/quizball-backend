@@ -1611,8 +1611,7 @@ async function resolvePossessionRoundDbPath(
         if (result.goalScoredBySeat) {
           const goalScoredByUserId = getUserIdBySeat(players, result.goalScoredBySeat);
           if (goalScoredByUserId) {
-            await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, { goals: 1 });
-            await matchesRepo.insertGoalEventIfMissing({
+            await matchesRepo.incrementGoalsAndInsertEventIfMissing({
               matchId,
               userId: goalScoredByUserId,
               seat: result.goalScoredBySeat,
@@ -1620,6 +1619,7 @@ async function resolvePossessionRoundDbPath(
               phaseKind: questionPayload.phaseKind,
               qIndex,
               isPenalty: false,
+              delta: { goals: 1 },
             });
           }
         }
@@ -1631,10 +1631,9 @@ async function resolvePossessionRoundDbPath(
           asSeat(questionPayload.shooterSeat) ?? state.penalty.shooterSeat
         );
         if (penaltyOutcome.goalScoredByUserId) {
-          await matchesRepo.updatePlayerGoalTotals(matchId, penaltyOutcome.goalScoredByUserId, { penaltyGoals: 1 });
           const scorer = players.find((player) => player.user_id === penaltyOutcome.goalScoredByUserId);
           if (scorer?.seat === 1 || scorer?.seat === 2) {
-            await matchesRepo.insertGoalEventIfMissing({
+            await matchesRepo.incrementGoalsAndInsertEventIfMissing({
               matchId,
               userId: penaltyOutcome.goalScoredByUserId,
               seat: scorer.seat,
@@ -1642,6 +1641,7 @@ async function resolvePossessionRoundDbPath(
               phaseKind: questionPayload.phaseKind,
               qIndex,
               isPenalty: true,
+              delta: { penaltyGoals: 1 },
             });
           }
         }
@@ -2081,15 +2081,13 @@ export async function resolvePossessionRound(
       const goalScoredByUserId = getUserIdByCachedSeat(cache.players, goalScoredBySeat);
       const delta = question.phaseKind === 'penalty' ? { penaltyGoals: 1 } : { goals: 1 };
       const MAX_RETRIES = 3;
-      let goalTotalsUpdated = false;
+      // The atomic write (insert event + increment totals in one tx) is now
+      // naturally idempotent — on retry the ON CONFLICT short-circuits and the
+      // totals aren't incremented again. No local flag needed.
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
           if (goalScoredByUserId) {
-            if (!goalTotalsUpdated) {
-              await matchesRepo.updatePlayerGoalTotals(matchId, goalScoredByUserId, delta);
-              goalTotalsUpdated = true;
-            }
-            await matchesRepo.insertGoalEventIfMissing({
+            await matchesRepo.incrementGoalsAndInsertEventIfMissing({
               matchId,
               userId: goalScoredByUserId,
               seat: goalScoredBySeat,
@@ -2097,6 +2095,7 @@ export async function resolvePossessionRound(
               phaseKind: question.phaseKind,
               qIndex,
               isPenalty: question.phaseKind === 'penalty',
+              delta,
             });
           }
           break;
@@ -2104,7 +2103,7 @@ export async function resolvePossessionRound(
           if (attempt === MAX_RETRIES) {
             logger.error(
               { error: err, matchId, userId: goalScoredByUserId, delta, phaseKind: question.phaseKind },
-              'updatePlayerGoalTotals failed after retries'
+              'incrementGoalsAndInsertEventIfMissing failed after retries'
             );
             break;
           }

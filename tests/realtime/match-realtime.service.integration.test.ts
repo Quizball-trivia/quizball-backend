@@ -81,6 +81,8 @@ const getMatchQuestionMock = vi.fn();
 const insertMatchAnswerMock = vi.fn();
 const updatePlayerTotalsMock = vi.fn();
 const updatePlayerGoalTotalsMock = vi.fn();
+const incrementGoalsAndInsertEventIfMissingMock = vi.fn();
+const insertGoalEventIfMissingMock = vi.fn();
 const listAnswersForQuestionMock = vi.fn();
 const setMatchStatePayloadMock = vi.fn();
 const completeMatchMock = vi.fn();
@@ -120,6 +122,9 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
     updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
+    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
+    incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
+      incrementGoalsAndInsertEventIfMissingMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     completeMatch: (...args: unknown[]) => completeMatchMock(...args),
@@ -367,6 +372,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
       correct_answers: 3,
     });
     updatePlayerGoalTotalsMock.mockResolvedValue(undefined);
+    insertGoalEventIfMissingMock.mockResolvedValue(null);
+    incrementGoalsAndInsertEventIfMissingMock.mockResolvedValue({ inserted: true, player: null });
     setMatchStatePayloadMock.mockResolvedValue(undefined);
     completeMatchMock.mockResolvedValue(undefined);
     updatePlayerAvgTimeMock.mockResolvedValue(undefined);

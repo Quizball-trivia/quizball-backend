@@ -568,10 +568,16 @@ async function applyTranslation(
         const translated = entry.text;
 
         switch (entry.descriptor.kind) {
+          // Each case below guards on `!field[TARGET_LOCALE]` before writing so
+          // an existing target-locale translation is never overwritten — same
+          // defensive pattern as the prompt/explanation block above. In normal
+          // operation buildTranslationDescriptors only emits descriptors for
+          // missing locales, so these guards are a no-op; they protect against
+          // concurrent translation runs and future descriptor bugs.
           case 'mcq_option': {
             if (payload.type === 'mcq_single') {
               const option = payload.options[entry.descriptor.optionIndex];
-              if (option) {
+              if (option && !option.text[TARGET_LOCALE]) {
                 option.text = { ...option.text, [TARGET_LOCALE]: translated };
               }
             }
@@ -580,7 +586,7 @@ async function applyTranslation(
           case 'true_false_option': {
             if (payload.type === 'true_false') {
               const option = payload.options[entry.descriptor.optionIndex];
-              if (option) {
+              if (option && !option.text[TARGET_LOCALE]) {
                 option.text = { ...option.text, [TARGET_LOCALE]: translated };
               }
             }
@@ -589,7 +595,7 @@ async function applyTranslation(
           case 'imposter_option': {
             if (payload.type === 'imposter_multi_select') {
               const option = payload.options[entry.descriptor.optionIndex];
-              if (option) {
+              if (option && !option.text[TARGET_LOCALE]) {
                 option.text = { ...option.text, [TARGET_LOCALE]: translated };
               }
             }
@@ -598,7 +604,7 @@ async function applyTranslation(
           case 'text_input_answer': {
             if (payload.type === 'input_text') {
               const answer = payload.accepted_answers[entry.descriptor.answerIndex];
-              if (answer) {
+              if (answer && !answer[TARGET_LOCALE]) {
                 payload.accepted_answers[entry.descriptor.answerIndex] = {
                   ...answer,
                   [TARGET_LOCALE]: translated,
@@ -608,14 +614,14 @@ async function applyTranslation(
             break;
           }
           case 'countdown_prompt':
-            if (payload.type === 'countdown_list') {
+            if (payload.type === 'countdown_list' && !payload.prompt[TARGET_LOCALE]) {
               payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
             }
             break;
           case 'countdown_display':
             if (payload.type === 'countdown_list') {
               const group = payload.answer_groups[entry.descriptor.groupIndex];
-              if (group) {
+              if (group && !group.display[TARGET_LOCALE]) {
                 group.display = { ...group.display, [TARGET_LOCALE]: translated };
                 const normalized = normalizeAcceptedAnswer(translated);
                 if (
@@ -628,7 +634,7 @@ async function applyTranslation(
             }
             break;
           case 'clue_display_answer':
-            if (payload.type === 'clue_chain') {
+            if (payload.type === 'clue_chain' && !payload.display_answer[TARGET_LOCALE]) {
               payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
               const normalized = normalizeAcceptedAnswer(translated);
               if (
@@ -642,20 +648,20 @@ async function applyTranslation(
           case 'clue_content':
             if (payload.type === 'clue_chain') {
               const clue = payload.clues[entry.descriptor.clueIndex];
-              if (clue) {
+              if (clue && !clue.content[TARGET_LOCALE]) {
                 clue.content = { ...clue.content, [TARGET_LOCALE]: translated };
               }
             }
             break;
           case 'put_prompt':
-            if (payload.type === 'put_in_order') {
+            if (payload.type === 'put_in_order' && !payload.prompt[TARGET_LOCALE]) {
               payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
             }
             break;
           case 'put_label':
             if (payload.type === 'put_in_order') {
               const item = payload.items[entry.descriptor.itemIndex];
-              if (item) {
+              if (item && !item.label[TARGET_LOCALE]) {
                 item.label = { ...item.label, [TARGET_LOCALE]: translated };
               }
             }
@@ -663,7 +669,7 @@ async function applyTranslation(
           case 'put_details':
             if (payload.type === 'put_in_order') {
               const item = payload.items[entry.descriptor.itemIndex];
-              if (item?.details) {
+              if (item?.details && !item.details[TARGET_LOCALE]) {
                 item.details = { ...item.details, [TARGET_LOCALE]: translated };
               }
             }
@@ -671,13 +677,13 @@ async function applyTranslation(
           case 'career_path_club':
             if (payload.type === 'career_path') {
               const club = payload.clubs[entry.descriptor.clubIndex];
-              if (club) {
+              if (club && !club[TARGET_LOCALE]) {
                 payload.clubs[entry.descriptor.clubIndex] = { ...club, [TARGET_LOCALE]: translated };
               }
             }
             break;
           case 'career_path_display_answer':
-            if (payload.type === 'career_path') {
+            if (payload.type === 'career_path' && !payload.display_answer[TARGET_LOCALE]) {
               payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
               const normalized = normalizeAcceptedAnswer(translated);
               if (
@@ -689,14 +695,14 @@ async function applyTranslation(
             }
             break;
           case 'high_low_stat_label':
-            if (payload.type === 'high_low') {
+            if (payload.type === 'high_low' && !payload.stat_label[TARGET_LOCALE]) {
               payload.stat_label = { ...payload.stat_label, [TARGET_LOCALE]: translated };
             }
             break;
           case 'high_low_left_name':
             if (payload.type === 'high_low') {
               const matchup = payload.matchups[entry.descriptor.matchupIndex];
-              if (matchup) {
+              if (matchup && !matchup.left_name[TARGET_LOCALE]) {
                 matchup.left_name = { ...matchup.left_name, [TARGET_LOCALE]: translated };
               }
             }
@@ -704,18 +710,18 @@ async function applyTranslation(
           case 'high_low_right_name':
             if (payload.type === 'high_low') {
               const matchup = payload.matchups[entry.descriptor.matchupIndex];
-              if (matchup) {
+              if (matchup && !matchup.right_name[TARGET_LOCALE]) {
                 matchup.right_name = { ...matchup.right_name, [TARGET_LOCALE]: translated };
               }
             }
             break;
           case 'football_logic_prompt':
-            if (payload.type === 'football_logic' && payload.prompt) {
+            if (payload.type === 'football_logic' && payload.prompt && !payload.prompt[TARGET_LOCALE]) {
               payload.prompt = { ...payload.prompt, [TARGET_LOCALE]: translated };
             }
             break;
           case 'football_logic_display_answer':
-            if (payload.type === 'football_logic') {
+            if (payload.type === 'football_logic' && !payload.display_answer[TARGET_LOCALE]) {
               payload.display_answer = { ...payload.display_answer, [TARGET_LOCALE]: translated };
               const normalized = normalizeAcceptedAnswer(translated);
               if (
@@ -727,7 +733,7 @@ async function applyTranslation(
             }
             break;
           case 'football_logic_explanation':
-            if (payload.type === 'football_logic' && payload.explanation) {
+            if (payload.type === 'football_logic' && payload.explanation && !payload.explanation[TARGET_LOCALE]) {
               payload.explanation = { ...payload.explanation, [TARGET_LOCALE]: translated };
             }
             break;

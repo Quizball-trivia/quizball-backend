@@ -80,6 +80,17 @@ class FakeRedis {
     return [...(this.sets.get(key) ?? new Set<string>())];
   }
 
+  async sRem(key: string, member: string | string[]): Promise<number> {
+    const set = this.sets.get(key);
+    if (!set) return 0;
+    const members = Array.isArray(member) ? member : [member];
+    let removed = 0;
+    for (const m of members) {
+      if (set.delete(m)) removed += 1;
+    }
+    return removed;
+  }
+
   async expire(key: string, seconds: number): Promise<boolean> {
     this.expirations.set(key, seconds);
     return true;
@@ -167,10 +178,16 @@ describe('Redis-backed user-cache', () => {
     await cache.setCachedUser('supabase', 'sub-a', MOCK_USER_A);
     await cache.setCachedUser('supabase', 'sub-b', MOCK_USER_B);
 
-    await cache.invalidateUser('supabase', 'sub-a');
+    await cache.invalidateUser('supabase', 'sub-a', MOCK_USER_A.id);
 
     await expect(cache.getCachedUser('supabase', 'sub-a')).resolves.toBeNull();
     await expect(cache.getCachedUser('supabase', 'sub-b')).resolves.toEqual(MOCK_USER_B);
+
+    // The invalidated key should also be removed from the per-user index so a
+    // subsequent updateCachedUser can't resurrect it.
+    const updated = { ...MOCK_USER_A, nickname: 'Alice 2' };
+    await cache.updateCachedUser(MOCK_USER_A.id, updated);
+    await expect(cache.getCachedUser('supabase', 'sub-a')).resolves.toBeNull();
   });
 
   it('invalidates every cached identity for a user id', async () => {

@@ -165,7 +165,11 @@ async function grantRewardIfNeeded(
     return row;
   }
 
-  const sourceKey = `${row.objective_id}:${row.period_start}`;
+  // postgres.js deserializes timestamptz to Date at runtime even though the
+  // row type claims `string`. Normalize to ISO so the source key, idempotency
+  // key, and metadata are deterministic across calls and locales.
+  const periodStartIso = new Date(row.period_start as unknown as string | Date).toISOString();
+  const sourceKey = `${row.objective_id}:${periodStartIso}`;
   if (row.reward_coins > 0) {
     await txRepo.addCoins(row.user_id, row.reward_coins);
   }
@@ -177,7 +181,7 @@ async function grantRewardIfNeeded(
       metadata: {
         objectiveId: row.objective_id,
         periodType: row.period_type,
-        periodStart: row.period_start,
+        periodStart: periodStartIso,
       },
     });
   }
@@ -186,7 +190,7 @@ async function grantRewardIfNeeded(
     coinsDelta: row.reward_coins,
     xpDelta: row.reward_xp,
     objectiveId: row.objective_id,
-    periodStart: row.period_start,
+    periodStart: periodStartIso,
     idempotencyKey: `objective:${sourceKey}`,
   });
 

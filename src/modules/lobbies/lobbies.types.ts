@@ -60,6 +60,7 @@ export interface LobbyMemberWithUser {
   nickname: string | null;
   avatar_url: string | null;
   avatar_customization: Json | null;
+  favorite_club: string | null;
 }
 
 export interface LobbyCategoryWithDetails {

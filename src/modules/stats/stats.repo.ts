@@ -140,4 +140,24 @@ export const statsRepo = {
       WHERE user_id = ${userId}
     `;
   },
+
+  /**
+   * Lightweight query: just W/L/D for the user's last `limit` finished matches.
+   * Used by the showdown screen "recent form" chip strip — much cheaper than
+   * `listRecentMatchesForUser` since we skip the opponent/score joins.
+   */
+  async listRecentFormForUser(
+    userId: string,
+    limit: number,
+  ): Promise<Array<{ winner_user_id: string | null; ended_at: string | null }>> {
+    return sql<Array<{ winner_user_id: string | null; ended_at: string | null }>>`
+      SELECT m.winner_user_id, m.ended_at
+      FROM match_players mp
+      JOIN matches m ON m.id = mp.match_id
+      WHERE mp.user_id = ${userId}
+        AND m.status = 'completed'
+      ORDER BY m.ended_at DESC NULLS LAST, m.started_at DESC
+      LIMIT ${limit}
+    `;
+  },
 };

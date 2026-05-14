@@ -8,6 +8,7 @@ import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { statsService } from '../../modules/stats/stats.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -482,8 +483,12 @@ async function handleRankedAiMatchFound(params: {
 
     const playerUser = await usersRepo.getById(userId);
     const aiGeo = generateRankedAiGeo(playerUser?.country);
+    const myRecentForm = await statsService
+      .getRecentFormForUser(userId, 3)
+      .catch(() => [] as Array<'W' | 'L' | 'D'>);
     io.to(`user:${userId}`).emit('ranked:match_found', {
       lobbyId,
+      myRecentForm,
       opponent: {
         id: aiUser.id,
         username: aiUser.nickname ?? aiProfile.username,
@@ -493,6 +498,8 @@ async function handleRankedAiMatchFound(params: {
         countryCode: aiGeo.countryCode,
         city: aiGeo.city,
         flag: aiGeo.flag,
+        favoriteClub: null,
+        recentForm: [],
         lat: aiGeo.lat,
         lon: aiGeo.lon,
       },

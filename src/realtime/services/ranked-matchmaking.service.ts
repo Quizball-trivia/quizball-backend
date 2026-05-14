@@ -7,6 +7,7 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { statsService } from '../../modules/stats/stats.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
@@ -108,23 +109,34 @@ async function startHumanRankedMatch(
 
     await emitLobbyState(io, lobby.id);
 
+    const [formA, formB] = await Promise.all([
+      statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
+      statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
+    ]);
+
     io.to(`user:${userAId}`).emit('ranked:match_found', {
       lobbyId: lobby.id,
+      myRecentForm: formA,
       opponent: {
         id: userB.id,
         username: userB.nickname ?? 'Player',
         avatarUrl: userB.avatar_url,
         avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+        favoriteClub: userB.favorite_club,
+        recentForm: formB,
         rp: profileB.rp,
       },
     });
     io.to(`user:${userBId}`).emit('ranked:match_found', {
       lobbyId: lobby.id,
+      myRecentForm: formB,
       opponent: {
         id: userA.id,
         username: userA.nickname ?? 'Player',
         avatarUrl: userA.avatar_url,
         avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+        favoriteClub: userA.favorite_club,
+        recentForm: formA,
         rp: profileA.rp,
       },
     });

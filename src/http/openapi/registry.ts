@@ -812,10 +812,10 @@ registry.registerPath({
   },
 });
 
-// Dev-only — route is gated to non-prod in users.routes.ts and the service
-// further restricts to NODE_ENV === 'local'. Skip OpenAPI registration in
-// prod so the endpoint never appears in production API docs.
-if (config.NODE_ENV !== 'prod') {
+// Dev-only — route is gated to local in users.routes.ts and the service also
+// enforces NODE_ENV === 'local'. Skip OpenAPI registration outside local so
+// the endpoint doesn't appear in staging/prod API docs.
+if (config.NODE_ENV === 'local') {
   registry.registerPath({
     method: 'post',
     path: '/api/v1/users/me/reset-onboarding',

@@ -54,7 +54,7 @@ router.post('/me/complete-onboarding', usersController.completeOnboarding);
  * onboarding flow can be re-tested. Only registered in non-prod envs and the
  * service additionally enforces NODE_ENV === 'local'.
  */
-if (config.NODE_ENV !== 'prod') {
+if (config.NODE_ENV === 'local') {
   router.post('/me/reset-onboarding', requireRole('admin'), usersController.resetOwnOnboarding);
 }
 

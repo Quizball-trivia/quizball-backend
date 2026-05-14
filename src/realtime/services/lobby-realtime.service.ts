@@ -17,6 +17,7 @@ import { beginMatchForLobby } from './match-realtime.service.js';
 import {
   generateRankedAiProfile,
   generateRankedAiGeo,
+  generateRankedAiFavoriteClub,
   rankedAiLobbyKey,
 } from '../ai-ranked.constants.js';
 import {
@@ -52,6 +53,11 @@ function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | unde
 
 function randomIntBetween(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function generateAiRecentForm(): Array<'W' | 'L' | 'D'> {
+  const outcomes: Array<'W' | 'L' | 'D'> = ['W', 'W', 'W', 'L', 'L', 'D'];
+  return Array.from({ length: 3 }, () => outcomes[Math.floor(Math.random() * outcomes.length)]);
 }
 
 function isRankedAiLobby(lobby: { mode: string }): boolean {
@@ -498,8 +504,8 @@ async function handleRankedAiMatchFound(params: {
         countryCode: aiGeo.countryCode,
         city: aiGeo.city,
         flag: aiGeo.flag,
-        favoriteClub: null,
-        recentForm: [],
+        favoriteClub: generateRankedAiFavoriteClub(),
+        recentForm: generateAiRecentForm(),
         lat: aiGeo.lat,
         lon: aiGeo.lon,
       },

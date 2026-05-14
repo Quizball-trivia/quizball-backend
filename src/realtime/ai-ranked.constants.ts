@@ -263,6 +263,25 @@ export async function generateRankedAiProfileValidated(): Promise<{
   };
 }
 
+// Must use exact `value` strings from `frontend-web-next/src/data/top5leagues-clubs.json`
+// so `getClub()` resolves the logo correctly.
+const RANKED_AI_FAVORITE_CLUBS = [
+  'Arsenal FC', 'Chelsea FC', 'Liverpool FC', 'Manchester City', 'Manchester United',
+  'Tottenham Hotspur', 'Newcastle United', 'Aston Villa', 'West Ham United', 'Everton FC',
+  'Real Madrid', 'FC Barcelona', 'Atlético de Madrid', 'Athletic Bilbao', 'Real Sociedad',
+  'Sevilla FC', 'Real Betis Balompié', 'Valencia CF', 'Villarreal CF',
+  'Bayern Munich', 'Borussia Dortmund', 'RB Leipzig', 'Bayer 04 Leverkusen',
+  'Eintracht Frankfurt', 'VfB Stuttgart', 'Borussia Mönchengladbach',
+  'Inter Milan', 'Juventus FC', 'AC Milan', 'AS Roma', 'SSC Napoli', 'SS Lazio',
+  'Atalanta BC', 'ACF Fiorentina',
+  'Paris Saint-Germain', 'Olympique Marseille', 'Olympique Lyon', 'AS Monaco',
+  'LOSC Lille', 'OGC Nice',
+];
+
+export function generateRankedAiFavoriteClub(): string {
+  return RANKED_AI_FAVORITE_CLUBS[Math.floor(Math.random() * RANKED_AI_FAVORITE_CLUBS.length)];
+}
+
 export function rankedAiLobbyKey(lobbyId: string): string {
   return `ranked:ai:lobby:${lobbyId}`;
 }

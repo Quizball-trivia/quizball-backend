@@ -186,6 +186,12 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/stats/stats.service.js', () => ({
+  statsService: {
+    getRecentFormForUser: vi.fn().mockResolvedValue([]),
+  },
+}));
+
 vi.mock('../../src/modules/achievements/index.js', () => ({
   achievementsService: {
     listUnlockedForMatch: (...args: unknown[]) => listUnlockedForMatchMock(...args),

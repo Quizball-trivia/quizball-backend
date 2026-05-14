@@ -169,4 +169,15 @@ export const statsService = {
       friendly,
     };
   },
+
+  /**
+   * Returns the user's last `limit` completed match results as 'W' | 'L' | 'D'
+   * letters, most recent first. Used by the showdown screen.
+   */
+  async getRecentFormForUser(userId: string, limit: number): Promise<Array<'W' | 'L' | 'D'>> {
+    const rows = await statsRepo.listRecentFormForUser(userId, limit);
+    return rows.map((row) =>
+      row.winner_user_id === null ? 'D' : row.winner_user_id === userId ? 'W' : 'L',
+    );
+  },
 };

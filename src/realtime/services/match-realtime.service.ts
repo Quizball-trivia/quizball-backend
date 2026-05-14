@@ -5,6 +5,7 @@ import { achievementsService } from '../../modules/achievements/index.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { objectivesService } from '../../modules/objectives/index.js';
+import { statsService } from '../../modules/stats/stats.service.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -218,6 +219,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
   username: string;
   avatarUrl: string | null;
   avatarCustomization: AvatarCustomization | null;
+  favoriteClub: string | null;
 }> {
   const players = await matchesRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
@@ -227,6 +229,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
       username: 'Opponent',
       avatarUrl: null,
       avatarCustomization: null,
+      favoriteClub: null,
     };
   }
 
@@ -236,6 +239,7 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
+    favoriteClub: opponentUser?.favorite_club ?? null,
   };
 }
 
@@ -637,7 +641,7 @@ export async function beginMatchForLobby(
   const countdownMs = countdownSec * 1000;
 
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization'>;
+  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'>;
   const match = await matchesRepo.getMatch(matchId);
   const players = await matchesRepo.listMatchPlayers(matchId);
   if (!match || players.length === 0) {
@@ -654,6 +658,7 @@ export async function beginMatchForLobby(
       nickname: member.nickname,
       avatar_url: member.avatar_url,
       avatar_customization: member.avatar_customization,
+      favorite_club: member.favorite_club,
     }));
   if (members.length !== players.length) {
     logger.warn(
@@ -666,6 +671,7 @@ export async function beginMatchForLobby(
       nickname: users[index]?.nickname ?? 'Player',
       avatar_url: users[index]?.avatar_url ?? null,
       avatar_customization: users[index]?.avatar_customization ?? null,
+      favorite_club: users[index]?.favorite_club ?? null,
     }));
   }
 
@@ -720,6 +726,20 @@ export async function beginMatchForLobby(
     ...(rpByUserId.has(member.user_id) ? { rankPoints: rpByUserId.get(member.user_id) } : {}),
   }));
 
+  // Fetch recent form (W/L/D × 3) for each member up-front so each emit can
+  // include both the recipient's own form and their opponent's.
+  const recentFormByUserId = new Map<string, Array<'W' | 'L' | 'D'>>();
+  await Promise.all(
+    members.map(async (m) => {
+      try {
+        recentFormByUserId.set(m.user_id, await statsService.getRecentFormForUser(m.user_id, 3));
+      } catch (err) {
+        logger.warn({ err, userId: m.user_id }, 'Failed to load recent form for showdown (non-fatal)');
+        recentFormByUserId.set(m.user_id, []);
+      }
+    }),
+  );
+
   await Promise.all(
     members.map(async (member) => {
       const opponent = members.find((candidate) => candidate.user_id !== member.user_id) ?? member;
@@ -728,11 +748,14 @@ export async function beginMatchForLobby(
         mode: match.mode,
         variant,
         mySeat: seatByUserId.get(member.user_id) ?? undefined,
+        myRecentForm: recentFormByUserId.get(member.user_id) ?? [],
         opponent: {
           id: opponent.user_id,
           username: opponent.nickname ?? 'Player',
           avatarUrl: opponent.avatar_url,
           avatarCustomization: parseStoredAvatarCustomization(opponent.avatar_customization),
+          favoriteClub: opponent.favorite_club,
+          recentForm: recentFormByUserId.get(opponent.user_id) ?? [],
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
         },
         participants,

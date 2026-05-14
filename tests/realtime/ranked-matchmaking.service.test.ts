@@ -74,6 +74,12 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/stats/stats.service.js', () => ({
+  statsService: {
+    getRecentFormForUser: vi.fn().mockResolvedValue([]),
+  },
+}));
+
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startDraft: (...args: unknown[]) => startDraftMock(...args),
   startRankedAiForUser: (...args: unknown[]) => startRankedAiForUserMock(...args),

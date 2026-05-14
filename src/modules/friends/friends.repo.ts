@@ -2,6 +2,12 @@ import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import type { FriendStatus, FriendRequestStatus } from './friends.schemas.js';
 
+// Pending friend requests older than 14 days are treated as expired (see
+// pg_cron job in 20260513140000_friend_requests_expiration.sql). The
+// `fr.created_at > NOW() - INTERVAL '14 days'` filter is repeated in each
+// pending-request query so users stop seeing expired ones immediately,
+// without waiting for the cron sweep.
+
 export interface SocialPlayerRow {
   id: string;
   nickname: string | null;
@@ -69,6 +75,7 @@ export const friendsRepo = {
             WHERE fr.sender_user_id = ${viewerUserId}
               AND fr.receiver_user_id = c.user_id
               AND fr.status = 'pending'
+              AND fr.created_at > NOW() - INTERVAL '14 days'
           ) THEN 'pending_sent'
           WHEN EXISTS (
             SELECT 1
@@ -76,6 +83,7 @@ export const friendsRepo = {
             WHERE fr.sender_user_id = c.user_id
               AND fr.receiver_user_id = ${viewerUserId}
               AND fr.status = 'pending'
+              AND fr.created_at > NOW() - INTERVAL '14 days'
           ) THEN 'pending_received'
           ELSE 'none'
         END AS status
@@ -141,6 +149,7 @@ export const friendsRepo = {
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE fr.receiver_user_id = ${userId}
         AND fr.status = 'pending'
+        AND fr.created_at > NOW() - INTERVAL '14 days'
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
       ORDER BY fr.created_at DESC
@@ -171,6 +180,7 @@ export const friendsRepo = {
       LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
       WHERE fr.sender_user_id = ${userId}
         AND fr.status = 'pending'
+        AND fr.created_at > NOW() - INTERVAL '14 days'
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
       ORDER BY fr.created_at DESC
@@ -195,6 +205,7 @@ export const friendsRepo = {
       SELECT *
       FROM friend_requests
       WHERE status = 'pending'
+        AND created_at > NOW() - INTERVAL '14 days'
         AND (
           (sender_user_id = ${userAId} AND receiver_user_id = ${userBId})
           OR (sender_user_id = ${userBId} AND receiver_user_id = ${userAId})
@@ -206,12 +217,34 @@ export const friendsRepo = {
   },
 
   async createFriendRequest(senderUserId: string, receiverUserId: string): Promise<FriendRequestRow> {
-    const [row] = await sql<FriendRequestRow[]>`
-      INSERT INTO friend_requests (sender_user_id, receiver_user_id, status)
-      VALUES (${senderUserId}, ${receiverUserId}, 'pending')
-      RETURNING *
-    `;
-    return row;
+    // Run the expire-then-insert in one transaction. If a previous request
+    // between this pair has aged past 14 days but the hourly cron hasn't run
+    // yet, the bidirectional unique partial index would block this insert —
+    // sweep those rows first so the new request can proceed.
+    return sql.begin<FriendRequestRow>(async (tx) => {
+      await tx.unsafe(
+        `
+        UPDATE friend_requests
+        SET status = 'cancelled', updated_at = NOW()
+        WHERE status = 'pending'
+          AND created_at < NOW() - INTERVAL '14 days'
+          AND (
+            (sender_user_id = $1 AND receiver_user_id = $2)
+            OR (sender_user_id = $2 AND receiver_user_id = $1)
+          )
+        `,
+        [senderUserId, receiverUserId]
+      );
+      const rows = await tx.unsafe<FriendRequestRow[]>(
+        `
+        INSERT INTO friend_requests (sender_user_id, receiver_user_id, status)
+        VALUES ($1, $2, 'pending')
+        RETURNING *
+        `,
+        [senderUserId, receiverUserId]
+      );
+      return rows[0];
+    }) as Promise<FriendRequestRow>;
   },
 
   async getPendingRequestById(requestId: string): Promise<FriendRequestRow | null> {

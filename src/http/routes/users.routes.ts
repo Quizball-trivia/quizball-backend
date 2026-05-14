@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { requireRole } from '../middleware/require-role.js';
+import { config } from '../../core/config.js';
 import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema } from '../../modules/users/index.js';
 
 const router = Router();
@@ -45,6 +47,16 @@ router.put(
  * Mark onboarding as complete.
  */
 router.post('/me/complete-onboarding', usersController.completeOnboarding);
+
+/**
+ * POST /api/v1/users/me/reset-onboarding
+ * Dev-only admin self-service: flip onboarding_complete back to false so the
+ * onboarding flow can be re-tested. Only registered in non-prod envs and the
+ * service additionally enforces NODE_ENV === 'local'.
+ */
+if (config.NODE_ENV === 'local') {
+  router.post('/me/reset-onboarding', requireRole('admin'), usersController.resetOwnOnboarding);
+}
 
 /**
  * POST /api/v1/users/me/deletion

@@ -122,4 +122,15 @@ export const usersController = {
     const user = await usersService.restorePendingDeletion(userId);
     res.json(toUserResponse(user));
   },
+
+  /**
+   * POST /api/v1/users/me/reset-onboarding
+   * Dev-only: reset the caller's onboarding flag so the flow can be re-triggered
+   * for testing. Requires admin role AND NODE_ENV === 'local'.
+   */
+  async resetOwnOnboarding(req: Request, res: Response): Promise<void> {
+    const userId = req.user!.id;
+    const user = await usersService.resetOnboarding(userId);
+    res.json(toUserResponse(user));
+  },
 };

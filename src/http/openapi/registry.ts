@@ -812,28 +812,37 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
-  method: 'post',
-  path: '/api/v1/users/me/reset-onboarding',
-  summary: 'Reset onboarding flag for the current admin (dev-only)',
-  description: 'Requires admin role. Flips onboarding_complete back to false so the onboarding flow can be re-tested. Operates on the caller\'s own user.',
-  tags: ['Users'],
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: 'Onboarding reset',
-      content: { 'application/json': { schema: userResponseOpenApiSchema } },
+// Dev-only — route is gated to non-prod in users.routes.ts and the service
+// further restricts to NODE_ENV === 'local'. Skip OpenAPI registration in
+// prod so the endpoint never appears in production API docs.
+if (config.NODE_ENV !== 'prod') {
+  registry.registerPath({
+    method: 'post',
+    path: '/api/v1/users/me/reset-onboarding',
+    summary: 'Reset onboarding flag for the current admin (dev-only)',
+    description: 'Dev-only. Requires admin role and NODE_ENV=\'local\'. Flips onboarding_complete back to false so the onboarding flow can be re-tested. Operates on the caller\'s own user.',
+    tags: ['Users'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: 'Onboarding reset',
+        content: { 'application/json': { schema: userResponseOpenApiSchema } },
+      },
+      401: {
+        description: 'Not authenticated',
+        content: { 'application/json': { schema: errorResponseSchema } },
+      },
+      403: {
+        description: 'Insufficient permissions',
+        content: { 'application/json': { schema: errorResponseSchema } },
+      },
+      404: {
+        description: 'Not available outside local environment',
+        content: { 'application/json': { schema: errorResponseSchema } },
+      },
     },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    403: {
-      description: 'Insufficient permissions',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
+  });
+}
 
 registry.registerPath({
   method: 'post',

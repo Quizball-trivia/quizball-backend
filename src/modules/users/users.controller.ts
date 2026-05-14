@@ -124,8 +124,9 @@ export const usersController = {
   },
 
   /**
-   * POST /api/v1/admin/users/me/reset-onboarding
-   * Reset the caller's onboarding flag so the flow can be re-triggered for testing.
+   * POST /api/v1/users/me/reset-onboarding
+   * Dev-only: reset the caller's onboarding flag so the flow can be re-triggered
+   * for testing. Requires admin role AND NODE_ENV === 'local'.
    */
   async resetOwnOnboarding(req: Request, res: Response): Promise<void> {
     const userId = req.user!.id;

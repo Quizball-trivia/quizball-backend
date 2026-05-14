@@ -353,6 +353,12 @@ export const usersService = {
   },
 
   async resetOnboarding(id: string): Promise<User> {
+    // Dev-only — mirrors the guard on /store/dev/grant-self. Even if a stale
+    // route registration leaked into a non-local env, the service refuses.
+    if (config.NODE_ENV !== 'local') {
+      throw new NotFoundError('Not found');
+    }
+
     const user = await usersRepo.update(id, { onboardingComplete: false });
 
     if (!user) {

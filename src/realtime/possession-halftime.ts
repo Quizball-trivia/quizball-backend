@@ -364,31 +364,46 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     userId: string,
     matchId: string
   ): Promise<void> {
-    const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return;
-    const state = cache.statePayload;
-    if (state.phase !== 'HALFTIME') return;
-    if (!state.halftime.deadlineAt) return;
+    // Both players can emit `halftime:ui_ready` near-simultaneously after
+    // the result screen closes. Without a lock, both calls race past
+    // `isHalftimeUiReady` and end up bumping the state version twice,
+    // overwriting each other's `deadlineAt`, and scheduling overlapping
+    // timeout / AI-ban timers. Serialize the read-modify-write through a
+    // Redis lock keyed on the matchId, same pattern `finalizeHalftime`
+    // and the AI ban scheduler already use elsewhere in this file.
+    const lockKey = `lock:match:${matchId}:halftime_ui_ready`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) return;
 
-    const player = getCachedPlayer(cache, userId);
-    if (!player) return;
+    try {
+      const cache = await getMatchCacheOrRebuild(matchId);
+      if (!cache || cache.status !== 'active') return;
+      const state = cache.statePayload;
+      if (state.phase !== 'HALFTIME') return;
+      if (!state.halftime.deadlineAt) return;
 
-    if (isHalftimeUiReady(matchId, state.halftime.deadlineAt)) {
+      const player = getCachedPlayer(cache, userId);
+      if (!player) return;
+
+      if (isHalftimeUiReady(matchId, state.halftime.deadlineAt)) {
+        schedulePossessionAiHalftimeBan(io, matchId);
+        return;
+      }
+
+      state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+      bumpStateVersion(state);
+      await setMatchCache(cache);
+      fireAndForget('setMatchStatePayload(halftimeUiReady)', async () => {
+        await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+      });
+      await emitMatchState(io, matchId, state);
+
+      markHalftimeUiReady(matchId, state.halftime.deadlineAt);
+      scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
-      return;
+    } finally {
+      await releaseLock(lockKey, lock.token);
     }
-
-    state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
-    bumpStateVersion(state);
-    await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(halftimeUiReady)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
-    });
-    await emitMatchState(io, matchId, state);
-
-    markHalftimeUiReady(matchId, state.halftime.deadlineAt);
-    scheduleHalftimeTimeout(io, matchId);
-    schedulePossessionAiHalftimeBan(io, matchId);
   }
 
   return {

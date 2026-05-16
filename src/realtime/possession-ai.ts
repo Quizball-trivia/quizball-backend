@@ -232,6 +232,12 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
                 .map((item) => item.id);
               isCorrect = Math.random() < aiCorrectness;
               selectedIndex = null;
+              // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
+              // by 0.55 so an AI that "would have" got the question right
+              // (aiCorrectness=1.0) still places ~55% of items in the correct
+              // prefix on a miss — partial credit that feels reasonable
+              // without making wrong answers nearly as rewarding as right
+              // ones. Mirrors the 0.75 factor used for countdown questions.
               foundCount = isCorrect
                 ? options.evaluation.items.length
                 : Math.min(

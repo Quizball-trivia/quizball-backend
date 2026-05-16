@@ -264,6 +264,8 @@ export interface MatchRoundResultPlayer {
   pointsEarned: number;
   totalPoints: number;
   foundCount?: number;
+  foundAnswerIds?: string[];
+  submittedOrderIds?: string[];
   clueIndex?: number | null;
 }
 
@@ -613,6 +615,8 @@ export interface ClientToServerEvents {
   'warmup:get_scores': () => void;
   'dev:quick_match': () => void;
   'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half' }) => void;
+  'dev:pause_match': (data: { matchId: string }) => void;
+  'dev:resume_match': (data: { matchId: string }) => void;
 }
 
 export interface ErrorPayload {

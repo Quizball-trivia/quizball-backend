@@ -20,6 +20,7 @@ export const CLUES_QUESTION_TIME_MS = CLUES_PER_CLUE_MS * CLUES_MAX_CLUES;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
 export const FRONTEND_TRANSITION_DELAY_MS = 2500; // Synced with frontend TRANSITION_DELAY_MS
 export const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
+export const FRONTEND_GOAL_CELEBRATION_MS = 4000; // Synced with frontend GOAL_CELEBRATION_MS
 export const FRONTEND_SPECIAL_RESULT_EXTRA_MS = 3000; // Extra hold for special question reveals (countdown, put-in-order, clues)
 export const FRONTEND_FIRST_QUESTION_INTRO_MS = 2000; // Synced with first-question intro overlay
 export const ROUND_RESULT_DELAY_MS = 0;

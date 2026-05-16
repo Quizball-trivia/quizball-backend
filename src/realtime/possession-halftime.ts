@@ -373,7 +373,21 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     const player = getCachedPlayer(cache, userId);
     if (!player) return;
 
+    if (isHalftimeUiReady(matchId, state.halftime.deadlineAt)) {
+      schedulePossessionAiHalftimeBan(io, matchId);
+      return;
+    }
+
+    state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+    bumpStateVersion(state);
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(halftimeUiReady)', async () => {
+      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+    });
+    await emitMatchState(io, matchId, state);
+
     markHalftimeUiReady(matchId, state.halftime.deadlineAt);
+    scheduleHalftimeTimeout(io, matchId);
     schedulePossessionAiHalftimeBan(io, matchId);
   }
 

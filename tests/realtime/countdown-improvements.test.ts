@@ -6,7 +6,7 @@ import {
   PUT_IN_ORDER_QUESTION_TIME_MS,
   getQuestionDurationMs,
 } from '../../src/realtime/possession-state.js';
-import { calculateCountdownScore } from '../../src/realtime/scoring.js';
+import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -239,5 +239,33 @@ describe('calculateCountdownScore', () => {
 
   it('returns 0 when totalGroups is negative', () => {
     expect(calculateCountdownScore(1, -1)).toBe(0);
+  });
+});
+
+describe('calculatePutInOrderScore', () => {
+  it('awards proportional points for matched positions', () => {
+    expect(calculatePutInOrderScore(0, 5)).toBe(0);
+    expect(calculatePutInOrderScore(3, 5)).toBe(60);
+    expect(calculatePutInOrderScore(5, 5)).toBe(100);
+  });
+
+  it('caps scores to the available item count', () => {
+    expect(calculatePutInOrderScore(7, 5)).toBe(100);
+    expect(calculatePutInOrderScore(1, 0)).toBe(0);
+  });
+});
+
+describe('calculateCluesScore', () => {
+  it('caps who-am-I scoring at 100 and steps down by clue', () => {
+    expect(calculateCluesScore(true, 0)).toBe(100);
+    expect(calculateCluesScore(true, 1)).toBe(80);
+    expect(calculateCluesScore(true, 2)).toBe(60);
+    expect(calculateCluesScore(true, 3)).toBe(40);
+    expect(calculateCluesScore(true, 4)).toBe(20);
+  });
+
+  it('returns zero for wrong answers and never drops correct answers below 20', () => {
+    expect(calculateCluesScore(false, 0)).toBe(0);
+    expect(calculateCluesScore(true, 10)).toBe(20);
   });
 });

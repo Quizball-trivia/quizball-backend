@@ -33,7 +33,6 @@ type ResolveAiUserFn = (matchId: string) => Promise<string | null>;
 export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; resolveAiUserId: ResolveAiUserFn }) {
   const halftimeTimers = new Map<string, NodeJS.Timeout>();
   const halftimeAiBanTimers = new Map<string, NodeJS.Timeout>();
-  const halftimeUiReadyByMatch = new Map<string, string>();
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
     fn().catch((error) => {
@@ -55,15 +54,6 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     if (!timer) return;
     clearTimeout(timer);
     halftimeAiBanTimers.delete(matchId);
-  }
-
-  function markHalftimeUiReady(matchId: string, deadlineAt: string): void {
-    halftimeUiReadyByMatch.set(matchId, deadlineAt);
-  }
-
-  function isHalftimeUiReady(matchId: string, deadlineAt: string | null | undefined): boolean {
-    if (!deadlineAt) return false;
-    return halftimeUiReadyByMatch.get(matchId) === deadlineAt;
   }
 
   function clearHalftimeTimer(matchId: string): void {
@@ -229,7 +219,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
-      halftimeUiReadyByMatch.delete(matchId);
+      state.halftime.uiReadyAt = null;
 
       const halfTwoCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryAId;
       cache.categoryBId = halfTwoCategoryId;
@@ -338,7 +328,11 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const isInitialBan = Boolean(
         state && state.phase === 'HALFTIME' && !state.halftime.bans.seat1 && !state.halftime.bans.seat2
       );
-      if (isInitialBan && !isHalftimeUiReady(matchId, state?.halftime.deadlineAt)) {
+      const uiReadyForDeadline = Boolean(
+        state?.halftime.deadlineAt
+        && state.halftime.uiReadyAt === state.halftime.deadlineAt
+      );
+      if (isInitialBan && !uiReadyForDeadline) {
         return;
       }
       const delayMs = getHalftimeAiBanDelayMs();
@@ -365,12 +359,10 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     matchId: string
   ): Promise<void> {
     // Both players can emit `halftime:ui_ready` near-simultaneously after
-    // the result screen closes. Without a lock, both calls race past
-    // `isHalftimeUiReady` and end up bumping the state version twice,
-    // overwriting each other's `deadlineAt`, and scheduling overlapping
-    // timeout / AI-ban timers. Serialize the read-modify-write through a
-    // Redis lock keyed on the matchId, same pattern `finalizeHalftime`
-    // and the AI ban scheduler already use elsewhere in this file.
+    // the result screen closes. Serialize the read-modify-write through a
+    // Redis lock and persist `uiReadyAt` on the shared halftime state so
+    // the second emitter — possibly handled by a different Node instance —
+    // sees the first instance's mark.
     const lockKey = `lock:match:${matchId}:halftime_ui_ready`;
     const lock = await acquireLock(lockKey, 3000);
     if (!lock.acquired || !lock.token) return;
@@ -385,12 +377,14 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const player = getCachedPlayer(cache, userId);
       if (!player) return;
 
-      if (isHalftimeUiReady(matchId, state.halftime.deadlineAt)) {
+      if (state.halftime.uiReadyAt === state.halftime.deadlineAt) {
         schedulePossessionAiHalftimeBan(io, matchId);
         return;
       }
 
-      state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+      const newDeadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+      state.halftime.deadlineAt = newDeadlineAt;
+      state.halftime.uiReadyAt = newDeadlineAt;
       bumpStateVersion(state);
       await setMatchCache(cache);
       fireAndForget('setMatchStatePayload(halftimeUiReady)', async () => {
@@ -398,7 +392,6 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       });
       await emitMatchState(io, matchId, state);
 
-      markHalftimeUiReady(matchId, state.halftime.deadlineAt);
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
     } finally {

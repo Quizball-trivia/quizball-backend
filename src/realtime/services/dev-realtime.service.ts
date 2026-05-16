@@ -6,6 +6,7 @@ import { matchesService } from '../../modules/matches/matches.service.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { generateRankedAiProfile, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
+import { acquireLock, releaseLock } from '../locks.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { devSkipToPossessionPhase, resumePossessionMatchQuestion } from '../possession-match-flow.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
@@ -41,7 +42,13 @@ export async function checkDevPauseAndDefer(
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
-  const paused = await redis.get(devPauseKey(matchId));
+  let paused: string | null;
+  try {
+    paused = await redis.get(devPauseKey(matchId));
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Dev pause check failed; proceeding with normal dispatch');
+    return false;
+  }
   if (!paused) return false;
   const queue = pendingDispatches.get(matchId) ?? [];
   queue.push(dispatch);
@@ -257,10 +264,30 @@ export const devRealtimeService = {
   },
 
   async handlePauseMatch(payload: { matchId: string }): Promise<void> {
-    await pauseMatchInternal(payload.matchId);
+    const lockKey = `lock:match:${payload.matchId}:dev_pause`;
+    const lock = await acquireLock(lockKey, 5000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ matchId: payload.matchId }, 'Dev pause skipped: could not acquire lock');
+      return;
+    }
+    try {
+      await pauseMatchInternal(payload.matchId);
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
   },
 
   async handleResumeMatch(io: QuizballServer, payload: { matchId: string }): Promise<void> {
-    await resumeMatchInternal(io, payload.matchId);
+    const lockKey = `lock:match:${payload.matchId}:dev_pause`;
+    const lock = await acquireLock(lockKey, 5000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ matchId: payload.matchId }, 'Dev resume skipped: could not acquire lock');
+      return;
+    }
+    try {
+      await resumeMatchInternal(io, payload.matchId);
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
   },
 };

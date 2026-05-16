@@ -42,7 +42,7 @@ export function calculateCountdownScore(foundCount: number, totalGroups: number)
  */
 export function calculatePutInOrderScore(matchedPositions: number, totalItems: number): number {
   if (totalItems <= 0) return 0;
-  return clamp(matchedPositions, 0, totalItems) * 20;
+  return Math.min(clamp(matchedPositions, 0, totalItems) * 20, 100);
 }
 
 /**

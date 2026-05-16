@@ -239,6 +239,7 @@ export interface MatchAnswerAckPayload {
   shooterSeat?: 1 | 2 | null;
   foundCount?: number;
   clueIndex?: number | null;
+  submittedOrderIds?: string[];
 }
 
 export interface MatchCountdownGuessAckPayload {
@@ -248,6 +249,7 @@ export interface MatchCountdownGuessAckPayload {
   duplicate: boolean;
   foundCount: number;
   acceptedDisplay?: Record<string, string>;
+  acceptedDisplays?: Array<Record<string, string>>;
 }
 
 export interface MatchCluesGuessAckPayload {

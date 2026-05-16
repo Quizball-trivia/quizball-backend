@@ -28,7 +28,6 @@ import {
   getCachedPlayer,
   getExpectedUserIds,
   getMatchCacheOrRebuild,
-  hasUserAnswered,
   setMatchCache,
   type CachedAnswer,
   type CachedPlayer,
@@ -42,6 +41,7 @@ import { createReadyGateRegistry } from './ready-gate.js';
 import { questionTimerKey, lastMatchKey } from './match-keys.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type {
+  MatchAnswerAckPayload,
   MatchCluesGuessAckPayload,
   MatchQuestionKind,
   MatchRoundResultDeltas,
@@ -249,6 +249,21 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   const cache = await getMatchCacheOrRebuild(matchId);
   if (cache) {
     socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
+    if (cache.currentQuestion) {
+      socket.emit('match:question', {
+        matchId,
+        qIndex: cache.currentQuestion.qIndex,
+        total: cache.totalQuestions,
+        question: cache.currentQuestion.questionDTO,
+        playableAt: cache.currentQuestion.shownAt ?? undefined,
+        deadlineAt: cache.currentQuestion.deadlineAt ?? new Date().toISOString(),
+        phaseKind: cache.currentQuestion.phaseKind,
+        phaseRound: cache.currentQuestion.phaseRound,
+        shooterSeat: cache.currentQuestion.shooterSeat,
+        attackerSeat: cache.currentQuestion.attackerSeat,
+      });
+    }
+    await emitPossessionAnswerSnapshotToSocket(socket, cache);
     return;
   }
 
@@ -434,6 +449,74 @@ function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, {
     };
   }
   return payload;
+}
+
+function buildCachedAnswerAckPayload(cache: MatchCache, userId: string): MatchAnswerAckPayload | null {
+  const question = cache.currentQuestion;
+  const answer = cache.answers[userId];
+  const player = getCachedPlayer(cache, userId);
+  if (!question || !answer || !player) return null;
+
+  const expectedCount = getExpectedUserIds(cache).length;
+  const currentAnswerCount = answerCount(cache);
+  const shouldWaitForOpponent = expectedCount > 1 && currentAnswerCount < expectedCount;
+  const myTotalPoints = answer.questionKind === 'multipleChoice'
+    ? player.totalPoints
+    : player.totalPoints + answer.pointsEarned;
+
+  return {
+    matchId: cache.matchId,
+    qIndex: question.qIndex,
+    questionKind: answer.questionKind,
+    selectedIndex: answer.selectedIndex,
+    isCorrect: answer.isCorrect,
+    correctIndex: question.kind === 'multipleChoice'
+      ? getCachedMultipleChoiceCorrectIndex(question) ?? undefined
+      : undefined,
+    myTotalPoints,
+    oppAnswered: !shouldWaitForOpponent,
+    pointsEarned: answer.pointsEarned,
+    phaseKind: question.phaseKind,
+    phaseRound: question.phaseRound,
+    shooterSeat: question.shooterSeat,
+    foundCount: answer.foundCount,
+    clueIndex: answer.clueIndex,
+    submittedOrderIds: answer.submittedOrderIds,
+  };
+}
+
+async function emitPossessionAnswerSnapshotToSocket(
+  socket: QuizballSocket,
+  cache: MatchCache
+): Promise<void> {
+  const userId = socket.data.user.id;
+  const answerAck = buildCachedAnswerAckPayload(cache, userId);
+  if (answerAck) {
+    socket.emit('match:answer_ack', answerAck);
+    return;
+  }
+
+  const question = cache.currentQuestion;
+  if (!question || question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') return;
+
+  const foundIds = await countdownGetFound(cache.matchId, userId);
+  if (foundIds.length === 0) return;
+
+  const foundIdSet = new Set(foundIds);
+  const acceptedDisplays = question.evaluation.answerGroups
+    .filter((group) => foundIdSet.has(group.id))
+    .map((group) => group.display);
+  const latestDisplay = acceptedDisplays[acceptedDisplays.length - 1];
+
+  socket.emit('match:countdown_guess_ack', {
+    matchId: cache.matchId,
+    qIndex: question.qIndex,
+    accepted: true,
+    duplicate: false,
+    foundCount: foundIds.length,
+    acceptedDisplay: latestDisplay,
+    acceptedDisplays,
+  });
 }
 
 function selectedIndexForAnswerPersistence(
@@ -2565,7 +2648,6 @@ export async function handlePossessionPutInOrderAnswer(
 
     const player = getCachedPlayer(cache, socket.data.user.id);
     if (!player) return;
-    if (hasUserAnswered(cache, socket.data.user.id)) return;
 
     const question = cache.currentQuestion;
     if (question.kind !== 'putInOrder' || question.evaluation.kind !== 'putInOrder') {
@@ -2573,6 +2655,13 @@ export async function handlePossessionPutInOrderAnswer(
         code: 'MATCH_NOT_ALLOWED',
         message: 'The active question is not a put-in-order round.',
       });
+      return;
+    }
+
+    const existingAnswer = cache.answers[socket.data.user.id];
+    if (existingAnswer) {
+      const answerAck = buildCachedAnswerAckPayload(cache, socket.data.user.id);
+      if (answerAck) socket.emit('match:answer_ack', answerAck);
       return;
     }
 
@@ -2648,6 +2737,7 @@ export async function handlePossessionPutInOrderAnswer(
     phaseRound: committed.question.phaseRound,
     shooterSeat: committed.question.shooterSeat,
     foundCount: committed.foundCount,
+    submittedOrderIds: orderedItemIds,
   });
 
   if (committed.question.phaseKind !== 'penalty') {
@@ -2727,7 +2817,6 @@ export async function handlePossessionCluesAnswer(
 
     const player = getCachedPlayer(cache, socket.data.user.id);
     if (!player) return;
-    if (hasUserAnswered(cache, socket.data.user.id)) return;
 
     const question = cache.currentQuestion;
     if (question.kind !== 'clues' || question.evaluation.kind !== 'clues') {
@@ -2735,6 +2824,13 @@ export async function handlePossessionCluesAnswer(
         code: 'MATCH_NOT_ALLOWED',
         message: 'The active question is not a clues round.',
       });
+      return;
+    }
+
+    const existingAnswer = cache.answers[socket.data.user.id];
+    if (existingAnswer) {
+      const answerAck = buildCachedAnswerAckPayload(cache, socket.data.user.id);
+      if (answerAck) socket.emit('match:answer_ack', answerAck);
       return;
     }
 
@@ -2785,7 +2881,7 @@ export async function handlePossessionCluesAnswer(
       pointsEarned,
       answerTimeMs: authoritativeTimeMs,
       clueIndex,
-      myTotalPoints: player.totalPoints,
+      myTotalPoints: player.totalPoints + pointsEarned,
       expectedCount,
       answerCount: currentAnswerCount,
     };

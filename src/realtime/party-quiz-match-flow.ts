@@ -775,6 +775,7 @@ export async function handlePartyQuizAnswer(
     if (!inserted) {
       const duplicate = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
       if (duplicate) {
+        const answeredUserIds = new Set([...state.answeredUserIds, userId]);
         socket.emit(
           'match:answer_ack',
           buildAnswerAckPayload({
@@ -785,6 +786,7 @@ export async function handlePartyQuizAnswer(
             correctIndex,
             myTotalPoints: totalPointsBefore,
             pointsEarned: duplicate.points_earned,
+            oppAnswered: answeredUserIds.size >= participants.length,
           })
         );
       }

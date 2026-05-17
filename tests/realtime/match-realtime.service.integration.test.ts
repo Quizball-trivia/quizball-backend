@@ -457,7 +457,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect.objectContaining({ code: 'MATCH_NOT_ALLOWED' })
     );
     expect(socket.leave).not.toHaveBeenCalled();
-    expect((io.to as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('user:u1');
+    expect((io.to as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('user:u9');
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {

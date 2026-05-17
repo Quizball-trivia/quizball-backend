@@ -18,7 +18,6 @@ import { withSpan } from '../core/tracing.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
-  POSSESSION_QUESTIONS_PER_HALF,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
@@ -56,7 +55,6 @@ import {
   TIMEOUT_RESOLVE_BUFFER_MS,
   type Seat,
   asSeat,
-  nextSeat,
   seatToBanKey,
   buildPlayableQuestionTiming,
   parsePossessionState,
@@ -218,7 +216,14 @@ const {
   handlePossessionHalftimeUiReady: handlePossessionHalftimeUiReadyInternal,
 } = possessionHalftime;
 
-export { clearAiMaps, clearHalftimeTimer };
+export {
+  clearAiAnswerTimer,
+  clearAiMaps,
+  clearHalftimeTimer,
+  ensureHalftimeCategories,
+  scheduleHalftimeTimeout,
+  schedulePossessionAiHalftimeBan,
+};
 
 export async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
@@ -252,7 +257,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   socket.emit('match:state', toMatchStatePayload(matchId, state));
 }
 
-function clearQuestionTimer(matchId: string, qIndex: number): void {
+export function clearQuestionTimer(matchId: string, qIndex: number): void {
   const key = questionTimerKey(matchId, qIndex);
   const timer = questionTimers.get(key);
   if (!timer) return;
@@ -1040,6 +1045,8 @@ export {
   handlePossessionPutInOrderAnswer,
 } from './possession-answer-handlers.js';
 
+export { devSkipToPossessionPhase } from './possession-dev-skip.js';
+
 export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): void {
   clearQuestionTimer(matchId, qIndex);
   clearAiAnswerTimer(matchId, qIndex);
@@ -1048,88 +1055,6 @@ export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): 
 export function cancelPossessionHalftimeTimer(matchId: string): void {
   clearHalftimeTimer(matchId);
   clearAiMaps(matchId);
-}
-
-export async function devSkipToPossessionPhase(
-  io: QuizballServer,
-  matchId: string,
-  target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half'
-): Promise<void> {
-  const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return;
-
-  // Cancel all active timers
-  clearQuestionTimer(matchId, cache.currentQIndex);
-  clearAiAnswerTimer(matchId, cache.currentQIndex);
-  clearHalftimeTimer(matchId);
-
-  const state = cache.statePayload;
-  const nextQIndex = cache.currentQIndex + 1;
-
-  switch (target) {
-    case 'halftime':
-      state.normalQuestionsAnsweredInHalf = POSSESSION_QUESTIONS_PER_HALF;
-      state.phase = 'HALFTIME';
-      state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
-      state.currentQuestion = null;
-      break;
-
-    case 'second_half':
-      state.half = 2;
-      state.phase = 'NORMAL_PLAY';
-      state.possessionDiff = 0;
-      state.kickOffSeat = nextSeat(state.kickOffSeat);
-      state.lastAttack.attackerSeat = null;
-      state.normalQuestionsAnsweredInHalf = 0;
-      state.halftime.categoryOptions = [];
-      state.halftime.firstBanSeat = null;
-      state.halftime.bans.seat1 = null;
-      state.halftime.bans.seat2 = null;
-      state.halftime.deadlineAt = null;
-      state.currentQuestion = null;
-      break;
-
-    case 'last_attack':
-    case 'shot':
-      state.phase = 'LAST_ATTACK';
-      state.lastAttack.attackerSeat = 1;
-      state.currentQuestion = null;
-      break;
-
-    case 'penalties':
-      state.half = 2;
-      state.normalQuestionsAnsweredInHalf = POSSESSION_QUESTIONS_PER_HALF;
-      state.goals = { seat1: 1, seat2: 1 };
-      state.phase = 'PENALTY_SHOOTOUT';
-      state.penalty = {
-        round: 1,
-        shooterSeat: 1,
-        suddenDeath: false,
-        kicksTaken: { seat1: 0, seat2: 0 },
-      };
-      state.currentQuestion = null;
-      break;
-  }
-
-  cache.currentQIndex = nextQIndex;
-  cache.currentQuestion = null;
-  cache.answers = {};
-  bumpStateVersion(state);
-  await setMatchCache(cache);
-  fireAndForget('setMatchStatePayload(devSkip)', async () => {
-    await matchesRepo.setMatchStatePayload(matchId, state, nextQIndex);
-  });
-  await emitMatchState(io, matchId, state);
-
-  if (target === 'halftime') {
-    scheduleHalftimeTimeout(io, matchId);
-    schedulePossessionAiHalftimeBan(io, matchId);
-  } else {
-    await sendPossessionMatchQuestion(io, matchId, nextQIndex);
-  }
-
-  logger.info({ matchId, target, phase: state.phase }, 'Dev skip: state modified');
 }
 
 export const __possessionInternals = {

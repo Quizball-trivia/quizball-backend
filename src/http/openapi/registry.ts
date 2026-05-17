@@ -1,3 +1,25 @@
+/**
+ * OpenAPI coordinator.
+ *
+ * Each module (auth, users, stats, …) hand-writes a `*.openapi.ts` file that
+ * exports a `registerXxxOpenApi(registry)` function. This file imports each
+ * registrar, wires them into a single `OpenAPIRegistry`, and generates the
+ * final OpenAPI 3.0 document via `generateOpenApiDocument()`.
+ *
+ * To add or change an endpoint:
+ *   1. Edit the relevant `src/modules/<feature>/<feature>.openapi.ts`
+ *   2. The `tests/openapi/spec-snapshot.test.ts` snapshot guard catches drift.
+ *      Intentional changes: regenerate the baseline with
+ *      `npx tsx scripts/export-openapi.ts > tests/openapi/__fixtures__/openapi.baseline.json`
+ *      and commit it alongside.
+ *   3. Frontend types regenerate with `cd ../frontend-web-next && npm run api:sync:local`.
+ *
+ * The post-generation `$ref` fix-ups at the bottom of this file are
+ * workarounds for zod-to-openapi composition limits — they ensure
+ * `QuestionResponse.payload`, `UserResponse.progression`, and
+ * `PublicProfileResponse.{progression,ranked,stats,headToHead}` link to
+ * their named schemas instead of inlining duplicated definitions.
+ */
 import {
   OpenAPIRegistry,
   OpenApiGeneratorV3,
@@ -5,19 +27,6 @@ import {
 } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
 import { config } from '../../core/config.js';
-
-// Extend Zod with OpenAPI support
-extendZodWithOpenApi(z);
-
-/**
- * OpenAPI registry for manual route registration.
- */
-export const registry = new OpenAPIRegistry();
-
-// =============================================================================
-// Common Schemas
-// =============================================================================
-
 import { registerCommonSchemas } from './common-schemas.js';
 import { registerAuthOpenApi } from '../../modules/auth/auth.openapi.js';
 import { registerCategoriesOpenApi } from '../../modules/categories/categories.openapi.js';
@@ -32,6 +41,13 @@ import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
 import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 import { registerUsersOpenApi } from '../../modules/users/users.openapi.js';
 
+extendZodWithOpenApi(z);
+
+export const registry = new OpenAPIRegistry();
+
+// Module registration order matches the original registry.ts so the resulting
+// `components.schemas` object has a stable order. (The snapshot test
+// canonicalizes order before comparing, so this is for human-diff comfort.)
 registerCommonSchemas(registry);
 registerAuthOpenApi(registry);
 registerStatsOpenApi(registry);
@@ -45,33 +61,22 @@ registerCategoriesOpenApi(registry);
 registerFeaturedCategoriesOpenApi(registry);
 registerQuestionsOpenApi(registry);
 registerDailyChallengesOpenApi(registry);
-// =============================================================================
-// Generate OpenAPI Document
-// =============================================================================
 
-/**
- * Build OpenAPI servers array based on environment configuration.
- * Supports multiple environments (local, staging, production).
- */
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];
 
-  // Add environment-specific URL if provided (e.g., staging/production)
   if (config.API_BASE_URL) {
     const envDescriptions: Record<string, string> = {
       local: 'Development Server',
       staging: 'Staging Server',
       prod: 'Production Server',
     };
-
     servers.push({
       url: config.API_BASE_URL,
       description: envDescriptions[config.NODE_ENV] || 'API Server',
     });
   }
 
-  // Always include localhost for local development
-  // Useful for developers even in staging/prod environments
   servers.push({
     url: `http://localhost:${config.PORT}`,
     description: 'Local development',
@@ -92,14 +97,14 @@ export function generateOpenApiDocument() {
     servers: buildOpenApiServers(),
   });
 
-  const questionResponse = document.components?.schemas?.QuestionResponse as
-    | {
-        properties?: {
-          payload?: unknown;
-        };
-      }
-    | undefined;
+  // ── Post-generation $ref fix-ups ──
+  // zod-to-openapi inlines union members and extended schemas instead of
+  // emitting $refs, even when both sides are registered. Patch the
+  // composed properties manually so the spec stays normalized.
 
+  const questionResponse = document.components?.schemas?.QuestionResponse as
+    | { properties?: { payload?: unknown } }
+    | undefined;
   if (questionResponse?.properties) {
     questionResponse.properties.payload = {
       allOf: [{ $ref: '#/components/schemas/QuestionPayload' }],
@@ -108,13 +113,8 @@ export function generateOpenApiDocument() {
   }
 
   const userResponse = document.components?.schemas?.UserResponse as
-    | {
-        properties?: {
-          progression?: unknown;
-        };
-      }
+    | { properties?: { progression?: unknown } }
     | undefined;
-
   if (userResponse?.properties) {
     userResponse.properties.progression = {
       $ref: '#/components/schemas/ProgressionResponse',
@@ -131,7 +131,6 @@ export function generateOpenApiDocument() {
         };
       }
     | undefined;
-
   if (publicProfileResponse?.properties) {
     publicProfileResponse.properties.progression = {
       $ref: '#/components/schemas/ProgressionResponse',

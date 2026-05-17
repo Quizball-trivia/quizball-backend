@@ -1,7 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   matchAnswerSchema,
-  matchChanceCardUseSchema,
   matchCluesAnswerSchema,
   matchCountdownGuessSchema,
   matchHalftimeBanSchema,
@@ -169,37 +168,6 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
         },
         'Error handling match:halftime_ui_ready'
       );
-    }
-  });
-
-  socket.on('match:chance_card_use', async (payload) => {
-    const parsed = matchChanceCardUseSchema.safeParse(payload);
-    if (!parsed.success) {
-      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:chance_card_use payload');
-      return;
-    }
-
-    try {
-      await matchRealtimeService.handleChanceCardUse(io, socket, parsed.data);
-    } catch (error) {
-      logger.error(
-        {
-          err: error,
-          userId: socket.data.user?.id,
-          matchId: parsed.data.matchId,
-          qIndex: parsed.data.qIndex,
-        },
-        'Error handling match:chance_card_use'
-      );
-      socket.emit('error', {
-        code: 'CHANCE_CARD_SYNC_FAILED',
-        message: 'Failed to apply 50-50 card',
-        meta: {
-          matchId: parsed.data.matchId,
-          qIndex: parsed.data.qIndex,
-          clientActionId: parsed.data.clientActionId,
-        },
-      });
     }
   });
 

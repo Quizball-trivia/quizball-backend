@@ -66,14 +66,6 @@ export interface CachedQuestion {
   reveal: MatchRoundReveal;
 }
 
-export interface CachedChanceCardUse {
-  userId: string;
-  qIndex: number;
-  clientActionId: string;
-  eliminatedIndices: number[];
-  remainingQuantity: number;
-}
-
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -87,7 +79,6 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
-  chanceCardUses: Record<string, CachedChanceCardUse>;
 }
 
 export function matchCacheKey(matchId: string): string {
@@ -272,7 +263,6 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
-    chanceCardUses: {},
   };
 }
 
@@ -294,12 +284,6 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
 
     try {
       const parsed = JSON.parse(raw) as Partial<MatchCache>;
-      const chanceCardUses =
-        parsed.chanceCardUses &&
-        typeof parsed.chanceCardUses === 'object' &&
-        !Array.isArray(parsed.chanceCardUses)
-          ? parsed.chanceCardUses
-          : {};
       const cached = parsed as MatchCache;
       // Backfill halftime.uiReadyAt on cache entries written before the field
       // existed — otherwise downstream code sees `undefined` instead of `null`.
@@ -308,10 +292,7 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
       }
       span.setAttribute('quizball.cache_hit', true);
-      return {
-        ...cached,
-        chanceCardUses,
-      };
+      return cached;
     } catch (error) {
       span.setAttribute('quizball.cache_parse_failed', true);
       logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');

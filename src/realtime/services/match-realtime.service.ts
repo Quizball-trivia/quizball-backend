@@ -13,7 +13,6 @@ import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
   MatchAnswerPayload,
-  MatchChanceCardUsePayload,
   MatchCluesAnswerPayload,
   MatchCountdownGuessPayload,
   MatchFinalResultsAckPayload,
@@ -47,7 +46,6 @@ import {
   handlePossessionCountdownGuess,
   emitPossessionStateToSocket,
   handlePossessionAnswer,
-  handlePossessionChanceCardUse,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
   handlePossessionReadyForNextQuestion,
@@ -1675,55 +1673,6 @@ export const matchRealtimeService = {
     }
 
     await handlePossessionCluesAnswer(io, socket, payload);
-  },
-
-  async handleChanceCardUse(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: MatchChanceCardUsePayload
-  ): Promise<void> {
-    const { matchId } = payload;
-
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-          meta: {
-            matchId: payload.matchId,
-            qIndex: payload.qIndex,
-            clientActionId: payload.clientActionId,
-          },
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'CHANCE_CARD_NOT_ALLOWED',
-        message: 'Power-ups are not available in party quiz mode.',
-        meta: {
-          matchId: payload.matchId,
-          qIndex: payload.qIndex,
-          clientActionId: payload.clientActionId,
-        },
-      });
-      return;
-    }
-
-    await handlePossessionChanceCardUse(io, socket, payload);
   },
 
   async handleReadyForNextQuestion(

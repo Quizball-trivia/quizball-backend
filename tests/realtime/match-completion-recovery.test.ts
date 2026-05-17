@@ -162,11 +162,6 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   },
 }));
 
-vi.mock('../../src/modules/store/store.service.js', () => ({
-  storeService: {
-    consumeChanceCardForMatch: vi.fn(),
-  },
-}));
 
 // ── Helpers ──
 

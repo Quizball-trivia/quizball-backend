@@ -115,7 +115,6 @@ export function fireAndForget(label: string, fn: () => Promise<unknown>): void {
 
 export {
   handlePossessionAnswer,
-  handlePossessionChanceCardUse,
   handlePossessionCluesAnswer,
   handlePossessionCountdownGuess,
   handlePossessionPutInOrderAnswer,

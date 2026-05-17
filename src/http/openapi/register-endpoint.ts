@@ -1,5 +1,7 @@
 import type { OpenAPIRegistry, RouteConfig } from '@asteasolutions/zod-to-openapi';
-import type { AnyZodObject, ZodTypeAny } from 'zod';
+import type { AnyZodObject, ZodEffects, ZodTypeAny } from 'zod';
+
+type RouteParameter = AnyZodObject | ZodEffects<AnyZodObject, unknown, unknown>;
 
 interface EndpointResponse {
   description: string;
@@ -15,8 +17,8 @@ export interface EndpointSpec {
   tags: string[];
   security?: RouteConfig['security'];
   body?: ZodTypeAny;
-  query?: AnyZodObject;
-  pathParams?: AnyZodObject;
+  query?: RouteParameter;
+  pathParams?: RouteParameter;
   responses: Record<number, EndpointResponse>;
 }
 

@@ -15,20 +15,31 @@ import baseline from './__fixtures__/openapi.baseline.json' with { type: 'json' 
  *     and commit it in the same PR.
  *   - Otherwise, the refactor introduced drift — investigate before merging.
  */
-function stripVolatile(spec: unknown): unknown {
-  if (!spec || typeof spec !== 'object') return spec;
-  // `servers` depends on PORT / API_BASE_URL env (see tests/openapi/server-urls.test.ts);
-  // it's not part of the API contract the frontend types regenerate from.
+/**
+ * Returns a stable JSON-stringified copy of the OpenAPI doc:
+ *   - `servers` removed (depends on PORT / API_BASE_URL env)
+ *   - `components.schemas` and `paths` re-emitted in sorted-key order
+ *     so module migration that registers schemas in a different sequence
+ *     doesn't fail the snapshot — only true semantic drift does.
+ */
+function canonicalize(spec: unknown): string {
+  if (!spec || typeof spec !== 'object') return JSON.stringify(spec);
   const { servers, ...rest } = spec as Record<string, unknown>;
   void servers;
-  return rest;
+  return JSON.stringify(rest, (_key, value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(value).sort()) sorted[k] = (value as Record<string, unknown>)[k];
+      return sorted;
+    }
+    return value;
+  }, 2);
 }
 
 describe('OpenAPI spec', () => {
-  it('matches the pre-refactor baseline (byte-identical JSON output, excluding env-dependent servers)', () => {
+  it('matches the pre-refactor baseline (canonicalized: sorted keys, excluding env-dependent servers)', () => {
     const doc = generateOpenApiDocument();
-    expect(JSON.stringify(stripVolatile(doc), null, 2))
-      .toEqual(JSON.stringify(stripVolatile(baseline), null, 2));
+    expect(canonicalize(doc)).toEqual(canonicalize(baseline));
   });
 
   it('exposes the same path inventory', () => {

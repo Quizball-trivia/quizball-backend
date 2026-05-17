@@ -7,13 +7,6 @@ import { z } from 'zod';
 import { i18nFieldSchema as baseI18nFieldSchema } from '../schemas/shared.js';
 import { config } from '../../core/config.js';
 import {
-  headToHeadQuerySchema,
-  headToHeadResponseSchema,
-  recentMatchesQuerySchema,
-  recentMatchesResponseSchema,
-  statsSummaryResponseSchema,
-} from '../../modules/stats/stats.schemas.js';
-import {
   publicProfileResponseSchema,
   accountDeletionResponseSchema,
   updateProfileSchema,
@@ -22,13 +15,6 @@ import {
   userSearchQuerySchema,
   userSearchResponseSchema,
 } from '../../modules/users/users.schemas.js';
-import {
-  listPublicLobbiesQuerySchema,
-  listPublicLobbiesResponseSchema,
-} from '../../modules/lobbies/lobbies.schemas.js';
-import {
-  rankedProfileResponseSchema,
-} from '../../modules/ranked/ranked.schemas.js';
 import {
   adminDailyChallengeCategoryOptionSchema,
   dailyChallengeMetadataSchema,
@@ -43,22 +29,6 @@ import {
   dailyChallengeParamSchema,
   dailyChallengeSettingsSchema,
 } from '../../modules/daily-challenges/daily-challenges.schemas.js';
-import {
-  createCheckoutBodySchema,
-  createCheckoutResponseSchema,
-  purchaseWithCoinsBodySchema,
-  purchaseWithCoinsResponseSchema,
-  devGrantSelfBodySchema,
-  devGrantSelfResponseSchema,
-  listStoreTransactionsQuerySchema,
-  listStoreTransactionsResponseSchema,
-  manualAdjustmentBodySchema,
-  manualAdjustmentResponseSchema,
-  storeInventoryResponseSchema,
-  storeProductsResponseSchema,
-  storeTransactionLogResponseSchema,
-  storeWalletResponseSchema,
-} from '../../modules/store/store.schemas.js';
 import {
   objectivesResponseSchema,
 } from '../../modules/objectives/objectives.schemas.js';
@@ -92,9 +62,17 @@ export const registry = new OpenAPIRegistry();
 
 import { errorResponseSchema, registerCommonSchemas } from './common-schemas.js';
 import { registerAuthOpenApi } from '../../modules/auth/auth.openapi.js';
+import { registerLobbiesOpenApi } from '../../modules/lobbies/lobbies.openapi.js';
+import { registerRankedOpenApi } from '../../modules/ranked/ranked.openapi.js';
+import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
+import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 
 registerCommonSchemas(registry);
 registerAuthOpenApi(registry);
+registerStatsOpenApi(registry);
+registerLobbiesOpenApi(registry);
+registerRankedOpenApi(registry);
+registerStoreOpenApi(registry);
 
 // =============================================================================
 // User Schemas
@@ -102,366 +80,18 @@ registerAuthOpenApi(registry);
 
 const progressionResponseOpenApiSchema = progressionResponseSchema.openapi('ProgressionResponse');
 const userResponseOpenApiSchema = userResponseSchema.openapi('UserResponse');
-const headToHeadResponseOpenApiSchema = headToHeadResponseSchema.openapi('HeadToHeadResponse');
-const statsSummaryResponseOpenApiSchema = statsSummaryResponseSchema.openapi('StatsSummaryResponse');
-const rankedProfileResponseOpenApiSchema = rankedProfileResponseSchema.openapi('RankedProfileResponse');
 const publicProfileResponseOpenApiSchema = publicProfileResponseSchema.openapi('PublicProfileResponse');
 const accountDeletionResponseOpenApiSchema = accountDeletionResponseSchema.openapi('AccountDeletionResponse');
 
 registry.register('ProgressionResponse', progressionResponseOpenApiSchema);
 registry.register('UserResponse', userResponseOpenApiSchema);
-registry.register('HeadToHeadResponse', headToHeadResponseOpenApiSchema);
-registry.register('RecentMatchesResponse', recentMatchesResponseSchema);
-registry.register('StatsSummaryResponse', statsSummaryResponseOpenApiSchema);
-registry.register('RankedProfileResponse', rankedProfileResponseOpenApiSchema);
 registry.register('PublicProfileResponse', publicProfileResponseOpenApiSchema);
 registry.register('AccountDeletionResponse', accountDeletionResponseOpenApiSchema);
-registry.register('StoreProductsResponse', storeProductsResponseSchema);
-registry.register('StoreWalletResponse', storeWalletResponseSchema);
-registry.register('StoreInventoryResponse', storeInventoryResponseSchema);
-registry.register('CreateCheckoutResponse', createCheckoutResponseSchema);
-registry.register('PurchaseWithCoinsResponse', purchaseWithCoinsResponseSchema);
-registry.register('ManualAdjustmentResponse', manualAdjustmentResponseSchema);
-registry.register('StoreTransactionLogResponse', storeTransactionLogResponseSchema);
-registry.register('ListStoreTransactionsResponse', listStoreTransactionsResponseSchema);
 registry.register('FriendsResponse', friendsResponseSchema);
 registry.register('FriendRequestsResponse', friendRequestsResponseSchema);
 registry.register('CreateFriendRequestResponse', createFriendRequestResponseSchema);
 registry.register('FriendActionResponse', friendActionResponseSchema);
 registry.register('ObjectivesResponse', objectivesResponseSchema);
-
-// =============================================================================
-// Stats Routes
-// =============================================================================
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/stats/head-to-head',
-  summary: 'Get head-to-head summary for two users',
-  tags: ['Stats'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    query: headToHeadQuerySchema,
-  },
-  responses: {
-    200: {
-      description: 'Head-to-head summary',
-      content: { 'application/json': { schema: headToHeadResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/stats/recent-matches',
-  summary: 'Get recent matches for authenticated user',
-  tags: ['Stats'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    query: recentMatchesQuerySchema,
-  },
-  responses: {
-    200: {
-      description: 'Recent matches list',
-      content: { 'application/json': { schema: recentMatchesResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/stats/summary',
-  summary: 'Get aggregate match stats for authenticated user',
-  tags: ['Stats'],
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: 'Aggregate stats summary',
-      content: { 'application/json': { schema: statsSummaryResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-// =============================================================================
-// Lobbies Routes
-// =============================================================================
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/lobbies/public',
-  summary: 'List public lobbies',
-  tags: ['Lobbies'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    query: listPublicLobbiesQuerySchema,
-  },
-  responses: {
-    200: {
-      description: 'Public lobby list',
-      content: { 'application/json': { schema: listPublicLobbiesResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-// =============================================================================
-// Ranked Routes
-// =============================================================================
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/ranked/profile',
-  summary: 'Get ranked profile for authenticated user',
-  tags: ['Ranked'],
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: 'Ranked profile',
-      content: { 'application/json': { schema: rankedProfileResponseSchema } },
-    },
-    401: {
-      description: 'Authentication required',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-// =============================================================================
-// Store Routes
-// =============================================================================
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/store/products',
-  summary: 'List active store products',
-  tags: ['Store'],
-  responses: {
-    200: {
-      description: 'Active store products',
-      content: { 'application/json': { schema: storeProductsResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/v1/store/checkout',
-  summary: 'Create Stripe checkout session',
-  tags: ['Store'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: {
-      required: true,
-      content: {
-        'application/json': {
-          schema: createCheckoutBodySchema,
-        },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Checkout URL created',
-      content: { 'application/json': { schema: createCheckoutResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    404: {
-      description: 'Product not found',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    502: {
-      description: 'Stripe checkout creation failed',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/v1/store/purchase-coins',
-  summary: 'Purchase non-coin-pack products with coin balance',
-  tags: ['Store'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: {
-      required: true,
-      content: {
-        'application/json': {
-          schema: purchaseWithCoinsBodySchema,
-        },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Product purchased with coins',
-      content: { 'application/json': { schema: purchaseWithCoinsResponseSchema } },
-    },
-    400: {
-      description: 'Insufficient coins or invalid product type',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    404: {
-      description: 'Product not found',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/store/wallet',
-  summary: 'Get authenticated wallet balances',
-  tags: ['Store'],
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: 'Wallet balances',
-      content: { 'application/json': { schema: storeWalletResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/store/inventory',
-  summary: 'Get authenticated user inventory',
-  tags: ['Store'],
-  security: [{ bearerAuth: [] }],
-  responses: {
-    200: {
-      description: 'User inventory',
-      content: { 'application/json': { schema: storeInventoryResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/v1/store/dev/grant-self',
-  summary: 'Development-only self wallet grant',
-  description: 'Local development helper for quickly granting coins/tickets to the authenticated user.',
-  tags: ['Store'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: {
-      required: true,
-      content: {
-        'application/json': {
-          schema: devGrantSelfBodySchema,
-        },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Updated wallet after grant',
-      content: { 'application/json': { schema: devGrantSelfResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    404: {
-      description: 'Not available outside local environment',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/v1/store/admin/adjustments',
-  summary: 'Apply manual admin adjustment',
-  description: 'Requires admin role',
-  tags: ['Store Admin'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: {
-      required: true,
-      content: {
-        'application/json': {
-          schema: manualAdjustmentBodySchema,
-        },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Adjustment result',
-      content: { 'application/json': { schema: manualAdjustmentResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    403: {
-      description: 'Insufficient permissions',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    400: {
-      description: 'Invalid adjustment request',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/v1/store/admin/transactions',
-  summary: 'List store transaction logs',
-  description: 'Requires admin role',
-  tags: ['Store Admin'],
-  security: [{ bearerAuth: [] }],
-  request: {
-    query: listStoreTransactionsQuerySchema,
-  },
-  responses: {
-    200: {
-      description: 'Paginated store transaction logs',
-      content: { 'application/json': { schema: listStoreTransactionsResponseSchema } },
-    },
-    401: {
-      description: 'Not authenticated',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-    403: {
-      description: 'Insufficient permissions',
-      content: { 'application/json': { schema: errorResponseSchema } },
-    },
-  },
-});
-
 // =============================================================================
 // Users Routes
 // =============================================================================

@@ -6,14 +6,121 @@ import { matchesService } from '../../modules/matches/matches.service.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { generateRankedAiProfile, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
+import { acquireLock, releaseLock } from '../locks.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
-import { devSkipToPossessionPhase } from '../possession-match-flow.js';
+import { devSkipToPossessionPhase, resumePossessionMatchQuestion } from '../possession-match-flow.js';
+import { cancelMatchQuestionTimer } from '../match-flow.js';
+import { getMatchCacheOrRebuild } from '../match-cache.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
 const AI_REDIS_TTL_SEC = 7200;
 const DEV_MATCH_START_COUNTDOWN_SEC = 0;
 const DEV_MATCHES_TO_KEEP = 5;
+const DEV_PAUSE_TTL_SEC = 3600;
+
+function devPauseKey(matchId: string): string {
+  return `match:devPaused:${matchId}`;
+}
+
+// In-process queue of dispatch callbacks deferred while a match was paused.
+// On resume, we drain and invoke them. This is single-pod (sufficient for dev tooling).
+const pendingDispatches = new Map<string, Array<() => void>>();
+
+/**
+ * Returns true if the match is currently dev-paused; defers `dispatch` to be
+ * invoked on resume. Callers should `return` (skip their own dispatch) when this
+ * resolves true. Best-effort: with Redis unavailable, returns false.
+ *
+ * The dev-pause Redis value stores the pause-started timestamp (epoch ms) as a
+ * string so resume can compute the deadline shift. Any non-null value means
+ * paused.
+ */
+export async function checkDevPauseAndDefer(
+  matchId: string,
+  dispatch: () => void
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+  let paused: string | null;
+  try {
+    paused = await redis.get(devPauseKey(matchId));
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Dev pause check failed; proceeding with normal dispatch');
+    return false;
+  }
+  if (!paused) return false;
+  const queue = pendingDispatches.get(matchId) ?? [];
+  queue.push(dispatch);
+  pendingDispatches.set(matchId, queue);
+  logger.info({ matchId, queued: queue.length }, 'Dev pause: deferred dispatch');
+  return true;
+}
+
+async function pauseMatchInternal(matchId: string): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) {
+    logger.warn({ matchId }, 'Dev pause skipped: Redis unavailable');
+    return;
+  }
+
+  const pauseStartedAtMs = Date.now();
+  await redis.set(devPauseKey(matchId), String(pauseStartedAtMs), { EX: DEV_PAUSE_TTL_SEC });
+
+  // Cancel the active question's answer-timeout so the server won't force-
+  // resolve the round while paused. The disconnect-pause flow uses the same
+  // primitive.
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (cache?.currentQuestion) {
+    cancelMatchQuestionTimer(matchId, cache.currentQuestion.qIndex);
+    logger.info({ matchId, qIndex: cache.currentQuestion.qIndex }, 'Dev pause: cancelled active question timer');
+  }
+  logger.info({ matchId, pauseStartedAtMs }, 'Dev pause: match paused');
+}
+
+async function resumeMatchInternal(io: QuizballServer, matchId: string): Promise<void> {
+  const redis = getRedisClient();
+  let pauseStartedAtMs: number | null = null;
+  if (redis?.isOpen) {
+    const raw = await redis.get(devPauseKey(matchId));
+    if (raw) {
+      const parsed = Number(raw);
+      pauseStartedAtMs = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+    await redis.del(devPauseKey(matchId));
+  }
+
+  // Re-emit the active question with a deadline shifted forward by the pause
+  // duration. Same helper the disconnect-pause uses.
+  if (pauseStartedAtMs !== null) {
+    const cache = await getMatchCacheOrRebuild(matchId);
+    if (cache?.currentQuestion) {
+      try {
+        const resumed = await resumePossessionMatchQuestion(
+          io,
+          matchId,
+          cache.currentQuestion.qIndex,
+          pauseStartedAtMs
+        );
+        logger.info({ matchId, qIndex: cache.currentQuestion.qIndex, resumed }, 'Dev resume: resumed question');
+      } catch (err) {
+        logger.warn({ err, matchId }, 'Dev resume: resumePossessionMatchQuestion threw');
+      }
+    }
+  }
+
+  // Drain any next-question dispatches that were held while paused.
+  const queue = pendingDispatches.get(matchId);
+  pendingDispatches.delete(matchId);
+  if (queue?.length) {
+    logger.info({ matchId, count: queue.length }, 'Dev resume: firing deferred dispatches');
+    for (const dispatch of queue) {
+      try { dispatch(); } catch (err) {
+        logger.warn({ err, matchId }, 'Deferred dev dispatch threw');
+      }
+    }
+  }
+}
 
 async function cleanupFailedQuickMatchLobby(
   socket: QuizballSocket,
@@ -154,5 +261,33 @@ export const devRealtimeService = {
     await devSkipToPossessionPhase(_io, payload.matchId, payload.target);
 
     logger.info({ matchId: payload.matchId, target: payload.target }, 'Dev skip executed');
+  },
+
+  async handlePauseMatch(payload: { matchId: string }): Promise<void> {
+    const lockKey = `lock:match:${payload.matchId}:dev_pause`;
+    const lock = await acquireLock(lockKey, 5000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ matchId: payload.matchId }, 'Dev pause skipped: could not acquire lock');
+      return;
+    }
+    try {
+      await pauseMatchInternal(payload.matchId);
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
+  },
+
+  async handleResumeMatch(io: QuizballServer, payload: { matchId: string }): Promise<void> {
+    const lockKey = `lock:match:${payload.matchId}:dev_pause`;
+    const lock = await acquireLock(lockKey, 5000);
+    if (!lock.acquired || !lock.token) {
+      logger.warn({ matchId: payload.matchId }, 'Dev resume skipped: could not acquire lock');
+      return;
+    }
+    try {
+      await resumeMatchInternal(io, payload.matchId);
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
   },
 };

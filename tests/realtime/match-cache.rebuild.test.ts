@@ -67,6 +67,7 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
     normalQuestionsAnsweredTotal: 0,
     halftime: {
       deadlineAt: null,
+      uiReadyAt: null,
       categoryOptions: [],
       firstHalfShownCategoryIds: [],
       firstBanSeat: null,

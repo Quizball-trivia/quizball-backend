@@ -115,6 +115,52 @@ export async function emitPartyQuizStateToSocket(
   const payload = await buildPartyStatePayload(matchId);
   if (!payload) return;
   socket.emit('match:party_state', payload);
+
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match || match.status !== 'active') return;
+  const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+  const qIndex = state.currentQuestion?.qIndex;
+  if (typeof qIndex !== 'number') return;
+
+  const [question, timing, existingAnswer, participants] = await Promise.all([
+    matchesService.buildMatchQuestionPayload(matchId, qIndex).then((raw) => normalizeMatchQuestionPayload(raw)),
+    matchesRepo.getMatchQuestionTiming(matchId, qIndex),
+    matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id),
+    matchesRepo.listMatchPlayers(matchId),
+  ]);
+  if (!question) return;
+
+  socket.emit('match:question', {
+    matchId,
+    qIndex,
+    total: match.total_questions,
+    question: question.question,
+    playableAt: timing?.shown_at ?? undefined,
+    deadlineAt: timing?.deadline_at ?? new Date().toISOString(),
+    phaseKind: 'normal',
+    phaseRound: qIndex + 1,
+    shooterSeat: null,
+    attackerSeat: null,
+  });
+
+  const correctIndex = getValidatedPartyQuizCorrectIndex(question);
+  if (!existingAnswer || correctIndex === null) return;
+
+  const player = participants.find((candidate) => candidate.user_id === socket.data.user.id);
+  const answeredUserIds = new Set([...state.answeredUserIds, socket.data.user.id]);
+  socket.emit(
+    'match:answer_ack',
+    buildAnswerAckPayload({
+      matchId,
+      qIndex,
+      selectedIndex: existingAnswer.selected_index,
+      isCorrect: existingAnswer.is_correct,
+      correctIndex,
+      myTotalPoints: player?.total_points ?? existingAnswer.points_earned,
+      pointsEarned: existingAnswer.points_earned,
+      oppAnswered: answeredUserIds.size >= participants.length,
+    })
+  );
 }
 
 export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): void {
@@ -178,6 +224,7 @@ function buildAnswerAckPayload(params: {
   correctIndex: number;
   myTotalPoints: number;
   pointsEarned: number;
+  oppAnswered?: boolean;
 }): MatchAnswerAckPayload {
   return {
     matchId: params.matchId,
@@ -187,7 +234,7 @@ function buildAnswerAckPayload(params: {
     isCorrect: params.isCorrect,
     correctIndex: params.correctIndex,
     myTotalPoints: params.myTotalPoints,
-    oppAnswered: false,
+    oppAnswered: params.oppAnswered ?? false,
     pointsEarned: params.pointsEarned,
     phaseKind: 'normal',
     phaseRound: null,
@@ -671,15 +718,6 @@ export async function handlePartyQuizAnswer(
     }
     const totalPointsBefore = participants.find((player) => player.user_id === userId)?.total_points ?? 0;
 
-    const existing = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
-    if (existing) {
-      socket.emit('error', {
-        code: 'ALREADY_ANSWERED',
-        message: 'You already answered this question',
-      });
-      return;
-    }
-
     const question = normalizeMatchQuestionPayload(
       await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
     );
@@ -700,6 +738,25 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
+    const existing = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
+    if (existing) {
+      const answeredUserIds = new Set([...state.answeredUserIds, userId]);
+      socket.emit(
+        'match:answer_ack',
+        buildAnswerAckPayload({
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          selectedIndex: existing.selected_index,
+          isCorrect: existing.is_correct,
+          correctIndex,
+          myTotalPoints: totalPointsBefore,
+          pointsEarned: existing.points_earned,
+          oppAnswered: answeredUserIds.size >= participants.length,
+        })
+      );
+      return;
+    }
+
     const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
@@ -716,10 +773,23 @@ export async function handlePartyQuizAnswer(
     });
 
     if (!inserted) {
-      socket.emit('error', {
-        code: 'ALREADY_ANSWERED',
-        message: 'You already answered this question',
-      });
+      const duplicate = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
+      if (duplicate) {
+        const answeredUserIds = new Set([...state.answeredUserIds, userId]);
+        socket.emit(
+          'match:answer_ack',
+          buildAnswerAckPayload({
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            selectedIndex: duplicate.selected_index,
+            isCorrect: duplicate.is_correct,
+            correctIndex,
+            myTotalPoints: totalPointsBefore,
+            pointsEarned: duplicate.points_earned,
+            oppAnswered: answeredUserIds.size >= participants.length,
+          })
+        );
+      }
       return;
     }
 

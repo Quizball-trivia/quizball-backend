@@ -142,6 +142,7 @@ function sanitizePossessionState(
     normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
+      uiReadyAt: typeof candidate.halftime?.uiReadyAt === 'string' ? candidate.halftime.uiReadyAt : null,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
         ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null; imageUrl: string | null }>>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
@@ -299,9 +300,16 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         !Array.isArray(parsed.chanceCardUses)
           ? parsed.chanceCardUses
           : {};
+      const cached = parsed as MatchCache;
+      // Backfill halftime.uiReadyAt on cache entries written before the field
+      // existed — otherwise downstream code sees `undefined` instead of `null`.
+      if (cached.statePayload && 'halftime' in cached.statePayload && cached.statePayload.halftime) {
+        const ht = cached.statePayload.halftime as { uiReadyAt?: unknown };
+        ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
+      }
       span.setAttribute('quizball.cache_hit', true);
       return {
-        ...(parsed as MatchCache),
+        ...cached,
         chanceCardUses,
       };
     } catch (error) {

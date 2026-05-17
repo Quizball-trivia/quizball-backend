@@ -128,6 +128,7 @@ export const statsRepo = {
        AND rrc.user_id = mp_self.user_id
       LEFT JOIN users opp ON opp.id = mp_opp.user_id
       WHERE m.status IN ('completed', 'abandoned')
+        AND m.is_dev = false
       ORDER BY COALESCE(m.ended_at, m.started_at) DESC
       LIMIT ${limit}
     `;
@@ -156,6 +157,7 @@ export const statsRepo = {
       JOIN matches m ON m.id = mp.match_id
       WHERE mp.user_id = ${userId}
         AND m.status = 'completed'
+        AND m.is_dev = false
       ORDER BY m.ended_at DESC NULLS LAST, m.started_at DESC
       LIMIT ${limit}
     `;

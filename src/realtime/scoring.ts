@@ -33,5 +33,26 @@ export function calculatePoints(isCorrect: boolean, timeMs: number, questionTime
  */
 export function calculateCountdownScore(foundCount: number, totalGroups: number): number {
   if (totalGroups <= 0) return 0;
-  return Math.round((foundCount / totalGroups) * 100);
+  return Math.round((clamp(foundCount, 0, totalGroups) / totalGroups) * 100);
+}
+
+/**
+ * Calculate put-in-order points from positions that match the correct order.
+ * Each matched position is worth 20 points, capped at 100.
+ */
+export function calculatePutInOrderScore(matchedPositions: number, totalItems: number): number {
+  if (totalItems <= 0) return 0;
+  return Math.min(clamp(matchedPositions, 0, totalItems) * 20, 100);
+}
+
+/**
+ * Calculate who-am-I points from the clue that produced the correct answer.
+ * Clue 1 is the maximum score, then each later clue steps down. Scores are
+ * capped at 100 so clues cannot create oversized bar battles or possession
+ * swings compared with the other special question types.
+ */
+export function calculateCluesScore(isCorrect: boolean, clueIndex: number): number {
+  if (!isCorrect) return 0;
+  const normalizedIndex = Math.max(0, Math.floor(clueIndex));
+  return Math.max(20, 100 - normalizedIndex * 20);
 }

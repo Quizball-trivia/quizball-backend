@@ -17,7 +17,7 @@ import { getRedisClient } from './redis.js';
 import { questionTimerKey, countdownPlayerKey } from './match-keys.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
-import { clamp, calculatePoints, calculateCountdownScore } from './scoring.js';
+import { clamp, calculatePoints, calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from './scoring.js';
 import {
   getQuestionDurationMs,
   getQuestionPreAnswerDelayMs,
@@ -180,6 +180,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             expectedCount: number;
             foundCount?: number;
             foundAnswerIds?: string[];
+            submittedOrderIds?: string[];
             clueIndex?: number | null;
           } | null = null;
 
@@ -206,6 +207,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             let pointsEarned = 0;
             let foundCount: number | undefined;
             let foundAnswerIds: string[] | undefined;
+            let submittedOrderIds: string[] | undefined;
             let clueIndex: number | null | undefined;
 
             if (options.questionKind === 'multipleChoice' && options.evaluation.kind === 'multipleChoice') {
@@ -225,9 +227,30 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               pointsEarned = calculateCountdownScore(foundCount, totalGroups);
               isCorrect = false;
             } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
+              const correctOrderIds = [...options.evaluation.items]
+                .sort((left, right) => left.sortValue - right.sortValue)
+                .map((item) => item.id);
               isCorrect = Math.random() < aiCorrectness;
               selectedIndex = null;
-              pointsEarned = isCorrect ? calculatePoints(true, answerTimeMs, questionTimeMs) : 0;
+              // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
+              // by 0.55 so an AI that "would have" got the question right
+              // (aiCorrectness=1.0) still places ~55% of items in the correct
+              // prefix on a miss — partial credit that feels reasonable
+              // without making wrong answers nearly as rewarding as right
+              // ones. Mirrors the 0.75 factor used for countdown questions.
+              foundCount = isCorrect
+                ? options.evaluation.items.length
+                : Math.min(
+                  options.evaluation.items.length - 1,
+                  Math.max(0, Math.round(options.evaluation.items.length * aiCorrectness * 0.55))
+                );
+              submittedOrderIds = [...correctOrderIds];
+              if (!isCorrect && submittedOrderIds.length > 1) {
+                const fixedPrefix = submittedOrderIds.slice(0, foundCount);
+                const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
+                submittedOrderIds = [...fixedPrefix, ...shuffledTail];
+              }
+              pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
             } else if (options.questionKind === 'clues' && options.evaluation.kind === 'clues') {
               isCorrect = Math.random() < aiCorrectness;
               clueIndex = getAiClueIndex(options.evaluation.clues.length, aiCorrectness);
@@ -240,7 +263,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
                   questionTimeMs
                 );
               }
-              pointsEarned = isCorrect ? [200, 150, 100, 50, 25][clueIndex] ?? 25 : 0;
+              pointsEarned = calculateCluesScore(isCorrect, clueIndex);
             }
 
             const answer: CachedAnswer = {
@@ -256,6 +279,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               answeredAt: new Date().toISOString(),
               foundCount,
               foundAnswerIds,
+              submittedOrderIds,
               clueIndex,
             };
 
@@ -284,7 +308,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               isCorrect,
               answerTimeMs,
               pointsEarned,
-              totalPoints: aiPlayer.totalPoints,
+              totalPoints: aiPlayer.totalPoints + (options.questionKind === 'multipleChoice' ? 0 : pointsEarned),
               phaseKind: question.phaseKind,
               phaseRound: question.phaseRound,
               shooterSeat: question.shooterSeat,
@@ -292,6 +316,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               expectedCount: expected.length,
               foundCount,
               foundAnswerIds,
+              submittedOrderIds,
               clueIndex,
             };
           } finally {

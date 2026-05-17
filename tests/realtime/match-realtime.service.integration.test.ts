@@ -445,6 +445,21 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
   });
 
+  it('S15a: match:leave rejects requested active matches where the socket user is not a participant', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u9');
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_NOT_ALLOWED' })
+    );
+    expect(socket.leave).not.toHaveBeenCalled();
+    expect((io.to as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('user:u9');
+  });
+
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
     vi.useFakeTimers();
     try {
@@ -1045,7 +1060,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(updatePlayerAvgTimeMock).toHaveBeenCalledWith('m1', 'u2', null);
     expect(socket.leave).toHaveBeenCalledWith('match:m1');
     expect(socket.data.matchId).toBeUndefined();
-    expect((io.to as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('match:m1');
+    expect((io.to as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.arrayContaining(['match:m1', 'user:u1', 'user:u2'])
+    );
   });
 
   it('S26: match:rejoin resolves seat/opponent from cache without roster DB read', async () => {

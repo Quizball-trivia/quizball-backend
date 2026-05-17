@@ -106,4 +106,11 @@ describe('possession mixed-question sequencing', () => {
     expect(result.playableAt.toISOString()).toBe(new Date(resumedAtMs + 5_000).toISOString());
     expect(result.deadlineAt.toISOString()).toBe(new Date(resumedAtMs + 20_000).toISOString());
   });
+
+  it('does not persist special-round progress as selected_index', () => {
+    expect(__possessionInternals.selectedIndexForAnswerPersistence('multipleChoice', 2)).toBe(2);
+    expect(__possessionInternals.selectedIndexForAnswerPersistence('countdown', 7)).toBeNull();
+    expect(__possessionInternals.selectedIndexForAnswerPersistence('putInOrder', null)).toBeNull();
+    expect(__possessionInternals.selectedIndexForAnswerPersistence('clues', null)).toBeNull();
+  });
 });

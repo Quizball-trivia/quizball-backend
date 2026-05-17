@@ -555,6 +555,19 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   };
 }
 
+async function emitFinalResultsToMatchParticipants(
+  io: QuizballServer,
+  matchId: string,
+  payload: NonNullable<Awaited<ReturnType<typeof buildFinalResultsPayload>>>
+): Promise<void> {
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  const rooms = [
+    `match:${matchId}`,
+    ...players.map((player) => `user:${player.user_id}`),
+  ];
+  io.to(rooms).emit('match:final_results', payload);
+}
+
 async function createOrJoinFriendlyRematchLobby(
   io: QuizballServer,
   userId: string,
@@ -882,6 +895,16 @@ export const matchRealtimeService = {
           return;
         }
 
+        const { participants } = await getParticipantSnapshot(activeMatch.id);
+        const isParticipant = participants.some((player) => player.user_id === userId);
+        if (!isParticipant) {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ALLOWED',
+            message: 'You are not a participant in this match',
+          });
+          return;
+        }
+
         const pauseResult = await this.pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId);
 
         socket.leave(`match:${activeMatch.id}`);
@@ -966,7 +989,7 @@ export const matchRealtimeService = {
         const resultVersion = finalized.resultVersion;
         const finalPayload = await buildFinalResultsPayload(activeMatch.id, resultVersion);
         if (finalPayload) {
-          io.to(`match:${activeMatch.id}`).emit('match:final_results', finalPayload);
+          await emitFinalResultsToMatchParticipants(io, activeMatch.id, finalPayload);
         }
 
         const redis = getRedisClient();
@@ -1316,7 +1339,7 @@ export const matchRealtimeService = {
       });
       const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
       if (finalPayload) {
-        io.to(`match:${matchId}`).emit('match:final_results', finalPayload);
+        await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
       }
       await redis.del(cleanupKeys);
       return {
@@ -1369,6 +1392,10 @@ export const matchRealtimeService = {
               ],
             });
             if (finalized.completed) {
+              const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
+              if (finalPayload) {
+                await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+              }
               return;
             }
           }
@@ -1452,7 +1479,7 @@ export const matchRealtimeService = {
         const resultVersion = Date.now();
         const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
         if (finalPayload) {
-          io.to(`match:${matchId}`).emit('match:final_results', finalPayload);
+          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
         }
 
         await redis.del(rankedAiMatchKey(matchId));

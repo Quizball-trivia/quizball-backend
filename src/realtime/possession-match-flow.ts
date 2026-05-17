@@ -13,14 +13,7 @@
  * symbols so external consumers see a single import surface.
  */
 import { logger } from '../core/logger.js';
-import { appMetrics } from '../core/metrics.js';
-import { withSpan } from '../core/tracing.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
-import {
-  matchesService,
-  type PossessionStatePayload,
-} from '../modules/matches/matches.service.js';
-import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
 import { acquireLock, releaseLock } from './locks.js';
 import {
   answerCount,
@@ -30,40 +23,25 @@ import {
   getMatchCacheOrRebuild,
   setMatchCache,
   type CachedAnswer,
-  type MatchCache,
 } from './match-cache.js';
-import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { getRedisClient } from './redis.js';
-import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
-import { createReadyGateRegistry } from './ready-gate.js';
-import { questionTimerKey } from './match-keys.js';
-import type { QuizballServer, QuizballSocket } from './socket-server.js';
+import type { QuizballServer } from './socket-server.js';
 import type {
-  MatchQuestionKind,
   MatchRoundResultDeltas,
 } from './socket.types.js';
 import { calculateCountdownScore } from './scoring.js';
 
-// ── Re-exports from extracted sub-modules ──
 import {
   getQuestionDurationMs,
-  FRONTEND_RESULT_HOLD_MS,
-  FRONTEND_TRANSITION_DELAY_MS,
-  FRONTEND_GOAL_CELEBRATION_MS,
-  TIMEOUT_RESOLVE_GRACE_MS,
-  TIMEOUT_RESOLVE_BUFFER_MS,
   type Seat,
   asSeat,
   buildPlayableQuestionTiming,
   parsePossessionState,
-  phaseKindFromState,
-  getDifficultyForState,
-  toMatchStatePayload,
   bumpStateVersion,
 } from './possession-state.js';
 
 import { createPossessionAi } from './possession-ai.js';
-import { createPossessionHalftime, HALFTIME_DURATION_MS } from './possession-halftime.js';
+import { createPossessionHalftime } from './possession-halftime.js';
 import {
   clueIndexForTimeMs,
   countdownMatch,
@@ -72,13 +50,10 @@ import {
 import {
   computeAuthoritativeTimeMs,
   computeResumedPossessionTiming,
-  getNextQuestionDelayMs,
 } from './possession-timing.js';
 import {
-  buildCachedAnswerAckPayload,
   buildPlayersPayloadFromCache,
   getUserIdByCachedSeat,
-  questionKindForType,
   questionTypeForState,
   selectedIndexForAnswerPersistence,
   toCachedAnswerByUserId,
@@ -92,34 +67,24 @@ import {
   penaltyWinnerSeat,
 } from './possession-resolution.js';
 import { completePossessionMatch, decideWinner } from './possession-completion.js';
-
-// ── Module-scoped Maps for timers ──
-
-const questionTimers = new Map<string, NodeJS.Timeout>();
-
-const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
-// Safety ceiling: if a client never acks ready (dropped, bug, slow device), send
-// the next question anyway so the match doesn't stall.
-const GOAL_ROUND_READY_ACK_CEILING_MS =
-  FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
-
-// ── Ready-ack gate for goal rounds ───────────────────────────────────────────
-// When a goal is scored, the client runs a celebration + transition sequence
-// whose total length is animation-dependent. Instead of the server guessing
-// that length with a fixed setTimeout (fragile), we wait for both players to
-// emit 'match:ready_for_next_question' and then send the next question with
-// playableAt = sendTime + REVEAL_MS only (no extra hold/transition buffer,
-// since the client has already completed those). A ceiling timeout guards
-// against a client never acking.
-const pendingReadyGates = createReadyGateRegistry<number>();
-
-export function handlePossessionReadyForNextQuestion(
-  userId: string,
-  matchId: string,
-  qIndex: number
-): void {
-  pendingReadyGates.acknowledge(userId, matchId, qIndex);
-}
+import {
+  clearQuestionTimer,
+  emitMatchState,
+  emitPossessionStateToSocket,
+  handlePossessionReadyForNextQuestion,
+  resumePossessionMatchQuestion,
+  scheduleNextPossessionQuestion,
+  sendPossessionMatchQuestion,
+} from './possession-question-dispatch.js';
+export {
+  clearQuestionTimer,
+  emitMatchState,
+  emitPossessionStateToSocket,
+  handlePossessionReadyForNextQuestion,
+  resumePossessionMatchQuestion,
+  scheduleNextPossessionQuestion,
+  sendPossessionMatchQuestion,
+};
 
 export async function handlePossessionHalftimeUiReady(
   io: QuizballServer,
@@ -127,63 +92,6 @@ export async function handlePossessionHalftimeUiReady(
   matchId: string
 ): Promise<void> {
   await handlePossessionHalftimeUiReadyInternal(io, userId, matchId);
-}
-
-async function scheduleNextPossessionQuestion(
-  io: QuizballServer,
-  matchId: string,
-  cache: MatchCache | null,
-  params: {
-    phase: PossessionStatePayload['phase'];
-    phaseKind: 'normal' | 'last_attack' | 'penalty' | 'shot';
-    resolvedQIndex: number;
-    nextIndex: number;
-    goalScoredBySeat: Seat | null;
-  }
-): Promise<void> {
-  const { phase, phaseKind, resolvedQIndex, nextIndex, goalScoredBySeat } = params;
-  const dispatch = (opts?: { postReadyAck?: boolean }) => {
-    const fire = () => {
-      void sendPossessionMatchQuestion(io, matchId, nextIndex, opts).catch((error) => {
-        logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
-      });
-    };
-    void checkDevPauseAndDefer(matchId, fire).then((deferred) => {
-      if (!deferred) fire();
-    });
-  };
-
-  if (goalScoredBySeat && phaseKind !== 'penalty') {
-    // Wait for both human players to ack ready; ceiling timeout guards against
-    // a client that never acks (drop, bug, slow device).
-    const humanUserIds: string[] = [];
-    if (cache) {
-      const aiUserId = await resolveAiUserIdForMatch(matchId);
-      for (const player of cache.players) {
-        if (player.userId !== aiUserId) humanUserIds.push(player.userId);
-      }
-    }
-    if (humanUserIds.length === 0) {
-      // No humans to wait on (shouldn't happen, but be safe).
-      setTimeout(() => dispatch({ postReadyAck: true }), 0);
-      return;
-    }
-
-    pendingReadyGates.open({
-      scopeId: matchId,
-      token: resolvedQIndex,
-      waitingUserIds: humanUserIds,
-      ceilingMs: GOAL_ROUND_READY_ACK_CEILING_MS,
-      dispatch: () => dispatch({ postReadyAck: true }),
-      onTimeout: (missing) => {
-        logger.info({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
-      },
-    });
-    return;
-  }
-
-  const delay = getNextQuestionDelayMs({ phase });
-  setTimeout(() => dispatch(), delay);
 }
 
 // ── Initialize AI sub-module ──
@@ -220,72 +128,13 @@ export {
   clearHalftimeTimer,
   ensureHalftimeCategories,
   getHalftimeTurnSeat,
+  resolveAiUserIdForMatch,
   scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
+  schedulePossessionAiAnswer,
   schedulePossessionAiHalftimeBan,
 };
 
-export async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
-  io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
-}
-
-export async function emitPossessionStateToSocket(socket: QuizballSocket, matchId: string): Promise<void> {
-  const cache = await getMatchCacheOrRebuild(matchId);
-  if (cache) {
-    socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
-    if (cache.currentQuestion) {
-      socket.emit('match:question', {
-        matchId,
-        qIndex: cache.currentQuestion.qIndex,
-        total: cache.totalQuestions,
-        question: cache.currentQuestion.questionDTO,
-        playableAt: cache.currentQuestion.shownAt ?? undefined,
-        deadlineAt: cache.currentQuestion.deadlineAt ?? new Date().toISOString(),
-        phaseKind: cache.currentQuestion.phaseKind,
-        phaseRound: cache.currentQuestion.phaseRound,
-        shooterSeat: cache.currentQuestion.shooterSeat,
-        attackerSeat: cache.currentQuestion.attackerSeat,
-      });
-    }
-    await emitPossessionAnswerSnapshotToSocket(socket, cache);
-    return;
-  }
-
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match) return;
-  const state = parsePossessionState(match.state_payload);
-  socket.emit('match:state', toMatchStatePayload(matchId, state));
-}
-
-export function clearQuestionTimer(matchId: string, qIndex: number): void {
-  const key = questionTimerKey(matchId, qIndex);
-  const timer = questionTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  questionTimers.delete(key);
-}
-
-function scheduleQuestionTimeout(
-  io: QuizballServer,
-  matchId: string,
-  qIndex: number,
-  deadlineAt: Date
-): void {
-  const key = questionTimerKey(matchId, qIndex);
-  const existing = questionTimers.get(key);
-  if (existing) {
-    clearTimeout(existing);
-  }
-
-  const delayMs = Math.max(0, deadlineAt.getTime() - Date.now()) + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS;
-  const timeout = setTimeout(() => {
-    void resolvePossessionRound(io, matchId, qIndex, true).catch((error) => {
-      logger.error({ error, matchId, qIndex }, 'Failed to resolve possession round after timeout');
-    });
-  }, delayMs);
-
-  questionTimers.set(key, timeout);
-}
 
 export function fireAndForget(label: string, fn: () => Promise<unknown>): void {
   fn().catch((error) => {
@@ -293,338 +142,6 @@ export function fireAndForget(label: string, fn: () => Promise<unknown>): void {
   });
 }
 
-async function emitPossessionAnswerSnapshotToSocket(
-  socket: QuizballSocket,
-  cache: MatchCache
-): Promise<void> {
-  const userId = socket.data.user.id;
-  const answerAck = buildCachedAnswerAckPayload(cache, userId);
-  if (answerAck) {
-    socket.emit('match:answer_ack', answerAck);
-    return;
-  }
-
-  const question = cache.currentQuestion;
-  if (!question || question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') return;
-
-  const foundIds = await countdownGetFound(cache.matchId, userId);
-  if (foundIds.length === 0) return;
-
-  const foundIdSet = new Set(foundIds);
-  const acceptedDisplays = question.evaluation.answerGroups
-    .filter((group) => foundIdSet.has(group.id))
-    .map((group) => group.display);
-  const latestDisplay = acceptedDisplays[acceptedDisplays.length - 1];
-
-  socket.emit('match:countdown_guess_ack', {
-    matchId: cache.matchId,
-    qIndex: question.qIndex,
-    accepted: true,
-    duplicate: false,
-    foundCount: foundIds.length,
-    acceptedDisplay: latestDisplay,
-    acceptedDisplays,
-  });
-}
-
-async function maybePickQuestionForState(
-  matchId: string,
-  state: PossessionStatePayload,
-  categoryIds: string[]
-): Promise<{
-  questionId: string;
-  categoryId: string;
-  correctIndex: number;
-  questionKind: MatchQuestionKind;
-} | null> {
-  const questionType = questionTypeForState(state);
-  const useDifficulty = questionType === 'mcq_single';
-  const preferredDifficulties = useDifficulty ? getDifficultyForState(state) : undefined;
-  const pickValidCandidate = async (
-    difficulties?: Array<'easy' | 'medium' | 'hard'>
-  ): Promise<{
-    questionId: string;
-    categoryId: string;
-    correctIndex: number;
-    questionKind: MatchQuestionKind;
-  } | null> => {
-    const rows = await matchesRepo.getRandomQuestionCandidatesForMatch({
-      matchId,
-      categoryIds,
-      difficulties,
-      questionTypes: [questionType],
-      limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
-    });
-
-    for (const row of rows) {
-      const parsed = questionPayloadSchema.safeParse(row.payload);
-      if (!parsed.success || parsed.data.type !== questionType) {
-        continue;
-      }
-
-      const correctIndex = parsed.data.type === 'mcq_single'
-        ? parsed.data.options.findIndex((option) => option.is_correct)
-        : 0;
-      if (parsed.data.type === 'mcq_single' && correctIndex < 0) {
-        continue;
-      }
-
-      return {
-        questionId: row.id,
-        categoryId: row.category_id,
-        correctIndex,
-        questionKind: questionKindForType(questionType),
-      };
-    }
-
-    return null;
-  };
-
-  let picked = await pickValidCandidate(preferredDifficulties);
-  if (!picked && useDifficulty) {
-    picked = await pickValidCandidate(['easy', 'medium', 'hard']);
-  }
-
-  return picked;
-}
-
-export async function sendPossessionMatchQuestion(
-  io: QuizballServer,
-  matchId: string,
-  qIndex: number,
-  preloaded?: { cache?: MatchCache; postReadyAck?: boolean }
-): Promise<{ correctIndex: number } | null> {
-  return withSpan('match.possession.send_question', {
-    'quizball.match_id': matchId,
-    'quizball.q_index': qIndex,
-  }, async (span) => {
-    const startedAt = Date.now();
-    const cache = preloaded?.cache ?? await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return null;
-    const totalQuestions = cache.totalQuestions;
-    const state = cache.statePayload;
-
-    span.setAttributes({
-      'quizball.match_phase': state.phase,
-      'quizball.match_half': state.half,
-    });
-
-    if (state.phase === 'HALFTIME') {
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
-      if (!state.halftime.deadlineAt) {
-        state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
-      }
-      scheduleHalftimeTimeout(io, matchId);
-      schedulePossessionAiHalftimeBan(io, matchId);
-      bumpStateVersion(state);
-      await setMatchCache(cache);
-      fireAndForget('setMatchStatePayload(sendQuestion:halftime)', async () => {
-        await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
-      });
-      await emitMatchState(io, matchId, state);
-      return null;
-    }
-    if (state.phase === 'COMPLETED') {
-      return null;
-    }
-
-    const phaseKind = phaseKindFromState(state);
-    const runtimePhaseKind: 'normal' | 'last_attack' | 'penalty' = phaseKind === 'shot' ? 'normal' : phaseKind;
-    const attackerSeat = runtimePhaseKind === 'last_attack'
-      ? (state.lastAttack.attackerSeat ?? (state.possessionDiff >= 0 ? 1 : 2))
-      : null;
-    const shooterSeat = runtimePhaseKind === 'penalty' ? state.penalty.shooterSeat : null;
-    const phaseRound = runtimePhaseKind === 'normal'
-      ? state.normalQuestionsAnsweredTotal + 1
-      : runtimePhaseKind === 'last_attack'
-        ? state.half
-        : Math.ceil(state.penalty.round / 2);
-
-    span.setAttributes({
-      'quizball.phase_kind': runtimePhaseKind,
-      'quizball.phase_round': phaseRound,
-    });
-
-    const categoryIds = categoryIdsForCurrentHalf(state, cache);
-    const picked = await maybePickQuestionForState(matchId, state, categoryIds);
-    if (!picked) {
-      logger.error({ matchId, phaseKind }, 'Failed to pick a valid question for possession state');
-      return null;
-    }
-
-    span.setAttributes({
-      'quizball.question_id': picked.questionId,
-      'quizball.category_id': picked.categoryId,
-    });
-
-    const inserted = await matchesRepo.insertMatchQuestionIfMissing({
-      matchId,
-      qIndex,
-      questionId: picked.questionId,
-      categoryId: picked.categoryId,
-      correctIndex: picked.correctIndex,
-      phaseKind: runtimePhaseKind,
-      phaseRound,
-      shooterSeat,
-      attackerSeat,
-    });
-
-    if (!inserted) {
-      logger.warn({ matchId, qIndex, phaseKind: runtimePhaseKind }, 'Question row already exists for possession qIndex');
-      span.setAttribute('quizball.question_row_preexisting', true);
-    }
-
-    const payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
-    if (!payload) {
-      logger.error({ matchId, qIndex }, 'Unable to build possession match question payload');
-      return null;
-    }
-    const correctIndex = getMultipleChoiceCorrectIndexFromPayload(payload) ?? 0;
-
-    const previousQuestionKind = cache.currentQuestion?.kind;
-    const clueCount = payload.question.kind === 'clues' ? payload.question.clues.length : undefined;
-    const { playableAt, deadlineAt } = buildPlayableQuestionTiming({
-      qIndex,
-      state,
-      questionKind: payload.question.kind,
-      previousQuestionKind,
-      clueCount,
-      postReadyAck: preloaded?.postReadyAck,
-    });
-
-    state.currentQuestion = {
-      qIndex,
-      phaseKind: runtimePhaseKind,
-      phaseRound,
-      shooterSeat,
-      attackerSeat,
-    };
-    cache.currentQIndex = qIndex;
-    cache.currentQuestion = {
-      qIndex,
-      kind: payload.question.kind,
-      questionId: payload.question.id,
-      correctIndex,
-      phaseKind: runtimePhaseKind,
-      phaseRound,
-      shooterSeat,
-      attackerSeat,
-      shownAt: playableAt.toISOString(),
-      deadlineAt: deadlineAt.toISOString(),
-      questionDTO: payload.question,
-      evaluation: payload.evaluation,
-      reveal: payload.reveal,
-    };
-    cache.answers = {};
-    bumpStateVersion(state);
-
-    await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    });
-    try {
-      await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-    } catch (error) {
-      logger.error({ error, matchId, qIndex }, 'setQuestionTiming failed before emitting match:question');
-    }
-
-    await emitMatchState(io, matchId, state);
-
-    io.to(`match:${matchId}`).emit('match:question', {
-      matchId,
-      qIndex,
-      total: totalQuestions,
-      question: cache.currentQuestion.questionDTO,
-      playableAt: playableAt.toISOString(),
-      deadlineAt: deadlineAt.toISOString(),
-      phaseKind: runtimePhaseKind,
-      phaseRound,
-      shooterSeat,
-      attackerSeat,
-    });
-
-    appMetrics.questionGenerationDuration.record(Date.now() - startedAt, {
-      mode: cache.mode,
-      variant: cache.statePayload.variant,
-      phase_kind: runtimePhaseKind,
-    });
-
-    scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
-    void schedulePossessionAiAnswer(io, matchId, qIndex, {
-      questionKind: payload.question.kind,
-      evaluation: payload.evaluation,
-      phaseKind: runtimePhaseKind,
-      phaseRound,
-      shooterSeat,
-    }).catch((error) => {
-      logger.warn({ error, matchId, qIndex }, 'Failed to schedule possession AI answer');
-    });
-
-    return { correctIndex: cache.currentQuestion.correctIndex };
-  });
-}
-
-export async function resumePossessionMatchQuestion(
-  io: QuizballServer,
-  matchId: string,
-  qIndex: number,
-  pauseStartedAtMs: number
-): Promise<boolean> {
-  const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return false;
-
-  const currentQuestion = cache.currentQuestion;
-  if (!currentQuestion || currentQuestion.qIndex !== qIndex) {
-    return false;
-  }
-
-  const resumedAtMs = Date.now();
-  const { playableAt, deadlineAt } = computeResumedPossessionTiming({
-    shownAtRaw: currentQuestion.shownAt,
-    deadlineAtRaw: currentQuestion.deadlineAt,
-    pauseStartedAtMs,
-    resumedAtMs,
-    qIndex,
-    state: cache.statePayload,
-    questionKind: currentQuestion.kind,
-  });
-
-  currentQuestion.shownAt = playableAt.toISOString();
-  currentQuestion.deadlineAt = deadlineAt.toISOString();
-  cache.currentQIndex = qIndex;
-
-  await setMatchCache(cache);
-  fireAndForget('setQuestionTiming(resumeQuestion)', async () => {
-    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-  });
-
-  await emitMatchState(io, matchId, cache.statePayload);
-  io.to(`match:${matchId}`).emit('match:question', {
-    matchId,
-    qIndex,
-    total: cache.totalQuestions,
-    question: currentQuestion.questionDTO,
-    playableAt: playableAt.toISOString(),
-    deadlineAt: deadlineAt.toISOString(),
-    phaseKind: currentQuestion.phaseKind,
-    phaseRound: currentQuestion.phaseRound,
-    shooterSeat: currentQuestion.shooterSeat,
-    attackerSeat: currentQuestion.attackerSeat,
-  });
-
-  scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
-  void schedulePossessionAiAnswer(io, matchId, qIndex, {
-    questionKind: currentQuestion.kind,
-    evaluation: currentQuestion.evaluation,
-    phaseKind: currentQuestion.phaseKind,
-    phaseRound: currentQuestion.phaseRound ?? 0,
-    shooterSeat: currentQuestion.shooterSeat,
-  }).catch((error) => {
-    logger.warn({ error, matchId, qIndex }, 'Failed to reschedule possession AI answer after resume');
-  });
-
-  return true;
-}
 export async function resolvePossessionRound(
   io: QuizballServer,
   matchId: string,

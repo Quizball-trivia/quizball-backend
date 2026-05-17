@@ -764,12 +764,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
     });
   });
 
-  it('S14: emits ack/opponent event after persisted answer and resolves when both answered', async () => {
+  it('S14: emits MATCH_UNAVAILABLE when Redis is down (no DB-fallback path)', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
-    const opponentEmitter = vi.fn();
-    socket.to = vi.fn(() => ({ emit: opponentEmitter })) as unknown as QuizballSocket['to'];
 
     await matchRealtimeService.handleAnswer(io, socket, {
       matchId: 'm1',
@@ -778,21 +776,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
       timeMs: 500,
     });
 
-    expect(insertMatchAnswerMock).toHaveBeenCalledTimes(1);
+    expect(insertMatchAnswerMock).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith(
-      'match:answer_ack',
-      expect.objectContaining({
-        matchId: 'm1',
-        qIndex: 0,
-        oppAnswered: true,
-      })
-    );
-    expect(opponentEmitter).toHaveBeenCalledWith(
-      'match:opponent_answered',
-      expect.objectContaining({
-        matchId: 'm1',
-        qIndex: 0,
-      })
+      'error',
+      expect.objectContaining({ code: 'MATCH_UNAVAILABLE' })
     );
   });
 
@@ -1197,72 +1184,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
-  it('S22: persists clamped client timing and awards points deterministically', async () => {
-    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
-    const io = createIoMock();
-    const socket = createSocketMock('u1', 'm1');
-    const fixedNow = 1_700_000_000_000;
-    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
-
-    getMatchQuestionTimingMock.mockResolvedValue({
-      shown_at: new Date(fixedNow - 2400).toISOString(),
-      deadline_at: new Date(fixedNow + 7600).toISOString(),
-    });
-
-    await matchRealtimeService.handleAnswer(io, socket, {
-      matchId: 'm1',
-      qIndex: 0,
-      selectedIndex: 1,
-      timeMs: 50,
-    });
-
-    expect(insertMatchAnswerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matchId: 'm1',
-        qIndex: 0,
-        userId: 'u1',
-        timeMs: 2400,
-        pointsEarned: 80,
-      })
-    );
-
-    dateNowSpy.mockRestore();
-  });
-
-  it('S23: logs discrepancy when client time differs from server time beyond tolerance', async () => {
-    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
-    const { logger } = await import('../../src/core/logger.js');
-    const io = createIoMock();
-    const socket = createSocketMock('u1', 'm1');
-    const fixedNow = 1_700_000_010_000;
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
-
-    getMatchQuestionTimingMock.mockResolvedValue({
-      shown_at: new Date(fixedNow - 3000).toISOString(),
-      deadline_at: new Date(fixedNow + 7000).toISOString(),
-    });
-
-    await matchRealtimeService.handleAnswer(io, socket, {
-      matchId: 'm1',
-      qIndex: 0,
-      selectedIndex: 1,
-      timeMs: 100,
-    });
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matchId: 'm1',
-        qIndex: 0,
-        userId: 'u1',
-        serverTimeMs: 3000,
-        clientTimeMs: 100,
-        diffMs: 2900,
-      }),
-      'Match answer timing discrepancy detected'
-    );
-
-    nowSpy.mockRestore();
-  });
+  // S22/S23 removed: covered the now-deleted DB-fallback path. The Redis-path
+  // equivalents (scoring/timing) are exercised via tests/realtime/possession-match-flow.test.ts.
 
   it('S24: beginMatchForLobby emits countdown and delays first question by 5s', async () => {
     vi.useFakeTimers();

@@ -443,18 +443,13 @@ async function buildFinalQuestionResults(
 
   if (safeTotal === 0) return results;
 
-  const answersByQuestion = await Promise.all(
-    Array.from({ length: safeTotal }, (_, qIndex) => matchesRepo.listAnswersForQuestion(matchId, qIndex))
-  );
-
-  for (const [qIndex, answers] of answersByQuestion.entries()) {
-    for (const answer of answers) {
-      const playerResults = results[answer.user_id];
-      if (!playerResults) continue;
-      const answerQIndex = typeof answer.q_index === 'number' ? answer.q_index : qIndex;
-      if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
-      playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
-    }
+  const answers = await matchesRepo.listAnswersForMatch(matchId);
+  for (const answer of answers) {
+    const playerResults = results[answer.user_id];
+    if (!playerResults) continue;
+    const answerQIndex = answer.q_index;
+    if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
+    playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
   }
 
   return results;

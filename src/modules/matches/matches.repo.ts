@@ -468,6 +468,21 @@ export const matchesRepo = {
     });
   },
 
+  async listAnswersForMatch(matchId: string): Promise<MatchAnswerRow[]> {
+    return withSpan('db.matches.list_answers_for_match', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+    }, async (span) => {
+      const rows = await sql<MatchAnswerRow[]>`
+        SELECT * FROM match_answers
+        WHERE match_id = ${matchId}
+        ORDER BY q_index ASC
+      `;
+      span.setAttribute('quizball.answer_count', rows.length);
+      return rows;
+    });
+  },
+
   async getAnswerForUser(matchId: string, qIndex: number, userId: string): Promise<MatchAnswerRow | null> {
     const [row] = await sql<MatchAnswerRow[]>`
       SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex} AND user_id = ${userId}

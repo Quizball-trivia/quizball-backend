@@ -18,7 +18,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { lastMatchKey } from './match-keys.js';
-import { clearAiMaps, clearHalftimeTimer } from './possession-match-flow.js';
+import { clearAiMaps, clearHalftimeTimer, fireAndForget } from './possession-match-flow.js';
 import { getUserIdBySeat, LAST_MATCH_REPLAY_TTL_SEC, type ResolutionDecision } from './possession-state.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer } from './socket-server.js';
@@ -99,18 +99,13 @@ async function buildFinalQuestionResults(
 
   if (safeTotal === 0) return results;
 
-  const answersByQuestion = await Promise.all(
-    Array.from({ length: safeTotal }, (_, qIndex) => matchesRepo.listAnswersForQuestion(matchId, qIndex))
-  );
-
-  for (const [qIndex, answers] of answersByQuestion.entries()) {
-    for (const answer of answers) {
-      const playerResults = results[answer.user_id];
-      if (!playerResults) continue;
-      const answerQIndex = typeof answer.q_index === 'number' ? answer.q_index : qIndex;
-      if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
-      playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
-    }
+  const answers = await matchesRepo.listAnswersForMatch(matchId);
+  for (const answer of answers) {
+    const playerResults = results[answer.user_id];
+    if (!playerResults) continue;
+    const answerQIndex = answer.q_index;
+    if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
+    playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
   }
 
   return results;
@@ -122,8 +117,10 @@ export async function completePossessionMatch(
   state: PossessionStatePayload,
   preloadedCache?: MatchCache
 ): Promise<void> {
-  const cache = preloadedCache ?? await getMatchCacheOrRebuild(matchId);
-  const match = await matchesRepo.getMatch(matchId);
+  const [cache, match] = await Promise.all([
+    preloadedCache ? Promise.resolve(preloadedCache) : getMatchCacheOrRebuild(matchId),
+    matchesRepo.getMatch(matchId),
+  ]);
   if (!match || match.status !== 'active') return;
 
   const decisionInput = cache
@@ -156,22 +153,29 @@ export async function completePossessionMatch(
 
   await matchesRepo.completeMatch(matchId, decision.winnerId);
 
-  const avgTimes = await matchesService.computeAvgTimes(matchId);
-  const playerRows = cache
-    ? cache.players.map((player) => ({
-      user_id: player.userId,
-      total_points: player.totalPoints,
-      correct_answers: player.correctAnswers,
-      goals: player.goals,
-      penalty_goals: player.penaltyGoals,
-    }))
-    : await matchesRepo.listMatchPlayers(matchId);
+  const [avgTimes, playerRows] = await Promise.all([
+    matchesService.computeAvgTimes(matchId),
+    cache
+      ? Promise.resolve(cache.players.map((player) => ({
+        user_id: player.userId,
+        total_points: player.totalPoints,
+        correct_answers: player.correctAnswers,
+        goals: player.goals,
+        penalty_goals: player.penaltyGoals,
+      })))
+      : matchesRepo.listMatchPlayers(matchId),
+  ]);
+  const finalPlayers = playerRows.map((player) => ({
+    ...player,
+    avg_time_ms: avgTimes.get(player.user_id) ?? null,
+  }));
 
-  for (const player of playerRows) {
-    await matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
-  }
+  await Promise.all(
+    finalPlayers.map((player) =>
+      matchesRepo.updatePlayerAvgTime(matchId, player.user_id, player.avg_time_ms)
+    )
+  );
 
-  const refreshedPlayers = await matchesRepo.listMatchPlayers(matchId);
   const payloadPlayers: Record<string, {
     totalPoints: number;
     correctAnswers: number;
@@ -180,7 +184,7 @@ export async function completePossessionMatch(
     penaltyGoals: number;
   }> = {};
 
-  for (const player of refreshedPlayers) {
+  for (const player of finalPlayers) {
     payloadPlayers[player.user_id] = {
       totalPoints: player.total_points,
       correctAnswers: player.correct_answers,
@@ -194,7 +198,7 @@ export async function completePossessionMatch(
   try {
     questionResults = await buildFinalQuestionResults(
       matchId,
-      refreshedPlayers.map((player) => player.user_id),
+      finalPlayers.map((player) => player.user_id),
       match.total_questions
     );
   } catch (err) {
@@ -211,7 +215,7 @@ export async function completePossessionMatch(
       winnerId: decision.winnerId,
       winnerDecisionMethod: decision.method,
       totalPointsFallbackUsed: decision.totalPointsFallbackUsed,
-      players: refreshedPlayers.map((player) => ({
+      players: finalPlayers.map((player) => ({
         userId: player.user_id,
         totalPoints: player.total_points,
         correctAnswers: player.correct_answers,
@@ -243,22 +247,26 @@ export async function completePossessionMatch(
     }
   }
 
-  try {
-    await progressionService.awardCompletedMatchXp(matchId);
-  } catch (err) {
-    logger.warn({ err, matchId }, 'Match XP award failed after completion');
+  const completionSideEffectsStartedAt = Date.now();
+  let unlockedAchievements: NonNullable<MatchFinalResultsPayload['unlockedAchievements']> = {};
+  const [xpAwardResult, achievementResult] = await Promise.allSettled([
+    progressionService.awardCompletedMatchXp(matchId),
+    achievementsService.evaluateForMatch(
+      matchId,
+      finalPlayers.map((player) => player.user_id),
+      match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
+    ),
+  ]);
+  if (xpAwardResult.status === 'rejected') {
+    logger.warn({ err: xpAwardResult.reason, matchId }, 'Match XP award failed after completion');
   }
-
-  const unlockedAchievements = await achievementsService.evaluateForMatch(
-    matchId,
-    refreshedPlayers.map((player) => player.user_id),
-    match.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'
-  );
-
-  try {
-    await objectivesService.evaluateForMatchBestEffort(matchId);
-  } catch (err) {
-    logger.warn({ err, matchId }, 'Objectives evaluation failed after match completion');
+  if (achievementResult.status === 'fulfilled') {
+    unlockedAchievements = achievementResult.value;
+  } else {
+    logger.warn(
+      { err: achievementResult.reason, matchId },
+      'Achievement evaluation failed after completion'
+    );
   }
 
   const finalResultsPayload = {
@@ -281,12 +289,17 @@ export async function completePossessionMatch(
     winnerId: decision.winnerId,
     winnerDecisionMethod: decision.method,
     resultVersion,
+    sideEffectsMs: Date.now() - completionSideEffectsStartedAt,
   }, 'Emitting match:final_results payload');
 
   io.to(`match:${matchId}`).emit('match:final_results', finalResultsPayload);
 
-  for (const player of refreshedPlayers) {
-    const opponentPlayer = refreshedPlayers.find((p) => p.user_id !== player.user_id);
+  fireAndForget('evaluateObjectivesAfterPossessionFinalResults', async () => {
+    await objectivesService.evaluateForMatchBestEffort(matchId);
+  });
+
+  for (const player of finalPlayers) {
+    const opponentPlayer = finalPlayers.find((p) => p.user_id !== player.user_id);
     trackMatchCompleted({
       userId: player.user_id,
       matchId,
@@ -318,7 +331,7 @@ export async function completePossessionMatch(
   if (redis) {
     await redis.del(rankedAiMatchKey(matchId));
     await Promise.all(
-      refreshedPlayers.map((player) =>
+      finalPlayers.map((player) =>
         redis.set(
           lastMatchKey(player.user_id),
           JSON.stringify({ matchId, resultVersion }),

@@ -253,7 +253,7 @@ export interface MatchRoundResultPlayer {
   totalPoints: number;
   foundCount?: number;
   foundAnswerIds?: string[];
-  submittedOrderIds?: string[];
+  submittedOrderIds: string[];
   clueIndex?: number | null;
 }
 
@@ -375,6 +375,8 @@ export interface MatchFinalResultsPayload {
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   standings?: MatchStandingPayload[];
+  totalQuestions?: number;
+  questionResults?: Record<string, Array<'correct' | 'wrong' | null>>;
   unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
   durationMs: number;
   resultVersion: number;
@@ -404,6 +406,7 @@ export interface MatchStatePayload {
   shooterSeat: 1 | 2 | null;
   halftime: {
     deadlineAt: string | null;
+    uiReadyAt: string | null;
     categoryOptions: DraftCategory[];
     firstBanSeat: 1 | 2 | null;
     bans: {

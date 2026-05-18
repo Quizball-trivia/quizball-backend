@@ -146,13 +146,30 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const expectedUserIds = getExpectedUserIds(cache);
     if (!expectedUserIds.includes(aiUserId)) return;
 
-    const aiThinkTimeMs = getAiAnswerDelayMs();
     const preAnswerDelayMs = getQuestionPreAnswerDelayMs({
       qIndex,
       state: cache.statePayload,
     });
-    const delayMs = preAnswerDelayMs + aiThinkTimeMs;
     const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
+    const aiThinkTimeMs = getAiAnswerDelayMs();
+    const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
+      ? options.evaluation.clues.length
+      : undefined;
+    const plannedClueIndex = typeof clueCountForDelay === 'number'
+      ? getAiClueIndex(clueCountForDelay, aiCorrectness)
+      : null;
+    const questionTimeMsForDelay = getQuestionDurationMs(options.questionKind, clueCountForDelay);
+    const plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
+      ? (() => {
+          const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
+          return clamp(
+            Math.round(clueSliceMs * plannedClueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
+            0,
+            questionTimeMsForDelay
+          );
+        })()
+      : clamp(aiThinkTimeMs, 0, questionTimeMsForDelay);
+    const delayMs = preAnswerDelayMs + plannedAnswerTimeMs;
     const timeout = setTimeout(() => {
       const stored = aiAnswerTimers.get(key);
       if (stored) {
@@ -201,7 +218,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               ? options.evaluation.clues.length
               : undefined;
             const questionTimeMs = getQuestionDurationMs(options.questionKind, clueCountForDuration);
-            let answerTimeMs = clamp(aiThinkTimeMs, 0, questionTimeMs);
+            let answerTimeMs = clamp(plannedAnswerTimeMs, 0, questionTimeMs);
             let isCorrect = false;
             let selectedIndex: number | null = null;
             let pointsEarned = 0;
@@ -253,16 +270,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
               pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
             } else if (options.questionKind === 'clues' && options.evaluation.kind === 'clues') {
               isCorrect = Math.random() < aiCorrectness;
-              clueIndex = getAiClueIndex(options.evaluation.clues.length, aiCorrectness);
+              clueIndex = plannedClueIndex ?? getAiClueIndex(options.evaluation.clues.length, aiCorrectness);
               selectedIndex = null;
-              if (options.evaluation.clues.length > 0) {
-                const clueSliceMs = questionTimeMs / options.evaluation.clues.length;
-                answerTimeMs = clamp(
-                  Math.round(clueSliceMs * clueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
-                  0,
-                  questionTimeMs
-                );
-              }
               pointsEarned = calculateCluesScore(isCorrect, clueIndex);
             }
 

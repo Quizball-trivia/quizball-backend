@@ -297,6 +297,7 @@ export type Database = {
       }
       match_answers: {
         Row: {
+          answer_payload: Json
           answered_at: string
           is_correct: boolean
           match_id: string
@@ -310,6 +311,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          answer_payload?: Json
           answered_at?: string
           is_correct: boolean
           match_id: string
@@ -323,6 +325,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          answer_payload?: Json
           answered_at?: string
           is_correct?: boolean
           match_id?: string

@@ -611,6 +611,7 @@ export async function resolvePartyQuizRound(
           timeMs: answer?.time_ms ?? PARTY_QUESTION_TIME_MS,
           pointsEarned: answer?.points_earned ?? 0,
           totalPoints: player.total_points,
+          submittedOrderIds: [],
         };
       }
 

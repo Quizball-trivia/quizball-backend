@@ -3,6 +3,7 @@ import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { acquireLock, releaseLock } from './locks.js';
 import {
   answerCount,
+  buildAnswerPayload,
   countdownGetFound,
   deleteCountdownPlayerKeys,
   getExpectedUserIds,
@@ -95,6 +96,7 @@ export async function resolvePossessionRound(
           answeredAt: new Date().toISOString(),
           foundCount: question.kind === 'countdown' || question.kind === 'putInOrder' ? 0 : undefined,
           foundAnswerIds: question.kind === 'countdown' ? [] : undefined,
+          submittedOrderIds: question.kind === 'putInOrder' ? [] : undefined,
           clueIndex: question.kind === 'clues' ? null : undefined,
         };
         cache.answers[userId] = backfill;
@@ -107,6 +109,7 @@ export async function resolvePossessionRound(
             isCorrect: false,
             timeMs: timeoutDurationMs,
             pointsEarned: 0,
+            answerPayload: buildAnswerPayload(backfill),
             phaseKind: question.phaseKind,
             phaseRound: question.phaseRound,
             shooterSeat: question.shooterSeat,
@@ -179,6 +182,7 @@ export async function resolvePossessionRound(
             isCorrect: answer.isCorrect,
             timeMs: answer.timeMs,
             pointsEarned: answer.pointsEarned,
+            answerPayload: buildAnswerPayload(answer),
             phaseKind: question.phaseKind,
             phaseRound: question.phaseRound,
             shooterSeat: question.shooterSeat,

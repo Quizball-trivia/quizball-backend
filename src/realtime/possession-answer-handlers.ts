@@ -2,6 +2,7 @@ import { logger } from '../core/logger.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   answerCount,
+  buildAnswerPayload,
   countdownAddFound,
   countdownGetFound,
   getCachedPlayer,
@@ -35,6 +36,7 @@ import {
 import { toAuthoritativeTimeMsFromCache } from './possession-timing.js';
 import { getCachedMultipleChoiceCorrectIndex } from './question-compat.js';
 import {
+  clueIndexForScoring,
   calculateCluesScore,
   calculatePoints,
   calculatePutInOrderScore,
@@ -434,6 +436,26 @@ export async function handlePossessionPutInOrderAnswer(
     submittedOrderIds: orderedItemIds,
   });
 
+  fireAndForget('insertMatchAnswer(handlePossessionPutInOrderAnswer)', async () => {
+    await matchesRepo.insertMatchAnswerIfMissing({
+      matchId,
+      qIndex,
+      userId: socket.data.user.id,
+      selectedIndex: null,
+      isCorrect: committed.isCorrect,
+      timeMs: committed.answerTimeMs,
+      pointsEarned: committed.pointsEarned,
+      answerPayload: buildAnswerPayload({
+        questionKind: committed.question.kind,
+        foundCount: committed.foundCount,
+        submittedOrderIds: orderedItemIds,
+      }),
+      phaseKind: committed.question.phaseKind,
+      phaseRound: committed.question.phaseRound,
+      shooterSeat: committed.question.shooterSeat,
+    });
+  });
+
   if (committed.question.phaseKind !== 'penalty') {
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {
       matchId,
@@ -528,16 +550,32 @@ export async function handlePossessionCluesAnswer(
       timeMs,
       questionDurationMs
     );
-    const clueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
+    const timedClueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
+    const existingRevealCount = cache.clueReveals?.[socket.data.user.id]?.qIndex === qIndex
+      ? cache.clueReveals[socket.data.user.id].revealCount
+      : 1;
+    const clueIndex = clueIndexForScoring(timedClueIndex, existingRevealCount);
     const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
     if (!isCorrect && !giveUp) {
+      const revealCount = clamp(
+        Math.max(existingRevealCount, timedClueIndex + 2),
+        1,
+        question.evaluation.clues.length
+      );
+      cache.clueReveals ??= {};
+      cache.clueReveals[socket.data.user.id] = {
+        qIndex,
+        revealCount,
+      };
+      await setMatchCache(cache);
+
       return {
         kind: 'wrongGuess',
         ack: {
           matchId,
           qIndex,
-          clueIndex,
-          revealCount: clamp(clueIndex + 2, 1, question.evaluation.clues.length),
+          clueIndex: timedClueIndex,
+          revealCount,
         },
       };
     }
@@ -617,4 +655,3 @@ export async function handlePossessionCluesAnswer(
     await resolvePossessionRound(io, matchId, qIndex, false);
   }
 }
-

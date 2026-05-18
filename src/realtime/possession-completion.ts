@@ -22,6 +22,9 @@ import { clearAiMaps, clearHalftimeTimer } from './possession-match-flow.js';
 import { getUserIdBySeat, LAST_MATCH_REPLAY_TTL_SEC, type ResolutionDecision } from './possession-state.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer } from './socket-server.js';
+import type { MatchFinalResultsPayload } from './socket.types.js';
+
+type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
 
 export function decideWinner(
   players: Array<{ user_id: string; seat: number; total_points: number }>,
@@ -79,6 +82,38 @@ async function flushCacheToDB(cache: MatchCache): Promise<void> {
       })
     )
   );
+}
+
+async function buildFinalQuestionResults(
+  matchId: string,
+  userIds: string[],
+  totalQuestions: number
+): Promise<NonNullable<MatchFinalResultsPayload['questionResults']>> {
+  const safeTotal = Math.max(0, totalQuestions);
+  const results = Object.fromEntries(
+    userIds.map((userId) => [
+      userId,
+      Array.from({ length: safeTotal }, () => null as QuestionResult),
+    ])
+  ) as NonNullable<MatchFinalResultsPayload['questionResults']>;
+
+  if (safeTotal === 0) return results;
+
+  const answersByQuestion = await Promise.all(
+    Array.from({ length: safeTotal }, (_, qIndex) => matchesRepo.listAnswersForQuestion(matchId, qIndex))
+  );
+
+  for (const [qIndex, answers] of answersByQuestion.entries()) {
+    for (const answer of answers) {
+      const playerResults = results[answer.user_id];
+      if (!playerResults) continue;
+      const answerQIndex = typeof answer.q_index === 'number' ? answer.q_index : qIndex;
+      if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
+      playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
+    }
+  }
+
+  return results;
 }
 
 export async function completePossessionMatch(
@@ -155,6 +190,17 @@ export async function completePossessionMatch(
     };
   }
 
+  let questionResults: MatchFinalResultsPayload['questionResults'];
+  try {
+    questionResults = await buildFinalQuestionResults(
+      matchId,
+      refreshedPlayers.map((player) => player.user_id),
+      match.total_questions
+    );
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Failed to build final question results');
+  }
+
   const durationMs = Date.now() - new Date(cache?.startedAt ?? match.started_at).getTime();
   const resultVersion = Date.now();
 
@@ -219,6 +265,8 @@ export async function completePossessionMatch(
     matchId,
     winnerId: decision.winnerId,
     players: payloadPlayers,
+    totalQuestions: match.total_questions,
+    ...(questionResults ? { questionResults } : {}),
     unlockedAchievements,
     durationMs,
     resultVersion,

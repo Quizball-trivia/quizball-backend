@@ -58,7 +58,7 @@ import {
   handlePartyQuizReadyForNextQuestion,
   resumePartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
-import type { AchievementUnlockPayload } from '../socket.types.js';
+import type { AchievementUnlockPayload, MatchFinalResultsPayload } from '../socket.types.js';
 import {
   matchPresenceKey,
   matchDisconnectKey,
@@ -79,6 +79,8 @@ const GRACE_TTL_SEC = 65;
 const FORFEIT_TTL_SEC = 600;
 const FRIENDLY_REMATCH_LOBBY_TTL_MS = 30 * 60 * 1000;
 const FRIENDLY_REMATCH_LOCK_TTL_MS = 5000;
+
+type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
 
 type LastMatchReplay = {
   matchId: string;
@@ -426,6 +428,38 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
   return nextCount;
 }
 
+async function buildFinalQuestionResults(
+  matchId: string,
+  userIds: string[],
+  totalQuestions: number
+): Promise<NonNullable<MatchFinalResultsPayload['questionResults']>> {
+  const safeTotal = Math.max(0, totalQuestions);
+  const results = Object.fromEntries(
+    userIds.map((userId) => [
+      userId,
+      Array.from({ length: safeTotal }, () => null as QuestionResult),
+    ])
+  ) as NonNullable<MatchFinalResultsPayload['questionResults']>;
+
+  if (safeTotal === 0) return results;
+
+  const answersByQuestion = await Promise.all(
+    Array.from({ length: safeTotal }, (_, qIndex) => matchesRepo.listAnswersForQuestion(matchId, qIndex))
+  );
+
+  for (const [qIndex, answers] of answersByQuestion.entries()) {
+    for (const answer of answers) {
+      const playerResults = results[answer.user_id];
+      if (!playerResults) continue;
+      const answerQIndex = typeof answer.q_index === 'number' ? answer.q_index : qIndex;
+      if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
+      playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
+    }
+  }
+
+  return results;
+}
+
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
   winnerId: string | null;
@@ -444,6 +478,8 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     avgTimeMs: number | null;
   }>;
   unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
+  totalQuestions?: number;
+  questionResults?: Record<string, Array<'correct' | 'wrong' | null>>;
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
@@ -474,6 +510,18 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   const standings = buildStandings(players);
   const variant = resolveMatchVariant(match.state_payload, match.mode);
   const unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
+  let questionResults: MatchFinalResultsPayload['questionResults'];
+  if (variant !== 'friendly_party_quiz') {
+    try {
+      questionResults = await buildFinalQuestionResults(
+        matchId,
+        players.map((player) => player.user_id),
+        match.total_questions
+      );
+    } catch (err) {
+      logger.warn({ err, matchId }, 'Failed to build replay final question results');
+    }
+  }
   const seat1UserId = players.find((player) => player.seat === 1)?.user_id ?? null;
   const seat2UserId = players.find((player) => player.seat === 2)?.user_id ?? null;
   const fallbackWinnerId = standings[0]?.userId ?? seat1UserId ?? seat2UserId ?? players[0]?.user_id ?? null;
@@ -544,6 +592,8 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     winnerId: match.winner_user_id ?? derivedWinnerId,
     players: payloadPlayers,
     ...(variant === 'friendly_party_quiz' ? { standings } : {}),
+    totalQuestions: match.total_questions,
+    ...(questionResults ? { questionResults } : {}),
     unlockedAchievements,
     durationMs,
     resultVersion,

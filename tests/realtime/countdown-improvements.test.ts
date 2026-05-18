@@ -6,7 +6,12 @@ import {
   PUT_IN_ORDER_QUESTION_TIME_MS,
   getQuestionDurationMs,
 } from '../../src/realtime/possession-state.js';
-import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
+import {
+  calculateCountdownScore,
+  calculatePutInOrderScore,
+  calculateCluesScore,
+  clueIndexForScoring,
+} from '../../src/realtime/scoring.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -267,5 +272,15 @@ describe('calculateCluesScore', () => {
   it('returns zero for wrong answers and never drops correct answers below 20', () => {
     expect(calculateCluesScore(false, 0)).toBe(0);
     expect(calculateCluesScore(true, 10)).toBe(20);
+  });
+
+  it('scores by the latest revealed clue when wrong guesses reveal ahead of time', () => {
+    expect(clueIndexForScoring(0, 2)).toBe(1);
+    expect(calculateCluesScore(true, clueIndexForScoring(0, 2))).toBe(80);
+  });
+
+  it('keeps time-based scoring when timed clues are ahead of manual reveals', () => {
+    expect(clueIndexForScoring(3, 1)).toBe(3);
+    expect(calculateCluesScore(true, clueIndexForScoring(3, 1))).toBe(40);
   });
 });

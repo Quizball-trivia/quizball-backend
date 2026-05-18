@@ -1,6 +1,7 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import type { Json } from '../db/types.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPossessionState,
@@ -50,6 +51,32 @@ export interface CachedAnswer {
   clueIndex?: number | null;
 }
 
+function stringArrayFromPayload(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function numberFromPayload(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function buildAnswerPayload(answer: Pick<CachedAnswer,
+  'questionKind' | 'foundCount' | 'foundAnswerIds' | 'submittedOrderIds' | 'clueIndex'
+>): Json {
+  return {
+    questionKind: answer.questionKind,
+    foundCount: answer.foundCount ?? null,
+    foundAnswerIds: answer.foundAnswerIds ?? null,
+    submittedOrderIds: answer.submittedOrderIds ?? null,
+    clueIndex: answer.clueIndex ?? null,
+  };
+}
+
+export interface CachedClueReveal {
+  qIndex: number;
+  revealCount: number;
+}
+
 export interface CachedQuestion {
   qIndex: number;
   kind: MatchQuestionKind;
@@ -79,6 +106,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
+  clueReveals?: Record<string, CachedClueReveal>;
 }
 
 export function matchCacheKey(matchId: string): string {
@@ -196,13 +224,20 @@ function toCachedAnswer(rows: {
   phase_kind: MatchPhaseKind;
   phase_round: number | null;
   shooter_seat: number | null;
+  answer_payload: Json | null;
   answered_at: string;
 }[]): Record<string, CachedAnswer> {
   const answers: Record<string, CachedAnswer> = {};
   for (const row of rows) {
+    const payload = row.answer_payload && typeof row.answer_payload === 'object' && !Array.isArray(row.answer_payload)
+      ? row.answer_payload as Record<string, unknown>
+      : {};
+    const questionKind = typeof payload.questionKind === 'string'
+      ? payload.questionKind as MatchQuestionKind
+      : 'multipleChoice';
     answers[row.user_id] = {
       userId: row.user_id,
-      questionKind: 'multipleChoice',
+      questionKind,
       selectedIndex: row.selected_index,
       isCorrect: row.is_correct,
       timeMs: row.time_ms,
@@ -211,6 +246,10 @@ function toCachedAnswer(rows: {
       phaseRound: row.phase_round,
       shooterSeat: asSeat(row.shooter_seat),
       answeredAt: row.answered_at,
+      foundCount: numberFromPayload(payload.foundCount),
+      foundAnswerIds: stringArrayFromPayload(payload.foundAnswerIds),
+      submittedOrderIds: stringArrayFromPayload(payload.submittedOrderIds),
+      clueIndex: typeof payload.clueIndex === 'number' ? payload.clueIndex : null,
     };
   }
   return answers;
@@ -263,6 +302,7 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
+    clueReveals: {},
   };
 }
 
@@ -291,6 +331,7 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         const ht = cached.statePayload.halftime as { uiReadyAt?: unknown };
         ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
       }
+      cached.clueReveals ??= {};
       span.setAttribute('quizball.cache_hit', true);
       return cached;
     } catch (error) {

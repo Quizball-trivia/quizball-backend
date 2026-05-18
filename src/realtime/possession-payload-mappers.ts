@@ -44,7 +44,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
   totalPoints: number;
   foundCount?: number;
   foundAnswerIds?: string[];
-  submittedOrderIds?: string[];
+  submittedOrderIds: string[];
   clueIndex?: number | null;
 }> {
   const payload: Record<string, {
@@ -55,7 +55,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
     totalPoints: number;
     foundCount?: number;
     foundAnswerIds?: string[];
-    submittedOrderIds?: string[];
+    submittedOrderIds: string[];
     clueIndex?: number | null;
   }> = {};
 
@@ -70,7 +70,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
       totalPoints: player.totalPoints,
       foundCount: answer.foundCount,
       foundAnswerIds: answer.foundAnswerIds,
-      submittedOrderIds: answer.submittedOrderIds,
+      submittedOrderIds: answer.submittedOrderIds ?? [],
       clueIndex: answer.clueIndex ?? null,
     };
   }
@@ -107,7 +107,7 @@ export function buildCachedAnswerAckPayload(cache: MatchCache, userId: string): 
     shooterSeat: question.shooterSeat,
     foundCount: answer.foundCount,
     clueIndex: answer.clueIndex,
-    submittedOrderIds: answer.submittedOrderIds,
+    submittedOrderIds: answer.questionKind === 'putInOrder' ? (answer.submittedOrderIds ?? []) : answer.submittedOrderIds,
   };
 }
 

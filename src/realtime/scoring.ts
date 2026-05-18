@@ -56,3 +56,9 @@ export function calculateCluesScore(isCorrect: boolean, clueIndex: number): numb
   const normalizedIndex = Math.max(0, Math.floor(clueIndex));
   return Math.max(20, 100 - normalizedIndex * 20);
 }
+
+export function clueIndexForScoring(timedClueIndex: number, revealedClueCount: number): number {
+  const normalizedTimedIndex = Math.max(0, Math.floor(timedClueIndex));
+  const normalizedRevealIndex = Math.max(0, Math.floor(revealedClueCount) - 1);
+  return Math.max(normalizedTimedIndex, normalizedRevealIndex);
+}

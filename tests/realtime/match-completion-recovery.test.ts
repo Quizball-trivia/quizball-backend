@@ -7,6 +7,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 const getMatchMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
+const listAnswersForQuestionMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
 const getMatchOutcomeMock = vi.fn();
 const settleCompletedRankedMatchMock = vi.fn();
@@ -59,6 +60,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
   },
 }));
 
@@ -216,6 +218,7 @@ describe('match completion recovery on replay', () => {
     fakeRedisStore.values.clear();
     listUnlockedForMatchMock.mockResolvedValue({});
     listMatchPlayersMock.mockResolvedValue(PLAYERS);
+    listAnswersForQuestionMock.mockResolvedValue([]);
     getActiveMatchForUserMock.mockResolvedValue(null);
     awardCompletedMatchXpMock.mockResolvedValue(undefined);
   });

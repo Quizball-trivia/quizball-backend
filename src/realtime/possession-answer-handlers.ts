@@ -20,6 +20,7 @@ import {
   clueIndexForTimeMs,
   countdownMatch,
   fuzzyMatchesAnswer,
+  shouldFinalizeWrongCluesGuess,
 } from './possession-answer-matching.js';
 import {
   emitMatchBusy,
@@ -556,28 +557,45 @@ export async function handlePossessionCluesAnswer(
       : 1;
     const clueIndex = clueIndexForScoring(timedClueIndex, existingRevealCount);
     const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
+    const expectedCount = getExpectedUserIds(cache).length;
+    const currentAnswerCountBefore = answerCount(cache);
     if (!isCorrect && !giveUp) {
       const revealCount = clamp(
         Math.max(existingRevealCount, timedClueIndex + 2),
         1,
         question.evaluation.clues.length
       );
-      cache.clueReveals ??= {};
-      cache.clueReveals[socket.data.user.id] = {
-        qIndex,
-        revealCount,
-      };
-      await setMatchCache(cache);
-
-      return {
-        kind: 'wrongGuess',
-        ack: {
-          matchId,
+      const shouldCommitWrongGuess = shouldFinalizeWrongCluesGuess({
+        clueCount: question.evaluation.clues.length,
+        currentAnswerCount: currentAnswerCountBefore,
+        expectedCount,
+        existingRevealCount,
+        timedClueIndex,
+      });
+      if (shouldCommitWrongGuess) {
+        cache.clueReveals ??= {};
+        cache.clueReveals[socket.data.user.id] = {
           qIndex,
-          clueIndex: timedClueIndex,
           revealCount,
-        },
-      };
+        };
+      } else {
+        cache.clueReveals ??= {};
+        cache.clueReveals[socket.data.user.id] = {
+          qIndex,
+          revealCount,
+        };
+        await setMatchCache(cache);
+
+        return {
+          kind: 'wrongGuess',
+          ack: {
+            matchId,
+            qIndex,
+            clueIndex: timedClueIndex,
+            revealCount,
+          },
+        };
+      }
     }
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 
@@ -595,7 +613,6 @@ export async function handlePossessionCluesAnswer(
       clueIndex,
     };
 
-    const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
     await setMatchCache(cache);
 

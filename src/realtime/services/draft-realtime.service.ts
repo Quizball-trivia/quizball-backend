@@ -8,13 +8,12 @@ import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
+import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
+const DRAFT_AUTO_BAN_MS = 16000;
 const AI_LOBBY_KEY_TTL_SEC = 7200;
-
-// Process-local timer guard for delayed AI bans (safe for single-instance deployment).
-const pendingAiBanTimers = new Map<string, NodeJS.Timeout>();
 
 async function startMatchFromDraft(
   io: QuizballServer,
@@ -77,10 +76,20 @@ function getAiBanDelayMs(): number {
 }
 
 function clearPendingAiBanTimer(lobbyId: string): void {
-  const timer = pendingAiBanTimers.get(lobbyId);
-  if (!timer) return;
-  clearTimeout(timer);
-  pendingAiBanTimers.delete(lobbyId);
+  void cancelRealtimeTimer('draft_ai_ban', lobbyId).catch((error) => {
+    logger.warn({ error, lobbyId }, 'Failed to cancel draft AI ban timer');
+  });
+}
+
+function clearPendingAutoBanTimer(lobbyId: string): void {
+  void cancelRealtimeTimer('draft_auto_ban', lobbyId).catch((error) => {
+    logger.warn({ error, lobbyId }, 'Failed to cancel draft auto-ban timer');
+  });
+}
+
+function clearDraftTimers(lobbyId: string): void {
+  clearPendingAiBanTimer(lobbyId);
+  clearPendingAutoBanTimer(lobbyId);
 }
 
 async function resolveRankedAiUserId(
@@ -122,7 +131,7 @@ function getFirstDraftActorId(
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') {
-    clearPendingAiBanTimer(lobbyId);
+    clearDraftTimers(lobbyId);
     return;
   }
 
@@ -130,7 +139,7 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
   if (bans.length < 2) return;
 
-  clearPendingAiBanTimer(lobbyId);
+  clearDraftTimers(lobbyId);
   const bannedIds = new Set(bans.map((ban) => ban.category_id));
   const remaining = categories.filter((category) => !bannedIds.has(category.id));
   if (remaining.length !== 1) {
@@ -153,56 +162,157 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 
-function scheduleRankedAiBan(io: QuizballServer, lobbyId: string, aiUserId: string): void {
+export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
+  clearPendingAutoBanTimer(lobbyId);
+
+  void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + DRAFT_AUTO_BAN_MS), {
+    kind: 'draft_auto_ban',
+    lobbyId,
+  }).catch((error) => {
+    logger.error({ error, lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Failed to schedule draft auto-ban timer');
+  });
+  logger.debug({ lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Scheduled automatic draft ban fallback');
+}
+
+export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Promise<void> {
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') return;
+
+    const [categories, bans, members] = await Promise.all([
+      lobbiesService.getLobbyCategories(lobbyId),
+      lobbiesRepo.listLobbyCategoryBans(lobbyId),
+      lobbiesRepo.listMembersWithUser(lobbyId),
+    ]);
+    if (members.length !== 2 || bans.length >= 2 || categories.length === 0) return;
+
+    const aiUserId = lobby.mode === 'ranked'
+      ? await resolveRankedAiUserId(lobbyId, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+    const expectedUserId = getNextActorId(members, bans, firstActorUserId);
+    if (bans.some((ban) => ban.user_id === expectedUserId)) return;
+
+    const bannedIds = new Set(bans.map((ban) => ban.category_id));
+    const candidates = categories.filter((category) => !bannedIds.has(category.id));
+    const autoChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!autoChoice) return;
+
+    let inserted = false;
+    try {
+      await lobbiesRepo.insertLobbyCategoryBan(lobbyId, expectedUserId, autoChoice.id);
+      inserted = true;
+    } catch (error) {
+      logger.warn({ error, lobbyId, userId: expectedUserId }, 'Failed to insert automatic draft ban');
+    }
+
+    if (inserted) {
+      io.to(`lobby:${lobbyId}`).emit('draft:banned', {
+        actorId: expectedUserId,
+        categoryId: autoChoice.id,
+      });
+      logger.info(
+        { lobbyId, userId: expectedUserId, categoryId: autoChoice.id, delayMs: DRAFT_AUTO_BAN_MS },
+        'Draft ban applied automatically after timeout'
+      );
+    }
+
+    await completeDraftIfReady(io, lobbyId);
+
+    const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (updatedBans.length < 2) {
+      scheduleDraftAutoBan(io, lobbyId);
+    }
+  } catch (error) {
+    logger.error({ error, lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Scheduled automatic draft ban callback failed');
+  }
+}
+
+function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): void {
   clearPendingAiBanTimer(lobbyId);
   const delayMs = getAiBanDelayMs();
 
-  const timer = setTimeout(() => {
-    void (async () => {
-      try {
-        const lobby = await lobbiesRepo.getById(lobbyId);
-        if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
-
-        const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-        const hasAiMember = members.some((member) => member.user_id === aiUserId);
-        if (!hasAiMember) return;
-
-        const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-        if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
-
-        const categories = await lobbiesService.getLobbyCategories(lobbyId);
-        const bannedIds = new Set(bans.map((ban) => ban.category_id));
-        const candidates = categories.filter((category) => !bannedIds.has(category.id));
-        const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
-        if (!aiChoice) return;
-
-        try {
-          await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
-        } catch (error) {
-          logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
-          return;
-        }
-
-        io.to(`lobby:${lobbyId}`).emit('draft:banned', {
-          actorId: aiUserId,
-          categoryId: aiChoice.id,
-        });
-        logger.info(
-          { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
-          'Draft ban applied (AI)'
-        );
-
-        await completeDraftIfReady(io, lobbyId);
-      } catch (error) {
-        logger.error({ error, lobbyId, aiUserId, delayMs }, 'Scheduled AI draft ban callback failed');
-      } finally {
-        pendingAiBanTimers.delete(lobbyId);
-      }
-    })();
-  }, delayMs);
-
-  pendingAiBanTimers.set(lobbyId, timer);
+  void scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(Date.now() + delayMs), {
+    kind: 'draft_ai_ban',
+    lobbyId,
+    aiUserId,
+  }).catch((error) => {
+    logger.error({ error, lobbyId, aiUserId, delayMs }, 'Failed to schedule draft AI ban timer');
+  });
   logger.debug({ lobbyId, aiUserId, delayMs }, 'Scheduled delayed AI draft ban');
+}
+
+export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, aiUserId: string): Promise<void> {
+  const delayMs = 0;
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
+
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const hasAiMember = members.some((member) => member.user_id === aiUserId);
+    if (!hasAiMember) return;
+
+    const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    const categories = await lobbiesService.getLobbyCategories(lobbyId);
+    const bannedIds = new Set(bans.map((ban) => ban.category_id));
+    const candidates = categories.filter((category) => !bannedIds.has(category.id));
+    const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!aiChoice) return;
+
+    try {
+      await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+    } catch (error) {
+      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
+      return;
+    }
+
+    io.to(`lobby:${lobbyId}`).emit('draft:banned', {
+      actorId: aiUserId,
+      categoryId: aiChoice.id,
+    });
+    logger.info(
+      { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
+      'Draft ban applied (AI)'
+    );
+
+    await completeDraftIfReady(io, lobbyId);
+  } catch (error) {
+    logger.error({ error, lobbyId, aiUserId, delayMs }, 'Scheduled AI draft ban callback failed');
+  }
+}
+
+export async function resumeActiveDraftTimers(io: QuizballServer, lobbyId: string): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') {
+    clearDraftTimers(lobbyId);
+    return;
+  }
+
+  const [categories, bans, members] = await Promise.all([
+    lobbiesService.getLobbyCategories(lobbyId),
+    lobbiesRepo.listLobbyCategoryBans(lobbyId),
+    lobbiesRepo.listMembersWithUser(lobbyId),
+  ]);
+  if (members.length !== 2 || categories.length === 0) return;
+
+  if (bans.length >= 2) {
+    await completeDraftIfReady(io, lobbyId);
+    return;
+  }
+
+  scheduleDraftAutoBan(io, lobbyId);
+
+  if (lobby.mode !== 'ranked') return;
+  const aiUserId = await resolveRankedAiUserId(lobbyId, members);
+  if (!aiUserId) return;
+
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  const expectedUserId = getNextActorId(members, bans, firstActorUserId);
+  if (expectedUserId === aiUserId && !bans.some((ban) => ban.user_id === aiUserId)) {
+    scheduleRankedAiBan(io, lobbyId, aiUserId);
+  }
 }
 
 export const draftRealtimeService = {
@@ -272,6 +382,10 @@ export const draftRealtimeService = {
     });
 
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (updatedBans.length < 2) {
+      scheduleDraftAutoBan(io, lobbyId);
+    }
+
     const isRankedVsAi = lobby.mode === 'ranked' && aiUserId !== null;
     if (isRankedVsAi && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
       scheduleRankedAiBan(io, lobbyId, aiUserId);

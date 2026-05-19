@@ -45,6 +45,7 @@ import {
   handlePossessionCluesAnswer,
   handlePossessionCountdownGuess,
   emitPossessionStateToSocket,
+  ensurePossessionActiveTimers,
   handlePossessionAnswer,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
@@ -54,6 +55,7 @@ import {
 import {
   emitPartyQuizState,
   emitPartyQuizStateToSocket,
+  ensurePartyQuizActiveTimer,
   handlePartyQuizAnswer,
   handlePartyQuizReadyForNextQuestion,
   resumePartyQuizQuestion,
@@ -575,6 +577,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
         winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit';
       } | null
     )?.winnerDecisionMethod ?? null;
+  const explicitNoWinnerForfeit = winnerDecisionMethod === 'forfeit' && match.winner_user_id === null;
 
   let rankedOutcome = null;
   if (match.mode === 'ranked') {
@@ -584,7 +587,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
-    winnerId: match.winner_user_id ?? derivedWinnerId,
+    winnerId: explicitNoWinnerForfeit ? null : (match.winner_user_id ?? derivedWinnerId),
     players: payloadPlayers,
     ...(variant === 'friendly_party_quiz' ? { standings } : {}),
     totalQuestions: match.total_questions,
@@ -893,8 +896,10 @@ export const matchRealtimeService = {
     });
     if (variant === 'friendly_party_quiz') {
       await emitPartyQuizStateToSocket(socket, match.id);
+      await ensurePartyQuizActiveTimer(io, match.id);
     } else {
       await emitPossessionStateToSocket(socket, match.id);
+      await ensurePossessionActiveTimers(io, match.id);
     }
 
     const redis = getRedisClient();
@@ -1106,8 +1111,10 @@ export const matchRealtimeService = {
         });
         if (variant === 'friendly_party_quiz') {
           await emitPartyQuizStateToSocket(socket, match.id);
+          await ensurePartyQuizActiveTimer(io, match.id);
         } else {
           await emitPossessionStateToSocket(socket, match.id);
+          await ensurePossessionActiveTimers(io, match.id);
         }
 
         if (!redis) return;
@@ -1229,6 +1236,11 @@ export const matchRealtimeService = {
     socket: QuizballSocket,
     payload: MatchFinalResultsAckPayload
   ): Promise<void> {
+    socket.leave(`match:${payload.matchId}`);
+    if (socket.data.matchId === payload.matchId) {
+      socket.data.matchId = undefined;
+    }
+
     const redis = getRedisClient();
     if (!redis) return;
 
@@ -1521,9 +1533,6 @@ export const matchRealtimeService = {
 
         const resultVersion = Date.now();
         const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
-        if (finalPayload) {
-          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
-        }
 
         await redis.del(rankedAiMatchKey(matchId));
         await redis.set(matchForfeitKey(matchId), winnerId ?? 'draw', { EX: FORFEIT_TTL_SEC });
@@ -1536,6 +1545,9 @@ export const matchRealtimeService = {
             )
           )
         );
+        if (finalPayload) {
+          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+        }
       } finally {
         await redis.del(matchGraceKey(matchId));
         await redis.del(matchPauseKey(matchId));

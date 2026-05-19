@@ -246,17 +246,19 @@ export const rankedService = {
       };
     }
 
-    if (!match.winner_user_id) {
+    const rankedContext = parseRankedContext(match.ranked_context);
+    const winnerDecisionMethod = parseWinnerDecisionMethod(match.state_payload);
+    const bothForfeit = !match.winner_user_id && winnerDecisionMethod === 'forfeit';
+    if (!match.winner_user_id && !bothForfeit) {
       logger.warn({ matchId }, 'Ranked settlement skipped: no winner_user_id for completed match');
       return null;
     }
 
-    const rankedContext = parseRankedContext(match.ranked_context);
-    const winnerDecisionMethod = parseWinnerDecisionMethod(match.state_payload);
     logger.info({
       matchId,
       winnerUserId: match.winner_user_id,
       winnerDecisionMethod,
+      bothForfeit,
       humanPlayerIds: humanPlayers.map((player) => player.user_id),
       reusedExistingOutcome: existing.length >= humanPlayers.length,
       rankedContext,
@@ -306,7 +308,7 @@ export const rankedService = {
         ? (profileByUser.get(opponent.user_id) ?? await rankedRepo.ensureProfile(opponent.user_id))
         : null;
 
-      const isWin = match.winner_user_id === player.user_id;
+      const isWin = !bothForfeit && match.winner_user_id === player.user_id;
       const result: 'win' | 'loss' = isWin ? 'win' : 'loss';
       const oldRp = profile.rp;
       const oldTier = tierFromRp(oldRp);

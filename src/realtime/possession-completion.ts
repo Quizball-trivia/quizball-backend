@@ -292,6 +292,20 @@ export async function completePossessionMatch(
     sideEffectsMs: Date.now() - completionSideEffectsStartedAt,
   }, 'Emitting match:final_results payload');
 
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.del(rankedAiMatchKey(matchId));
+    await Promise.all(
+      finalPlayers.map((player) =>
+        redis.set(
+          lastMatchKey(player.user_id),
+          JSON.stringify({ matchId, resultVersion }),
+          { EX: LAST_MATCH_REPLAY_TTL_SEC }
+        )
+      )
+    );
+  }
+
   io.to(`match:${matchId}`).emit('match:final_results', finalResultsPayload);
 
   fireAndForget('evaluateObjectivesAfterPossessionFinalResults', async () => {
@@ -325,20 +339,6 @@ export async function completePossessionMatch(
       goals: state.goals,
       penaltyGoals: state.penaltyGoals,
     });
-  }
-
-  const redis = getRedisClient();
-  if (redis) {
-    await redis.del(rankedAiMatchKey(matchId));
-    await Promise.all(
-      finalPlayers.map((player) =>
-        redis.set(
-          lastMatchKey(player.user_id),
-          JSON.stringify({ matchId, resultVersion }),
-          { EX: LAST_MATCH_REPLAY_TTL_SEC }
-        )
-      )
-    );
   }
 
   clearAiMaps(matchId);

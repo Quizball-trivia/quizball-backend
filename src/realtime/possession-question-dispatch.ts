@@ -14,6 +14,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { questionTimerKey } from './match-keys.js';
+import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   ensureHalftimeCategories,
   fireAndForget,
@@ -51,7 +52,6 @@ import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
-const questionTimers = new Map<string, NodeJS.Timeout>();
 const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
 const GOAL_ROUND_READY_ACK_CEILING_MS =
   FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
@@ -68,30 +68,26 @@ export function handlePossessionReadyForNextQuestion(
 
 export function clearQuestionTimer(matchId: string, qIndex: number): void {
   const key = questionTimerKey(matchId, qIndex);
-  const timer = questionTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  questionTimers.delete(key);
+  void cancelRealtimeTimer('possession_question', key).catch((error) => {
+    logger.warn({ error, matchId, qIndex }, 'Failed to cancel possession question timer');
+  });
 }
 
 function scheduleQuestionTimeout(
-  io: QuizballServer,
+  _io: QuizballServer,
   matchId: string,
   qIndex: number,
   deadlineAt: Date
 ): void {
   const key = questionTimerKey(matchId, qIndex);
-  const existing = questionTimers.get(key);
-  if (existing) clearTimeout(existing);
-
-  const delayMs = Math.max(0, deadlineAt.getTime() - Date.now()) + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS;
-  const timeout = setTimeout(() => {
-    void resolvePossessionRound(io, matchId, qIndex, true).catch((error) => {
-      logger.error({ error, matchId, qIndex }, 'Failed to resolve possession round after timeout');
-    });
-  }, delayMs);
-
-  questionTimers.set(key, timeout);
+  const dueAt = new Date(deadlineAt.getTime() + TIMEOUT_RESOLVE_GRACE_MS + TIMEOUT_RESOLVE_BUFFER_MS);
+  void scheduleRealtimeTimer('possession_question', key, dueAt, {
+    kind: 'possession_question',
+    matchId,
+    qIndex,
+  }).catch((error) => {
+    logger.error({ error, matchId, qIndex }, 'Failed to schedule possession question timer');
+  });
 }
 
 export async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
@@ -521,5 +517,41 @@ export async function resumePossessionMatchQuestion(
     logger.warn({ error, matchId, qIndex }, 'Failed to reschedule possession AI answer after resume');
   });
 
+  return true;
+}
+
+export async function ensurePossessionActiveTimers(
+  io: QuizballServer,
+  matchId: string
+): Promise<boolean> {
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return false;
+
+  const state = cache.statePayload;
+  if (state.phase === 'HALFTIME') {
+    scheduleHalftimeTimeout(io, matchId);
+    schedulePossessionAiHalftimeBan(io, matchId);
+    return true;
+  }
+
+  const currentQuestion = cache.currentQuestion;
+  if (!currentQuestion) return false;
+
+  const deadlineAt = currentQuestion.deadlineAt ? new Date(currentQuestion.deadlineAt) : null;
+  if (!deadlineAt || Number.isNaN(deadlineAt.getTime())) {
+    await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
+    return true;
+  }
+
+  scheduleQuestionTimeout(io, matchId, currentQuestion.qIndex, deadlineAt);
+  void schedulePossessionAiAnswer(io, matchId, currentQuestion.qIndex, {
+    questionKind: currentQuestion.kind,
+    evaluation: currentQuestion.evaluation,
+    phaseKind: currentQuestion.phaseKind,
+    phaseRound: currentQuestion.phaseRound ?? 0,
+    shooterSeat: currentQuestion.shooterSeat,
+  }).catch((error) => {
+    logger.warn({ error, matchId, qIndex: currentQuestion.qIndex }, 'Failed to ensure possession AI answer timer');
+  });
   return true;
 }

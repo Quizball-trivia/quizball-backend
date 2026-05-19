@@ -16,6 +16,7 @@ import { progressionService } from '../modules/progression/progression.service.j
 import { acquireLock, releaseLock } from './locks.js';
 import { calculatePoints } from './scoring.js';
 import { getRedisClient } from './redis.js';
+import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import { createReadyGateRegistry } from './ready-gate.js';
 import {
   questionTimerKey,
@@ -41,7 +42,6 @@ const PARTY_QUESTION_REVEAL_MS = 3000;
 const PARTY_ROUND_READY_ACK_CEILING_MS = 8000;
 const FORFEIT_TTL_SEC = 600;
 
-const questionTimers = new Map<string, NodeJS.Timeout>();
 const pendingReadyGates = createReadyGateRegistry<number>();
 
 function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
@@ -165,10 +165,9 @@ export async function emitPartyQuizStateToSocket(
 
 export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): void {
   const key = questionTimerKey(matchId, qIndex);
-  const timer = questionTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  questionTimers.delete(key);
+  void cancelRealtimeTimer('party_question', key).catch((error) => {
+    logger.warn({ error, matchId, qIndex }, 'Failed to cancel party quiz question timer');
+  });
 }
 
 export function handlePartyQuizReadyForNextQuestion(
@@ -184,18 +183,19 @@ function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: n
 }
 
 function schedulePartyQuizTimeoutAt(
-  io: QuizballServer,
+  _io: QuizballServer,
   matchId: string,
   qIndex: number,
   deadlineAt: Date
 ): void {
   cancelPartyQuizQuestionTimer(matchId, qIndex);
-  const timer = setTimeout(() => {
-    void resolvePartyQuizRound(io, matchId, qIndex, true).catch((error) => {
-      logger.error({ error, matchId, qIndex }, 'Failed to resolve party quiz round from timeout');
-    });
-  }, Math.max(0, deadlineAt.getTime() - Date.now()));
-  questionTimers.set(questionTimerKey(matchId, qIndex), timer);
+  void scheduleRealtimeTimer('party_question', questionTimerKey(matchId, qIndex), deadlineAt, {
+    kind: 'party_question',
+    matchId,
+    qIndex,
+  }).catch((error) => {
+    logger.error({ error, matchId, qIndex }, 'Failed to schedule party quiz question timer');
+  });
 }
 
 function computeResumedDeadlineAt(
@@ -345,9 +345,6 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       const resultVersion = Date.now();
       const payload = await buildFinalResultsPayload(matchId, resultVersion);
-      if (payload) {
-        io.to(`match:${matchId}`).emit('match:final_results', payload);
-      }
 
       const redis = getRedisClient();
       if (redis) {
@@ -368,6 +365,10 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
             )
           )
         );
+      }
+
+      if (payload) {
+        io.to(`match:${matchId}`).emit('match:final_results', payload);
       }
     } finally {
       await releaseLock(lockKey, lock.token);
@@ -549,6 +550,31 @@ export async function resumePartyQuizQuestion(
     shooterSeat: null,
     attackerSeat: null,
   });
+
+  schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
+  return true;
+}
+
+export async function ensurePartyQuizActiveTimer(
+  io: QuizballServer,
+  matchId: string
+): Promise<boolean> {
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match || match.status !== 'active') return false;
+  if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    return false;
+  }
+
+  const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+  const qIndex = state.currentQuestion?.qIndex;
+  if (typeof qIndex !== 'number') return false;
+
+  const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
+  const deadlineAt = timing?.deadline_at ? new Date(timing.deadline_at) : null;
+  if (!deadlineAt || Number.isNaN(deadlineAt.getTime())) {
+    await resolvePartyQuizRound(io, matchId, qIndex, true);
+    return true;
+  }
 
   schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
   return true;

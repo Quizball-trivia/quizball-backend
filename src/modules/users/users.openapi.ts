@@ -101,7 +101,6 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
         200: { description: 'Onboarding reset', schema: userResponseOpenApiSchema },
         401: { description: 'Not authenticated', schema: errorResponseSchema },
         403: { description: 'Insufficient permissions', schema: errorResponseSchema },
-        404: { description: 'Not available outside local environment', schema: errorResponseSchema },
       },
     });
   }

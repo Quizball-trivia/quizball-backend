@@ -624,6 +624,33 @@ export async function handlePossessionCluesAnswer(
 
   const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
 
+  fireAndForget('insertMatchAnswer(handlePossessionCluesAnswer)', async () => {
+    await matchesRepo.insertMatchAnswerIfMissing({
+      matchId,
+      qIndex,
+      userId: socket.data.user.id,
+      selectedIndex: null,
+      isCorrect: committed.isCorrect,
+      timeMs: committed.answerTimeMs,
+      pointsEarned: committed.pointsEarned,
+      answerPayload: buildAnswerPayload({
+        questionKind: committed.question.kind,
+        clueIndex: committed.clueIndex,
+      }),
+      phaseKind: committed.question.phaseKind,
+      phaseRound: committed.question.phaseRound,
+      shooterSeat: committed.question.shooterSeat,
+    });
+  });
+  fireAndForget('updatePlayerTotals(handlePossessionCluesAnswer)', async () => {
+    await matchesRepo.updatePlayerTotals(
+      matchId,
+      socket.data.user.id,
+      committed.pointsEarned,
+      committed.isCorrect
+    );
+  });
+
   socket.emit('match:answer_ack', {
     matchId,
     qIndex,

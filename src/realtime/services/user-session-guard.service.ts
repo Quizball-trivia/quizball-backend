@@ -34,26 +34,27 @@ type ResolveContext = {
 };
 
 function toSnapshot(context: ResolveContext): SessionStatePayload {
+  const primaryLobby = context.waitingLobbies[0] ?? context.activeLobbies[0] ?? null;
   const indicatorCount =
     Number(Boolean(context.activeMatch?.id)) +
     Number(Boolean(context.queueSearchId)) +
-    Number(context.waitingLobbies.length > 0);
+    Number(Boolean(primaryLobby));
 
   let state: SessionStatePayload['state'] = 'IDLE';
-  if (indicatorCount > 1 || context.waitingLobbies.length > 1) {
+  if (indicatorCount > 1 || context.waitingLobbies.length + context.activeLobbies.length > 1) {
     state = 'CORRUPT_MULTI_STATE';
   } else if (context.activeMatch?.id) {
     state = 'IN_ACTIVE_MATCH';
   } else if (context.queueSearchId) {
     state = 'IN_QUEUE';
-  } else if (context.waitingLobbies.length > 0) {
+  } else if (primaryLobby) {
     state = 'IN_WAITING_LOBBY';
   }
 
   return {
     state,
     activeMatchId: context.activeMatch?.id ?? null,
-    waitingLobbyId: context.waitingLobbies[0]?.id ?? null,
+    waitingLobbyId: primaryLobby?.id ?? null,
     queueSearchId: context.queueSearchId,
     openLobbyIds: context.openLobbies.map((lobby) => lobby.id),
     resolvedAt: new Date().toISOString(),
@@ -282,12 +283,17 @@ async function cleanupOpenLobbies(
   io: QuizballServer,
   userId: string,
   options: {
+    keepLobbyId?: string;
     keepWaitingLobbyId?: string;
     preserveActiveMatchId?: string | null;
   } = {}
 ): Promise<void> {
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
   for (const lobby of openLobbies) {
+    if (options.keepLobbyId && lobby.id === options.keepLobbyId) {
+      continue;
+    }
+
     if (lobby.status === 'waiting') {
       if (options.keepWaitingLobbyId && lobby.id === options.keepWaitingLobbyId) {
         continue;
@@ -459,12 +465,13 @@ export const userSessionGuardService = {
       return this.resolveState(userId);
     }
 
-    const keepWaitingLobbyId = context.waitingLobbies[0]?.id;
-    if (context.queueSearchId && keepWaitingLobbyId) {
+    const keepLobbyId = context.waitingLobbies[0]?.id ?? context.activeLobbies[0]?.id;
+    if (context.queueSearchId && keepLobbyId) {
       await cancelRankedQueueSearch(userId);
     }
     await cleanupOpenLobbies(io, userId, {
-      keepWaitingLobbyId,
+      keepLobbyId,
+      keepWaitingLobbyId: context.waitingLobbies[0]?.id,
       preserveActiveMatchId: null,
     });
     return this.resolveState(userId);

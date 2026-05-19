@@ -3,6 +3,7 @@ import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   getCachedPlayer,
   getMatchCacheOrRebuild,
@@ -31,7 +32,6 @@ type SendQuestionFn = (io: QuizballServer, matchId: string, qIndex: number, opts
 type ResolveAiUserFn = (matchId: string) => Promise<string | null>;
 
 export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; resolveAiUserId: ResolveAiUserFn }) {
-  const halftimeTimers = new Map<string, NodeJS.Timeout>();
   const halftimeAiBanTimers = new Map<string, NodeJS.Timeout>();
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
@@ -57,11 +57,9 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   }
 
   function clearHalftimeTimer(matchId: string): void {
-    const timer = halftimeTimers.get(matchId);
-    if (timer) {
-      clearTimeout(timer);
-      halftimeTimers.delete(matchId);
-    }
+    void cancelRealtimeTimer('possession_halftime', matchId).catch((error) => {
+      logger.warn({ error, matchId }, 'Failed to cancel possession halftime timer');
+    });
     clearHalftimeAiBanTimer(matchId);
   }
 
@@ -252,24 +250,35 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     }
   }
 
-  function scheduleFinalizeHalftime(io: QuizballServer, matchId: string, delayMs: number): void {
+  function scheduleFinalizeHalftime(_io: QuizballServer, matchId: string, delayMs: number): void {
     clearHalftimeTimer(matchId);
-    const timer = setTimeout(() => {
-      void finalizeHalftime(io, matchId).catch((error) => {
-        logger.error({ error, matchId }, 'Failed to finalize halftime after both bans');
-      });
-    }, delayMs);
-    halftimeTimers.set(matchId, timer);
+    void scheduleRealtimeTimer('possession_halftime', matchId, new Date(Date.now() + delayMs), {
+      kind: 'possession_halftime',
+      matchId,
+    }).catch((error) => {
+      logger.error({ error, matchId }, 'Failed to schedule halftime post-ban finalize timer');
+    });
   }
 
-  function scheduleHalftimeTimeout(io: QuizballServer, matchId: string): void {
+  function scheduleHalftimeTimeout(_io: QuizballServer, matchId: string): void {
     clearHalftimeTimer(matchId);
-    const timer = setTimeout(() => {
-      void finalizeHalftime(io, matchId).catch((error) => {
-        logger.error({ error, matchId }, 'Failed to finalize halftime timer');
+    void (async () => {
+      const cache = await getMatchCacheOrRebuild(matchId);
+      const deadlineAtRaw = cache?.statePayload.phase === 'HALFTIME'
+        ? cache.statePayload.halftime.deadlineAt
+        : null;
+      const deadlineAtMs = deadlineAtRaw ? new Date(deadlineAtRaw).getTime() : Number.NaN;
+      const dueAt = Number.isFinite(deadlineAtMs)
+        ? new Date(deadlineAtMs)
+        : new Date(Date.now() + HALFTIME_DURATION_MS);
+
+      await scheduleRealtimeTimer('possession_halftime', matchId, dueAt, {
+        kind: 'possession_halftime',
+        matchId,
       });
-    }, HALFTIME_DURATION_MS);
-    halftimeTimers.set(matchId, timer);
+    })().catch((error) => {
+      logger.error({ error, matchId }, 'Failed to schedule halftime timer');
+    });
   }
 
   function schedulePossessionAiHalftimeBan(io: QuizballServer, matchId: string): void {

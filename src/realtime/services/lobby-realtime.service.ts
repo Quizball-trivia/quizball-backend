@@ -95,6 +95,25 @@ async function resolveRankedAiUserIdForDraft(
   return aiMember.userId;
 }
 
+function getFirstDraftActorId(
+  members: Array<{ user_id: string }>,
+  hostUserId: string,
+  aiUserId: string | null
+): string {
+  if (!aiUserId) return hostUserId;
+  return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
+}
+
+function getNextDraftActorId(
+  members: Array<{ user_id: string }>,
+  bans: Array<{ user_id: string }>,
+  firstActorUserId: string
+): string {
+  if (bans.length === 0) return firstActorUserId;
+  const lastActor = bans[bans.length - 1]?.user_id;
+  return members.find((member) => member.user_id !== lastActor)?.user_id ?? firstActorUserId;
+}
+
 async function tryAcquireDraftStartGuard(lobbyId: string): Promise<boolean> {
   const redis = getRedisClient();
   if (redis) {
@@ -377,6 +396,13 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         categories,
         turnUserId,
       });
+      void import('./draft-realtime.service.js')
+        .then(({ scheduleDraftAutoBan }) => {
+          scheduleDraftAutoBan(io, lobbyId);
+        })
+        .catch((error) => {
+          logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
+        });
       logger.info(
         { lobbyId, hostUserId: lobby.host_user_id, turnUserId, categoryCount: categories.length },
         'Draft started'
@@ -569,6 +595,55 @@ export const lobbyRealtimeService = {
     const state = await lobbiesService.buildLobbyState(newestLobby);
     socket.emit('lobby:state', state);
     logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
+  },
+
+  async rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+    const userId = socket.data.user.id;
+    const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+    const activeLobbies = openLobbies.filter((lobby) => lobby.status === 'active');
+    if (activeLobbies.length === 0) return;
+
+    const newestLobby = activeLobbies[0];
+    await attachUserSocketsToLobby(io, userId, newestLobby.id);
+    const [state, categories, bans, members] = await Promise.all([
+      lobbiesService.buildLobbyState(newestLobby),
+      lobbiesService.getLobbyCategories(newestLobby.id),
+      lobbiesRepo.listLobbyCategoryBans(newestLobby.id),
+      lobbiesRepo.listMembersWithUser(newestLobby.id),
+    ]);
+
+    socket.emit('lobby:state', state);
+
+    if (categories.length > 0 && members.length === 2) {
+      const aiUserId = newestLobby.mode === 'ranked'
+        ? await resolveRankedAiUserIdForDraft(newestLobby.id, members)
+        : null;
+      const firstActorUserId = getFirstDraftActorId(members, newestLobby.host_user_id, aiUserId);
+      const turnUserId = getNextDraftActorId(members, bans, firstActorUserId);
+
+      socket.emit('draft:start', {
+        lobbyId: newestLobby.id,
+        categories,
+        turnUserId,
+      });
+      for (const ban of bans) {
+        socket.emit('draft:banned', {
+          actorId: ban.user_id,
+          categoryId: ban.category_id,
+        });
+      }
+
+      void import('./draft-realtime.service.js')
+        .then(({ resumeActiveDraftTimers }) => resumeActiveDraftTimers(io, newestLobby.id))
+        .catch((error) => {
+          logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
+        });
+    }
+
+    logger.info(
+      { userId, lobbyId: newestLobby.id, categoryCount: categories.length, banCount: bans.length },
+      'Socket rejoined active draft lobby'
+    );
   },
 
   async createLobby(

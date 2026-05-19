@@ -231,8 +231,8 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
       difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
       type: questionTypeEnum.optional(),
       search: z.string().optional(),
-      page: z.string().optional(),
-      limit: z.string().optional(),
+      page: z.coerce.number().int().min(1).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
     responses: {
       200: { description: 'Paginated list of questions', schema: paginatedQuestionsResponseSchema },

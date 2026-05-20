@@ -120,25 +120,28 @@ async function cleanupStaleOrphanActiveMatch(
   // before it has rejoined match:<id>. During a normal page reload the match
   // room can be temporarily empty, so treating "no match sockets" as orphaned
   // here can incorrectly forfeit the reconnecting player's active match.
-  try {
-    const userSockets = await io.in(`user:${userId}`).fetchSockets();
-    if (userSockets.length > 0) {
-      logger.info(
-        {
-          userId,
-          matchId: activeMatch.id,
-          lobbyId: activeMatch.lobby_id,
-          startedAt: activeMatch.started_at,
-          staleByAge,
-          staleByNoSockets,
-          userSocketCount: userSockets.length,
-        },
-        'Session guard skipped stale orphan cleanup because user is reconnecting'
-      );
-      return;
+  // The bypass is scoped to the staleByNoSockets case only — a truly
+  // age-stale match should still be cleaned up regardless of reconnects.
+  if (staleByNoSockets && !staleByAge) {
+    try {
+      const userSockets = await io.in(`user:${userId}`).fetchSockets();
+      if (userSockets.length > 0) {
+        logger.info(
+          {
+            userId,
+            matchId: activeMatch.id,
+            lobbyId: activeMatch.lobby_id,
+            startedAt: activeMatch.started_at,
+            staleByNoSockets,
+            userSocketCount: userSockets.length,
+          },
+          'Session guard skipped staleByNoSockets cleanup because user is reconnecting'
+        );
+        return;
+      }
+    } catch (error) {
+      logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
     }
-  } catch (error) {
-    logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
   }
 
   if (activeMatch.mode === 'ranked') {

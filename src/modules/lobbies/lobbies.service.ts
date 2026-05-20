@@ -1,8 +1,9 @@
 import { lobbiesRepo } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
-import { NotFoundError, pickI18nText } from '../../core/index.js';
+import { logger, NotFoundError, pickI18nText } from '../../core/index.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
+import { rankedService } from '../ranked/ranked.service.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
@@ -13,15 +14,48 @@ function shuffle<T>(arr: T[]): T[] {
   return arr;
 }
 
-function toLobbyMember(row: LobbyMemberWithUser, hostUserId: string): LobbyMember {
+function toLobbyMember(
+  row: LobbyMemberWithUser,
+  hostUserId: string,
+  rankPointsByUserId: Map<string, number>
+): LobbyMember {
   return {
     userId: row.user_id,
     username: row.nickname ?? 'Player',
     avatarUrl: row.avatar_url,
     avatarCustomization: parseStoredAvatarCustomization(row.avatar_customization),
+    ...(rankPointsByUserId.has(row.user_id) ? { rankPoints: rankPointsByUserId.get(row.user_id) } : {}),
     isReady: row.is_ready,
     isHost: row.user_id === hostUserId,
   };
+}
+
+async function buildRankPointsByUserId(
+  lobby: LobbyRow,
+  members: LobbyMemberWithUser[]
+): Promise<Map<string, number>> {
+  if (lobby.mode !== 'ranked') return new Map();
+
+  const entries = await Promise.all(
+    members.map(async (member): Promise<[string, number] | null> => {
+      if (member.is_ai && typeof lobby.ranked_context?.aiAnchorRp === 'number') {
+        return [member.user_id, lobby.ranked_context.aiAnchorRp];
+      }
+
+      try {
+        const profile = await rankedService.ensureProfile(member.user_id);
+        return [member.user_id, profile.rp];
+      } catch (error) {
+        logger.warn(
+          { error, lobbyId: lobby.id, userId: member.user_id },
+          'Failed to include ranked RP in lobby state'
+        );
+        return null;
+      }
+    })
+  );
+
+  return new Map(entries.filter((entry): entry is [string, number] => entry !== null));
 }
 
 export const MIN_QUESTIONS_PER_CATEGORY = 5;
@@ -73,6 +107,7 @@ export function invalidateCategoryCache(): void {
 export const lobbiesService = {
   async buildLobbyState(lobby: LobbyRow): Promise<LobbyState> {
     const members = await lobbiesRepo.listMembersWithUser(lobby.id);
+    const rankPointsByUserId = await buildRankPointsByUserId(lobby, members);
     return {
       lobbyId: lobby.id,
       mode: lobby.mode,
@@ -87,7 +122,7 @@ export const lobbiesService = {
         friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
         friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
       },
-      members: members.map((m) => toLobbyMember(m, lobby.host_user_id)),
+      members: members.map((m) => toLobbyMember(m, lobby.host_user_id, rankPointsByUserId)),
     };
   },
 

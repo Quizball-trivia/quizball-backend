@@ -9,6 +9,14 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   },
 }));
 
+const ensureProfileMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: {
+    ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
+  },
+}));
+
 vi.mock('../../src/core/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/index.js')>();
   return {
@@ -27,6 +35,7 @@ import { lobbiesService } from '../../src/modules/lobbies/lobbies.service.js';
 describe('lobbiesService public/friendly helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ensureProfileMock.mockResolvedValue({ rp: 0 });
   });
 
   it('defaults legacy friendly game mode to friendly_possession in lobby state', async () => {
@@ -38,6 +47,9 @@ describe('lobbiesService public/friendly helpers', () => {
         joined_at: new Date().toISOString(),
         nickname: 'Host',
         avatar_url: null,
+        avatar_customization: null,
+        favorite_club: null,
+        is_ai: false,
       },
     ]);
 
@@ -102,5 +114,55 @@ describe('lobbiesService public/friendly helpers', () => {
       },
     ]);
     expect(lobbiesRepo.listPublicLobbies).toHaveBeenCalledWith({ limit: 20, joinableOnly: true });
+  });
+
+  it('includes ranked RP in active ranked lobby state after reconnect', async () => {
+    ensureProfileMock.mockResolvedValue({ rp: 875 });
+    (lobbiesRepo.listMembersWithUser as Mock).mockResolvedValue([
+      {
+        lobby_id: 'lobby-ranked',
+        user_id: 'host-1',
+        is_ready: true,
+        joined_at: new Date().toISOString(),
+        nickname: 'Host',
+        avatar_url: null,
+        avatar_customization: null,
+        favorite_club: null,
+        is_ai: false,
+      },
+      {
+        lobby_id: 'lobby-ranked',
+        user_id: 'ai-1',
+        is_ready: true,
+        joined_at: new Date().toISOString(),
+        nickname: 'AI',
+        avatar_url: null,
+        avatar_customization: null,
+        favorite_club: null,
+        is_ai: true,
+      },
+    ]);
+
+    const state = await lobbiesService.buildLobbyState({
+      id: 'lobby-ranked',
+      mode: 'ranked',
+      status: 'active',
+      invite_code: null,
+      display_name: 'Ranked',
+      is_public: false,
+      host_user_id: 'host-1',
+      game_mode: 'ranked_sim',
+      friendly_random: true,
+      friendly_category_a_id: null,
+      friendly_category_b_id: null,
+      ranked_context: { aiAnchorRp: 150 },
+    } as never);
+
+    expect(state.members).toEqual([
+      expect.objectContaining({ userId: 'host-1', rankPoints: 875 }),
+      expect.objectContaining({ userId: 'ai-1', rankPoints: 150 }),
+    ]);
+    expect(ensureProfileMock).toHaveBeenCalledWith('host-1');
+    expect(ensureProfileMock).not.toHaveBeenCalledWith('ai-1');
   });
 });

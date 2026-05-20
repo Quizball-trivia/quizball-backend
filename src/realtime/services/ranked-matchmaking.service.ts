@@ -511,14 +511,27 @@ export const rankedMatchmakingService = {
     });
   },
 
-  async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-    const userId = socket.data.user.id;
-    await withSpan('ranked.disconnect_cleanup', {
-      'quizball.user_id': userId,
-    }, async (span) => {
-      const redis = getRedisClient();
-      if (!redis) {
-        span.setAttribute('quizball.redis_available', false);
+	  async handleSocketDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+	    const userId = socket.data.user.id;
+	    await withSpan('ranked.disconnect_cleanup', {
+	      'quizball.user_id': userId,
+	    }, async (span) => {
+	      if (socket.data.matchId || socket.data.lobbyId) {
+	        span.setAttribute('quizball.skipped_due_to_active_session', true);
+	        logger.debug(
+	          {
+	            userId,
+	            matchId: socket.data.matchId ?? null,
+	            lobbyId: socket.data.lobbyId ?? null,
+	          },
+	          'Ranked disconnect cleanup skipped for active match/lobby socket'
+	        );
+	        return;
+	      }
+
+	      const redis = getRedisClient();
+	      if (!redis) {
+	        span.setAttribute('quizball.redis_available', false);
         return;
       }
 

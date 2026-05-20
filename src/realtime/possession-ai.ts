@@ -15,6 +15,7 @@ import {
 } from './match-cache.js';
 import { getRedisClient } from './redis.js';
 import { questionTimerKey, countdownPlayerKey } from './match-keys.js';
+import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints, calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from './scoring.js';
@@ -25,6 +26,9 @@ import {
 } from './possession-state.js';
 
 type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTimeout: boolean) => Promise<void>;
+
+const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
+const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 
 function getAiAnswerDelayMs(): number {
   // AI "thinking" time after options become visible to players.
@@ -57,7 +61,6 @@ function getAiClueIndex(clueCount: number, aiCorrectness: number): number {
 export function createPossessionAi(resolveRound: ResolveRoundFn) {
   const aiUserIdByMatch = new Map<string, string | null>();
   const aiCorrectnessForMatch = new Map<string, number>();
-  const aiAnswerTimers = new Map<string, NodeJS.Timeout>();
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
     fn().catch((error) => {
@@ -112,14 +115,13 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
   function clearAiAnswerTimer(matchId: string, qIndex: number): void {
     const key = questionTimerKey(matchId, qIndex);
-    const timer = aiAnswerTimers.get(key);
-    if (!timer) return;
-    clearTimeout(timer);
-    aiAnswerTimers.delete(key);
+    void cancelRealtimeTimer('possession_ai_answer', key).catch((error) => {
+      logger.warn({ error, matchId, qIndex }, 'Failed to cancel possession AI answer timer');
+    });
   }
 
   async function schedulePossessionAiAnswer(
-    io: QuizballServer,
+    _io: QuizballServer,
     matchId: string,
     qIndex: number,
     options: {
@@ -128,6 +130,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       phaseKind: MatchPhaseKind;
       phaseRound: number;
       shooterSeat: Seat | null;
+      playableAt?: Date;
+      deadlineAt?: Date;
     }
   ): Promise<void> {
     const key = questionTimerKey(matchId, qIndex);
@@ -146,233 +150,279 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const expectedUserIds = getExpectedUserIds(cache);
     if (!expectedUserIds.includes(aiUserId)) return;
 
-    const aiThinkTimeMs = getAiAnswerDelayMs();
-    const preAnswerDelayMs = getQuestionPreAnswerDelayMs({
-      qIndex,
-      state: cache.statePayload,
-    });
-    const delayMs = preAnswerDelayMs + aiThinkTimeMs;
+    const nowMs = Date.now();
+    const playableAtMs = options.playableAt?.getTime();
+    const deadlineAtMs = options.deadlineAt?.getTime();
+    const hasAuthoritativeWindow =
+      Number.isFinite(playableAtMs) &&
+      Number.isFinite(deadlineAtMs) &&
+      (deadlineAtMs as number) > (playableAtMs as number);
+    const preAnswerDelayMs = hasAuthoritativeWindow
+      ? Math.max(0, (playableAtMs as number) - nowMs)
+      : getQuestionPreAnswerDelayMs({
+          qIndex,
+          state: cache.statePayload,
+        });
     const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
-    const timeout = setTimeout(() => {
-      const stored = aiAnswerTimers.get(key);
-      if (stored) {
-        clearTimeout(stored);
-        aiAnswerTimers.delete(key);
+    const aiThinkTimeMs = getAiAnswerDelayMs();
+    const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
+      ? options.evaluation.clues.length
+      : undefined;
+    const plannedClueIndex = typeof clueCountForDelay === 'number'
+      ? getAiClueIndex(clueCountForDelay, aiCorrectness)
+      : null;
+    const questionTimeMsForDelay = hasAuthoritativeWindow
+      ? Math.max(0, (deadlineAtMs as number) - (playableAtMs as number))
+      : getQuestionDurationMs(options.questionKind, clueCountForDelay);
+    let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
+      ? (() => {
+          const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
+          return clamp(
+            Math.round(clueSliceMs * plannedClueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
+            0,
+            questionTimeMsForDelay
+          );
+        })()
+      : clamp(aiThinkTimeMs, 0, questionTimeMsForDelay);
+    let dueAtMs = nowMs + preAnswerDelayMs + plannedAnswerTimeMs;
+    if (hasAuthoritativeWindow) {
+      const latestDueAtMs = Math.max(nowMs + AI_ANSWER_MIN_RESUME_DELAY_MS, (deadlineAtMs as number) - AI_ANSWER_TIMEOUT_BUFFER_MS);
+      if (dueAtMs > latestDueAtMs) {
+        dueAtMs = latestDueAtMs;
+        plannedAnswerTimeMs = clamp(dueAtMs - nowMs - preAnswerDelayMs, 0, questionTimeMsForDelay);
+      }
+    }
+    await scheduleRealtimeTimer('possession_ai_answer', key, new Date(dueAtMs), {
+      kind: 'possession_ai_answer',
+      matchId,
+      qIndex,
+      plannedAnswerTimeMs,
+      plannedClueIndex,
+    });
+    logger.debug(
+      {
+        matchId,
+        qIndex,
+        questionKind: options.questionKind,
+        authoritativeWindow: hasAuthoritativeWindow,
+        preAnswerDelayMs,
+        plannedAnswerTimeMs,
+        dueAt: new Date(dueAtMs).toISOString(),
+        deadlineAt: hasAuthoritativeWindow ? new Date(deadlineAtMs as number).toISOString() : null,
+      },
+      'Scheduled possession AI answer'
+    );
+  }
+
+  async function runPossessionAiAnswer(
+    io: QuizballServer,
+    matchId: string,
+    qIndex: number,
+    plannedAnswerTimeMs: number,
+    plannedClueIndex: number | null
+  ): Promise<void> {
+    try {
+      const aiUserId = await resolveAiUserIdForMatch(matchId);
+      if (!aiUserId) return;
+
+      const lockKey = `lock:match:${matchId}:answer`;
+      const lock = await acquireLock(lockKey, 2000);
+      if (!lock.acquired || !lock.token) return;
+
+      let committed: {
+        questionKind: MatchQuestionKind;
+        selectedIndex: number | null;
+        isCorrect: boolean;
+        answerTimeMs: number;
+        pointsEarned: number;
+        totalPoints: number;
+        phaseKind: MatchPhaseKind;
+        phaseRound: number | null;
+        shooterSeat: Seat | null;
+        answerCount: number;
+        expectedCount: number;
+        foundCount?: number;
+        foundAnswerIds?: string[];
+        submittedOrderIds?: string[];
+        clueIndex?: number | null;
+      } | null = null;
+
+      try {
+        const fresh = await getMatchCacheOrRebuild(matchId);
+        if (!fresh || fresh.status !== 'active') return;
+        if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) return;
+        if (hasUserAnswered(fresh, aiUserId)) return;
+
+        const expected = getExpectedUserIds(fresh);
+        if (!expected.includes(aiUserId)) return;
+
+        const question = fresh.currentQuestion;
+        const aiPlayer = getCachedPlayer(fresh, aiUserId);
+        if (!aiPlayer) return;
+
+        const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
+        const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
+          ? question.evaluation.clues.length
+          : undefined;
+        const questionTimeMs = getQuestionDurationMs(question.kind, clueCountForDuration);
+        const answerTimeMs = clamp(plannedAnswerTimeMs, 0, questionTimeMs);
+        let isCorrect = false;
+        let selectedIndex: number | null = null;
+        let pointsEarned = 0;
+        let foundCount: number | undefined;
+        let foundAnswerIds: string[] | undefined;
+        let submittedOrderIds: string[] | undefined;
+        let clueIndex: number | null | undefined;
+
+        if (question.kind === 'multipleChoice' && question.evaluation.kind === 'multipleChoice') {
+          const optionCount = question.questionDTO.kind === 'multipleChoice'
+            ? question.questionDTO.options.length
+            : 4;
+          isCorrect = Math.random() < aiCorrectness;
+          selectedIndex = isCorrect
+            ? question.evaluation.correctIndex
+            : pickIncorrectIndex(question.evaluation.correctIndex, optionCount);
+          pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
+        } else if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
+          const totalGroups = question.evaluation.answerGroups.length;
+          foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
+          foundAnswerIds = question.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
+          selectedIndex = foundCount;
+          pointsEarned = calculateCountdownScore(foundCount, totalGroups);
+          isCorrect = false;
+        } else if (question.kind === 'putInOrder' && question.evaluation.kind === 'putInOrder') {
+          const correctOrderIds = [...question.evaluation.items]
+            .sort((left, right) => left.sortValue - right.sortValue)
+            .map((item) => item.id);
+          isCorrect = Math.random() < aiCorrectness;
+          selectedIndex = null;
+          // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
+          // by 0.55 so an AI that "would have" got the question right
+          // (aiCorrectness=1.0) still places ~55% of items in the correct
+          // prefix on a miss — partial credit that feels reasonable
+          // without making wrong answers nearly as rewarding as right
+          // ones. Mirrors the 0.75 factor used for countdown questions.
+          foundCount = isCorrect
+            ? question.evaluation.items.length
+            : Math.min(
+              question.evaluation.items.length - 1,
+              Math.max(0, Math.round(question.evaluation.items.length * aiCorrectness * 0.55))
+            );
+          submittedOrderIds = [...correctOrderIds];
+          if (!isCorrect && submittedOrderIds.length > 1) {
+            const fixedPrefix = submittedOrderIds.slice(0, foundCount);
+            const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
+            submittedOrderIds = [...fixedPrefix, ...shuffledTail];
+          }
+          pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
+        } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
+          isCorrect = Math.random() < aiCorrectness;
+          clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
+          selectedIndex = null;
+          pointsEarned = calculateCluesScore(isCorrect, clueIndex);
+        }
+
+        const answer: CachedAnswer = {
+          userId: aiUserId,
+          questionKind: question.kind,
+          selectedIndex,
+          isCorrect,
+          timeMs: answerTimeMs,
+          pointsEarned,
+          phaseKind: question.phaseKind,
+          phaseRound: question.phaseRound,
+          shooterSeat: question.shooterSeat,
+          answeredAt: new Date().toISOString(),
+          foundCount,
+          foundAnswerIds,
+          submittedOrderIds,
+          clueIndex,
+        };
+
+        fresh.answers[aiUserId] = answer;
+        if (question.kind === 'multipleChoice') {
+          aiPlayer.totalPoints += pointsEarned;
+          if (isCorrect) aiPlayer.correctAnswers += 1;
+        }
+
+        if (question.kind === 'countdown' && foundAnswerIds && foundAnswerIds.length > 0) {
+          const redisClient = getRedisClient();
+          if (redisClient?.isOpen) {
+            const countdownKey = countdownPlayerKey(matchId, aiUserId);
+            await redisClient.sAdd(countdownKey, foundAnswerIds);
+            await redisClient.expire(countdownKey, 120);
+          }
+        }
+
+        await setMatchCache(fresh);
+
+        committed = {
+          questionKind: question.kind,
+          selectedIndex,
+          isCorrect,
+          answerTimeMs,
+          pointsEarned,
+          totalPoints: aiPlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+          phaseKind: question.phaseKind,
+          phaseRound: question.phaseRound,
+          shooterSeat: question.shooterSeat,
+          answerCount: answerCount(fresh),
+          expectedCount: expected.length,
+          foundCount,
+          foundAnswerIds,
+          submittedOrderIds,
+          clueIndex,
+        };
+      } finally {
+        await releaseLock(lockKey, lock.token);
       }
 
-      void (async () => {
-        try {
-          const lockKey = `lock:match:${matchId}:answer`;
-          const lock = await acquireLock(lockKey, 2000);
-          if (!lock.acquired || !lock.token) return;
+      if (!committed) return;
 
-          let committed: {
-            questionKind: MatchQuestionKind;
-            selectedIndex: number | null;
-            isCorrect: boolean;
-            answerTimeMs: number;
-            pointsEarned: number;
-            totalPoints: number;
-            phaseKind: MatchPhaseKind;
-            phaseRound: number | null;
-            shooterSeat: Seat | null;
-            answerCount: number;
-            expectedCount: number;
-            foundCount?: number;
-            foundAnswerIds?: string[];
-            submittedOrderIds?: string[];
-            clueIndex?: number | null;
-          } | null = null;
+      if (committed.questionKind === 'multipleChoice') {
+        fireAndForget('insertMatchAnswer(ai)', async () => {
+          await matchesRepo.insertMatchAnswerIfMissing({
+            matchId,
+            qIndex,
+            userId: aiUserId,
+            selectedIndex: committed.selectedIndex,
+            isCorrect: committed.isCorrect,
+            timeMs: committed.answerTimeMs,
+            pointsEarned: committed.pointsEarned,
+            phaseKind: committed.phaseKind,
+            phaseRound: committed.phaseRound,
+            shooterSeat: committed.shooterSeat,
+          });
+        });
 
-          try {
-            const fresh = await getMatchCacheOrRebuild(matchId);
-            if (!fresh || fresh.status !== 'active') return;
-            if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) return;
-            if (hasUserAnswered(fresh, aiUserId)) return;
+        fireAndForget('updatePlayerTotals(ai)', async () => {
+          await matchesRepo.updatePlayerTotals(
+            matchId,
+            aiUserId,
+            committed.pointsEarned,
+            committed.isCorrect
+          );
+        });
+      }
 
-            const expected = getExpectedUserIds(fresh);
-            if (!expected.includes(aiUserId)) return;
+      if (committed.phaseKind !== 'penalty' && committed.questionKind !== 'countdown') {
+        io.to(`match:${matchId}`).emit('match:opponent_answered', {
+          matchId,
+          qIndex,
+          questionKind: committed.questionKind,
+          opponentTotalPoints: committed.totalPoints,
+          pointsEarned: committed.pointsEarned,
+          isCorrect: committed.isCorrect,
+          selectedIndex: committed.selectedIndex,
+        });
+      }
 
-            const question = fresh.currentQuestion;
-            const aiPlayer = getCachedPlayer(fresh, aiUserId);
-            if (!aiPlayer) return;
-
-            const clueCountForDuration = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
-              ? options.evaluation.clues.length
-              : undefined;
-            const questionTimeMs = getQuestionDurationMs(options.questionKind, clueCountForDuration);
-            let answerTimeMs = clamp(aiThinkTimeMs, 0, questionTimeMs);
-            let isCorrect = false;
-            let selectedIndex: number | null = null;
-            let pointsEarned = 0;
-            let foundCount: number | undefined;
-            let foundAnswerIds: string[] | undefined;
-            let submittedOrderIds: string[] | undefined;
-            let clueIndex: number | null | undefined;
-
-            if (options.questionKind === 'multipleChoice' && options.evaluation.kind === 'multipleChoice') {
-              const optionCount = question.questionDTO.kind === 'multipleChoice'
-                ? question.questionDTO.options.length
-                : 4;
-              isCorrect = Math.random() < aiCorrectness;
-              selectedIndex = isCorrect
-                ? options.evaluation.correctIndex
-                : pickIncorrectIndex(options.evaluation.correctIndex, optionCount);
-              pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
-            } else if (options.questionKind === 'countdown' && options.evaluation.kind === 'countdown') {
-              const totalGroups = options.evaluation.answerGroups.length;
-              foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
-              foundAnswerIds = options.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
-              selectedIndex = foundCount;
-              pointsEarned = calculateCountdownScore(foundCount, totalGroups);
-              isCorrect = false;
-            } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
-              const correctOrderIds = [...options.evaluation.items]
-                .sort((left, right) => left.sortValue - right.sortValue)
-                .map((item) => item.id);
-              isCorrect = Math.random() < aiCorrectness;
-              selectedIndex = null;
-              // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
-              // by 0.55 so an AI that "would have" got the question right
-              // (aiCorrectness=1.0) still places ~55% of items in the correct
-              // prefix on a miss — partial credit that feels reasonable
-              // without making wrong answers nearly as rewarding as right
-              // ones. Mirrors the 0.75 factor used for countdown questions.
-              foundCount = isCorrect
-                ? options.evaluation.items.length
-                : Math.min(
-                  options.evaluation.items.length - 1,
-                  Math.max(0, Math.round(options.evaluation.items.length * aiCorrectness * 0.55))
-                );
-              submittedOrderIds = [...correctOrderIds];
-              if (!isCorrect && submittedOrderIds.length > 1) {
-                const fixedPrefix = submittedOrderIds.slice(0, foundCount);
-                const shuffledTail = submittedOrderIds.slice(foundCount).reverse();
-                submittedOrderIds = [...fixedPrefix, ...shuffledTail];
-              }
-              pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
-            } else if (options.questionKind === 'clues' && options.evaluation.kind === 'clues') {
-              isCorrect = Math.random() < aiCorrectness;
-              clueIndex = getAiClueIndex(options.evaluation.clues.length, aiCorrectness);
-              selectedIndex = null;
-              if (options.evaluation.clues.length > 0) {
-                const clueSliceMs = questionTimeMs / options.evaluation.clues.length;
-                answerTimeMs = clamp(
-                  Math.round(clueSliceMs * clueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
-                  0,
-                  questionTimeMs
-                );
-              }
-              pointsEarned = calculateCluesScore(isCorrect, clueIndex);
-            }
-
-            const answer: CachedAnswer = {
-              userId: aiUserId,
-              questionKind: question.kind,
-              selectedIndex,
-              isCorrect,
-              timeMs: answerTimeMs,
-              pointsEarned,
-              phaseKind: question.phaseKind,
-              phaseRound: question.phaseRound,
-              shooterSeat: question.shooterSeat,
-              answeredAt: new Date().toISOString(),
-              foundCount,
-              foundAnswerIds,
-              submittedOrderIds,
-              clueIndex,
-            };
-
-            fresh.answers[aiUserId] = answer;
-            if (options.questionKind === 'multipleChoice') {
-              aiPlayer.totalPoints += pointsEarned;
-              if (isCorrect) aiPlayer.correctAnswers += 1;
-            }
-
-            // Write AI countdown found answers to per-player Redis Set
-            // so resolution can merge them alongside the human player's Set.
-            if (options.questionKind === 'countdown' && foundAnswerIds && foundAnswerIds.length > 0) {
-              const redisClient = getRedisClient();
-              if (redisClient?.isOpen) {
-                const countdownKey = countdownPlayerKey(matchId, aiUserId);
-                await redisClient.sAdd(countdownKey, foundAnswerIds);
-                await redisClient.expire(countdownKey, 120);
-              }
-            }
-
-            await setMatchCache(fresh);
-
-            committed = {
-              questionKind: question.kind,
-              selectedIndex,
-              isCorrect,
-              answerTimeMs,
-              pointsEarned,
-              totalPoints: aiPlayer.totalPoints + (options.questionKind === 'multipleChoice' ? 0 : pointsEarned),
-              phaseKind: question.phaseKind,
-              phaseRound: question.phaseRound,
-              shooterSeat: question.shooterSeat,
-              answerCount: answerCount(fresh),
-              expectedCount: expected.length,
-              foundCount,
-              foundAnswerIds,
-              submittedOrderIds,
-              clueIndex,
-            };
-          } finally {
-            await releaseLock(lockKey, lock.token);
-          }
-
-          if (!committed) return;
-
-          if (committed.questionKind === 'multipleChoice') {
-            fireAndForget('insertMatchAnswer(ai)', async () => {
-              await matchesRepo.insertMatchAnswerIfMissing({
-                matchId,
-                qIndex,
-                userId: aiUserId,
-                selectedIndex: committed.selectedIndex,
-                isCorrect: committed.isCorrect,
-                timeMs: committed.answerTimeMs,
-                pointsEarned: committed.pointsEarned,
-                phaseKind: committed.phaseKind,
-                phaseRound: committed.phaseRound,
-                shooterSeat: committed.shooterSeat,
-              });
-            });
-
-            fireAndForget('updatePlayerTotals(ai)', async () => {
-              await matchesRepo.updatePlayerTotals(
-                matchId,
-                aiUserId,
-                committed.pointsEarned,
-                committed.isCorrect
-              );
-            });
-          }
-
-          if (committed.phaseKind !== 'penalty' && committed.questionKind !== 'countdown') {
-            io.to(`match:${matchId}`).emit('match:opponent_answered', {
-              matchId,
-              qIndex,
-              questionKind: committed.questionKind,
-              opponentTotalPoints: committed.totalPoints,
-              pointsEarned: committed.pointsEarned,
-              isCorrect: committed.isCorrect,
-              selectedIndex: committed.selectedIndex,
-            });
-          }
-
-          if (committed.questionKind !== 'countdown' && committed.answerCount >= committed.expectedCount) {
-            await resolveRound(io, matchId, qIndex, false);
-          }
-        } catch (error) {
-          logger.warn({ error, matchId, qIndex }, 'Possession AI answer scheduling failed');
-        }
-      })();
-    }, delayMs);
-
-    aiAnswerTimers.set(key, timeout);
+      if (committed.questionKind !== 'countdown' && committed.answerCount >= committed.expectedCount) {
+        await resolveRound(io, matchId, qIndex, false);
+      }
+    } catch (error) {
+      logger.warn({ error, matchId, qIndex }, 'Possession AI answer failed');
+    }
   }
 
   function clearAiMaps(matchId: string): void {
@@ -384,6 +434,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     resolveAiUserIdForMatch,
     resolveAiCorrectnessForMatch,
     schedulePossessionAiAnswer,
+    runPossessionAiAnswer,
     clearAiAnswerTimer,
     clearAiMaps,
   };

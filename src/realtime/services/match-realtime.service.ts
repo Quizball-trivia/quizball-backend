@@ -13,7 +13,6 @@ import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
   MatchAnswerPayload,
-  MatchChanceCardUsePayload,
   MatchCluesAnswerPayload,
   MatchCountdownGuessPayload,
   MatchFinalResultsAckPayload,
@@ -46,8 +45,8 @@ import {
   handlePossessionCluesAnswer,
   handlePossessionCountdownGuess,
   emitPossessionStateToSocket,
+  ensurePossessionActiveTimers,
   handlePossessionAnswer,
-  handlePossessionChanceCardUse,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
   handlePossessionReadyForNextQuestion,
@@ -56,17 +55,20 @@ import {
 import {
   emitPartyQuizState,
   emitPartyQuizStateToSocket,
+  ensurePartyQuizActiveTimer,
   handlePartyQuizAnswer,
   handlePartyQuizReadyForNextQuestion,
   resumePartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
-import type { AchievementUnlockPayload } from '../socket.types.js';
+import type { AchievementUnlockPayload, MatchFinalResultsPayload, MatchForfeitPendingPayload } from '../socket.types.js';
 import {
   matchPresenceKey,
   matchDisconnectKey,
   matchPauseKey,
   matchGraceKey,
+  matchResumeCountdownKey,
   matchReconnectCountKey,
+  matchForfeitPendingUserKey,
   lastMatchKey,
 } from '../match-keys.js';
 import { buildStandings } from '../match-utils.js';
@@ -75,12 +77,17 @@ import { acquireLock, releaseLock } from '../locks.js';
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_START_COUNTDOWN_SEC = 5;
+const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
 const GRACE_TTL_SEC = 65;
+const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
+const FORFEIT_PENDING_TTL_SEC = 60;
 const FRIENDLY_REMATCH_LOBBY_TTL_MS = 30 * 60 * 1000;
 const FRIENDLY_REMATCH_LOCK_TTL_MS = 5000;
+
+type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
 
 type LastMatchReplay = {
   matchId: string;
@@ -428,6 +435,33 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
   return nextCount;
 }
 
+async function buildFinalQuestionResults(
+  matchId: string,
+  userIds: string[],
+  totalQuestions: number
+): Promise<NonNullable<MatchFinalResultsPayload['questionResults']>> {
+  const safeTotal = Math.max(0, totalQuestions);
+  const results = Object.fromEntries(
+    userIds.map((userId) => [
+      userId,
+      Array.from({ length: safeTotal }, () => null as QuestionResult),
+    ])
+  ) as NonNullable<MatchFinalResultsPayload['questionResults']>;
+
+  if (safeTotal === 0) return results;
+
+  const answers = await matchesRepo.listAnswersForMatch(matchId);
+  for (const answer of answers) {
+    const playerResults = results[answer.user_id];
+    if (!playerResults) continue;
+    const answerQIndex = answer.q_index;
+    if (answerQIndex < 0 || answerQIndex >= safeTotal) continue;
+    playerResults[answerQIndex] = answer.is_correct ? 'correct' : 'wrong';
+  }
+
+  return results;
+}
+
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
   winnerId: string | null;
@@ -438,6 +472,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     goals?: number;
     penaltyGoals?: number;
   }>;
+  participants?: MatchFinalResultsPayload['participants'];
   standings?: Array<{
     userId: string;
     rank: number;
@@ -446,6 +481,8 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
     avgTimeMs: number | null;
   }>;
   unlockedAchievements?: Record<string, AchievementUnlockPayload[]>;
+  totalQuestions?: number;
+  questionResults?: Record<string, Array<'correct' | 'wrong' | null>>;
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
@@ -474,8 +511,21 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   }
 
   const standings = buildStandings(players);
+  const participants = await buildParticipantPayloads(players, match.mode, match.ranked_context);
   const variant = resolveMatchVariant(match.state_payload, match.mode);
   const unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
+  let questionResults: MatchFinalResultsPayload['questionResults'];
+  if (variant !== 'friendly_party_quiz') {
+    try {
+      questionResults = await buildFinalQuestionResults(
+        matchId,
+        players.map((player) => player.user_id),
+        match.total_questions
+      );
+    } catch (err) {
+      logger.warn({ err, matchId }, 'Failed to build replay final question results');
+    }
+  }
   const seat1UserId = players.find((player) => player.seat === 1)?.user_id ?? null;
   const seat2UserId = players.find((player) => player.seat === 2)?.user_id ?? null;
   const fallbackWinnerId = standings[0]?.userId ?? seat1UserId ?? seat2UserId ?? players[0]?.user_id ?? null;
@@ -534,6 +584,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
         winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit';
       } | null
     )?.winnerDecisionMethod ?? null;
+  const explicitNoWinnerForfeit = winnerDecisionMethod === 'forfeit' && match.winner_user_id === null;
 
   let rankedOutcome = null;
   if (match.mode === 'ranked') {
@@ -543,9 +594,12 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
-    winnerId: match.winner_user_id ?? derivedWinnerId,
+    winnerId: explicitNoWinnerForfeit ? null : (match.winner_user_id ?? derivedWinnerId),
     players: payloadPlayers,
+    participants,
     ...(variant === 'friendly_party_quiz' ? { standings } : {}),
+    totalQuestions: match.total_questions,
+    ...(questionResults ? { questionResults } : {}),
     unlockedAchievements,
     durationMs,
     resultVersion,
@@ -566,6 +620,54 @@ async function emitFinalResultsToMatchParticipants(
     ...players.map((player) => `user:${player.user_id}`),
   ];
   io.to(rooms).emit('match:final_results', payload);
+}
+
+function buildReconnectLimitForfeitPendingPayload(matchId: string): MatchForfeitPendingPayload {
+  return {
+    matchId,
+    reason: 'reconnect_limit',
+    message: 'You lost the match after exceeding the reconnect limit. Finalizing results...',
+  };
+}
+
+function buildOpponentForfeitPendingPayload(
+  matchId: string,
+  reason: 'opponent_forfeit' | 'opponent_reconnect_limit'
+): MatchForfeitPendingPayload {
+  return {
+    matchId,
+    reason,
+    message: reason === 'opponent_forfeit'
+      ? 'Opponent forfeited. Finalizing results...'
+      : 'Opponent did not reconnect in time. Finalizing results...',
+  };
+}
+
+async function setForfeitPendingForUser(userId: string, payload: MatchForfeitPendingPayload): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  await redis.set(matchForfeitPendingUserKey(userId), JSON.stringify(payload), { EX: FORFEIT_PENDING_TTL_SEC });
+}
+
+function parseForfeitPendingPayload(raw: string): MatchForfeitPendingPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<MatchForfeitPendingPayload>;
+    if (
+      !parsed.matchId ||
+      !(
+        parsed.reason === 'reconnect_limit' ||
+        parsed.reason === 'opponent_forfeit' ||
+        parsed.reason === 'opponent_reconnect_limit'
+      )
+    ) return null;
+    return {
+      matchId: parsed.matchId,
+      reason: parsed.reason,
+      message: parsed.message ?? 'You lost the match. Finalizing results...',
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function createOrJoinFriendlyRematchLobby(
@@ -802,6 +904,7 @@ export async function beginMatchForLobby(
     matchId,
     seconds: countdownSec,
     startsAt,
+    reason: 'kickoff',
   });
   logger.info(
     { matchId, seconds: countdownSec, startsAt },
@@ -832,6 +935,20 @@ export const matchRealtimeService = {
     const match = await matchesRepo.getActiveMatchForUser(userId);
     if (!match) return;
 
+    const redis = getRedisClient();
+    const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
+    const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
+    const variant = resolveMatchVariant(match.state_payload, match.mode);
+
+    if (redis && isPaused && wasDisconnected) {
+      const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
+      const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
+      const remainingReconnects = toRemainingReconnects(await getDisconnectCount(match.id, userId));
+      appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
+      await emitRejoinAvailable(socket, match, userId, graceMs, remainingReconnects);
+      return;
+    }
+
     socket.join(`match:${match.id}`);
     socket.data.matchId = match.id;
 
@@ -839,7 +956,6 @@ export const matchRealtimeService = {
     const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode, match.ranked_context);
     const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
     const mySeat = participants.find((player) => player.user_id === userId)?.seat;
-    const variant = resolveMatchVariant(match.state_payload, match.mode);
     socket.emit('match:start', {
       matchId: match.id,
       mode: match.mode,
@@ -848,27 +964,41 @@ export const matchRealtimeService = {
       opponent,
       participants: participantPayloads,
     });
-    if (variant === 'friendly_party_quiz') {
-      await emitPartyQuizStateToSocket(socket, match.id);
-    } else {
-      await emitPossessionStateToSocket(socket, match.id);
-    }
 
-    const redis = getRedisClient();
     if (redis) {
       await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
     }
 
-    if (!redis) return;
+    if (redis && isPaused) {
+      const disconnectedPlayers: string[] = [];
+      for (const participant of participants) {
+        if (participant.user_id === userId) continue;
+        const disconnected = await redis.exists(matchDisconnectKey(match.id, participant.user_id));
+        if (disconnected) disconnectedPlayers.push(participant.user_id);
+      }
+      const disconnectedUserId = disconnectedPlayers[0];
+      if (disconnectedUserId) {
+        const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
+        const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
+        const remainingReconnects = toRemainingReconnects(
+          await getDisconnectCount(match.id, disconnectedUserId)
+        );
+        socket.emit('match:opponent_disconnected', {
+          matchId: match.id,
+          opponentId: disconnectedUserId,
+          graceMs,
+          remainingReconnects,
+        });
+      }
+      return;
+    }
 
-    const disconnectKey = matchDisconnectKey(match.id, userId);
-    const pauseKey = matchPauseKey(match.id);
-    const isPaused = (await redis.exists(pauseKey)) === 1;
-    const wasDisconnected = (await redis.exists(disconnectKey)) === 1;
-
-    if (isPaused && wasDisconnected) {
-      appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
-      await this.resumePausedMatch(io, match.id, userId);
+    if (variant === 'friendly_party_quiz') {
+      await emitPartyQuizStateToSocket(socket, match.id);
+      await ensurePartyQuizActiveTimer(io, match.id);
+    } else {
+      await emitPossessionStateToSocket(socket, match.id);
+      await ensurePossessionActiveTimers(io, match.id);
     }
   },
 
@@ -979,6 +1109,11 @@ export const matchRealtimeService = {
           ]),
           rankedAiMatchKey(activeMatch.id),
         ];
+        const opponentPendingPayload = buildOpponentForfeitPendingPayload(activeMatch.id, 'opponent_forfeit');
+        for (const player of roster) {
+          if (player.user_id === userId) continue;
+          io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+        }
         const finalized = await finalizeMatchAsForfeit({
           matchId: activeMatch.id,
           forfeitingUserId: userId,
@@ -1061,18 +1196,20 @@ export const matchRealtimeService = {
           opponent,
           participants: participantPayloads,
         });
-        if (variant === 'friendly_party_quiz') {
-          await emitPartyQuizStateToSocket(socket, match.id);
-        } else {
-          await emitPossessionStateToSocket(socket, match.id);
+
+        const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
+        const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
+        if (redis && isPaused && wasDisconnected) {
+          await this.resumePausedMatch(io, match.id, userId);
+          return;
         }
 
-        if (!redis) return;
-
-        const isPaused = (await redis.exists(matchPauseKey(match.id))) === 1;
-        const wasDisconnected = (await redis.exists(matchDisconnectKey(match.id, userId))) === 1;
-        if (isPaused && wasDisconnected) {
-          await this.resumePausedMatch(io, match.id, userId);
+        if (variant === 'friendly_party_quiz') {
+          await emitPartyQuizStateToSocket(socket, match.id);
+          await ensurePartyQuizActiveTimer(io, match.id);
+        } else {
+          await emitPossessionStateToSocket(socket, match.id);
+          await ensurePossessionActiveTimers(io, match.id);
         }
       },
       {
@@ -1127,7 +1264,23 @@ export const matchRealtimeService = {
     const payload = await buildFinalResultsPayload(replay.matchId, replay.resultVersion);
     if (payload) {
       socket.emit('match:final_results', payload);
+      await redis.del(matchForfeitPendingUserKey(userId));
     }
+  },
+
+  async emitPendingForfeitIfAny(socket: QuizballSocket): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) return;
+
+    const userId = socket.data.user.id;
+    const raw = await redis.get(matchForfeitPendingUserKey(userId));
+    if (!raw) return;
+    const payload = parseForfeitPendingPayload(raw);
+    if (!payload) {
+      await redis.del(matchForfeitPendingUserKey(userId));
+      return;
+    }
+    socket.emit('match:forfeit_pending', payload);
   },
 
   async handlePlayAgain(
@@ -1186,18 +1339,41 @@ export const matchRealtimeService = {
     socket: QuizballSocket,
     payload: MatchFinalResultsAckPayload
   ): Promise<void> {
-    const redis = getRedisClient();
-    if (!redis) return;
-
     const userId = socket.data.user.id;
-    const rawReplay = await redis.get(lastMatchKey(userId));
-    if (!rawReplay) return;
+    const redis = getRedisClient();
 
-    const replay = parseLastMatchReplay(rawReplay);
-    if (replay.matchId !== payload.matchId || replay.resultVersion !== payload.resultVersion) {
-      return;
+    // Validate against the stored replay BEFORE clearing the socket's
+    // matchId binding — a bogus ACK (no replay match, wrong resultVersion)
+    // must not unbind an in-progress match, otherwise handleMatchDisconnect
+    // loses the matchId it needs for pause/forfeit bookkeeping. When the
+    // replay exists and doesn't match, ignore the ACK; when it exists and
+    // matches, delete it as part of the cleanup; when it's absent (Redis
+    // down or already consumed), proceed (idempotent ACK).
+    if (redis) {
+      const rawReplay = await redis.get(lastMatchKey(userId));
+      if (rawReplay) {
+        const replay = parseLastMatchReplay(rawReplay);
+        if (replay.matchId !== payload.matchId || replay.resultVersion !== payload.resultVersion) {
+          logger.warn(
+            {
+              userId,
+              payloadMatchId: payload.matchId,
+              payloadResultVersion: payload.resultVersion,
+              replayMatchId: replay.matchId,
+              replayResultVersion: replay.resultVersion,
+            },
+            'Ignoring final_results_ack with mismatched matchId/resultVersion'
+          );
+          return;
+        }
+        await redis.del(lastMatchKey(userId));
+      }
     }
-    await redis.del(lastMatchKey(userId));
+
+    socket.leave(`match:${payload.matchId}`);
+    if (socket.data.matchId === payload.matchId) {
+      socket.data.matchId = undefined;
+    }
   },
 
   async resumePausedMatch(io: QuizballServer, matchId: string, userId: string): Promise<void> {
@@ -1233,25 +1409,81 @@ export const matchRealtimeService = {
       return;
     }
 
-    await redis.del([matchPauseKey(matchId), matchGraceKey(matchId)]);
+    await redis.del(matchGraceKey(matchId));
 
-    io.to(`match:${matchId}`).emit('match:resume', {
-      matchId,
-      nextQIndex: match.current_q_index,
+    const countdownEndsAtMs = Date.now() + MATCH_RESUME_COUNTDOWN_MS;
+    const countdownKey = matchResumeCountdownKey(matchId);
+    const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
+      NX: true,
+      EX: RESUME_COUNTDOWN_TTL_SEC,
     });
 
-    const activeQuestion = await matchesRepo.getMatchQuestion(matchId, match.current_q_index);
-    if (activeQuestion) {
-      const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
-        ? pauseStartedAtMs
-        : Date.now();
-      const variant = resolveMatchVariant(match.state_payload, match.mode);
-      const resumed = variant === 'friendly_party_quiz'
-        ? await resumePartyQuizQuestion(io, matchId, match.current_q_index, effectivePauseStartedAtMs)
-        : await resumePossessionMatchQuestion(io, matchId, match.current_q_index, effectivePauseStartedAtMs);
-      if (resumed) return;
+    if (acquired !== 'OK') {
+      const rawEndsAt = await redis.get(countdownKey);
+      const existingEndsAtMs = Number(rawEndsAt);
+      if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+        io.to(`user:${userId}`).emit('match:countdown', {
+          matchId,
+          seconds: Math.max(1, Math.ceil((existingEndsAtMs - Date.now()) / 1000)),
+          startsAt: new Date(existingEndsAtMs).toISOString(),
+          reason: 'resume',
+        });
+      }
+      return;
     }
-    await sendMatchQuestion(io, matchId, match.current_q_index);
+
+    io.to(`match:${matchId}`).emit('match:countdown', {
+      matchId,
+      seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
+      startsAt: new Date(countdownEndsAtMs).toISOString(),
+      reason: 'resume',
+    });
+
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const countdownStillActive = (await redis.exists(countdownKey)) === 1;
+          if (!countdownStillActive) return;
+
+          const activeMatch = await matchesRepo.getMatch(matchId);
+          if (!activeMatch || activeMatch.status !== 'active') {
+            await redis.del([countdownKey, matchPauseKey(matchId)]);
+            return;
+          }
+
+          const roster = await matchesRepo.listMatchPlayers(matchId);
+          const stillDisconnected = await Promise.all(
+            roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+          );
+          if (stillDisconnected.some((exists) => exists === 1)) {
+            await redis.del(countdownKey);
+            return;
+          }
+
+          await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
+
+          io.to(`match:${matchId}`).emit('match:resume', {
+            matchId,
+            nextQIndex: activeMatch.current_q_index,
+          });
+
+          const activeQuestion = await matchesRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
+          if (activeQuestion) {
+            const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+              ? pauseStartedAtMs
+              : Date.now();
+            const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+            const resumed = variant === 'friendly_party_quiz'
+              ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
+              : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
+            if (resumed) return;
+          }
+          await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
+        } catch (err) {
+          logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
+        }
+      })();
+    }, MATCH_RESUME_COUNTDOWN_MS);
   },
 
   async handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
@@ -1299,6 +1531,17 @@ export const matchRealtimeService = {
     const disconnectedAtMs = Date.now();
     const disconnectCount = await incrementDisconnectCount(matchId, userId);
     const remainingReconnects = toRemainingReconnects(disconnectCount);
+    logger.info(
+      {
+        matchId,
+        userId,
+        qIndex: match.current_q_index,
+        disconnectCount,
+        remainingReconnects,
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
+      },
+      'Match disconnect pause requested'
+    );
     await redis.set(matchDisconnectKey(matchId, userId), String(disconnectedAtMs), { EX: DISCONNECT_TTL_SEC });
     await redis.set(matchPauseKey(matchId), String(disconnectedAtMs), { EX: PRESENCE_TTL_SEC });
 
@@ -1319,10 +1562,29 @@ export const matchRealtimeService = {
     });
 
     if (disconnectCount > MAX_MATCH_DISCONNECTS) {
+      logger.warn(
+        {
+          matchId,
+          userId,
+          qIndex: match.current_q_index,
+          disconnectCount,
+          maxDisconnects: MAX_MATCH_DISCONNECTS,
+        },
+        'Match reconnect limit exceeded; finalizing as forfeit'
+      );
+      const pendingPayload = buildReconnectLimitForfeitPendingPayload(matchId);
+      await setForfeitPendingForUser(userId, pendingPayload);
+      io.to(`user:${userId}`).emit('match:forfeit_pending', pendingPayload);
       const { participants: roster, cache } = await getParticipantSnapshot(matchId);
+      const opponentPendingPayload = buildOpponentForfeitPendingPayload(matchId, 'opponent_reconnect_limit');
+      for (const player of roster) {
+        if (player.user_id === userId) continue;
+        io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+      }
       const cleanupKeys = [
         matchPauseKey(matchId),
         matchGraceKey(matchId),
+        matchResumeCountdownKey(matchId),
         ...roster.flatMap((player) => [
           matchDisconnectKey(matchId, player.user_id),
           matchPresenceKey(matchId, player.user_id),
@@ -1342,6 +1604,7 @@ export const matchRealtimeService = {
         await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
       }
       await redis.del(cleanupKeys);
+      await redis.del(matchForfeitPendingUserKey(userId));
       return {
         graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects,
@@ -1425,6 +1688,11 @@ export const matchRealtimeService = {
                 (await matchesRepo.listMatchPlayers(matchId)).filter((player) => !disconnected.includes(player.user_id))
               )[0]?.userId ?? null
             : roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
+        const opponentPendingPayload = buildOpponentForfeitPendingPayload(matchId, 'opponent_reconnect_limit');
+        for (const player of roster) {
+          if (disconnected.includes(player.user_id)) continue;
+          io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+        }
         if (winnerId && variant !== 'friendly_party_quiz') {
           const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
           const fullCorrectAnswers = activeMatch.total_questions;
@@ -1478,9 +1746,6 @@ export const matchRealtimeService = {
 
         const resultVersion = Date.now();
         const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
-        if (finalPayload) {
-          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
-        }
 
         await redis.del(rankedAiMatchKey(matchId));
         await redis.set(matchForfeitKey(matchId), winnerId ?? 'draw', { EX: FORFEIT_TTL_SEC });
@@ -1493,6 +1758,9 @@ export const matchRealtimeService = {
             )
           )
         );
+        if (finalPayload) {
+          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+        }
       } finally {
         await redis.del(matchGraceKey(matchId));
         await redis.del(matchPauseKey(matchId));
@@ -1675,55 +1943,6 @@ export const matchRealtimeService = {
     }
 
     await handlePossessionCluesAnswer(io, socket, payload);
-  },
-
-  async handleChanceCardUse(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: MatchChanceCardUsePayload
-  ): Promise<void> {
-    const { matchId } = payload;
-
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-          meta: {
-            matchId: payload.matchId,
-            qIndex: payload.qIndex,
-            clientActionId: payload.clientActionId,
-          },
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'CHANCE_CARD_NOT_ALLOWED',
-        message: 'Power-ups are not available in party quiz mode.',
-        meta: {
-          matchId: payload.matchId,
-          qIndex: payload.qIndex,
-          clientActionId: payload.clientActionId,
-        },
-      });
-      return;
-    }
-
-    await handlePossessionChanceCardUse(io, socket, payload);
   },
 
   async handleReadyForNextQuestion(

@@ -107,9 +107,10 @@ export function getQuestionPreAnswerDelayMs(params: {
   if (postReadyAck) {
     return FRONTEND_REVEAL_MS;
   }
-  // First question after halftime does not have round-result transition blockers.
+  // First question after halftime has no round result to promote from, but the
+  // client still shows a second-half transition before the normal reveal.
   if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
-    return FRONTEND_REVEAL_MS;
+    return FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
   }
   // Special question reveals (countdown, put-in-order, clues) need extra hold time
   // so players can read the correct answers before transitioning to the next round.
@@ -294,6 +295,7 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
     shooterSeat: state.currentQuestion?.shooterSeat ?? (state.phase === 'PENALTY_SHOOTOUT' ? state.penalty.shooterSeat : null),
     halftime: {
       deadlineAt: state.halftime.deadlineAt,
+      uiReadyAt: state.halftime.uiReadyAt,
       categoryOptions: state.halftime.categoryOptions,
       firstBanSeat: state.halftime.firstBanSeat,
       bans: {

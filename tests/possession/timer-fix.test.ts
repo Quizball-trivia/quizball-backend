@@ -66,4 +66,22 @@ describe('possession authoritative timer fix', () => {
 
     vi.useRealTimers();
   });
+
+  it('builds a full transition and reveal window for the first second-half question', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-24T12:00:00.000Z'));
+
+    const timing = buildPlayableQuestionTiming({
+      qIndex: 6,
+      state: {
+        half: 2,
+        normalQuestionsAnsweredInHalf: 0,
+      },
+    });
+
+    expect(timing.playableAt.toISOString()).toBe('2026-03-24T12:00:05.500Z');
+    expect(timing.deadlineAt.toISOString()).toBe('2026-03-24T12:00:15.500Z');
+
+    vi.useRealTimers();
+  });
 });

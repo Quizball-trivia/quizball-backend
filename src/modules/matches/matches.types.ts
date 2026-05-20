@@ -1,4 +1,5 @@
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
+import type { Json } from '../../db/types.js';
 
 export type MatchQuestionPhaseKind = 'normal' | 'shot' | 'last_attack' | 'penalty';
 
@@ -52,6 +53,7 @@ export interface MatchAnswerRow {
   is_correct: boolean;
   time_ms: number;
   points_earned: number;
+  answer_payload: Json;
   phase_kind: MatchQuestionPhaseKind;
   phase_round: number | null;
   shooter_seat: number | null;

@@ -55,12 +55,6 @@ export const matchHalftimeUiReadySchema = z.object({
   matchId: z.string().uuid(),
 });
 
-export const matchChanceCardUseSchema = z.object({
-  matchId: z.string().uuid(),
-  qIndex: z.number().int().min(0).max(999),
-  clientActionId: z.string().min(8).max(120),
-});
-
 export const matchRejoinSchema = z.object({
   matchId: z.string().uuid().optional(),
 });
@@ -93,7 +87,6 @@ export type MatchPutInOrderAnswerPayload = z.infer<typeof matchPutInOrderAnswerS
 export type MatchCluesAnswerPayload = z.infer<typeof matchCluesAnswerSchema>;
 export type MatchHalftimeBanPayload = z.infer<typeof matchHalftimeBanSchema>;
 export type MatchHalftimeUiReadyPayload = z.infer<typeof matchHalftimeUiReadySchema>;
-export type MatchChanceCardUsePayload = z.infer<typeof matchChanceCardUseSchema>;
 export type MatchRejoinPayload = z.infer<typeof matchRejoinSchema>;
 export type MatchLeavePayload = z.infer<typeof matchLeaveSchema>;
 export type MatchForfeitPayload = z.infer<typeof matchForfeitSchema>;

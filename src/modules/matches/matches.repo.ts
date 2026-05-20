@@ -392,6 +392,7 @@ export const matchesRepo = {
     isCorrect: boolean;
     timeMs: number;
     pointsEarned: number;
+    answerPayload?: Json | null;
     phaseKind?: MatchQuestionPhaseKind;
     phaseRound?: number | null;
     shooterSeat?: number | null;
@@ -399,11 +400,11 @@ export const matchesRepo = {
     try {
       const [row] = await sql<MatchAnswerRow[]>`
         INSERT INTO match_answers (
-          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
+          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
         )
         VALUES (
           ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
+          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
         )
         RETURNING *
       `;
@@ -421,6 +422,7 @@ export const matchesRepo = {
     isCorrect: boolean;
     timeMs: number;
     pointsEarned: number;
+    answerPayload?: Json | null;
     phaseKind?: MatchQuestionPhaseKind;
     phaseRound?: number | null;
     shooterSeat?: number | null;
@@ -435,11 +437,11 @@ export const matchesRepo = {
       try {
         const [row] = await sql<MatchAnswerRow[]>`
           INSERT INTO match_answers (
-            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, phase_kind, phase_round, shooter_seat
+            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
           )
           VALUES (
             ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
+            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
           )
           ON CONFLICT (match_id, q_index, user_id) DO NOTHING
           RETURNING *
@@ -460,6 +462,21 @@ export const matchesRepo = {
     }, async (span) => {
       const rows = await sql<MatchAnswerRow[]>`
         SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
+      `;
+      span.setAttribute('quizball.answer_count', rows.length);
+      return rows;
+    });
+  },
+
+  async listAnswersForMatch(matchId: string): Promise<MatchAnswerRow[]> {
+    return withSpan('db.matches.list_answers_for_match', {
+      'db.operation.name': 'select',
+      'quizball.match_id': matchId,
+    }, async (span) => {
+      const rows = await sql<MatchAnswerRow[]>`
+        SELECT * FROM match_answers
+        WHERE match_id = ${matchId}
+        ORDER BY q_index ASC
       `;
       span.setAttribute('quizball.answer_count', rows.length);
       return rows;

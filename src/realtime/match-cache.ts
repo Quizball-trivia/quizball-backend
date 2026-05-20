@@ -1,6 +1,7 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import type { Json } from '../db/types.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPossessionState,
@@ -50,6 +51,45 @@ export interface CachedAnswer {
   clueIndex?: number | null;
 }
 
+const VALID_QUESTION_KINDS: ReadonlySet<MatchQuestionKind> = new Set([
+  'multipleChoice',
+  'countdown',
+  'putInOrder',
+  'clues',
+]);
+
+function asQuestionKind(value: unknown): MatchQuestionKind {
+  return typeof value === 'string' && (VALID_QUESTION_KINDS as ReadonlySet<string>).has(value)
+    ? (value as MatchQuestionKind)
+    : 'multipleChoice';
+}
+
+function stringArrayFromPayload(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function numberFromPayload(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function buildAnswerPayload(answer: Pick<CachedAnswer,
+  'questionKind' | 'foundCount' | 'foundAnswerIds' | 'submittedOrderIds' | 'clueIndex'
+>): Json {
+  return {
+    questionKind: answer.questionKind,
+    foundCount: answer.foundCount ?? null,
+    foundAnswerIds: answer.foundAnswerIds ?? null,
+    submittedOrderIds: answer.submittedOrderIds ?? null,
+    clueIndex: answer.clueIndex ?? null,
+  };
+}
+
+export interface CachedClueReveal {
+  qIndex: number;
+  revealCount: number;
+}
+
 export interface CachedQuestion {
   qIndex: number;
   kind: MatchQuestionKind;
@@ -66,14 +106,6 @@ export interface CachedQuestion {
   reveal: MatchRoundReveal;
 }
 
-export interface CachedChanceCardUse {
-  userId: string;
-  qIndex: number;
-  clientActionId: string;
-  eliminatedIndices: number[];
-  remainingQuantity: number;
-}
-
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -87,7 +119,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
-  chanceCardUses: Record<string, CachedChanceCardUse>;
+  clueReveals?: Record<string, CachedClueReveal>;
 }
 
 export function matchCacheKey(matchId: string): string {
@@ -205,13 +237,18 @@ function toCachedAnswer(rows: {
   phase_kind: MatchPhaseKind;
   phase_round: number | null;
   shooter_seat: number | null;
+  answer_payload: Json | null;
   answered_at: string;
 }[]): Record<string, CachedAnswer> {
   const answers: Record<string, CachedAnswer> = {};
   for (const row of rows) {
+    const payload = row.answer_payload && typeof row.answer_payload === 'object' && !Array.isArray(row.answer_payload)
+      ? row.answer_payload as Record<string, unknown>
+      : {};
+    const questionKind = asQuestionKind(payload.questionKind);
     answers[row.user_id] = {
       userId: row.user_id,
-      questionKind: 'multipleChoice',
+      questionKind,
       selectedIndex: row.selected_index,
       isCorrect: row.is_correct,
       timeMs: row.time_ms,
@@ -220,6 +257,10 @@ function toCachedAnswer(rows: {
       phaseRound: row.phase_round,
       shooterSeat: asSeat(row.shooter_seat),
       answeredAt: row.answered_at,
+      foundCount: numberFromPayload(payload.foundCount),
+      foundAnswerIds: stringArrayFromPayload(payload.foundAnswerIds),
+      submittedOrderIds: stringArrayFromPayload(payload.submittedOrderIds),
+      clueIndex: typeof payload.clueIndex === 'number' ? payload.clueIndex : null,
     };
   }
   return answers;
@@ -272,7 +313,7 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
-    chanceCardUses: {},
+    clueReveals: {},
   };
 }
 
@@ -294,12 +335,6 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
 
     try {
       const parsed = JSON.parse(raw) as Partial<MatchCache>;
-      const chanceCardUses =
-        parsed.chanceCardUses &&
-        typeof parsed.chanceCardUses === 'object' &&
-        !Array.isArray(parsed.chanceCardUses)
-          ? parsed.chanceCardUses
-          : {};
       const cached = parsed as MatchCache;
       // Backfill halftime.uiReadyAt on cache entries written before the field
       // existed — otherwise downstream code sees `undefined` instead of `null`.
@@ -307,11 +342,9 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         const ht = cached.statePayload.halftime as { uiReadyAt?: unknown };
         ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
       }
+      cached.clueReveals ??= {};
       span.setAttribute('quizball.cache_hit', true);
-      return {
-        ...cached,
-        chanceCardUses,
-      };
+      return cached;
     } catch (error) {
       span.setAttribute('quizball.cache_parse_failed', true);
       logger.warn({ error, matchId }, 'Failed to parse match cache, deleting key');

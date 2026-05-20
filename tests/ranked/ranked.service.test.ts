@@ -385,6 +385,46 @@ describe('rankedService', () => {
     expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
   });
 
+  it('settles null-winner forfeit as losses for both ranked players', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', null, undefined, 'forfeit')
+    );
+    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('u-1', 1, 800),
+      createPlayer('u-2', 2, 700),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: false,
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
+      createProfile({
+        user_id: userId,
+        rp: 1200,
+        tier: rankedService.tierFromRp(1200),
+        placement_status: 'placed',
+        placement_played: 3,
+      })
+    );
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    expect(outcome?.byUserId['u-1']?.deltaRp).toBe(-35);
+    expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-35);
+    expect(rankedRepo.applySettlement).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          change: expect.objectContaining({ userId: 'u-1', result: 'loss' }),
+        }),
+        expect.objectContaining({
+          change: expect.objectContaining({ userId: 'u-2', result: 'loss' }),
+        }),
+      ])
+    );
+  });
+
   it('keeps RP unchanged during placement game 1 and updates placement counters', async () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })

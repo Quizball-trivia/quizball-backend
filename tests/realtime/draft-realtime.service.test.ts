@@ -8,10 +8,18 @@ const insertLobbyCategoryBanMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
+const pauseMatchForDisconnectedPlayerMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const redisGetMock = vi.fn();
 const redisSetMock = vi.fn();
-let redisClientMock: { get: typeof redisGetMock; set: typeof redisSetMock } | null = null;
+const redisExistsMock = vi.fn();
+const redisDelMock = vi.fn();
+let redisClientMock: {
+  get: typeof redisGetMock;
+  set: typeof redisSetMock;
+  exists: typeof redisExistsMock;
+  del: typeof redisDelMock;
+} | null = null;
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
@@ -36,6 +44,9 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
 
 vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   beginMatchForLobby: (...args: unknown[]) => beginMatchForLobbyMock(...args),
+  matchRealtimeService: {
+    pauseMatchForDisconnectedPlayer: (...args: unknown[]) => pauseMatchForDisconnectedPlayerMock(...args),
+  },
 }));
 
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
@@ -59,7 +70,9 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 function createIoMock() {
   const emit = vi.fn();
   const to = vi.fn(() => ({ emit }));
-  return { io: { to } as unknown as QuizballServer, emit };
+  const fetchSockets = vi.fn(async () => []);
+  const inMock = vi.fn(() => ({ fetchSockets }));
+  return { io: { to, in: inMock } as unknown as QuizballServer, emit, fetchSockets };
 }
 
 function createSocketMock(userId: string, lobbyId: string): QuizballSocket {
@@ -78,6 +91,9 @@ describe('draftRealtimeService', () => {
     redisClientMock = null;
     redisGetMock.mockResolvedValue(null);
     redisSetMock.mockResolvedValue('OK');
+    redisExistsMock.mockResolvedValue(0);
+    redisDelMock.mockResolvedValue(1);
+    pauseMatchForDisconnectedPlayerMock.mockResolvedValue({ finalized: false, graceMs: 60_000, remainingReconnects: 2 });
 
     const bans: Array<{ user_id: string; category_id: string }> = [];
 
@@ -151,8 +167,18 @@ describe('draftRealtimeService', () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
-      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { draftRealtimeService, runDraftAutoBan, runRankedAiDraftBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
       const { io } = createIoMock();
+      stopRealtimeTimerScheduler();
+      startRealtimeTimerScheduler(io, {
+        draft_ai_ban: async (server, payload) => {
+          if (payload.kind === 'draft_ai_ban') await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+        },
+        draft_auto_ban: async (server, payload) => {
+          if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
+        },
+      });
 
       getLobbyByIdMock.mockResolvedValue({
         id: 'l1',
@@ -173,6 +199,8 @@ describe('draftRealtimeService', () => {
       expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
       expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
     } finally {
+      const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      stopRealtimeTimerScheduler();
       randomSpy.mockRestore();
       vi.useRealTimers();
     }
@@ -182,8 +210,18 @@ describe('draftRealtimeService', () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
-      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { draftRealtimeService, runDraftAutoBan, runRankedAiDraftBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
       const { io } = createIoMock();
+      stopRealtimeTimerScheduler();
+      startRealtimeTimerScheduler(io, {
+        draft_ai_ban: async (server, payload) => {
+          if (payload.kind === 'draft_ai_ban') await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+        },
+        draft_auto_ban: async (server, payload) => {
+          if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
+        },
+      });
       const aiSocket = createSocketMock('ai-1', 'l1');
       const userSocket = createSocketMock('u1', 'l1');
 
@@ -212,8 +250,57 @@ describe('draftRealtimeService', () => {
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
       expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
     } finally {
+      const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      stopRealtimeTimerScheduler();
       randomSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it('pauses active draft and notifies opponent when a draft player disconnects', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+    };
+    fetchSockets.mockResolvedValue([]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1');
+
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 75 });
+    expect(redisSetMock).toHaveBeenCalledWith('draft:pause:l1', expect.any(String), { EX: 75 });
+    expect(emit).toHaveBeenCalledWith('draft:opponent_disconnected', {
+      lobbyId: 'l1',
+      opponentId: 'u1',
+      graceMs: 60_000,
+    });
+  });
+
+  it('clears draft pause and resumes timers when the disconnected player reconnects', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+    };
+    const existingKeys = new Set(['draft:disconnect:l1:u1']);
+    redisExistsMock.mockImplementation(async (key: string) => (existingKeys.has(key) ? 1 : 0));
+    redisDelMock.mockImplementation(async (keys: string | string[]) => {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        existingKeys.delete(key);
+      }
+      return 1;
+    });
+
+    await draftRealtimeService.resumeDraftForReconnectedPlayer(io, 'l1', 'u1');
+
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:disconnect:l1:u1', 'draft:absent_after_grace:l1:u1']);
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:pause:l1', 'draft:grace:l1']);
+    expect(emit).toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
   });
 });

@@ -6,7 +6,13 @@ import {
   PUT_IN_ORDER_QUESTION_TIME_MS,
   getQuestionDurationMs,
 } from '../../src/realtime/possession-state.js';
-import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
+import {
+  calculateCountdownScore,
+  calculatePutInOrderScore,
+  calculateCluesScore,
+  clueIndexForScoring,
+} from '../../src/realtime/scoring.js';
+import { shouldFinalizeWrongCluesGuess } from '../../src/realtime/possession-answer-matching.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -60,6 +66,38 @@ describe('timer constants', () => {
   });
 });
 
+describe('Who Am I wrong guess finalization', () => {
+  it('finalizes a wrong clue guess when the opponent has already answered', () => {
+    expect(shouldFinalizeWrongCluesGuess({
+      clueCount: 5,
+      currentAnswerCount: 1,
+      expectedCount: 2,
+      existingRevealCount: 1,
+      timedClueIndex: 0,
+    })).toBe(true);
+  });
+
+  it('keeps revealing clues when the opponent has not answered and more clues remain', () => {
+    expect(shouldFinalizeWrongCluesGuess({
+      clueCount: 5,
+      currentAnswerCount: 0,
+      expectedCount: 2,
+      existingRevealCount: 1,
+      timedClueIndex: 0,
+    })).toBe(false);
+  });
+
+  it('finalizes a wrong clue guess once there are no more clues to reveal', () => {
+    expect(shouldFinalizeWrongCluesGuess({
+      clueCount: 5,
+      currentAnswerCount: 0,
+      expectedCount: 2,
+      existingRevealCount: 4,
+      timedClueIndex: 3,
+    })).toBe(true);
+  });
+});
+
 // ── normalizeAnswer tests ──
 
 describe('normalizeAnswer', () => {
@@ -101,26 +139,19 @@ describe('countdownMatch — prefix matching', () => {
   });
 
   it('accepts a prefix once ambiguity is resolved by longer input', () => {
-    // Use an evaluation where fuzzy/substring won't interfere
     const evalWithSimilarNames = makeEvaluation([
       { id: 'a1', display: { en: 'Martinez' }, acceptedAnswers: ['Martinez'] },
       { id: 'a2', display: { en: 'Martins' }, acceptedAnswers: ['Martins'] },
     ]);
 
-    // "mar" matches both — ambiguous prefix, no fuzzy match either (too short for substring)
-    const result1 = countdownMatch(evalWithSimilarNames, 'mar', new Set());
-    expect(result1).toBeNull();
+    // "mar" / "mart" are ambiguous prefixes of both groups → null
+    expect(countdownMatch(evalWithSimilarNames, 'mar', new Set())).toBeNull();
+    expect(countdownMatch(evalWithSimilarNames, 'mart', new Set())).toBeNull();
 
-    // "mart" matches both (substring of both)
-    // But since fuzzy runs first and "mart" is substring of "martinez" (4+ chars), it matches a1
-    const result2 = countdownMatch(evalWithSimilarNames, 'mart', new Set());
-    expect(result2).not.toBeNull();
-
-    // "martin" is substring of both — but fuzzy match picks the first one
-    // After a1 is found, "martin" matches a2 via substring
-    const result3 = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
-    expect(result3).not.toBeNull();
-    expect(result3!.id).toBe('a2');
+    // Once a1 is found, "martin" is a unique prefix of a2.
+    const result = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('a2');
   });
 
   it('resolves ambiguity when one group is already found', () => {
@@ -180,11 +211,22 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     expect(result!.id).toBe('g2');
   });
 
-  it('accepts substring match for inputs >= 4 chars', () => {
-    // "aldo" is a substring of "Ronaldo" (4 chars)
+  it('rejects an interior substring (not a whole-word) match', () => {
+    // "aldo" sits inside "Ronaldo" but isn't a complete token, so it should
+    // no longer match — only whole-word, prefix, suffix, or fuzzy-distance
+    // matches are accepted.
     const result = countdownMatch(FOOTBALL_EVALUATION, 'aldo', new Set());
+    expect(result).toBeNull();
+  });
+
+  it('accepts a whole-word match inside a multi-word answer', () => {
+    // "messi" is a whole word in an accepted answer like "Lionel Messi".
+    const evalWithMultiWord = makeEvaluation([
+      { id: 'm1', display: { en: 'Lionel Messi' }, acceptedAnswers: ['Lionel Messi'] },
+    ]);
+    const result = countdownMatch(evalWithMultiWord, 'messi', new Set());
     expect(result).not.toBeNull();
-    expect(result!.id).toBe('g1');
+    expect(result!.id).toBe('m1');
   });
 
   it('returns null when no match is found', () => {
@@ -267,5 +309,15 @@ describe('calculateCluesScore', () => {
   it('returns zero for wrong answers and never drops correct answers below 20', () => {
     expect(calculateCluesScore(false, 0)).toBe(0);
     expect(calculateCluesScore(true, 10)).toBe(20);
+  });
+
+  it('scores by the latest revealed clue when wrong guesses reveal ahead of time', () => {
+    expect(clueIndexForScoring(0, 2)).toBe(1);
+    expect(calculateCluesScore(true, clueIndexForScoring(0, 2))).toBe(80);
+  });
+
+  it('keeps time-based scoring when timed clues are ahead of manual reveals', () => {
+    expect(clueIndexForScoring(3, 1)).toBe(3);
+    expect(calculateCluesScore(true, clueIndexForScoring(3, 1))).toBe(40);
   });
 });

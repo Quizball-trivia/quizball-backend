@@ -21,6 +21,16 @@ import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { resolvePartyQuizRound } from './party-quiz-match-flow.js';
+import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from './possession-match-flow.js';
+import {
+  startRealtimeTimerScheduler,
+  type RealtimeTimerPayload,
+} from './realtime-timer-scheduler.js';
+import {
+  runDraftAutoBan,
+  runRankedAiDraftBan,
+} from './services/draft-realtime.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -29,8 +39,8 @@ const ONLINE_COUNT_KEY = 'presence:online_users';
 const PRESENCE_LOCK_TTL_MS = 3000;
 const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
-const POST_CONNECT_RETRY_MS = 350;
-const POST_CONNECT_MAX_ATTEMPTS = 6;
+const POST_CONNECT_RETRY_MS = 150;
+const POST_CONNECT_MAX_ATTEMPTS = 10;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
@@ -145,6 +155,7 @@ async function runPostConnectHydration(
           operation: 'connect',
           stateSnapshot: snapshot,
         });
+        await matchRealtimeService.emitPendingForfeitIfAny(socket);
       } catch (error) {
         logger.warn({ error, userId }, 'Failed to emit blocked state on connect');
       }
@@ -178,8 +189,17 @@ async function runPostConnectHydration(
     }
   }
 
+  if (!socket.data.matchId && !socket.data.lobbyId) {
+    try {
+      await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin active draft lobby on connect');
+    }
+  }
+
   if (!socket.data.matchId) {
     try {
+      await matchRealtimeService.emitPendingForfeitIfAny(socket);
       await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
     } catch (error) {
       logger.warn({ error, userId }, 'Failed to emit last match results on connect');
@@ -217,6 +237,39 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).
   setAuthRealtimeServer(io);
+
+  startRealtimeTimerScheduler(io, {
+    draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'draft_ai_ban') return;
+      await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+    },
+    draft_auto_ban: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'draft_auto_ban') return;
+      await runDraftAutoBan(server, payload.lobbyId);
+    },
+    party_question: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'party_question') return;
+      await resolvePartyQuizRound(server, payload.matchId, payload.qIndex, true);
+    },
+    possession_ai_answer: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'possession_ai_answer') return;
+      await runPossessionAiAnswer(
+        server,
+        payload.matchId,
+        payload.qIndex,
+        payload.plannedAnswerTimeMs,
+        payload.plannedClueIndex
+      );
+    },
+    possession_halftime: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'possession_halftime') return;
+      await finalizeHalftime(server, payload.matchId);
+    },
+    possession_question: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'possession_question') return;
+      await resolvePossessionRound(server, payload.matchId, payload.qIndex, true);
+    },
+  });
 
   rankedMatchmakingService.start(io);
 

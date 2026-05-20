@@ -116,6 +116,31 @@ async function cleanupStaleOrphanActiveMatch(
 
   if (!staleByAge && !staleByNoSockets) return;
 
+  // `prepareForConnect` runs after the new socket has joined user:<id>, but
+  // before it has rejoined match:<id>. During a normal page reload the match
+  // room can be temporarily empty, so treating "no match sockets" as orphaned
+  // here can incorrectly forfeit the reconnecting player's active match.
+  try {
+    const userSockets = await io.in(`user:${userId}`).fetchSockets();
+    if (userSockets.length > 0) {
+      logger.info(
+        {
+          userId,
+          matchId: activeMatch.id,
+          lobbyId: activeMatch.lobby_id,
+          startedAt: activeMatch.started_at,
+          staleByAge,
+          staleByNoSockets,
+          userSocketCount: userSockets.length,
+        },
+        'Session guard skipped stale orphan cleanup because user is reconnecting'
+      );
+      return;
+    }
+  } catch (error) {
+    logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for stale match cleanup');
+  }
+
   if (activeMatch.mode === 'ranked') {
     const players = await matchesRepo.listMatchPlayers(activeMatch.id);
     const finalized = await finalizeMatchAsForfeit({

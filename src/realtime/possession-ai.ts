@@ -27,6 +27,9 @@ import {
 
 type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTimeout: boolean) => Promise<void>;
 
+const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
+const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
+
 function getAiAnswerDelayMs(): number {
   // AI "thinking" time after options become visible to players.
   // Range: 2–7s => 80..30 points on correct answers.
@@ -127,6 +130,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       phaseKind: MatchPhaseKind;
       phaseRound: number;
       shooterSeat: Seat | null;
+      playableAt?: Date;
+      deadlineAt?: Date;
     }
   ): Promise<void> {
     const key = questionTimerKey(matchId, qIndex);
@@ -145,10 +150,19 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const expectedUserIds = getExpectedUserIds(cache);
     if (!expectedUserIds.includes(aiUserId)) return;
 
-    const preAnswerDelayMs = getQuestionPreAnswerDelayMs({
-      qIndex,
-      state: cache.statePayload,
-    });
+    const nowMs = Date.now();
+    const playableAtMs = options.playableAt?.getTime();
+    const deadlineAtMs = options.deadlineAt?.getTime();
+    const hasAuthoritativeWindow =
+      Number.isFinite(playableAtMs) &&
+      Number.isFinite(deadlineAtMs) &&
+      (deadlineAtMs as number) > (playableAtMs as number);
+    const preAnswerDelayMs = hasAuthoritativeWindow
+      ? Math.max(0, (playableAtMs as number) - nowMs)
+      : getQuestionPreAnswerDelayMs({
+          qIndex,
+          state: cache.statePayload,
+        });
     const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
     const aiThinkTimeMs = getAiAnswerDelayMs();
     const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
@@ -157,8 +171,10 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const plannedClueIndex = typeof clueCountForDelay === 'number'
       ? getAiClueIndex(clueCountForDelay, aiCorrectness)
       : null;
-    const questionTimeMsForDelay = getQuestionDurationMs(options.questionKind, clueCountForDelay);
-    const plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
+    const questionTimeMsForDelay = hasAuthoritativeWindow
+      ? Math.max(0, (deadlineAtMs as number) - (playableAtMs as number))
+      : getQuestionDurationMs(options.questionKind, clueCountForDelay);
+    let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
       ? (() => {
           const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
           return clamp(
@@ -168,14 +184,34 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           );
         })()
       : clamp(aiThinkTimeMs, 0, questionTimeMsForDelay);
-    const delayMs = preAnswerDelayMs + plannedAnswerTimeMs;
-    await scheduleRealtimeTimer('possession_ai_answer', key, new Date(Date.now() + delayMs), {
+    let dueAtMs = nowMs + preAnswerDelayMs + plannedAnswerTimeMs;
+    if (hasAuthoritativeWindow) {
+      const latestDueAtMs = Math.max(nowMs + AI_ANSWER_MIN_RESUME_DELAY_MS, (deadlineAtMs as number) - AI_ANSWER_TIMEOUT_BUFFER_MS);
+      if (dueAtMs > latestDueAtMs) {
+        dueAtMs = latestDueAtMs;
+        plannedAnswerTimeMs = clamp(dueAtMs - nowMs - preAnswerDelayMs, 0, questionTimeMsForDelay);
+      }
+    }
+    await scheduleRealtimeTimer('possession_ai_answer', key, new Date(dueAtMs), {
       kind: 'possession_ai_answer',
       matchId,
       qIndex,
       plannedAnswerTimeMs,
       plannedClueIndex,
     });
+    logger.debug(
+      {
+        matchId,
+        qIndex,
+        questionKind: options.questionKind,
+        authoritativeWindow: hasAuthoritativeWindow,
+        preAnswerDelayMs,
+        plannedAnswerTimeMs,
+        dueAt: new Date(dueAtMs).toISOString(),
+        deadlineAt: hasAuthoritativeWindow ? new Date(deadlineAtMs as number).toISOString() : null,
+      },
+      'Scheduled possession AI answer'
+    );
   }
 
   async function runPossessionAiAnswer(

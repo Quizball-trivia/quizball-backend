@@ -61,6 +61,10 @@ const fakeRedis = {
   async ttl(key: string): Promise<number> {
     return fakeRedisStore.ttls.get(key) ?? -1;
   },
+  async zScore(_key: string, _member: string): Promise<number | null> {
+    // No persistent timers in this fake; tests don't exercise that path.
+    return null;
+  },
   async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
     const key = payload.keys[0];
     const token = payload.arguments[0];
@@ -489,6 +493,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
   });
 
   it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {
+    vi.useFakeTimers();
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const socket = createSocketMock('u1');
     const io = createIoWithUserSocket('u1', socket);
@@ -530,15 +535,112 @@ describe('match-realtime.service high-risk integration behavior', () => {
     });
     resumePossessionMatchQuestionMock.mockResolvedValue(true);
 
-    await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
+    try {
+      await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
 
-    expect(resumePossessionMatchQuestionMock).toHaveBeenCalledWith(
-      io,
-      'm1',
-      3,
-      expect.any(Number)
+      expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
+      expect(resolveRoundMock).not.toHaveBeenCalled();
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(resumePossessionMatchQuestionMock).toHaveBeenCalledWith(
+        io,
+        'm1',
+        3,
+        expect.any(Number)
+      );
+      expect(resolveRoundMock).not.toHaveBeenCalled();
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15c1: passive socket reconnect only offers rejoin and does not resume a paused match', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '1');
+    fakeRedisStore.ttls.set('match:grace:m1', 42);
+
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+
+    await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.objectContaining({
+        matchId: 'm1',
+        graceMs: 42_000,
+        remainingReconnects: 2,
+      })
     );
-    expect(resolveRoundMock).not.toHaveBeenCalled();
+    expect(socket.emit).not.toHaveBeenCalledWith('match:start', expect.anything());
+    expect(socket.join).not.toHaveBeenCalledWith('match:m1');
+    expect(socket.data.matchId).toBeUndefined();
+    expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
+    expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15c2: passive socket reconnect for remaining player keeps pause visible', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u2');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '1');
+    fakeRedisStore.ttls.set('match:grace:m1', 42);
+
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+
+    await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+
+    expect(socket.emit).toHaveBeenCalledWith('match:start', expect.objectContaining({ matchId: 'm1' }));
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:opponent_disconnected',
+      expect.objectContaining({
+        matchId: 'm1',
+        opponentId: 'u1',
+        graceMs: 42_000,
+        remainingReconnects: 2,
+      })
+    );
+    expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
     expect(sendMatchQuestionMock).not.toHaveBeenCalled();
   });
 

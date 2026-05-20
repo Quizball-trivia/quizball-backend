@@ -3,28 +3,47 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import { beginMatchForLobby } from './match-realtime.service.js';
+import { beginMatchForLobby, matchRealtimeService } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
-import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
+import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
 const DRAFT_AUTO_BAN_MS = 16000;
 const AI_LOBBY_KEY_TTL_SEC = 7200;
+const DRAFT_DISCONNECT_GRACE_MS = 60000;
+const DRAFT_DISCONNECT_TTL_SEC = 75;
+const DRAFT_GRACE_TTL_SEC = 65;
+
+function draftDisconnectKey(lobbyId: string, userId: string): string {
+  return `draft:disconnect:${lobbyId}:${userId}`;
+}
+
+function draftPauseKey(lobbyId: string): string {
+  return `draft:pause:${lobbyId}`;
+}
+
+function draftGraceKey(lobbyId: string): string {
+  return `draft:grace:${lobbyId}`;
+}
+
+function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
+  return `draft:absent_after_grace:${lobbyId}:${userId}`;
+}
 
 async function startMatchFromDraft(
   io: QuizballServer,
   lobbyId: string,
   halfOneCategoryId: string
-): Promise<void> {
+): Promise<string | null> {
   const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
+  if (!lobby) return null;
 
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length !== 2) return;
+  if (members.length !== 2) return null;
 
   let result;
   try {
@@ -42,7 +61,7 @@ async function startMatchFromDraft(
       'Failed to create match from draft; restarting draft'
     );
     await startDraft(io, lobbyId);
-    return;
+    return null;
   }
 
   const matchId = result.match.id;
@@ -51,6 +70,22 @@ async function startMatchFromDraft(
     'Match created from draft'
   );
   await beginMatchForLobby(io, lobbyId, matchId);
+
+  const redis = getRedisClient();
+  if (redis) {
+    for (const member of members) {
+      const absent = await redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id));
+      if (!absent) continue;
+      logger.info(
+        { lobbyId, matchId, userId: member.user_id },
+        'Pausing newly-created match for player absent after draft grace'
+      );
+      await matchRealtimeService.pauseMatchForDisconnectedPlayer(io, matchId, member.user_id);
+      await redis.del(draftAbsentAfterGraceKey(lobbyId, member.user_id));
+    }
+  }
+
+  return matchId;
 }
 
 /**
@@ -75,21 +110,27 @@ function getAiBanDelayMs(): number {
   return Math.floor(Math.random() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
 }
 
-function clearPendingAiBanTimer(lobbyId: string): void {
-  void cancelRealtimeTimer('draft_ai_ban', lobbyId).catch((error) => {
+async function clearPendingAiBanTimer(lobbyId: string): Promise<void> {
+  try {
+    await cancelRealtimeTimer('draft_ai_ban', lobbyId);
+  } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to cancel draft AI ban timer');
-  });
+  }
 }
 
-function clearPendingAutoBanTimer(lobbyId: string): void {
-  void cancelRealtimeTimer('draft_auto_ban', lobbyId).catch((error) => {
+async function clearPendingAutoBanTimer(lobbyId: string): Promise<void> {
+  try {
+    await cancelRealtimeTimer('draft_auto_ban', lobbyId);
+  } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to cancel draft auto-ban timer');
-  });
+  }
 }
 
-function clearDraftTimers(lobbyId: string): void {
-  clearPendingAiBanTimer(lobbyId);
-  clearPendingAutoBanTimer(lobbyId);
+async function clearDraftTimers(lobbyId: string): Promise<void> {
+  await Promise.all([
+    clearPendingAiBanTimer(lobbyId),
+    clearPendingAutoBanTimer(lobbyId),
+  ]);
 }
 
 async function resolveRankedAiUserId(
@@ -128,18 +169,18 @@ function getFirstDraftActorId(
   return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
 }
 
-async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<void> {
+async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') {
-    clearDraftTimers(lobbyId);
-    return;
+    await clearDraftTimers(lobbyId);
+    return null;
   }
 
   const categories = await lobbiesService.getLobbyCategories(lobbyId);
   const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-  if (bans.length < 2) return;
+  if (bans.length < 2) return null;
 
-  clearDraftTimers(lobbyId);
+  await clearDraftTimers(lobbyId);
   const bannedIds = new Set(bans.map((ban) => ban.category_id));
   const remaining = categories.filter((category) => !bannedIds.has(category.id));
   if (remaining.length !== 1) {
@@ -153,18 +194,16 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
       },
       'Insufficient categories remaining after bans in draft'
     );
-    return;
+    return null;
   }
 
   const halfOneCategoryId = remaining[0].id;
   io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
   logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
-  await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+  return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
-  clearPendingAutoBanTimer(lobbyId);
-
   void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + DRAFT_AUTO_BAN_MS), {
     kind: 'draft_auto_ban',
     lobbyId,
@@ -176,6 +215,12 @@ export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void
 
 export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Promise<void> {
   try {
+    const redis = getRedisClient();
+    if (redis && await redis.exists(draftPauseKey(lobbyId))) {
+      logger.info({ lobbyId }, 'Skipping draft auto-ban while draft is paused');
+      return;
+    }
+
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby || lobby.status !== 'active') return;
 
@@ -228,8 +273,36 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
   }
 }
 
+async function getCurrentDraftActorId(lobbyId: string): Promise<string | null> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') return null;
+
+  const [bans, members] = await Promise.all([
+    lobbiesRepo.listLobbyCategoryBans(lobbyId),
+    lobbiesRepo.listMembersWithUser(lobbyId),
+  ]);
+  if (members.length !== 2 || bans.length >= 2) return null;
+
+  const aiUserId = lobby.mode === 'ranked'
+    ? await resolveRankedAiUserId(lobbyId, members)
+    : null;
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  return getNextActorId(members, bans, firstActorUserId);
+}
+
+async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+
+  for (const userId of userIds) {
+    if (await redis.exists(draftDisconnectKey(lobbyId, userId))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): void {
-  clearPendingAiBanTimer(lobbyId);
   const delayMs = getAiBanDelayMs();
 
   void scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(Date.now() + delayMs), {
@@ -245,6 +318,12 @@ function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: str
 export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, aiUserId: string): Promise<void> {
   const delayMs = 0;
   try {
+    const redis = getRedisClient();
+    if (redis && await redis.exists(draftPauseKey(lobbyId))) {
+      logger.info({ lobbyId, aiUserId }, 'Skipping AI draft ban while draft is paused');
+      return;
+    }
+
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
 
@@ -283,11 +362,26 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
   }
 }
 
-export async function resumeActiveDraftTimers(io: QuizballServer, lobbyId: string): Promise<void> {
+export async function resumeActiveDraftTimers(
+  io: QuizballServer,
+  lobbyId: string,
+  options: { restartTimers?: boolean } = {}
+): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') {
-    clearDraftTimers(lobbyId);
+    await clearDraftTimers(lobbyId);
     return;
+  }
+
+  const redis = getRedisClient();
+  if (redis && await redis.exists(draftPauseKey(lobbyId))) {
+    await clearDraftTimers(lobbyId);
+    logger.info({ lobbyId }, 'Draft timers remain paused because a player is disconnected');
+    return;
+  }
+
+  if (options.restartTimers) {
+    await clearDraftTimers(lobbyId);
   }
 
   const [categories, bans, members] = await Promise.all([
@@ -302,7 +396,11 @@ export async function resumeActiveDraftTimers(io: QuizballServer, lobbyId: strin
     return;
   }
 
-  scheduleDraftAutoBan(io, lobbyId);
+  // Normal reconnect hydration preserves existing deadlines. A draft resume
+  // after pause restarts timers because the old deadlines were canceled.
+  if (options.restartTimers || !(await hasPendingRealtimeTimer('draft_auto_ban', lobbyId))) {
+    scheduleDraftAutoBan(io, lobbyId);
+  }
 
   if (lobby.mode !== 'ranked') return;
   const aiUserId = await resolveRankedAiUserId(lobbyId, members);
@@ -310,12 +408,120 @@ export async function resumeActiveDraftTimers(io: QuizballServer, lobbyId: strin
 
   const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
   const expectedUserId = getNextActorId(members, bans, firstActorUserId);
-  if (expectedUserId === aiUserId && !bans.some((ban) => ban.user_id === aiUserId)) {
+  if (
+    expectedUserId === aiUserId
+    && !bans.some((ban) => ban.user_id === aiUserId)
+    && (options.restartTimers || !(await hasPendingRealtimeTimer('draft_ai_ban', lobbyId)))
+  ) {
     scheduleRankedAiBan(io, lobbyId, aiUserId);
   }
 }
 
 export const draftRealtimeService = {
+  async pauseDraftForDisconnectedPlayer(
+    io: QuizballServer,
+    lobbyId: string,
+    userId: string
+  ): Promise<void> {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') return;
+
+    const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+    const stillPresent = sockets.some((socket) => socket.data.user.id === userId);
+    if (stillPresent) return;
+
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    if (!members.some((member) => member.user_id === userId)) return;
+
+    const redis = getRedisClient();
+    if (!redis) return;
+
+    await redis.set(draftDisconnectKey(lobbyId, userId), String(Date.now()), { EX: DRAFT_DISCONNECT_TTL_SEC });
+    await redis.set(draftPauseKey(lobbyId), String(Date.now()), { EX: DRAFT_DISCONNECT_TTL_SEC });
+    await clearDraftTimers(lobbyId);
+
+    const remainingPlayers = members.filter((member) => member.user_id !== userId);
+    remainingPlayers.forEach((member) => {
+      io.to(`user:${member.user_id}`).emit('draft:opponent_disconnected', {
+        lobbyId,
+        opponentId: userId,
+        graceMs: DRAFT_DISCONNECT_GRACE_MS,
+      });
+    });
+    logger.info(
+      { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
+      'Draft paused for disconnected player'
+    );
+
+    const acquired = await redis.set(draftGraceKey(lobbyId), String(Date.now()), { NX: true, EX: DRAFT_GRACE_TTL_SEC });
+    if (acquired !== 'OK') return;
+
+    setTimeout(async () => {
+      try {
+        const graceStillActive = (await redis.exists(draftGraceKey(lobbyId))) === 1;
+        if (!graceStillActive) return;
+
+        const activeLobby = await lobbiesRepo.getById(lobbyId);
+        if (!activeLobby || activeLobby.status !== 'active') return;
+
+        const activeMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+        const disconnectedUserIds: string[] = [];
+        for (const member of activeMembers) {
+          if (await redis.exists(draftDisconnectKey(lobbyId, member.user_id))) {
+            disconnectedUserIds.push(member.user_id);
+          }
+        }
+        if (disconnectedUserIds.length === 0) return;
+
+        await Promise.all(
+          disconnectedUserIds.map((disconnectedUserId) =>
+            redis.set(draftAbsentAfterGraceKey(lobbyId, disconnectedUserId), '1', { EX: DRAFT_DISCONNECT_TTL_SEC })
+          )
+        );
+
+        const currentActorId = await getCurrentDraftActorId(lobbyId);
+        logger.info(
+          { lobbyId, disconnectedUserIds, currentActorId },
+          'Draft disconnect grace expired'
+        );
+
+        await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
+        await Promise.all(disconnectedUserIds.map((disconnectedUserId) => redis.del(draftDisconnectKey(lobbyId, disconnectedUserId))));
+
+        if (currentActorId && disconnectedUserIds.includes(currentActorId)) {
+          await runDraftAutoBan(io, lobbyId);
+        } else {
+          await resumeActiveDraftTimers(io, lobbyId);
+        }
+      } catch (error) {
+        logger.warn({ error, lobbyId, userId }, 'Draft disconnect grace expiry failed');
+      }
+    }, DRAFT_DISCONNECT_GRACE_MS);
+  },
+
+  async resumeDraftForReconnectedPlayer(
+    io: QuizballServer,
+    lobbyId: string,
+    userId: string
+  ): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis) return;
+
+    const wasDisconnected = (await redis.exists(draftDisconnectKey(lobbyId, userId))) === 1
+      || (await redis.exists(draftAbsentAfterGraceKey(lobbyId, userId))) === 1;
+    if (!wasDisconnected) return;
+
+    await redis.del([draftDisconnectKey(lobbyId, userId), draftAbsentAfterGraceKey(lobbyId, userId)]);
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const memberIds = members.map((member) => member.user_id);
+    if (!(await anyDraftDisconnectExists(lobbyId, memberIds))) {
+      await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
+      io.to(`lobby:${lobbyId}`).emit('draft:resume', { lobbyId });
+      await resumeActiveDraftTimers(io, lobbyId, { restartTimers: true });
+      logger.info({ lobbyId, userId }, 'Draft resumed after player reconnected');
+    }
+  },
+
   async handleBan(
     io: QuizballServer,
     socket: QuizballSocket,
@@ -337,6 +543,15 @@ export const draftRealtimeService = {
     if (lobby.status !== 'active') {
       logger.warn({ lobbyId, status: lobby.status }, 'Draft ban failed: lobby not active');
       socket.emit('error', { code: 'LOBBY_NOT_ACTIVE', message: 'Draft has not started yet' });
+      return;
+    }
+
+    const redis = getRedisClient();
+    if (redis && await redis.exists(draftPauseKey(lobbyId))) {
+      socket.emit('error', {
+        code: 'DRAFT_PAUSED',
+        message: 'Draft is paused while a player reconnects',
+      });
       return;
     }
 

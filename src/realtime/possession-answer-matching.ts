@@ -35,6 +35,16 @@ export function levenshtein(left: string, right: string): number {
   return matrix[right.length][left.length];
 }
 
+// Whole-word match: input must appear as a complete token in the accepted
+// answer (surrounded by string boundaries or whitespace), not as an interior
+// substring. After normalizeAnswer, the only separators are single spaces.
+function containsWholeWord(haystack: string, needle: string): boolean {
+  if (haystack === needle) return true;
+  if (haystack.startsWith(`${needle} `)) return true;
+  if (haystack.endsWith(` ${needle}`)) return true;
+  return haystack.includes(` ${needle} `);
+}
+
 export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
   const normalizedInput = normalizeAnswer(input);
   if (!normalizedInput) return false;
@@ -43,7 +53,7 @@ export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): bo
     const normalizedAccepted = normalizeAnswer(acceptedAnswer);
     if (!normalizedAccepted) return false;
     if (normalizedInput === normalizedAccepted) return true;
-    if (normalizedInput.length >= 4 && normalizedAccepted.includes(normalizedInput)) return true;
+    if (normalizedInput.length >= 4 && containsWholeWord(normalizedAccepted, normalizedInput)) return true;
     const maxDistance = normalizedAccepted.length > 6 ? 2 : 1;
     return levenshtein(normalizedInput, normalizedAccepted) <= maxDistance;
   });

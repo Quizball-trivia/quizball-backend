@@ -234,6 +234,16 @@ export async function scheduleRealtimeTimer(
   await redis.zAdd(TIMER_ZSET_KEY, [{ score: dueAt.getTime(), value: member }]);
 }
 
+/** True if a timer for this kind+key is still scheduled (Redis or local fallback). */
+export async function hasPendingRealtimeTimer(kind: RealtimeTimerKind, key: string): Promise<boolean> {
+  const member = timerMember(kind, key);
+  if (localFallbackTimers.has(member)) return true;
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return false;
+  const score = await redis.zScore(TIMER_ZSET_KEY, member);
+  return score !== null && !Number.isNaN(score) && score > Date.now();
+}
+
 export async function cancelRealtimeTimer(kind: RealtimeTimerKind, key: string): Promise<void> {
   const member = timerMember(kind, key);
   clearLocalFallbackTimer(member);

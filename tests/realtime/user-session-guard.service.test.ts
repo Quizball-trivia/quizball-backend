@@ -145,6 +145,33 @@ describe('user-session-guard.service', () => {
     expect(snapshot.state).toBe('IDLE');
   });
 
+  it('does not forfeit an active ranked match while the user is reconnecting', async () => {
+    const staleStartedAt = new Date(Date.now() - 91_000).toISOString();
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      started_at: staleStartedAt,
+      lobby_id: 'l1',
+    });
+
+    const reconnectingSocket = { data: { user: { id: 'u1' } } };
+    const io = {
+      in: vi.fn((room: string) => ({
+        fetchSockets: vi.fn(async () => (room === 'user:u1' ? [reconnectingSocket] : [])),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
+
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(snapshot.state).toBe('IN_ACTIVE_MATCH');
+    expect(snapshot.activeMatchId).toBe('m1');
+  });
+
   it('preserves active draft lobbies on reconnect before a match row exists', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     listOpenLobbiesForUserMock.mockResolvedValue([

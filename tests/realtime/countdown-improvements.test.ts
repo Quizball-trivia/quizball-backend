@@ -139,26 +139,19 @@ describe('countdownMatch — prefix matching', () => {
   });
 
   it('accepts a prefix once ambiguity is resolved by longer input', () => {
-    // Use an evaluation where fuzzy/substring won't interfere
     const evalWithSimilarNames = makeEvaluation([
       { id: 'a1', display: { en: 'Martinez' }, acceptedAnswers: ['Martinez'] },
       { id: 'a2', display: { en: 'Martins' }, acceptedAnswers: ['Martins'] },
     ]);
 
-    // "mar" matches both — ambiguous prefix, no fuzzy match either (too short for substring)
-    const result1 = countdownMatch(evalWithSimilarNames, 'mar', new Set());
-    expect(result1).toBeNull();
+    // "mar" / "mart" are ambiguous prefixes of both groups → null
+    expect(countdownMatch(evalWithSimilarNames, 'mar', new Set())).toBeNull();
+    expect(countdownMatch(evalWithSimilarNames, 'mart', new Set())).toBeNull();
 
-    // "mart" matches both (substring of both)
-    // But since fuzzy runs first and "mart" is substring of "martinez" (4+ chars), it matches a1
-    const result2 = countdownMatch(evalWithSimilarNames, 'mart', new Set());
-    expect(result2).not.toBeNull();
-
-    // "martin" is substring of both — but fuzzy match picks the first one
-    // After a1 is found, "martin" matches a2 via substring
-    const result3 = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
-    expect(result3).not.toBeNull();
-    expect(result3!.id).toBe('a2');
+    // Once a1 is found, "martin" is a unique prefix of a2.
+    const result = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('a2');
   });
 
   it('resolves ambiguity when one group is already found', () => {
@@ -218,11 +211,22 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     expect(result!.id).toBe('g2');
   });
 
-  it('accepts substring match for inputs >= 4 chars', () => {
-    // "aldo" is a substring of "Ronaldo" (4 chars)
+  it('rejects an interior substring (not a whole-word) match', () => {
+    // "aldo" sits inside "Ronaldo" but isn't a complete token, so it should
+    // no longer match — only whole-word, prefix, suffix, or fuzzy-distance
+    // matches are accepted.
     const result = countdownMatch(FOOTBALL_EVALUATION, 'aldo', new Set());
+    expect(result).toBeNull();
+  });
+
+  it('accepts a whole-word match inside a multi-word answer', () => {
+    // "messi" is a whole word in an accepted answer like "Lionel Messi".
+    const evalWithMultiWord = makeEvaluation([
+      { id: 'm1', display: { en: 'Lionel Messi' }, acceptedAnswers: ['Lionel Messi'] },
+    ]);
+    const result = countdownMatch(evalWithMultiWord, 'messi', new Set());
     expect(result).not.toBeNull();
-    expect(result!.id).toBe('g1');
+    expect(result!.id).toBe('m1');
   });
 
   it('returns null when no match is found', () => {

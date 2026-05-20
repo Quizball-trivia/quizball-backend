@@ -39,8 +39,8 @@ const ONLINE_COUNT_KEY = 'presence:online_users';
 const PRESENCE_LOCK_TTL_MS = 3000;
 const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
-const POST_CONNECT_RETRY_MS = 350;
-const POST_CONNECT_MAX_ATTEMPTS = 6;
+const POST_CONNECT_RETRY_MS = 150;
+const POST_CONNECT_MAX_ATTEMPTS = 10;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
@@ -155,6 +155,7 @@ async function runPostConnectHydration(
           operation: 'connect',
           stateSnapshot: snapshot,
         });
+        await matchRealtimeService.emitPendingForfeitIfAny(socket);
       } catch (error) {
         logger.warn({ error, userId }, 'Failed to emit blocked state on connect');
       }
@@ -198,6 +199,7 @@ async function runPostConnectHydration(
 
   if (!socket.data.matchId) {
     try {
+      await matchRealtimeService.emitPendingForfeitIfAny(socket);
       await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
     } catch (error) {
       logger.warn({ error, userId }, 'Failed to emit last match results on connect');

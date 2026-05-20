@@ -1,8 +1,9 @@
-import { acquireLock, releaseLock } from './locks.js';
+import { acquireLock, extendLock, releaseLock } from './locks.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballSocket } from './socket-server.js';
 
 const ANSWER_LOCK_TTL_MS = 2000;
+const ANSWER_LOCK_RENEW_MS = Math.floor(ANSWER_LOCK_TTL_MS / 2);
 
 export async function withAnswerLock<T>(
   matchId: string,
@@ -16,10 +17,17 @@ export async function withAnswerLock<T>(
     onBusy();
     return undefined;
   }
+  // Renew the lock at half the TTL so a slow fn() can't run past expiry
+  // and let a concurrent handler in. Stops on release in finally.
+  const token = lock.token;
+  const renew = setInterval(() => {
+    void extendLock(lockKey, token, ANSWER_LOCK_TTL_MS).catch(() => {});
+  }, ANSWER_LOCK_RENEW_MS);
   try {
     return await fn();
   } finally {
-    await releaseLock(lockKey, lock.token);
+    clearInterval(renew);
+    await releaseLock(lockKey, token);
   }
 }
 

@@ -14,7 +14,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { questionTimerKey } from './match-keys.js';
-import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
+import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   ensureHalftimeCategories,
   fireAndForget,
@@ -450,6 +450,8 @@ export async function sendPossessionMatchQuestion(
       phaseKind: runtimePhaseKind,
       phaseRound,
       shooterSeat,
+      playableAt,
+      deadlineAt,
     }).catch((error) => {
       logger.warn({ error, matchId, qIndex }, 'Failed to schedule possession AI answer');
     });
@@ -513,6 +515,8 @@ export async function resumePossessionMatchQuestion(
     phaseKind: currentQuestion.phaseKind,
     phaseRound: currentQuestion.phaseRound ?? 0,
     shooterSeat: currentQuestion.shooterSeat,
+    playableAt,
+    deadlineAt,
   }).catch((error) => {
     logger.warn({ error, matchId, qIndex }, 'Failed to reschedule possession AI answer after resume');
   });
@@ -544,12 +548,20 @@ export async function ensurePossessionActiveTimers(
   }
 
   scheduleQuestionTimeout(io, matchId, currentQuestion.qIndex, deadlineAt);
+  // Reconnect/resume path: only schedule AI answer if no plan exists yet.
+  // Rescheduling here would re-randomize the AI's plan and shift the
+  // deadline forward, breaking live timing for ongoing rounds.
+  const aiAnswerKey = questionTimerKey(matchId, currentQuestion.qIndex);
+  const aiAlreadyScheduled = await hasPendingRealtimeTimer('possession_ai_answer', aiAnswerKey);
+  if (aiAlreadyScheduled) return true;
   void schedulePossessionAiAnswer(io, matchId, currentQuestion.qIndex, {
     questionKind: currentQuestion.kind,
     evaluation: currentQuestion.evaluation,
     phaseKind: currentQuestion.phaseKind,
     phaseRound: currentQuestion.phaseRound ?? 0,
     shooterSeat: currentQuestion.shooterSeat,
+    playableAt: currentQuestion.shownAt ? new Date(currentQuestion.shownAt) : undefined,
+    deadlineAt,
   }).catch((error) => {
     logger.warn({ error, matchId, qIndex: currentQuestion.qIndex }, 'Failed to ensure possession AI answer timer');
   });

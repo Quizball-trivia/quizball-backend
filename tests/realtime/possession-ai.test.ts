@@ -157,6 +157,37 @@ describe('possession AI timer scheduling', () => {
     }
   });
 
+  it('clamps resumed AI answers before the resumed question deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-19T19:28:45.000Z'));
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+    try {
+      getMatchCacheOrRebuildMock.mockResolvedValue(createCache());
+      const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
+      const ai = createPossessionAi(vi.fn());
+      const playableAt = new Date(Date.now());
+      const deadlineAt = new Date(Date.now() + 1500);
+
+      await ai.schedulePossessionAiAnswer({} as QuizballServer, 'm1', 0, {
+        questionKind: 'multipleChoice',
+        evaluation: { kind: 'multipleChoice', correctIndex: 2 },
+        phaseKind: 'normal',
+        phaseRound: 1,
+        shooterSeat: null,
+        playableAt,
+        deadlineAt,
+      });
+
+      const scheduledAt = redis.zsets.get('realtime:timers')?.get('possession_ai_answer:m1:0');
+      expect(scheduledAt).toBeLessThanOrEqual(deadlineAt.getTime() - 250);
+      const payload = redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0');
+      expect(payload).toContain('"plannedAnswerTimeMs":1250');
+    } finally {
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('reloads current state before committing a due AI answer', async () => {
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {

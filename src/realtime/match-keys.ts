@@ -18,8 +18,16 @@ export function matchGraceKey(matchId: string): string {
   return `match:grace:${matchId}`;
 }
 
+export function matchResumeCountdownKey(matchId: string): string {
+  return `match:resume_countdown:${matchId}`;
+}
+
 export function matchReconnectCountKey(matchId: string, userId: string): string {
   return `match:reconnect_count:${matchId}:${userId}`;
+}
+
+export function matchForfeitPendingUserKey(userId: string): string {
+  return `user:match_forfeit_pending:${userId}`;
 }
 
 export function lastMatchKey(userId: string): string {

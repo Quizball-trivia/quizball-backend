@@ -634,7 +634,10 @@ export const lobbyRealtimeService = {
       }
 
       void import('./draft-realtime.service.js')
-        .then(({ resumeActiveDraftTimers }) => resumeActiveDraftTimers(io, newestLobby.id))
+        .then(async ({ draftRealtimeService, resumeActiveDraftTimers }) => {
+          await draftRealtimeService.resumeDraftForReconnectedPlayer(io, newestLobby.id, userId);
+          await resumeActiveDraftTimers(io, newestLobby.id);
+        })
         .catch((error) => {
           logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
         });
@@ -1317,7 +1320,20 @@ export const lobbyRealtimeService = {
     }
 
     const lobby = await lobbiesRepo.getById(lobbyId);
-    if (!lobby || lobby.status !== 'waiting') {
+    if (!lobby) {
+      return;
+    }
+
+    if (lobby.status === 'active') {
+      void import('./draft-realtime.service.js')
+        .then(({ draftRealtimeService }) => draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId))
+        .catch((error) => {
+          logger.warn({ error, lobbyId, userId }, 'Draft disconnect pause failed');
+        });
+      return;
+    }
+
+    if (lobby.status !== 'waiting') {
       return;
     }
 

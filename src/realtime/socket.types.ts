@@ -81,6 +81,16 @@ export interface DraftState {
   turnUserId: string;
 }
 
+export interface DraftOpponentDisconnectedPayload {
+  lobbyId: string;
+  opponentId: string;
+  graceMs: number;
+}
+
+export interface DraftResumePayload {
+  lobbyId: string;
+}
+
 export interface OpponentInfo {
   id: string;
   username: string;
@@ -181,6 +191,7 @@ export interface MatchCountdownPayload {
   matchId: string;
   seconds: number;
   startsAt: string;
+  reason?: 'kickoff' | 'resume';
 }
 
 export interface MatchQuestionPayload {
@@ -374,6 +385,7 @@ export interface MatchFinalResultsPayload {
   matchId: string;
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
+  participants?: MatchParticipant[];
   standings?: MatchStandingPayload[];
   totalQuestions?: number;
   questionResults?: Record<string, Array<'correct' | 'wrong' | null>>;
@@ -383,6 +395,12 @@ export interface MatchFinalResultsPayload {
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: RankedMatchOutcomePayload | null;
+}
+
+export interface MatchForfeitPendingPayload {
+  matchId: string;
+  reason: 'reconnect_limit' | 'opponent_forfeit' | 'opponent_reconnect_limit';
+  message: string;
 }
 
 export interface MatchStatePayload {
@@ -629,6 +647,8 @@ export interface ServerToClientEvents {
   'draft:start': (data: DraftState) => void;
   'draft:banned': (data: { actorId: string; categoryId: string }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
+  'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
+  'draft:resume': (data: DraftResumePayload) => void;
   'match:start': (data: MatchStartPayload) => void;
   'match:countdown': (data: MatchCountdownPayload) => void;
   'match:state': (data: MatchStatePayload) => void;
@@ -640,6 +660,7 @@ export interface ServerToClientEvents {
   'match:clues_guess_ack': (data: MatchCluesGuessAckPayload) => void;
   'match:round_result': (data: MatchRoundResultPayload) => void;
   'match:final_results': (data: MatchFinalResultsPayload) => void;
+  'match:forfeit_pending': (data: MatchForfeitPendingPayload) => void;
   'match:opponent_disconnected': (data: MatchOpponentDisconnectedPayload) => void;
   'match:resume': (data: MatchResumePayload) => void;
   'match:rejoin_available': (data: MatchRejoinAvailablePayload) => void;

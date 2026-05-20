@@ -641,6 +641,10 @@ export async function handlePossessionCluesAnswer(
 
   const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
 
+  // Mirror put-in-order: persist the answer row so it survives cache
+  // eviction, but leave totals to the resolver (resolver is the sole
+  // updater for non-MCQ to avoid double-counting against the additive
+  // matchesRepo.updatePlayerTotals).
   fireAndForget('insertMatchAnswer(handlePossessionCluesAnswer)', async () => {
     await matchesRepo.insertMatchAnswerIfMissing({
       matchId,
@@ -658,14 +662,6 @@ export async function handlePossessionCluesAnswer(
       phaseRound: committed.question.phaseRound,
       shooterSeat: committed.question.shooterSeat,
     });
-  });
-  fireAndForget('updatePlayerTotals(handlePossessionCluesAnswer)', async () => {
-    await matchesRepo.updatePlayerTotals(
-      matchId,
-      socket.data.user.id,
-      committed.pointsEarned,
-      committed.isCorrect
-    );
   });
 
   socket.emit('match:answer_ack', {

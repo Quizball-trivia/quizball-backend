@@ -51,6 +51,19 @@ export interface CachedAnswer {
   clueIndex?: number | null;
 }
 
+const VALID_QUESTION_KINDS: ReadonlySet<MatchQuestionKind> = new Set([
+  'multipleChoice',
+  'countdown',
+  'putInOrder',
+  'clues',
+]);
+
+function asQuestionKind(value: unknown): MatchQuestionKind {
+  return typeof value === 'string' && (VALID_QUESTION_KINDS as ReadonlySet<string>).has(value)
+    ? (value as MatchQuestionKind)
+    : 'multipleChoice';
+}
+
 function stringArrayFromPayload(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((entry): entry is string => typeof entry === 'string');
@@ -232,9 +245,7 @@ function toCachedAnswer(rows: {
     const payload = row.answer_payload && typeof row.answer_payload === 'object' && !Array.isArray(row.answer_payload)
       ? row.answer_payload as Record<string, unknown>
       : {};
-    const questionKind = typeof payload.questionKind === 'string'
-      ? payload.questionKind as MatchQuestionKind
-      : 'multipleChoice';
+    const questionKind = asQuestionKind(payload.questionKind);
     answers[row.user_id] = {
       userId: row.user_id,
       questionKind,

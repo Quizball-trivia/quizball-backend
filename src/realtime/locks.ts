@@ -16,6 +16,15 @@ const RELEASE_LOCK_SCRIPT = `
   end
 `;
 
+// Atomic compare-and-extend: only renew the TTL if the token still matches.
+const EXTEND_LOCK_SCRIPT = `
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+  else
+    return 0
+  end
+`;
+
 export interface LockResult {
   acquired: boolean;
   token?: string;
@@ -94,4 +103,28 @@ export async function releaseLock(key: string, token: string): Promise<boolean> 
     }
     return false;
   });
+}
+
+/** Renew an existing lock's TTL, but only if the token still matches. */
+export async function extendLock(key: string, token: string, ttlMs: number): Promise<boolean> {
+  const client = getRedisClient();
+  if (client && client.isOpen) {
+    if (typeof client.eval !== 'function') return false;
+    try {
+      const result = await client.eval(EXTEND_LOCK_SCRIPT, {
+        keys: [key],
+        arguments: [token, String(ttlMs)],
+      });
+      return result === 1;
+    } catch (error) {
+      logger.warn({ error, key }, 'Failed to extend Redis lock');
+      return false;
+    }
+  }
+  const lock = localLocks.get(key);
+  if (!lock || lock.token !== token) return false;
+  clearTimeout(lock.timeout);
+  const timeout = setTimeout(() => localLocks.delete(key), ttlMs);
+  localLocks.set(key, { token, timeout });
+  return true;
 }

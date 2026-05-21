@@ -453,6 +453,7 @@ export async function startRankedAiForUser(
 
     await attachUserSocketsToLobby(io, userId, lobby.id);
     await emitLobbyState(io, lobby.id);
+    await userSessionGuardService.emitState(io, userId);
 
     const searchDurationMs =
       options?.searchDurationMs ??
@@ -594,6 +595,23 @@ export const lobbyRealtimeService = {
     await attachUserSocketsToLobby(io, userId, newestLobby.id);
     const state = await lobbiesService.buildLobbyState(newestLobby);
     socket.emit('lobby:state', state);
+    await userSessionGuardService.emitState(io, userId);
+
+    if (newestLobby.mode === 'ranked') {
+      const members = await lobbiesRepo.listMembersWithUser(newestLobby.id);
+      if (members.length === 2) {
+        setTimeout(() => {
+          void (async () => {
+            const latest = await lobbiesRepo.getById(newestLobby.id);
+            if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
+            await startDraft(io, newestLobby.id);
+          })().catch((error) => {
+            logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to recover ranked waiting lobby draft start');
+          });
+        }, 250);
+      }
+    }
+
     logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
   },
 

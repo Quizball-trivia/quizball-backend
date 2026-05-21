@@ -33,6 +33,8 @@ const QUEUE_KEY = 'ranked:mm:queue';
 const TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const USER_MAP_KEY = 'ranked:mm:user';
 const SEARCH_KEY_PREFIX = 'ranked:mm:search:';
+const CANCEL_KEY_PREFIX = 'ranked:mm:cancel:';
+const CANCEL_KEY_TTL_SEC = 30;
 const TICK_LOCK_KEY = 'ranked:mm:tick-lock';
 
 let loopTimer: NodeJS.Timeout | null = null;
@@ -40,6 +42,10 @@ let loopIo: QuizballServer | null = null;
 
 function searchKey(searchId: string): string {
   return `${SEARCH_KEY_PREFIX}${searchId}`;
+}
+
+function cancelKey(userId: string): string {
+  return `${CANCEL_KEY_PREFIX}${userId}`;
 }
 
 function toStringArray(value: unknown): string[] {
@@ -77,6 +83,22 @@ async function startHumanRankedMatch(
   }, async (span) => {
     if (userAId === userBId) return;
 
+    const redis = getRedisClient();
+    if (redis) {
+      const [userACancelled, userBCancelled] = await Promise.all([
+        redis.get(cancelKey(userAId)),
+        redis.get(cancelKey(userBId)),
+      ]);
+      if (userACancelled || userBCancelled) {
+        logger.info(
+          { userAId, userBId, userACancelled: Boolean(userACancelled), userBCancelled: Boolean(userBCancelled) },
+          'Ranked human match creation skipped because a player cancelled search'
+        );
+        span.setAttribute('quizball.skipped_cancelled', true);
+        return;
+      }
+    }
+
     const [userA, userB] = await Promise.all([
       usersRepo.getById(userAId),
       usersRepo.getById(userBId),
@@ -108,6 +130,10 @@ async function startHumanRankedMatch(
     ]);
 
     await emitLobbyState(io, lobby.id);
+    await Promise.all([
+      userSessionGuardService.emitState(io, userAId),
+      userSessionGuardService.emitState(io, userBId),
+    ]);
 
     const [formA, formB] = await Promise.all([
       statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
@@ -158,6 +184,11 @@ async function startAiFallback(io: QuizballServer, userId: string): Promise<void
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
   }, async () => {
+    const redis = getRedisClient();
+    if (redis && await redis.get(cancelKey(userId))) {
+      logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
+      return;
+    }
     await startRankedAiForUser(io, userId, { skipSearchEmit: true });
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
     appMetrics.rankedAiFallbacks.add(1);
@@ -286,6 +317,10 @@ export const rankedMatchmakingService = {
       if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
         span.setAttribute('quizball.queue_mode', 'ai_only');
+        const redis = getRedisClient();
+        if (redis) {
+          await redis.del(cancelKey(userId));
+        }
         await startRankedAiForUser(io, userId);
         return;
       }
@@ -343,6 +378,8 @@ export const rankedMatchmakingService = {
             });
             return;
           }
+
+          await redis.del(cancelKey(userId));
 
           const now = Date.now();
           const deadlineAt = now + SEARCH_DURATION_MS;
@@ -476,6 +513,7 @@ export const rankedMatchmakingService = {
         io,
         socket,
         async () => {
+          await redis.set(cancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
             keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
             arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
@@ -489,7 +527,8 @@ export const rankedMatchmakingService = {
           }
 
           socket.emit('ranked:queue_left');
-          const snapshot = await userSessionGuardService.emitState(io, userId);
+          const snapshot = await userSessionGuardService.cleanupRankedQueueArtifacts(io, userId);
+          io.to(`user:${userId}`).emit('session:state', snapshot);
           logger.info(
             {
               userId,

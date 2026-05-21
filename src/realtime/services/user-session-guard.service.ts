@@ -357,6 +357,14 @@ async function cleanupOpenLobbies(
   }
 }
 
+async function cleanupRankedWaitingLobbies(io: QuizballServer, userId: string): Promise<void> {
+  const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
+  for (const lobby of openLobbies) {
+    if (lobby.mode !== 'ranked' || lobby.status !== 'waiting') continue;
+    await removeUserFromLobby(io, lobby, userId, 'ranked_queue_leave');
+  }
+}
+
 export const userSessionGuardService = {
   async withUserSessionLock<T>(
     userId: string,
@@ -555,5 +563,11 @@ export const userSessionGuardService = {
     await cleanupOpenLobbies(io, userId);
     const nextSnapshot = await this.resolveState(userId);
     return { ok: true, snapshot: nextSnapshot };
+  },
+
+  async cleanupRankedQueueArtifacts(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
+    await cancelRankedQueueSearch(userId);
+    await cleanupRankedWaitingLobbies(io, userId);
+    return this.resolveState(userId);
   },
 };

@@ -9,12 +9,18 @@ import {
 type FakeRedis = {
   zRangeByScore: ReturnType<typeof vi.fn>;
   eval: ReturnType<typeof vi.fn>;
+  hGet: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  set: ReturnType<typeof vi.fn>;
+  del: ReturnType<typeof vi.fn>;
 };
 
 const createLobbyMock = vi.fn();
 const addMemberMock = vi.fn();
 const getLobbyByIdMock = vi.fn();
 const buildLobbyStateMock = vi.fn();
+const listOpenLobbiesForUserMock = vi.fn();
+const getActiveMatchForUserMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const ensureProfileMock = vi.fn();
 const startDraftMock = vi.fn();
@@ -53,6 +59,13 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     createLobby: (...args: unknown[]) => createLobbyMock(...args),
     addMember: (...args: unknown[]) => addMemberMock(...args),
     getById: (...args: unknown[]) => getLobbyByIdMock(...args),
+    listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/matches.repo.js', () => ({
+  matchesRepo: {
+    getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
   },
 }));
 
@@ -114,6 +127,10 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock = {
       zRangeByScore: vi.fn().mockResolvedValue([]),
       eval: vi.fn().mockResolvedValue([]),
+      hGet: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue('OK'),
+      del: vi.fn().mockResolvedValue(1),
     };
 
     acquireLockMock.mockResolvedValue({ acquired: true, token: 't1' });
@@ -135,6 +152,8 @@ describe('ranked-matchmaking.service queue behavior', () => {
       updated_at: new Date().toISOString(),
     }));
     addMemberMock.mockResolvedValue(undefined);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    getActiveMatchForUserMock.mockResolvedValue(null);
     getLobbyByIdMock.mockImplementation(async (lobbyId: string) => ({
       id: lobbyId,
       mode: 'ranked',

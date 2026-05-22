@@ -8,6 +8,7 @@ import { getProgressionFromTotalXp } from '../progression/progression.logic.js';
 import { rankedProfileResponseSchema } from '../ranked/ranked.schemas.js';
 import { friendStatusSchema } from '../friends/friends.schemas.js';
 import { avatarCustomizationSchema, parseStoredAvatarCustomization } from './avatar-customization.js';
+import { i18nFieldSchema } from '../../http/schemas/shared.js';
 
 export const userRoleSchema = z.enum(['admin', 'user']);
 export type UserRole = z.infer<typeof userRoleSchema>;
@@ -149,8 +150,8 @@ export type PublicProfileResponse = z.infer<typeof publicProfileResponseSchema>;
 
 export const achievementResponseSchema = z.object({
   id: z.string(),
-  title: z.string(),
-  description: z.string(),
+  title: i18nFieldSchema,
+  description: i18nFieldSchema,
   icon: z.string(),
   unlocked: z.boolean(),
   progress: z.number().int().nonnegative(),

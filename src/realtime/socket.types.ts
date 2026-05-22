@@ -352,10 +352,15 @@ export interface MatchStandingPayload {
   avgTimeMs: number | null;
 }
 
+/**
+ * Sent to the client when an achievement unlocks during a match.
+ * `title` and `description` are I18nField objects (`{ en, ka, ... }`)
+ * — the frontend resolves them via the current locale.
+ */
 export interface AchievementUnlockPayload {
   id: string;
-  title: string;
-  description: string;
+  title: Record<string, string>;
+  description: Record<string, string>;
   icon: string;
   unlocked: boolean;
   progress: number;

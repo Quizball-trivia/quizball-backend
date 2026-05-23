@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { i18nFieldSchema } from '../../http/schemas/shared.js';
 
 export const objectivePeriodTypeSchema = z.enum(['daily', 'weekly']);
 
@@ -11,8 +12,8 @@ export const objectiveMetadataSchema = z.object({
 export const objectiveProgressResponseSchema = z.object({
   id: z.string(),
   periodType: objectivePeriodTypeSchema,
-  title: z.string(),
-  description: z.string(),
+  title: i18nFieldSchema,
+  description: i18nFieldSchema,
   icon: z.string(),
   progress: z.number().int().nonnegative(),
   target: z.number().int().positive(),

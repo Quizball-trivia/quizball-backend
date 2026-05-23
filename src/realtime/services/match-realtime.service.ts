@@ -46,6 +46,7 @@ import {
   handlePossessionCountdownGuess,
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
+  emitMatchState,
   handlePossessionAnswer,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
@@ -814,9 +815,11 @@ export async function beginMatchForLobby(
     })
   );
 
-  if (variant !== 'friendly_party_quiz') {
-    const cache = buildInitialCache({ match, players });
-    await setMatchCache(cache);
+  const initialPossessionCache = variant !== 'friendly_party_quiz'
+    ? buildInitialCache({ match, players })
+    : null;
+  if (initialPossessionCache) {
+    await setMatchCache(initialPossessionCache);
   }
 
   const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat]));
@@ -880,6 +883,8 @@ export async function beginMatchForLobby(
 
   if (variant === 'friendly_party_quiz') {
     await emitPartyQuizState(io, matchId);
+  } else if (initialPossessionCache) {
+    await emitMatchState(io, matchId, initialPossessionCache.statePayload);
   }
 
   const redis = getRedisClient();
@@ -1524,6 +1529,20 @@ export const matchRealtimeService = {
       return {
         graceMs: MATCH_DISCONNECT_GRACE_MS,
         remainingReconnects: 0,
+        finalized: false,
+      };
+    }
+
+    const sockets = await io.in(`match:${matchId}`).fetchSockets();
+    const stillPresent = sockets.some((connectedSocket) => connectedSocket.data.user.id === userId);
+    if (stillPresent) {
+      logger.info(
+        { matchId, userId, socketCount: sockets.length },
+        'Match disconnect pause skipped because user still has a live match socket'
+      );
+      return {
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
+        remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
         finalized: false,
       };
     }

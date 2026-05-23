@@ -1,4 +1,5 @@
 import type { Json } from '../../db/types.js';
+import type { I18nField } from '../../http/schemas/shared.js';
 
 export type ObjectivePeriodType = 'daily' | 'weekly';
 
@@ -17,8 +18,8 @@ export type ObjectiveRuleType =
 export interface ObjectiveDefinition {
   id: string;
   periodType: ObjectivePeriodType;
-  title: string;
-  description: string;
+  title: I18nField;
+  description: I18nField;
   icon: string;
   target: number;
   rewardCoins: number;

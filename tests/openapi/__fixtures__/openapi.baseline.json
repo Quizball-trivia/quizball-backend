@@ -2066,10 +2066,18 @@
                       ]
                     },
                     "title": {
-                      "type": "string"
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     },
                     "description": {
-                      "type": "string"
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     },
                     "icon": {
                       "type": "string"
@@ -2188,10 +2196,18 @@
                       ]
                     },
                     "title": {
-                      "type": "string"
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     },
                     "description": {
-                      "type": "string"
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     },
                     "icon": {
                       "type": "string"
@@ -9027,10 +9043,18 @@
                                 ]
                               },
                               "title": {
-                                "type": "string"
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
                               },
                               "description": {
-                                "type": "string"
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
                               },
                               "icon": {
                                 "type": "string"
@@ -9149,10 +9173,18 @@
                                 ]
                               },
                               "title": {
-                                "type": "string"
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
                               },
                               "description": {
-                                "type": "string"
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
                               },
                               "icon": {
                                 "type": "string"

@@ -41,6 +41,10 @@ const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
 const POST_CONNECT_RETRY_MS = 150;
 const POST_CONNECT_MAX_ATTEMPTS = 10;
+export const SOCKET_HEARTBEAT_CONFIG = {
+  pingInterval: 2000,
+  pingTimeout: 3000,
+} as const;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
@@ -219,8 +223,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
       credentials: true,
     },
-    pingTimeout: 20000,   // How long to wait for pong response
-    pingInterval: 10000,  // How often to send ping (must be < pingTimeout)
+    // Gameplay needs near-immediate disconnect feedback: if a player stops
+    // answering heartbeats for ~3s, the opponent should see the 60s grace
+    // overlay within ~5s worst case.
+    pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
+    pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
   });
 
   const { pubClient, subClient } = await initRedisClients();

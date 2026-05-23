@@ -1,7 +1,9 @@
+import type { I18nField } from '../../http/schemas/shared.js';
+
 export interface AchievementDefinition {
   id: string;
-  title: string;
-  description: string;
+  title: I18nField;
+  description: I18nField;
   icon: string;
   target: number;
 }
@@ -18,8 +20,8 @@ export interface UserAchievementRow {
 
 export interface AchievementProgress {
   id: string;
-  title: string;
-  description: string;
+  title: I18nField;
+  description: I18nField;
   icon: string;
   unlocked: boolean;
   progress: number;

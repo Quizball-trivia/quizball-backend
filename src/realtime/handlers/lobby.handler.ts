@@ -1,6 +1,8 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   lobbyCreateSchema,
+  lobbyChallengeDecisionSchema,
+  lobbyChallengeSchema,
   lobbyJoinByCodeSchema,
   lobbyReadySchema,
   lobbyStartSchema,
@@ -26,6 +28,51 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:create');
       socket.emit('error', { code: 'LOBBY_CREATE_ERROR', message: 'Failed to create lobby' });
+    }
+  });
+
+  socket.on('lobby:challenge', async (payload) => {
+    const parsed = lobbyChallengeSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:challenge payload');
+      return;
+    }
+
+    try {
+      await lobbyRealtimeService.challengeFriend(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:challenge');
+      socket.emit('error', { code: 'LOBBY_CHALLENGE_ERROR', message: 'Failed to create challenge' });
+    }
+  });
+
+  socket.on('lobby:challenge_accept', async (payload) => {
+    const parsed = lobbyChallengeDecisionSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:challenge_accept payload');
+      return;
+    }
+
+    try {
+      await lobbyRealtimeService.acceptChallenge(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:challenge_accept');
+      socket.emit('error', { code: 'LOBBY_CHALLENGE_ACCEPT_ERROR', message: 'Failed to accept challenge' });
+    }
+  });
+
+  socket.on('lobby:challenge_decline', async (payload) => {
+    const parsed = lobbyChallengeDecisionSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:challenge_decline payload');
+      return;
+    }
+
+    try {
+      await lobbyRealtimeService.declineChallenge(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:challenge_decline');
+      socket.emit('error', { code: 'LOBBY_CHALLENGE_DECLINE_ERROR', message: 'Failed to decline challenge' });
     }
   });
 

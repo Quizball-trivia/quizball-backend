@@ -136,7 +136,7 @@ export const achievementsService = {
             unlockedAt,
           };
           unlockedForUser.push(payload);
-          trackAchievementUnlocked(userId, definition.id, definition.title);
+          trackAchievementUnlocked(userId, definition.id, definition.title.en ?? definition.id);
         }
       }
 

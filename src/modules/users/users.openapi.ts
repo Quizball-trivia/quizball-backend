@@ -6,6 +6,7 @@ import { registerEndpoint } from '../../http/openapi/register-endpoint.js';
 import { progressionResponseSchema } from '../progression/progression.schemas.js';
 import {
   accountDeletionResponseSchema,
+  achievementsResponseSchema,
   publicProfileResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
@@ -21,10 +22,12 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
   const userResponseOpenApiSchema = userResponseSchema.openapi('UserResponse');
   const publicProfileResponseOpenApiSchema = publicProfileResponseSchema.openapi('PublicProfileResponse');
   const accountDeletionResponseOpenApiSchema = accountDeletionResponseSchema.openapi('AccountDeletionResponse');
+  const achievementsResponseOpenApiSchema = achievementsResponseSchema.openapi('AchievementsResponse');
   registry.register('ProgressionResponse', progressionResponseOpenApiSchema);
   registry.register('UserResponse', userResponseOpenApiSchema);
   registry.register('PublicProfileResponse', publicProfileResponseOpenApiSchema);
   registry.register('AccountDeletionResponse', accountDeletionResponseOpenApiSchema);
+  registry.register('AchievementsResponse', achievementsResponseOpenApiSchema);
 
   registerEndpoint(registry, {
     method: 'get',
@@ -118,6 +121,32 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
       400: { description: 'Account is not restorable', schema: errorResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Insufficient permissions', schema: errorResponseSchema },
+      404: { description: 'User not found', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/users/me/achievements',
+    summary: 'Get achievements for the current user',
+    tags: ['Users'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Achievements list', schema: achievementsResponseOpenApiSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/users/{userId}/achievements',
+    summary: 'Get achievements for a specific user',
+    tags: ['Users'],
+    security: [{ bearerAuth: [] }],
+    pathParams: userIdParamSchema,
+    responses: {
+      200: { description: 'Achievements list', schema: achievementsResponseOpenApiSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
       404: { description: 'User not found', schema: errorResponseSchema },
     },
   });

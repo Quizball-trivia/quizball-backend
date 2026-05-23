@@ -1132,7 +1132,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
   // S22/S23 removed: covered the now-deleted DB-fallback path. The Redis-path
   // equivalents (scoring/timing) are exercised via tests/realtime/possession-match-flow.test.ts.
 
-  it('S24: beginMatchForLobby emits countdown and delays first question by 5s', async () => {
+  it('S24: beginMatchForLobby emits countdown and delays first question by 10s', async () => {
     vi.useFakeTimers();
     try {
       const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
@@ -1143,7 +1143,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
       expect((io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([room]: [string]) => room === 'match:m1')).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(4999);
+      await vi.advanceTimersByTimeAsync(9999);
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
@@ -1170,7 +1170,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(toCalls.some(([room]: [string]) => room === 'user:u1')).toBe(true);
       expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(10000);
       expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
     } finally {
       vi.useRealTimers();

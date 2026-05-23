@@ -77,7 +77,7 @@ import { acquireLock, releaseLock } from '../locks.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
-const MATCH_START_COUNTDOWN_SEC = 5;
+const MATCH_START_COUNTDOWN_SEC = 10;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;

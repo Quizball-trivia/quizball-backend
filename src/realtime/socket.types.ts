@@ -354,19 +354,11 @@ export interface MatchStandingPayload {
 
 /**
  * Sent to the client when an achievement unlocks during a match.
- * `title` and `description` are I18nField objects (`{ en, ka, ... }`)
- * — the frontend resolves them via the current locale.
+ * Single source of truth lives in the achievements module so the I18nField
+ * shape (`{ en, ka, ... }`) stays consistent across HTTP + socket layers.
  */
-export interface AchievementUnlockPayload {
-  id: string;
-  title: Record<string, string>;
-  description: Record<string, string>;
-  icon: string;
-  unlocked: boolean;
-  progress: number;
-  target: number;
-  unlockedAt: string | null;
-}
+import type { AchievementUnlockPayload } from '../modules/achievements/achievements.types.js';
+export type { AchievementUnlockPayload };
 
 export interface RankedUserOutcomePayload {
   userId: string;

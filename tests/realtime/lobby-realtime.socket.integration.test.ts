@@ -314,7 +314,11 @@ vi.mock('../../src/modules/lobbies/lobby-challenge-invitations.repo.js', () => (
     }),
     listPendingForUser: vi.fn(async (userId: string) => {
       return [...store.challengeInvites.values()]
-        .filter((invite) => invite.to_user_id === userId && invite.status === 'pending')
+        .filter((invite) =>
+          invite.to_user_id === userId &&
+          invite.status === 'pending' &&
+          new Date(invite.expires_at).getTime() > Date.now()
+        )
         .map((invite) => {
           const lobby = store.lobbies.get(invite.lobby_id);
           return {

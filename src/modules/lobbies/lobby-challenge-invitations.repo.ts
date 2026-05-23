@@ -107,8 +107,10 @@ export const lobbyChallengeInvitationsRepo = {
     await sql`
       UPDATE lobby_challenge_invitations
       SET status = 'expired', updated_at = NOW()
-      WHERE from_user_id = ${fromUserId}
-        AND to_user_id = ${toUserId}
+      WHERE (
+        (from_user_id = ${fromUserId} AND to_user_id = ${toUserId})
+        OR (from_user_id = ${toUserId} AND to_user_id = ${fromUserId})
+      )
         AND status = 'pending'
         AND expires_at <= NOW()
     `;
@@ -122,6 +124,7 @@ export const lobbyChallengeInvitationsRepo = {
       UPDATE lobby_challenge_invitations
       SET status = ${status}, updated_at = NOW()
       WHERE id = ${id}
+        AND status = 'pending'
       RETURNING *
     `;
     return row ?? null;

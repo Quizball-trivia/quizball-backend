@@ -44,8 +44,18 @@ export const lobbyStartSchema = z.object({
   lobbyId: z.string().uuid().optional(),
 });
 
+export const lobbyChallengeSchema = z.object({
+  toUserId: z.string().uuid(),
+});
+
+export const lobbyChallengeDecisionSchema = z.object({
+  invitationId: z.string().uuid(),
+});
+
 export type LobbyCreatePayload = z.infer<typeof lobbyCreateSchema>;
 export type LobbyJoinByCodePayload = z.infer<typeof lobbyJoinByCodeSchema>;
 export type LobbyReadyPayload = z.infer<typeof lobbyReadySchema>;
 export type LobbyUpdateSettingsPayload = z.infer<typeof lobbyUpdateSettingsSchema>;
 export type LobbyStartPayload = z.infer<typeof lobbyStartSchema>;
+export type LobbyChallengePayload = z.infer<typeof lobbyChallengeSchema>;
+export type LobbyChallengeDecisionPayload = z.infer<typeof lobbyChallengeDecisionSchema>;

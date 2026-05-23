@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
+import { lobbyRealtimeService } from '../../src/realtime/services/lobby-realtime.service.js';
 import '../setup.js';
 
 type LobbyMode = 'friendly' | 'ranked';
@@ -27,11 +28,24 @@ type LobbyMember = {
   joined_at: string;
 };
 
+type ChallengeInvite = {
+  id: string;
+  lobby_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  status: 'pending' | 'accepted' | 'declined' | 'canceled' | 'expired';
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 const store = {
   lobbies: new Map<string, LobbyRow>(),
   members: new Map<string, LobbyMember[]>(),
+  challengeInvites: new Map<string, ChallengeInvite>(),
   activeMatchByUser: new Map<string, { id: string; lobby_id: string; started_at: string }>(),
   idCounter: 0,
+  inviteCounter: 0,
 };
 
 function nowIso(): string {
@@ -41,6 +55,11 @@ function nowIso(): string {
 function nextLobbyId(): string {
   store.idCounter += 1;
   return `lobby-${store.idCounter}`;
+}
+
+function nextInviteId(): string {
+  store.inviteCounter += 1;
+  return `aaaaaaaa-aaaa-4aaa-8aaa-${String(store.inviteCounter).padStart(12, '0')}`;
 }
 
 function listMembers(lobbyId: string): LobbyMember[] {
@@ -71,7 +90,15 @@ class TestSocket {
     private readonly io: TestIo,
     userId: string
   ) {
-    this.data = { user: { id: userId, role: 'user' } };
+    this.data = {
+      user: {
+        id: userId,
+        role: 'user',
+        nickname: userId,
+        avatar_url: null,
+        avatar_customization: null,
+      },
+    } as QuizballSocket['data'];
   }
 
   on(event: string, handler: (payload?: unknown) => void | Promise<void>): this {
@@ -225,12 +252,89 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
 }));
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
+  isUserAccountInactive: () => false,
   usersRepo: {
+    getById: vi.fn(async (id: string) => ({
+      id,
+      nickname: id,
+      avatar_url: null,
+      avatar_customization: null,
+      is_deleted: false,
+      deleted_at: null,
+      pending_deletion_at: null,
+    })),
     create: vi.fn(async ({ nickname, avatarUrl }: { nickname: string; avatarUrl: string | null }) => ({
       id: `ai-${nickname}`,
       nickname,
       avatar_url: avatarUrl,
     })),
+  },
+}));
+
+vi.mock('../../src/modules/friends/friends.repo.js', () => ({
+  friendsRepo: {
+    friendshipExists: vi.fn(async (userAId: string, userBId: string) =>
+      userAId !== '44444444-4444-4444-8444-444444444444' &&
+      userBId !== '44444444-4444-4444-8444-444444444444'
+    ),
+  },
+}));
+
+vi.mock('../../src/modules/lobbies/lobby-challenge-invitations.repo.js', () => ({
+  lobbyChallengeInvitationsRepo: {
+    create: vi.fn(async (data: {
+      lobbyId: string;
+      fromUserId: string;
+      toUserId: string;
+      expiresAt: Date;
+    }) => {
+      const row: ChallengeInvite = {
+        id: nextInviteId(),
+        lobby_id: data.lobbyId,
+        from_user_id: data.fromUserId,
+        to_user_id: data.toUserId,
+        status: 'pending',
+        expires_at: data.expiresAt.toISOString(),
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      };
+      store.challengeInvites.set(row.id, row);
+      return row;
+    }),
+    getById: vi.fn(async (id: string) => store.challengeInvites.get(id) ?? null),
+    findPendingBetween: vi.fn(async (fromUserId: string, toUserId: string) => {
+      return [...store.challengeInvites.values()].find((invite) =>
+        invite.status === 'pending' &&
+        (
+          (invite.from_user_id === fromUserId && invite.to_user_id === toUserId) ||
+          (invite.from_user_id === toUserId && invite.to_user_id === fromUserId)
+        ) &&
+        new Date(invite.expires_at).getTime() > Date.now()
+      ) ?? null;
+    }),
+    listPendingForUser: vi.fn(async (userId: string) => {
+      return [...store.challengeInvites.values()]
+        .filter((invite) => invite.to_user_id === userId && invite.status === 'pending')
+        .map((invite) => {
+          const lobby = store.lobbies.get(invite.lobby_id);
+          return {
+            ...invite,
+            from_nickname: invite.from_user_id,
+            from_avatar_url: null,
+            from_avatar_customization: null,
+            lobby_invite_code: lobby?.invite_code ?? null,
+          };
+        });
+    }),
+    expireStalePendingForUser: vi.fn(async () => undefined),
+    expireStalePendingBetween: vi.fn(async () => undefined),
+    updateStatus: vi.fn(async (id: string, status: ChallengeInvite['status']) => {
+      const invite = store.challengeInvites.get(id);
+      if (!invite) return null;
+      invite.status = status;
+      invite.updated_at = nowIso();
+      return invite;
+    }),
   },
 }));
 
@@ -468,14 +572,20 @@ function waitForEvent<T = unknown>(socket: TestSocket, eventName: string, timeou
 describe('lobby realtime socket integration', () => {
   let io: TestIo;
   const sockets: TestSocket[] = [];
+  const CHALLENGER_ID = '11111111-1111-4111-8111-111111111111';
+  const CHALLENGED_ID = '22222222-2222-4222-8222-222222222222';
+  const FRIEND_ID = '33333333-3333-4333-8333-333333333333';
+  const STRANGER_ID = '44444444-4444-4444-8444-444444444444';
 
   beforeEach(() => {
     vi.clearAllMocks();
     lockStore.clear();
     store.lobbies.clear();
     store.members.clear();
+    store.challengeInvites.clear();
     store.activeMatchByUser.clear();
     store.idCounter = 0;
+    store.inviteCounter = 0;
     io = new TestIo(sockets);
   });
 
@@ -509,6 +619,117 @@ describe('lobby realtime socket integration', () => {
     await host.trigger('lobby:leave');
     expect(store.lobbies.get(lobby.id)?.host_user_id).toBe('guest-u');
     expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['guest-u']);
+  });
+
+  it('creates a private friend challenge lobby and emits invite to challenged user', async () => {
+    const challenger = createSocket(CHALLENGER_ID);
+    const challenged = createSocket(CHALLENGED_ID);
+
+    const createdPromise = waitForEvent<{ invitationId: string; inviteCode: string; toUserId: string }>(
+      challenger,
+      'lobby:challenge_created'
+    );
+    const receivedPromise = waitForEvent<{ invitationId: string; inviteCode: string; fromUser: { id: string } }>(
+      challenged,
+      'lobby:challenge_received'
+    );
+
+    await challenger.trigger('lobby:challenge', { toUserId: CHALLENGED_ID });
+
+    const created = await createdPromise;
+    const received = await receivedPromise;
+    expect(created.toUserId).toBe(CHALLENGED_ID);
+    expect(received.invitationId).toBe(created.invitationId);
+    expect(received.inviteCode).toBe(created.inviteCode);
+    expect(received.fromUser.id).toBe(CHALLENGER_ID);
+
+    const lobby = [...store.lobbies.values()][0];
+    expect(lobby.mode).toBe('friendly');
+    expect(lobby.game_mode).toBe('friendly_possession');
+    expect(lobby.is_public).toBe(false);
+    expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual([CHALLENGER_ID]);
+  });
+
+  it('accepts a friend challenge through normal join-by-code flow', async () => {
+    const challenger = createSocket(CHALLENGER_ID);
+    const challenged = createSocket(CHALLENGED_ID);
+
+    const createdPromise = waitForEvent<{ invitationId: string; inviteCode: string }>(
+      challenger,
+      'lobby:challenge_created'
+    );
+    await challenger.trigger('lobby:challenge', { toUserId: CHALLENGED_ID });
+    const created = await createdPromise;
+
+    const statusPromise = waitForEvent<{ status: string; invitationId: string }>(
+      challenger,
+      'lobby:challenge_status'
+    );
+    await challenged.trigger('lobby:challenge_accept', { invitationId: created.invitationId });
+    const status = await statusPromise;
+
+    expect(status).toMatchObject({ invitationId: created.invitationId, status: 'accepted' });
+    const lobby = [...store.lobbies.values()][0];
+    expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual([CHALLENGER_ID, CHALLENGED_ID]);
+    expect(store.challengeInvites.get(created.invitationId)?.status).toBe('accepted');
+  });
+
+  it('delivers pending challenge invite when offline friend reconnects', async () => {
+    const challenger = createSocket(CHALLENGER_ID);
+
+    const createdPromise = waitForEvent<{ invitationId: string; inviteCode: string }>(
+      challenger,
+      'lobby:challenge_created'
+    );
+    await challenger.trigger('lobby:challenge', { toUserId: CHALLENGED_ID });
+    const created = await createdPromise;
+
+    const challenged = createSocket(CHALLENGED_ID);
+    const receivedPromise = waitForEvent<{ invitationId: string; inviteCode: string }>(
+      challenged,
+      'lobby:challenge_received'
+    );
+    await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(challenged as unknown as QuizballSocket);
+    const received = await receivedPromise;
+
+    expect(received.invitationId).toBe(created.invitationId);
+    expect(received.inviteCode).toBe(created.inviteCode);
+  });
+
+  it('declines a friend challenge without joining the lobby', async () => {
+    const challenger = createSocket(CHALLENGER_ID);
+    const challenged = createSocket(CHALLENGED_ID);
+
+    const createdPromise = waitForEvent<{ invitationId: string }>(challenger, 'lobby:challenge_created');
+    await challenger.trigger('lobby:challenge', { toUserId: CHALLENGED_ID });
+    const created = await createdPromise;
+
+    const statusPromise = waitForEvent<{ status: string; invitationId: string }>(
+      challenger,
+      'lobby:challenge_status'
+    );
+    await challenged.trigger('lobby:challenge_decline', { invitationId: created.invitationId });
+    const status = await statusPromise;
+
+    expect(status).toMatchObject({ invitationId: created.invitationId, status: 'declined' });
+    const lobby = [...store.lobbies.values()][0];
+    expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual([CHALLENGER_ID]);
+    expect(store.challengeInvites.get(created.invitationId)?.status).toBe('declined');
+  });
+
+  it('rejects self, non-friend, and duplicate challenges', async () => {
+    const challenger = createSocket(CHALLENGER_ID);
+    createSocket(FRIEND_ID);
+
+    await challenger.trigger('lobby:challenge', { toUserId: CHALLENGER_ID });
+    expect(challenger.emitted.some((entry) => entry.event === 'error' && (entry.payload as { code?: string }).code === 'LOBBY_CHALLENGE_INVALID')).toBe(true);
+
+    await challenger.trigger('lobby:challenge', { toUserId: STRANGER_ID });
+    expect(challenger.emitted.some((entry) => entry.event === 'error' && (entry.payload as { code?: string }).code === 'LOBBY_CHALLENGE_NOT_FRIENDS')).toBe(true);
+
+    await challenger.trigger('lobby:challenge', { toUserId: FRIEND_ID });
+    await challenger.trigger('lobby:challenge', { toUserId: FRIEND_ID });
+    expect(challenger.emitted.some((entry) => entry.event === 'error' && (entry.payload as { code?: string }).code === 'LOBBY_CHALLENGE_DUPLICATE')).toBe(true);
   });
 
   it('deletes lobby when both members leave concurrently (S10)', async () => {

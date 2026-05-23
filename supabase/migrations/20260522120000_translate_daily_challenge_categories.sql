@@ -9,43 +9,43 @@
 -- an admin has already populated the field manually.
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"დღიური გამოწვევები"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კონტენტის პულები დღიური გამოწვევის რეჟიმებისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('დღიური გამოწვევები'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კონტენტის პულები დღიური გამოწვევის რეჟიმებისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"ფულის ვარდნა"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები ფულის ვარდნის დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('ფულის ვარდნა'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები ფულის ვარდნის დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-money-drop';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"საფეხბურთო ჯეოპარდი"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები საფეხბურთო ჯეოპარდის დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('საფეხბურთო ჯეოპარდი'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები საფეხბურთო ჯეოპარდის დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-football-jeopardy';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"მართალია თუ მცდარი"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები „მართალია თუ მცდარი" დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('მართალია თუ მცდარი'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები „მართალია თუ მცდარი" დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-true-false';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"უკუთვლა"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები უკუთვლის დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('უკუთვლა'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები უკუთვლის დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-countdown';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"მინიშნებები"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები მინიშნებების დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('მინიშნებები'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები მინიშნებების დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-clues';
 
 UPDATE categories
-SET name = jsonb_set(name::jsonb, '{ka}', '"დაალაგე რიგით"', true),
-    description = jsonb_set(description::jsonb, '{ka}', '"კითხვები „დაალაგე რიგით" დღიური გამოწვევისთვის."', true),
+SET name = jsonb_set(name::jsonb, '{ka}', to_jsonb('დაალაგე რიგით'::text), true),
+    description = jsonb_set(description::jsonb, '{ka}', to_jsonb('კითხვები „დაალაგე რიგით" დღიური გამოწვევისთვის.'::text), true),
     updated_at = NOW()
 WHERE slug = 'daily-challenges-put-in-order';

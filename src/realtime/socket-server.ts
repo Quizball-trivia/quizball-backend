@@ -203,6 +203,14 @@ async function runPostConnectHydration(
 
   if (!socket.data.matchId) {
     try {
+      await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to emit pending challenge invites on connect');
+    }
+  }
+
+  if (!socket.data.matchId) {
+    try {
       await matchRealtimeService.emitPendingForfeitIfAny(socket);
       await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
     } catch (error) {

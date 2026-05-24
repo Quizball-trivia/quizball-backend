@@ -40,9 +40,26 @@ import type {
 const PARTY_QUESTION_TIME_MS = 10000;
 const PARTY_QUESTION_REVEAL_MS = 3000;
 const PARTY_ROUND_READY_ACK_CEILING_MS = 8000;
+const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+
+async function acquireLockWithRetry(
+  key: string,
+  ttlMs: number,
+  attempts = 10,
+  delayMs = 50
+): Promise<{ acquired: boolean; token?: string }> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const lock = await acquireLock(key, ttlMs);
+    if (lock.acquired && lock.token) return lock;
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return { acquired: false };
+}
 
 function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
   const fallback = createInitialPartyQuizState(totalQuestions);
@@ -276,9 +293,11 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
+    variant: 'friendly_party_quiz',
     winnerId: match.winner_user_id ?? standings[0]?.userId ?? null,
     players: payloadPlayers,
     standings,
+    totalQuestions: match.total_questions,
     unlockedAchievements,
     durationMs: Math.max(0, endedAtMs - startedAtMs),
     resultVersion,
@@ -309,9 +328,11 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       const avgTimes = await matchesService.computeAvgTimes(matchId);
       const playersBefore = await matchesRepo.listMatchPlayers(matchId);
-      for (const player of playersBefore) {
-        await matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
-      }
+      await Promise.all(
+        playersBefore.map((player) =>
+          matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
+        )
+      );
 
       const players = await matchesRepo.listMatchPlayers(matchId);
       span.setAttribute('quizball.player_count', players.length);
@@ -325,23 +346,6 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       await matchesRepo.setMatchStatePayload(matchId, state, activeMatch.total_questions);
       await matchesRepo.completeMatch(matchId, standings[0]?.userId ?? null);
       await deleteMatchCache(matchId);
-      await achievementsService.evaluateForMatch(
-        matchId,
-        players.map((player) => player.user_id),
-        'friendly_party_quiz'
-      );
-
-      try {
-        await progressionService.awardCompletedMatchXp(matchId);
-      } catch (err) {
-        logger.warn({ err, matchId }, 'Party quiz match XP award failed after completion');
-      }
-
-      try {
-        await objectivesService.evaluateForMatchBestEffort(matchId);
-      } catch (err) {
-        logger.warn({ err, matchId }, 'Party quiz match objectives evaluation failed after completion');
-      }
 
       const resultVersion = Date.now();
       const payload = await buildFinalResultsPayload(matchId, resultVersion);
@@ -370,6 +374,27 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       if (payload) {
         io.to(`match:${matchId}`).emit('match:final_results', payload);
       }
+
+      void (async () => {
+        try {
+          await Promise.allSettled([
+            achievementsService.evaluateForMatch(
+              matchId,
+              players.map((player) => player.user_id),
+              'friendly_party_quiz'
+            ),
+            progressionService.awardCompletedMatchXp(matchId),
+            objectivesService.evaluateForMatchBestEffort(matchId),
+          ]);
+
+          const refreshedPayload = await buildFinalResultsPayload(matchId, resultVersion);
+          if (refreshedPayload) {
+            io.to(`match:${matchId}`).emit('match:final_results', refreshedPayload);
+          }
+        } catch (err) {
+          logger.warn({ err, matchId }, 'Party quiz post-completion side effects failed');
+        }
+      })();
     } finally {
       await releaseLock(lockKey, lock.token);
     }
@@ -380,13 +405,14 @@ function schedulePartyQuizPostRoundAdvance(
   matchId: string,
   resolvedQIndex: number,
   participantUserIds: string[],
-  dispatch: () => void
+  dispatch: () => void,
+  ceilingMs = PARTY_ROUND_READY_ACK_CEILING_MS
 ): void {
   pendingReadyGates.open({
     scopeId: matchId,
     token: resolvedQIndex,
     waitingUserIds: participantUserIds,
-    ceilingMs: PARTY_ROUND_READY_ACK_CEILING_MS,
+    ceilingMs,
     dispatch,
     onTimeout: (missing) => {
       logger.info({ matchId, resolvedQIndex, missing }, 'Party ready-ack ceiling reached — advancing anyway');
@@ -681,7 +707,7 @@ export async function resolvePartyQuizRound(
           void completePartyQuizMatch(io, matchId).catch((error) => {
             logger.error({ error, matchId }, 'Failed to complete party quiz match');
           });
-        });
+        }, PARTY_FINAL_READY_ACK_CEILING_MS);
         return;
       }
 
@@ -824,13 +850,27 @@ export async function handlePartyQuizAnswer(
       correct: isCorrect ? 'true' : 'false',
     });
 
+    const updatedPlayer = await matchesRepo.updatePlayerTotals(payload.matchId, userId, pointsEarned, isCorrect);
+    socket.emit(
+      'match:answer_ack',
+      buildAnswerAckPayload({
+        matchId: payload.matchId,
+        qIndex: payload.qIndex,
+        selectedIndex: payload.selectedIndex,
+        isCorrect,
+        correctIndex,
+        myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
+        pointsEarned,
+      })
+    );
+
     const answerLockKey = `lock:match:${payload.matchId}:party_answer:${payload.qIndex}`;
-    const answerLock = await acquireLock(answerLockKey, 3000);
+    const answerLock = await acquireLockWithRetry(answerLockKey, 3000);
     if (!answerLock.acquired || !answerLock.token) {
-      socket.emit('error', {
-        code: 'TRANSITION_IN_PROGRESS',
-        message: 'Answer is being processed. Please retry.',
-      });
+      logger.warn(
+        { matchId: payload.matchId, qIndex: payload.qIndex, userId },
+        'Party answer state lock busy after optimistic ack'
+      );
       return;
     }
 
@@ -845,23 +885,9 @@ export async function handlePartyQuizAnswer(
       }
 
       const latestState = sanitizePartyQuizState(latestMatch.state_payload, latestMatch.total_questions);
-      const updatedPlayer = await matchesRepo.updatePlayerTotals(payload.matchId, userId, pointsEarned, isCorrect);
       latestState.answeredUserIds = Array.from(new Set([...latestState.answeredUserIds, userId]));
       bumpStateVersion(latestState);
       await matchesRepo.setMatchStatePayload(payload.matchId, latestState, payload.qIndex);
-
-      socket.emit(
-        'match:answer_ack',
-        buildAnswerAckPayload({
-          matchId: payload.matchId,
-          qIndex: payload.qIndex,
-          selectedIndex: payload.selectedIndex,
-          isCorrect,
-          correctIndex,
-          myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
-          pointsEarned,
-        })
-      );
 
       await emitPartyQuizState(io, payload.matchId);
 

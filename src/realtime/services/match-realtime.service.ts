@@ -77,7 +77,8 @@ import { acquireLock, releaseLock } from '../locks.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
-const MATCH_START_COUNTDOWN_SEC = 10;
+const MATCH_START_COUNTDOWN_SEC = 5;
+const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
@@ -465,6 +466,7 @@ async function buildFinalQuestionResults(
 
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
+  variant?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   winnerId: string | null;
   players: Record<string, {
     totalPoints: number;
@@ -595,6 +597,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
+    variant,
     winnerId: explicitNoWinnerForfeit ? null : (match.winner_user_id ?? derivedWinnerId),
     players: payloadPlayers,
     participants,
@@ -748,14 +751,6 @@ export async function beginMatchForLobby(
   matchId: string,
   options?: { countdownSec?: number }
 ): Promise<void> {
-  const countdownSec = Math.max(
-    0,
-    Number.isFinite(options?.countdownSec)
-      ? Math.floor(options?.countdownSec ?? MATCH_START_COUNTDOWN_SEC)
-      : MATCH_START_COUNTDOWN_SEC
-  );
-  const countdownMs = countdownSec * 1000;
-
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
   type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'>;
   const match = await matchesRepo.getMatch(matchId);
@@ -767,7 +762,19 @@ export async function beginMatchForLobby(
     );
     return;
   }
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+
+  const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode);
+  const defaultCountdownSec = variantForCountdown === 'friendly_party_quiz'
+    ? PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC
+    : MATCH_START_COUNTDOWN_SEC;
+  const countdownSec = Math.max(
+    0,
+    Number.isFinite(options?.countdownSec)
+      ? Math.floor(options?.countdownSec ?? defaultCountdownSec)
+      : defaultCountdownSec
+  );
+  const countdownMs = countdownSec * 1000;
+  const variant = variantForCountdown;
 
   let members: MatchStartMember[] = lobbyMembers.map((member) => ({
       user_id: member.user_id,

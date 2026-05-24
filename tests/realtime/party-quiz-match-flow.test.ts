@@ -362,27 +362,40 @@ describe('party quiz realtime flow', () => {
     );
   });
 
-  it('returns TRANSITION_IN_PROGRESS when the per-question answer lock is unavailable', async () => {
+  it('retries a busy per-question answer lock after sending the optimistic ack', async () => {
     const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
     const { io } = createIoMock();
     const { socket, emitted } = createSocketMock('u1');
 
-    vi.mocked(acquireLock).mockResolvedValueOnce({ acquired: false });
+    vi.mocked(acquireLock)
+      .mockResolvedValueOnce({ acquired: false })
+      .mockResolvedValueOnce({ acquired: true, token: 'lock-token' });
 
-    await handlePartyQuizAnswer(io, socket, {
+    const answerPromise = handlePartyQuizAnswer(io, socket, {
       matchId: 'match-1',
       qIndex: 0,
       selectedIndex: 2,
       timeMs: 1000,
     });
 
-    expect(updatePlayerTotalsMock).not.toHaveBeenCalled();
-    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(50);
+    await answerPromise;
+
+    expect(updatePlayerTotalsMock).toHaveBeenCalledWith('match-1', 'u1', 100, true);
     expect(emitted).toContainEqual({
-      event: 'error',
+      event: 'match:answer_ack',
       payload: expect.objectContaining({
-        code: 'TRANSITION_IN_PROGRESS',
+        isCorrect: true,
+        myTotalPoints: 220,
+        pointsEarned: 100,
       }),
     });
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.objectContaining({
+        answeredUserIds: ['u1'],
+      }),
+      0
+    );
   });
 });

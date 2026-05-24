@@ -380,6 +380,7 @@ export interface RankedMatchOutcomePayload {
 
 export interface MatchFinalResultsPayload {
   matchId: string;
+  variant?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   winnerId: string | null;
   players: Record<string, MatchFinalResultPlayer>;
   participants?: MatchParticipant[];

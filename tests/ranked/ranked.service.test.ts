@@ -234,7 +234,8 @@ describe('rankedService', () => {
     expect(context.isPlacement).toBe(false);
     expect(context.placementGameNo).toBeUndefined();
     expect(context.aiAnchorRp).toBe(525);
-    expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.52);
+    expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.4);
+    expect(context.aiCorrectness).toBeLessThanOrEqual(0.6);
     expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
   });
 

@@ -249,6 +249,13 @@ export interface MatchCountdownGuessAckPayload {
   acceptedDisplays?: Array<Record<string, string>>;
 }
 
+export interface MatchOpponentCountdownProgressPayload {
+  matchId: string;
+  qIndex: number;
+  opponentUserId: string;
+  foundCount: number;
+}
+
 export interface MatchCluesGuessAckPayload {
   matchId: string;
   qIndex: number;
@@ -691,6 +698,7 @@ export interface ServerToClientEvents {
   'match:opponent_answered': (data: MatchOpponentAnsweredPayload) => void;
   'match:answer_ack': (data: MatchAnswerAckPayload) => void;
   'match:countdown_guess_ack': (data: MatchCountdownGuessAckPayload) => void;
+  'match:opponent_countdown_progress': (data: MatchOpponentCountdownProgressPayload) => void;
   'match:clues_guess_ack': (data: MatchCluesGuessAckPayload) => void;
   'match:round_result': (data: MatchRoundResultPayload) => void;
   'match:final_results': (data: MatchFinalResultsPayload) => void;

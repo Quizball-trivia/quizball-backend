@@ -311,6 +311,16 @@ export async function handlePossessionCountdownGuess(
     foundCount: addResult.foundCount,
     acceptedDisplay: matched.display,
   });
+
+  // Notify the opponent(s) so they can render the real live count instead
+  // of a simulated one. Only fires on accepted (newly-found) answers — no
+  // signal needed on rejections/duplicates.
+  socket.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
+    matchId,
+    qIndex,
+    opponentUserId: userId,
+    foundCount: addResult.foundCount,
+  });
 }
 
 export async function handlePossessionPutInOrderAnswer(

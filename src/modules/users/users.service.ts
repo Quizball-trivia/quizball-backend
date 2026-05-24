@@ -1,7 +1,7 @@
 import type { User } from '../../db/types.js';
 import { isUserAccountInactive, usersRepo, type UpdateUserData } from './users.repo.js';
 import { identitiesRepo } from './identities.repo.js';
-import { AuthenticationError, BadRequestError, NotFoundError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
 import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
@@ -204,6 +204,13 @@ export const usersService = {
     options?: UpdateProfileOptions
   ): Promise<User> {
     await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
+
+    if (typeof data.nickname === 'string' && data.nickname.trim().length > 0) {
+      const taken = await usersRepo.isNicknameTaken(data.nickname, id);
+      if (taken) {
+        throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+      }
+    }
 
     const user = await usersRepo.update(id, data);
 

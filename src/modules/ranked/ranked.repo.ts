@@ -257,6 +257,7 @@ export const rankedRepo = {
           ) sub
         ) trend ON true
         WHERE u.is_ai = false
+          AND u.is_seed = false
           AND u.is_deleted = false
           AND u.deleted_at IS NULL
           AND u.pending_deletion_at IS NULL
@@ -291,6 +292,7 @@ export const rankedRepo = {
         ) sub
       ) trend ON true
       WHERE u.is_ai = false
+        AND u.is_seed = false
         AND u.is_deleted = false
         AND u.deleted_at IS NULL
         AND u.pending_deletion_at IS NULL
@@ -321,6 +323,7 @@ export const rankedRepo = {
          FROM ranked_profiles rp2
          JOIN users u ON u.id = rp2.user_id
          WHERE u.is_ai = false
+           AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL
            AND u.pending_deletion_at IS NULL
@@ -331,6 +334,7 @@ export const rankedRepo = {
          FROM ranked_profiles rp3
          JOIN users u ON u.id = rp3.user_id
          WHERE u.is_ai = false
+           AND u.is_seed = false
            AND u.is_deleted = false
            AND u.deleted_at IS NULL
            AND u.pending_deletion_at IS NULL

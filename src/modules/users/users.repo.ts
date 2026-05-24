@@ -52,6 +52,49 @@ export const usersRepo = {
     return user;
   },
 
+  /**
+   * Case-insensitive nickname existence check among active real users.
+   * Backed by the partial unique index `uq_users_lower_nickname_real`
+   * (lower(nickname) WHERE is_ai = false AND not deleted), so this is an
+   * O(log n) index lookup even at high user counts.
+   */
+  async isNicknameTaken(nickname: string, excludeUserId?: string): Promise<boolean> {
+    const trimmed = nickname.trim();
+    if (trimmed.length === 0) return false;
+    const rows = await sql<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM users
+        WHERE lower(nickname) = lower(${trimmed})
+          AND is_ai = false
+          AND is_deleted = false
+          AND deleted_at IS NULL
+          AND pending_deletion_at IS NULL
+          ${excludeUserId ? sql`AND id <> ${excludeUserId}` : sql``}
+        LIMIT 1
+      ) AS exists
+    `;
+    return rows[0]?.exists ?? false;
+  },
+
+  /**
+   * Batch lookup: returns the subset of input nicknames already taken by
+   * active real users, lowercased. Uses the partial index on
+   * lower(nickname) — single query, O((k + matches) log n).
+   */
+  async findTakenLowerNicknames(nicknames: string[]): Promise<Set<string>> {
+    if (nicknames.length === 0) return new Set();
+    const lowered = nicknames.map((name) => name.toLowerCase());
+    const rows = await sql<{ lower_nickname: string }[]>`
+      SELECT lower(nickname) AS lower_nickname FROM users
+      WHERE lower(nickname) = ANY(${lowered}::text[])
+        AND is_ai = false
+        AND is_deleted = false
+        AND deleted_at IS NULL
+        AND pending_deletion_at IS NULL
+    `;
+    return new Set(rows.map((row) => row.lower_nickname));
+  },
+
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
       INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)

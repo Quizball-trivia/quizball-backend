@@ -7,7 +7,7 @@ import { matchesService, resolveMatchVariant } from '../../modules/matches/match
 import { objectivesService } from '../../modules/objectives/index.js';
 import { statsService } from '../../modules/stats/stats.service.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
-import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
@@ -826,13 +826,19 @@ export async function beginMatchForLobby(
 
   let rpByUserId = new Map<string, number>();
   if (match.mode === 'ranked') {
+    const memberUsers = await Promise.all(members.map((member) => usersRepo.getById(member.user_id)));
+    const rankedContext = parseRankedContext(match.ranked_context);
     const profiles = await Promise.all(
-      members.map(async (member) => ({
-        userId: member.user_id,
-        profile: await rankedService.ensureProfile(member.user_id),
-      }))
+      members.map(async (member, index) => {
+        const memberUser = memberUsers[index];
+        if (memberUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
+          return { userId: member.user_id, rp: rankedContext.aiAnchorRp };
+        }
+        const profile = await rankedService.ensureProfile(member.user_id);
+        return { userId: member.user_id, rp: profile.rp };
+      })
     );
-    rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.profile.rp]));
+    rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.rp]));
   }
 
   const participants = members.map((member) => ({

@@ -112,6 +112,23 @@ export function generateRankedAiUsername(): string {
 }
 
 /**
+ * Pick a clean AI nickname from the pool; if every candidate collides with
+ * a real-user nickname, fall back to a uniquified `${pick}_${random}` form.
+ * Caller passes in the set of nicknames currently taken by real users so we
+ * only pay the DB cost once per matchmaking.
+ */
+export function generateRankedAiUsernameAvoiding(takenLowerNicknames: Set<string>): string {
+  const available = AI_NICKNAMES.filter((name) => !takenLowerNicknames.has(name.toLowerCase()));
+  if (available.length > 0) return randomFrom(available);
+  const suffix = Math.floor(Math.random() * 9000 + 1000);
+  return `${randomFrom(AI_NICKNAMES)}_${suffix}`;
+}
+
+export function getAiNicknamePool(): readonly string[] {
+  return AI_NICKNAMES;
+}
+
+/**
  * Generate AI avatar URL with caching and fallback support.
  * Returns a Dicebear URL from cache if available, otherwise generates a new one.
  * In case of external API unavailability, use FALLBACK_AVATAR_URL.

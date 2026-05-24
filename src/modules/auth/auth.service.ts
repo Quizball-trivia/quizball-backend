@@ -3,7 +3,7 @@ import { usersService } from '../users/index.js';
 import { AuthenticationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
-import type { AuthSession, RegisterRequest, LoginRequest } from './auth.schemas.js';
+import type { AuthSession, RegisterRequest, LoginRequest, SocialLoginTokenRequest } from './auth.schemas.js';
 
 /**
  * Provision user identity in our database.
@@ -68,6 +68,22 @@ export const authService = {
     }, async () => {
       const authClient = getAuthClient();
       const session = await authClient.signIn(request.email, request.password);
+      await provisionIdentity(session);
+      return session;
+    });
+  },
+
+  async socialLoginToken(request: SocialLoginTokenRequest): Promise<AuthSession> {
+    return withSpan('auth.social_login_token', {
+      'quizball.auth_provider': 'supabase',
+      'quizball.oauth_provider': request.provider,
+    }, async () => {
+      const authClient = getAuthClient();
+      const session = await authClient.signInWithIdToken(
+        request.provider,
+        request.id_token,
+        request.nonce,
+      );
       await provisionIdentity(session);
       return session;
     });

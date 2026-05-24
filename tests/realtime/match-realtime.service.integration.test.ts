@@ -181,6 +181,7 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
     buildAiMatchContext: vi.fn(() => ({ aiAnchorRp: 1900 })),
     DEFAULT_AI_OPPONENT_RP: 1900,
   },
+  parseRankedContext: vi.fn(() => ({ isPlacement: false, aiAnchorRp: 1900 })),
 }));
 
 vi.mock('../../src/modules/stats/stats.service.js', () => ({
@@ -1132,7 +1133,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
   // S22/S23 removed: covered the now-deleted DB-fallback path. The Redis-path
   // equivalents (scoring/timing) are exercised via tests/realtime/possession-match-flow.test.ts.
 
-  it('S24: beginMatchForLobby emits countdown and delays first question by 10s', async () => {
+  it('S24: beginMatchForLobby emits countdown and delays first question by countdown', async () => {
     vi.useFakeTimers();
     try {
       const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
@@ -1143,7 +1144,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
       expect((io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([room]: [string]) => room === 'match:m1')).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(9999);
+      // Countdown is 5s for both ranked and party-quiz variants now.
+      await vi.advanceTimersByTimeAsync(4999);
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);

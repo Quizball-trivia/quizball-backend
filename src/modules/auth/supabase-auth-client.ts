@@ -98,6 +98,27 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
+  async signInWithIdToken(
+    provider: string,
+    idToken: string,
+    nonce?: string,
+  ): Promise<AuthSession> {
+    return withSpan('auth.signin_id_token', {
+      'quizball.auth_provider': 'supabase',
+      'quizball.oauth_provider': provider,
+    }, async () => {
+      const response = await this.request('/auth/v1/token?grant_type=id_token', {
+        method: 'POST',
+        body: JSON.stringify({
+          provider,
+          id_token: idToken,
+          ...(nonce ? { nonce } : {}),
+        }),
+      });
+      return this.normalizeSession(response);
+    });
+  }
+
   oauthAuthorizeUrl(
     provider: string,
     redirectTo: string,

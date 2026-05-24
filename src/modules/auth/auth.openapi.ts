@@ -129,6 +129,27 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
 
   registerEndpoint(registry, {
     method: 'post',
+    path: '/api/v1/auth/social-login-token',
+    summary: 'Exchange a provider-issued OIDC id_token for a session',
+    description:
+      'Used by client-side OAuth flows like Google Identity Services and ' +
+      'Sign in with Apple that return a signed id_token instead of doing a ' +
+      'browser redirect. Required for in-app browsers where the classic ' +
+      'OAuth redirect endpoint is blocked.',
+    tags: ['Auth'],
+    body: z.object({
+      provider: z.enum(['google', 'apple']),
+      id_token: z.string().min(1).max(8192),
+      nonce: z.string().min(1).max(512).optional(),
+    }),
+    responses: {
+      200: { description: 'Session created', schema: authResponseSchema },
+      401: { description: 'Invalid id_token', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
     path: '/api/v1/auth/logout',
     summary: 'Logout',
     tags: ['Auth'],

@@ -31,7 +31,7 @@ function roundToNearest25(value: number): number {
   return Math.round(value / 25) * 25;
 }
 
-function parseRankedContext(raw: unknown): {
+export function parseRankedContext(raw: unknown): {
   isPlacement: boolean;
   aiAnchorRp?: number;
 } {

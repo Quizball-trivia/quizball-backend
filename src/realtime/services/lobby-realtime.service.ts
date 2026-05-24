@@ -17,7 +17,9 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import {
-  generateRankedAiProfile,
+  generateRankedAiAvatarUrl,
+  generateRankedAiUsernameAvoiding,
+  getAiNicknamePool,
   generateRankedAiGeo,
   generateRankedAiFavoriteClub,
   rankedAiLobbyKey,
@@ -465,7 +467,11 @@ export async function startRankedAiForUser(
   await withSpan('ranked.match_found.ai.prepare', {
     'quizball.user_id': userId,
   }, async (span) => {
-    const aiProfile = generateRankedAiProfile();
+    const takenLower = await usersRepo.findTakenLowerNicknames([...getAiNicknamePool()]);
+    const aiProfile = {
+      username: generateRankedAiUsernameAvoiding(takenLower),
+      avatarUrl: generateRankedAiAvatarUrl(96),
+    };
     const aiUser = await usersRepo.create({
       nickname: aiProfile.username,
       avatarUrl: aiProfile.avatarUrl,

@@ -149,14 +149,7 @@ export const authController = {
     res.json({ url });
   },
 
-  /**
-   * POST /api/v1/auth/social-login-token
-   * Exchange a provider-issued OIDC id_token (from Google Identity Services
-   * or Sign in with Apple) for a Supabase session. Used in flows that do
-   * sign-in client-side without a browser redirect — required when the
-   * user is inside an embedded webview (Messenger, Instagram) where the
-   * classic OAuth redirect endpoint is blocked.
-   */
+  // POST /api/v1/auth/social-login-token — exchange GIS id_token for a Supabase session.
   async socialLoginToken(req: Request, res: Response): Promise<void> {
     const { provider, id_token, nonce } = req.validated
       .body as SocialLoginTokenRequest;

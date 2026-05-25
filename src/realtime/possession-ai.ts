@@ -31,14 +31,8 @@ const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
 const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 
 function getAiAnswerDelayMs(questionKind?: string): number {
-  // AI "thinking" time after the question becomes playable.
-  // Countdown questions are open-ended (the player has to think of and
-  // type N football player names from memory) — humans typically need
-  // 10-25s, so the AI uses a slower range to feel realistic. Other
-  // question kinds (multipleChoice, clues, putInOrder) keep the snappier
-  // 2-7s range that mirrors a confident player.
+  // Countdown is open-ended typing, so the AI uses a much slower range than other kinds.
   if (questionKind === 'countdown') {
-    // 12-22s window — leaves room for the human to think and type.
     return Math.floor(Math.random() * 10000) + 12000;
   }
   return Math.floor(Math.random() * 5000) + 2000;
@@ -425,21 +419,25 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         });
       }
 
-      // For countdown the AI commits all found answers atomically, but to
-      // the human opponent it should feel like the AI is "typing" them in
-      // one at a time. Drip-feed `match:opponent_countdown_progress`
-      // events with staggered delays so the live counter ticks up.
+      // AI commits all countdown answers at once; drip-feed them so the human sees a typing pace.
       if (committed.questionKind === 'countdown' && committed.foundCount && committed.foundCount > 0) {
         const totalFound = committed.foundCount;
+        const emitQIndex = qIndex;
         for (let i = 1; i <= totalFound; i += 1) {
           const stepDelay = 600 + Math.floor(Math.random() * 800) + (i - 1) * 250;
           setTimeout(() => {
-            io.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
-              matchId,
-              qIndex,
-              opponentUserId: aiUserId,
-              foundCount: i,
-            });
+            void (async () => {
+              // Skip if the round advanced before our timer fired.
+              const liveCache = await getMatchCacheOrRebuild(matchId);
+              if (!liveCache || liveCache.status !== 'active') return;
+              if (liveCache.currentQIndex !== emitQIndex) return;
+              io.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
+                matchId,
+                qIndex: emitQIndex,
+                opponentUserId: aiUserId,
+                foundCount: i,
+              });
+            })();
           }, stepDelay);
         }
       }

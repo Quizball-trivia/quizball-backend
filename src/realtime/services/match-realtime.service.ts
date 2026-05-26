@@ -11,13 +11,8 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
-  MatchAnswerPayload,
-  MatchCluesAnswerPayload,
-  MatchCountdownGuessPayload,
   MatchFinalResultsAckPayload,
-  MatchPutInOrderAnswerPayload,
   MatchPlayAgainPayload,
-  MatchReadyForNextQuestionPayload,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -40,29 +35,29 @@ import {
   resolveMatchCategoryName,
 } from './match-participants.helpers.js';
 import {
+  handleAnswer,
+  handleCluesAnswer,
+  handleCountdownGuess,
+  handleHalftimeBan,
+  handlePutInOrderAnswer,
+  handleReadyForNextQuestion,
+} from './match-question-dispatch.service.js';
+import {
   buildInitialCache,
   deleteMatchCache,
   setMatchCache,
 } from '../match-cache.js';
 import {
   cancelPossessionHalftimeTimer,
-  handlePossessionCluesAnswer,
-  handlePossessionCountdownGuess,
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
   emitMatchState,
-  handlePossessionAnswer,
-  handlePossessionHalftimeBan,
-  handlePossessionPutInOrderAnswer,
-  handlePossessionReadyForNextQuestion,
   resumePossessionMatchQuestion,
 } from '../possession-match-flow.js';
 import {
   emitPartyQuizState,
   emitPartyQuizStateToSocket,
   ensurePartyQuizActiveTimer,
-  handlePartyQuizAnswer,
-  handlePartyQuizReadyForNextQuestion,
   resumePartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
 import type { AchievementUnlockPayload, MatchFinalResultsPayload, MatchForfeitPendingPayload } from '../socket.types.js';
@@ -1662,193 +1657,10 @@ export const matchRealtimeService = {
     };
   },
 
-  async handleHalftimeBan(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: { matchId: string; categoryId: string }
-  ): Promise<void> {
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found for halftime category ban.',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'Party quiz does not support halftime bans.',
-      });
-      return;
-    }
-
-    await handlePossessionHalftimeBan(io, socket, payload);
-  },
-
-  async handleAnswer(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: MatchAnswerPayload
-  ): Promise<void> {
-    const { matchId } = payload;
-
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      await handlePartyQuizAnswer(io, socket, payload, match);
-      return;
-    }
-
-    await handlePossessionAnswer(io, socket, payload);
-  },
-
-  async handleCountdownGuess(
-    socket: QuizballSocket,
-    payload: MatchCountdownGuessPayload
-  ): Promise<void> {
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(payload.matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'Countdown guesses are not available in party quiz mode.',
-      });
-      return;
-    }
-
-    await handlePossessionCountdownGuess(socket, payload);
-  },
-
-  async handlePutInOrderAnswer(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: MatchPutInOrderAnswerPayload
-  ): Promise<void> {
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(payload.matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'Ordering answers are not available in party quiz mode.',
-      });
-      return;
-    }
-
-    await handlePossessionPutInOrderAnswer(io, socket, payload);
-  },
-
-  async handleCluesAnswer(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    payload: MatchCluesAnswerPayload
-  ): Promise<void> {
-    const redis = getRedisClient();
-    if (redis) {
-      const paused = await redis.exists(matchPauseKey(payload.matchId));
-      if (paused) {
-        socket.emit('error', {
-          code: 'MATCH_PAUSED',
-          message: 'Match is paused. Please wait for your opponent to return.',
-        });
-        return;
-      }
-    }
-
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ACTIVE',
-        message: 'No active match found',
-      });
-      return;
-    }
-
-    if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      socket.emit('error', {
-        code: 'MATCH_NOT_ALLOWED',
-        message: 'Clue answers are not available in party quiz mode.',
-      });
-      return;
-    }
-
-    await handlePossessionCluesAnswer(io, socket, payload);
-  },
-
-  async handleReadyForNextQuestion(
-    socket: QuizballSocket,
-    payload: MatchReadyForNextQuestionPayload
-  ): Promise<void> {
-    const userId = socket.data.user?.id;
-    if (!userId) return;
-
-    const match = await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') return;
-
-    const variant = resolveMatchVariant(match.state_payload, match.mode);
-    if (variant === 'friendly_party_quiz') {
-      handlePartyQuizReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
-      return;
-    }
-
-    handlePossessionReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
-  },
+  handleHalftimeBan,
+  handleAnswer,
+  handleCountdownGuess,
+  handlePutInOrderAnswer,
+  handleCluesAnswer,
+  handleReadyForNextQuestion,
 };

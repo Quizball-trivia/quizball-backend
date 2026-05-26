@@ -1,27 +1,27 @@
-import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import { matchesRepo } from '../../modules/matches/matches.repo.js';
-import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
-import { statsService } from '../../modules/stats/stats.service.js';
-import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.service.js';
-import { usersRepo } from '../../modules/users/users.repo.js';
-import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
-import { sendMatchQuestion } from '../match-flow.js';
-import { logger } from '../../core/logger.js';
-import { appMetrics } from '../../core/metrics.js';
-import { getRedisClient } from '../redis.js';
-import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+/**
+ * Match-realtime service — assembly shell.
+ *
+ * The actual implementation lives in sibling files, each owning a
+ * single concern. This file's only job is to expose the unchanged
+ * public surface (`matchRealtimeService` + `beginMatchForLobby`) so
+ * external consumers don't need to know the layout:
+ *
+ *   - match-lifecycle.service.ts        match start + rejoin-on-connect
+ *   - match-disconnect.service.ts       leave / pause / grace / resume
+ *   - match-final-results.service.ts    payload assembly + replay + ack
+ *   - match-forfeit.service.ts          finalize + socket adapter + pending
+ *   - match-rematch.service.ts          friendly play-again lobby
+ *   - match-question-dispatch.service.ts answer/countdown/clues/etc. routers
+ *   - match-participants.helpers.ts     shared snapshot/profile lookups
+ */
+import {
+  beginMatchForLobby,
+  rejoinActiveMatchOnConnect,
+} from './match-lifecycle.service.js';
 import {
   emitPendingForfeitIfAny,
   handleMatchForfeit,
 } from './match-forfeit.service.js';
-import {
-  buildParticipantPayloads,
-  getOpponentInfo,
-  getOpponentInfoFromParticipants,
-  getParticipantSnapshot,
-  resolveMatchCategoryName,
-} from './match-participants.helpers.js';
 import {
   handleAnswer,
   handleCluesAnswer,
@@ -36,370 +36,17 @@ import {
 } from './match-final-results.service.js';
 import { handlePlayAgain } from './match-rematch.service.js';
 import {
-  getDisconnectCount,
   handleMatchDisconnect,
   handleMatchLeave,
   handleMatchRejoin,
   pauseMatchForDisconnectedPlayer,
   resumePausedMatch,
-  toRemainingReconnects,
 } from './match-disconnect.service.js';
-import {
-  buildInitialCache,
-  setMatchCache,
-} from '../match-cache.js';
-import {
-  emitPossessionStateToSocket,
-  ensurePossessionActiveTimers,
-  emitMatchState,
-} from '../possession-match-flow.js';
-import {
-  emitPartyQuizState,
-  emitPartyQuizStateToSocket,
-  ensurePartyQuizActiveTimer,
-} from '../party-quiz-match-flow.js';
-import {
-  matchPresenceKey,
-  matchDisconnectKey,
-  matchPauseKey,
-  matchGraceKey,
-} from '../match-keys.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 60000;
-const MATCH_START_COUNTDOWN_SEC = 5;
-const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
-const PRESENCE_TTL_SEC = 75;
-const FORFEIT_TTL_SEC = 600;
-async function emitRejoinAvailable(
-  socket: QuizballSocket,
-  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
-  userId: string,
-  graceMs: number,
-  remainingReconnects: number
-): Promise<void> {
-  const opponent = await getOpponentInfo(match.id, userId);
-  const players = await matchesRepo.listMatchPlayers(match.id);
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-  socket.emit('match:rejoin_available', {
-    matchId: match.id,
-    mode: match.mode,
-    variant: resolveMatchVariant(match.state_payload, match.mode),
-    opponent,
-    participants: players.map((player, index) => ({
-      userId: player.user_id,
-      username: users[index]?.nickname ?? 'Player',
-      avatarUrl: users[index]?.avatar_url ?? null,
-      avatarCustomization: parseStoredAvatarCustomization(users[index]?.avatar_customization),
-      seat: player.seat,
-    })),
-    graceMs,
-    remainingReconnects,
-  });
-}
-
-export async function beginMatchForLobby(
-  io: QuizballServer,
-  lobbyId: string,
-  matchId: string,
-  options?: { countdownSec?: number }
-): Promise<void> {
-  const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
-  const match = await matchesRepo.getMatch(matchId);
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  if (!match || players.length === 0) {
-    logger.warn(
-      { lobbyId, matchId, hasMatch: Boolean(match), playerCount: players.length },
-      'Match start aborted: invalid match context'
-    );
-    return;
-  }
-
-  const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode);
-  const defaultCountdownSec = variantForCountdown === 'friendly_party_quiz'
-    ? PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC
-    : MATCH_START_COUNTDOWN_SEC;
-  const countdownSec = Math.max(
-    0,
-    Number.isFinite(options?.countdownSec)
-      ? Math.floor(options?.countdownSec ?? defaultCountdownSec)
-      : defaultCountdownSec
-  );
-  const countdownMs = countdownSec * 1000;
-  const variant = variantForCountdown;
-
-  let members: MatchStartMember[];
-  // Country (only used for the matchmaking-map pin) must not block match start.
-  const memberUsersSettled = await Promise.allSettled(
-    lobbyMembers.map((member) => usersRepo.getById(member.user_id))
-  );
-  const memberCountry = (index: number): string | null => {
-    const result = memberUsersSettled[index];
-    if (result?.status !== 'fulfilled') return null;
-    return result.value?.country ?? null;
-  };
-  members = lobbyMembers.map((member, index) => ({
-    user_id: member.user_id,
-    nickname: member.nickname,
-    avatar_url: member.avatar_url,
-    avatar_customization: member.avatar_customization,
-    favorite_club: member.favorite_club,
-    country: memberCountry(index),
-  }));
-  if (members.length !== players.length) {
-    logger.warn(
-      { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
-      'Match start member count invalid, falling back to match players'
-    );
-    const usersSettled = await Promise.allSettled(players.map((player) => usersRepo.getById(player.user_id)));
-    const playerUser = (index: number) => {
-      const result = usersSettled[index];
-      return result?.status === 'fulfilled' ? result.value : null;
-    };
-    members = players.map((player, index) => {
-      const user = playerUser(index);
-      return {
-        user_id: player.user_id,
-        nickname: user?.nickname ?? 'Player',
-        avatar_url: user?.avatar_url ?? null,
-        avatar_customization: user?.avatar_customization ?? null,
-        favorite_club: user?.favorite_club ?? null,
-        country: user?.country ?? null,
-      };
-    });
-  }
-
-  // Lobby is no longer needed for membership tracking once match starts.
-  await lobbiesRepo.setLobbyStatus(lobbyId, 'closed');
-  await Promise.all(lobbyMembers.map((member) => lobbiesRepo.removeMember(lobbyId, member.user_id)));
-
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-    socket.join(`match:${matchId}`);
-    socket.data.matchId = matchId;
-  });
-
-  await Promise.all(
-    members.map(async (member) => {
-      const userSockets = await io.in(`user:${member.user_id}`).fetchSockets();
-      userSockets.forEach((socket) => {
-        socket.leave(`lobby:${lobbyId}`);
-        socket.data.lobbyId = undefined;
-        socket.join(`match:${matchId}`);
-        socket.data.matchId = matchId;
-      });
-    })
-  );
-
-  const initialPossessionCache = variant !== 'friendly_party_quiz'
-    ? buildInitialCache({ match, players })
-    : null;
-  if (initialPossessionCache) {
-    await setMatchCache(initialPossessionCache);
-  }
-
-  const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat]));
-
-  let rpByUserId = new Map<string, number>();
-  if (match.mode === 'ranked') {
-    const memberUsers = await Promise.all(members.map((member) => usersRepo.getById(member.user_id)));
-    const rankedContext = parseRankedContext(match.ranked_context);
-    const profiles = await Promise.all(
-      members.map(async (member, index) => {
-        const memberUser = memberUsers[index];
-        if (memberUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
-          return { userId: member.user_id, rp: rankedContext.aiAnchorRp };
-        }
-        const profile = await rankedService.ensureProfile(member.user_id);
-        return { userId: member.user_id, rp: profile.rp };
-      })
-    );
-    rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.rp]));
-  }
-
-  const participants = members.map((member) => ({
-    userId: member.user_id,
-    username: member.nickname ?? 'Player',
-    avatarUrl: member.avatar_url,
-    avatarCustomization: parseStoredAvatarCustomization(member.avatar_customization),
-    seat: seatByUserId.get(member.user_id) ?? 0,
-    ...(rpByUserId.has(member.user_id) ? { rankPoints: rpByUserId.get(member.user_id) } : {}),
-  }));
-
-  // Fetch recent form (W/L/D × 3) for each member up-front so each emit can
-  // include both the recipient's own form and their opponent's.
-  const recentFormByUserId = new Map<string, Array<'W' | 'L' | 'D'>>();
-  await Promise.all(
-    members.map(async (m) => {
-      try {
-        recentFormByUserId.set(m.user_id, await statsService.getRecentFormForUser(m.user_id, 3));
-      } catch (err) {
-        logger.warn({ err, userId: m.user_id }, 'Failed to load recent form for showdown (non-fatal)');
-        recentFormByUserId.set(m.user_id, []);
-      }
-    }),
-  );
-
-  // Resolve the first-half category name so the client's round-1 intro
-  // doesn't flash a placeholder while waiting for match:question.
-  const categoryName = await resolveMatchCategoryName(match.category_a_id);
-
-  await Promise.all(
-    members.map(async (member) => {
-      const opponent = members.find((candidate) => candidate.user_id !== member.user_id) ?? member;
-      io.to(`user:${member.user_id}`).emit('match:start', {
-        matchId,
-        mode: match.mode,
-        variant,
-        mySeat: seatByUserId.get(member.user_id) ?? undefined,
-        myRecentForm: recentFormByUserId.get(member.user_id) ?? [],
-        opponent: {
-          id: opponent.user_id,
-          username: opponent.nickname ?? 'Player',
-          avatarUrl: opponent.avatar_url,
-          avatarCustomization: parseStoredAvatarCustomization(opponent.avatar_customization),
-          favoriteClub: opponent.favorite_club,
-          recentForm: recentFormByUserId.get(opponent.user_id) ?? [],
-          ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
-          ...(opponent.country ? { country: opponent.country, countryCode: opponent.country } : {}),
-        },
-        participants,
-        ...(categoryName ? { categoryName } : {}),
-      });
-    })
-  );
-
-  if (variant === 'friendly_party_quiz') {
-    await emitPartyQuizState(io, matchId);
-  } else if (initialPossessionCache) {
-    await emitMatchState(io, matchId, initialPossessionCache.statePayload);
-  }
-
-  const redis = getRedisClient();
-  if (redis?.isOpen) {
-    if (match?.mode === 'ranked') {
-      const aiUserId = await redis.get(rankedAiLobbyKey(lobbyId));
-      if (aiUserId) {
-        await redis.set(rankedAiMatchKey(matchId), aiUserId, { EX: FORFEIT_TTL_SEC });
-      }
-      await redis.del(rankedAiLobbyKey(lobbyId));
-    }
-
-    await Promise.all(
-      members.map((member) =>
-        redis.set(matchPresenceKey(matchId, member.user_id), '1', { EX: PRESENCE_TTL_SEC })
-      )
-    );
-  }
-
-  const startsAt = new Date(Date.now() + countdownMs).toISOString();
-  io.to(`match:${matchId}`).emit('match:countdown', {
-    matchId,
-    seconds: countdownSec,
-    startsAt,
-    reason: 'kickoff',
-  });
-  logger.info(
-    { matchId, seconds: countdownSec, startsAt },
-    'Match start countdown scheduled'
-  );
-
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const match = await matchesRepo.getMatch(matchId);
-        if (!match || match.status !== 'active') {
-          logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
-          return;
-        }
-        await sendMatchQuestion(io, matchId, 0);
-      } catch (error) {
-        logger.error({ error, matchId }, 'Failed to send first match question after countdown');
-      }
-    })();
-  }, countdownMs);
-}
-
-
+export { beginMatchForLobby };
 
 export const matchRealtimeService = {
-  async rejoinActiveMatchOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-    const userId = socket.data.user.id;
-    const match = await matchesRepo.getActiveMatchForUser(userId);
-    if (!match) return;
-
-    const redis = getRedisClient();
-    const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
-    const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
-    const variant = resolveMatchVariant(match.state_payload, match.mode);
-
-    if (redis && isPaused && wasDisconnected) {
-      const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
-      const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
-      const remainingReconnects = toRemainingReconnects(await getDisconnectCount(match.id, userId));
-      appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
-      await emitRejoinAvailable(socket, match, userId, graceMs, remainingReconnects);
-      return;
-    }
-
-    socket.join(`match:${match.id}`);
-    socket.data.matchId = match.id;
-
-    const { participants } = await getParticipantSnapshot(match.id);
-    const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode, match.ranked_context);
-    const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
-    const mySeat = participants.find((player) => player.user_id === userId)?.seat;
-    const categoryName = await resolveMatchCategoryName(match.category_a_id);
-    socket.emit('match:start', {
-      matchId: match.id,
-      mode: match.mode,
-      variant,
-      mySeat: mySeat ?? undefined,
-      opponent,
-      participants: participantPayloads,
-      ...(categoryName ? { categoryName } : {}),
-    });
-
-    if (redis) {
-      await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
-    }
-
-    if (redis && isPaused) {
-      const disconnectedPlayers: string[] = [];
-      for (const participant of participants) {
-        if (participant.user_id === userId) continue;
-        const disconnected = await redis.exists(matchDisconnectKey(match.id, participant.user_id));
-        if (disconnected) disconnectedPlayers.push(participant.user_id);
-      }
-      const disconnectedUserId = disconnectedPlayers[0];
-      if (disconnectedUserId) {
-        const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
-        const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
-        const remainingReconnects = toRemainingReconnects(
-          await getDisconnectCount(match.id, disconnectedUserId)
-        );
-        socket.emit('match:opponent_disconnected', {
-          matchId: match.id,
-          opponentId: disconnectedUserId,
-          graceMs,
-          remainingReconnects,
-        });
-      }
-      return;
-    }
-
-    if (variant === 'friendly_party_quiz') {
-      await emitPartyQuizStateToSocket(socket, match.id);
-      await ensurePartyQuizActiveTimer(io, match.id);
-    } else {
-      await emitPossessionStateToSocket(socket, match.id);
-      await ensurePossessionActiveTimers(io, match.id);
-    }
-  },
-
-
+  rejoinActiveMatchOnConnect,
   handleMatchLeave,
   handleMatchForfeit,
   handleMatchRejoin,

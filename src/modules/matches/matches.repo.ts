@@ -1,5 +1,6 @@
 import { sql, type TransactionSql } from '../../db/index.js';
 import { matchEventsRepo } from './match-events.repo.js';
+import { matchPlayersRepo } from './match-players.repo.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import { withSpan } from '../../core/tracing.js';
@@ -47,47 +48,17 @@ export const matchesRepo = {
     return row;
   },
 
-  async insertMatchPlayers(matchId: string, players: Array<{ userId: string; seat: number }>): Promise<MatchPlayerRow[]> {
-    if (players.length === 0) return [];
-    const rows = players.map((p) => [matchId, p.userId, p.seat]);
+  // ─── match_players facade delegates ───
+  // Real implementations live in matchPlayersRepo. Kept here so existing
+  // matchesRepo.* call sites compile unchanged; removed in a follow-up PR.
+  insertMatchPlayers: (matchId: string, players: Array<{ userId: string; seat: number }>) =>
+    matchPlayersRepo.insertMatchPlayers(matchId, players),
 
-    return sql<MatchPlayerRow[]>`
-      INSERT INTO match_players (match_id, user_id, seat)
-      VALUES ${sql(rows)}
-      RETURNING *
-    `;
-  },
+  listMatchPlayers: (matchId: string, tx?: TransactionSql) =>
+    matchPlayersRepo.listMatchPlayers(matchId, tx),
 
-  async listMatchPlayers(matchId: string, tx?: TransactionSql): Promise<MatchPlayerRow[]> {
-    // Accepts an optional transaction handle so callers like
-    // matchesService.completeMatch can read roster INSIDE the same tx
-    // that mutates user_mode_match_stats — keeps the snapshot consistent.
-    return withSpan('db.matches.list_players', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-    }, async () => {
-      if (tx) {
-        // postgres.js TransactionSql doesn't expose the tagged-template
-        // call signature cleanly to TS, so use tx.unsafe inside the tx
-        // (codebase precedent — see daily-challenges.repo, objectives.repo).
-        return tx.unsafe<MatchPlayerRow[]>(
-          `SELECT * FROM match_players WHERE match_id = $1 ORDER BY seat ASC`,
-          [matchId],
-        );
-      }
-      return sql<MatchPlayerRow[]>`
-        SELECT * FROM match_players WHERE match_id = ${matchId} ORDER BY seat ASC
-      `;
-    });
-  },
-
-  async getPlayerTotalPoints(matchId: string, userId: string): Promise<number> {
-    const [row] = await sql<{ total_points: number }[]>`
-      SELECT total_points FROM match_players
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-    return row?.total_points ?? 0;
-  },
+  getPlayerTotalPoints: (matchId: string, userId: string) =>
+    matchPlayersRepo.getPlayerTotalPoints(matchId, userId),
 
   async insertMatchQuestions(matchId: string, questions: Array<{
     qIndex: number;
@@ -615,19 +586,10 @@ export const matchesRepo = {
     return row ?? null;
   },
 
-  async updatePlayerTotals(matchId: string, userId: string, points: number, isCorrect: boolean): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        total_points = total_points + ${points},
-        correct_answers = correct_answers + ${isCorrect ? 1 : 0}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+  updatePlayerTotals: (matchId: string, userId: string, points: number, isCorrect: boolean) =>
+    matchPlayersRepo.updatePlayerTotals(matchId, userId, points, isCorrect),
 
-  async setPlayerFinalTotals(
+  setPlayerFinalTotals: (
     matchId: string,
     userId: string,
     values: {
@@ -635,20 +597,8 @@ export const matchesRepo = {
       correctAnswers: number;
       goals: number;
       penaltyGoals: number;
-    }
-  ): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        total_points = ${values.totalPoints},
-        correct_answers = ${values.correctAnswers},
-        goals = ${values.goals},
-        penalty_goals = ${values.penaltyGoals}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+    },
+  ) => matchPlayersRepo.setPlayerFinalTotals(matchId, userId, values),
 
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
@@ -695,21 +645,11 @@ export const matchesRepo = {
     `;
   },
 
-  async updatePlayerGoalTotals(
+  updatePlayerGoalTotals: (
     matchId: string,
     userId: string,
-    changes: { goals?: number; penaltyGoals?: number }
-  ): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        goals = goals + ${changes.goals ?? 0},
-        penalty_goals = penalty_goals + ${changes.penaltyGoals ?? 0}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+    changes: { goals?: number; penaltyGoals?: number },
+  ) => matchPlayersRepo.updatePlayerGoalTotals(matchId, userId, changes),
 
   // Facade delegate — real implementation lives in matchEventsRepo.
   // Kept here so existing call sites (`matchesRepo.insertGoalEventIfMissing(…)`)
@@ -774,14 +714,8 @@ export const matchesRepo = {
     }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
   },
 
-  async getPlayerBySeat(matchId: string, seat: 1 | 2): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      SELECT * FROM match_players
-      WHERE match_id = ${matchId} AND seat = ${seat}
-      LIMIT 1
-    `;
-    return row ?? null;
-  },
+  getPlayerBySeat: (matchId: string, seat: 1 | 2) =>
+    matchPlayersRepo.getPlayerBySeat(matchId, seat),
 
   /**
    * Atomically flip a match to "completed" and return the metadata the
@@ -865,27 +799,15 @@ export const matchesRepo = {
     );
   },
 
-  async updatePlayerAvgTime(matchId: string, userId: string, avgTimeMs: number | null): Promise<void> {
-    await sql`
-      UPDATE match_players
-      SET avg_time_ms = ${avgTimeMs}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-  },
+  updatePlayerAvgTime: (matchId: string, userId: string, avgTimeMs: number | null) =>
+    matchPlayersRepo.updatePlayerAvgTime(matchId, userId, avgTimeMs),
 
-  async setPlayerForfeitWinTotals(
+  setPlayerForfeitWinTotals: (
     matchId: string,
     userId: string,
     totalPoints: number,
-    correctAnswers: number
-  ): Promise<void> {
-    await sql`
-      UPDATE match_players
-      SET total_points = ${totalPoints},
-          correct_answers = ${correctAnswers}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-  },
+    correctAnswers: number,
+  ) => matchPlayersRepo.setPlayerForfeitWinTotals(matchId, userId, totalPoints, correctAnswers),
 
   async getAverageTimes(matchId: string): Promise<Array<{ user_id: string; avg_time_ms: number | null }>> {
     return sql<{ user_id: string; avg_time_ms: number | null }[]>`

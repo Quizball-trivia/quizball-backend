@@ -1,4 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { matchAnswersRepo } from './match-answers.repo.js';
 import { matchEventsRepo } from './match-events.repo.js';
 import { matchPlayersRepo } from './match-players.repo.js';
 import type { Json } from '../../db/types.js';
@@ -370,75 +371,14 @@ export const matchesRepo = {
     `;
   },
 
-  async insertMatchAnswer(data: {
-    matchId: string;
-    qIndex: number;
-    userId: string;
-    selectedIndex: number | null;
-    isCorrect: boolean;
-    timeMs: number;
-    pointsEarned: number;
-    answerPayload?: Json | null;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-  }): Promise<MatchAnswerRow> {
-    try {
-      const [row] = await sql<MatchAnswerRow[]>`
-        INSERT INTO match_answers (
-          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
-        )
-        VALUES (
-          ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-        )
-        RETURNING *
-      `;
-      return row;
-    } catch (err) {
-      throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
-    }
-  },
+  // ─── match_answers facade delegates ───
+  // Real implementations live in matchAnswersRepo. Kept here so existing
+  // matchesRepo.* call sites compile unchanged.
+  insertMatchAnswer: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswer>[0]) =>
+    matchAnswersRepo.insertMatchAnswer(data),
 
-  async insertMatchAnswerIfMissing(data: {
-    matchId: string;
-    qIndex: number;
-    userId: string;
-    selectedIndex: number | null;
-    isCorrect: boolean;
-    timeMs: number;
-    pointsEarned: number;
-    answerPayload?: Json | null;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-  }): Promise<MatchAnswerRow | null> {
-    return withSpan('db.matches.insert_answer_if_missing', {
-      'db.operation.name': 'insert',
-      'quizball.match_id': data.matchId,
-      'quizball.q_index': data.qIndex,
-      'quizball.user_id': data.userId,
-      'quizball.phase_kind': data.phaseKind ?? 'normal',
-    }, async (span) => {
-      try {
-        const [row] = await sql<MatchAnswerRow[]>`
-          INSERT INTO match_answers (
-            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
-          )
-          VALUES (
-            ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-          )
-          ON CONFLICT (match_id, q_index, user_id) DO NOTHING
-          RETURNING *
-        `;
-        span.setAttribute('quizball.answer_inserted', Boolean(row));
-        return row ?? null;
-      } catch (err) {
-        throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
-      }
-    });
-  },
+  insertMatchAnswerIfMissing: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswerIfMissing>[0]) =>
+    matchAnswersRepo.insertMatchAnswerIfMissing(data),
 
   async recordPartyQuizAnswerIfMissing(data: {
     matchId: string;
@@ -550,41 +490,14 @@ export const matchesRepo = {
     });
   },
 
-  async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
-    return withSpan('db.matches.list_answers_for_question', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-      'quizball.q_index': qIndex,
-    }, async (span) => {
-      const rows = await sql<MatchAnswerRow[]>`
-        SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
-      `;
-      span.setAttribute('quizball.answer_count', rows.length);
-      return rows;
-    });
-  },
+  listAnswersForQuestion: (matchId: string, qIndex: number) =>
+    matchAnswersRepo.listAnswersForQuestion(matchId, qIndex),
 
-  async listAnswersForMatch(matchId: string): Promise<MatchAnswerRow[]> {
-    return withSpan('db.matches.list_answers_for_match', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-    }, async (span) => {
-      const rows = await sql<MatchAnswerRow[]>`
-        SELECT * FROM match_answers
-        WHERE match_id = ${matchId}
-        ORDER BY q_index ASC
-      `;
-      span.setAttribute('quizball.answer_count', rows.length);
-      return rows;
-    });
-  },
+  listAnswersForMatch: (matchId: string) =>
+    matchAnswersRepo.listAnswersForMatch(matchId),
 
-  async getAnswerForUser(matchId: string, qIndex: number, userId: string): Promise<MatchAnswerRow | null> {
-    const [row] = await sql<MatchAnswerRow[]>`
-      SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex} AND user_id = ${userId}
-    `;
-    return row ?? null;
-  },
+  getAnswerForUser: (matchId: string, qIndex: number, userId: string) =>
+    matchAnswersRepo.getAnswerForUser(matchId, qIndex, userId),
 
   updatePlayerTotals: (matchId: string, userId: string, points: number, isCorrect: boolean) =>
     matchPlayersRepo.updatePlayerTotals(matchId, userId, points, isCorrect),
@@ -765,14 +678,8 @@ export const matchesRepo = {
     correctAnswers: number,
   ) => matchPlayersRepo.setPlayerForfeitWinTotals(matchId, userId, totalPoints, correctAnswers),
 
-  async getAverageTimes(matchId: string): Promise<Array<{ user_id: string; avg_time_ms: number | null }>> {
-    return sql<{ user_id: string; avg_time_ms: number | null }[]>`
-      SELECT user_id, AVG(time_ms)::int as avg_time_ms
-      FROM match_answers
-      WHERE match_id = ${matchId}
-      GROUP BY user_id
-    `;
-  },
+  getAverageTimes: (matchId: string) =>
+    matchAnswersRepo.getAverageTimes(matchId),
 
   async getMatch(matchId: string): Promise<MatchRow | null> {
     const [row] = await sql<MatchRow[]>`

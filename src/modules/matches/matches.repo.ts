@@ -665,54 +665,10 @@ export const matchesRepo = {
     isPenalty: boolean;
   }): Promise<MatchGoalEventRow | null> => matchEventsRepo.insertGoalEventIfMissing(data),
 
-  /**
-   * Atomic goal write. Inserts the goal event (idempotent via ON CONFLICT) and
-   * increments the player's goal/penalty-goal counter inside the same DB
-   * transaction. Either both succeed or both rollback — never partial state.
-   *
-   * Returns `inserted: true` only when the event row was newly created; on a
-   * duplicate (e.g., a retry after a transient network blip) the totals are
-   * left untouched, which is what `insertGoalEventIfMissing`'s idempotency
-   * guarantee already implied and what callers depended on.
-   */
-  async incrementGoalsAndInsertEventIfMissing(data: {
-    matchId: string;
-    userId: string;
-    seat: 1 | 2;
-    half: 1 | 2;
-    phaseKind: MatchQuestionPhaseKind;
-    qIndex: number | null;
-    isPenalty: boolean;
-    delta: { goals?: number; penaltyGoals?: number };
-  }): Promise<{ inserted: boolean; player: MatchPlayerRow | null }> {
-    return sql.begin(async (tx) => {
-      const insertedRows = await tx.unsafe<MatchGoalEventRow[]>(
-        `
-        INSERT INTO match_goal_events (
-          match_id, user_id, seat, half, phase_kind, q_index, is_penalty
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (match_id, user_id, phase_kind, q_index, is_penalty) DO NOTHING
-        RETURNING *
-        `,
-        [data.matchId, data.userId, data.seat, data.half, data.phaseKind, data.qIndex, data.isPenalty]
-      );
-      if (insertedRows.length === 0) {
-        return { inserted: false, player: null };
-      }
-      const playerRows = await tx.unsafe<MatchPlayerRow[]>(
-        `
-        UPDATE match_players
-        SET goals = goals + $3,
-            penalty_goals = penalty_goals + $4
-        WHERE match_id = $1 AND user_id = $2
-        RETURNING *
-        `,
-        [data.matchId, data.userId, data.delta.goals ?? 0, data.delta.penaltyGoals ?? 0]
-      );
-      return { inserted: true, player: playerRows[0] ?? null };
-    }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
-  },
+  // incrementGoalsAndInsertEventIfMissing moved to matchesService in
+  // Step 3 of the repo split. Cross-entity transactions (writes to both
+  // match_goal_events and match_players) are owned by the service layer
+  // so the repos can stay table-pure.
 
   getPlayerBySeat: (matchId: string, seat: 1 | 2) =>
     matchPlayersRepo.getPlayerBySeat(matchId, seat),

@@ -1,5 +1,12 @@
 import { matchesRepo } from './matches.repo.js';
+import { matchEventsRepo } from './match-events.repo.js';
+import { matchPlayersRepo } from './match-players.repo.js';
 import { sql } from '../../db/index.js';
+import type {
+  MatchGoalEventRow,
+  MatchPlayerRow,
+  MatchQuestionPhaseKind,
+} from './matches.types.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
 import { rankedService } from '../ranked/ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
@@ -668,5 +675,52 @@ export const matchesService = {
 
       await matchesRepo.recordUserModeStats(tx, statRows);
     });
+  },
+
+  /**
+   * Atomic goal write. Inserts a `match_goal_events` row (idempotent
+   * via ON CONFLICT) and increments the player's goal/penalty-goal
+   * counter inside the same DB transaction. Either both succeed or
+   * both roll back — never partial state.
+   *
+   * Returns `inserted: true` only when the event row was newly
+   * created; on a duplicate (e.g. a retry after a transient network
+   * blip) the player totals are left untouched.
+   *
+   * Was on matches.repo as `incrementGoalsAndInsertEventIfMissing`;
+   * moved here in the repo split so the cross-entity transaction is
+   * owned by the service layer. Repos stay table-pure.
+   */
+  async incrementGoalsAndInsertEventIfMissing(data: {
+    matchId: string;
+    userId: string;
+    seat: 1 | 2;
+    half: 1 | 2;
+    phaseKind: MatchQuestionPhaseKind;
+    qIndex: number | null;
+    isPenalty: boolean;
+    delta: { goals?: number; penaltyGoals?: number };
+  }): Promise<{ inserted: boolean; player: MatchPlayerRow | null }> {
+    return sql.begin(async (tx) => {
+      const inserted: MatchGoalEventRow | null = await matchEventsRepo.insertGoalEventIfMissingInTx(tx, {
+        matchId: data.matchId,
+        userId: data.userId,
+        seat: data.seat,
+        half: data.half,
+        phaseKind: data.phaseKind,
+        qIndex: data.qIndex,
+        isPenalty: data.isPenalty,
+      });
+      if (!inserted) {
+        return { inserted: false, player: null };
+      }
+      const player = await matchPlayersRepo.updatePlayerGoalTotalsInTx(
+        tx,
+        data.matchId,
+        data.userId,
+        data.delta,
+      );
+      return { inserted: true, player };
+    }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
   },
 };

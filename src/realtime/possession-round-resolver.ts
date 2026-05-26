@@ -1,5 +1,6 @@
 import { logger } from '../core/logger.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { matchesService } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import {
   answerCount,
@@ -254,7 +255,7 @@ export async function resolvePossessionRound(
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
           if (goalScoredByUserId) {
-            await matchesRepo.incrementGoalsAndInsertEventIfMissing({
+            await matchesService.incrementGoalsAndInsertEventIfMissing({
               matchId,
               userId: goalScoredByUserId,
               seat: goalScoredBySeat,

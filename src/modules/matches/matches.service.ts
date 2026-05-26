@@ -52,6 +52,34 @@ function getPutInOrderInstruction(direction: 'asc' | 'desc'): Record<string, str
   return { ...PUT_IN_ORDER_INSTRUCTION_I18N[direction] };
 }
 
+function shuffleArray<T>(input: readonly T[]): T[] {
+  const arr = [...input];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+  return arr;
+}
+
+// Shuffle until the result is not already the correct order — otherwise the
+// player sees the answer pre-arranged and wins for free.
+function shuffleDifferentlyFromCorrect<T>(
+  itemsInCorrectOrder: readonly T[],
+  idOf: (item: T) => string,
+): T[] {
+  if (itemsInCorrectOrder.length <= 1) return [...itemsInCorrectOrder];
+  const correctIds = itemsInCorrectOrder.map(idOf);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidate = shuffleArray(itemsInCorrectOrder);
+    const sameAsCorrect = candidate.every((item, index) => idOf(item) === correctIds[index]);
+    if (!sameAsCorrect) return candidate;
+  }
+  // Defensive fallback: swap first two to guarantee a different order.
+  const fallback = [...itemsInCorrectOrder];
+  [fallback[0], fallback[1]] = [fallback[1]!, fallback[0]!];
+  return fallback;
+}
+
 interface CountdownAnswerGroupEvaluation {
   id: string;
   display: Record<string, string>;
@@ -185,25 +213,31 @@ function buildQuestionAssets(row: MatchQuestionWithCategory): {
         sortValue: item.sort_value,
       }));
 
+      // sort_value represents rank/position (1 = first in correct order).
+      // The direction field is a display hint for the player, not a sort modifier.
+      const correctOrder = [...items].sort((left, right) =>
+        left.sortValue - right.sortValue
+      );
+
+      // Shuffle items before sending to client so the player isn't handed the
+      // answer pre-arranged. DB rows often arrive in their correct rank order
+      // because admins enter them sequentially, which let players submit the
+      // default order and win for free.
+      const shuffledForClient = shuffleDifferentlyFromCorrect(correctOrder, (item) => item.id);
+
       const question: PutInOrderQuestionDTO = {
         kind: 'putInOrder',
         ...common,
         prompt: ensureI18nObject(parsed.data.prompt),
         instruction: getPutInOrderInstruction(direction),
         direction,
-        items: items.map((item) => ({
+        items: shuffledForClient.map((item) => ({
           id: item.id,
           label: item.label,
           details: item.details,
           emoji: item.emoji,
         })),
       };
-
-      // sort_value represents rank/position (1 = first in correct order).
-      // The direction field is a display hint for the player, not a sort modifier.
-      const correctOrder = [...items].sort((left, right) =>
-        left.sortValue - right.sortValue
-      );
 
       return {
         question,
@@ -311,6 +345,7 @@ export interface PartyQuizStatePayload {
   totalQuestions: number;
   currentQuestion: {
     qIndex: number;
+    correctIndex?: number;
   } | null;
   answeredUserIds: string[];
   winnerDecisionMethod: MatchWinnerDecisionMethod | null;

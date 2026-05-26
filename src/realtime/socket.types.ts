@@ -201,7 +201,6 @@ export interface MatchQuestionPayload {
   question: GameQuestionDTO;
   playableAt?: string;
   deadlineAt: string;
-  correctIndex?: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
   shooterSeat?: 1 | 2 | null;

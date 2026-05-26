@@ -813,7 +813,7 @@ export async function handlePartyQuizAnswer(
     const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
-    const recorded = await matchesRepo.recordPartyQuizAnswerIfMissing({
+    const recorded = await matchesService.recordPartyQuizAnswerIfMissing({
       matchId: payload.matchId,
       qIndex: payload.qIndex,
       userId,

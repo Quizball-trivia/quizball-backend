@@ -1,8 +1,11 @@
 import { matchesRepo } from './matches.repo.js';
+import { matchAnswersRepo } from './match-answers.repo.js';
 import { matchEventsRepo } from './match-events.repo.js';
 import { matchPlayersRepo } from './match-players.repo.js';
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
 import type {
+  MatchAnswerRow,
   MatchGoalEventRow,
   MatchPlayerRow,
   MatchQuestionPhaseKind,
@@ -722,5 +725,87 @@ export const matchesService = {
       );
       return { inserted: true, player };
     }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
+  },
+
+  /**
+   * Atomic party-quiz answer write. Inserts a match_answers row
+   * (idempotent via ON CONFLICT) and on first-write increments the
+   * player's totals inside the same DB transaction.
+   *
+   * On duplicate (a retry): the second call's insert no-ops, and we
+   * read the already-present rows so the caller can echo back the
+   * authoritative state without re-applying the score delta.
+   *
+   * Was on matches.repo as `recordPartyQuizAnswerIfMissing`; moved
+   * here so the cross-entity transaction is owned by the service
+   * layer. Repos stay table-pure.
+   */
+  async recordPartyQuizAnswerIfMissing(data: {
+    matchId: string;
+    qIndex: number;
+    userId: string;
+    selectedIndex: number | null;
+    isCorrect: boolean;
+    timeMs: number;
+    pointsEarned: number;
+    answerPayload?: Json | null;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
+    try {
+      return await sql.begin(async (tx) => {
+        const insertedAnswer = await matchAnswersRepo.insertMatchAnswerIfMissingInTx(tx, data);
+
+        if (insertedAnswer) {
+          const updatedPlayer = await matchPlayersRepo.updatePlayerTotalsInTx(
+            tx,
+            data.matchId,
+            data.userId,
+            data.pointsEarned,
+            data.isCorrect,
+          );
+
+          // UPDATE must hit one row — otherwise the answer persists without
+          // the score increment. Throw to roll back the transaction.
+          if (!updatedPlayer) {
+            throw new AppError(
+              'match_players row missing during party answer insert',
+              500,
+              ErrorCode.INTERNAL_ERROR,
+              { matchId: data.matchId, userId: data.userId },
+            );
+          }
+
+          return {
+            inserted: true,
+            answer: insertedAnswer,
+            player: updatedPlayer,
+          };
+        }
+
+        // ON CONFLICT path — answer already existed. Read back the
+        // authoritative rows so the caller has consistent state.
+        const existingAnswer = await matchAnswersRepo.getAnswerForUserInTx(
+          tx,
+          data.matchId,
+          data.qIndex,
+          data.userId,
+        );
+        const existingPlayerRows = await tx.unsafe<MatchPlayerRow[]>(
+          `SELECT * FROM match_players WHERE match_id = $1 AND user_id = $2`,
+          [data.matchId, data.userId],
+        );
+
+        return {
+          inserted: false,
+          answer: existingAnswer,
+          player: existingPlayerRows[0] ?? null,
+        };
+      }) as { inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null };
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);
+    }
   },
 };

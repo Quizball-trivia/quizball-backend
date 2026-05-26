@@ -57,7 +57,6 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
     insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
-    recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
@@ -76,6 +75,9 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
       completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+      // recordPartyQuizAnswerIfMissing moved from matchesRepo to
+      // matchesService in Step 5 of the matches.repo split.
+      recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
     },
   };
 });

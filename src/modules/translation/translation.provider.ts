@@ -106,8 +106,17 @@ class GenericTranslationProvider {
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'unknown');
-        logger.error({ status: response.status, error: errorText }, 'OpenRouter API error');
+        // Don't log the raw body — upstream may echo prompts, API keys, or
+        // PII. Capture only safe metadata for diagnostics.
+        const bodyText = await response.text().catch(() => '');
+        logger.error(
+          {
+            status: response.status,
+            requestId: response.headers.get('x-request-id') ?? response.headers.get('cf-ray'),
+            bodyLength: bodyText.length,
+          },
+          'OpenRouter API error',
+        );
         throw new ExternalServiceError(`OpenRouter API error: ${response.status}`);
       }
 
@@ -122,7 +131,16 @@ class GenericTranslationProvider {
         logger.error({ timeout: REQUEST_TIMEOUT_MS }, 'OpenRouter translate timed out');
         throw new ExternalServiceError('Translation request timed out');
       }
-      logger.error({ err, model: this.model }, 'OpenRouter translate failed');
+      // Log only error name/message — `err` itself can include response
+      // bodies attached by fetch wrappers or stack traces with user content.
+      logger.error(
+        {
+          model: this.model,
+          errName: err instanceof Error ? err.name : 'unknown',
+          errMessage: err instanceof Error ? err.message : 'unknown',
+        },
+        'OpenRouter translate failed',
+      );
       throw new ExternalServiceError(
         `OpenRouter translate failed: ${err instanceof Error ? err.message : 'unknown error'}`,
         err,
@@ -142,7 +160,8 @@ class GenericTranslationProvider {
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      logger.error({ snippet: cleaned.slice(0, 500) }, 'Failed to parse translate response');
+      // Don't log the model's raw output — could contain user text.
+      logger.error({ length: cleaned.length }, 'Failed to parse translate response');
       throw new ExternalServiceError('Invalid JSON in translation response');
     }
 

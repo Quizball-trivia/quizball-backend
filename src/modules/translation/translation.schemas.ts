@@ -11,7 +11,26 @@ export const translateRequestSchema = z.object({
   target_locale: z.string().min(2).max(10),
   source_locale: z.string().min(2).max(10).optional(),
   domain: translationDomainSchema.optional().default('general'),
-  items: z.array(translateItemSchema).min(1).max(50),
+  items: z
+    .array(translateItemSchema)
+    .min(1)
+    .max(50)
+    // Downstream provider keys results by id, so duplicate ids would silently
+    // collapse — fail loudly at the boundary instead.
+    .superRefine((items, ctx) => {
+      const seen = new Set<string>();
+      const duplicates = new Set<string>();
+      for (const item of items) {
+        if (seen.has(item.id)) duplicates.add(item.id);
+        else seen.add(item.id);
+      }
+      if (duplicates.size > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate item ids: ${[...duplicates].join(', ')}`,
+        });
+      }
+    }),
 });
 
 export type TranslateRequestBody = z.infer<typeof translateRequestSchema>;

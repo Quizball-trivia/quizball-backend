@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 import { achievementsService } from '../../modules/achievements/index.js';
+import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { objectivesService } from '../../modules/objectives/index.js';
@@ -77,7 +78,8 @@ import { acquireLock, releaseLock } from '../locks.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
-const MATCH_START_COUNTDOWN_SEC = 10;
+const MATCH_START_COUNTDOWN_SEC = 5;
+const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
@@ -222,12 +224,27 @@ function parseLastMatchReplay(raw: string): LastMatchReplay {
   };
 }
 
+async function resolveMatchCategoryName(categoryId: string | null | undefined): Promise<Record<string, string> | undefined> {
+  if (!categoryId) return undefined;
+  try {
+    const category = await categoriesRepo.getById(categoryId);
+    const raw = category?.name;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    return raw as Record<string, string>;
+  } catch (err) {
+    logger.warn({ err, categoryId }, 'Failed to resolve category name (non-fatal)');
+    return undefined;
+  }
+}
+
 async function getOpponentInfo(matchId: string, userId: string): Promise<{
   id: string;
   username: string;
   avatarUrl: string | null;
   avatarCustomization: AvatarCustomization | null;
   favoriteClub: string | null;
+  country?: string;
+  countryCode?: string;
 }> {
   const players = await matchesRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
@@ -248,6 +265,8 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     favoriteClub: opponentUser?.favorite_club ?? null,
+    country: opponentUser?.country ?? undefined,
+    countryCode: opponentUser?.country ?? undefined,
   };
 }
 
@@ -313,6 +332,8 @@ async function getOpponentInfoFromParticipants(
   avatarUrl: string | null;
   avatarCustomization: AvatarCustomization | null;
   rp?: number;
+  country?: string;
+  countryCode?: string;
 }> {
   const opponent = participants.find((player) => player.user_id !== userId);
   if (!opponent) {
@@ -340,6 +361,7 @@ async function getOpponentInfoFromParticipants(
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     ...(rp != null ? { rp } : {}),
+    ...(opponentUser?.country ? { country: opponentUser.country, countryCode: opponentUser.country } : {}),
   };
 }
 
@@ -465,6 +487,7 @@ async function buildFinalQuestionResults(
 
 async function buildFinalResultsPayload(matchId: string, resultVersion: number): Promise<{
   matchId: string;
+  variant?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
   winnerId: string | null;
   players: Record<string, {
     totalPoints: number;
@@ -595,6 +618,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
 
   return {
     matchId,
+    variant,
     winnerId: explicitNoWinnerForfeit ? null : (match.winner_user_id ?? derivedWinnerId),
     players: payloadPlayers,
     participants,
@@ -748,16 +772,8 @@ export async function beginMatchForLobby(
   matchId: string,
   options?: { countdownSec?: number }
 ): Promise<void> {
-  const countdownSec = Math.max(
-    0,
-    Number.isFinite(options?.countdownSec)
-      ? Math.floor(options?.countdownSec ?? MATCH_START_COUNTDOWN_SEC)
-      : MATCH_START_COUNTDOWN_SEC
-  );
-  const countdownMs = countdownSec * 1000;
-
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'>;
+  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
   const match = await matchesRepo.getMatch(matchId);
   const players = await matchesRepo.listMatchPlayers(matchId);
   if (!match || players.length === 0) {
@@ -767,28 +783,59 @@ export async function beginMatchForLobby(
     );
     return;
   }
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
 
-  let members: MatchStartMember[] = lobbyMembers.map((member) => ({
-      user_id: member.user_id,
-      nickname: member.nickname,
-      avatar_url: member.avatar_url,
-      avatar_customization: member.avatar_customization,
-      favorite_club: member.favorite_club,
-    }));
+  const variantForCountdown = resolveMatchVariant(match.state_payload, match.mode);
+  const defaultCountdownSec = variantForCountdown === 'friendly_party_quiz'
+    ? PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC
+    : MATCH_START_COUNTDOWN_SEC;
+  const countdownSec = Math.max(
+    0,
+    Number.isFinite(options?.countdownSec)
+      ? Math.floor(options?.countdownSec ?? defaultCountdownSec)
+      : defaultCountdownSec
+  );
+  const countdownMs = countdownSec * 1000;
+  const variant = variantForCountdown;
+
+  let members: MatchStartMember[];
+  // Country (only used for the matchmaking-map pin) must not block match start.
+  const memberUsersSettled = await Promise.allSettled(
+    lobbyMembers.map((member) => usersRepo.getById(member.user_id))
+  );
+  const memberCountry = (index: number): string | null => {
+    const result = memberUsersSettled[index];
+    if (result?.status !== 'fulfilled') return null;
+    return result.value?.country ?? null;
+  };
+  members = lobbyMembers.map((member, index) => ({
+    user_id: member.user_id,
+    nickname: member.nickname,
+    avatar_url: member.avatar_url,
+    avatar_customization: member.avatar_customization,
+    favorite_club: member.favorite_club,
+    country: memberCountry(index),
+  }));
   if (members.length !== players.length) {
     logger.warn(
       { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
       'Match start member count invalid, falling back to match players'
     );
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    members = players.map((player, index) => ({
-      user_id: player.user_id,
-      nickname: users[index]?.nickname ?? 'Player',
-      avatar_url: users[index]?.avatar_url ?? null,
-      avatar_customization: users[index]?.avatar_customization ?? null,
-      favorite_club: users[index]?.favorite_club ?? null,
-    }));
+    const usersSettled = await Promise.allSettled(players.map((player) => usersRepo.getById(player.user_id)));
+    const playerUser = (index: number) => {
+      const result = usersSettled[index];
+      return result?.status === 'fulfilled' ? result.value : null;
+    };
+    members = players.map((player, index) => {
+      const user = playerUser(index);
+      return {
+        user_id: player.user_id,
+        nickname: user?.nickname ?? 'Player',
+        avatar_url: user?.avatar_url ?? null,
+        avatar_customization: user?.avatar_customization ?? null,
+        favorite_club: user?.favorite_club ?? null,
+        country: user?.country ?? null,
+      };
+    });
   }
 
   // Lobby is no longer needed for membership tracking once match starts.
@@ -864,6 +911,10 @@ export async function beginMatchForLobby(
     }),
   );
 
+  // Resolve the first-half category name so the client's round-1 intro
+  // doesn't flash a placeholder while waiting for match:question.
+  const categoryName = await resolveMatchCategoryName(match.category_a_id);
+
   await Promise.all(
     members.map(async (member) => {
       const opponent = members.find((candidate) => candidate.user_id !== member.user_id) ?? member;
@@ -881,8 +932,10 @@ export async function beginMatchForLobby(
           favoriteClub: opponent.favorite_club,
           recentForm: recentFormByUserId.get(opponent.user_id) ?? [],
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
+          ...(opponent.country ? { country: opponent.country, countryCode: opponent.country } : {}),
         },
         participants,
+        ...(categoryName ? { categoryName } : {}),
       });
     })
   );
@@ -967,6 +1020,7 @@ export const matchRealtimeService = {
     const opponent = await getOpponentInfoFromParticipants(participants, userId, match.mode, match.ranked_context);
     const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
     const mySeat = participants.find((player) => player.user_id === userId)?.seat;
+    const categoryName = await resolveMatchCategoryName(match.category_a_id);
     socket.emit('match:start', {
       matchId: match.id,
       mode: match.mode,
@@ -974,6 +1028,7 @@ export const matchRealtimeService = {
       mySeat: mySeat ?? undefined,
       opponent,
       participants: participantPayloads,
+      ...(categoryName ? { categoryName } : {}),
     });
 
     if (redis) {
@@ -1199,6 +1254,7 @@ export const matchRealtimeService = {
         const participantPayloads = await buildParticipantPayloads(participants, match.mode, match.ranked_context);
         const mySeat = participants.find((player) => player.user_id === userId)?.seat;
         const variant = resolveMatchVariant(match.state_payload, match.mode);
+        const categoryName = await resolveMatchCategoryName(match.category_a_id);
         socket.emit('match:start', {
           matchId: match.id,
           mode: match.mode,
@@ -1206,6 +1262,7 @@ export const matchRealtimeService = {
           mySeat: mySeat ?? undefined,
           opponent,
           participants: participantPayloads,
+          ...(categoryName ? { categoryName } : {}),
         });
 
         const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
@@ -1853,7 +1910,7 @@ export const matchRealtimeService = {
     }
 
     if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      await handlePartyQuizAnswer(io, socket, payload);
+      await handlePartyQuizAnswer(io, socket, payload, match);
       return;
     }
 

@@ -30,9 +30,11 @@ type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTi
 const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
 const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 
-function getAiAnswerDelayMs(): number {
-  // AI "thinking" time after options become visible to players.
-  // Range: 2–7s => 80..30 points on correct answers.
+function getAiAnswerDelayMs(questionKind?: string): number {
+  // Countdown is open-ended typing, so the AI uses a much slower range than other kinds.
+  if (questionKind === 'countdown') {
+    return Math.floor(Math.random() * 10000) + 12000;
+  }
   return Math.floor(Math.random() * 5000) + 2000;
 }
 
@@ -164,7 +166,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           state: cache.statePayload,
         });
     const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
-    const aiThinkTimeMs = getAiAnswerDelayMs();
+    const aiThinkTimeMs = getAiAnswerDelayMs(options.questionKind);
     const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
       ? options.evaluation.clues.length
       : undefined;
@@ -415,6 +417,33 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           isCorrect: committed.isCorrect,
           selectedIndex: committed.selectedIndex,
         });
+      }
+
+      // AI commits all countdown answers at once; drip-feed them so the human sees a typing pace.
+      if (committed.questionKind === 'countdown' && committed.foundCount && committed.foundCount > 0) {
+        const totalFound = committed.foundCount;
+        const emitQIndex = qIndex;
+        for (let i = 1; i <= totalFound; i += 1) {
+          const stepDelay = 600 + Math.floor(Math.random() * 800) + (i - 1) * 250;
+          setTimeout(() => {
+            void (async () => {
+              try {
+                // Skip if the round advanced before our timer fired.
+                const liveCache = await getMatchCacheOrRebuild(matchId);
+                if (!liveCache || liveCache.status !== 'active') return;
+                if (liveCache.currentQIndex !== emitQIndex) return;
+                io.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
+                  matchId,
+                  qIndex: emitQIndex,
+                  opponentUserId: aiUserId,
+                  foundCount: i,
+                });
+              } catch (error) {
+                logger.warn({ error, matchId, qIndex: emitQIndex }, 'AI countdown drip emit failed');
+              }
+            })();
+          }, stepDelay);
+        }
       }
 
       if (committed.questionKind !== 'countdown' && committed.answerCount >= committed.expectedCount) {

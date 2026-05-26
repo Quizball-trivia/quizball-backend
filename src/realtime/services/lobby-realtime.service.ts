@@ -815,16 +815,24 @@ export const lobbyRealtimeService = {
           displayName,
         });
 
-        await lobbiesRepo.addMember(lobby.id, userId, false);
+        let invite;
+        try {
+          await lobbiesRepo.addMember(lobby.id, userId, false);
+          invite = await lobbyChallengeInvitationsRepo.create({
+            lobbyId: lobby.id,
+            fromUserId: userId,
+            toUserId,
+            expiresAt: new Date(Date.now() + CHALLENGE_INVITE_TTL_MS),
+          });
+        } catch (err) {
+          // Compensating rollback: prevent stray lobby + member if the
+          // invitation insert fails (e.g. unique constraint conflict).
+          await lobbiesRepo.removeMember(lobby.id, userId).catch(() => {});
+          await lobbiesRepo.deleteLobby(lobby.id).catch(() => {});
+          throw err;
+        }
+
         await attachUserSocketsToLobby(io, userId, lobby.id);
-
-        const invite = await lobbyChallengeInvitationsRepo.create({
-          lobbyId: lobby.id,
-          fromUserId: userId,
-          toUserId,
-          expiresAt: new Date(Date.now() + CHALLENGE_INVITE_TTL_MS),
-        });
-
         await emitLobbyState(io, lobby.id);
         socket.emit('lobby:challenge_created', {
           invitationId: invite.id,
@@ -1514,6 +1522,10 @@ export const lobbyRealtimeService = {
       }
 
       await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+      // Non-host members otherwise see no UI change between the host pressing
+      // "Start" and the match-start countdown firing — broadcast the status
+      // flip so every client can render its "preparing match" state.
+      await emitLobbyState(io, lobbyId);
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       logger.info(

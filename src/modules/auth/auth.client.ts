@@ -41,4 +41,20 @@ export interface AuthClient {
     redirectTo: string,
     scopes?: string | string[]
   ): string;
+
+  /**
+   * Exchange a provider-issued OIDC id_token (e.g. from Google Identity
+   * Services / Sign in with Apple) for a Supabase session. Used when the
+   * frontend does sign-in client-side without a redirect — required for
+   * in-app browsers (Messenger/Instagram) where the classic OAuth redirect
+   * endpoint is blocked by Google.
+   *
+   * `nonce` must match the nonce sent to the provider on the original
+   * id_token request, when one was used.
+   */
+  signInWithIdToken(
+    provider: string,
+    idToken: string,
+    nonce?: string,
+  ): Promise<AuthSession>;
 }

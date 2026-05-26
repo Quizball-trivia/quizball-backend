@@ -11,6 +11,7 @@ import {
   type ResetPasswordRequest,
   type ResetPasswordHeaders,
   type SocialLoginRequest,
+  type SocialLoginTokenRequest,
 } from './auth.schemas.js';
 import { BadRequestError } from '../../core/errors.js';
 
@@ -146,6 +147,16 @@ export const authController = {
     const url = authClient.oauthAuthorizeUrl(provider, redirect_to, scopes);
 
     res.json({ url });
+  },
+
+  // POST /api/v1/auth/social-login-token — exchange GIS id_token for a Supabase session.
+  async socialLoginToken(req: Request, res: Response): Promise<void> {
+    const { provider, id_token, nonce } = req.validated
+      .body as SocialLoginTokenRequest;
+    const session = await authService.socialLoginToken({ provider, id_token, nonce });
+
+    setAuthCookies(res, session);
+    res.json(toAuthResponse(session));
   },
 
   /**

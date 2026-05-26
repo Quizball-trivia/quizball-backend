@@ -12,6 +12,7 @@ export {
   resetPasswordSchema,
   resetPasswordHeadersSchema,
   socialLoginSchema,
+  socialLoginTokenSchema,
   authResponseSchema,
   messageResponseSchema,
   socialLoginResponseSchema,
@@ -25,6 +26,7 @@ export {
   type ResetPasswordRequest,
   type ResetPasswordHeaders,
   type SocialLoginRequest,
+  type SocialLoginTokenRequest,
   type MessageResponse,
   type SocialLoginResponse,
 } from './auth.schemas.js';

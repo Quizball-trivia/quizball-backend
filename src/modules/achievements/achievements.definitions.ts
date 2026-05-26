@@ -25,7 +25,7 @@ export const ACHIEVEMENT_DEFINITIONS: readonly AchievementDefinition[] = [
   {
     id: 'clean_sheet',
     title: { en: 'Clean Sheet', ka: 'სუფთა ფურცელი' },
-    description: { en: 'Win a possession match without conceding a goal.', ka: 'მოიგე ფლობის მატჩი გოლის გატანის გარეშე.' },
+    description: { en: 'Win a possession match without conceding a goal.', ka: 'მოიგე ფლობის მატჩი გოლის მიღების გარეშე.' },
     icon: 'Trophy',
     target: 1,
   },
@@ -46,7 +46,7 @@ export const ACHIEVEMENT_DEFINITIONS: readonly AchievementDefinition[] = [
   {
     id: 'trophy_collector',
     title: { en: 'Trophy Collector', ka: 'თასების კოლექციონერი' },
-    description: { en: 'Win your first party quiz.', ka: 'მოიგე შენი პირველი ფარტი ქვიზი.' },
+    description: { en: 'Win your first party quiz.', ka: 'მოიგე შენი პირველი ფართი ქვიზი.' },
     icon: 'Award',
     target: 1,
   },

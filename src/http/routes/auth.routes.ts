@@ -10,6 +10,7 @@ import {
   resetPasswordSchema,
   resetPasswordHeadersSchema,
   socialLoginSchema,
+  socialLoginTokenSchema,
 } from '../../modules/auth/index.js';
 
 const router = Router();
@@ -69,6 +70,17 @@ router.post(
   '/social-login',
   validate({ body: socialLoginSchema }),
   authController.socialLogin
+);
+
+/**
+ * POST /api/v1/auth/social-login-token
+ * Exchange a provider-issued OIDC id_token (Google Identity Services or
+ * Sign in with Apple) for a Supabase session.
+ */
+router.post(
+  '/social-login-token',
+  validate({ body: socialLoginTokenSchema }),
+  authController.socialLoginToken
 );
 
 /**

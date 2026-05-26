@@ -68,6 +68,13 @@ export const socialLoginSchema = z.object({
 });
 export type SocialLoginRequest = z.infer<typeof socialLoginSchema>;
 
+export const socialLoginTokenSchema = z.object({
+  provider: z.enum(['google', 'apple']),
+  id_token: z.string().min(1).max(8192),
+  nonce: z.string().min(1).max(512).optional(),
+});
+export type SocialLoginTokenRequest = z.infer<typeof socialLoginTokenSchema>;
+
 // =============================================================================
 // Response Schemas
 // =============================================================================

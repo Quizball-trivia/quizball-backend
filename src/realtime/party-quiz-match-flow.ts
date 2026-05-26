@@ -153,7 +153,6 @@ export async function emitPartyQuizStateToSocket(
   if (!question) return;
   const correctIndex = getValidatedPartyQuizCorrectIndex(question);
 
-  // correctIndex is intentionally withheld — clients get it via answer_ack or round_result.
   socket.emit('match:question', {
     matchId,
     qIndex,
@@ -161,6 +160,7 @@ export async function emitPartyQuizStateToSocket(
     question: question.question,
     playableAt: timing?.shown_at ?? undefined,
     deadlineAt: timing?.deadline_at ?? new Date().toISOString(),
+    correctIndex: correctIndex ?? undefined,
     phaseKind: 'normal',
     phaseRound: qIndex + 1,
     shooterSeat: null,
@@ -516,6 +516,7 @@ export async function sendPartyQuizQuestion(
       question: payload.question,
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
+      correctIndex,
       phaseKind: 'normal',
       phaseRound: qIndex + 1,
       shooterSeat: null,
@@ -584,6 +585,7 @@ export async function resumePartyQuizQuestion(
     question: question.question,
     playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
+    correctIndex,
     phaseKind: 'normal',
     phaseRound: qIndex + 1,
     shooterSeat: null,

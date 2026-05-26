@@ -1,4 +1,5 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { matchEventsRepo } from './match-events.repo.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import { withSpan } from '../../core/tracing.js';
@@ -710,7 +711,11 @@ export const matchesRepo = {
     return row ?? null;
   },
 
-  async insertGoalEventIfMissing(data: {
+  // Facade delegate — real implementation lives in matchEventsRepo.
+  // Kept here so existing call sites (`matchesRepo.insertGoalEventIfMissing(…)`)
+  // keep working unchanged through the split. Will be removed in a follow-up
+  // PR once all callers have migrated to the entity repo.
+  insertGoalEventIfMissing: (data: {
     matchId: string;
     userId: string;
     seat: 1 | 2;
@@ -718,31 +723,7 @@ export const matchesRepo = {
     phaseKind: MatchQuestionPhaseKind;
     qIndex: number | null;
     isPenalty: boolean;
-  }): Promise<MatchGoalEventRow | null> {
-    const [row] = await sql<MatchGoalEventRow[]>`
-      INSERT INTO match_goal_events (
-        match_id,
-        user_id,
-        seat,
-        half,
-        phase_kind,
-        q_index,
-        is_penalty
-      )
-      VALUES (
-        ${data.matchId},
-        ${data.userId},
-        ${data.seat},
-        ${data.half},
-        ${data.phaseKind},
-        ${data.qIndex},
-        ${data.isPenalty}
-      )
-      ON CONFLICT (match_id, user_id, phase_kind, q_index, is_penalty) DO NOTHING
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+  }): Promise<MatchGoalEventRow | null> => matchEventsRepo.insertGoalEventIfMissing(data),
 
   /**
    * Atomic goal write. Inserts the goal event (idempotent via ON CONFLICT) and

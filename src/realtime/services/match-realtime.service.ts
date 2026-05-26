@@ -14,7 +14,15 @@ import { appMetrics } from '../../core/metrics.js';
 import { getRedisClient } from '../redis.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
+import {
+  buildOpponentForfeitPendingPayload,
+  buildReconnectLimitForfeitPendingPayload,
+  emitPendingForfeitIfAny,
+  finalizeMatchAsForfeit,
+  handleMatchForfeit,
+  matchForfeitKey,
+  setForfeitPendingForUser,
+} from './match-forfeit.service.js';
 import {
   buildParticipantPayloads,
   getOpponentInfo,
@@ -55,7 +63,6 @@ import {
   ensurePartyQuizActiveTimer,
   resumePartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
-import type { MatchForfeitPendingPayload } from '../socket.types.js';
 import {
   matchPresenceKey,
   matchDisconnectKey,
@@ -78,11 +85,6 @@ const DISCONNECT_TTL_SEC = 75;
 const GRACE_TTL_SEC = 65;
 const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
-const FORFEIT_PENDING_TTL_SEC = 60;
-function matchForfeitKey(matchId: string): string {
-  return `match:forfeit:${matchId}`;
-}
-
 async function emitRejoinAvailable(
   socket: QuizballSocket,
   match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
@@ -130,54 +132,6 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
   return nextCount;
 }
 
-
-function buildReconnectLimitForfeitPendingPayload(matchId: string): MatchForfeitPendingPayload {
-  return {
-    matchId,
-    reason: 'reconnect_limit',
-    message: 'You lost the match after exceeding the reconnect limit. Finalizing results...',
-  };
-}
-
-function buildOpponentForfeitPendingPayload(
-  matchId: string,
-  reason: 'opponent_forfeit' | 'opponent_reconnect_limit'
-): MatchForfeitPendingPayload {
-  return {
-    matchId,
-    reason,
-    message: reason === 'opponent_forfeit'
-      ? 'Opponent forfeited. Finalizing results...'
-      : 'Opponent did not reconnect in time. Finalizing results...',
-  };
-}
-
-async function setForfeitPendingForUser(userId: string, payload: MatchForfeitPendingPayload): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  await redis.set(matchForfeitPendingUserKey(userId), JSON.stringify(payload), { EX: FORFEIT_PENDING_TTL_SEC });
-}
-
-function parseForfeitPendingPayload(raw: string): MatchForfeitPendingPayload | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<MatchForfeitPendingPayload>;
-    if (
-      !parsed.matchId ||
-      !(
-        parsed.reason === 'reconnect_limit' ||
-        parsed.reason === 'opponent_forfeit' ||
-        parsed.reason === 'opponent_reconnect_limit'
-      )
-    ) return null;
-    return {
-      matchId: parsed.matchId,
-      reason: parsed.reason,
-      message: parsed.message ?? 'You lost the match. Finalizing results...',
-    };
-  } catch {
-    return null;
-  }
-}
 
 export async function beginMatchForLobby(
   io: QuizballServer,
@@ -540,90 +494,7 @@ export const matchRealtimeService = {
     await userSessionGuardService.emitState(io, userId);
   },
 
-  async handleMatchForfeit(
-    io: QuizballServer,
-    socket: QuizballSocket,
-    requestedMatchId: string | null
-  ): Promise<void> {
-    const userId = socket.data.user.id;
-    const completed = await userSessionGuardService.runWithUserTransitionLock(
-      io,
-      socket,
-      async () => {
-        const activeMatch =
-          (requestedMatchId ? await matchesRepo.getMatch(requestedMatchId) : null) ??
-          (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
-          (await matchesRepo.getActiveMatchForUser(userId));
-
-        if (!activeMatch || activeMatch.status !== 'active') {
-          socket.emit('error', {
-            code: 'MATCH_NOT_ACTIVE',
-            message: 'No active match to forfeit',
-          });
-          return;
-        }
-
-        const { participants: roster, cache } = await getParticipantSnapshot(activeMatch.id);
-        const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
-        const isParticipant = roster.some((player) => player.user_id === userId);
-        if (!isParticipant) {
-          socket.emit('error', {
-            code: 'MATCH_NOT_ALLOWED',
-            message: 'You are not a participant in this match',
-          });
-          return;
-        }
-
-        cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
-        if (variant !== 'friendly_party_quiz') {
-          cancelPossessionHalftimeTimer(activeMatch.id);
-        }
-        const cleanupKeys = [
-          matchPauseKey(activeMatch.id),
-          matchGraceKey(activeMatch.id),
-          ...roster.flatMap((player) => [
-            matchDisconnectKey(activeMatch.id, player.user_id),
-            matchPresenceKey(activeMatch.id, player.user_id),
-            matchReconnectCountKey(activeMatch.id, player.user_id),
-          ]),
-          rankedAiMatchKey(activeMatch.id),
-        ];
-        const opponentPendingPayload = buildOpponentForfeitPendingPayload(activeMatch.id, 'opponent_forfeit');
-        for (const player of roster) {
-          if (player.user_id === userId) continue;
-          io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
-        }
-        const finalized = await finalizeMatchAsForfeit({
-          matchId: activeMatch.id,
-          forfeitingUserId: userId,
-          activeMatch,
-          cacheSnapshot: cache,
-          cleanupRedisKeys: cleanupKeys,
-        });
-        const resultVersion = finalized.resultVersion;
-        const finalPayload = await buildFinalResultsPayload(activeMatch.id, resultVersion);
-        if (finalPayload) {
-          await emitFinalResultsToMatchParticipants(io, activeMatch.id, finalPayload);
-        }
-
-        const redis = getRedisClient();
-        if (redis) {
-          await redis.del(cleanupKeys);
-        }
-
-        socket.leave(`match:${activeMatch.id}`);
-        socket.data.matchId = undefined;
-      },
-      {
-        code: 'TRANSITION_IN_PROGRESS',
-        message: 'Match transition is in progress. Please retry.',
-        operation: 'match:forfeit',
-      }
-    );
-    if (!completed) return;
-
-    await userSessionGuardService.emitState(io, userId);
-  },
+  handleMatchForfeit,
 
   async handleMatchRejoin(io: QuizballServer, socket: QuizballSocket, requestedMatchId: string | null): Promise<void> {
     const userId = socket.data.user.id;
@@ -705,20 +576,7 @@ export const matchRealtimeService = {
 
   emitLastMatchResultIfAny,
 
-  async emitPendingForfeitIfAny(socket: QuizballSocket): Promise<void> {
-    const redis = getRedisClient();
-    if (!redis) return;
-
-    const userId = socket.data.user.id;
-    const raw = await redis.get(matchForfeitPendingUserKey(userId));
-    if (!raw) return;
-    const payload = parseForfeitPendingPayload(raw);
-    if (!payload) {
-      await redis.del(matchForfeitPendingUserKey(userId));
-      return;
-    }
-    socket.emit('match:forfeit_pending', payload);
-  },
+  emitPendingForfeitIfAny,
 
   handlePlayAgain,
 

@@ -185,6 +185,8 @@ export interface MatchStartPayload {
   /** Recipient's own last 3 match results (most recent first). Used by the showdown form-strip. */
   myRecentForm?: Array<'W' | 'L' | 'D'>;
   participants: MatchParticipant[];
+  /** Resolved first-half category name (i18n). Lets the client skip the placeholder/flicker on the round-1 intro. */
+  categoryName?: Record<string, string>;
 }
 
 export interface MatchCountdownPayload {

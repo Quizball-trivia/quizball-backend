@@ -151,6 +151,10 @@ async function startHumanRankedMatch(
         favoriteClub: userB.favorite_club ?? null,
         recentForm: formB,
         rp: profileB.rp,
+        // Frontend resolves country (ISO 3166-1 alpha-2) to the matchmaking map
+        // pin/city. Without this Georgian players land on the Denver fallback.
+        country: userB.country ?? undefined,
+        countryCode: userB.country ?? undefined,
       },
     });
     io.to(`user:${userBId}`).emit('ranked:match_found', {
@@ -164,6 +168,8 @@ async function startHumanRankedMatch(
         favoriteClub: userA.favorite_club ?? null,
         recentForm: formA,
         rp: profileA.rp,
+        country: userA.country ?? undefined,
+        countryCode: userA.country ?? undefined,
       },
     });
 

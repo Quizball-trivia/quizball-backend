@@ -229,6 +229,8 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
   avatarUrl: string | null;
   avatarCustomization: AvatarCustomization | null;
   favoriteClub: string | null;
+  country?: string;
+  countryCode?: string;
 }> {
   const players = await matchesRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
@@ -249,6 +251,8 @@ async function getOpponentInfo(matchId: string, userId: string): Promise<{
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     favoriteClub: opponentUser?.favorite_club ?? null,
+    country: opponentUser?.country ?? undefined,
+    countryCode: opponentUser?.country ?? undefined,
   };
 }
 
@@ -314,6 +318,8 @@ async function getOpponentInfoFromParticipants(
   avatarUrl: string | null;
   avatarCustomization: AvatarCustomization | null;
   rp?: number;
+  country?: string;
+  countryCode?: string;
 }> {
   const opponent = participants.find((player) => player.user_id !== userId);
   if (!opponent) {
@@ -341,6 +347,7 @@ async function getOpponentInfoFromParticipants(
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     ...(rp != null ? { rp } : {}),
+    ...(opponentUser?.country ? { country: opponentUser.country, countryCode: opponentUser.country } : {}),
   };
 }
 
@@ -752,7 +759,7 @@ export async function beginMatchForLobby(
   options?: { countdownSec?: number }
 ): Promise<void> {
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'>;
+  type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
   const match = await matchesRepo.getMatch(matchId);
   const players = await matchesRepo.listMatchPlayers(matchId);
   if (!match || players.length === 0) {
@@ -776,13 +783,20 @@ export async function beginMatchForLobby(
   const countdownMs = countdownSec * 1000;
   const variant = variantForCountdown;
 
-  let members: MatchStartMember[] = lobbyMembers.map((member) => ({
-      user_id: member.user_id,
-      nickname: member.nickname,
-      avatar_url: member.avatar_url,
-      avatar_customization: member.avatar_customization,
-      favorite_club: member.favorite_club,
-    }));
+  let members: MatchStartMember[];
+  // Always fetch users to get `country` — listMembersWithUser doesn't include it
+  // and the matchmaking-map overlay needs it to resolve the opponent city pin.
+  const memberUsers = await Promise.all(
+    lobbyMembers.map((member) => usersRepo.getById(member.user_id))
+  );
+  members = lobbyMembers.map((member, index) => ({
+    user_id: member.user_id,
+    nickname: member.nickname,
+    avatar_url: member.avatar_url,
+    avatar_customization: member.avatar_customization,
+    favorite_club: member.favorite_club,
+    country: memberUsers[index]?.country ?? null,
+  }));
   if (members.length !== players.length) {
     logger.warn(
       { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
@@ -795,6 +809,7 @@ export async function beginMatchForLobby(
       avatar_url: users[index]?.avatar_url ?? null,
       avatar_customization: users[index]?.avatar_customization ?? null,
       favorite_club: users[index]?.favorite_club ?? null,
+      country: users[index]?.country ?? null,
     }));
   }
 
@@ -888,6 +903,7 @@ export async function beginMatchForLobby(
           favoriteClub: opponent.favorite_club,
           recentForm: recentFormByUserId.get(opponent.user_id) ?? [],
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
+          ...(opponent.country ? { country: opponent.country, countryCode: opponent.country } : {}),
         },
         participants,
       });
@@ -1860,7 +1876,7 @@ export const matchRealtimeService = {
     }
 
     if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-      await handlePartyQuizAnswer(io, socket, payload);
+      await handlePartyQuizAnswer(io, socket, payload, match);
       return;
     }
 

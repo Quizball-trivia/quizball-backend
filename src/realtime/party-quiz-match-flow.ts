@@ -351,7 +351,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       bumpStateVersion(state);
 
       await matchesRepo.setMatchStatePayload(matchId, state, activeMatch.total_questions);
-      await matchesRepo.completeMatch(matchId, standings[0]?.userId ?? null);
+      await matchesService.completeMatch(matchId, standings[0]?.userId ?? null);
       await deleteMatchCache(matchId);
 
       const resultVersion = Date.now();

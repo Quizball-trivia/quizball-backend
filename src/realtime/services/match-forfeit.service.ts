@@ -182,7 +182,7 @@ export async function finalizeMatchAsForfeit(
       winnerDecisionMethod: 'forfeit',
     });
 
-    await matchesRepo.completeMatch(params.matchId, winnerId);
+    await matchesService.completeMatch(params.matchId, winnerId);
     await deleteMatchCache(params.matchId);
 
     if (activeMatch.mode === 'ranked') {

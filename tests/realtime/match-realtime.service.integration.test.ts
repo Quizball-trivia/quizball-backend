@@ -130,7 +130,6 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
       incrementGoalsAndInsertEventIfMissingMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
-    completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
     setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
@@ -146,6 +145,10 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
       abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
+      // completeMatch moved from matches.repo to matches.service in the
+      // layering-violation cleanup; tests still call it `completeMatchMock`
+      // for continuity and assert call-site behavior, not implementation.
+      completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     },
   };
 });

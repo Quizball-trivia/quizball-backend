@@ -619,7 +619,7 @@ export async function pauseMatchForDisconnectedPlayer(
         winnerDecisionMethod: 'forfeit',
       });
 
-      await matchesRepo.completeMatch(matchId, winnerId);
+      await matchesService.completeMatch(matchId, winnerId);
       await deleteMatchCache(matchId);
       if (variant !== 'friendly_party_quiz') {
         cancelPossessionHalftimeTimer(matchId);

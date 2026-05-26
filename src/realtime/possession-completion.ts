@@ -151,7 +151,7 @@ export async function completePossessionMatch(
     await matchesRepo.setMatchStatePayload(matchId, state, match.current_q_index);
   }
 
-  await matchesRepo.completeMatch(matchId, decision.winnerId);
+  await matchesService.completeMatch(matchId, decision.winnerId);
 
   const [avgTimes, playerRows] = await Promise.all([
     matchesService.computeAvgTimes(matchId),

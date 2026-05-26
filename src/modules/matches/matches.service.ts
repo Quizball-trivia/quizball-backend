@@ -1,4 +1,5 @@
 import { matchesRepo } from './matches.repo.js';
+import { sql } from '../../db/index.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
 import { rankedService } from '../ranked/ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
@@ -623,5 +624,49 @@ export const matchesService = {
         ErrorCode.BAD_REQUEST
       );
     }
+  },
+
+  /**
+   * Flip a match to "completed" and fan stats out to the per-user
+   * `user_mode_match_stats` aggregate. Atomic — if the stats upsert
+   * throws, the match completion rolls back too, so the match stays
+   * in 'active' and the caller can retry. Idempotent on subsequent
+   * calls (the `WHERE status = 'active'` guard short-circuits).
+   *
+   * Owns the win/loss/draw policy and the is_dev skip rule — those
+   * were business rules previously living in matches.repo.completeMatch,
+   * which violated the "repos = data writes only" boundary.
+   */
+  async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
+    await sql.begin(async (tx) => {
+      const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId);
+      if (!completed) {
+        // Already completed/abandoned — nothing to do.
+        return;
+      }
+
+      // Dev matches don't contribute to aggregate stats.
+      if (completed.is_dev) {
+        return;
+      }
+
+      const players = await matchesRepo.listMatchPlayers(matchId, tx);
+      if (players.length === 0) return;
+
+      const statRows = players.map((player) => {
+        const isDraw = winnerId === null;
+        const isWinner = winnerId !== null && winnerId === player.user_id;
+        return {
+          userId: player.user_id,
+          mode: completed.mode,
+          wins: (isWinner ? 1 : 0) as 0 | 1,
+          losses: (!isDraw && !isWinner ? 1 : 0) as 0 | 1,
+          draws: (isDraw ? 1 : 0) as 0 | 1,
+          lastMatchAt: completed.ended_at,
+        };
+      });
+
+      await matchesRepo.recordUserModeStats(tx, statRows);
+    });
   },
 };

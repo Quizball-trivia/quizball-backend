@@ -1,4 +1,4 @@
-import { sql } from '../../db/index.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import { AppError } from '../../core/errors.js';
 import { withSpan } from '../../core/tracing.js';
@@ -57,13 +57,27 @@ export const matchesRepo = {
     `;
   },
 
-  async listMatchPlayers(matchId: string): Promise<MatchPlayerRow[]> {
+  async listMatchPlayers(matchId: string, tx?: TransactionSql): Promise<MatchPlayerRow[]> {
+    // Accepts an optional transaction handle so callers like
+    // matchesService.completeMatch can read roster INSIDE the same tx
+    // that mutates user_mode_match_stats — keeps the snapshot consistent.
     return withSpan('db.matches.list_players', {
       'db.operation.name': 'select',
       'quizball.match_id': matchId,
-    }, async () => sql<MatchPlayerRow[]>`
-      SELECT * FROM match_players WHERE match_id = ${matchId} ORDER BY seat ASC
-    `);
+    }, async () => {
+      if (tx) {
+        // postgres.js TransactionSql doesn't expose the tagged-template
+        // call signature cleanly to TS, so use tx.unsafe inside the tx
+        // (codebase precedent — see daily-challenges.repo, objectives.repo).
+        return tx.unsafe<MatchPlayerRow[]>(
+          `SELECT * FROM match_players WHERE match_id = $1 ORDER BY seat ASC`,
+          [matchId],
+        );
+      }
+      return sql<MatchPlayerRow[]>`
+        SELECT * FROM match_players WHERE match_id = ${matchId} ORDER BY seat ASC
+      `;
+    });
   },
 
   async getPlayerTotalPoints(matchId: string, userId: string): Promise<number> {
@@ -788,83 +802,86 @@ export const matchesRepo = {
     return row ?? null;
   },
 
-  async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
-    await sql.begin(async (tx) => {
-      const completedRows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
-        `
-        UPDATE matches
-        SET status = 'completed', winner_user_id = $2, ended_at = NOW()
-        WHERE id = $1 AND status = 'active'
-        RETURNING id, mode, ended_at, is_dev
-        `,
-        [matchId, winnerId]
+  /**
+   * Atomically flip a match to "completed" and return the metadata the
+   * service needs to make downstream stat decisions. Returns `null` if
+   * the row was already in a terminal state — idempotency-safe so
+   * concurrent callers can't double-complete the same match.
+   *
+   * Service layer drives the transaction; this just executes the write.
+   */
+  async markMatchCompleted(
+    tx: TransactionSql,
+    matchId: string,
+    winnerId: string | null,
+  ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'> | null> {
+    // Same tx.unsafe pattern used by listMatchPlayers above and other
+    // tx-aware repos in this codebase (TransactionSql doesn't expose the
+    // tagged-template call signature cleanly to TS).
+    const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
+      `
+      UPDATE matches
+      SET status = 'completed', winner_user_id = $2, ended_at = NOW()
+      WHERE id = $1 AND status = 'active'
+      RETURNING id, mode, ended_at, is_dev
+      `,
+      [matchId, winnerId],
+    );
+    return rows[0] ?? null;
+  },
+
+  /**
+   * Multi-row upsert into user_mode_match_stats. Service pre-computes
+   * wins/losses/draws — repo just writes what it's given.
+   *
+   * Uses tx.unsafe with a dynamically-built placeholder string because
+   * postgres.js's TransactionSql type doesn't expose the helper-call
+   * form (`tx(rows)`) for variable VALUES clauses — only tagged
+   * templates. Parameters are still bound positionally, so this is
+   * injection-safe; the only "unsafe" bit is the dynamically-sized
+   * placeholder list itself (no user data in the SQL string).
+   */
+  async recordUserModeStats(
+    tx: TransactionSql,
+    rows: Array<{
+      userId: string;
+      mode: 'friendly' | 'ranked';
+      wins: 0 | 1;
+      losses: 0 | 1;
+      draws: 0 | 1;
+      lastMatchAt: string | null;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const params: (string | number | null)[] = [];
+    const placeholders: string[] = [];
+    rows.forEach((r, i) => {
+      const off = i * 6;
+      placeholders.push(
+        `($${off + 1}, $${off + 2}, 1, $${off + 3}, $${off + 4}, $${off + 5}, $${off + 6}, NOW())`,
       );
-      const completedMatch = completedRows[0];
-
-      // Idempotency guard: if already completed/abandoned, skip aggregate updates.
-      if (!completedMatch) {
-        return;
-      }
-
-      // Dev matches don't affect user stats
-      if (completedMatch.is_dev) {
-        return;
-      }
-
-      const matchPlayers = await tx.unsafe<Pick<MatchPlayerRow, 'user_id'>[]>(
-        `
-        SELECT user_id
-        FROM match_players
-        WHERE match_id = $1
-        `,
-        [matchId]
-      );
-
-      if (matchPlayers.length > 0) {
-        // Build a single multi-row upsert instead of one INSERT per player
-        const values: (string | number | Date | null)[] = [];
-        const placeholders: string[] = [];
-        for (let i = 0; i < matchPlayers.length; i++) {
-          const player = matchPlayers[i];
-          const isDraw = winnerId === null;
-          const isWinner = winnerId !== null && winnerId === player.user_id;
-          const offset = i * 6;
-          placeholders.push(
-            `($${offset + 1}, $${offset + 2}, 1, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, NOW())`
-          );
-          values.push(
-            player.user_id,
-            completedMatch.mode,
-            isWinner ? 1 : 0,
-            !isDraw && !isWinner ? 1 : 0,
-            isDraw ? 1 : 0,
-            completedMatch.ended_at,
-          );
-        }
-
-        await tx.unsafe(
-          `
-          INSERT INTO user_mode_match_stats (
-            user_id, mode, games_played, wins, losses, draws, last_match_at, updated_at
-          )
-          VALUES ${placeholders.join(', ')}
-          ON CONFLICT (user_id, mode) DO UPDATE
-          SET
-            games_played = user_mode_match_stats.games_played + 1,
-            wins = user_mode_match_stats.wins + EXCLUDED.wins,
-            losses = user_mode_match_stats.losses + EXCLUDED.losses,
-            draws = user_mode_match_stats.draws + EXCLUDED.draws,
-            last_match_at = COALESCE(
-              GREATEST(user_mode_match_stats.last_match_at, EXCLUDED.last_match_at),
-              EXCLUDED.last_match_at,
-              user_mode_match_stats.last_match_at
-            ),
-            updated_at = NOW()
-          `,
-          values
-        );
-      }
+      params.push(r.userId, r.mode, r.wins, r.losses, r.draws, r.lastMatchAt);
     });
+    await tx.unsafe(
+      `
+      INSERT INTO user_mode_match_stats (
+        user_id, mode, games_played, wins, losses, draws, last_match_at, updated_at
+      )
+      VALUES ${placeholders.join(', ')}
+      ON CONFLICT (user_id, mode) DO UPDATE SET
+        games_played = user_mode_match_stats.games_played + 1,
+        wins = user_mode_match_stats.wins + EXCLUDED.wins,
+        losses = user_mode_match_stats.losses + EXCLUDED.losses,
+        draws = user_mode_match_stats.draws + EXCLUDED.draws,
+        last_match_at = COALESCE(
+          GREATEST(user_mode_match_stats.last_match_at, EXCLUDED.last_match_at),
+          EXCLUDED.last_match_at,
+          user_mode_match_stats.last_match_at
+        ),
+        updated_at = NOW()
+      `,
+      params,
+    );
   },
 
   async updatePlayerAvgTime(matchId: string, userId: string, avgTimeMs: number | null): Promise<void> {

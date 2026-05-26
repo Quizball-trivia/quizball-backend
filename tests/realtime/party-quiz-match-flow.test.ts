@@ -60,7 +60,6 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setQuestionTiming: (...args: unknown[]) => setQuestionTimingMock(...args),
     getRandomQuestionForMatch: vi.fn(),
@@ -76,6 +75,7 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       ...actual.matchesService,
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
+      completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     },
   };
 });

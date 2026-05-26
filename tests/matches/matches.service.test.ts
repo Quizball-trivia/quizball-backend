@@ -8,6 +8,22 @@ const insertMatchPlayersMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const ensureProfileMock = vi.fn();
 const buildAiMatchContextMock = vi.fn();
+const markMatchCompletedMock = vi.fn();
+const listMatchPlayersMock = vi.fn();
+const recordUserModeStatsMock = vi.fn();
+
+/**
+ * Stand-in for `sql.begin(cb)`. Just invokes the callback with a sentinel
+ * `tx` value and resolves with whatever it returns — the repo mocks below
+ * don't actually need a postgres transaction handle.
+ */
+const sqlBeginMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx'));
+
+vi.mock('../../src/db/index.js', () => ({
+  sql: Object.assign((..._args: unknown[]) => undefined, {
+    begin: (cb: (tx: unknown) => Promise<unknown>) => sqlBeginMock(cb),
+  }),
+}));
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -28,6 +44,9 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     createMatch: (...args: unknown[]) => createMatchMock(...args),
     insertMatchPlayers: (...args: unknown[]) => insertMatchPlayersMock(...args),
+    markMatchCompleted: (...args: unknown[]) => markMatchCompletedMock(...args),
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    recordUserModeStats: (...args: unknown[]) => recordUserModeStatsMock(...args),
   },
 }));
 
@@ -183,6 +202,8 @@ describe('matches.service friendly-party-quiz variants', () => {
     expect(createMatchMock).not.toHaveBeenCalled();
   });
 
+  // ── completeMatch tests are in their own describe block below ──
+
   it('keeps two-player friendly creation on the possession variant', async () => {
     listMembersWithUserMock.mockResolvedValue([
       { user_id: 'host-user' },
@@ -219,5 +240,114 @@ describe('matches.service friendly-party-quiz variants', () => {
     ]);
     expect(result.playerIds).toEqual(['host-user', 'guest-a']);
     expect(result.variant).toBe('friendly_possession');
+  });
+});
+
+describe('matches.service completeMatch', () => {
+  const matchId = 'match-99';
+  const userA = 'user-a';
+  const userB = 'user-b';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sqlBeginMock.mockImplementation(async (cb) => cb('tx'));
+    markMatchCompletedMock.mockResolvedValue({
+      id: matchId,
+      mode: 'friendly',
+      ended_at: '2026-01-01T00:00:00.000Z',
+      is_dev: false,
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: userA, seat: 1 },
+      { user_id: userB, seat: 2 },
+    ]);
+    recordUserModeStatsMock.mockResolvedValue(undefined);
+  });
+
+  it('increments wins/losses for the winning player and their opponent', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await matchesService.completeMatch(matchId, userA);
+
+    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, userA);
+    expect(listMatchPlayersMock).toHaveBeenCalledWith(matchId, 'tx');
+    expect(recordUserModeStatsMock).toHaveBeenCalledTimes(1);
+    const [, statRows] = (recordUserModeStatsMock.mock.calls[0] as [unknown, Array<Record<string, unknown>>]);
+    expect(statRows).toEqual([
+      { userId: userA, mode: 'friendly', wins: 1, losses: 0, draws: 0, lastMatchAt: '2026-01-01T00:00:00.000Z' },
+      { userId: userB, mode: 'friendly', wins: 0, losses: 1, draws: 0, lastMatchAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+  });
+
+  it('increments draws for both players when winnerId is null', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await matchesService.completeMatch(matchId, null);
+
+    expect(markMatchCompletedMock).toHaveBeenCalledWith('tx', matchId, null);
+    const [, statRows] = (recordUserModeStatsMock.mock.calls[0] as [unknown, Array<Record<string, unknown>>]);
+    expect(statRows).toEqual([
+      { userId: userA, mode: 'friendly', wins: 0, losses: 0, draws: 1, lastMatchAt: '2026-01-01T00:00:00.000Z' },
+      { userId: userB, mode: 'friendly', wins: 0, losses: 0, draws: 1, lastMatchAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+  });
+
+  it('skips the stats upsert entirely on dev matches', async () => {
+    markMatchCompletedMock.mockResolvedValue({
+      id: matchId,
+      mode: 'friendly',
+      ended_at: '2026-01-01T00:00:00.000Z',
+      is_dev: true,
+    });
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await matchesService.completeMatch(matchId, userA);
+
+    expect(markMatchCompletedMock).toHaveBeenCalledOnce();
+    // Crucially: no roster read, no stats write — dev matches don't pollute
+    // aggregate stats.
+    expect(listMatchPlayersMock).not.toHaveBeenCalled();
+    expect(recordUserModeStatsMock).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent on a double-call (markMatchCompleted returns null the second time)', async () => {
+    markMatchCompletedMock
+      .mockResolvedValueOnce({
+        id: matchId,
+        mode: 'friendly',
+        ended_at: '2026-01-01T00:00:00.000Z',
+        is_dev: false,
+      })
+      .mockResolvedValueOnce(null); // 2nd call hits the `WHERE status = 'active'` guard
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await matchesService.completeMatch(matchId, userA);
+    await matchesService.completeMatch(matchId, userA);
+
+    expect(markMatchCompletedMock).toHaveBeenCalledTimes(2);
+    expect(recordUserModeStatsMock).toHaveBeenCalledTimes(1); // not twice
+  });
+
+  it('does not write stats when the roster is empty (defensive guard)', async () => {
+    listMatchPlayersMock.mockResolvedValue([]);
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await matchesService.completeMatch(matchId, userA);
+
+    expect(recordUserModeStatsMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls the whole transaction back when the stats upsert throws', async () => {
+    // Atomicity smoke: when the repo's stats upsert throws, completeMatch
+    // should propagate the error (which causes sql.begin to roll back the
+    // markMatchCompleted UPDATE in production — the match stays 'active'
+    // and a retry will work).
+    recordUserModeStatsMock.mockRejectedValueOnce(new Error('boom'));
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await expect(matchesService.completeMatch(matchId, userA)).rejects.toThrow('boom');
+    expect(markMatchCompletedMock).toHaveBeenCalledOnce();
   });
 });

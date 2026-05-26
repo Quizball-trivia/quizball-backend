@@ -427,16 +427,20 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           const stepDelay = 600 + Math.floor(Math.random() * 800) + (i - 1) * 250;
           setTimeout(() => {
             void (async () => {
-              // Skip if the round advanced before our timer fired.
-              const liveCache = await getMatchCacheOrRebuild(matchId);
-              if (!liveCache || liveCache.status !== 'active') return;
-              if (liveCache.currentQIndex !== emitQIndex) return;
-              io.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
-                matchId,
-                qIndex: emitQIndex,
-                opponentUserId: aiUserId,
-                foundCount: i,
-              });
+              try {
+                // Skip if the round advanced before our timer fired.
+                const liveCache = await getMatchCacheOrRebuild(matchId);
+                if (!liveCache || liveCache.status !== 'active') return;
+                if (liveCache.currentQIndex !== emitQIndex) return;
+                io.to(`match:${matchId}`).emit('match:opponent_countdown_progress', {
+                  matchId,
+                  qIndex: emitQIndex,
+                  opponentUserId: aiUserId,
+                  foundCount: i,
+                });
+              } catch (error) {
+                logger.warn({ error, matchId, qIndex: emitQIndex }, 'AI countdown drip emit failed');
+              }
             })();
           }, stepDelay);
         }

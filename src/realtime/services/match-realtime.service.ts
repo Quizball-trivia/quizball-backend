@@ -1,8 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 import { achievementsService } from '../../modules/achievements/index.js';
-import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { objectivesService } from '../../modules/objectives/index.js';
@@ -10,7 +8,7 @@ import { statsService } from '../../modules/stats/stats.service.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
+import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { QUESTION_TIME_MS, cancelMatchQuestionTimer, sendMatchQuestion } from '../match-flow.js';
 import type {
   MatchAnswerPayload,
@@ -35,11 +33,16 @@ import {
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import {
+  buildParticipantPayloads,
+  getOpponentInfo,
+  getOpponentInfoFromParticipants,
+  getParticipantSnapshot,
+  resolveMatchCategoryName,
+} from './match-participants.helpers.js';
+import {
   buildInitialCache,
   deleteMatchCache,
-  getMatchCacheOrRebuild,
   setMatchCache,
-  type MatchCache,
 } from '../match-cache.js';
 import {
   cancelPossessionHalftimeTimer,
@@ -95,16 +98,6 @@ type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[s
 type LastMatchReplay = {
   matchId: string;
   resultVersion: number;
-};
-
-type MatchParticipantSnapshot = {
-  user_id: string;
-  seat: number;
-  total_points: number;
-  correct_answers: number;
-  goals: number;
-  penalty_goals: number;
-  avg_time_ms: number | null;
 };
 
 const rematchLobbyByMatchId = new Map<string, { lobbyId: string; createdAt: number }>();
@@ -222,193 +215,6 @@ function parseLastMatchReplay(raw: string): LastMatchReplay {
     matchId: raw,
     resultVersion: Date.now(),
   };
-}
-
-async function resolveMatchCategoryName(categoryId: string | null | undefined): Promise<Record<string, string> | undefined> {
-  if (!categoryId) return undefined;
-  try {
-    const category = await categoriesRepo.getById(categoryId);
-    const raw = category?.name;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-    return raw as Record<string, string>;
-  } catch (err) {
-    logger.warn({ err, categoryId }, 'Failed to resolve category name (non-fatal)');
-    return undefined;
-  }
-}
-
-async function getOpponentInfo(matchId: string, userId: string): Promise<{
-  id: string;
-  username: string;
-  avatarUrl: string | null;
-  avatarCustomization: AvatarCustomization | null;
-  favoriteClub: string | null;
-  country?: string;
-  countryCode?: string;
-}> {
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  const opponent = players.find((player) => player.user_id !== userId);
-  if (!opponent) {
-    return {
-      id: 'opponent',
-      username: 'Opponent',
-      avatarUrl: null,
-      avatarCustomization: null,
-      favoriteClub: null,
-    };
-  }
-
-  const opponentUser = await usersRepo.getById(opponent.user_id);
-  return {
-    id: opponent.user_id,
-    username: opponentUser?.nickname ?? 'Player',
-    avatarUrl: opponentUser?.avatar_url ?? null,
-    avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
-    favoriteClub: opponentUser?.favorite_club ?? null,
-    country: opponentUser?.country ?? undefined,
-    countryCode: opponentUser?.country ?? undefined,
-  };
-}
-
-function participantSnapshotFromCache(cache: MatchCache): MatchParticipantSnapshot[] {
-  return cache.players.map((player) => ({
-    user_id: player.userId,
-    seat: player.seat,
-    total_points: player.totalPoints,
-    correct_answers: player.correctAnswers,
-    goals: player.goals,
-    penalty_goals: player.penaltyGoals,
-    avg_time_ms: player.avgTimeMs,
-  }));
-}
-
-function participantSnapshotFromRows(rows: Array<{
-  user_id: string;
-  seat: number;
-  total_points: number;
-  correct_answers: number;
-  goals: number;
-  penalty_goals: number;
-  avg_time_ms: number | null;
-}>): MatchParticipantSnapshot[] {
-  return rows.map((row) => ({
-    user_id: row.user_id,
-    seat: row.seat,
-    total_points: row.total_points,
-    correct_answers: row.correct_answers,
-    goals: row.goals,
-    penalty_goals: row.penalty_goals,
-    avg_time_ms: row.avg_time_ms,
-  }));
-}
-
-async function getParticipantSnapshot(matchId: string): Promise<{
-  participants: MatchParticipantSnapshot[];
-  cache: MatchCache | null;
-}> {
-  const cache = await getMatchCacheOrRebuild(matchId);
-  if (cache && cache.players.length > 0) {
-    return {
-      participants: participantSnapshotFromCache(cache),
-      cache,
-    };
-  }
-
-  const players = await matchesRepo.listMatchPlayers(matchId);
-  return {
-    participants: participantSnapshotFromRows(players),
-    cache: null,
-  };
-}
-
-async function getOpponentInfoFromParticipants(
-  participants: MatchParticipantSnapshot[],
-  userId: string,
-  matchMode?: 'friendly' | 'ranked',
-  rankedContext?: RankedLobbyContext | null
-): Promise<{
-  id: string;
-  username: string;
-  avatarUrl: string | null;
-  avatarCustomization: AvatarCustomization | null;
-  rp?: number;
-  country?: string;
-  countryCode?: string;
-}> {
-  const opponent = participants.find((player) => player.user_id !== userId);
-  if (!opponent) {
-    return {
-      id: 'opponent',
-      username: 'Opponent',
-      avatarUrl: null,
-      avatarCustomization: null,
-    };
-  }
-
-  const opponentUser = await usersRepo.getById(opponent.user_id);
-  let rp: number | undefined;
-  if (matchMode === 'ranked') {
-    if (opponentUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
-      rp = rankedContext.aiAnchorRp;
-    } else {
-      const profile = await rankedService.ensureProfile(opponent.user_id);
-      rp = profile.rp;
-    }
-  }
-  return {
-    id: opponent.user_id,
-    username: opponentUser?.nickname ?? 'Player',
-    avatarUrl: opponentUser?.avatar_url ?? null,
-    avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
-    ...(rp != null ? { rp } : {}),
-    ...(opponentUser?.country ? { country: opponentUser.country, countryCode: opponentUser.country } : {}),
-  };
-}
-
-async function buildParticipantPayloads(
-  players: MatchParticipantSnapshot[],
-  matchMode: 'friendly' | 'ranked',
-  rankedContext?: RankedLobbyContext | null
-): Promise<Array<{
-  userId: string;
-  username: string;
-  avatarUrl: string | null;
-  avatarCustomization: AvatarCustomization | null;
-  seat: number;
-  rankPoints?: number;
-}>> {
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-  let rpByUserId = new Map<string, number>();
-
-  if (matchMode === 'ranked') {
-    const nonAiPlayers = players.filter((_player, index) => {
-      const user = users[index];
-      return !(user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number');
-    });
-    const profiles = await Promise.all(
-      nonAiPlayers.map(async (player) => ({
-        userId: player.user_id,
-        profile: await rankedService.ensureProfile(player.user_id),
-      }))
-    );
-    rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.profile.rp]));
-  }
-
-  return players.map((player, index) => {
-    const user = users[index];
-    const rankPoints = matchMode === 'ranked' && user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number'
-      ? rankedContext.aiAnchorRp
-      : rpByUserId.get(player.user_id);
-
-    return {
-      userId: player.user_id,
-      username: user?.nickname ?? 'Player',
-      avatarUrl: user?.avatar_url ?? null,
-      avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
-      seat: player.seat,
-      ...(rankPoints != null ? { rankPoints } : {}),
-    };
-  });
 }
 
 async function emitRejoinAvailable(

@@ -1522,6 +1522,10 @@ export const lobbyRealtimeService = {
       }
 
       await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+      // Non-host members otherwise see no UI change between the host pressing
+      // "Start" and the match-start countdown firing — broadcast the status
+      // flip so every client can render its "preparing match" state.
+      await emitLobbyState(io, lobbyId);
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       logger.info(

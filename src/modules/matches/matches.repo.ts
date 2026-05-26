@@ -454,6 +454,104 @@ export const matchesRepo = {
     });
   },
 
+  async recordPartyQuizAnswerIfMissing(data: {
+    matchId: string;
+    qIndex: number;
+    userId: string;
+    selectedIndex: number | null;
+    isCorrect: boolean;
+    timeMs: number;
+    pointsEarned: number;
+    answerPayload?: Json | null;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
+    return withSpan('db.matches.record_party_answer_if_missing', {
+      'db.operation.name': 'insert_update',
+      'quizball.match_id': data.matchId,
+      'quizball.q_index': data.qIndex,
+      'quizball.user_id': data.userId,
+    }, async (span) => {
+      try {
+        const result = await sql.begin(async (tx) => {
+          const insertedRows = await tx.unsafe<MatchAnswerRow[]>(
+            `
+            INSERT INTO match_answers (
+              match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
+            ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+            RETURNING *
+            `,
+            [
+              data.matchId,
+              data.qIndex,
+              data.userId,
+              data.selectedIndex,
+              data.isCorrect,
+              data.timeMs,
+              data.pointsEarned,
+              JSON.stringify(data.answerPayload ?? {}),
+              data.phaseKind ?? 'normal',
+              data.phaseRound ?? null,
+              data.shooterSeat ?? null,
+            ]
+          );
+
+          const insertedAnswer = insertedRows[0] ?? null;
+          if (insertedAnswer) {
+            const playerRows = await tx.unsafe<MatchPlayerRow[]>(
+              `
+              UPDATE match_players
+              SET
+                total_points = total_points + $3,
+                correct_answers = correct_answers + $4
+              WHERE match_id = $1 AND user_id = $2
+              RETURNING *
+              `,
+              [data.matchId, data.userId, data.pointsEarned, data.isCorrect ? 1 : 0]
+            );
+
+            return {
+              inserted: true,
+              answer: insertedAnswer,
+              player: playerRows[0] ?? null,
+            };
+          }
+
+          const existingRows = await tx.unsafe<MatchAnswerRow[]>(
+            `
+            SELECT *
+            FROM match_answers
+            WHERE match_id = $1 AND q_index = $2 AND user_id = $3
+            `,
+            [data.matchId, data.qIndex, data.userId]
+          );
+          const playerRows = await tx.unsafe<MatchPlayerRow[]>(
+            `
+            SELECT *
+            FROM match_players
+            WHERE match_id = $1 AND user_id = $2
+            `,
+            [data.matchId, data.userId]
+          );
+
+          return {
+            inserted: false,
+            answer: existingRows[0] ?? null,
+            player: playerRows[0] ?? null,
+          };
+        });
+
+        span.setAttribute('quizball.answer_inserted', result.inserted);
+        return result;
+      } catch (err) {
+        throw new AppError('Failed to record party quiz answer', 500, 'INTERNAL_ERROR', err);
+      }
+    });
+  },
+
   async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
     return withSpan('db.matches.list_answers_for_question', {
       'db.operation.name': 'select',

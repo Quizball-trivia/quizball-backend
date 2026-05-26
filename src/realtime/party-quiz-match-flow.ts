@@ -36,6 +36,7 @@ import type {
   MatchPartyStatePayload,
   MatchRoundResultPayload,
 } from './socket.types.js';
+import type { MatchAnswerRow, MatchPlayerRow, MatchRow } from '../modules/matches/matches.types.js';
 
 const PARTY_QUESTION_TIME_MS = 10000;
 const PARTY_QUESTION_REVEAL_MS = 3000;
@@ -44,22 +45,6 @@ const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
-
-async function acquireLockWithRetry(
-  key: string,
-  ttlMs: number,
-  attempts = 10,
-  delayMs = 50
-): Promise<{ acquired: boolean; token?: string }> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const lock = await acquireLock(key, ttlMs);
-    if (lock.acquired && lock.token) return lock;
-    if (attempt < attempts - 1) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-  return { acquired: false };
-}
 
 function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
   const fallback = createInitialPartyQuizState(totalQuestions);
@@ -74,7 +59,12 @@ function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuiz
     totalQuestions,
     currentQuestion:
       candidate.currentQuestion && typeof candidate.currentQuestion.qIndex === 'number'
-        ? { qIndex: Math.max(0, candidate.currentQuestion.qIndex) }
+        ? {
+          qIndex: Math.max(0, candidate.currentQuestion.qIndex),
+          ...(typeof candidate.currentQuestion.correctIndex === 'number'
+            ? { correctIndex: candidate.currentQuestion.correctIndex }
+            : {}),
+        }
         : null,
     answeredUserIds: Array.isArray(candidate.answeredUserIds)
       ? candidate.answeredUserIds.filter((userId): userId is string => typeof userId === 'string')
@@ -87,18 +77,19 @@ function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuiz
   };
 }
 
-async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match) return null;
-
-  const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-  const players = await matchesRepo.listMatchPlayers(matchId);
+function buildPartyStatePayloadFromRows(
+  match: MatchRow,
+  state: PartyQuizStatePayload,
+  players: MatchPlayerRow[],
+  answers: MatchAnswerRow[]
+): MatchPartyStatePayload {
   const standings = buildStandings(players);
   const rankByUserId = new Map(standings.map((standing) => [standing.userId, standing.rank]));
-  const answeredSet = new Set(state.answeredUserIds);
+  const answeredSet = new Set(answers.map((answer) => answer.user_id));
+  const stateVersion = (state.stateVersionCounter * 1000) + answeredSet.size;
 
   return {
-    matchId,
+    matchId: match.id,
     totalQuestions: match.total_questions,
     currentQuestionIndex: state.currentQuestion?.qIndex ?? match.current_q_index,
     leaderUserId: standings[0]?.userId ?? null,
@@ -111,8 +102,22 @@ async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStateP
       rank: rankByUserId.get(player.user_id) ?? standings.length,
       avgTimeMs: player.avg_time_ms,
     })),
-    stateVersion: state.stateVersionCounter,
+    stateVersion,
   };
+}
+
+async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {
+  const match = await matchesRepo.getMatch(matchId);
+  if (!match) return null;
+
+  const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+  const players = await matchesRepo.listMatchPlayers(matchId);
+  const activeQIndex = state.currentQuestion?.qIndex;
+  const answers = typeof activeQIndex === 'number'
+    ? await matchesRepo.listAnswersForQuestion(matchId, activeQIndex)
+    : [];
+
+  return buildPartyStatePayloadFromRows(match, state, players, answers);
 }
 
 export async function emitPartyQuizState(io: QuizballServer, matchId: string): Promise<void> {
@@ -146,6 +151,7 @@ export async function emitPartyQuizStateToSocket(
     matchesRepo.listMatchPlayers(matchId),
   ]);
   if (!question) return;
+  const correctIndex = getValidatedPartyQuizCorrectIndex(question);
 
   socket.emit('match:question', {
     matchId,
@@ -154,17 +160,18 @@ export async function emitPartyQuizStateToSocket(
     question: question.question,
     playableAt: timing?.shown_at ?? undefined,
     deadlineAt: timing?.deadline_at ?? new Date().toISOString(),
+    correctIndex: correctIndex ?? undefined,
     phaseKind: 'normal',
     phaseRound: qIndex + 1,
     shooterSeat: null,
     attackerSeat: null,
   });
 
-  const correctIndex = getValidatedPartyQuizCorrectIndex(question);
   if (!existingAnswer || correctIndex === null) return;
 
   const player = participants.find((candidate) => candidate.user_id === socket.data.user.id);
-  const answeredUserIds = new Set([...state.answeredUserIds, socket.data.user.id]);
+  const answeredUsers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
+  const answeredUserIds = new Set(answeredUsers.map((answer) => answer.user_id));
   socket.emit(
     'match:answer_ack',
     buildAnswerAckPayload({
@@ -485,10 +492,16 @@ export async function sendPartyQuizQuestion(
       return null;
     }
 
+    const correctIndex = getValidatedPartyQuizCorrectIndex(payload);
+    if (correctIndex === null) {
+      logger.error({ matchId, qIndex }, 'Party quiz question payload is invalid after normalization');
+      return null;
+    }
+
     const playableAt = new Date(Date.now() + PARTY_QUESTION_REVEAL_MS);
     const deadlineAt = new Date(playableAt.getTime() + PARTY_QUESTION_TIME_MS);
 
-    state.currentQuestion = { qIndex };
+    state.currentQuestion = { qIndex, correctIndex };
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
@@ -503,6 +516,7 @@ export async function sendPartyQuizQuestion(
       question: payload.question,
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
+      correctIndex,
       phaseKind: 'normal',
       phaseRound: qIndex + 1,
       shooterSeat: null,
@@ -517,11 +531,6 @@ export async function sendPartyQuizQuestion(
       source: questionSource,
     });
     schedulePartyQuizTimeout(io, matchId, qIndex);
-    const correctIndex = getValidatedPartyQuizCorrectIndex(payload);
-    if (correctIndex === null) {
-      logger.error({ matchId, qIndex }, 'Party quiz question payload is invalid after normalization');
-      return null;
-    }
     return {
       correctIndex,
     };
@@ -550,6 +559,11 @@ export async function resumePartyQuizQuestion(
     logger.warn({ matchId, qIndex, kind: question.question.kind }, 'Skipping party quiz resume: question is not MCQ');
     return false;
   }
+  const correctIndex = getValidatedPartyQuizCorrectIndex(question);
+  if (correctIndex === null) {
+    logger.warn({ matchId, qIndex }, 'Skipping party quiz resume: question missing correct index');
+    return false;
+  }
 
   const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
   const nowMs = Date.now();
@@ -571,6 +585,7 @@ export async function resumePartyQuizQuestion(
     question: question.question,
     playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
+    correctIndex,
     phaseKind: 'normal',
     phaseRound: qIndex + 1,
     shooterSeat: null,
@@ -726,14 +741,15 @@ export async function resolvePartyQuizRound(
 export async function handlePartyQuizAnswer(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: MatchAnswerPayload
+  payload: MatchAnswerPayload,
+  preloadedMatch?: MatchRow
 ): Promise<void> {
   await withSpan('match.party.answer', {
     'quizball.match_id': payload.matchId,
     'quizball.q_index': payload.qIndex,
     'quizball.user_id': socket.data.user.id,
   }, async (span) => {
-    const match = await matchesRepo.getMatch(payload.matchId);
+    const match = preloadedMatch ?? await matchesRepo.getMatch(payload.matchId);
     if (!match || match.status !== 'active') {
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
@@ -771,18 +787,21 @@ export async function handlePartyQuizAnswer(
     }
     const totalPointsBefore = participants.find((player) => player.user_id === userId)?.total_points ?? 0;
 
-    const question = normalizeMatchQuestionPayload(
-      await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
-    );
-    if (!question) {
-      socket.emit('error', {
-        code: 'INVALID_QUESTION',
-        message: 'Question data is unavailable',
-      });
-      return;
-    }
+    let correctIndex = state.currentQuestion.correctIndex ?? null;
+    if (correctIndex === null) {
+      const question = normalizeMatchQuestionPayload(
+        await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
+      );
+      if (!question) {
+        socket.emit('error', {
+          code: 'INVALID_QUESTION',
+          message: 'Question data is unavailable',
+        });
+        return;
+      }
 
-    const correctIndex = getMultipleChoiceCorrectIndexFromPayload(question);
+      correctIndex = getMultipleChoiceCorrectIndexFromPayload(question);
+    }
     if (correctIndex === null) {
       socket.emit('error', {
         code: 'INVALID_QUESTION',
@@ -791,29 +810,10 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    const existing = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
-    if (existing) {
-      const answeredUserIds = new Set([...state.answeredUserIds, userId]);
-      socket.emit(
-        'match:answer_ack',
-        buildAnswerAckPayload({
-          matchId: payload.matchId,
-          qIndex: payload.qIndex,
-          selectedIndex: existing.selected_index,
-          isCorrect: existing.is_correct,
-          correctIndex,
-          myTotalPoints: totalPointsBefore,
-          pointsEarned: existing.points_earned,
-          oppAnswered: answeredUserIds.size >= participants.length,
-        })
-      );
-      return;
-    }
-
     const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
-    const inserted = await matchesRepo.insertMatchAnswerIfMissing({
+    const recorded = await matchesRepo.recordPartyQuizAnswerIfMissing({
       matchId: payload.matchId,
       qIndex: payload.qIndex,
       userId,
@@ -825,77 +825,54 @@ export async function handlePartyQuizAnswer(
       phaseRound: payload.qIndex + 1,
     });
 
-    if (!inserted) {
-      const duplicate = await matchesRepo.getAnswerForUser(payload.matchId, payload.qIndex, userId);
-      if (duplicate) {
-        const answeredUserIds = new Set([...state.answeredUserIds, userId]);
-        socket.emit(
-          'match:answer_ack',
-          buildAnswerAckPayload({
-            matchId: payload.matchId,
-            qIndex: payload.qIndex,
-            selectedIndex: duplicate.selected_index,
-            isCorrect: duplicate.is_correct,
-            correctIndex,
-            myTotalPoints: totalPointsBefore,
-            pointsEarned: duplicate.points_earned,
-            oppAnswered: answeredUserIds.size >= participants.length,
-          })
-        );
-      }
+    if (!recorded.answer) {
+      logger.error({ matchId: payload.matchId, qIndex: payload.qIndex, userId }, 'Party answer record missing after submit');
+      socket.emit('error', {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to record answer',
+      });
       return;
     }
 
-    appMetrics.partyAnswersSubmitted.add(1, {
-      correct: isCorrect ? 'true' : 'false',
-    });
+    if (recorded.inserted) {
+      appMetrics.partyAnswersSubmitted.add(1, {
+        correct: recorded.answer.is_correct ? 'true' : 'false',
+      });
+    }
 
-    const updatedPlayer = await matchesRepo.updatePlayerTotals(payload.matchId, userId, pointsEarned, isCorrect);
     socket.emit(
       'match:answer_ack',
       buildAnswerAckPayload({
         matchId: payload.matchId,
         qIndex: payload.qIndex,
-        selectedIndex: payload.selectedIndex,
-        isCorrect,
+        selectedIndex: recorded.answer.selected_index,
+        isCorrect: recorded.answer.is_correct,
         correctIndex,
-        myTotalPoints: updatedPlayer?.total_points ?? totalPointsBefore + pointsEarned,
-        pointsEarned,
+        myTotalPoints: recorded.player?.total_points
+          ?? totalPointsBefore + (recorded.inserted ? recorded.answer.points_earned : 0),
+        pointsEarned: recorded.answer.points_earned,
       })
     );
 
-    const answerLockKey = `lock:match:${payload.matchId}:party_answer:${payload.qIndex}`;
-    const answerLock = await acquireLockWithRetry(answerLockKey, 3000);
-    if (!answerLock.acquired || !answerLock.token) {
-      logger.warn(
-        { matchId: payload.matchId, qIndex: payload.qIndex, userId },
-        'Party answer state lock busy after optimistic ack'
-      );
-      return;
-    }
+    const [livePlayers, answers] = await Promise.all([
+      matchesRepo.listMatchPlayers(payload.matchId),
+      matchesRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
+    ]);
+    io.to(`match:${payload.matchId}`).emit(
+      'match:party_state',
+      buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
+    );
+    logger.debug({
+      matchId: payload.matchId,
+      qIndex: payload.qIndex,
+      userId,
+      answerCount: answers.length,
+      participantCount: livePlayers.length,
+      inserted: recorded.inserted,
+    }, 'Party answer live state emitted');
 
-    try {
-      const latestMatch = await matchesRepo.getMatch(payload.matchId);
-      if (!latestMatch || latestMatch.status !== 'active') {
-        socket.emit('error', {
-          code: 'MATCH_NOT_ACTIVE',
-          message: 'Match is no longer active',
-        });
-        return;
-      }
-
-      const latestState = sanitizePartyQuizState(latestMatch.state_payload, latestMatch.total_questions);
-      latestState.answeredUserIds = Array.from(new Set([...latestState.answeredUserIds, userId]));
-      bumpStateVersion(latestState);
-      await matchesRepo.setMatchStatePayload(payload.matchId, latestState, payload.qIndex);
-
-      await emitPartyQuizState(io, payload.matchId);
-
-      if (latestState.answeredUserIds.length >= participants.length) {
-        await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
-      }
-    } finally {
-      await releaseLock(answerLockKey, answerLock.token);
+    if (livePlayers.length > 0 && answers.length >= livePlayers.length) {
+      await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
     }
   });
 }

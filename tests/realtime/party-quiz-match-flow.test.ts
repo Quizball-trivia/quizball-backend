@@ -9,6 +9,7 @@ const listMatchPlayersMock = vi.fn();
 const getAnswerForUserMock = vi.fn();
 const insertMatchAnswerIfMissingMock = vi.fn();
 const updatePlayerTotalsMock = vi.fn();
+const recordPartyQuizAnswerIfMissingMock = vi.fn();
 const setMatchStatePayloadMock = vi.fn();
 const listAnswersForQuestionMock = vi.fn();
 const completeMatchMock = vi.fn();
@@ -56,6 +57,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
     insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+    recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
     completeMatch: (...args: unknown[]) => completeMatchMock(...args),
@@ -127,10 +129,18 @@ describe('party quiz realtime flow', () => {
     penalty_goals: number;
     avg_time_ms: number | null;
   }>;
+  let answers: Array<{
+    user_id: string;
+    selected_index: number | null;
+    is_correct: boolean;
+    points_earned: number;
+    time_ms: number;
+  }>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    vi.mocked(acquireLock).mockImplementation(async () => ({ acquired: true, token: 'lock-token' }));
 
     partyState = {
       version: 1,
@@ -146,6 +156,7 @@ describe('party quiz realtime flow', () => {
       { user_id: 'u2', seat: 2, total_points: 90, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: 2100 },
       { user_id: 'u3', seat: 3, total_points: 60, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
     ];
+    answers = [];
 
     getMatchMock.mockImplementation(async () => ({
       id: 'match-1',
@@ -173,14 +184,46 @@ describe('party quiz realtime flow', () => {
         correct_answers: player.correct_answers,
       };
     });
+    recordPartyQuizAnswerIfMissingMock.mockImplementation(async (data: {
+      userId: string;
+      selectedIndex: number | null;
+      isCorrect: boolean;
+      timeMs: number;
+      pointsEarned: number;
+    }) => {
+      const existing = answers.find((answer) => answer.user_id === data.userId);
+      const player = players.find((entry) => entry.user_id === data.userId) ?? null;
+      if (existing) {
+        return {
+          inserted: false,
+          answer: existing,
+          player,
+        };
+      }
+
+      const answer = {
+        user_id: data.userId,
+        selected_index: data.selectedIndex,
+        is_correct: data.isCorrect,
+        points_earned: data.pointsEarned,
+        time_ms: data.timeMs,
+      };
+      answers.push(answer);
+      if (player) {
+        player.total_points += data.pointsEarned;
+        if (data.isCorrect) player.correct_answers += 1;
+      }
+
+      return {
+        inserted: true,
+        answer,
+        player,
+      };
+    });
     setMatchStatePayloadMock.mockImplementation(async (_matchId: string, nextState: typeof partyState) => {
       partyState = { ...nextState, answeredUserIds: [...nextState.answeredUserIds] };
     });
-    listAnswersForQuestionMock.mockResolvedValue([
-      { user_id: 'u1', selected_index: 2, is_correct: true, points_earned: 90, time_ms: 1000 },
-      { user_id: 'u2', selected_index: 1, is_correct: false, points_earned: 0, time_ms: 4000 },
-      { user_id: 'u3', selected_index: 2, is_correct: true, points_earned: 60, time_ms: 3500 },
-    ]);
+    listAnswersForQuestionMock.mockImplementation(async () => answers.map((answer) => ({ ...answer })));
     completeMatchMock.mockResolvedValue(undefined);
     updatePlayerAvgTimeMock.mockResolvedValue(undefined);
     setQuestionTimingMock.mockResolvedValue(undefined);
@@ -255,16 +298,6 @@ describe('party quiz realtime flow', () => {
       timeMs: 1000,
     });
 
-    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
-      'match-1',
-      expect.objectContaining({
-        currentQuestion: { qIndex: 0 },
-        answeredUserIds: ['u1'],
-        stateVersionCounter: 1,
-      }),
-      0
-    );
-
     const ackEvent = emitted.find((entry) => entry.event === 'match:answer_ack');
     expect(ackEvent?.payload).toEqual(expect.objectContaining({
       matchId: 'match-1',
@@ -272,6 +305,8 @@ describe('party quiz realtime flow', () => {
       selectedIndex: 2,
       isCorrect: true,
       correctIndex: 2,
+      myTotalPoints: 220,
+      pointsEarned: 100,
     }));
 
     const partyStateEvent = events.find((entry) => entry.event === 'match:party_state');
@@ -284,6 +319,7 @@ describe('party quiz realtime flow', () => {
         expect.objectContaining({ userId: 'u3', answered: false }),
       ]),
     }));
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
   });
 
   it('emits ranking order sorted by points, correctness, then average time when resolving a round', async () => {
@@ -299,6 +335,11 @@ describe('party quiz realtime flow', () => {
       { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: 2500 },
       { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: 1800 },
       { user_id: 'u3', seat: 3, total_points: 260, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: 1600 },
+    ];
+    answers = [
+      { user_id: 'u1', selected_index: 2, is_correct: true, points_earned: 90, time_ms: 1000 },
+      { user_id: 'u2', selected_index: 1, is_correct: false, points_earned: 0, time_ms: 4000 },
+      { user_id: 'u3', selected_index: 2, is_correct: true, points_earned: 60, time_ms: 3500 },
     ];
 
     await resolvePartyQuizRound(io, 'match-1', 0);
@@ -334,9 +375,9 @@ describe('party quiz realtime flow', () => {
     }));
   });
 
-  it('preserves existing answered users when another answer is processed under the answer lock', async () => {
+  it('derives answered users from answer rows instead of mutating match state', async () => {
     const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
-    const { io } = createIoMock();
+    const { io, events } = createIoMock();
     const { socket } = createSocketMock('u3');
 
     partyState = {
@@ -344,6 +385,10 @@ describe('party quiz realtime flow', () => {
       answeredUserIds: ['u1', 'u2'],
       stateVersionCounter: 4,
     };
+    answers = [
+      { user_id: 'u1', selected_index: 2, is_correct: true, points_earned: 90, time_ms: 1000 },
+      { user_id: 'u2', selected_index: 1, is_correct: false, points_earned: 0, time_ms: 4000 },
+    ];
 
     await handlePartyQuizAnswer(io, socket, {
       matchId: 'match-1',
@@ -352,50 +397,105 @@ describe('party quiz realtime flow', () => {
       timeMs: 1500,
     });
 
-    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalledWith(
       'match-1',
       expect.objectContaining({
         answeredUserIds: ['u1', 'u2', 'u3'],
-        stateVersionCounter: 5,
       }),
       0
     );
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.objectContaining({
+        currentQuestion: null,
+        answeredUserIds: [],
+      }),
+      1
+    );
+    const partyStateEvent = events.find((entry) => entry.event === 'match:party_state');
+    expect(partyStateEvent?.payload).toEqual(expect.objectContaining({
+      players: expect.arrayContaining([
+        expect.objectContaining({ userId: 'u1', answered: true }),
+        expect.objectContaining({ userId: 'u2', answered: true }),
+        expect.objectContaining({ userId: 'u3', answered: true }),
+      ]),
+    }));
   });
 
-  it('retries a busy per-question answer lock after sending the optimistic ack', async () => {
+  it('handles duplicate submits without double-scoring and still emits party state', async () => {
     const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
-    const { io } = createIoMock();
+    const { io, events } = createIoMock();
     const { socket, emitted } = createSocketMock('u1');
 
-    vi.mocked(acquireLock)
-      .mockResolvedValueOnce({ acquired: false })
-      .mockResolvedValueOnce({ acquired: true, token: 'lock-token' });
+    answers = [
+      { user_id: 'u1', selected_index: 2, is_correct: true, points_earned: 100, time_ms: 1000 },
+    ];
 
-    const answerPromise = handlePartyQuizAnswer(io, socket, {
+    await handlePartyQuizAnswer(io, socket, {
       matchId: 'match-1',
       qIndex: 0,
       selectedIndex: 2,
       timeMs: 1000,
     });
 
-    await vi.advanceTimersByTimeAsync(50);
-    await answerPromise;
-
-    expect(updatePlayerTotalsMock).toHaveBeenCalledWith('match-1', 'u1', 100, true);
+    expect(recordPartyQuizAnswerIfMissingMock).toHaveBeenCalledTimes(1);
+    expect(players.find((player) => player.user_id === 'u1')?.total_points).toBe(120);
     expect(emitted).toContainEqual({
       event: 'match:answer_ack',
       payload: expect.objectContaining({
         isCorrect: true,
-        myTotalPoints: 220,
+        myTotalPoints: 120,
         pointsEarned: 100,
       }),
     });
-    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
-      'match-1',
-      expect.objectContaining({
-        answeredUserIds: ['u1'],
-      }),
-      0
-    );
+    expect(events.some((entry) => entry.event === 'match:party_state')).toBe(true);
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+  });
+
+  it('handles six concurrent party answers without losing answered state', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    let roundLockGranted = false;
+    vi.mocked(acquireLock).mockImplementation(async (key: string) => {
+      if (key.includes(':round:')) {
+        if (roundLockGranted) return { acquired: false };
+        roundLockGranted = true;
+      }
+      return { acquired: true, token: 'lock-token' };
+    });
+
+    players = Array.from({ length: 6 }, (_, index) => ({
+      user_id: `u${index + 1}`,
+      seat: index + 1,
+      total_points: 0,
+      correct_answers: 0,
+      goals: 0,
+      penalty_goals: 0,
+      avg_time_ms: null,
+    }));
+
+    await Promise.all(players.map((player, index) => {
+      const { socket } = createSocketMock(player.user_id);
+      return handlePartyQuizAnswer(io, socket, {
+        matchId: 'match-1',
+        qIndex: 0,
+        selectedIndex: 2,
+        timeMs: 1000 + index,
+      });
+    }));
+
+    expect(answers).toHaveLength(6);
+    expect(players.every((player) => player.total_points > 0 && player.correct_answers === 1)).toBe(true);
+
+    const allAnsweredPartyState = events
+      .filter((entry) => entry.event === 'match:party_state')
+      .find((entry) => {
+        const payload = entry.payload as { players?: Array<{ answered: boolean }> };
+        return payload.players?.length === 6 && payload.players.every((player) => player.answered);
+      });
+    expect(allAnsweredPartyState).toBeDefined();
+
+    const roundResults = events.filter((entry) => entry.event === 'match:round_result');
+    expect(roundResults).toHaveLength(1);
   });
 });

@@ -513,14 +513,15 @@ export const matchesRepo = {
               [data.matchId, data.userId, data.pointsEarned, data.isCorrect ? 1 : 0]
             );
 
-            // The UPDATE must touch exactly one row — otherwise the answer
-            // would persist without the score increment landing. Throw so
-            // the surrounding transaction rolls back instead of returning
-            // an inconsistent `inserted: true, player: null` state.
+            // UPDATE must hit one row — otherwise the answer persists without
+            // the score increment. Throw to roll back the transaction.
             const updatedPlayer = playerRows[0];
             if (!updatedPlayer) {
-              throw new Error(
-                `match_players row missing for match ${data.matchId} user ${data.userId} during party answer insert`
+              throw new AppError(
+                'match_players row missing during party answer insert',
+                500,
+                'INTERNAL_ERROR',
+                { matchId: data.matchId, userId: data.userId }
               );
             }
 

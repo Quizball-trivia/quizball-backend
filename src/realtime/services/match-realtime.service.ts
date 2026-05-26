@@ -784,33 +784,44 @@ export async function beginMatchForLobby(
   const variant = variantForCountdown;
 
   let members: MatchStartMember[];
-  // Always fetch users to get `country` — listMembersWithUser doesn't include it
-  // and the matchmaking-map overlay needs it to resolve the opponent city pin.
-  const memberUsers = await Promise.all(
+  // Country (only used for the matchmaking-map pin) must not block match start.
+  const memberUsersSettled = await Promise.allSettled(
     lobbyMembers.map((member) => usersRepo.getById(member.user_id))
   );
+  const memberCountry = (index: number): string | null => {
+    const result = memberUsersSettled[index];
+    if (result?.status !== 'fulfilled') return null;
+    return result.value?.country ?? null;
+  };
   members = lobbyMembers.map((member, index) => ({
     user_id: member.user_id,
     nickname: member.nickname,
     avatar_url: member.avatar_url,
     avatar_customization: member.avatar_customization,
     favorite_club: member.favorite_club,
-    country: memberUsers[index]?.country ?? null,
+    country: memberCountry(index),
   }));
   if (members.length !== players.length) {
     logger.warn(
       { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
       'Match start member count invalid, falling back to match players'
     );
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    members = players.map((player, index) => ({
-      user_id: player.user_id,
-      nickname: users[index]?.nickname ?? 'Player',
-      avatar_url: users[index]?.avatar_url ?? null,
-      avatar_customization: users[index]?.avatar_customization ?? null,
-      favorite_club: users[index]?.favorite_club ?? null,
-      country: users[index]?.country ?? null,
-    }));
+    const usersSettled = await Promise.allSettled(players.map((player) => usersRepo.getById(player.user_id)));
+    const playerUser = (index: number) => {
+      const result = usersSettled[index];
+      return result?.status === 'fulfilled' ? result.value : null;
+    };
+    members = players.map((player, index) => {
+      const user = playerUser(index);
+      return {
+        user_id: player.user_id,
+        nickname: user?.nickname ?? 'Player',
+        avatar_url: user?.avatar_url ?? null,
+        avatar_customization: user?.avatar_customization ?? null,
+        favorite_club: user?.favorite_club ?? null,
+        country: user?.country ?? null,
+      };
+    });
   }
 
   // Lobby is no longer needed for membership tracking once match starts.

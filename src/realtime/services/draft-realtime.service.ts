@@ -266,6 +266,11 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
 
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     if (updatedBans.length < 2) {
+      const nextActorUserId = getNextActorId(members, updatedBans, firstActorUserId);
+      if (lobby.mode === 'ranked' && aiUserId && nextActorUserId === aiUserId) {
+        scheduleRankedAiBan(io, lobbyId, aiUserId);
+        return;
+      }
       scheduleDraftAutoBan(io, lobbyId);
     }
   } catch (error) {

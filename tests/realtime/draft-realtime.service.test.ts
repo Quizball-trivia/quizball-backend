@@ -206,6 +206,59 @@ describe('draftRealtimeService', () => {
     }
   });
 
+  it('uses the fast AI ban timer after the human draft ban times out in ranked-vs-AI', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const {
+        runDraftAutoBan,
+        runRankedAiDraftBan,
+        scheduleDraftAutoBan,
+      } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      const { io } = createIoMock();
+      stopRealtimeTimerScheduler();
+      startRealtimeTimerScheduler(io, {
+        draft_ai_ban: async (server, payload) => {
+          if (payload.kind === 'draft_ai_ban') await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+        },
+        draft_auto_ban: async (server, payload) => {
+          if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
+        },
+      });
+
+      getLobbyByIdMock.mockResolvedValue({
+        id: 'l1',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'u1',
+      });
+      listMembersWithUserMock.mockResolvedValue([
+        { user_id: 'u1' },
+        { user_id: 'ai-1' },
+      ]);
+
+      scheduleDraftAutoBan(io, 'l1');
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(1);
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', expect.any(String));
+      expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(700);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(2);
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+      expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+    } finally {
+      const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      stopRealtimeTimerScheduler();
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('enforces human first ban in ranked-vs-AI even when AI is host', async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);

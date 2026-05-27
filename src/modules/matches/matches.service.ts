@@ -1,5 +1,15 @@
 import { matchesRepo } from './matches.repo.js';
+import { matchAnswersRepo } from './match-answers.repo.js';
+import { matchEventsRepo } from './match-events.repo.js';
+import { matchPlayersRepo } from './match-players.repo.js';
 import { sql } from '../../db/index.js';
+import type { Json } from '../../db/types.js';
+import type {
+  MatchAnswerRow,
+  MatchGoalEventRow,
+  MatchPlayerRow,
+  MatchQuestionPhaseKind,
+} from './matches.types.js';
 import { lobbiesRepo } from '../lobbies/lobbies.repo.js';
 import { rankedService } from '../ranked/ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
@@ -668,5 +678,194 @@ export const matchesService = {
 
       await matchesRepo.recordUserModeStats(tx, statRows);
     });
+  },
+
+  /**
+   * Atomic goal write. Inserts a `match_goal_events` row (idempotent
+   * via ON CONFLICT) and increments the player's goal/penalty-goal
+   * counter inside the same DB transaction. Either both succeed or
+   * both roll back — never partial state.
+   *
+   * Returns `inserted: true` only when the event row was newly
+   * created; on a duplicate (e.g. a retry after a transient network
+   * blip) the player totals are left untouched.
+   *
+   * Was on matches.repo as `incrementGoalsAndInsertEventIfMissing`;
+   * moved here in the repo split so the cross-entity transaction is
+   * owned by the service layer. Repos stay table-pure.
+   */
+  async incrementGoalsAndInsertEventIfMissing(data: {
+    matchId: string;
+    userId: string;
+    seat: 1 | 2;
+    half: 1 | 2;
+    phaseKind: MatchQuestionPhaseKind;
+    qIndex: number | null;
+    isPenalty: boolean;
+    delta: { goals?: number; penaltyGoals?: number };
+  }): Promise<{ inserted: boolean; player: MatchPlayerRow | null }> {
+    return sql.begin(async (tx) => {
+      const inserted: MatchGoalEventRow | null = await matchEventsRepo.insertGoalEventIfMissingInTx(tx, {
+        matchId: data.matchId,
+        userId: data.userId,
+        seat: data.seat,
+        half: data.half,
+        phaseKind: data.phaseKind,
+        qIndex: data.qIndex,
+        isPenalty: data.isPenalty,
+      });
+      if (!inserted) {
+        return { inserted: false, player: null };
+      }
+      const player = await matchPlayersRepo.updatePlayerGoalTotalsInTx(
+        tx,
+        data.matchId,
+        data.userId,
+        data.delta,
+      );
+      return { inserted: true, player };
+    }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
+  },
+
+  /**
+   * Atomic party-quiz answer write. Inserts a match_answers row
+   * (idempotent via ON CONFLICT) and on first-write increments the
+   * player's totals inside the same DB transaction.
+   *
+   * On duplicate (a retry): the second call's insert no-ops, and we
+   * read the already-present rows so the caller can echo back the
+   * authoritative state without re-applying the score delta.
+   *
+   * Was on matches.repo as `recordPartyQuizAnswerIfMissing`; moved
+   * here so the cross-entity transaction is owned by the service
+   * layer. Repos stay table-pure.
+   */
+  async recordPartyQuizAnswerIfMissing(data: {
+    matchId: string;
+    qIndex: number;
+    userId: string;
+    selectedIndex: number | null;
+    isCorrect: boolean;
+    timeMs: number;
+    pointsEarned: number;
+    answerPayload?: Json | null;
+    phaseKind?: MatchQuestionPhaseKind;
+    phaseRound?: number | null;
+    shooterSeat?: number | null;
+  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
+    try {
+      return await sql.begin(async (tx) => {
+        const insertedAnswer = await matchAnswersRepo.insertMatchAnswerIfMissingInTx(tx, data);
+
+        if (insertedAnswer) {
+          const updatedPlayer = await matchPlayersRepo.updatePlayerTotalsInTx(
+            tx,
+            data.matchId,
+            data.userId,
+            data.pointsEarned,
+            data.isCorrect,
+          );
+
+          // UPDATE must hit one row — otherwise the answer persists without
+          // the score increment. Throw to roll back the transaction.
+          if (!updatedPlayer) {
+            throw new AppError(
+              'match_players row missing during party answer insert',
+              500,
+              ErrorCode.INTERNAL_ERROR,
+              { matchId: data.matchId, userId: data.userId },
+            );
+          }
+
+          return {
+            inserted: true,
+            answer: insertedAnswer,
+            player: updatedPlayer,
+          };
+        }
+
+        // ON CONFLICT path — answer already existed. Read back the
+        // authoritative rows so the caller has consistent state.
+        const existingAnswer = await matchAnswersRepo.getAnswerForUserInTx(
+          tx,
+          data.matchId,
+          data.qIndex,
+          data.userId,
+        );
+        const existingPlayerRows = await tx.unsafe<MatchPlayerRow[]>(
+          `SELECT * FROM match_players WHERE match_id = $1 AND user_id = $2`,
+          [data.matchId, data.userId],
+        );
+
+        return {
+          inserted: false,
+          answer: existingAnswer,
+          player: existingPlayerRows[0] ?? null,
+        };
+      }) as { inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null };
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);
+    }
+  },
+
+  /**
+   * Admin/dev-only cleanup. Removes old dev matches (kept count
+   * preserved as a buffer) plus any AI users that exist ONLY in
+   * those cleaned matches. Returns the count of match rows deleted.
+   *
+   * The single CTE statement is what gives us atomicity — either
+   * all 5 deletes commit or none do, no sql.begin required. Lives
+   * here in the service rather than matches.repo because the
+   * operation spans 5 tables (4 match tables + orphan AI users) and
+   * is a lifecycle concern, not pure data access.
+   *
+   * Guarantees verified by tests:
+   *   - Non-dev matches are never touched.
+   *   - Non-AI users are never touched.
+   *   - AI users that still have non-dev matches are kept.
+   *   - AI users orphaned by this cleanup ARE deleted.
+   *   - Dev match rows ARE cleaned across all 4 match tables.
+   */
+  async cleanupOldDevMatches(keep: number): Promise<number> {
+    const deleted = await sql<{ id: string }[]>`
+      WITH matches_to_delete AS (
+        SELECT id
+        FROM matches
+        WHERE is_dev = true AND status IN ('completed', 'abandoned')
+        ORDER BY started_at DESC
+        OFFSET ${keep}
+      ),
+      orphaned_ai_users AS (
+        SELECT DISTINCT mp.user_id
+        FROM match_players mp
+        JOIN users u ON u.id = mp.user_id
+        WHERE mp.match_id IN (SELECT id FROM matches_to_delete)
+          AND u.is_ai = true
+          AND NOT EXISTS (
+            SELECT 1 FROM match_players mp2
+            WHERE mp2.user_id = mp.user_id
+              AND mp2.match_id NOT IN (SELECT id FROM matches_to_delete)
+          )
+      ),
+      del_answers AS (
+        DELETE FROM match_answers WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_questions AS (
+        DELETE FROM match_questions WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_players AS (
+        DELETE FROM match_players WHERE match_id IN (SELECT id FROM matches_to_delete)
+      ),
+      del_matches AS (
+        DELETE FROM matches WHERE id IN (SELECT id FROM matches_to_delete)
+        RETURNING id
+      ),
+      del_ai_users AS (
+        DELETE FROM users WHERE id IN (SELECT user_id FROM orphaned_ai_users)
+      )
+      SELECT id FROM del_matches
+    `;
+    return deleted.length;
   },
 };

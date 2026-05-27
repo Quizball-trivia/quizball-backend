@@ -1,20 +1,16 @@
 import { sql, type TransactionSql } from '../../db/index.js';
+import { matchAnswersRepo } from './match-answers.repo.js';
+import { matchEventsRepo } from './match-events.repo.js';
+import { matchPlayersRepo } from './match-players.repo.js';
+import { matchQuestionsRepo } from './match-questions.repo.js';
 import type { Json } from '../../db/types.js';
-import { AppError } from '../../core/errors.js';
 import { withSpan } from '../../core/tracing.js';
-import { VALID_PAYLOAD_CONDITIONS_RAW as VALID_PAYLOAD_CONDITIONS } from '../../db/sql-fragments.js';
 import type {
   MatchRow,
-  MatchPlayerRow,
-  MatchQuestionRow,
-  MatchAnswerRow,
   MatchGoalEventRow,
-  MatchQuestionWithCategory,
-  MatchQuestionTimingRow,
   MatchQuestionPhaseKind,
 } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
-import type { QuestionType } from '../questions/questions.schemas.js';
 
 export interface CreateMatchData {
   lobbyId: string | null;
@@ -46,587 +42,69 @@ export const matchesRepo = {
     return row;
   },
 
-  async insertMatchPlayers(matchId: string, players: Array<{ userId: string; seat: number }>): Promise<MatchPlayerRow[]> {
-    if (players.length === 0) return [];
-    const rows = players.map((p) => [matchId, p.userId, p.seat]);
+  // ─── match_players facade delegates ───
+  // Real implementations live in matchPlayersRepo. Kept here so existing
+  // matchesRepo.* call sites compile unchanged; removed in a follow-up PR.
+  insertMatchPlayers: (matchId: string, players: Array<{ userId: string; seat: number }>) =>
+    matchPlayersRepo.insertMatchPlayers(matchId, players),
 
-    return sql<MatchPlayerRow[]>`
-      INSERT INTO match_players (match_id, user_id, seat)
-      VALUES ${sql(rows)}
-      RETURNING *
-    `;
-  },
+  listMatchPlayers: (matchId: string, tx?: TransactionSql) =>
+    matchPlayersRepo.listMatchPlayers(matchId, tx),
 
-  async listMatchPlayers(matchId: string, tx?: TransactionSql): Promise<MatchPlayerRow[]> {
-    // Accepts an optional transaction handle so callers like
-    // matchesService.completeMatch can read roster INSIDE the same tx
-    // that mutates user_mode_match_stats — keeps the snapshot consistent.
-    return withSpan('db.matches.list_players', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-    }, async () => {
-      if (tx) {
-        // postgres.js TransactionSql doesn't expose the tagged-template
-        // call signature cleanly to TS, so use tx.unsafe inside the tx
-        // (codebase precedent — see daily-challenges.repo, objectives.repo).
-        return tx.unsafe<MatchPlayerRow[]>(
-          `SELECT * FROM match_players WHERE match_id = $1 ORDER BY seat ASC`,
-          [matchId],
-        );
-      }
-      return sql<MatchPlayerRow[]>`
-        SELECT * FROM match_players WHERE match_id = ${matchId} ORDER BY seat ASC
-      `;
-    });
-  },
+  getPlayerTotalPoints: (matchId: string, userId: string) =>
+    matchPlayersRepo.getPlayerTotalPoints(matchId, userId),
 
-  async getPlayerTotalPoints(matchId: string, userId: string): Promise<number> {
-    const [row] = await sql<{ total_points: number }[]>`
-      SELECT total_points FROM match_players
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-    return row?.total_points ?? 0;
-  },
+  // ─── match_questions facade delegates ───
+  // Real implementations live in matchQuestionsRepo. Kept here so existing
+  // matchesRepo.* call sites compile unchanged.
+  insertMatchQuestions: (
+    matchId: string,
+    questions: Parameters<typeof matchQuestionsRepo.insertMatchQuestions>[1],
+  ) => matchQuestionsRepo.insertMatchQuestions(matchId, questions),
 
-  async insertMatchQuestions(matchId: string, questions: Array<{
-    qIndex: number;
-    questionId: string;
-    categoryId: string;
-    correctIndex: number;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-    attackerSeat?: number | null;
-  }>): Promise<MatchQuestionRow[]> {
-    if (questions.length === 0) return [];
-    const rows = questions.map((q) => [
-      matchId,
-      q.qIndex,
-      q.questionId,
-      q.categoryId,
-      q.correctIndex,
-      q.phaseKind ?? 'normal',
-      q.phaseRound ?? null,
-      q.shooterSeat ?? null,
-      q.attackerSeat ?? null,
-    ] as (string | number)[]);
+  insertMatchQuestionIfMissing: (question: Parameters<typeof matchQuestionsRepo.insertMatchQuestionIfMissing>[0]) =>
+    matchQuestionsRepo.insertMatchQuestionIfMissing(question),
 
-    return sql<MatchQuestionRow[]>`
-      INSERT INTO match_questions (
-        match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
-      )
-      VALUES ${sql(rows)}
-      RETURNING *
-    `;
-  },
+  getRandomQuestionsForCategory: (categoryId: string, limit: number) =>
+    matchQuestionsRepo.getRandomQuestionsForCategory(categoryId, limit),
 
-  async insertMatchQuestionIfMissing(question: {
-    matchId: string;
-    qIndex: number;
-    questionId: string;
-    categoryId: string;
-    correctIndex: number;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-    attackerSeat?: number | null;
-  }): Promise<MatchQuestionRow | null> {
-    return withSpan('db.matches.insert_question_if_missing', {
-      'db.operation.name': 'insert',
-      'quizball.match_id': question.matchId,
-      'quizball.q_index': question.qIndex,
-      'quizball.phase_kind': question.phaseKind ?? 'normal',
-    }, async (span) => {
-      const [row] = await sql<MatchQuestionRow[]>`
-        INSERT INTO match_questions (
-          match_id, q_index, question_id, category_id, correct_index, phase_kind, phase_round, shooter_seat, attacker_seat
-        )
-        VALUES (
-          ${question.matchId},
-          ${question.qIndex},
-          ${question.questionId},
-          ${question.categoryId},
-          ${question.correctIndex},
-          ${question.phaseKind ?? 'normal'},
-          ${question.phaseRound ?? null},
-          ${question.shooterSeat ?? null},
-          ${question.attackerSeat ?? null}
-        )
-        ON CONFLICT (match_id, q_index) DO NOTHING
-        RETURNING *
-      `;
-      span.setAttribute('quizball.question_inserted', Boolean(row));
-      return row ?? null;
-    });
-  },
+  getRandomQuestionCandidatesForMatch: (params: Parameters<typeof matchQuestionsRepo.getRandomQuestionCandidatesForMatch>[0]) =>
+    matchQuestionsRepo.getRandomQuestionCandidatesForMatch(params),
 
-  async getRandomQuestionsForCategory(
-    categoryId: string,
-    limit: number
-  ): Promise<Array<{
-    id: string;
-    prompt: Record<string, string>;
-    difficulty: string;
-    category_id: string;
-    payload: unknown;
-  }>> {
-    const [{ count }] = await sql.unsafe<{ count: number }[]>(`
-      SELECT COUNT(*)::int as count
-      FROM questions q
-      JOIN categories c ON c.id = q.category_id
-      JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1
-        AND c.is_active = true
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-      ${VALID_PAYLOAD_CONDITIONS}
-    `, [categoryId]);
+  getRandomQuestionForMatch: (params: Parameters<typeof matchQuestionsRepo.getRandomQuestionForMatch>[0]) =>
+    matchQuestionsRepo.getRandomQuestionForMatch(params),
 
-    if (!count) return [];
+  getMatchQuestion: (matchId: string, qIndex: number) =>
+    matchQuestionsRepo.getMatchQuestion(matchId, qIndex),
 
-    const SMALL_SET_THRESHOLD = limit * 5;
-    if (count <= SMALL_SET_THRESHOLD) {
-      return sql.unsafe<{
-        id: string;
-        prompt: Record<string, string>;
-        difficulty: string;
-        category_id: string;
-        payload: unknown;
-      }[]>(`
-        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-        FROM questions q
-        JOIN categories c ON c.id = q.category_id
-        JOIN question_payloads qp ON qp.question_id = q.id
-        WHERE q.category_id = $1
-          AND c.is_active = true
-          AND q.status = 'published'
-          AND q.type = 'mcq_single'
-        ${VALID_PAYLOAD_CONDITIONS}
-        ORDER BY RANDOM()
-        LIMIT $2
-      `, [categoryId, limit]);
-    }
+  getMatchQuestionTiming: (matchId: string, qIndex: number) =>
+    matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex),
 
-    const basePercent = Math.ceil((limit * 100) / count);
-    const samplePercent = Math.min(10, Math.max(1, basePercent * 2));
-    const sampleLimit = limit * 3;
+  setQuestionTiming: (matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date) =>
+    matchQuestionsRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt),
 
-    const sampled = await sql.unsafe<{
-      id: string;
-      prompt: Record<string, string>;
-      difficulty: string;
-      category_id: string;
-      payload: unknown;
-    }[]>(
-      `
-      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-      FROM (
-        SELECT * FROM questions TABLESAMPLE SYSTEM (${samplePercent})
-      ) AS q
-      JOIN categories c ON c.id = q.category_id
-      JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1
-        AND c.is_active = true
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-      ${VALID_PAYLOAD_CONDITIONS}
-      ORDER BY RANDOM()
-      LIMIT $2
-      `,
-      [categoryId, sampleLimit]
-    );
+  // ─── match_answers facade delegates ───
+  // Real implementations live in matchAnswersRepo. Kept here so existing
+  // matchesRepo.* call sites compile unchanged.
+  insertMatchAnswer: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswer>[0]) =>
+    matchAnswersRepo.insertMatchAnswer(data),
 
-    if (sampled.length >= limit) {
-      return sampled.slice(0, limit);
-    }
+  insertMatchAnswerIfMissing: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswerIfMissing>[0]) =>
+    matchAnswersRepo.insertMatchAnswerIfMissing(data),
 
-    const remaining = limit - sampled.length;
-    const excludeIds = sampled.map((row) => row.id);
-    const excludeCondition = excludeIds.length > 0 ? `AND q.id NOT IN (${excludeIds.map((_, i) => `$${i + 3}`).join(',')})` : '';
-    const fallback = await sql.unsafe<{
-      id: string;
-      prompt: Record<string, string>;
-      difficulty: string;
-      category_id: string;
-      payload: unknown;
-    }[]>(
-      `
-      SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-      FROM questions q
-      JOIN categories c ON c.id = q.category_id
-      JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.category_id = $1
-        AND c.is_active = true
-        AND q.status = 'published'
-        AND q.type = 'mcq_single'
-      ${VALID_PAYLOAD_CONDITIONS}
-      ${excludeCondition}
-      ORDER BY RANDOM()
-      LIMIT $2
-      `,
-      [categoryId, remaining, ...excludeIds]
-    );
+  listAnswersForQuestion: (matchId: string, qIndex: number) =>
+    matchAnswersRepo.listAnswersForQuestion(matchId, qIndex),
 
-    return [...sampled, ...fallback];
-  },
+  listAnswersForMatch: (matchId: string) =>
+    matchAnswersRepo.listAnswersForMatch(matchId),
 
-  async getRandomQuestionCandidatesForMatch(params: {
-    matchId: string;
-    categoryIds: string[];
-    difficulties?: Array<'easy' | 'medium' | 'hard'>;
-    questionTypes?: QuestionType[];
-    limit?: number;
-  }): Promise<{
-    id: string;
-    prompt: Record<string, string>;
-    difficulty: string;
-    category_id: string;
-    payload: unknown;
-  }[]> {
-    return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
-      'db.operation.name': 'select',
-      'quizball.match_id': params.matchId,
-      'quizball.category_count': params.categoryIds.length,
-      'quizball.difficulty_count': params.difficulties?.length ?? 0,
-    }, async (span) => {
-      const questionTypes = params.questionTypes?.length
-        ? params.questionTypes
-        : ['mcq_single'];
-      const includesMcq = questionTypes.includes('mcq_single');
-      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+  getAnswerForUser: (matchId: string, qIndex: number, userId: string) =>
+    matchAnswersRepo.getAnswerForUser(matchId, qIndex, userId),
 
-      const rows = await sql.unsafe<{
-        id: string;
-        prompt: Record<string, string>;
-        difficulty: string;
-        category_id: string;
-        payload: unknown;
-      }[]>(
-        `
-        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
-        FROM questions q
-        JOIN categories c ON c.id = q.category_id
-        JOIN question_payloads qp ON qp.question_id = q.id
-        WHERE q.category_id = ANY($2::uuid[])
-          AND c.is_active = true
-          AND q.status = 'published'
-          AND q.type = ANY($3::text[])
-          ${includesMcq ? `AND (q.type <> 'mcq_single' OR (${perRowMcqPayloadValidation}))` : ''}
-          ${params.difficulties?.length ? 'AND q.difficulty = ANY($4::text[])' : ''}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM match_questions mq
-            WHERE mq.match_id = $1
-              AND mq.question_id = q.id
-          )
-        ORDER BY RANDOM()
-        LIMIT $${params.difficulties?.length ? 5 : 4}
-        `,
-        [
-          params.matchId,
-          params.categoryIds,
-          questionTypes,
-          ...(params.difficulties?.length ? [params.difficulties] : []),
-          params.limit ?? 1,
-        ]
-      );
-      span.setAttribute('quizball.question_found', rows.length > 0);
-      span.setAttribute('quizball.question_candidate_count', rows.length);
-      return rows;
-    });
-  },
+  updatePlayerTotals: (matchId: string, userId: string, points: number, isCorrect: boolean) =>
+    matchPlayersRepo.updatePlayerTotals(matchId, userId, points, isCorrect),
 
-  async getRandomQuestionForMatch(params: {
-    matchId: string;
-    categoryIds: string[];
-    difficulties?: Array<'easy' | 'medium' | 'hard'>;
-    questionTypes?: QuestionType[];
-  }): Promise<{
-    id: string;
-    prompt: Record<string, string>;
-    difficulty: string;
-    category_id: string;
-    payload: unknown;
-  } | null> {
-    const rows = await this.getRandomQuestionCandidatesForMatch({ ...params, limit: 1 });
-    return rows[0] ?? null;
-  },
-
-  async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {
-    return withSpan('db.matches.get_question', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-      'quizball.q_index': qIndex,
-    }, async (span) => {
-      const [row] = await sql<MatchQuestionWithCategory[]>`
-        SELECT mq.question_id, mq.q_index, mq.category_id, mq.correct_index,
-               mq.phase_kind, mq.phase_round, mq.shooter_seat, mq.attacker_seat,
-               q.prompt, q.difficulty, qp.payload,
-               c.name as category_name, c.icon as category_icon
-        FROM match_questions mq
-        JOIN questions q ON q.id = mq.question_id
-        LEFT JOIN question_payloads qp ON qp.question_id = q.id
-        JOIN categories c ON c.id = mq.category_id
-        WHERE mq.match_id = ${matchId} AND mq.q_index = ${qIndex}
-      `;
-      span.setAttribute('quizball.question_found', Boolean(row));
-      return row ?? null;
-    });
-  },
-
-  async getMatchQuestionTiming(matchId: string, qIndex: number): Promise<MatchQuestionTimingRow | null> {
-    return withSpan('db.matches.get_question_timing', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-      'quizball.q_index': qIndex,
-    }, async (span) => {
-      const [row] = await sql<MatchQuestionTimingRow[]>`
-        SELECT shown_at, deadline_at
-        FROM match_questions
-        WHERE match_id = ${matchId} AND q_index = ${qIndex}
-      `;
-      span.setAttribute('quizball.question_timing_found', Boolean(row));
-      return row ?? null;
-    });
-  },
-
-  async setQuestionTiming(matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date): Promise<void> {
-    await sql`
-      UPDATE match_questions
-      SET shown_at = ${shownAt}, deadline_at = ${deadlineAt}
-      WHERE match_id = ${matchId} AND q_index = ${qIndex}
-    `;
-  },
-
-  async insertMatchAnswer(data: {
-    matchId: string;
-    qIndex: number;
-    userId: string;
-    selectedIndex: number | null;
-    isCorrect: boolean;
-    timeMs: number;
-    pointsEarned: number;
-    answerPayload?: Json | null;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-  }): Promise<MatchAnswerRow> {
-    try {
-      const [row] = await sql<MatchAnswerRow[]>`
-        INSERT INTO match_answers (
-          match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
-        )
-        VALUES (
-          ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-          ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-        )
-        RETURNING *
-      `;
-      return row;
-    } catch (err) {
-      throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
-    }
-  },
-
-  async insertMatchAnswerIfMissing(data: {
-    matchId: string;
-    qIndex: number;
-    userId: string;
-    selectedIndex: number | null;
-    isCorrect: boolean;
-    timeMs: number;
-    pointsEarned: number;
-    answerPayload?: Json | null;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-  }): Promise<MatchAnswerRow | null> {
-    return withSpan('db.matches.insert_answer_if_missing', {
-      'db.operation.name': 'insert',
-      'quizball.match_id': data.matchId,
-      'quizball.q_index': data.qIndex,
-      'quizball.user_id': data.userId,
-      'quizball.phase_kind': data.phaseKind ?? 'normal',
-    }, async (span) => {
-      try {
-        const [row] = await sql<MatchAnswerRow[]>`
-          INSERT INTO match_answers (
-            match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
-          )
-          VALUES (
-            ${data.matchId}, ${data.qIndex}, ${data.userId}, ${data.selectedIndex},
-            ${data.isCorrect}, ${data.timeMs}, ${data.pointsEarned}, ${sql.json(data.answerPayload ?? {})}, ${data.phaseKind ?? 'normal'}, ${data.phaseRound ?? null}, ${data.shooterSeat ?? null}
-          )
-          ON CONFLICT (match_id, q_index, user_id) DO NOTHING
-          RETURNING *
-        `;
-        span.setAttribute('quizball.answer_inserted', Boolean(row));
-        return row ?? null;
-      } catch (err) {
-        throw new AppError('Failed to insert match answer', 500, 'INTERNAL_ERROR', err);
-      }
-    });
-  },
-
-  async recordPartyQuizAnswerIfMissing(data: {
-    matchId: string;
-    qIndex: number;
-    userId: string;
-    selectedIndex: number | null;
-    isCorrect: boolean;
-    timeMs: number;
-    pointsEarned: number;
-    answerPayload?: Json | null;
-    phaseKind?: MatchQuestionPhaseKind;
-    phaseRound?: number | null;
-    shooterSeat?: number | null;
-  }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
-    return withSpan('db.matches.record_party_answer_if_missing', {
-      'db.operation.name': 'insert_update',
-      'quizball.match_id': data.matchId,
-      'quizball.q_index': data.qIndex,
-      'quizball.user_id': data.userId,
-    }, async (span) => {
-      try {
-        const result = await sql.begin(async (tx) => {
-          const insertedRows = await tx.unsafe<MatchAnswerRow[]>(
-            `
-            INSERT INTO match_answers (
-              match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answer_payload, phase_kind, phase_round, shooter_seat
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
-            ON CONFLICT (match_id, q_index, user_id) DO NOTHING
-            RETURNING *
-            `,
-            [
-              data.matchId,
-              data.qIndex,
-              data.userId,
-              data.selectedIndex,
-              data.isCorrect,
-              data.timeMs,
-              data.pointsEarned,
-              JSON.stringify(data.answerPayload ?? {}),
-              data.phaseKind ?? 'normal',
-              data.phaseRound ?? null,
-              data.shooterSeat ?? null,
-            ]
-          );
-
-          const insertedAnswer = insertedRows[0] ?? null;
-          if (insertedAnswer) {
-            const playerRows = await tx.unsafe<MatchPlayerRow[]>(
-              `
-              UPDATE match_players
-              SET
-                total_points = total_points + $3,
-                correct_answers = correct_answers + $4
-              WHERE match_id = $1 AND user_id = $2
-              RETURNING *
-              `,
-              [data.matchId, data.userId, data.pointsEarned, data.isCorrect ? 1 : 0]
-            );
-
-            // UPDATE must hit one row — otherwise the answer persists without
-            // the score increment. Throw to roll back the transaction.
-            const updatedPlayer = playerRows[0];
-            if (!updatedPlayer) {
-              throw new AppError(
-                'match_players row missing during party answer insert',
-                500,
-                'INTERNAL_ERROR',
-                { matchId: data.matchId, userId: data.userId }
-              );
-            }
-
-            return {
-              inserted: true,
-              answer: insertedAnswer,
-              player: updatedPlayer,
-            };
-          }
-
-          const existingRows = await tx.unsafe<MatchAnswerRow[]>(
-            `
-            SELECT *
-            FROM match_answers
-            WHERE match_id = $1 AND q_index = $2 AND user_id = $3
-            `,
-            [data.matchId, data.qIndex, data.userId]
-          );
-          const playerRows = await tx.unsafe<MatchPlayerRow[]>(
-            `
-            SELECT *
-            FROM match_players
-            WHERE match_id = $1 AND user_id = $2
-            `,
-            [data.matchId, data.userId]
-          );
-
-          return {
-            inserted: false,
-            answer: existingRows[0] ?? null,
-            player: playerRows[0] ?? null,
-          };
-        });
-
-        span.setAttribute('quizball.answer_inserted', result.inserted);
-        return result;
-      } catch (err) {
-        throw new AppError('Failed to record party quiz answer', 500, 'INTERNAL_ERROR', err);
-      }
-    });
-  },
-
-  async listAnswersForQuestion(matchId: string, qIndex: number): Promise<MatchAnswerRow[]> {
-    return withSpan('db.matches.list_answers_for_question', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-      'quizball.q_index': qIndex,
-    }, async (span) => {
-      const rows = await sql<MatchAnswerRow[]>`
-        SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex}
-      `;
-      span.setAttribute('quizball.answer_count', rows.length);
-      return rows;
-    });
-  },
-
-  async listAnswersForMatch(matchId: string): Promise<MatchAnswerRow[]> {
-    return withSpan('db.matches.list_answers_for_match', {
-      'db.operation.name': 'select',
-      'quizball.match_id': matchId,
-    }, async (span) => {
-      const rows = await sql<MatchAnswerRow[]>`
-        SELECT * FROM match_answers
-        WHERE match_id = ${matchId}
-        ORDER BY q_index ASC
-      `;
-      span.setAttribute('quizball.answer_count', rows.length);
-      return rows;
-    });
-  },
-
-  async getAnswerForUser(matchId: string, qIndex: number, userId: string): Promise<MatchAnswerRow | null> {
-    const [row] = await sql<MatchAnswerRow[]>`
-      SELECT * FROM match_answers WHERE match_id = ${matchId} AND q_index = ${qIndex} AND user_id = ${userId}
-    `;
-    return row ?? null;
-  },
-
-  async updatePlayerTotals(matchId: string, userId: string, points: number, isCorrect: boolean): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        total_points = total_points + ${points},
-        correct_answers = correct_answers + ${isCorrect ? 1 : 0}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
-
-  async setPlayerFinalTotals(
+  setPlayerFinalTotals: (
     matchId: string,
     userId: string,
     values: {
@@ -634,20 +112,8 @@ export const matchesRepo = {
       correctAnswers: number;
       goals: number;
       penaltyGoals: number;
-    }
-  ): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        total_points = ${values.totalPoints},
-        correct_answers = ${values.correctAnswers},
-        goals = ${values.goals},
-        penalty_goals = ${values.penaltyGoals}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+    },
+  ) => matchPlayersRepo.setPlayerFinalTotals(matchId, userId, values),
 
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
@@ -694,23 +160,17 @@ export const matchesRepo = {
     `;
   },
 
-  async updatePlayerGoalTotals(
+  updatePlayerGoalTotals: (
     matchId: string,
     userId: string,
-    changes: { goals?: number; penaltyGoals?: number }
-  ): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      UPDATE match_players
-      SET
-        goals = goals + ${changes.goals ?? 0},
-        penalty_goals = penalty_goals + ${changes.penaltyGoals ?? 0}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+    changes: { goals?: number; penaltyGoals?: number },
+  ) => matchPlayersRepo.updatePlayerGoalTotals(matchId, userId, changes),
 
-  async insertGoalEventIfMissing(data: {
+  // Facade delegate — real implementation lives in matchEventsRepo.
+  // Kept here so existing call sites (`matchesRepo.insertGoalEventIfMissing(…)`)
+  // keep working unchanged through the split. Will be removed in a follow-up
+  // PR once all callers have migrated to the entity repo.
+  insertGoalEventIfMissing: (data: {
     matchId: string;
     userId: string;
     seat: 1 | 2;
@@ -718,89 +178,15 @@ export const matchesRepo = {
     phaseKind: MatchQuestionPhaseKind;
     qIndex: number | null;
     isPenalty: boolean;
-  }): Promise<MatchGoalEventRow | null> {
-    const [row] = await sql<MatchGoalEventRow[]>`
-      INSERT INTO match_goal_events (
-        match_id,
-        user_id,
-        seat,
-        half,
-        phase_kind,
-        q_index,
-        is_penalty
-      )
-      VALUES (
-        ${data.matchId},
-        ${data.userId},
-        ${data.seat},
-        ${data.half},
-        ${data.phaseKind},
-        ${data.qIndex},
-        ${data.isPenalty}
-      )
-      ON CONFLICT (match_id, user_id, phase_kind, q_index, is_penalty) DO NOTHING
-      RETURNING *
-    `;
-    return row ?? null;
-  },
+  }): Promise<MatchGoalEventRow | null> => matchEventsRepo.insertGoalEventIfMissing(data),
 
-  /**
-   * Atomic goal write. Inserts the goal event (idempotent via ON CONFLICT) and
-   * increments the player's goal/penalty-goal counter inside the same DB
-   * transaction. Either both succeed or both rollback — never partial state.
-   *
-   * Returns `inserted: true` only when the event row was newly created; on a
-   * duplicate (e.g., a retry after a transient network blip) the totals are
-   * left untouched, which is what `insertGoalEventIfMissing`'s idempotency
-   * guarantee already implied and what callers depended on.
-   */
-  async incrementGoalsAndInsertEventIfMissing(data: {
-    matchId: string;
-    userId: string;
-    seat: 1 | 2;
-    half: 1 | 2;
-    phaseKind: MatchQuestionPhaseKind;
-    qIndex: number | null;
-    isPenalty: boolean;
-    delta: { goals?: number; penaltyGoals?: number };
-  }): Promise<{ inserted: boolean; player: MatchPlayerRow | null }> {
-    return sql.begin(async (tx) => {
-      const insertedRows = await tx.unsafe<MatchGoalEventRow[]>(
-        `
-        INSERT INTO match_goal_events (
-          match_id, user_id, seat, half, phase_kind, q_index, is_penalty
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (match_id, user_id, phase_kind, q_index, is_penalty) DO NOTHING
-        RETURNING *
-        `,
-        [data.matchId, data.userId, data.seat, data.half, data.phaseKind, data.qIndex, data.isPenalty]
-      );
-      if (insertedRows.length === 0) {
-        return { inserted: false, player: null };
-      }
-      const playerRows = await tx.unsafe<MatchPlayerRow[]>(
-        `
-        UPDATE match_players
-        SET goals = goals + $3,
-            penalty_goals = penalty_goals + $4
-        WHERE match_id = $1 AND user_id = $2
-        RETURNING *
-        `,
-        [data.matchId, data.userId, data.delta.goals ?? 0, data.delta.penaltyGoals ?? 0]
-      );
-      return { inserted: true, player: playerRows[0] ?? null };
-    }) as Promise<{ inserted: boolean; player: MatchPlayerRow | null }>;
-  },
+  // incrementGoalsAndInsertEventIfMissing moved to matchesService in
+  // Step 3 of the repo split. Cross-entity transactions (writes to both
+  // match_goal_events and match_players) are owned by the service layer
+  // so the repos can stay table-pure.
 
-  async getPlayerBySeat(matchId: string, seat: 1 | 2): Promise<MatchPlayerRow | null> {
-    const [row] = await sql<MatchPlayerRow[]>`
-      SELECT * FROM match_players
-      WHERE match_id = ${matchId} AND seat = ${seat}
-      LIMIT 1
-    `;
-    return row ?? null;
-  },
+  getPlayerBySeat: (matchId: string, seat: 1 | 2) =>
+    matchPlayersRepo.getPlayerBySeat(matchId, seat),
 
   /**
    * Atomically flip a match to "completed" and return the metadata the
@@ -884,36 +270,18 @@ export const matchesRepo = {
     );
   },
 
-  async updatePlayerAvgTime(matchId: string, userId: string, avgTimeMs: number | null): Promise<void> {
-    await sql`
-      UPDATE match_players
-      SET avg_time_ms = ${avgTimeMs}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-  },
+  updatePlayerAvgTime: (matchId: string, userId: string, avgTimeMs: number | null) =>
+    matchPlayersRepo.updatePlayerAvgTime(matchId, userId, avgTimeMs),
 
-  async setPlayerForfeitWinTotals(
+  setPlayerForfeitWinTotals: (
     matchId: string,
     userId: string,
     totalPoints: number,
-    correctAnswers: number
-  ): Promise<void> {
-    await sql`
-      UPDATE match_players
-      SET total_points = ${totalPoints},
-          correct_answers = ${correctAnswers}
-      WHERE match_id = ${matchId} AND user_id = ${userId}
-    `;
-  },
+    correctAnswers: number,
+  ) => matchPlayersRepo.setPlayerForfeitWinTotals(matchId, userId, totalPoints, correctAnswers),
 
-  async getAverageTimes(matchId: string): Promise<Array<{ user_id: string; avg_time_ms: number | null }>> {
-    return sql<{ user_id: string; avg_time_ms: number | null }[]>`
-      SELECT user_id, AVG(time_ms)::int as avg_time_ms
-      FROM match_answers
-      WHERE match_id = ${matchId}
-      GROUP BY user_id
-    `;
-  },
+  getAverageTimes: (matchId: string) =>
+    matchAnswersRepo.getAverageTimes(matchId),
 
   async getMatch(matchId: string): Promise<MatchRow | null> {
     const [row] = await sql<MatchRow[]>`
@@ -949,47 +317,10 @@ export const matchesRepo = {
    * Cascades to match_players, match_questions, match_answers via FK.
    * Also cleans up orphaned AI users that were created for dev matches.
    */
-  async cleanupOldDevMatches(keep: number): Promise<number> {
-    const deleted = await sql<{ id: string }[]>`
-      WITH matches_to_delete AS (
-        SELECT id
-        FROM matches
-        WHERE is_dev = true AND status IN ('completed', 'abandoned')
-        ORDER BY started_at DESC
-        OFFSET ${keep}
-      ),
-      orphaned_ai_users AS (
-        SELECT DISTINCT mp.user_id
-        FROM match_players mp
-        JOIN users u ON u.id = mp.user_id
-        WHERE mp.match_id IN (SELECT id FROM matches_to_delete)
-          AND u.is_ai = true
-          AND NOT EXISTS (
-            SELECT 1 FROM match_players mp2
-            WHERE mp2.user_id = mp.user_id
-              AND mp2.match_id NOT IN (SELECT id FROM matches_to_delete)
-          )
-      ),
-      del_answers AS (
-        DELETE FROM match_answers WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_questions AS (
-        DELETE FROM match_questions WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_players AS (
-        DELETE FROM match_players WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_matches AS (
-        DELETE FROM matches WHERE id IN (SELECT id FROM matches_to_delete)
-        RETURNING id
-      ),
-      del_ai_users AS (
-        DELETE FROM users WHERE id IN (SELECT user_id FROM orphaned_ai_users)
-      )
-      SELECT id FROM del_matches
-    `;
-    return deleted.length;
-  },
+  // cleanupOldDevMatches moved to matchesService in Step 7 of the repo
+  // split. It's a lifecycle/admin operation that spans 5 tables (4 match
+  // tables + orphan AI users), so it belongs in the service layer rather
+  // than this table-pure repo.
 
   async abandonMatch(matchId: string): Promise<boolean> {
     const rows = await sql<{ id: string }[]>`

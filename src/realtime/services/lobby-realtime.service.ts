@@ -39,6 +39,23 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import type { LobbyChallengeInvitePayload, LobbyChallengeStatusPayload } from '../socket.types.js';
 import type { AvatarCustomization } from '../../modules/users/avatar-customization.js';
+import {
+  acquireLobbyLockWithRetry,
+  autoLeaveAllWaitingLobbies,
+  closeLobbyIfEmpty,
+  detachAllSocketsFromLobby,
+  emitClosedLobbyStateForMode,
+  getFirstDraftActorId,
+  getNextDraftActorId,
+  getRankedAiUserIdForLobby,
+  isRankedAiLobby,
+  randomIntBetween,
+  removeUserFromLobbySockets,
+  resolveLobbyId,
+  resolveRankedAiUserIdForDraft,
+  transferHostIfNeeded,
+  RANKED_AI_KEY_TTL_SEC,
+} from './lobby-lifecycle.helpers.js';
 
 const DRAFT_START_GUARD_PREFIX = 'draft:starting:';
 const DRAFT_START_GUARD_TTL_SEC = 15;
@@ -46,29 +63,14 @@ const LOBBY_DISCONNECT_GRACE_MS = 15000;
 const RANKED_SIM_SEARCH_MIN_MS = 3000;
 const RANKED_SIM_SEARCH_MAX_MS = 10000;
 const RANKED_SIM_FOUND_MODAL_MS = 1200;
-const RANKED_AI_KEY_TTL_SEC = 7200;
-const LOBBY_LOCK_WAIT_MS = 1200;
-const LOBBY_LOCK_RETRY_INTERVAL_MS = 75;
 const CHALLENGE_INVITE_TTL_MS = 5 * 60 * 1000;
 
 // Fallback guard when Redis is unavailable (single instance only).
 const draftStartingSet = new Set<string>();
 
-function resolveLobbyId(socket: QuizballSocket, lobbyId?: string): string | undefined {
-  return lobbyId ?? socket.data.lobbyId;
-}
-
-function randomIntBetween(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
 function generateAiRecentForm(): Array<'W' | 'L' | 'D'> {
   const outcomes: Array<'W' | 'L' | 'D'> = ['W', 'W', 'W', 'L', 'L', 'D'];
   return Array.from({ length: 3 }, () => outcomes[Math.floor(Math.random() * outcomes.length)]);
-}
-
-function isRankedAiLobby(lobby: { mode: string }): boolean {
-  return lobby.mode === 'ranked';
 }
 
 function mapChallengeInvitePayload(invite: {
@@ -107,56 +109,6 @@ function emitChallengeStatus(
   }
 }
 
-async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string | null> {
-  const redis = getRedisClient();
-  if (!redis) return null;
-  return redis.get(rankedAiLobbyKey(lobbyId));
-}
-
-async function resolveRankedAiUserIdForDraft(
-  lobbyId: string,
-  members: Array<{ user_id: string }>
-): Promise<string | null> {
-  const aiUserIdFromRedis = await getRankedAiUserIdForLobby(lobbyId);
-  if (aiUserIdFromRedis && members.some((member) => member.user_id === aiUserIdFromRedis)) {
-    return aiUserIdFromRedis;
-  }
-
-  const users = await Promise.all(
-    members.map(async (member) => ({
-      userId: member.user_id,
-      user: await usersRepo.getById(member.user_id),
-    }))
-  );
-  const aiMember = users.find((entry) => entry.user?.is_ai);
-  if (!aiMember) return null;
-
-  const redis = getRedisClient();
-  if (redis) {
-    await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: RANKED_AI_KEY_TTL_SEC });
-  }
-  return aiMember.userId;
-}
-
-function getFirstDraftActorId(
-  members: Array<{ user_id: string }>,
-  hostUserId: string,
-  aiUserId: string | null
-): string {
-  if (!aiUserId) return hostUserId;
-  return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
-}
-
-function getNextDraftActorId(
-  members: Array<{ user_id: string }>,
-  bans: Array<{ user_id: string }>,
-  firstActorUserId: string
-): string {
-  if (bans.length === 0) return firstActorUserId;
-  const lastActor = bans[bans.length - 1]?.user_id;
-  return members.find((member) => member.user_id !== lastActor)?.user_id ?? firstActorUserId;
-}
-
 async function tryAcquireDraftStartGuard(lobbyId: string): Promise<boolean> {
   const redis = getRedisClient();
   if (redis) {
@@ -176,150 +128,6 @@ async function releaseDraftStartGuard(lobbyId: string): Promise<void> {
     await redis.del(`${DRAFT_START_GUARD_PREFIX}${lobbyId}`);
   }
   draftStartingSet.delete(lobbyId);
-}
-
-async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  if (members.length === 0) return;
-  const nextHostId = members[0]?.user_id;
-  if (nextHostId && nextHostId !== previousHostId) {
-    await lobbiesRepo.setHostUser(lobbyId, nextHostId);
-  }
-}
-
-async function removeUserFromLobbySockets(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    if (socket.data.user.id !== userId) return;
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-  });
-}
-
-async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  await lobbiesRepo.removeMember(lobbyId, userId);
-
-  if (lobby && isRankedAiLobby(lobby)) {
-    const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-    if (aiUserId) {
-      await lobbiesRepo.removeMember(lobbyId, aiUserId);
-    }
-    const redis = getRedisClient();
-    if (redis) {
-      await redis.del(rankedAiLobbyKey(lobbyId));
-    }
-  }
-  await removeUserFromLobbySockets(io, lobbyId, userId);
-  logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');
-
-  const closed = await closeLobbyIfEmpty(io, lobbyId);
-  if (closed) {
-    return;
-  }
-
-  if (lobby && lobby.status === 'waiting' && lobby.host_user_id === userId) {
-    await transferHostIfNeeded(lobbyId, userId);
-  }
-
-  await syncFriendlyLobbyModeForMemberCount(lobbyId);
-
-  await emitLobbyState(io, lobbyId);
-}
-
-async function autoLeaveAllWaitingLobbies(
-  io: QuizballServer,
-  userId: string,
-  keepLobbyId?: string
-): Promise<void> {
-  const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
-  const waitingLobbies = openLobbies.filter(
-    (lobby) => lobby.status === 'waiting' && lobby.id !== keepLobbyId
-  );
-
-  for (const lobby of waitingLobbies) {
-    await autoLeaveLobby(io, lobby.id, userId);
-  }
-}
-
-async function acquireLobbyLockWithRetry(
-  lobbyId: string,
-  ttlMs = 3000,
-  waitMs = LOBBY_LOCK_WAIT_MS
-): Promise<Awaited<ReturnType<typeof acquireLock>>> {
-  const key = `lock:lobby:${lobbyId}`;
-  const deadline = Date.now() + Math.max(0, waitMs);
-
-  while (true) {
-    const lock = await acquireLock(key, ttlMs);
-    if (lock.acquired && lock.token) {
-      return lock;
-    }
-    if (Date.now() >= deadline) {
-      return { acquired: false };
-    }
-    const remainingMs = deadline - Date.now();
-    const sleepMs = Math.min(LOBBY_LOCK_RETRY_INTERVAL_MS, remainingMs);
-    if (sleepMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, sleepMs));
-    }
-  }
-}
-
-async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Promise<boolean> {
-  const memberCount = await lobbiesRepo.countMembers(lobbyId);
-  if (memberCount > 0) return false;
-  await lobbiesRepo.deleteLobby(lobbyId);
-  await warmupRealtimeService.cleanupLobby(lobbyId);
-  logger.info({ lobbyId }, 'Lobby deleted (no members)');
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
-    lobbyId,
-    mode: 'friendly',
-    status: 'closed',
-    inviteCode: null,
-    displayName: 'Lobby closed',
-    isPublic: false,
-    hostUserId: '',
-    settings: {
-      gameMode: 'friendly_possession',
-      friendlyRandom: true,
-      friendlyCategoryAId: null,
-      friendlyCategoryBId: null,
-    },
-    members: [],
-  });
-  return true;
-}
-
-async function detachAllSocketsFromLobby(io: QuizballServer, lobbyId: string): Promise<void> {
-  const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-  sockets.forEach((socket) => {
-    socket.leave(`lobby:${lobbyId}`);
-    socket.data.lobbyId = undefined;
-  });
-}
-
-async function emitClosedLobbyStateForMode(
-  io: QuizballServer,
-  lobbyId: string,
-  mode: 'friendly' | 'ranked'
-): Promise<void> {
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', {
-    lobbyId,
-    mode,
-    status: 'closed',
-    inviteCode: null,
-    displayName: 'Lobby closed',
-    isPublic: false,
-    hostUserId: '',
-    settings: {
-      gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
-      friendlyRandom: true,
-      friendlyCategoryAId: null,
-      friendlyCategoryBId: null,
-    },
-    members: [],
-  });
 }
 
 async function abortRankedDraftStartForTickets(

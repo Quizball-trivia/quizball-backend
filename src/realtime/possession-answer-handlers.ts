@@ -1,5 +1,6 @@
 import { logger } from '../core/logger.js';
-import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import {
   answerCount,
   buildAnswerPayload,
@@ -190,7 +191,7 @@ export async function handlePossessionAnswer(
   const shouldWaitForOpponent = committed.expectedCount > 1 && committed.answerCount < committed.expectedCount;
 
   fireAndForget('insertMatchAnswer(handlePossessionAnswer)', async () => {
-    await matchesRepo.insertMatchAnswerIfMissing({
+    await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
       userId: socket.data.user.id,
@@ -204,7 +205,7 @@ export async function handlePossessionAnswer(
     });
   });
   fireAndForget('updatePlayerTotals(handlePossessionAnswer)', async () => {
-    await matchesRepo.updatePlayerTotals(
+    await matchPlayersRepo.updatePlayerTotals(
       matchId,
       socket.data.user.id,
       committed.pointsEarned,
@@ -448,7 +449,7 @@ export async function handlePossessionPutInOrderAnswer(
   });
 
   fireAndForget('insertMatchAnswer(handlePossessionPutInOrderAnswer)', async () => {
-    await matchesRepo.insertMatchAnswerIfMissing({
+    await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
       userId: socket.data.user.id,
@@ -654,9 +655,9 @@ export async function handlePossessionCluesAnswer(
   // Mirror put-in-order: persist the answer row so it survives cache
   // eviction, but leave totals to the resolver (resolver is the sole
   // updater for non-MCQ to avoid double-counting against the additive
-  // matchesRepo.updatePlayerTotals).
+  // matchPlayersRepo.updatePlayerTotals).
   fireAndForget('insertMatchAnswer(handlePossessionCluesAnswer)', async () => {
-    await matchesRepo.insertMatchAnswerIfMissing({
+    await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
       userId: socket.data.user.id,

@@ -25,9 +25,19 @@ let redis: FakeRedis;
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
   },
 }));
 

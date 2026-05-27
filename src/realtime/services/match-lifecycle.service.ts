@@ -2,6 +2,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { statsService } from '../../modules/stats/stats.service.js';
@@ -54,7 +55,7 @@ async function emitRejoinAvailable(
   remainingReconnects: number
 ): Promise<void> {
   const opponent = await getOpponentInfo(match.id, userId);
-  const players = await matchesRepo.listMatchPlayers(match.id);
+  const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
@@ -82,7 +83,7 @@ export async function beginMatchForLobby(
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
   type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
   const match = await matchesRepo.getMatch(matchId);
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   if (!match || players.length === 0) {
     logger.warn(
       { lobbyId, matchId, hasMatch: Boolean(match), playerCount: players.length },

@@ -1,6 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
-import { matchesRepo } from '../../modules/matches/matches.repo.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
@@ -41,7 +41,7 @@ export async function getOpponentInfo(matchId: string, userId: string): Promise<
   country?: string;
   countryCode?: string;
 }> {
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
   if (!opponent) {
     return {
@@ -109,7 +109,7 @@ export async function getParticipantSnapshot(matchId: string): Promise<{
     };
   }
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   return {
     participants: participantSnapshotFromRows(players),
     cache: null,

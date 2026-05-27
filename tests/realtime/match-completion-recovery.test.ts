@@ -59,8 +59,19 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+    listAnswersForMatch: vi.fn().mockResolvedValue([]),
   },
 }));
 

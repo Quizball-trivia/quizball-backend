@@ -1,6 +1,8 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { achievementsService } from '../../modules/achievements/index.js';
+import { matchAnswersRepo } from '../../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
@@ -55,7 +57,7 @@ export async function buildFinalQuestionResults(
 
   if (safeTotal === 0) return results;
 
-  const answers = await matchesRepo.listAnswersForMatch(matchId);
+  const answers = await matchAnswersRepo.listAnswersForMatch(matchId);
   for (const answer of answers) {
     const playerResults = results[answer.user_id];
     if (!playerResults) continue;
@@ -98,7 +100,7 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'completed') return null;
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const payloadPlayers: Record<string, {
     totalPoints: number;
     correctAnswers: number;
@@ -221,7 +223,7 @@ export async function emitFinalResultsToMatchParticipants(
   matchId: string,
   payload: NonNullable<Awaited<ReturnType<typeof buildFinalResultsPayload>>>
 ): Promise<void> {
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const rooms = [
     `match:${matchId}`,
     ...players.map((player) => `user:${player.user_id}`),

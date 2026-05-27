@@ -118,21 +118,53 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
-    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
-    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
-    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
-    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
-    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
-    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
+    // Transitional facade stubs: services-B (match-disconnect, match-forfeit)
+    // and match-cache.ts still call these via matchesRepo.* until later
+    // Tier 2 #7 commits migrate them. Same vi.fn forwards from both the
+    // facade entry here and the entity-repo entry below so either call site
+    // hits the same mock implementation.
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
+    setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
+    updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
+    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
     setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
+    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
+  matchEventsRepo: {
+    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
   },
 }));
 

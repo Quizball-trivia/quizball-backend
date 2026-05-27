@@ -43,9 +43,14 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
     getActiveMatchForLobby: (...args: unknown[]) => getActiveMatchForLobbyMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
   },
 }));
 

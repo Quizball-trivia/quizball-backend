@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { getRedisClient } from '../redis.js';
 import {
@@ -122,7 +123,7 @@ async function createOrJoinFriendlyRematchLobby(
     return null;
   }
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   if (!players.some((player) => player.user_id === userId)) {
     return null;
   }
@@ -202,7 +203,7 @@ export async function handlePlayAgain(
         return;
       }
 
-      const players = await matchesRepo.listMatchPlayers(payload.matchId);
+      const players = await matchPlayersRepo.listMatchPlayers(payload.matchId);
       if (!players.some((player) => player.user_id === userId)) {
         socket.emit('error', {
           code: 'NOT_IN_MATCH',

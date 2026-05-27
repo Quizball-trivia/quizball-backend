@@ -1,6 +1,7 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import { ExternalServiceError } from '../core/errors.js';
 import type { Json } from '../db/types.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
@@ -579,7 +580,7 @@ export async function countdownAddFound(
 ): Promise<CountdownAddResult> {
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) {
-    throw new Error('Redis unavailable for countdown state');
+    throw new ExternalServiceError('Redis unavailable for countdown state');
   }
   const key = countdownPlayerKey(matchId, userId);
   const [wasAdded, count] = await redis.eval(COUNTDOWN_ADD_FOUND_SCRIPT, {

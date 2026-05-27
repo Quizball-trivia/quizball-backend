@@ -121,13 +121,6 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
-    // Transitional facade stubs: match-cache.ts still calls these via
-    // matchesRepo.* until the misc commit migrates it. The same vi.fn
-    // forwards from both the facade entry here and the entity-repo entry
-    // below so either call site hits the same mock implementation.
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
-    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
   },
 }));
 

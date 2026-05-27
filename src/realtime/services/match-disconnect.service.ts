@@ -1,6 +1,8 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
+import { matchQuestionsRepo } from '../../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { objectivesService } from '../../modules/objectives/index.js';
@@ -95,7 +97,7 @@ async function emitRejoinAvailable(
   remainingReconnects: number
 ): Promise<void> {
   const opponent = await getOpponentInfo(match.id, userId);
-  const players = await matchesRepo.listMatchPlayers(match.id);
+  const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
@@ -287,7 +289,7 @@ export async function resumePausedMatch(
   const pauseStartedAtMs = Number(pauseStartedRaw);
   await redis.del(matchDisconnectKey(matchId, userId));
 
-  const roster = await matchesRepo.listMatchPlayers(matchId);
+  const roster = await matchPlayersRepo.listMatchPlayers(matchId);
   const stillDisconnected: string[] = [];
   for (const player of roster) {
     const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
@@ -351,7 +353,7 @@ export async function resumePausedMatch(
           return;
         }
 
-        const roster = await matchesRepo.listMatchPlayers(matchId);
+        const roster = await matchPlayersRepo.listMatchPlayers(matchId);
         const stillDisconnected = await Promise.all(
           roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
         );
@@ -367,7 +369,7 @@ export async function resumePausedMatch(
           nextQIndex: activeMatch.current_q_index,
         });
 
-        const activeQuestion = await matchesRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
+        const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
         if (activeQuestion) {
           const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
             ? pauseStartedAtMs
@@ -447,7 +449,7 @@ export async function pauseMatchForDisconnectedPlayer(
     cancelPossessionHalftimeTimer(matchId);
   }
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const remainingPlayers = players.filter((player) => player.user_id !== userId);
   remainingPlayers.forEach((player) => {
     io.to(`user:${player.user_id}`).emit('match:opponent_disconnected', {
@@ -527,7 +529,7 @@ export async function pauseMatchForDisconnectedPlayer(
       const activeMatch = await matchesRepo.getMatch(matchId);
       if (!activeMatch || activeMatch.status !== 'active') return;
 
-      const roster = await matchesRepo.listMatchPlayers(matchId);
+      const roster = await matchPlayersRepo.listMatchPlayers(matchId);
       const disconnected: string[] = [];
       for (const player of roster) {
         const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
@@ -582,7 +584,7 @@ export async function pauseMatchForDisconnectedPlayer(
       const winnerId =
         variant === 'friendly_party_quiz'
           ? buildStandings(
-              (await matchesRepo.listMatchPlayers(matchId)).filter((player) => !disconnected.includes(player.user_id))
+              (await matchPlayersRepo.listMatchPlayers(matchId)).filter((player) => !disconnected.includes(player.user_id))
             )[0]?.userId ?? null
           : roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
       const opponentPendingPayload = buildOpponentForfeitPendingPayload(matchId, 'opponent_reconnect_limit');
@@ -595,7 +597,7 @@ export async function pauseMatchForDisconnectedPlayer(
         const fullCorrectAnswers = activeMatch.total_questions;
 
         // Fetch current player stats to compute max values (business logic in service)
-        const players = await matchesRepo.listMatchPlayers(matchId);
+        const players = await matchPlayersRepo.listMatchPlayers(matchId);
         const winnerPlayer = players.find((p) => p.user_id === winnerId);
         const currentPoints = winnerPlayer?.total_points ?? 0;
         const currentCorrect = winnerPlayer?.correct_answers ?? 0;
@@ -604,7 +606,7 @@ export async function pauseMatchForDisconnectedPlayer(
         const finalPoints = Math.max(currentPoints, fullPoints);
         const finalCorrect = Math.max(currentCorrect, fullCorrectAnswers);
 
-        await matchesRepo.setPlayerForfeitWinTotals(
+        await matchPlayersRepo.setPlayerForfeitWinTotals(
           matchId,
           winnerId,
           finalPoints,
@@ -638,7 +640,7 @@ export async function pauseMatchForDisconnectedPlayer(
 
       const avgTimes = await matchesService.computeAvgTimes(matchId);
       for (const player of roster) {
-        await matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
+        await matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
       }
 
       const resultVersion = Date.now();

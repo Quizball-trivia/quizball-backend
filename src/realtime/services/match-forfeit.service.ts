@@ -1,5 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
@@ -133,7 +134,7 @@ export async function finalizeMatchAsForfeit(
     }
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
-    const roster = await matchesRepo.listMatchPlayers(params.matchId);
+    const roster = await matchPlayersRepo.listMatchPlayers(params.matchId);
     const winnerId =
       variant === 'friendly_party_quiz'
         ? buildStandings(
@@ -149,7 +150,7 @@ export async function finalizeMatchAsForfeit(
       );
       await Promise.all(
         params.cacheSnapshot.players.map((player) =>
-          matchesRepo.setPlayerFinalTotals(params.matchId, player.userId, {
+          matchPlayersRepo.setPlayerFinalTotals(params.matchId, player.userId, {
             totalPoints: player.totalPoints,
             correctAnswers: player.correctAnswers,
             goals: player.goals,
@@ -166,7 +167,7 @@ export async function finalizeMatchAsForfeit(
       const currentPoints = winnerPlayer?.total_points ?? 0;
       const currentCorrect = winnerPlayer?.correct_answers ?? 0;
 
-      await matchesRepo.setPlayerForfeitWinTotals(
+      await matchPlayersRepo.setPlayerForfeitWinTotals(
         params.matchId,
         winnerId,
         Math.max(currentPoints, fullPoints),
@@ -207,7 +208,7 @@ export async function finalizeMatchAsForfeit(
 
     const avgTimes = await matchesService.computeAvgTimes(params.matchId);
     for (const player of roster) {
-      await matchesRepo.updatePlayerAvgTime(
+      await matchPlayersRepo.updatePlayerAvgTime(
         params.matchId,
         player.user_id,
         avgTimes.get(player.user_id) ?? null

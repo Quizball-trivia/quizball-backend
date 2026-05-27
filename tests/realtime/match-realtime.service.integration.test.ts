@@ -121,16 +121,11 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
-    // Transitional facade stubs: services-B (match-disconnect, match-forfeit)
-    // and match-cache.ts still call these via matchesRepo.* until later
-    // Tier 2 #7 commits migrate them. Same vi.fn forwards from both the
-    // facade entry here and the entity-repo entry below so either call site
-    // hits the same mock implementation.
+    // Transitional facade stubs: match-cache.ts still calls these via
+    // matchesRepo.* until the misc commit migrates it. The same vi.fn
+    // forwards from both the facade entry here and the entity-repo entry
+    // below so either call site hits the same mock implementation.
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
-    setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
-    updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
-    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
     getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
   },

@@ -317,47 +317,10 @@ export const matchesRepo = {
    * Cascades to match_players, match_questions, match_answers via FK.
    * Also cleans up orphaned AI users that were created for dev matches.
    */
-  async cleanupOldDevMatches(keep: number): Promise<number> {
-    const deleted = await sql<{ id: string }[]>`
-      WITH matches_to_delete AS (
-        SELECT id
-        FROM matches
-        WHERE is_dev = true AND status IN ('completed', 'abandoned')
-        ORDER BY started_at DESC
-        OFFSET ${keep}
-      ),
-      orphaned_ai_users AS (
-        SELECT DISTINCT mp.user_id
-        FROM match_players mp
-        JOIN users u ON u.id = mp.user_id
-        WHERE mp.match_id IN (SELECT id FROM matches_to_delete)
-          AND u.is_ai = true
-          AND NOT EXISTS (
-            SELECT 1 FROM match_players mp2
-            WHERE mp2.user_id = mp.user_id
-              AND mp2.match_id NOT IN (SELECT id FROM matches_to_delete)
-          )
-      ),
-      del_answers AS (
-        DELETE FROM match_answers WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_questions AS (
-        DELETE FROM match_questions WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_players AS (
-        DELETE FROM match_players WHERE match_id IN (SELECT id FROM matches_to_delete)
-      ),
-      del_matches AS (
-        DELETE FROM matches WHERE id IN (SELECT id FROM matches_to_delete)
-        RETURNING id
-      ),
-      del_ai_users AS (
-        DELETE FROM users WHERE id IN (SELECT user_id FROM orphaned_ai_users)
-      )
-      SELECT id FROM del_matches
-    `;
-    return deleted.length;
-  },
+  // cleanupOldDevMatches moved to matchesService in Step 7 of the repo
+  // split. It's a lifecycle/admin operation that spans 5 tables (4 match
+  // tables + orphan AI users), so it belongs in the service layer rather
+  // than this table-pure repo.
 
   async abandonMatch(matchId: string): Promise<boolean> {
     const rows = await sql<{ id: string }[]>`

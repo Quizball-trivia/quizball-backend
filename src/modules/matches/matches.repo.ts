@@ -1,15 +1,7 @@
 import { sql, type TransactionSql } from '../../db/index.js';
-import { matchAnswersRepo } from './match-answers.repo.js';
-import { matchEventsRepo } from './match-events.repo.js';
-import { matchPlayersRepo } from './match-players.repo.js';
-import { matchQuestionsRepo } from './match-questions.repo.js';
 import type { Json } from '../../db/types.js';
 import { withSpan } from '../../core/tracing.js';
-import type {
-  MatchRow,
-  MatchGoalEventRow,
-  MatchQuestionPhaseKind,
-} from './matches.types.js';
+import type { MatchRow } from './matches.types.js';
 import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 export interface CreateMatchData {
@@ -23,6 +15,20 @@ export interface CreateMatchData {
   isDev?: boolean;
 }
 
+/**
+ * Pure-data repo for the `matches` table.
+ *
+ * Sibling repos own the other match-* entities:
+ *   match_players       → matchPlayersRepo
+ *   match_questions     → matchQuestionsRepo
+ *   match_answers       → matchAnswersRepo
+ *   match_goal_events   → matchEventsRepo
+ *
+ * Cross-entity orchestration (party-quiz answer recording, goal event
+ * + player totals atomicity, dev-match cleanup, match completion +
+ * user-mode stats) lives in matchesService — that owns the sql.begin
+ * transactions and drives the tx-aware primitives on each repo.
+ */
 export const matchesRepo = {
   async createMatch(data: CreateMatchData): Promise<MatchRow> {
     const [row] = await sql<MatchRow[]>`
@@ -41,79 +47,6 @@ export const matchesRepo = {
     `;
     return row;
   },
-
-  // ─── match_players facade delegates ───
-  // Real implementations live in matchPlayersRepo. Kept here so existing
-  // matchesRepo.* call sites compile unchanged; removed in a follow-up PR.
-  insertMatchPlayers: (matchId: string, players: Array<{ userId: string; seat: number }>) =>
-    matchPlayersRepo.insertMatchPlayers(matchId, players),
-
-  listMatchPlayers: (matchId: string, tx?: TransactionSql) =>
-    matchPlayersRepo.listMatchPlayers(matchId, tx),
-
-  getPlayerTotalPoints: (matchId: string, userId: string) =>
-    matchPlayersRepo.getPlayerTotalPoints(matchId, userId),
-
-  // ─── match_questions facade delegates ───
-  // Real implementations live in matchQuestionsRepo. Kept here so existing
-  // matchesRepo.* call sites compile unchanged.
-  insertMatchQuestions: (
-    matchId: string,
-    questions: Parameters<typeof matchQuestionsRepo.insertMatchQuestions>[1],
-  ) => matchQuestionsRepo.insertMatchQuestions(matchId, questions),
-
-  insertMatchQuestionIfMissing: (question: Parameters<typeof matchQuestionsRepo.insertMatchQuestionIfMissing>[0]) =>
-    matchQuestionsRepo.insertMatchQuestionIfMissing(question),
-
-  getRandomQuestionsForCategory: (categoryId: string, limit: number) =>
-    matchQuestionsRepo.getRandomQuestionsForCategory(categoryId, limit),
-
-  getRandomQuestionCandidatesForMatch: (params: Parameters<typeof matchQuestionsRepo.getRandomQuestionCandidatesForMatch>[0]) =>
-    matchQuestionsRepo.getRandomQuestionCandidatesForMatch(params),
-
-  getRandomQuestionForMatch: (params: Parameters<typeof matchQuestionsRepo.getRandomQuestionForMatch>[0]) =>
-    matchQuestionsRepo.getRandomQuestionForMatch(params),
-
-  getMatchQuestion: (matchId: string, qIndex: number) =>
-    matchQuestionsRepo.getMatchQuestion(matchId, qIndex),
-
-  getMatchQuestionTiming: (matchId: string, qIndex: number) =>
-    matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex),
-
-  setQuestionTiming: (matchId: string, qIndex: number, shownAt: Date, deadlineAt: Date) =>
-    matchQuestionsRepo.setQuestionTiming(matchId, qIndex, shownAt, deadlineAt),
-
-  // ─── match_answers facade delegates ───
-  // Real implementations live in matchAnswersRepo. Kept here so existing
-  // matchesRepo.* call sites compile unchanged.
-  insertMatchAnswer: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswer>[0]) =>
-    matchAnswersRepo.insertMatchAnswer(data),
-
-  insertMatchAnswerIfMissing: (data: Parameters<typeof matchAnswersRepo.insertMatchAnswerIfMissing>[0]) =>
-    matchAnswersRepo.insertMatchAnswerIfMissing(data),
-
-  listAnswersForQuestion: (matchId: string, qIndex: number) =>
-    matchAnswersRepo.listAnswersForQuestion(matchId, qIndex),
-
-  listAnswersForMatch: (matchId: string) =>
-    matchAnswersRepo.listAnswersForMatch(matchId),
-
-  getAnswerForUser: (matchId: string, qIndex: number, userId: string) =>
-    matchAnswersRepo.getAnswerForUser(matchId, qIndex, userId),
-
-  updatePlayerTotals: (matchId: string, userId: string, points: number, isCorrect: boolean) =>
-    matchPlayersRepo.updatePlayerTotals(matchId, userId, points, isCorrect),
-
-  setPlayerFinalTotals: (
-    matchId: string,
-    userId: string,
-    values: {
-      totalPoints: number;
-      correctAnswers: number;
-      goals: number;
-      penaltyGoals: number;
-    },
-  ) => matchPlayersRepo.setPlayerFinalTotals(matchId, userId, values),
 
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
@@ -160,34 +93,6 @@ export const matchesRepo = {
     `;
   },
 
-  updatePlayerGoalTotals: (
-    matchId: string,
-    userId: string,
-    changes: { goals?: number; penaltyGoals?: number },
-  ) => matchPlayersRepo.updatePlayerGoalTotals(matchId, userId, changes),
-
-  // Facade delegate — real implementation lives in matchEventsRepo.
-  // Kept here so existing call sites (`matchesRepo.insertGoalEventIfMissing(…)`)
-  // keep working unchanged through the split. Will be removed in a follow-up
-  // PR once all callers have migrated to the entity repo.
-  insertGoalEventIfMissing: (data: {
-    matchId: string;
-    userId: string;
-    seat: 1 | 2;
-    half: 1 | 2;
-    phaseKind: MatchQuestionPhaseKind;
-    qIndex: number | null;
-    isPenalty: boolean;
-  }): Promise<MatchGoalEventRow | null> => matchEventsRepo.insertGoalEventIfMissing(data),
-
-  // incrementGoalsAndInsertEventIfMissing moved to matchesService in
-  // Step 3 of the repo split. Cross-entity transactions (writes to both
-  // match_goal_events and match_players) are owned by the service layer
-  // so the repos can stay table-pure.
-
-  getPlayerBySeat: (matchId: string, seat: 1 | 2) =>
-    matchPlayersRepo.getPlayerBySeat(matchId, seat),
-
   /**
    * Atomically flip a match to "completed" and return the metadata the
    * service needs to make downstream stat decisions. Returns `null` if
@@ -201,9 +106,9 @@ export const matchesRepo = {
     matchId: string,
     winnerId: string | null,
   ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'> | null> {
-    // Same tx.unsafe pattern used by listMatchPlayers above and other
-    // tx-aware repos in this codebase (TransactionSql doesn't expose the
-    // tagged-template call signature cleanly to TS).
+    // tx.unsafe pattern matches other tx-aware repos in this codebase
+    // (TransactionSql doesn't expose the tagged-template call signature
+    // cleanly to TS).
     const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
       `
       UPDATE matches
@@ -270,19 +175,6 @@ export const matchesRepo = {
     );
   },
 
-  updatePlayerAvgTime: (matchId: string, userId: string, avgTimeMs: number | null) =>
-    matchPlayersRepo.updatePlayerAvgTime(matchId, userId, avgTimeMs),
-
-  setPlayerForfeitWinTotals: (
-    matchId: string,
-    userId: string,
-    totalPoints: number,
-    correctAnswers: number,
-  ) => matchPlayersRepo.setPlayerForfeitWinTotals(matchId, userId, totalPoints, correctAnswers),
-
-  getAverageTimes: (matchId: string) =>
-    matchAnswersRepo.getAverageTimes(matchId),
-
   async getMatch(matchId: string): Promise<MatchRow | null> {
     const [row] = await sql<MatchRow[]>`
       SELECT * FROM matches WHERE id = ${matchId}
@@ -311,16 +203,6 @@ export const matchesRepo = {
     `;
     return row ?? null;
   },
-
-  /**
-   * Delete old dev matches, keeping only the most recent `keep` completed ones.
-   * Cascades to match_players, match_questions, match_answers via FK.
-   * Also cleans up orphaned AI users that were created for dev matches.
-   */
-  // cleanupOldDevMatches moved to matchesService in Step 7 of the repo
-  // split. It's a lifecycle/admin operation that spans 5 tables (4 match
-  // tables + orphan AI users), so it belongs in the service layer rather
-  // than this table-pure repo.
 
   async abandonMatch(matchId: string): Promise<boolean> {
     const rows = await sql<{ id: string }[]>`

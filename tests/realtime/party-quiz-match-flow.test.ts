@@ -53,15 +53,28 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
     updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
-    recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
-    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
-    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
     setQuestionTiming: (...args: unknown[]) => setQuestionTimingMock(...args),
     getRandomQuestionForMatch: vi.fn(),
     insertMatchQuestionIfMissing: vi.fn(),
@@ -76,6 +89,10 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       ...actual.matchesService,
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
+      completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+      // recordPartyQuizAnswerIfMissing moved from matchesRepo to
+      // matchesService in Step 5 of the matches.repo split.
+      recordPartyQuizAnswerIfMissing: (...args: unknown[]) => recordPartyQuizAnswerIfMissingMock(...args),
     },
   };
 });

@@ -5,6 +5,7 @@ import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import type { LobbyWithJoinedAt } from '../../modules/lobbies/lobbies.types.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
@@ -145,7 +146,7 @@ async function cleanupStaleOrphanActiveMatch(
   }
 
   if (activeMatch.mode === 'ranked') {
-    const players = await matchesRepo.listMatchPlayers(activeMatch.id);
+    const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
     const finalized = await finalizeMatchAsForfeit({
       matchId: activeMatch.id,
       forfeitingUserId: userId,

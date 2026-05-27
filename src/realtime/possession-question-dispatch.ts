@@ -1,6 +1,7 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
@@ -198,7 +199,7 @@ async function maybePickQuestionForState(
     correctIndex: number;
     questionKind: MatchQuestionKind;
   } | null> => {
-    const rows = await matchesRepo.getRandomQuestionCandidatesForMatch({
+    const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
@@ -357,7 +358,7 @@ export async function sendPossessionMatchQuestion(
       'quizball.category_id': picked.categoryId,
     });
 
-    const inserted = await matchesRepo.insertMatchQuestionIfMissing({
+    const inserted = await matchQuestionsRepo.insertMatchQuestionIfMissing({
       matchId,
       qIndex,
       questionId: picked.questionId,
@@ -423,7 +424,7 @@ export async function sendPossessionMatchQuestion(
       await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
     });
     try {
-      await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+      await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
     } catch (error) {
       logger.error({ error, matchId, qIndex }, 'setQuestionTiming failed before emitting match:question');
     }
@@ -500,7 +501,7 @@ export async function resumePossessionMatchQuestion(
 
   await setMatchCache(cache);
   fireAndForget('setQuestionTiming(resumeQuestion)', async () => {
-    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
   });
 
   await emitMatchState(io, matchId, cache.statePayload);

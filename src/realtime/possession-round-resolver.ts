@@ -1,5 +1,8 @@
 import { logger } from '../core/logger.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { matchesService } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import {
   answerCount,
@@ -101,7 +104,7 @@ export async function resolvePossessionRound(
         };
         cache.answers[userId] = backfill;
         fireAndForget('insertMatchAnswerIfMissing(timeout)', async () => {
-          await matchesRepo.insertMatchAnswerIfMissing({
+          await matchAnswersRepo.insertMatchAnswerIfMissing({
             matchId,
             qIndex,
             userId,
@@ -174,7 +177,7 @@ export async function resolvePossessionRound(
         }
 
         fireAndForget('insertMatchAnswerIfMissing(resolve:special)', async () => {
-          await matchesRepo.insertMatchAnswerIfMissing({
+          await matchAnswersRepo.insertMatchAnswerIfMissing({
             matchId,
             qIndex,
             userId: player.userId,
@@ -189,7 +192,7 @@ export async function resolvePossessionRound(
           });
         });
         fireAndForget('updatePlayerTotals(resolve:special)', async () => {
-          await matchesRepo.updatePlayerTotals(
+          await matchPlayersRepo.updatePlayerTotals(
             matchId,
             player.userId,
             answer.pointsEarned,
@@ -254,7 +257,7 @@ export async function resolvePossessionRound(
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
           if (goalScoredByUserId) {
-            await matchesRepo.incrementGoalsAndInsertEventIfMissing({
+            await matchesService.incrementGoalsAndInsertEventIfMissing({
               matchId,
               userId: goalScoredByUserId,
               seat: goalScoredBySeat,

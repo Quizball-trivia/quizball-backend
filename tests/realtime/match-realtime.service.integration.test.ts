@@ -118,22 +118,41 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
-    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
-    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
-    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
-    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
-    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
-    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
-    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
-    completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
     setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
+    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
+  matchEventsRepo: {
+    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
   },
 }));
 
@@ -146,6 +165,10 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
       abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
+      // completeMatch moved from matches.repo to matches.service in the
+      // layering-violation cleanup; tests still call it `completeMatchMock`
+      // for continuity and assert call-site behavior, not implementation.
+      completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     },
   };
 });

@@ -3,7 +3,6 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
-import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { generateRankedAiProfile, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -172,7 +171,7 @@ export const devRealtimeService = {
 
         // 0. Clean up old dev matches (keep most recent N)
         try {
-          const cleaned = await matchesRepo.cleanupOldDevMatches(DEV_MATCHES_TO_KEEP);
+          const cleaned = await matchesService.cleanupOldDevMatches(DEV_MATCHES_TO_KEEP);
           if (cleaned > 0) {
             logger.info({ cleaned }, 'Cleaned up old dev matches');
           }

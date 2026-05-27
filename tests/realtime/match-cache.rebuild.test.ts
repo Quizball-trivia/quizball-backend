@@ -45,8 +45,23 @@ vi.mock('../../src/realtime/locks.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
     getMatchQuestionTiming: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
     listAnswersForQuestion: vi.fn(),
   },
 }));

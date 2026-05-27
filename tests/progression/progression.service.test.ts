@@ -11,6 +11,11 @@ const grantXpInTxMock = vi.fn();
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
   },
 }));

@@ -1,5 +1,7 @@
 import { logger } from '../core/logger.js';
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { usersRepo } from '../modules/users/users.repo.js';
 import { acquireLock, releaseLock } from './locks.js';
@@ -84,7 +86,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       }
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     for (const player of players) {
       const user = await usersRepo.getById(player.user_id);
       if (user?.is_ai) {
@@ -383,7 +385,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
       if (committed.questionKind === 'multipleChoice') {
         fireAndForget('insertMatchAnswer(ai)', async () => {
-          await matchesRepo.insertMatchAnswerIfMissing({
+          await matchAnswersRepo.insertMatchAnswerIfMissing({
             matchId,
             qIndex,
             userId: aiUserId,
@@ -398,7 +400,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         });
 
         fireAndForget('updatePlayerTotals(ai)', async () => {
-          await matchesRepo.updatePlayerTotals(
+          await matchPlayersRepo.updatePlayerTotals(
             matchId,
             aiUserId,
             committed.pointsEarned,

@@ -3,6 +3,9 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { achievementsService } from '../modules/achievements/index.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
+import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { objectivesService } from '../modules/objectives/index.js';
 import {
@@ -111,10 +114,10 @@ async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStateP
   if (!match) return null;
 
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const activeQIndex = state.currentQuestion?.qIndex;
   const answers = typeof activeQIndex === 'number'
-    ? await matchesRepo.listAnswersForQuestion(matchId, activeQIndex)
+    ? await matchAnswersRepo.listAnswersForQuestion(matchId, activeQIndex)
     : [];
 
   return buildPartyStatePayloadFromRows(match, state, players, answers);
@@ -146,9 +149,9 @@ export async function emitPartyQuizStateToSocket(
 
   const [question, timing, existingAnswer, participants] = await Promise.all([
     matchesService.buildMatchQuestionPayload(matchId, qIndex).then((raw) => normalizeMatchQuestionPayload(raw)),
-    matchesRepo.getMatchQuestionTiming(matchId, qIndex),
-    matchesRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id),
-    matchesRepo.listMatchPlayers(matchId),
+    matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex),
+    matchAnswersRepo.getAnswerForUser(matchId, qIndex, socket.data.user.id),
+    matchPlayersRepo.listMatchPlayers(matchId),
   ]);
   if (!question) return;
   const correctIndex = getValidatedPartyQuizCorrectIndex(question);
@@ -170,7 +173,7 @@ export async function emitPartyQuizStateToSocket(
   if (!existingAnswer || correctIndex === null) return;
 
   const player = participants.find((candidate) => candidate.user_id === socket.data.user.id);
-  const answeredUsers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
+  const answeredUsers = await matchAnswersRepo.listAnswersForQuestion(matchId, qIndex);
   const answeredUserIds = new Set(answeredUsers.map((answer) => answer.user_id));
   socket.emit(
     'match:answer_ack',
@@ -280,7 +283,7 @@ async function buildFinalResultsPayload(matchId: string, resultVersion: number):
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'completed') return null;
 
-  const players = await matchesRepo.listMatchPlayers(matchId);
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const standings = buildStandings(players);
   const payloadPlayers: MatchFinalResultsPayload['players'] = {};
   for (const player of players) {
@@ -334,14 +337,14 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       if (!activeMatch || activeMatch.status !== 'active') return;
 
       const avgTimes = await matchesService.computeAvgTimes(matchId);
-      const playersBefore = await matchesRepo.listMatchPlayers(matchId);
+      const playersBefore = await matchPlayersRepo.listMatchPlayers(matchId);
       await Promise.all(
         playersBefore.map((player) =>
-          matchesRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
+          matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
         )
       );
 
-      const players = await matchesRepo.listMatchPlayers(matchId);
+      const players = await matchPlayersRepo.listMatchPlayers(matchId);
       span.setAttribute('quizball.player_count', players.length);
       const standings = buildStandings(players);
       const state = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
@@ -351,7 +354,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
       bumpStateVersion(state);
 
       await matchesRepo.setMatchStatePayload(matchId, state, activeMatch.total_questions);
-      await matchesRepo.completeMatch(matchId, standings[0]?.userId ?? null);
+      await matchesService.completeMatch(matchId, standings[0]?.userId ?? null);
       await deleteMatchCache(matchId);
 
       const resultVersion = Date.now();
@@ -451,7 +454,7 @@ export async function sendPartyQuizQuestion(
     let payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
     let questionSource: 'existing' | 'picked' = 'existing';
     if (!payload) {
-      const picked = await matchesRepo.getRandomQuestionForMatch({
+      const picked = await matchQuestionsRepo.getRandomQuestionForMatch({
         matchId,
         categoryIds: [match.category_a_id],
         difficulties: ['easy', 'medium', 'hard'],
@@ -473,7 +476,7 @@ export async function sendPartyQuizQuestion(
         return null;
       }
 
-      await matchesRepo.insertMatchQuestionIfMissing({
+      await matchQuestionsRepo.insertMatchQuestionIfMissing({
         matchId,
         qIndex,
         questionId: picked.id,
@@ -506,7 +509,7 @@ export async function sendPartyQuizQuestion(
     bumpStateVersion(state);
 
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
     await emitPartyQuizState(io, matchId);
 
     io.to(`match:${matchId}`).emit('match:question', {
@@ -565,7 +568,7 @@ export async function resumePartyQuizQuestion(
     return false;
   }
 
-  const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
+  const timing = await matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex);
   const nowMs = Date.now();
   const playableAt = new Date(nowMs + PARTY_QUESTION_REVEAL_MS);
   const deadlineAt = computeResumedDeadlineAt(
@@ -575,7 +578,7 @@ export async function resumePartyQuizQuestion(
     playableAt.getTime()
   );
 
-  await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+  await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
   await emitPartyQuizState(io, matchId);
 
   io.to(`match:${matchId}`).emit('match:question', {
@@ -610,7 +613,7 @@ export async function ensurePartyQuizActiveTimer(
   const qIndex = state.currentQuestion?.qIndex;
   if (typeof qIndex !== 'number') return false;
 
-  const timing = await matchesRepo.getMatchQuestionTiming(matchId, qIndex);
+  const timing = await matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex);
   const deadlineAt = timing?.deadline_at ? new Date(timing.deadline_at) : null;
   if (!deadlineAt || Number.isNaN(deadlineAt.getTime())) {
     await resolvePartyQuizRound(io, matchId, qIndex, true);
@@ -663,8 +666,8 @@ export async function resolvePartyQuizRound(
         return;
       }
 
-      const players = await matchesRepo.listMatchPlayers(matchId);
-      const answers = await matchesRepo.listAnswersForQuestion(matchId, qIndex);
+      const players = await matchPlayersRepo.listMatchPlayers(matchId);
+      const answers = await matchAnswersRepo.listAnswersForQuestion(matchId, qIndex);
       span.setAttribute('quizball.player_count', players.length);
       span.setAttribute('quizball.answer_count', answers.length);
       const answerByUserId = new Map(answers.map((answer) => [answer.user_id, answer]));
@@ -776,7 +779,7 @@ export async function handlePartyQuizAnswer(
     }
 
     const userId = socket.data.user.id;
-    const participants = await matchesRepo.listMatchPlayers(payload.matchId);
+    const participants = await matchPlayersRepo.listMatchPlayers(payload.matchId);
     const isParticipant = participants.some((player) => player.user_id === userId);
     if (!isParticipant) {
       socket.emit('error', {
@@ -813,7 +816,7 @@ export async function handlePartyQuizAnswer(
     const isCorrect = payload.selectedIndex === correctIndex;
     span.setAttribute('quizball.answer_correct', isCorrect);
     const pointsEarned = calculatePoints(isCorrect, payload.timeMs, PARTY_QUESTION_TIME_MS);
-    const recorded = await matchesRepo.recordPartyQuizAnswerIfMissing({
+    const recorded = await matchesService.recordPartyQuizAnswerIfMissing({
       matchId: payload.matchId,
       qIndex: payload.qIndex,
       userId,
@@ -855,8 +858,8 @@ export async function handlePartyQuizAnswer(
     );
 
     const [livePlayers, answers] = await Promise.all([
-      matchesRepo.listMatchPlayers(payload.matchId),
-      matchesRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
+      matchPlayersRepo.listMatchPlayers(payload.matchId),
+      matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
     ]);
     io.to(`match:${payload.matchId}`).emit(
       'match:party_state',

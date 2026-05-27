@@ -18,7 +18,7 @@ const DEV_DOMAINS = [
   '127.0.0.1:8000',
 ];
 const PROD_DOMAINS = ['quizball.io', 'www.quizball.io', 'quizball.app', 'www.quizball.app'];
-const isProd = config.NODE_ENV === 'prod' || config.NODE_ENV === 'staging';
+const isProd = config.NODE_ENV === 'prod';
 
 // Matches valid hostname/IPv4 with optional port, or bracketed IPv6.
 const VALID_HOST_RE = /^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::\d{1,5})?$/;

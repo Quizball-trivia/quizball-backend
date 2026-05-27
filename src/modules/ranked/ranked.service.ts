@@ -1,5 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../matches/matches.repo.js';
+import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { rankedRepo } from './ranked.repo.js';
 import type {
@@ -209,7 +210,7 @@ export const rankedService = {
       return null;
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     if (players.length < 2) {
       logger.debug({ matchId, playerCount: players.length }, 'Ranked settlement skipped: not enough players');
       return null;

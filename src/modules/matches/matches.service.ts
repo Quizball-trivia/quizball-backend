@@ -2,6 +2,7 @@ import { matchesRepo } from './matches.repo.js';
 import { matchAnswersRepo } from './match-answers.repo.js';
 import { matchEventsRepo } from './match-events.repo.js';
 import { matchPlayersRepo } from './match-players.repo.js';
+import { matchQuestionsRepo } from './match-questions.repo.js';
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
 import type {
@@ -572,7 +573,7 @@ export const matchesService = {
       isDev: params.isDev,
     });
 
-    await matchesRepo.insertMatchPlayers(
+    await matchPlayersRepo.insertMatchPlayers(
       match.id,
       playerIds.map((userId, index) => ({
         userId,
@@ -588,13 +589,13 @@ export const matchesService = {
   },
 
   async buildGameQuestion(matchId: string, qIndex: number): Promise<GameQuestionDTO | null> {
-    const row = await matchesRepo.getMatchQuestion(matchId, qIndex);
+    const row = await matchQuestionsRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
     return buildQuestionAssets(row)?.question ?? null;
   },
 
   async buildMatchQuestionPayload(matchId: string, qIndex: number): Promise<BuiltMatchQuestionPayload | null> {
-    const row: MatchQuestionWithCategory | null = await matchesRepo.getMatchQuestion(matchId, qIndex);
+    const row: MatchQuestionWithCategory | null = await matchQuestionsRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
 
     logger.debug({
@@ -621,7 +622,7 @@ export const matchesService = {
   },
 
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
-    const rows = await matchesRepo.getAverageTimes(matchId);
+    const rows = await matchAnswersRepo.getAverageTimes(matchId);
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));
   },
 
@@ -660,7 +661,7 @@ export const matchesService = {
         return;
       }
 
-      const players = await matchesRepo.listMatchPlayers(matchId, tx);
+      const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
       if (players.length === 0) return;
 
       const statRows = players.map((player) => {

@@ -61,9 +61,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     createMatch: (...args: unknown[]) => createMatchMock(...args),
-    insertMatchPlayers: (...args: unknown[]) => insertMatchPlayersMock(...args),
     markMatchCompleted: (...args: unknown[]) => markMatchCompletedMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     recordUserModeStats: (...args: unknown[]) => recordUserModeStatsMock(...args),
   },
 }));
@@ -77,6 +75,8 @@ vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
 
 vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   matchPlayersRepo: {
+    insertMatchPlayers: (...args: unknown[]) => insertMatchPlayersMock(...args),
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     updatePlayerGoalTotalsInTx: (...args: unknown[]) =>
       updatePlayerGoalTotalsInTxMock(...args),
     updatePlayerTotalsInTx: (...args: unknown[]) =>
@@ -570,9 +570,18 @@ describe('matches.service cleanupOldDevMatches', () => {
     }));
 
     const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const callsBefore = dbMock.mock.calls.length;
     const count = await matchesService.cleanupOldDevMatches(50);
 
-    expect(dbMock).toHaveBeenCalledTimes(1);
+    // The cleanup itself is exactly one tagged-template invocation. Other
+    // modules pulled in by the dynamic import (e.g. src/db/sql-fragments.ts)
+    // call sql\`...\` at module load — those happen before this assertion,
+    // so we measure the delta caused by cleanupOldDevMatches.
+    const callsDuringCleanup = dbMock.mock.calls.length - callsBefore;
+    expect(callsDuringCleanup).toBe(1);
+    const cleanupCallArgs = dbMock.mock.calls[dbMock.mock.calls.length - 1];
+    const strings = cleanupCallArgs[0] as TemplateStringsArray;
+    expect(strings[0]).toContain('matches_to_delete');
     expect(count).toBe(0);
   });
 });

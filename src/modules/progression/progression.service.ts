@@ -1,4 +1,5 @@
 import { matchesRepo } from '../matches/matches.repo.js';
+import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { trackLevelUp } from '../../core/analytics/game-events.js';
 import { getProgressionFromTotalXp, getMatchXpReward } from './progression.logic.js';
@@ -35,7 +36,7 @@ export const progressionService = {
       return;
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     if (players.length === 0) {
       return;
     }

@@ -12,16 +12,34 @@ const markMatchCompletedMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const recordUserModeStatsMock = vi.fn();
 
+// Entity-repo mocks for the new cross-entity service orchestrators
+// (incrementGoalsAndInsertEventIfMissing, recordPartyQuizAnswerIfMissing).
+const insertGoalEventIfMissingInTxMock = vi.fn();
+const updatePlayerGoalTotalsInTxMock = vi.fn();
+const insertMatchAnswerIfMissingInTxMock = vi.fn();
+const updatePlayerTotalsInTxMock = vi.fn();
+const getAnswerForUserInTxMock = vi.fn();
+
+// sql.begin's callback often does an inline `tx.unsafe(...)` read
+// (recordPartyQuizAnswerIfMissing reads the existing match_players row on
+// ON CONFLICT). The sentinel tx returned by sqlBeginMock needs `.unsafe`
+// so those reads don't throw.
+const txUnsafeMock = vi.fn();
+
 /**
  * Stand-in for `sql.begin(cb)`. Just invokes the callback with a sentinel
  * `tx` value and resolves with whatever it returns — the repo mocks below
  * don't actually need a postgres transaction handle.
  */
-const sqlBeginMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx'));
+const sqlBeginMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+  const tx = { unsafe: (...args: unknown[]) => txUnsafeMock(...args) };
+  return cb(tx);
+});
 
 vi.mock('../../src/db/index.js', () => ({
   sql: Object.assign((..._args: unknown[]) => undefined, {
     begin: (cb: (tx: unknown) => Promise<unknown>) => sqlBeginMock(cb),
+    json: (v: unknown) => v,
   }),
 }));
 
@@ -47,6 +65,31 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     markMatchCompleted: (...args: unknown[]) => markMatchCompletedMock(...args),
     listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     recordUserModeStats: (...args: unknown[]) => recordUserModeStatsMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
+  matchEventsRepo: {
+    insertGoalEventIfMissingInTx: (...args: unknown[]) =>
+      insertGoalEventIfMissingInTxMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    updatePlayerGoalTotalsInTx: (...args: unknown[]) =>
+      updatePlayerGoalTotalsInTxMock(...args),
+    updatePlayerTotalsInTx: (...args: unknown[]) =>
+      updatePlayerTotalsInTxMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    insertMatchAnswerIfMissingInTx: (...args: unknown[]) =>
+      insertMatchAnswerIfMissingInTxMock(...args),
+    getAnswerForUserInTx: (...args: unknown[]) =>
+      getAnswerForUserInTxMock(...args),
   },
 }));
 
@@ -349,5 +392,187 @@ describe('matches.service completeMatch', () => {
 
     await expect(matchesService.completeMatch(matchId, userA)).rejects.toThrow('boom');
     expect(markMatchCompletedMock).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── Cross-entity orchestrators added in the matches.repo split ──────────
+// These tests are service-orchestration smoke. They prove the service calls
+// the right repo methods in the right order with the right args, and
+// short-circuits correctly on the idempotency path. They do NOT prove DB
+// rollback — the mocked sql.begin in this file just invokes the callback
+// synchronously, so a thrown step doesn't actually undo a previous step's
+// write. Real rollback semantics rely on postgres + sql.begin in
+// production and would need a DB-backed integration test to pin.
+
+describe('matches.service incrementGoalsAndInsertEventIfMissing', () => {
+  const matchId = 'match-goal-1';
+  const userId = 'user-goal-1';
+  const goalEventInput = {
+    matchId,
+    userId,
+    seat: 1 as const,
+    half: 1 as const,
+    phaseKind: 'normal' as const,
+    qIndex: 3,
+    isPenalty: false,
+    delta: { goals: 1 },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sqlBeginMock.mockImplementation(async (cb) => {
+      const tx = { unsafe: (...args: unknown[]) => txUnsafeMock(...args) };
+      return cb(tx);
+    });
+  });
+
+  it('inserts the event then updates the player counter on first write', async () => {
+    insertGoalEventIfMissingInTxMock.mockResolvedValue({ id: 'ge-1' });
+    updatePlayerGoalTotalsInTxMock.mockResolvedValue({ id: 'mp-1', goals: 1, penalty_goals: 0 });
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.incrementGoalsAndInsertEventIfMissing(goalEventInput);
+
+    expect(insertGoalEventIfMissingInTxMock).toHaveBeenCalledTimes(1);
+    expect(updatePlayerGoalTotalsInTxMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ inserted: true, player: { id: 'mp-1', goals: 1, penalty_goals: 0 } });
+  });
+
+  it('skips the player update on duplicate (ON CONFLICT returned null)', async () => {
+    insertGoalEventIfMissingInTxMock.mockResolvedValue(null);
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.incrementGoalsAndInsertEventIfMissing(goalEventInput);
+
+    expect(insertGoalEventIfMissingInTxMock).toHaveBeenCalledTimes(1);
+    expect(updatePlayerGoalTotalsInTxMock).not.toHaveBeenCalled(); // no double-count
+    expect(result).toEqual({ inserted: false, player: null });
+  });
+
+  it('propagates errors from the player update so sql.begin can roll back', async () => {
+    insertGoalEventIfMissingInTxMock.mockResolvedValue({ id: 'ge-1' });
+    updatePlayerGoalTotalsInTxMock.mockRejectedValue(new Error('player update failed'));
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await expect(
+      matchesService.incrementGoalsAndInsertEventIfMissing(goalEventInput),
+    ).rejects.toThrow('player update failed');
+    expect(insertGoalEventIfMissingInTxMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe('matches.service recordPartyQuizAnswerIfMissing', () => {
+  const matchId = 'match-party-1';
+  const userId = 'user-party-1';
+  const answerInput = {
+    matchId,
+    qIndex: 5,
+    userId,
+    selectedIndex: 2,
+    isCorrect: true,
+    timeMs: 1234,
+    pointsEarned: 10,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sqlBeginMock.mockImplementation(async (cb) => {
+      const tx = { unsafe: (...args: unknown[]) => txUnsafeMock(...args) };
+      return cb(tx);
+    });
+  });
+
+  it('inserts the answer and updates player totals on first write', async () => {
+    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1', is_correct: true, points_earned: 10 });
+    updatePlayerTotalsInTxMock.mockResolvedValue({ id: 'mp-1', total_points: 10, correct_answers: 1 });
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
+
+    expect(insertMatchAnswerIfMissingInTxMock).toHaveBeenCalledTimes(1);
+    expect(updatePlayerTotalsInTxMock).toHaveBeenCalledWith(
+      expect.anything(), // the tx sentinel
+      matchId,
+      userId,
+      10,
+      true,
+    );
+    expect(result.inserted).toBe(true);
+    expect(result.answer).toEqual({ id: 'ma-1', is_correct: true, points_earned: 10 });
+    expect(result.player).toEqual({ id: 'mp-1', total_points: 10, correct_answers: 1 });
+  });
+
+  it('reads back existing rows on duplicate without scoring again (no double-count)', async () => {
+    insertMatchAnswerIfMissingInTxMock.mockResolvedValue(null); // ON CONFLICT path
+    getAnswerForUserInTxMock.mockResolvedValue({ id: 'ma-existing', is_correct: true });
+    // The service's existing-player read uses tx.unsafe directly. Mock the
+    // SELECT to return one row.
+    txUnsafeMock.mockResolvedValue([{ id: 'mp-existing', total_points: 10 }]);
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
+
+    expect(insertMatchAnswerIfMissingInTxMock).toHaveBeenCalledTimes(1);
+    expect(updatePlayerTotalsInTxMock).not.toHaveBeenCalled(); // crucial: no double-score
+    expect(result.inserted).toBe(false);
+    expect(result.answer).toEqual({ id: 'ma-existing', is_correct: true });
+    expect(result.player).toEqual({ id: 'mp-existing', total_points: 10 });
+  });
+
+  it('throws (rolling back) if match_players row is missing during first write', async () => {
+    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1' });
+    updatePlayerTotalsInTxMock.mockResolvedValue(null); // FK violation analog
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await expect(
+      matchesService.recordPartyQuizAnswerIfMissing(answerInput),
+    ).rejects.toThrow(/match_players row missing/);
+  });
+
+  it('propagates other errors from the player update so sql.begin can roll back', async () => {
+    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1' });
+    updatePlayerTotalsInTxMock.mockRejectedValue(new Error('player update failed'));
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+
+    await expect(
+      matchesService.recordPartyQuizAnswerIfMissing(answerInput),
+    ).rejects.toThrow(/Failed to record party quiz answer/);
+  });
+});
+
+describe('matches.service cleanupOldDevMatches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('runs a single tagged-template SQL call (atomicity is the single statement)', async () => {
+    // The cleanup is a single sql\`...\` CTE statement, not a sql.begin block.
+    // It atomically deletes from 5 tables in one round trip. Here we just
+    // verify the service surfaces the right call shape — the SQL itself
+    // is not unit-testable without a real DB, but a follow-up integration
+    // test should pin the guarantees called out in the service docstring:
+    //
+    //   - Non-dev matches are never touched.
+    //   - Non-AI users are never touched.
+    //   - AI users that still have non-dev matches are kept.
+    //   - Orphan AI users (only in cleaned matches) ARE deleted.
+    //   - Dev match rows ARE cleaned across all 4 match tables.
+    //
+    // Mock sql as a tagged-template callable that returns an empty array
+    // (no matches deleted) for this smoke check.
+    vi.resetModules();
+    const dbMock = vi.fn().mockResolvedValue([]);
+    vi.doMock('../../src/db/index.js', () => ({
+      sql: Object.assign(dbMock, { begin: vi.fn(), json: (v: unknown) => v }),
+    }));
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const count = await matchesService.cleanupOldDevMatches(50);
+
+    expect(dbMock).toHaveBeenCalledTimes(1);
+    expect(count).toBe(0);
   });
 });

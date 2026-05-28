@@ -25,11 +25,14 @@ export class SupabaseAuthClient implements AuthClient {
     this.anonKey = config.SUPABASE_ANON_KEY;
   }
 
-  async signUp(email: string, password: string): Promise<AuthSession> {
+  async signUp(email: string, password: string, redirectTo?: string): Promise<AuthSession> {
     return withSpan('auth.signup', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
-      const response = await this.request('/auth/v1/signup', {
+      const path = redirectTo
+        ? `/auth/v1/signup?${new URLSearchParams({ redirect_to: redirectTo }).toString()}`
+        : '/auth/v1/signup';
+      const response = await this.request(path, {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });

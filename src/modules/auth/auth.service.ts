@@ -74,7 +74,7 @@ async function sendSmsOfficeOtp(phone: string, otp: string): Promise<void> {
         errorCode: payload?.ErrorCode,
         message: payload?.Message,
       },
-      'SMSOffice OTP send failed'
+      'SMSOffice OTP send failed',
     );
     throw new ExternalServiceError(payload?.Message ?? 'SMSOffice OTP send failed');
   }
@@ -131,8 +131,10 @@ export const authService = {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const authClient = getAuthClient();
-      const session = await authClient.signUp(request.email, request.password);
-      await provisionIdentity(session);
+      const session = await authClient.signUp(request.email, request.password, request.redirect_to);
+      if (session.accessToken) {
+        await provisionIdentity(session);
+      }
       return session;
     });
   },

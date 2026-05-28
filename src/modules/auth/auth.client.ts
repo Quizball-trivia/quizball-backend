@@ -9,7 +9,7 @@ export interface AuthClient {
    * Sign up with email and password.
    * May return accessToken=null if email confirmation is required.
    */
-  signUp(email: string, password: string): Promise<AuthSession>;
+  signUp(email: string, password: string, redirectTo?: string): Promise<AuthSession>;
 
   /**
    * Sign in with email and password.

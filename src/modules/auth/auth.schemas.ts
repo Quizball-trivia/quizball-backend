@@ -31,6 +31,7 @@ const redirectUrlSchema = z
 export const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
+  redirect_to: redirectUrlSchema.optional(),
 });
 export type RegisterRequest = z.infer<typeof registerSchema>;
 

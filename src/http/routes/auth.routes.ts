@@ -89,7 +89,7 @@ router.post(
 
 /**
  * POST /api/v1/auth/phone/ge/start
- * Start Georgian phone OTP sign-in/sign-up.
+ * Start passwordless auth for Georgian mobile numbers.
  */
 router.post(
   '/phone/ge/start',
@@ -99,7 +99,7 @@ router.post(
 
 /**
  * POST /api/v1/auth/phone/ge/verify
- * Verify Georgian phone OTP.
+ * Verify Georgian phone OTP and issue a session.
  */
 router.post(
   '/phone/ge/verify',

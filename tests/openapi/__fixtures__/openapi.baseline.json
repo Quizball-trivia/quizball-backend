@@ -5283,6 +5283,10 @@
                   "password": {
                     "type": "string",
                     "minLength": 8
+                  },
+                  "redirect_to": {
+                    "type": "string",
+                    "format": "uri"
                   }
                 },
                 "required": [

@@ -38,6 +38,9 @@ const configSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SMSOFFICE_API_KEY: z.string().optional(),
+  SMSOFFICE_SENDER: z.string().default("QuizBall"),
+  SUPABASE_SMS_HOOK_SECRET: z.string().optional(),
 
   // JWT Verification
   SUPABASE_JWKS_URL: z.string().url().optional(),

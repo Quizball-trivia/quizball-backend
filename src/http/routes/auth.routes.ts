@@ -11,6 +11,10 @@ import {
   resetPasswordHeadersSchema,
   socialLoginSchema,
   socialLoginTokenSchema,
+  georgianPhoneOtpStartSchema,
+  georgianPhoneOtpVerifySchema,
+  supabaseSmsHookHeadersSchema,
+  supabaseSmsHookSchema,
 } from '../../modules/auth/index.js';
 
 const router = Router();
@@ -81,6 +85,36 @@ router.post(
   '/social-login-token',
   validate({ body: socialLoginTokenSchema }),
   authController.socialLoginToken
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/start
+ * Start Georgian phone OTP sign-in/sign-up.
+ */
+router.post(
+  '/phone/ge/start',
+  validate({ body: georgianPhoneOtpStartSchema }),
+  authController.startGeorgianPhoneOtp
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/verify
+ * Verify Georgian phone OTP.
+ */
+router.post(
+  '/phone/ge/verify',
+  validate({ body: georgianPhoneOtpVerifySchema }),
+  authController.verifyGeorgianPhoneOtp
+);
+
+/**
+ * POST /api/v1/auth/sms/supabase-hook
+ * Supabase Send SMS hook for SMSOffice delivery.
+ */
+router.post(
+  '/sms/supabase-hook',
+  validate({ body: supabaseSmsHookSchema, headers: supabaseSmsHookHeadersSchema }),
+  authController.supabaseSmsHook
 );
 
 /**

@@ -78,7 +78,8 @@ export const usersRepo = {
 
   /**
    * Batch lookup: returns the subset of input nicknames already taken by
-   * active real users, lowercased. Uses the partial index on
+   * active real (non-AI, non-seed) users, lowercased. Seed leaderboard users
+   * must not block ranked AI nickname selection. Uses the partial index on
    * lower(nickname) — single query, O((k + matches) log n).
    */
   async findTakenLowerNicknames(nicknames: string[]): Promise<Set<string>> {
@@ -88,6 +89,7 @@ export const usersRepo = {
       SELECT lower(nickname) AS lower_nickname FROM users
       WHERE lower(nickname) = ANY(${lowered}::text[])
         AND is_ai = false
+        AND is_seed = false
         AND is_deleted = false
         AND deleted_at IS NULL
         AND pending_deletion_at IS NULL

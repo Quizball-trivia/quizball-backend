@@ -207,13 +207,15 @@ export async function finalizeMatchAsForfeit(
     }
 
     const avgTimes = await matchesService.computeAvgTimes(params.matchId);
-    for (const player of roster) {
-      await matchPlayersRepo.updatePlayerAvgTime(
-        params.matchId,
-        player.user_id,
-        avgTimes.get(player.user_id) ?? null
-      );
-    }
+    await Promise.all(
+      roster.map((player) =>
+        matchPlayersRepo.updatePlayerAvgTime(
+          params.matchId,
+          player.user_id,
+          avgTimes.get(player.user_id) ?? null
+        )
+      )
+    );
 
     const resultVersion = Date.now();
     const redis = getRedisClient();

@@ -1,3 +1,4 @@
+import type { User } from '../../db/types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -56,19 +57,22 @@ async function emitRejoinAvailable(
 ): Promise<void> {
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
+  const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
     variant: resolveMatchVariant(match.state_payload, match.mode),
     opponent,
-    participants: players.map((player, index) => ({
-      userId: player.user_id,
-      username: users[index]?.nickname ?? 'Player',
-      avatarUrl: users[index]?.avatar_url ?? null,
-      avatarCustomization: parseStoredAvatarCustomization(users[index]?.avatar_customization),
-      seat: player.seat,
-    })),
+    participants: players.map((player) => {
+      const user = usersById.get(player.user_id);
+      return {
+        userId: player.user_id,
+        username: user?.nickname ?? 'Player',
+        avatarUrl: user?.avatar_url ?? null,
+        avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
+        seat: player.seat,
+      };
+    }),
     graceMs,
     remainingReconnects,
   });
@@ -107,9 +111,20 @@ export async function beginMatchForLobby(
 
   let members: MatchStartMember[];
   // Country (only used for the matchmaking-map pin) must not block match start.
-  const memberUsersSettled = await Promise.allSettled(
-    lobbyMembers.map((member) => usersRepo.getById(member.user_id))
-  );
+  const lobbyMemberIds = lobbyMembers.map((member) => member.user_id);
+  let memberUsersSettled: PromiseSettledResult<User | null>[];
+  try {
+    const lobbyUsersById = await usersRepo.getByIds(lobbyMemberIds);
+    memberUsersSettled = lobbyMemberIds.map((userId) => ({
+      status: 'fulfilled',
+      value: lobbyUsersById.get(userId) ?? null,
+    }));
+  } catch (reason) {
+    memberUsersSettled = lobbyMemberIds.map(() => ({
+      status: 'rejected',
+      reason,
+    }));
+  }
   const memberCountry = (index: number): string | null => {
     const result = memberUsersSettled[index];
     if (result?.status !== 'fulfilled') return null;
@@ -128,7 +143,20 @@ export async function beginMatchForLobby(
       { lobbyId, matchId, memberCount: members.length, playerCount: players.length },
       'Match start member count invalid, falling back to match players'
     );
-    const usersSettled = await Promise.allSettled(players.map((player) => usersRepo.getById(player.user_id)));
+    const playerUserIds = players.map((player) => player.user_id);
+    let usersSettled: PromiseSettledResult<User | null>[];
+    try {
+      const playerUsersById = await usersRepo.getByIds(playerUserIds);
+      usersSettled = playerUserIds.map((userId) => ({
+        status: 'fulfilled',
+        value: playerUsersById.get(userId) ?? null,
+      }));
+    } catch (reason) {
+      usersSettled = playerUserIds.map(() => ({
+        status: 'rejected',
+        reason,
+      }));
+    }
     const playerUser = (index: number) => {
       const result = usersSettled[index];
       return result?.status === 'fulfilled' ? result.value : null;
@@ -181,7 +209,8 @@ export async function beginMatchForLobby(
 
   let rpByUserId = new Map<string, number>();
   if (match.mode === 'ranked') {
-    const memberUsers = await Promise.all(members.map((member) => usersRepo.getById(member.user_id)));
+    const memberUsersById = await usersRepo.getByIds(members.map((member) => member.user_id));
+    const memberUsers = members.map((member) => memberUsersById.get(member.user_id) ?? null);
     const rankedContext = parseRankedContext(match.ranked_context);
     const profiles = await Promise.all(
       members.map(async (member, index) => {
@@ -344,12 +373,15 @@ export async function rejoinActiveMatchOnConnect(
   }
 
   if (redis && isPaused) {
-    const disconnectedPlayers: string[] = [];
-    for (const participant of participants) {
-      if (participant.user_id === userId) continue;
-      const disconnected = await redis.exists(matchDisconnectKey(match.id, participant.user_id));
-      if (disconnected) disconnectedPlayers.push(participant.user_id);
-    }
+    const otherParticipants = participants.filter((participant) => participant.user_id !== userId);
+    const disconnectedExists = await Promise.all(
+      otherParticipants.map((participant) =>
+        redis.exists(matchDisconnectKey(match.id, participant.user_id))
+      )
+    );
+    const disconnectedPlayers = otherParticipants
+      .filter((_, index) => disconnectedExists[index])
+      .map((participant) => participant.user_id);
     const disconnectedUserId = disconnectedPlayers[0];
     if (disconnectedUserId) {
       const graceTtlSec = await redis.ttl(matchGraceKey(match.id));

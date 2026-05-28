@@ -172,12 +172,12 @@ export async function buildParticipantPayloads(
   seat: number;
   rankPoints?: number;
 }>> {
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
+  const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   let rpByUserId = new Map<string, number>();
 
   if (matchMode === 'ranked') {
-    const nonAiPlayers = players.filter((_player, index) => {
-      const user = users[index];
+    const nonAiPlayers = players.filter((player) => {
+      const user = usersById.get(player.user_id);
       return !(user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number');
     });
     const profiles = await Promise.all(
@@ -189,8 +189,8 @@ export async function buildParticipantPayloads(
     rpByUserId = new Map(profiles.map((entry) => [entry.userId, entry.profile.rp]));
   }
 
-  return players.map((player, index) => {
-    const user = users[index];
+  return players.map((player) => {
+    const user = usersById.get(player.user_id);
     const rankPoints = matchMode === 'ranked' && user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number'
       ? rankedContext.aiAnchorRp
       : rpByUserId.get(player.user_id);

@@ -78,7 +78,8 @@ export const usersRepo = {
 
   /**
    * Batch lookup: returns the subset of input nicknames already taken by
-   * active real users, lowercased. Uses the partial index on
+   * active real (non-AI, non-seed) users, lowercased. Seed leaderboard users
+   * must not block ranked AI nickname selection. Uses the partial index on
    * lower(nickname) — single query, O((k + matches) log n).
    */
   async findTakenLowerNicknames(nicknames: string[]): Promise<Set<string>> {
@@ -88,6 +89,7 @@ export const usersRepo = {
       SELECT lower(nickname) AS lower_nickname FROM users
       WHERE lower(nickname) = ANY(${lowered}::text[])
         AND is_ai = false
+        AND is_seed = false
         AND is_deleted = false
         AND deleted_at IS NULL
         AND pending_deletion_at IS NULL
@@ -145,6 +147,22 @@ export const usersRepo = {
       SELECT * FROM users WHERE id = ${id}
     `;
     return user ?? null;
+  },
+
+  /**
+   * Batch fetch users by IDs.
+   * More efficient than calling getById in a loop (avoids N+1 queries).
+   * Returns a Map for O(1) lookup by ID (unordered).
+   */
+  async getByIds(ids: string[]): Promise<Map<string, User>> {
+    if (ids.length === 0) return new Map();
+
+    const uniqueIds = [...new Set(ids)];
+    const results = await sql<User[]>`
+      SELECT * FROM users WHERE id = ANY(${sql.array(uniqueIds)}::uuid[])
+    `;
+
+    return new Map(results.map((user) => [user.id, user]));
   },
 
   async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{

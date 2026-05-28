@@ -98,19 +98,22 @@ async function emitRejoinAvailable(
 ): Promise<void> {
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
+  const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
     variant: resolveMatchVariant(match.state_payload, match.mode),
     opponent,
-    participants: players.map((player, index) => ({
-      userId: player.user_id,
-      username: users[index]?.nickname ?? 'Player',
-      avatarUrl: users[index]?.avatar_url ?? null,
-      avatarCustomization: parseStoredAvatarCustomization(users[index]?.avatar_customization),
-      seat: player.seat,
-    })),
+    participants: players.map((player) => {
+      const user = usersById.get(player.user_id);
+      return {
+        userId: player.user_id,
+        username: user?.nickname ?? 'Player',
+        avatarUrl: user?.avatar_url ?? null,
+        avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
+        seat: player.seat,
+      };
+    }),
     graceMs,
     remainingReconnects,
   });
@@ -290,11 +293,12 @@ export async function resumePausedMatch(
   await redis.del(matchDisconnectKey(matchId, userId));
 
   const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-  const stillDisconnected: string[] = [];
-  for (const player of roster) {
-    const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
-    if (exists) stillDisconnected.push(player.user_id);
-  }
+  const stillDisconnectedExists = await Promise.all(
+    roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+  );
+  const stillDisconnected = roster
+    .filter((_, index) => stillDisconnectedExists[index])
+    .map((player) => player.user_id);
 
   if (stillDisconnected.length > 0) {
     const ttl = await redis.ttl(matchGraceKey(matchId));
@@ -530,11 +534,12 @@ export async function pauseMatchForDisconnectedPlayer(
       if (!activeMatch || activeMatch.status !== 'active') return;
 
       const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-      const disconnected: string[] = [];
-      for (const player of roster) {
-        const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
-        if (exists) disconnected.push(player.user_id);
-      }
+      const disconnectedExists = await Promise.all(
+        roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+      );
+      const disconnected = roster
+        .filter((_, index) => disconnectedExists[index])
+        .map((player) => player.user_id);
 
       if (disconnected.length === 0) return;
 
@@ -639,9 +644,11 @@ export async function pauseMatchForDisconnectedPlayer(
       catch (err) { logger.warn({ err, matchId }, 'Objectives evaluation failed in grace expiry'); }
 
       const avgTimes = await matchesService.computeAvgTimes(matchId);
-      for (const player of roster) {
-        await matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
-      }
+      await Promise.all(
+        roster.map((player) =>
+          matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
+        )
+      );
 
       const resultVersion = Date.now();
       const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);

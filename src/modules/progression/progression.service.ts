@@ -41,8 +41,11 @@ export const progressionService = {
       return;
     }
 
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    const humanPlayers = players.filter((_, index) => users[index] && !users[index]!.is_ai);
+    const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+    const humanPlayers = players.filter((player) => {
+      const user = usersById.get(player.user_id);
+      return user && !user.is_ai;
+    });
     if (humanPlayers.length === 0) {
       return;
     }

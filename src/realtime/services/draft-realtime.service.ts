@@ -73,9 +73,12 @@ async function startMatchFromDraft(
 
   const redis = getRedisClient();
   if (redis) {
-    for (const member of members) {
-      const absent = await redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id));
-      if (!absent) continue;
+    const absentFlags = await Promise.all(
+      members.map((member) => redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id)))
+    );
+    for (let index = 0; index < members.length; index++) {
+      if (!absentFlags[index]) continue;
+      const member = members[index];
       logger.info(
         { lobbyId, matchId, userId: member.user_id },
         'Pausing newly-created match for player absent after draft grace'
@@ -145,12 +148,11 @@ async function resolveRankedAiUserId(
     }
   }
 
-  const users = await Promise.all(
-    members.map(async (member) => ({
-      userId: member.user_id,
-      user: await usersRepo.getById(member.user_id),
-    }))
-  );
+  const usersById = await usersRepo.getByIds(members.map((member) => member.user_id));
+  const users = members.map((member) => ({
+    userId: member.user_id,
+    user: usersById.get(member.user_id) ?? null,
+  }));
   const aiMember = users.find((entry) => entry.user?.is_ai);
   if (!aiMember) return null;
 
@@ -299,12 +301,10 @@ async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Pro
   const redis = getRedisClient();
   if (!redis) return false;
 
-  for (const userId of userIds) {
-    if (await redis.exists(draftDisconnectKey(lobbyId, userId))) {
-      return true;
-    }
-  }
-  return false;
+  const existsResults = await Promise.all(
+    userIds.map((userId) => redis.exists(draftDisconnectKey(lobbyId, userId)))
+  );
+  return existsResults.some((exists) => exists === 1);
 }
 
 function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): void {
@@ -470,12 +470,12 @@ export const draftRealtimeService = {
         if (!activeLobby || activeLobby.status !== 'active') return;
 
         const activeMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-        const disconnectedUserIds: string[] = [];
-        for (const member of activeMembers) {
-          if (await redis.exists(draftDisconnectKey(lobbyId, member.user_id))) {
-            disconnectedUserIds.push(member.user_id);
-          }
-        }
+        const disconnectedExists = await Promise.all(
+          activeMembers.map((member) => redis.exists(draftDisconnectKey(lobbyId, member.user_id)))
+        );
+        const disconnectedUserIds = activeMembers
+          .filter((_, index) => disconnectedExists[index] === 1)
+          .map((member) => member.user_id);
         if (disconnectedUserIds.length === 0) return;
 
         await Promise.all(

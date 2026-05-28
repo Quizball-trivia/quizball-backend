@@ -123,6 +123,13 @@ vi.mock('../../src/modules/achievements/index.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: vi.fn(async (id: string) => ({ id, nickname: id, avatar_url: null })),
+    getByIds: vi.fn(async (ids: string[]) => {
+      const usersById = new Map<string, { id: string; nickname: string; avatar_url: null }>();
+      for (const id of [...new Set(ids)]) {
+        usersById.set(id, { id, nickname: id, avatar_url: null });
+      }
+      return usersById;
+    }),
   },
 }));
 

@@ -85,6 +85,14 @@ vi.mock('../../src/realtime/redis.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
+    getByIds: async (ids: string[]) => {
+      const usersById = new Map<string, Awaited<ReturnType<typeof getUserByIdMock>>>();
+      for (const id of [...new Set(ids)]) {
+        const user = await getUserByIdMock(id);
+        if (user) usersById.set(id, user);
+      }
+      return usersById;
+    },
   },
 }));
 

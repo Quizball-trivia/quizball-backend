@@ -251,25 +251,36 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   beginMatchForLobby: vi.fn(),
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn(async (id: string) => ({
+    id,
+    nickname: id,
+    avatar_url: null,
+    avatar_customization: null,
+    is_deleted: false,
+    deleted_at: null,
+    pending_deletion_at: null,
+  }));
+  return {
   isUserAccountInactive: () => false,
   usersRepo: {
-    getById: vi.fn(async (id: string) => ({
-      id,
-      nickname: id,
-      avatar_url: null,
-      avatar_customization: null,
-      is_deleted: false,
-      deleted_at: null,
-      pending_deletion_at: null,
-    })),
+    getById,
+    getByIds: vi.fn(async (ids: string[]) => {
+      const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+      for (const id of [...new Set(ids)]) {
+        const user = await getById(id);
+        if (user) usersById.set(id, user);
+      }
+      return usersById;
+    }),
     create: vi.fn(async ({ nickname, avatarUrl }: { nickname: string; avatarUrl: string | null }) => ({
       id: `ai-${nickname}`,
       nickname,
       avatar_url: avatarUrl,
     })),
   },
-}));
+  };
+});
 
 vi.mock('../../src/modules/friends/friends.repo.js', () => ({
   friendsRepo: {

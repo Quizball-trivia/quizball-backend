@@ -148,12 +148,11 @@ async function resolveRankedAiUserId(
     }
   }
 
-  const users = await Promise.all(
-    members.map(async (member) => ({
-      userId: member.user_id,
-      user: await usersRepo.getById(member.user_id),
-    }))
-  );
+  const usersById = await usersRepo.getByIds(members.map((member) => member.user_id));
+  const users = members.map((member) => ({
+    userId: member.user_id,
+    user: usersById.get(member.user_id) ?? null,
+  }));
   const aiMember = users.find((entry) => entry.user?.is_ai);
   if (!aiMember) return null;
 

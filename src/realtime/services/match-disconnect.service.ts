@@ -98,19 +98,22 @@ async function emitRejoinAvailable(
 ): Promise<void> {
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
-  const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
+  const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
     variant: resolveMatchVariant(match.state_payload, match.mode),
     opponent,
-    participants: players.map((player, index) => ({
-      userId: player.user_id,
-      username: users[index]?.nickname ?? 'Player',
-      avatarUrl: users[index]?.avatar_url ?? null,
-      avatarCustomization: parseStoredAvatarCustomization(users[index]?.avatar_customization),
-      seat: player.seat,
-    })),
+    participants: players.map((player) => {
+      const user = usersById.get(player.user_id);
+      return {
+        userId: player.user_id,
+        username: user?.nickname ?? 'Player',
+        avatarUrl: user?.avatar_url ?? null,
+        avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
+        seat: player.seat,
+      };
+    }),
     graceMs,
     remainingReconnects,
   });

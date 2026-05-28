@@ -453,15 +453,26 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
   },
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
-  usersRepo: {
-    getById: vi.fn(async (userId: string) => ({
-      id: userId,
-      nickname: userId,
-      avatar_url: null,
-    })),
-  },
-}));
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn(async (userId: string) => ({
+    id: userId,
+    nickname: userId,
+    avatar_url: null,
+  }));
+  return {
+    usersRepo: {
+      getById,
+      getByIds: vi.fn(async (ids: string[]) => {
+        const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+        for (const id of [...new Set(ids)]) {
+          const user = await getById(id);
+          if (user) usersById.set(id, user);
+        }
+        return usersById;
+      }),
+    },
+  };
+});
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {

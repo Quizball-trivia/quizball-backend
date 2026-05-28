@@ -99,10 +99,9 @@ async function startHumanRankedMatch(
       }
     }
 
-    const [userA, userB] = await Promise.all([
-      usersRepo.getById(userAId),
-      usersRepo.getById(userBId),
-    ]);
+    const usersById = await usersRepo.getByIds([userAId, userBId]);
+    const userA = usersById.get(userAId) ?? null;
+    const userB = usersById.get(userBId) ?? null;
     if (!userA || !userB) {
       logger.warn({ userAId, userBId }, 'Ranked pairing skipped: user missing');
       span.setAttribute('quizball.skipped_missing_user', true);

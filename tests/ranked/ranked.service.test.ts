@@ -21,11 +21,22 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   },
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
-  usersRepo: {
-    getById: vi.fn(),
-  },
-}));
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn();
+  return {
+    usersRepo: {
+      getById,
+      getByIds: vi.fn(async (ids: string[]) => {
+        const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+        for (const id of [...new Set(ids)]) {
+          const user = await getById(id);
+          if (user) usersById.set(id, user);
+        }
+        return usersById;
+      }),
+    },
+  };
+});
 
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
   rankedRepo: {

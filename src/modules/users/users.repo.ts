@@ -147,6 +147,22 @@ export const usersRepo = {
     return user ?? null;
   },
 
+  /**
+   * Batch fetch users by IDs.
+   * More efficient than calling getById in a loop (avoids N+1 queries).
+   * Returns a Map for O(1) lookup by ID (unordered).
+   */
+  async getByIds(ids: string[]): Promise<Map<string, User>> {
+    if (ids.length === 0) return new Map();
+
+    const uniqueIds = [...new Set(ids)];
+    const results = await sql<User[]>`
+      SELECT * FROM users WHERE id = ANY(${sql.array(uniqueIds)}::uuid[])
+    `;
+
+    return new Map(results.map((user) => [user.id, user]));
+  },
+
   async searchByNickname(query: string, excludeUserId: string, limit = 20): Promise<Array<{
     id: string;
   nickname: string | null;

@@ -216,8 +216,8 @@ export const rankedService = {
       return null;
     }
 
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    const byUserId = new Map(players.map((player, index) => [player.user_id, users[index]]));
+    const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+    const byUserId = new Map(players.map((player) => [player.user_id, usersById.get(player.user_id) ?? null]));
     const humanPlayers = players.filter((player) => !byUserId.get(player.user_id)?.is_ai);
     if (humanPlayers.length === 0) {
       logger.debug({ matchId }, 'Ranked settlement skipped: no human players');

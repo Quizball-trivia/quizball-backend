@@ -104,9 +104,13 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     method: 'post',
     path: '/api/v1/auth/reset-password',
     summary: 'Reset password',
+    description:
+      'Sets a new password for the session identified by the Authorization Bearer ' +
+      'token (a Supabase recovery session, or a logged-in user adding/changing a ' +
+      'password). The token is read from the Authorization header, not the body.',
     tags: ['Auth'],
+    security: [{ bearerAuth: [] }],
     body: z.object({
-      access_token: z.string(),
       new_password: z.string().min(8),
     }),
     responses: {

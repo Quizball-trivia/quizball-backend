@@ -5476,8 +5476,14 @@
     "/api/v1/auth/reset-password": {
       "post": {
         "summary": "Reset password",
+        "description": "Sets a new password for the session identified by the Authorization Bearer token (a Supabase recovery session, or a logged-in user adding/changing a password). The token is read from the Authorization header, not the body.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5486,16 +5492,12 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "access_token": {
-                    "type": "string"
-                  },
                   "new_password": {
                     "type": "string",
                     "minLength": 8
                   }
                 },
                 "required": [
-                  "access_token",
                   "new_password"
                 ]
               }

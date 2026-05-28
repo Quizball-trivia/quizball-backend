@@ -66,3 +66,43 @@ describe('SupabaseAuthClient.signUp', () => {
     expect(body).toMatchObject({ data: { locale: 'en' } });
   });
 });
+
+describe('SupabaseAuthClient error mapping', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubResponse(status: number, payload: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status, json: async () => payload }),
+    );
+  }
+
+  it('maps a Supabase 429 to our RateLimitError (429), not a 502', async () => {
+    stubResponse(429, { error_code: 'over_email_send_rate_limit', msg: 'email rate limit exceeded' });
+    const client = new SupabaseAuthClient();
+
+    await expect(
+      client.forgotPassword('player@quizball.io', 'https://quizball.io/auth/reset-password'),
+    ).rejects.toMatchObject({ statusCode: 429, code: 'RATE_LIMIT_EXCEEDED' });
+  });
+
+  it('maps a Supabase 401 to AuthenticationError (401)', async () => {
+    stubResponse(401, { msg: 'invalid token' });
+    const client = new SupabaseAuthClient();
+
+    await expect(client.resetPassword('bad-token', 'password123')).rejects.toMatchObject({
+      statusCode: 401,
+    });
+  });
+
+  it('falls back to ExternalServiceError (502) for unmapped upstream errors', async () => {
+    stubResponse(500, { msg: 'boom' });
+    const client = new SupabaseAuthClient();
+
+    await expect(client.resetPassword('token', 'password123')).rejects.toMatchObject({
+      statusCode: 502,
+    });
+  });
+});

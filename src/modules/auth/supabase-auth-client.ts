@@ -3,6 +3,7 @@ import {
   ExternalServiceError,
   AuthenticationError,
   BadRequestError,
+  RateLimitError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
@@ -221,7 +222,8 @@ export class SupabaseAuthClient implements AuthClient {
       } catch (error) {
         if (error instanceof ExternalServiceError ||
             error instanceof AuthenticationError ||
-            error instanceof BadRequestError) {
+            error instanceof BadRequestError ||
+            error instanceof RateLimitError) {
           throw error;
         }
 
@@ -252,6 +254,10 @@ export class SupabaseAuthClient implements AuthClient {
         throw new AuthenticationError(message);
       case 422:
         throw new BadRequestError(message);
+      case 429:
+        // Supabase email/auth rate limit — surface as our own 429 so clients
+        // can back off, instead of masking it as a 502 upstream failure.
+        throw new RateLimitError(message);
       default:
         throw new ExternalServiceError(message, { statusCode: status });
     }

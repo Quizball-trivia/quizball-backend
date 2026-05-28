@@ -25,16 +25,26 @@ export class SupabaseAuthClient implements AuthClient {
     this.anonKey = config.SUPABASE_ANON_KEY;
   }
 
-  async signUp(email: string, password: string, redirectTo?: string): Promise<AuthSession> {
+  async signUp(
+    email: string,
+    password: string,
+    redirectTo?: string,
+    locale?: string,
+  ): Promise<AuthSession> {
     return withSpan('auth.signup', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const path = redirectTo
         ? `/auth/v1/signup?${new URLSearchParams({ redirect_to: redirectTo }).toString()}`
         : '/auth/v1/signup';
+      // `data` lands in raw_user_meta_data; the confirmation email template
+      // reads it as {{ .Data.locale }} to localize the message.
+      const body = locale
+        ? { email, password, data: { locale } }
+        : { email, password };
       const response = await this.request(path, {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(body),
       });
 
       return this.normalizeSession(response);

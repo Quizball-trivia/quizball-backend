@@ -65,8 +65,8 @@ export const authController = {
    * Register new user with email and password.
    */
   async register(req: Request, res: Response): Promise<void> {
-    const { email, password, redirect_to } = req.validated.body as RegisterRequest;
-    const session = await authService.register({ email, password, redirect_to });
+    const { email, password, redirect_to, locale } = req.validated.body as RegisterRequest;
+    const session = await authService.register({ email, password, redirect_to, locale });
 
     setAuthCookies(res, session);
     res.status(201).json(toAuthResponse(session));

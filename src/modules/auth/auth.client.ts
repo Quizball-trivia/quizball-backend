@@ -8,8 +8,15 @@ export interface AuthClient {
   /**
    * Sign up with email and password.
    * May return accessToken=null if email confirmation is required.
+   * `locale` is persisted as user metadata so the confirmation email can be
+   * localized via the Supabase template ({{ .Data.locale }}).
    */
-  signUp(email: string, password: string, redirectTo?: string): Promise<AuthSession>;
+  signUp(
+    email: string,
+    password: string,
+    redirectTo?: string,
+    locale?: string,
+  ): Promise<AuthSession>;
 
   /**
    * Sign in with email and password.

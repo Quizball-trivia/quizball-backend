@@ -32,6 +32,10 @@ export const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   redirect_to: redirectUrlSchema.optional(),
+  // Drives the language of the Supabase confirmation email. Stored as
+  // user metadata (raw_user_meta_data) so the email template can branch on
+  // {{ .Data.locale }}. Anything other than "ka" falls back to English.
+  locale: z.enum(['en', 'ka']).optional(),
 });
 export type RegisterRequest = z.infer<typeof registerSchema>;
 

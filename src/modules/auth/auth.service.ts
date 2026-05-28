@@ -131,7 +131,12 @@ export const authService = {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const authClient = getAuthClient();
-      const session = await authClient.signUp(request.email, request.password, request.redirect_to);
+      const session = await authClient.signUp(
+        request.email,
+        request.password,
+        request.redirect_to,
+        request.locale,
+      );
       if (session.accessToken) {
         await provisionIdentity(session);
       }

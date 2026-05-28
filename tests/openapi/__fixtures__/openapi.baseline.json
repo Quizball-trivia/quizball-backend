@@ -5287,6 +5287,13 @@
                   "redirect_to": {
                     "type": "string",
                     "format": "uri"
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka"
+                    ]
                   }
                 },
                 "required": [

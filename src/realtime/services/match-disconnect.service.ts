@@ -644,9 +644,11 @@ export async function pauseMatchForDisconnectedPlayer(
       catch (err) { logger.warn({ err, matchId }, 'Objectives evaluation failed in grace expiry'); }
 
       const avgTimes = await matchesService.computeAvgTimes(matchId);
-      for (const player of roster) {
-        await matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null);
-      }
+      await Promise.all(
+        roster.map((player) =>
+          matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
+        )
+      );
 
       const resultVersion = Date.now();
       const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);

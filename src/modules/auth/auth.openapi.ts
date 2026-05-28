@@ -150,6 +150,60 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
 
   registerEndpoint(registry, {
     method: 'post',
+    path: '/api/v1/auth/phone/ge/start',
+    summary: 'Start Georgian phone OTP sign-in or sign-up',
+    description:
+      'Starts Supabase phone OTP for Georgian mobile numbers only. SMS delivery is handled by the configured Supabase Send SMS hook.',
+    tags: ['Auth'],
+    body: z.object({
+      phone: z.string().min(9).max(32),
+    }),
+    responses: {
+      200: { description: 'Verification code sent', schema: messageResponseSchema },
+      400: { description: 'Unsupported or invalid phone number', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/auth/phone/ge/verify',
+    summary: 'Verify Georgian phone OTP',
+    tags: ['Auth'],
+    body: z.object({
+      phone: z.string().min(9).max(32),
+      token: z.string().regex(/^\d{6}$/),
+    }),
+    responses: {
+      200: { description: 'Session created', schema: authResponseSchema },
+      400: { description: 'Invalid request', schema: errorResponseSchema },
+      401: { description: 'Invalid OTP', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/auth/sms/supabase-hook',
+    summary: 'Supabase Send SMS hook for SMSOffice',
+    description:
+      'Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice.',
+    tags: ['Auth'],
+    body: z.object({
+      user: z.object({
+        phone: z.string().nullable().optional(),
+      }).passthrough(),
+      sms: z.object({
+        otp: z.string().min(1).max(16),
+      }).passthrough(),
+    }).passthrough(),
+    responses: {
+      200: { description: 'SMS accepted', schema: messageResponseSchema },
+      401: { description: 'Invalid hook authorization', schema: errorResponseSchema },
+      502: { description: 'SMS provider failed', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
     path: '/api/v1/auth/logout',
     summary: 'Logout',
     tags: ['Auth'],

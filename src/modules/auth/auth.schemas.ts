@@ -75,6 +75,32 @@ export const socialLoginTokenSchema = z.object({
 });
 export type SocialLoginTokenRequest = z.infer<typeof socialLoginTokenSchema>;
 
+export const georgianPhoneOtpStartSchema = z.object({
+  phone: z.string().min(9).max(32),
+});
+export type GeorgianPhoneOtpStartRequest = z.infer<typeof georgianPhoneOtpStartSchema>;
+
+export const georgianPhoneOtpVerifySchema = z.object({
+  phone: z.string().min(9).max(32),
+  token: z.string().regex(/^\d{6}$/, 'OTP must be a 6 digit code'),
+});
+export type GeorgianPhoneOtpVerifyRequest = z.infer<typeof georgianPhoneOtpVerifySchema>;
+
+export const supabaseSmsHookHeadersSchema = z.object({
+  authorization: z.string().optional(),
+}).passthrough();
+export type SupabaseSmsHookHeaders = z.infer<typeof supabaseSmsHookHeadersSchema>;
+
+export const supabaseSmsHookSchema = z.object({
+  user: z.object({
+    phone: z.string().optional().nullable(),
+  }).passthrough(),
+  sms: z.object({
+    otp: z.string().min(1).max(16),
+  }).passthrough(),
+}).passthrough();
+export type SupabaseSmsHookRequest = z.infer<typeof supabaseSmsHookSchema>;
+
 // =============================================================================
 // Response Schemas
 // =============================================================================

@@ -119,6 +119,37 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
+  async sendPhoneOtp(phone: string): Promise<void> {
+    await withSpan('auth.phone_otp_send', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/otp', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone,
+          create_user: true,
+        }),
+      });
+    });
+  }
+
+  async verifyPhoneOtp(phone: string, token: string): Promise<AuthSession> {
+    return withSpan('auth.phone_otp_verify', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request('/auth/v1/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone,
+          token,
+          type: 'sms',
+        }),
+      });
+
+      return this.normalizeSession(response);
+    });
+  }
+
   oauthAuthorizeUrl(
     provider: string,
     redirectTo: string,

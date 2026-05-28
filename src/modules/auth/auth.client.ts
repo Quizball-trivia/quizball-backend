@@ -57,4 +57,15 @@ export interface AuthClient {
     idToken: string,
     nonce?: string,
   ): Promise<AuthSession>;
+
+  /**
+   * Start Supabase phone OTP flow. SMS delivery is handled by Supabase's
+   * configured Send SMS hook.
+   */
+  sendPhoneOtp(phone: string): Promise<void>;
+
+  /**
+   * Verify a Supabase phone OTP and return a normal Supabase session.
+   */
+  verifyPhoneOtp(phone: string, token: string): Promise<AuthSession>;
 }

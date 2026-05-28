@@ -1,9 +1,84 @@
 import { getAuthClient } from './supabase-auth-client.js';
 import { usersService } from '../users/index.js';
-import { AuthenticationError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError, ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { config } from '../../core/config.js';
 import { withSpan } from '../../core/tracing.js';
-import type { AuthSession, RegisterRequest, LoginRequest, SocialLoginTokenRequest } from './auth.schemas.js';
+import type {
+  AuthSession,
+  RegisterRequest,
+  LoginRequest,
+  SocialLoginTokenRequest,
+  SupabaseSmsHookRequest,
+} from './auth.schemas.js';
+
+const GEORGIAN_MOBILE_RE = /^\+9955\d{8}$/;
+
+type SmsOfficeSendResponse = {
+  Success?: boolean;
+  Message?: string;
+  ErrorCode?: number;
+};
+
+function normalizeGeorgianPhone(rawPhone: string): string {
+  const compact = rawPhone.replace(/[\s()-]/g, '');
+  const withPlus = compact.startsWith('+')
+    ? compact
+    : compact.startsWith('995')
+      ? `+${compact}`
+      : compact.startsWith('5')
+        ? `+995${compact}`
+        : compact;
+
+  if (!GEORGIAN_MOBILE_RE.test(withPlus)) {
+    throw new BadRequestError('Only Georgian mobile numbers are supported right now');
+  }
+
+  return withPlus;
+}
+
+function toSmsOfficeDestination(phone: string): string {
+  return phone.replace(/^\+/, '');
+}
+
+async function sendSmsOfficeOtp(phone: string, otp: string): Promise<void> {
+  if (!config.SMSOFFICE_API_KEY) {
+    throw new ExternalServiceError('SMSOffice API key is not configured');
+  }
+
+  const form = new URLSearchParams({
+    key: config.SMSOFFICE_API_KEY,
+    destination: toSmsOfficeDestination(phone),
+    sender: config.SMSOFFICE_SENDER,
+    content: `QuizBall code: ${otp}`,
+    urgent: 'true',
+  });
+
+  const response = await fetch('https://smsoffice.ge/api/v2/send/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  });
+
+  let payload: SmsOfficeSendResponse | null = null;
+  try {
+    payload = await response.json() as SmsOfficeSendResponse;
+  } catch {
+    // SMSOffice should return JSON. Fall through to a provider error.
+  }
+
+  if (!response.ok || !payload?.Success) {
+    logger.warn(
+      {
+        status: response.status,
+        errorCode: payload?.ErrorCode,
+        message: payload?.Message,
+      },
+      'SMSOffice OTP send failed'
+    );
+    throw new ExternalServiceError(payload?.Message ?? 'SMSOffice OTP send failed');
+  }
+}
 
 /**
  * Provision user identity in our database.
@@ -86,6 +161,37 @@ export const authService = {
       );
       await provisionIdentity(session);
       return session;
+    });
+  },
+
+  async startGeorgianPhoneOtp(rawPhone: string): Promise<void> {
+    return withSpan('auth.georgian_phone_otp_start', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const phone = normalizeGeorgianPhone(rawPhone);
+      const authClient = getAuthClient();
+      await authClient.sendPhoneOtp(phone);
+    });
+  },
+
+  async verifyGeorgianPhoneOtp(rawPhone: string, token: string): Promise<AuthSession> {
+    return withSpan('auth.georgian_phone_otp_verify', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const phone = normalizeGeorgianPhone(rawPhone);
+      const authClient = getAuthClient();
+      const session = await authClient.verifyPhoneOtp(phone, token);
+      await provisionIdentity(session);
+      return session;
+    });
+  },
+
+  async sendSupabaseSmsHook(request: SupabaseSmsHookRequest): Promise<void> {
+    return withSpan('auth.supabase_sms_hook', {
+      'quizball.sms_provider': 'smsoffice',
+    }, async () => {
+      const phone = normalizeGeorgianPhone(request.user.phone ?? '');
+      await sendSmsOfficeOtp(phone, request.sms.otp);
     });
   },
 

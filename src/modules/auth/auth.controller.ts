@@ -12,8 +12,12 @@ import {
   type ResetPasswordHeaders,
   type SocialLoginRequest,
   type SocialLoginTokenRequest,
+  type GeorgianPhoneOtpStartRequest,
+  type GeorgianPhoneOtpVerifyRequest,
+  type SupabaseSmsHookHeaders,
+  type SupabaseSmsHookRequest,
 } from './auth.schemas.js';
-import { BadRequestError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError } from '../../core/errors.js';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -157,6 +161,46 @@ export const authController = {
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));
+  },
+
+  /**
+   * POST /api/v1/auth/phone/ge/start
+   * Start passwordless auth for Georgian mobile numbers.
+   */
+  async startGeorgianPhoneOtp(req: Request, res: Response): Promise<void> {
+    const { phone } = req.validated.body as GeorgianPhoneOtpStartRequest;
+    await authService.startGeorgianPhoneOtp(phone);
+
+    res.json({ message: 'Verification code sent' });
+  },
+
+  /**
+   * POST /api/v1/auth/phone/ge/verify
+   * Verify Georgian phone OTP and issue a Supabase session.
+   */
+  async verifyGeorgianPhoneOtp(req: Request, res: Response): Promise<void> {
+    const { phone, token } = req.validated.body as GeorgianPhoneOtpVerifyRequest;
+    const session = await authService.verifyGeorgianPhoneOtp(phone, token);
+
+    setAuthCookies(res, session);
+    res.json(toAuthResponse(session));
+  },
+
+  /**
+   * POST /api/v1/auth/sms/supabase-hook
+   * Supabase Send SMS hook. Sends only Georgian numbers through SMSOffice.
+   */
+  async supabaseSmsHook(req: Request, res: Response): Promise<void> {
+    const { authorization } = (req.validated.headers ?? {}) as SupabaseSmsHookHeaders;
+    if (config.SUPABASE_SMS_HOOK_SECRET) {
+      const expected = `Bearer ${config.SUPABASE_SMS_HOOK_SECRET}`;
+      if (authorization !== expected) {
+        throw new AuthenticationError('Invalid SMS hook authorization');
+      }
+    }
+
+    await authService.sendSupabaseSmsHook(req.validated.body as SupabaseSmsHookRequest);
+    res.json({ message: 'SMS sent' });
   },
 
   /**

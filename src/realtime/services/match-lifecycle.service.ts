@@ -344,12 +344,15 @@ export async function rejoinActiveMatchOnConnect(
   }
 
   if (redis && isPaused) {
-    const disconnectedPlayers: string[] = [];
-    for (const participant of participants) {
-      if (participant.user_id === userId) continue;
-      const disconnected = await redis.exists(matchDisconnectKey(match.id, participant.user_id));
-      if (disconnected) disconnectedPlayers.push(participant.user_id);
-    }
+    const otherParticipants = participants.filter((participant) => participant.user_id !== userId);
+    const disconnectedExists = await Promise.all(
+      otherParticipants.map((participant) =>
+        redis.exists(matchDisconnectKey(match.id, participant.user_id))
+      )
+    );
+    const disconnectedPlayers = otherParticipants
+      .filter((_, index) => disconnectedExists[index])
+      .map((participant) => participant.user_id);
     const disconnectedUserId = disconnectedPlayers[0];
     if (disconnectedUserId) {
       const graceTtlSec = await redis.ttl(matchGraceKey(match.id));

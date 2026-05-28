@@ -290,11 +290,12 @@ export async function resumePausedMatch(
   await redis.del(matchDisconnectKey(matchId, userId));
 
   const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-  const stillDisconnected: string[] = [];
-  for (const player of roster) {
-    const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
-    if (exists) stillDisconnected.push(player.user_id);
-  }
+  const stillDisconnectedExists = await Promise.all(
+    roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+  );
+  const stillDisconnected = roster
+    .filter((_, index) => stillDisconnectedExists[index])
+    .map((player) => player.user_id);
 
   if (stillDisconnected.length > 0) {
     const ttl = await redis.ttl(matchGraceKey(matchId));
@@ -530,11 +531,12 @@ export async function pauseMatchForDisconnectedPlayer(
       if (!activeMatch || activeMatch.status !== 'active') return;
 
       const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-      const disconnected: string[] = [];
-      for (const player of roster) {
-        const exists = await redis.exists(matchDisconnectKey(matchId, player.user_id));
-        if (exists) disconnected.push(player.user_id);
-      }
+      const disconnectedExists = await Promise.all(
+        roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+      );
+      const disconnected = roster
+        .filter((_, index) => disconnectedExists[index])
+        .map((player) => player.user_id);
 
       if (disconnected.length === 0) return;
 

@@ -1,1 +1,0 @@
-{{ if eq .Data.locale "ka" }}დაადასტურე QuizBall ანგარიში{{ else }}Confirm your QuizBall account{{ end }}

@@ -28,6 +28,8 @@ export type UserIdParam = z.infer<typeof userIdParamSchema>;
 export const userResponseSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email().nullable(),
+  phone_number: z.string().nullable(),
+  phone_verified_at: z.string().datetime().nullable(),
   role: userRoleSchema,
   nickname: z.string().nullable(),
   country: z.string().nullable(),
@@ -69,6 +71,8 @@ export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;
 export function toUserResponse(user: {
   id: string;
   email: string | null;
+  phone_number?: string | null;
+  phone_verified_at?: string | null;
   role: string;
   nickname: string | null;
   country: string | null;
@@ -83,6 +87,8 @@ export function toUserResponse(user: {
   return {
     id: user.id,
     email: user.email,
+    phone_number: user.phone_number ?? null,
+    phone_verified_at: user.phone_verified_at ?? null,
     role: user.role as UserRole,
     nickname: user.nickname,
     country: user.country,

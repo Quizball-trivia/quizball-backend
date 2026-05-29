@@ -4,6 +4,8 @@ import type { AvatarCustomization } from './avatar-customization.js';
 
 export interface CreateUserData {
   email?: string | null;
+  phoneNumber?: string | null;
+  phoneVerifiedAt?: string | null;
   nickname?: string | null;
   country?: string | null;
   avatarUrl?: string | null;
@@ -20,6 +22,8 @@ export interface CreateIdentityData {
 export interface UpdateUserData {
   nickname?: string | null;
   country?: string | null;
+  phoneNumber?: string | null;
+  phoneVerifiedAt?: string | null;
   avatarUrl?: string | null;
   avatarCustomization?: AvatarCustomization | null;
   favoriteClub?: string | null;
@@ -99,8 +103,8 @@ export const usersRepo = {
 
   async create(data: CreateUserData): Promise<User> {
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
+      INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.phoneNumber ?? null}, ${data.phoneVerifiedAt ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
       RETURNING *
     `;
     return user;
@@ -119,11 +123,13 @@ export const usersRepo = {
         ? null
         : JSON.stringify(userData.avatarCustomization);
       const result = await tx.unsafe<User[]>(
-        `INSERT INTO users (id, email, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb, false, false)
+        `INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::jsonb, false, false)
          RETURNING *`,
         [
           userData.email ?? null,
+          userData.phoneNumber ?? null,
+          userData.phoneVerifiedAt ?? null,
           userData.nickname ?? null,
           userData.country ?? null,
           userData.avatarUrl ?? null,
@@ -145,6 +151,19 @@ export const usersRepo = {
   async getById(id: string): Promise<User | null> {
     const [user] = await sql<User[]>`
       SELECT * FROM users WHERE id = ${id}
+    `;
+    return user ?? null;
+  },
+
+  async getActiveByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const [user] = await sql<User[]>`
+      SELECT * FROM users
+      WHERE phone_number = ${phoneNumber}
+        AND is_ai = false
+        AND is_deleted = false
+        AND deleted_at IS NULL
+        AND pending_deletion_at IS NULL
+      LIMIT 1
     `;
     return user ?? null;
   },
@@ -246,6 +265,8 @@ export const usersRepo = {
       SET
         nickname = CASE WHEN ${data.nickname !== undefined} THEN ${data.nickname ?? null} ELSE nickname END,
         country = CASE WHEN ${data.country !== undefined} THEN ${data.country ?? null} ELSE country END,
+        phone_number = CASE WHEN ${data.phoneNumber !== undefined} THEN ${data.phoneNumber ?? null} ELSE phone_number END,
+        phone_verified_at = CASE WHEN ${data.phoneVerifiedAt !== undefined} THEN ${data.phoneVerifiedAt ?? null} ELSE phone_verified_at END,
         avatar_url = CASE WHEN ${data.avatarUrl !== undefined} THEN ${data.avatarUrl ?? null} ELSE avatar_url END,
         avatar_customization = CASE WHEN ${data.avatarCustomization !== undefined} THEN ${sql.json((data.avatarCustomization ?? null) as Json)}::jsonb ELSE avatar_customization END,
         favorite_club = CASE WHEN ${data.favoriteClub !== undefined} THEN ${data.favoriteClub ?? null} ELSE favorite_club END,

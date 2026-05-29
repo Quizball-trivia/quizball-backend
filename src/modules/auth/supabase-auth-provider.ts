@@ -101,6 +101,8 @@ export class SupabaseAuthProvider implements AuthProvider {
         const user = (await response.json()) as {
           id?: string;
           email?: string;
+          phone?: string;
+          phone_confirmed_at?: string | null;
           app_metadata?: Record<string, unknown>;
           user_metadata?: Record<string, unknown>;
         };
@@ -113,6 +115,8 @@ export class SupabaseAuthProvider implements AuthProvider {
           provider: 'supabase',
           subject: user.id,
           email: user.email,
+          phoneNumber: user.phone,
+          phoneVerifiedAt: user.phone_confirmed_at ?? null,
           claims: {
             app_metadata: user.app_metadata,
             user_metadata: user.user_metadata,
@@ -149,6 +153,8 @@ export class SupabaseAuthProvider implements AuthProvider {
       provider: 'supabase',
       subject: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
+      phoneNumber: typeof payload.phone === 'string' ? payload.phone : undefined,
+      phoneVerifiedAt: typeof payload.phone_confirmed_at === 'string' ? payload.phone_confirmed_at : null,
       name,
       avatarUrl,
       claims: payload as Record<string, unknown>,

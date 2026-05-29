@@ -20,7 +20,10 @@ declare global {
         body?: unknown;
         query?: unknown;
         params?: unknown;
+        headers?: unknown;
       };
+      /** Raw JSON request body, captured for signed webhook verification. */
+      rawBody?: string;
     }
   }
 }

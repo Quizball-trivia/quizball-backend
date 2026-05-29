@@ -40,6 +40,11 @@ const configSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SMSOFFICE_API_KEY: z.string().optional(),
   SMSOFFICE_SENDER: z.string().default("QuizBall"),
+  SMSOFFICE_DRY_RUN: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SMSOFFICE_CALLBACK_SECRET: z.string().optional(),
   SUPABASE_SMS_HOOK_SECRET: z.string().optional(),
 
   // JWT Verification

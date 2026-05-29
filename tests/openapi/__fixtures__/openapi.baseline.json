@@ -61,12 +61,17 @@
             "nullable": true,
             "format": "email"
           },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
           "provider_sub": {
             "type": "string"
           }
         },
         "required": [
           "email",
+          "phone",
           "provider_sub"
         ]
       },
@@ -119,6 +124,52 @@
           }
         },
         "required": [
+          "message"
+        ]
+      },
+      "PhoneLinkStartResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MessageResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "phone": {
+                "type": "string"
+              },
+              "otp_required": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "phone",
+              "otp_required"
+            ]
+          }
+        ]
+      },
+      "SmsOfficeStatusResponse": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "reference",
+          "destination",
+          "status",
           "message"
         ]
       },
@@ -1125,6 +1176,15 @@
             "nullable": true,
             "format": "email"
           },
+          "phone_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone_verified_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
           "role": {
             "type": "string",
             "enum": [
@@ -1230,6 +1290,8 @@
         "required": [
           "id",
           "email",
+          "phone_number",
+          "phone_verified_at",
           "role",
           "nickname",
           "country",
@@ -5283,6 +5345,17 @@
                   "password": {
                     "type": "string",
                     "minLength": 8
+                  },
+                  "redirect_to": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka"
+                    ]
                   }
                 },
                 "required": [
@@ -5465,8 +5538,14 @@
     "/api/v1/auth/reset-password": {
       "post": {
         "summary": "Reset password",
+        "description": "Sets a new password for the session identified by the Authorization Bearer token (a Supabase recovery session, or a logged-in user adding/changing a password). The token is read from the Authorization header, not the body.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5475,16 +5554,12 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "access_token": {
-                    "type": "string"
-                  },
                   "new_password": {
                     "type": "string",
                     "minLength": 8
                   }
                 },
                 "required": [
-                  "access_token",
                   "new_password"
                 ]
               }
@@ -5747,6 +5822,332 @@
         }
       }
     },
+    "/api/v1/auth/phone/ge/link/start": {
+      "post": {
+        "summary": "Start linking a Georgian phone number",
+        "description": "Starts a Supabase phone-change OTP for the authenticated account. Use this from Settings so Google/email users link a phone to the same account.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "phone"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification code sent or already linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneLinkStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported or invalid phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Phone number already linked elsewhere",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/link/verify": {
+      "post": {
+        "summary": "Verify linked Georgian phone number",
+        "description": "Verifies the phone-change OTP and stores the verified phone number on the current QuizBall user.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  },
+                  "token": {
+                    "type": "string",
+                    "pattern": "^\\d{6}$"
+                  }
+                },
+                "required": [
+                  "phone",
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Phone number linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "email"
+                    },
+                    "phone_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "phone_verified_at": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "admin",
+                        "user"
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "country": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "avatar_url": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uri"
+                    },
+                    "avatar_customization": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "skin": {
+                          "type": "string",
+                          "enum": [
+                            "skin_male_white",
+                            "skin_male_white_alt",
+                            "skin_male_dark",
+                            "skin_male_dark_alt"
+                          ]
+                        },
+                        "jersey": {
+                          "type": "string",
+                          "enum": [
+                            "jersey_green",
+                            "jersey_blue",
+                            "jersey_yellow",
+                            "jersey_red",
+                            "jersey_violet",
+                            "jersey_pink",
+                            "jersey_real",
+                            "jersey_liverpool",
+                            "jersey_barcelona",
+                            "jersey_milan",
+                            "jersey_bayern",
+                            "jersey_brazil_retro",
+                            "jersey_argentina_retro",
+                            "jersey_france_retro",
+                            "jersey_germany_retro",
+                            "jersey_netherlands_retro"
+                          ]
+                        },
+                        "hair": {
+                          "type": "string",
+                          "enum": [
+                            "hair_boy_basic",
+                            "hair_girl_basic",
+                            "hair_hamsik",
+                            "hair_ramos",
+                            "hair_ronaldo_brazil",
+                            "hair_ronaldo_goat"
+                          ]
+                        },
+                        "glasses": {
+                          "type": "string",
+                          "enum": [
+                            "glasses_wayfarer",
+                            "glasses_round",
+                            "glasses_aviator"
+                          ]
+                        },
+                        "facialHair": {
+                          "type": "string",
+                          "enum": [
+                            "stache",
+                            "beard"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "favorite_club": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "preferred_language": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "onboarding_complete": {
+                      "type": "boolean"
+                    },
+                    "progression": {
+                      "type": "object",
+                      "properties": {
+                        "level": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "totalXp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "currentLevelXp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "xpForNextLevel": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "progressPct": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "totalXp",
+                        "currentLevelXp",
+                        "xpForNextLevel",
+                        "progressPct"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "email",
+                    "phone_number",
+                    "phone_verified_at",
+                    "role",
+                    "nickname",
+                    "country",
+                    "avatar_url",
+                    "avatar_customization",
+                    "favorite_club",
+                    "preferred_language",
+                    "onboarding_complete",
+                    "progression",
+                    "created_at"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid OTP or not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Phone number already linked elsewhere",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/sms/supabase-hook": {
       "post": {
         "summary": "Supabase Send SMS hook for SMSOffice",
@@ -5805,6 +6206,157 @@
           },
           "401": {
             "description": "Invalid hook authorization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "SMS provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/smsoffice-callback": {
+      "get": {
+        "summary": "SMSOffice delivery callback",
+        "description": "Receives SMSOffice delivery status updates. Responds with plain text OK.",
+        "tags": [
+          "Auth"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "required": true,
+            "name": "reference",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "reason",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "destination",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "timestamp",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "operator",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "secret",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Callback accepted"
+          },
+          "401": {
+            "description": "Invalid callback secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/smsoffice-status": {
+      "get": {
+        "summary": "Check SMSOffice message status",
+        "description": "Polls SMSOffice message status by destination and reference. Intended for manual/internal verification.",
+        "tags": [
+          "Auth"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "destination",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "required": true,
+            "name": "reference",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SMSOffice status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsOfficeStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid status authorization",
             "content": {
               "application/json": {
                 "schema": {

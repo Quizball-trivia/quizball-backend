@@ -327,4 +327,34 @@ describe('Auth Schemas', () => {
       expect(result.success).toBe(false);
     });
   });
+
+  describe('registerSchema - locale', () => {
+    const base = { email: 'user@example.com', password: 'password123' };
+
+    it('accepts a registration without a locale (locale is optional)', () => {
+      const result = registerSchema.safeParse(base);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.locale).toBeUndefined();
+      }
+    });
+
+    it('accepts locale "ka"', () => {
+      const result = registerSchema.safeParse({ ...base, locale: 'ka' });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.locale).toBe('ka');
+      }
+    });
+
+    it('accepts locale "en"', () => {
+      const result = registerSchema.safeParse({ ...base, locale: 'en' });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an unsupported locale', () => {
+      const result = registerSchema.safeParse({ ...base, locale: 'fr' });
+      expect(result.success).toBe(false);
+    });
+  });
 });

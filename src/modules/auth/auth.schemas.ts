@@ -91,6 +91,17 @@ export const georgianPhoneOtpVerifySchema = z.object({
 });
 export type GeorgianPhoneOtpVerifyRequest = z.infer<typeof georgianPhoneOtpVerifySchema>;
 
+export const georgianPhoneLinkStartSchema = z.object({
+  phone: z.string().min(9).max(32),
+});
+export type GeorgianPhoneLinkStartRequest = z.infer<typeof georgianPhoneLinkStartSchema>;
+
+export const georgianPhoneLinkVerifySchema = z.object({
+  phone: z.string().min(9).max(32),
+  token: z.string().regex(/^\d{6}$/, 'OTP must be a 6 digit code'),
+});
+export type GeorgianPhoneLinkVerifyRequest = z.infer<typeof georgianPhoneLinkVerifySchema>;
+
 export const supabaseSmsHookHeadersSchema = z.object({
   authorization: z.string().optional(),
 }).passthrough();
@@ -106,12 +117,35 @@ export const supabaseSmsHookSchema = z.object({
 }).passthrough();
 export type SupabaseSmsHookRequest = z.infer<typeof supabaseSmsHookSchema>;
 
+export const smsOfficeCallbackQuerySchema = z.object({
+  reference: z.string().min(1).max(20),
+  status: z.string().min(1).max(32),
+  reason: z.string().optional().default(''),
+  destination: z.string().min(9).max(32),
+  timestamp: z.string().optional().default(''),
+  operator: z.string().optional().default(''),
+  secret: z.string().optional(),
+}).passthrough();
+export type SmsOfficeCallbackQuery = z.infer<typeof smsOfficeCallbackQuerySchema>;
+
+export const smsOfficeStatusHeadersSchema = z.object({
+  authorization: z.string().optional(),
+}).passthrough();
+export type SmsOfficeStatusHeaders = z.infer<typeof smsOfficeStatusHeadersSchema>;
+
+export const smsOfficeStatusQuerySchema = z.object({
+  destination: z.string().min(9).max(32),
+  reference: z.string().min(1).max(20),
+});
+export type SmsOfficeStatusQuery = z.infer<typeof smsOfficeStatusQuerySchema>;
+
 // =============================================================================
 // Response Schemas
 // =============================================================================
 
 export const authUserSchema = z.object({
   email: z.string().email().nullable(),
+  phone: z.string().nullable(),
   provider_sub: z.string(),
 });
 
@@ -129,6 +163,20 @@ export const messageResponseSchema = z.object({
   message: z.string(),
 });
 export type MessageResponse = z.infer<typeof messageResponseSchema>;
+
+export const phoneLinkStartResponseSchema = messageResponseSchema.extend({
+  phone: z.string(),
+  otp_required: z.boolean(),
+});
+export type PhoneLinkStartResponse = z.infer<typeof phoneLinkStartResponseSchema>;
+
+export const smsOfficeStatusResponseSchema = z.object({
+  reference: z.string(),
+  destination: z.string(),
+  status: z.string(),
+  message: z.string().nullable(),
+});
+export type SmsOfficeStatusResponse = z.infer<typeof smsOfficeStatusResponseSchema>;
 
 export const socialLoginResponseSchema = z.object({
   url: z.string().url(),
@@ -149,6 +197,8 @@ export interface AuthSession {
   tokenType: string;
   user: {
     email: string | null;
+    phone: string | null;
+    phoneConfirmedAt: string | null;
     providerSub: string;
   } | null;
   provider: string;
@@ -166,6 +216,7 @@ export function toAuthResponse(session: AuthSession): AuthResponse {
     user: session.user
       ? {
           email: session.user.email,
+          phone: session.user.phone,
           provider_sub: session.user.providerSub,
         }
       : null,

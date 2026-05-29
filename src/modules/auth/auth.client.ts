@@ -39,6 +39,12 @@ export interface AuthClient {
   resetPassword(accessToken: string, newPassword: string): Promise<void>;
 
   /**
+   * Start a phone-change flow for the currently authenticated Supabase user.
+   * Supabase sends the OTP through the configured Send SMS hook.
+   */
+  updateUserPhone(accessToken: string, phone: string): Promise<void>;
+
+  /**
    * Generate OAuth authorization URL.
    * Note: Social login is typically done client-side via Supabase SDK.
    * This endpoint exists for parity and custom flows.
@@ -75,4 +81,9 @@ export interface AuthClient {
    * Verify a Supabase phone OTP and return a normal Supabase session.
    */
   verifyPhoneOtp(phone: string, token: string): Promise<AuthSession>;
+
+  /**
+   * Verify a phone-change OTP for the currently authenticated Supabase user.
+   */
+  verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession>;
 }

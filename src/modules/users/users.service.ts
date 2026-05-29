@@ -35,6 +35,26 @@ function assertUserAccountActive(user: User): void {
   }
 }
 
+function buildIdentityBackfill(
+  user: User,
+  identity: AuthIdentity,
+  detectedCountry?: string | null,
+): UpdateUserData {
+  const backfill: UpdateUserData = {};
+  if (!user.country && detectedCountry) {
+    backfill.country = detectedCountry;
+  }
+  if (identity.phoneNumber) {
+    if (user.phone_number !== identity.phoneNumber) {
+      backfill.phoneNumber = identity.phoneNumber;
+      backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
+    } else if (!user.phone_verified_at) {
+      backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
+    }
+  }
+  return backfill;
+}
+
 async function assertAvatarCustomizationAllowed(
   userId: string,
   customization: AvatarCustomization | null | undefined,
@@ -65,6 +85,19 @@ async function assertAvatarCustomizationAllowed(
   }
 }
 
+async function assertPhoneCanBeLinked(userId: string, phoneNumber: string): Promise<'available' | 'already_verified'> {
+  const existing = await usersRepo.getActiveByPhoneNumber(phoneNumber);
+  if (!existing) {
+    return 'available';
+  }
+  if (existing.id !== userId) {
+    throw new ConflictError('This phone number is already linked to another account', {
+      field: 'phone',
+    });
+  }
+  return existing.phone_verified_at ? 'already_verified' : 'available';
+}
+
 /**
  * Users service.
  * Contains ALL business logic for user operations.
@@ -88,8 +121,7 @@ export const usersService = {
       assertUserAccountActive(cached);
 
       // Backfill missing fields for existing users
-      const backfill: Record<string, string> = {};
-      if (!cached.country && detectedCountry) backfill.country = detectedCountry;
+      const backfill = buildIdentityBackfill(cached, identity, detectedCountry);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
@@ -117,8 +149,7 @@ export const usersService = {
       assertUserAccountActive(existingUser);
 
       // Backfill missing fields for existing users
-      const backfill: Record<string, string> = {};
-      if (!existingUser.country && detectedCountry) backfill.country = detectedCountry;
+      const backfill = buildIdentityBackfill(existingUser, identity, detectedCountry);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);
@@ -150,6 +181,10 @@ export const usersService = {
     const newUser = await usersRepo.createWithIdentity(
       {
         email: identity.email,
+        phoneNumber: identity.phoneNumber,
+        phoneVerifiedAt: identity.phoneNumber
+          ? identity.phoneVerifiedAt ?? new Date().toISOString()
+          : null,
         nickname: identity.name,
         country: detectedCountry ?? undefined,
       },
@@ -182,6 +217,38 @@ export const usersService = {
 
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    return user;
+  },
+
+  async assertPhoneCanBeLinked(userId: string, phoneNumber: string): Promise<'available' | 'already_verified'> {
+    return assertPhoneCanBeLinked(userId, phoneNumber);
+  },
+
+  async setVerifiedPhoneNumber(userId: string, phoneNumber: string, verifiedAt?: string | null): Promise<User> {
+    const availability = await assertPhoneCanBeLinked(userId, phoneNumber);
+    if (availability === 'already_verified') {
+      const current = await usersRepo.getById(userId);
+      if (!current) {
+        throw new NotFoundError('User not found');
+      }
+      return current;
+    }
+
+    const user = await usersRepo.update(userId, {
+      phoneNumber,
+      phoneVerifiedAt: verifiedAt ?? new Date().toISOString(),
+    });
+
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    try {
+      await updateCachedUser(userId, user);
+    } catch (err) {
+      logger.warn({ err, userId }, 'Cache update failed (non-fatal)');
     }
 
     return user;

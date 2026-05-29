@@ -112,6 +112,20 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
+  async updateUserPhone(accessToken: string, phone: string): Promise<void> {
+    await withSpan('auth.update_user_phone', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/user', {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ phone }),
+      });
+    });
+  }
+
   async signInWithIdToken(
     provider: string,
     idToken: string,
@@ -157,6 +171,26 @@ export class SupabaseAuthClient implements AuthClient {
           phone,
           token,
           type: 'sms',
+        }),
+      });
+
+      return this.normalizeSession(response);
+    });
+  }
+
+  async verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession> {
+    return withSpan('auth.phone_change_verify', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request('/auth/v1/verify', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          phone,
+          token,
+          type: 'phone_change',
         }),
       });
 
@@ -275,6 +309,8 @@ export class SupabaseAuthClient implements AuthClient {
       user?: {
         id?: string;
         email?: string;
+        phone?: string;
+        phone_confirmed_at?: string | null;
       };
     };
 
@@ -286,6 +322,8 @@ export class SupabaseAuthClient implements AuthClient {
       user: session.user
         ? {
             email: session.user.email ?? null,
+            phone: session.user.phone ?? null,
+            phoneConfirmedAt: session.user.phone_confirmed_at ?? null,
             providerSub: session.user.id ?? '',
           }
         : null,

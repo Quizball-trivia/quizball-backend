@@ -9,8 +9,10 @@ import { authService, normalizeGeorgianPhone } from '../../src/modules/auth/auth
 
 const getOrCreateFromIdentityMock = vi.fn();
 const assertPhoneCanBeLinkedMock = vi.fn();
+const getVerifiedByPhoneNumberMock = vi.fn();
 const setVerifiedPhoneNumberMock = vi.fn();
 const smsDeliveryUpsertMock = vi.fn();
+const sendPhoneOtpMock = vi.fn();
 const verifyPhoneOtpMock = vi.fn();
 const updateUserPhoneMock = vi.fn();
 const verifyPhoneChangeMock = vi.fn();
@@ -19,6 +21,7 @@ vi.mock('../../src/modules/users/index.js', () => ({
   usersService: {
     getOrCreateFromIdentity: (...args: unknown[]) => getOrCreateFromIdentityMock(...args),
     assertPhoneCanBeLinked: (...args: unknown[]) => assertPhoneCanBeLinkedMock(...args),
+    getVerifiedByPhoneNumber: (...args: unknown[]) => getVerifiedByPhoneNumberMock(...args),
     setVerifiedPhoneNumber: (...args: unknown[]) => setVerifiedPhoneNumberMock(...args),
   },
 }));
@@ -31,6 +34,7 @@ vi.mock('../../src/modules/auth/sms-delivery.repo.js', () => ({
 
 vi.mock('../../src/modules/auth/supabase-auth-client.js', () => ({
   getAuthClient: () => ({
+    sendPhoneOtp: (...args: unknown[]) => sendPhoneOtpMock(...args),
     verifyPhoneOtp: (...args: unknown[]) => verifyPhoneOtpMock(...args),
     updateUserPhone: (...args: unknown[]) => updateUserPhoneMock(...args),
     verifyPhoneChange: (...args: unknown[]) => verifyPhoneChangeMock(...args),
@@ -87,6 +91,24 @@ describe('authService SMSOffice delivery', () => {
       destination: '995577123456',
       status: 'dry_run',
       rawCallback: { dryRun: true },
+    }));
+  });
+
+  it('uses the pending phone_change value for add/change phone OTP hooks', async () => {
+    config.SMSOFFICE_API_KEY = undefined;
+    config.SMSOFFICE_DRY_RUN = true;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await authService.sendSupabaseSmsHook({
+      user: { phone: null, phone_change: '+995 599 000 111' },
+      sms: { otp: '000000' },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(smsDeliveryUpsertMock).toHaveBeenCalledWith(expect.objectContaining({
+      destination: '995599000111',
+      status: 'dry_run',
     }));
   });
 
@@ -200,6 +222,30 @@ describe('authService SMSOffice delivery', () => {
 describe('authService phone verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('starts OTP only for a verified linked phone number', async () => {
+    getVerifiedByPhoneNumberMock.mockResolvedValue({
+      id: 'user-1',
+      phone_number: '+995577123456',
+      phone_verified_at: '2026-05-29T12:00:00.000Z',
+      deletion_requested_at: null,
+      pending_deletion_at: null,
+    });
+
+    await authService.startGeorgianPhoneOtp('577123456');
+
+    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(sendPhoneOtpMock).toHaveBeenCalledWith('+995577123456');
+  });
+
+  it('returns generic success without sending OTP for an unlinked phone number', async () => {
+    getVerifiedByPhoneNumberMock.mockResolvedValue(null);
+
+    await authService.startGeorgianPhoneOtp('577123456');
+
+    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(sendPhoneOtpMock).not.toHaveBeenCalled();
   });
 
   it('provisions the verified phone number after OTP login', async () => {

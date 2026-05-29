@@ -287,6 +287,12 @@ export const authService = {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const phone = normalizeGeorgianPhone(rawPhone);
+      const linkedUser = await usersService.getVerifiedByPhoneNumber(phone);
+      if (!linkedUser) {
+        logger.info('Phone OTP requested for unlinked phone; returning generic success');
+        return;
+      }
+
       const authClient = getAuthClient();
       await authClient.sendPhoneOtp(phone);
     });
@@ -352,7 +358,7 @@ export const authService = {
     return withSpan('auth.supabase_sms_hook', {
       'quizball.sms_provider': 'smsoffice',
     }, async () => {
-      const phone = normalizeGeorgianPhone(request.user.phone ?? '');
+      const phone = normalizeGeorgianPhone(request.user.phone_change ?? request.user.phone ?? '');
       await sendSmsOfficeOtp(phone, request.sms.otp);
     });
   },

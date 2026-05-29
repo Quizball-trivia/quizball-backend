@@ -149,6 +149,22 @@
           }
         ]
       },
+      "GeorgianPhoneAvailabilityResponse": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone_auth_available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "country",
+          "phone_auth_available"
+        ]
+      },
       "SmsOfficeStatusResponse": {
         "type": "object",
         "properties": {
@@ -5699,6 +5715,27 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/availability": {
+      "get": {
+        "summary": "Check Georgian phone auth availability",
+        "description": "Detects the request country and reports whether Georgian phone sign-in should be shown to the client.",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Availability resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeorgianPhoneAvailabilityResponse"
                 }
               }
             }

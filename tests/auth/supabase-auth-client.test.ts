@@ -67,6 +67,34 @@ describe('SupabaseAuthClient.signUp', () => {
   });
 });
 
+describe('SupabaseAuthClient.sendPhoneOtp', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not create a Supabase user from the public phone OTP start flow', async () => {
+    const client = new SupabaseAuthClient();
+    await client.sendPhoneOtp('+995577123456');
+
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({
+      phone: '+995577123456',
+      create_user: false,
+    });
+  });
+});
+
 describe('SupabaseAuthClient error mapping', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

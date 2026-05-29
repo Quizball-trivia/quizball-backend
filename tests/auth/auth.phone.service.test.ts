@@ -112,6 +112,24 @@ describe('authService SMSOffice delivery', () => {
     }));
   });
 
+  it('uses the Supabase new_phone value for phone-change OTP hooks', async () => {
+    config.SMSOFFICE_API_KEY = undefined;
+    config.SMSOFFICE_DRY_RUN = true;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await authService.sendSupabaseSmsHook({
+      user: { phone: null, new_phone: '+995 599 000 222' },
+      sms: { otp: '000000' },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(smsDeliveryUpsertMock).toHaveBeenCalledWith(expect.objectContaining({
+      destination: '995599000222',
+      status: 'dry_run',
+    }));
+  });
+
   it('sends urgent POST requests with destination, reference, sender, and OTP content', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -358,7 +358,9 @@ export const authService = {
     return withSpan('auth.supabase_sms_hook', {
       'quizball.sms_provider': 'smsoffice',
     }, async () => {
-      const phone = normalizeGeorgianPhone(request.user.phone_change ?? request.user.phone ?? '');
+      const phone = normalizeGeorgianPhone(
+        request.user.new_phone ?? request.user.phone_change ?? request.user.phone ?? '',
+      );
       await sendSmsOfficeOtp(phone, request.sms.otp);
     });
   },

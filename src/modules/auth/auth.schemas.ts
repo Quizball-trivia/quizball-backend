@@ -111,6 +111,7 @@ export const supabaseSmsHookSchema = z.object({
   user: z.object({
     phone: z.string().optional().nullable(),
     phone_change: z.string().optional().nullable(),
+    new_phone: z.string().optional().nullable(),
   }).passthrough(),
   sms: z.object({
     otp: z.string().min(1).max(16),

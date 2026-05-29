@@ -35,6 +35,11 @@ const phoneLinkStartResponseSchema = messageResponseSchema.extend({
   otp_required: z.boolean(),
 }).openapi('PhoneLinkStartResponse');
 
+const georgianPhoneAvailabilityResponseSchema = z.object({
+  country: z.string().nullable(),
+  phone_auth_available: z.boolean(),
+}).openapi('GeorgianPhoneAvailabilityResponse');
+
 const smsOfficeStatusResponseSchema = z.object({
   reference: z.string(),
   destination: z.string(),
@@ -53,6 +58,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
   registry.register('AuthResponse', authResponseSchema);
   registry.register('MessageResponse', messageResponseSchema);
   registry.register('PhoneLinkStartResponse', phoneLinkStartResponseSchema);
+  registry.register('GeorgianPhoneAvailabilityResponse', georgianPhoneAvailabilityResponseSchema);
   registry.register('SmsOfficeStatusResponse', smsOfficeStatusResponseSchema);
   registry.register('SocialLoginResponse', socialLoginResponseSchema);
 
@@ -167,6 +173,18 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Session created', schema: authResponseSchema },
       401: { description: 'Invalid id_token', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/auth/phone/ge/availability',
+    summary: 'Check Georgian phone auth availability',
+    description:
+      'Detects the request country and reports whether Georgian phone sign-in should be shown to the client.',
+    tags: ['Auth'],
+    responses: {
+      200: { description: 'Availability resolved', schema: georgianPhoneAvailabilityResponseSchema },
     },
   });
 

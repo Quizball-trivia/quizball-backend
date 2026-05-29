@@ -25,6 +25,7 @@ import {
 } from './auth.schemas.js';
 import { toUserResponse } from '../users/users.schemas.js';
 import { AuthenticationError, BadRequestError } from '../../core/errors.js';
+import { detectCountryFromRequest } from '../../core/geo.js';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -148,6 +149,18 @@ function assertSupabaseSmsHookAuthorization(req: Request, authorization: string 
  * Controllers read ONLY req.validated.* (never req.body directly).
  */
 export const authController = {
+  /**
+   * GET /api/v1/auth/phone/ge/availability
+   * Public feature check for Georgian phone auth visibility.
+   */
+  async georgianPhoneAvailability(req: Request, res: Response): Promise<void> {
+    const country = await detectCountryFromRequest(req);
+    res.json({
+      country,
+      phone_auth_available: country === 'GE',
+    });
+  },
+
   /**
    * POST /api/v1/auth/register
    * Register new user with email and password.

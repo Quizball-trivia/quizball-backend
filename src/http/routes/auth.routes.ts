@@ -94,6 +94,15 @@ router.post(
 );
 
 /**
+ * GET /api/v1/auth/phone/ge/availability
+ * Detect whether Georgian phone auth should be shown for this request.
+ */
+router.get(
+  '/phone/ge/availability',
+  authController.georgianPhoneAvailability
+);
+
+/**
  * POST /api/v1/auth/phone/ge/start
  * Start passwordless auth for Georgian mobile numbers.
  */

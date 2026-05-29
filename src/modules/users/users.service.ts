@@ -226,6 +226,15 @@ export const usersService = {
     return assertPhoneCanBeLinked(userId, phoneNumber);
   },
 
+  async getVerifiedByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const user = await usersRepo.getActiveByPhoneNumber(phoneNumber);
+    if (!user || !user.phone_verified_at) {
+      return null;
+    }
+    assertUserAccountActive(user);
+    return user;
+  },
+
   async setVerifiedPhoneNumber(userId: string, phoneNumber: string, verifiedAt?: string | null): Promise<User> {
     const availability = await assertPhoneCanBeLinked(userId, phoneNumber);
     if (availability === 'already_verified') {

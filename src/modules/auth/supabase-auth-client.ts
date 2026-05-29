@@ -155,7 +155,7 @@ export class SupabaseAuthClient implements AuthClient {
         method: 'POST',
         body: JSON.stringify({
           phone,
-          create_user: true,
+          create_user: false,
         }),
       });
     });

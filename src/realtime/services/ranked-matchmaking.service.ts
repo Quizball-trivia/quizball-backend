@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { config } from '../../core/config.js';
+import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -75,7 +76,11 @@ async function attachUserSocketsToLobby(
 async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
-  userBId: string
+  userBId: string,
+  sessionCountries?: {
+    userA?: string | null;
+    userB?: string | null;
+  }
 ): Promise<void> {
   await withSpan('ranked.match_found.human', {
     'quizball.user_a_id': userAId,
@@ -150,10 +155,7 @@ async function startHumanRankedMatch(
         favoriteClub: userB.favorite_club ?? null,
         recentForm: formB,
         rp: profileB.rp,
-        // Frontend resolves country (ISO 3166-1 alpha-2) to the matchmaking map
-        // pin/city. Without this Georgian players land on the Denver fallback.
-        country: userB.country ?? undefined,
-        countryCode: userB.country ?? undefined,
+        ...countryPayload(sessionCountries?.userB ?? userB.country),
       },
     });
     io.to(`user:${userBId}`).emit('ranked:match_found', {
@@ -167,8 +169,7 @@ async function startHumanRankedMatch(
         favoriteClub: userA.favorite_club ?? null,
         recentForm: formA,
         rp: profileA.rp,
-        country: userA.country ?? undefined,
-        countryCode: userA.country ?? undefined,
+        ...countryPayload(sessionCountries?.userA ?? userA.country),
       },
     });
 
@@ -185,7 +186,11 @@ async function startHumanRankedMatch(
   });
 }
 
-async function startAiFallback(io: QuizballServer, userId: string): Promise<void> {
+async function startAiFallbackWithCountry(
+  io: QuizballServer,
+  userId: string,
+  playerCountryCode: string | null | undefined,
+): Promise<void> {
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
   }, async () => {
@@ -194,7 +199,10 @@ async function startAiFallback(io: QuizballServer, userId: string): Promise<void
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
       return;
     }
-    await startRankedAiForUser(io, userId, { skipSearchEmit: true });
+    await startRankedAiForUser(io, userId, {
+      skipSearchEmit: true,
+      ...(playerCountryCode ? { playerCountryCode } : {}),
+    });
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
     appMetrics.rankedAiFallbacks.add(1);
   });
@@ -223,8 +231,9 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       const result = toStringArray(resultRaw);
       const userId = result[0];
       if (!userId) continue;
+      const countryCode = result[1] || null;
       fallbackCount += 1;
-      await startAiFallback(io, userId);
+      await startAiFallbackWithCountry(io, userId, countryCode);
     }
     span.setAttribute('quizball.fallback_count', fallbackCount);
   });
@@ -248,10 +257,16 @@ async function processPairs(io: QuizballServer): Promise<void> {
       if (result.length < 4) break;
 
       const userAId = result[1];
-      const userBId = result[3];
+      const hasCountryCodes = result.length >= 6;
+      const userACountryCode = hasCountryCodes ? result[2] || null : null;
+      const userBId = hasCountryCodes ? result[4] : result[3];
+      const userBCountryCode = hasCountryCodes ? result[5] || null : null;
       if (!userAId || !userBId) break;
       pairCount += 1;
-      await startHumanRankedMatch(io, userAId, userBId);
+      await startHumanRankedMatch(io, userAId, userBId, {
+        userA: userACountryCode,
+        userB: userBCountryCode,
+      });
     }
     span.setAttribute('quizball.pair_count', pairCount);
   });
@@ -326,7 +341,9 @@ export const rankedMatchmakingService = {
         if (redis) {
           await redis.del(cancelKey(userId));
         }
-        await startRankedAiForUser(io, userId);
+        await startRankedAiForUser(io, userId, {
+          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
+        });
         return;
       }
 
@@ -334,7 +351,9 @@ export const rankedMatchmakingService = {
       if (!redis) {
         logger.warn({ userId }, 'Redis unavailable for ranked queue join, falling back to AI');
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
-        await startRankedAiForUser(io, userId);
+        await startRankedAiForUser(io, userId, {
+          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
+        });
         return;
       }
 
@@ -448,14 +467,19 @@ export const rankedMatchmakingService = {
           }
 
           const newSearchId = randomUUID();
+          const searchFields: Record<string, string> = {
+            userId,
+            status: 'queued',
+            queuedAt: String(now),
+            deadlineAt: String(deadlineAt),
+          };
+          if (socket.data.currentCountry) {
+            searchFields.countryCode = socket.data.currentCountry;
+          }
+
           const multiResult = await redis
             .multi()
-            .hSet(searchKey(newSearchId), {
-              userId,
-              status: 'queued',
-              queuedAt: String(now),
-              deadlineAt: String(deadlineAt),
-            })
+            .hSet(searchKey(newSearchId), searchFields)
             .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
             .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
             .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })

@@ -1,14 +1,18 @@
 import type { Socket } from 'socket.io';
+import { detectCountryFromHeaders } from '../core/geo.js';
 import { getAuthProvider } from '../modules/auth/index.js';
 import { usersService } from '../modules/users/index.js';
 import { logger } from '../core/logger.js';
 import { withSpan } from '../core/tracing.js';
 import type { AuthIdentity } from '../core/types.js';
 import type { User as DbUser } from '../db/types.js';
+import { getCachedUser } from '../modules/users/user-cache.js';
+import { rememberCurrentCountry } from './session-country.js';
 
 export interface SocketAuthData {
   user: DbUser;
   identity: AuthIdentity;
+  currentCountry?: string | null;
   lobbyId?: string;
   matchId?: string;
   connectedAt?: number;
@@ -66,10 +70,20 @@ export async function socketAuthMiddleware(
       span.setAttribute('quizball.auth_token_present', true);
       const authProvider = getAuthProvider();
       const identity = await authProvider.verifyToken(token);
-      const user = await usersService.getOrCreateFromIdentity(identity);
+      const cached = await getCachedUser(identity.provider, identity.subject);
+      const detectedCountry = await detectCountryFromHeaders(socket.handshake.headers, socket.handshake.address);
+      const user = await usersService.getOrCreateFromIdentity(
+        identity,
+        cached?.country ? null : detectedCountry,
+      );
+      await rememberCurrentCountry(user.id, detectedCountry);
 
       span.setAttribute('quizball.user_id', user.id);
-      const data: SocketAuthData = { user, identity };
+      const data: SocketAuthData = {
+        user,
+        identity,
+        currentCountry: detectedCountry ?? user.country ?? null,
+      };
       socket.data = { ...(socket.data ?? {}), ...data };
 
       logger.info({ userId: user.id, socketId: socket.id }, 'Socket authenticated');

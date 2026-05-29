@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { countryPayload } from '../../core/country.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -6,6 +7,7 @@ import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 import { getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
+import { getCurrentCountriesForUsers, getCurrentCountryForUser } from '../session-country.js';
 
 export type MatchParticipantSnapshot = {
   user_id: string;
@@ -54,14 +56,14 @@ export async function getOpponentInfo(matchId: string, userId: string): Promise<
   }
 
   const opponentUser = await usersRepo.getById(opponent.user_id);
+  const currentCountry = await getCurrentCountryForUser(opponent.user_id);
   return {
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     favoriteClub: opponentUser?.favorite_club ?? null,
-    country: opponentUser?.country ?? undefined,
-    countryCode: opponentUser?.country ?? undefined,
+    ...countryPayload(currentCountry ?? opponentUser?.country),
   };
 }
 
@@ -141,6 +143,7 @@ export async function getOpponentInfoFromParticipants(
   }
 
   const opponentUser = await usersRepo.getById(opponent.user_id);
+  const currentCountry = await getCurrentCountryForUser(opponent.user_id);
   let rp: number | undefined;
   if (matchMode === 'ranked') {
     if (opponentUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
@@ -156,7 +159,7 @@ export async function getOpponentInfoFromParticipants(
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     ...(rp != null ? { rp } : {}),
-    ...(opponentUser?.country ? { country: opponentUser.country, countryCode: opponentUser.country } : {}),
+    ...countryPayload(currentCountry ?? opponentUser?.country),
   };
 }
 
@@ -171,8 +174,11 @@ export async function buildParticipantPayloads(
   avatarCustomization: AvatarCustomization | null;
   seat: number;
   rankPoints?: number;
+  country?: string;
+  countryCode?: string;
 }>> {
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+  const currentCountriesByUserId = await getCurrentCountriesForUsers(players.map((player) => player.user_id));
   let rpByUserId = new Map<string, number>();
 
   if (matchMode === 'ranked') {
@@ -202,6 +208,7 @@ export async function buildParticipantPayloads(
       avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
       seat: player.seat,
       ...(rankPoints != null ? { rankPoints } : {}),
+      ...countryPayload(currentCountriesByUserId.get(player.user_id) ?? user?.country),
     };
   });
 }

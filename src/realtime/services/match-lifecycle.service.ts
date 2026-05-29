@@ -1,5 +1,6 @@
 import type { User } from '../../db/types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
@@ -13,6 +14,7 @@ import { parseStoredAvatarCustomization } from '../../modules/users/avatar-custo
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { buildInitialCache, setMatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
+import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   matchDisconnectKey,
   matchGraceKey,
@@ -58,6 +60,7 @@ async function emitRejoinAvailable(
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+  const currentCountriesByUserId = await getCurrentCountriesForUsers(players.map((player) => player.user_id));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
@@ -71,6 +74,7 @@ async function emitRejoinAvailable(
         avatarUrl: user?.avatar_url ?? null,
         avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
         seat: player.seat,
+        ...countryPayload(currentCountriesByUserId.get(player.user_id) ?? user?.country),
       };
     }),
     graceMs,
@@ -112,6 +116,7 @@ export async function beginMatchForLobby(
   let members: MatchStartMember[];
   // Country (only used for the matchmaking-map pin) must not block match start.
   const lobbyMemberIds = lobbyMembers.map((member) => member.user_id);
+  const currentCountriesByUserId = await getCurrentCountriesForUsers(lobbyMemberIds);
   let memberUsersSettled: PromiseSettledResult<User | null>[];
   try {
     const lobbyUsersById = await usersRepo.getByIds(lobbyMemberIds);
@@ -126,6 +131,8 @@ export async function beginMatchForLobby(
     }));
   }
   const memberCountry = (index: number): string | null => {
+    const currentCountry = currentCountriesByUserId.get(lobbyMemberIds[index] ?? '');
+    if (currentCountry) return currentCountry;
     const result = memberUsersSettled[index];
     if (result?.status !== 'fulfilled') return null;
     return result.value?.country ?? null;
@@ -144,6 +151,7 @@ export async function beginMatchForLobby(
       'Match start member count invalid, falling back to match players'
     );
     const playerUserIds = players.map((player) => player.user_id);
+    const currentPlayerCountriesByUserId = await getCurrentCountriesForUsers(playerUserIds);
     let usersSettled: PromiseSettledResult<User | null>[];
     try {
       const playerUsersById = await usersRepo.getByIds(playerUserIds);
@@ -169,7 +177,7 @@ export async function beginMatchForLobby(
         avatar_url: user?.avatar_url ?? null,
         avatar_customization: user?.avatar_customization ?? null,
         favorite_club: user?.favorite_club ?? null,
-        country: user?.country ?? null,
+        country: currentPlayerCountriesByUserId.get(player.user_id) ?? user?.country ?? null,
       };
     });
   }
@@ -232,6 +240,7 @@ export async function beginMatchForLobby(
     avatarCustomization: parseStoredAvatarCustomization(member.avatar_customization),
     seat: seatByUserId.get(member.user_id) ?? 0,
     ...(rpByUserId.has(member.user_id) ? { rankPoints: rpByUserId.get(member.user_id) } : {}),
+    ...countryPayload(member.country),
   }));
 
   // Fetch recent form (W/L/D × 3) for each member up-front so each emit can
@@ -269,7 +278,7 @@ export async function beginMatchForLobby(
           favoriteClub: opponent.favorite_club,
           recentForm: recentFormByUserId.get(opponent.user_id) ?? [],
           ...(rpByUserId.has(opponent.user_id) ? { rp: rpByUserId.get(opponent.user_id) } : {}),
-          ...(opponent.country ? { country: opponent.country, countryCode: opponent.country } : {}),
+          ...countryPayload(opponent.country),
         },
         participants,
         ...(categoryName ? { categoryName } : {}),
@@ -300,11 +309,13 @@ export async function beginMatchForLobby(
     );
   }
 
-  const startsAt = new Date(Date.now() + countdownMs).toISOString();
+  const countdownScheduledAtMs = Date.now();
+  const startsAt = new Date(countdownScheduledAtMs + countdownMs).toISOString();
   io.to(`match:${matchId}`).emit('match:countdown', {
     matchId,
     seconds: countdownSec,
     startsAt,
+    serverNow: new Date(countdownScheduledAtMs).toISOString(),
     reason: 'kickoff',
   });
   logger.info(

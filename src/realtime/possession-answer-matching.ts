@@ -101,22 +101,3 @@ export function clueIndexForTimeMs(clueCount: number, timeMs: number, questionTi
   const sliceMs = questionTimeMs / clueCount;
   return clamp(Math.floor(timeMs / sliceMs), 0, clueCount - 1);
 }
-
-export function shouldFinalizeWrongCluesGuess(params: {
-  clueCount: number;
-  currentAnswerCount: number;
-  expectedCount: number;
-  existingRevealCount: number;
-  timedClueIndex: number;
-}): boolean {
-  const opponentAlreadyAnswered = params.expectedCount > 1
-    && params.currentAnswerCount >= params.expectedCount - 1;
-  if (opponentAlreadyAnswered) return true;
-
-  const nextRevealCount = clamp(
-    Math.max(params.existingRevealCount, params.timedClueIndex + 2),
-    1,
-    params.clueCount
-  );
-  return nextRevealCount >= params.clueCount;
-}

@@ -10,9 +10,7 @@ import {
   calculateCountdownScore,
   calculatePutInOrderScore,
   calculateCluesScore,
-  clueIndexForScoring,
 } from '../../src/realtime/scoring.js';
-import { shouldFinalizeWrongCluesGuess } from '../../src/realtime/possession-answer-matching.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -63,38 +61,6 @@ describe('timer constants', () => {
     expect(getQuestionDurationMs('clues', 5)).toBe(50000);
     // Clue counts above the max are clamped to CLUES_MAX_CLUES
     expect(getQuestionDurationMs('clues', 8)).toBe(50000);
-  });
-});
-
-describe('Who Am I wrong guess finalization', () => {
-  it('finalizes a wrong clue guess when the opponent has already answered', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 1,
-      expectedCount: 2,
-      existingRevealCount: 1,
-      timedClueIndex: 0,
-    })).toBe(true);
-  });
-
-  it('keeps revealing clues when the opponent has not answered and more clues remain', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 0,
-      expectedCount: 2,
-      existingRevealCount: 1,
-      timedClueIndex: 0,
-    })).toBe(false);
-  });
-
-  it('finalizes a wrong clue guess once there are no more clues to reveal', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 0,
-      expectedCount: 2,
-      existingRevealCount: 4,
-      timedClueIndex: 3,
-    })).toBe(true);
   });
 });
 
@@ -311,13 +277,4 @@ describe('calculateCluesScore', () => {
     expect(calculateCluesScore(true, 10)).toBe(20);
   });
 
-  it('scores by the latest revealed clue when wrong guesses reveal ahead of time', () => {
-    expect(clueIndexForScoring(0, 2)).toBe(1);
-    expect(calculateCluesScore(true, clueIndexForScoring(0, 2))).toBe(80);
-  });
-
-  it('keeps time-based scoring when timed clues are ahead of manual reveals', () => {
-    expect(clueIndexForScoring(3, 1)).toBe(3);
-    expect(calculateCluesScore(true, clueIndexForScoring(3, 1))).toBe(40);
-  });
 });

@@ -458,11 +458,12 @@ export const userSessionGuardService = {
       code?: string;
       message?: string;
       operation?: string;
+      waitMs?: number;
     }
   ): Promise<boolean> {
     const userId = socket.data.user.id;
     const locked = await this.withUserSessionLock(userId, work, {
-      waitMs: SESSION_LOCK_WAIT_MS,
+      waitMs: options?.waitMs ?? SESSION_LOCK_WAIT_MS,
     });
     if (locked !== null) {
       return true;

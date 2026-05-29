@@ -22,6 +22,8 @@
  *   await preGenerateAiAvatars(96, false); // just cache URLs
  */
 
+import { normalizeCountryCode } from '../core/country.js';
+
 export const RANKED_AI_CORRECTNESS = 0.45;
 
 const AI_NICKNAMES = [
@@ -246,9 +248,9 @@ const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; f
 ];
 
 export function generateRankedAiGeo(playerCountryCode?: string | null): { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number } {
-  // 80% chance to pick same country as the player, 20% random worldwide
-  if (playerCountryCode && Math.random() < 0.8) {
-    const sameCountry = AI_GEO_POOL.filter(g => g.countryCode === playerCountryCode);
+  const normalizedPlayerCountryCode = normalizeCountryCode(playerCountryCode);
+  if (normalizedPlayerCountryCode) {
+    const sameCountry = AI_GEO_POOL.filter(g => g.countryCode === normalizedPlayerCountryCode);
     if (sameCountry.length > 0) return randomFrom(sameCountry);
   }
   return randomFrom(AI_GEO_POOL);

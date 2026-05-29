@@ -30,6 +30,8 @@ local userIdB = redis.call('HGET', searchKeyB, 'userId')
 if (not userIdA) or (not userIdB) then
   return {}
 end
+local countryCodeA = redis.call('HGET', searchKeyA, 'countryCode') or ''
+local countryCodeB = redis.call('HGET', searchKeyB, 'countryCode') or ''
 
 redis.call('HSET', searchKeyA, 'status', 'matched', 'matchedAt', matchedAt)
 redis.call('HSET', searchKeyB, 'status', 'matched', 'matchedAt', matchedAt)
@@ -37,7 +39,7 @@ redis.call('ZREM', queueKey, searchIdA, searchIdB)
 redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
 redis.call('HDEL', userMapKey, userIdA, userIdB)
 
-return { searchIdA, userIdA, searchIdB, userIdB }
+return { searchIdA, userIdA, countryCodeA, searchIdB, userIdB, countryCodeB }
 `;
 
 export const RANKED_MM_CLAIM_FALLBACK_SCRIPT = `
@@ -63,13 +65,14 @@ local userId = redis.call('HGET', searchKey, 'userId')
 if not userId then
   return {}
 end
+local countryCode = redis.call('HGET', searchKey, 'countryCode') or ''
 
 redis.call('HSET', searchKey, 'status', 'fallback', 'fallbackAt', fallbackAt)
 redis.call('ZREM', queueKey, searchId)
 redis.call('ZREM', timeoutKey, searchId)
 redis.call('HDEL', userMapKey, userId)
 
-return { userId }
+return { userId, countryCode }
 `;
 
 export const RANKED_MM_CANCEL_SEARCH_SCRIPT = `

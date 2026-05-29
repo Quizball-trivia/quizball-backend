@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  generateRankedAiGeo,
   generateRankedAiUsernameAvoiding,
   getAiNicknamePool,
 } from '../../src/realtime/ai-ranked.constants.js';
@@ -37,5 +38,26 @@ describe('generateRankedAiUsernameAvoiding', () => {
     const username = generateRankedAiUsernameAvoiding(taken);
     expect(username).toMatch(/^.+_\d{4}$/);
     expect(pool.some((name) => username.startsWith(name))).toBe(true);
+  });
+});
+
+describe('generateRankedAiGeo', () => {
+  it('uses a supported player country instead of random worldwide geo', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    expect(generateRankedAiGeo('GE')).toMatchObject({
+      city: 'Tbilisi',
+      countryCode: 'GE',
+      country: 'Georgia',
+    });
+    expect(generateRankedAiGeo('ma')).toMatchObject({
+      city: 'Casablanca',
+      countryCode: 'MA',
+      country: 'Morocco',
+    });
+    expect(generateRankedAiGeo('United States')).toMatchObject({
+      countryCode: 'US',
+      country: 'USA',
+    });
   });
 });

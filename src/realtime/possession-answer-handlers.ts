@@ -21,7 +21,6 @@ import {
   clueIndexForTimeMs,
   countdownMatch,
   fuzzyMatchesAnswer,
-  shouldFinalizeWrongCluesGuess,
 } from './possession-answer-matching.js';
 import {
   emitMatchBusy,
@@ -38,14 +37,12 @@ import {
 import { toAuthoritativeTimeMsFromCache } from './possession-timing.js';
 import { getCachedMultipleChoiceCorrectIndex } from './question-compat.js';
 import {
-  clueIndexForScoring,
   calculateCluesScore,
   calculatePoints,
   calculatePutInOrderScore,
   clamp,
 } from './scoring.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
-import type { MatchCluesGuessAckPayload } from './socket.types.js';
 
 export async function handlePossessionAnswer(
   io: QuizballServer,
@@ -525,7 +522,6 @@ export async function handlePossessionCluesAnswer(
   };
   type LockOutcome =
     | { kind: 'committed'; data: Committed }
-    | { kind: 'wrongGuess'; ack: MatchCluesGuessAckPayload }
     | { kind: 'noop' };
 
   const outcome = await withAnswerLock<LockOutcome>(matchId, 'clues_answer', () => emitMatchBusy(socket), async () => {
@@ -563,51 +559,9 @@ export async function handlePossessionCluesAnswer(
       questionDurationMs
     );
     const timedClueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
-    const existingRevealCount = cache.clueReveals?.[socket.data.user.id]?.qIndex === qIndex
-      ? cache.clueReveals[socket.data.user.id].revealCount
-      : 1;
-    const clueIndex = clueIndexForScoring(timedClueIndex, existingRevealCount);
+    const clueIndex = timedClueIndex;
     const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
     const expectedCount = getExpectedUserIds(cache).length;
-    const currentAnswerCountBefore = answerCount(cache);
-    if (!isCorrect && !giveUp) {
-      const revealCount = clamp(
-        Math.max(existingRevealCount, timedClueIndex + 2),
-        1,
-        question.evaluation.clues.length
-      );
-      const shouldCommitWrongGuess = shouldFinalizeWrongCluesGuess({
-        clueCount: question.evaluation.clues.length,
-        currentAnswerCount: currentAnswerCountBefore,
-        expectedCount,
-        existingRevealCount,
-        timedClueIndex,
-      });
-      if (shouldCommitWrongGuess) {
-        cache.clueReveals ??= {};
-        cache.clueReveals[socket.data.user.id] = {
-          qIndex,
-          revealCount,
-        };
-      } else {
-        cache.clueReveals ??= {};
-        cache.clueReveals[socket.data.user.id] = {
-          qIndex,
-          revealCount,
-        };
-        await setMatchCache(cache);
-
-        return {
-          kind: 'wrongGuess',
-          ack: {
-            matchId,
-            qIndex,
-            clueIndex: timedClueIndex,
-            revealCount,
-          },
-        };
-      }
-    }
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 
     cache.answers[socket.data.user.id] = {
@@ -641,11 +595,6 @@ export async function handlePossessionCluesAnswer(
       },
     };
   });
-
-  if (outcome?.kind === 'wrongGuess') {
-    socket.emit('match:clues_guess_ack', outcome.ack);
-    return;
-  }
 
   if (outcome?.kind !== 'committed') return;
   const committed = outcome.data;
@@ -688,6 +637,9 @@ export async function handlePossessionCluesAnswer(
     phaseRound: committed.question.phaseRound,
     shooterSeat: committed.question.shooterSeat,
     clueIndex: committed.clueIndex,
+    cluesDisplayAnswer: committed.question.reveal.kind === 'clues'
+      ? committed.question.reveal.displayAnswer
+      : undefined,
   });
 
   if (committed.question.phaseKind !== 'penalty') {

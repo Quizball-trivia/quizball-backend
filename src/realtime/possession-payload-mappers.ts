@@ -107,6 +107,9 @@ export function buildCachedAnswerAckPayload(cache: MatchCache, userId: string): 
     shooterSeat: question.shooterSeat,
     foundCount: answer.foundCount,
     clueIndex: answer.clueIndex,
+    cluesDisplayAnswer: question.kind === 'clues' && question.reveal.kind === 'clues'
+      ? question.reveal.displayAnswer
+      : undefined,
     submittedOrderIds: answer.questionKind === 'putInOrder' ? (answer.submittedOrderIds ?? []) : answer.submittedOrderIds,
   };
 }

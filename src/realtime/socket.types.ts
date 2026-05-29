@@ -243,6 +243,7 @@ export interface MatchAnswerAckPayload {
   shooterSeat?: 1 | 2 | null;
   foundCount?: number;
   clueIndex?: number | null;
+  cluesDisplayAnswer?: Record<string, string>;
   submittedOrderIds?: string[];
 }
 

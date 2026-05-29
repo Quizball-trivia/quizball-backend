@@ -109,19 +109,6 @@ async function emitPossessionAnswerSnapshotToSocket(
   const question = cache.currentQuestion;
   if (!question) return;
 
-  if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
-    const reveal = cache.clueReveals?.[userId];
-    if (!reveal || reveal.qIndex !== question.qIndex || reveal.revealCount <= 1) return;
-
-    socket.emit('match:clues_guess_ack', {
-      matchId: cache.matchId,
-      qIndex: question.qIndex,
-      clueIndex: reveal.revealCount - 1,
-      revealCount: reveal.revealCount,
-    });
-    return;
-  }
-
   if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') return;
 
   const foundIds = await countdownGetFound(cache.matchId, userId);

@@ -34,12 +34,17 @@ export async function startRankedAiForUser(
   options?: {
     skipSearchEmit?: boolean;
     searchDurationMs?: number;
+    playerCountryCode?: string | null;
   }
 ): Promise<void> {
   await withSpan('ranked.match_found.ai.prepare', {
     'quizball.user_id': userId,
   }, async (span) => {
-    const takenLower = await usersRepo.findTakenLowerNicknames([...getAiNicknamePool()]);
+    const [takenLower, playerUser] = await Promise.all([
+      usersRepo.findTakenLowerNicknames([...getAiNicknamePool()]),
+      usersRepo.getById(userId),
+    ]);
+    const aiGeo = generateRankedAiGeo(options?.playerCountryCode ?? playerUser?.country);
     const aiProfile = {
       username: generateRankedAiUsernameAvoiding(takenLower),
       avatarUrl: generateRankedAiAvatarUrl(96),
@@ -47,6 +52,7 @@ export async function startRankedAiForUser(
     const aiUser = await usersRepo.create({
       nickname: aiProfile.username,
       avatarUrl: aiProfile.avatarUrl,
+      country: aiGeo.countryCode,
       isAi: true,
     });
     const playerProfile = await rankedService.ensureProfile(userId);
@@ -94,6 +100,7 @@ export async function startRankedAiForUser(
           userId,
           aiUser,
           aiProfile,
+          aiGeo,
           rankedContext,
           lobbiesRepo,
           logger,
@@ -111,6 +118,7 @@ async function handleRankedAiMatchFound(params: {
   userId: string;
   aiUser: { id: string; nickname: string | null; avatar_url: string | null };
   aiProfile: { username: string; avatarUrl: string };
+  aiGeo: { city: string; country: string; countryCode: string; flag: string; lat: number; lon: number };
   rankedContext: {
     aiAnchorRp: number;
   };
@@ -119,7 +127,7 @@ async function handleRankedAiMatchFound(params: {
   foundModalMs: number;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, userId, aiUser, aiProfile, rankedContext, lobbiesRepo, logger, foundModalMs, startDraft } =
+  const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, rankedContext, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
   try {
@@ -133,8 +141,6 @@ async function handleRankedAiMatchFound(params: {
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
 
-    const playerUser = await usersRepo.getById(userId);
-    const aiGeo = generateRankedAiGeo(playerUser?.country);
     const myRecentForm = await statsService
       .getRecentFormForUser(userId, 3)
       .catch(() => [] as Array<'W' | 'L' | 'D'>);

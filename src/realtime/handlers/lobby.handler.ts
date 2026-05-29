@@ -76,21 +76,34 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
   });
 
-  socket.on('lobby:join_by_code', async (payload) => {
+  socket.on('lobby:join_by_code', async (payload, ack) => {
     const parsed = lobbyJoinByCodeSchema.safeParse(payload);
     if (!parsed.success) {
       logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:join_by_code payload');
+      ack?.({
+        ok: false,
+        code: 'INVALID_INVITE',
+        message: 'Invalid invite code',
+        retryable: false,
+      });
       return;
     }
 
     try {
-      await lobbyRealtimeService.joinByCode(io, socket, parsed.data.inviteCode);
-      if (socket.data.lobbyId) {
-        trackLobbyJoined(socket.data.user.id, socket.data.lobbyId, parsed.data.inviteCode);
+      const result = await lobbyRealtimeService.joinByCode(io, socket, parsed.data.inviteCode);
+      ack?.(result);
+      if (result.ok) {
+        trackLobbyJoined(socket.data.user.id, result.lobbyId, result.inviteCode);
       }
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:join_by_code');
       socket.emit('error', { code: 'LOBBY_JOIN_ERROR', message: 'Failed to join lobby' });
+      ack?.({
+        ok: false,
+        code: 'LOBBY_JOIN_ERROR',
+        message: 'Failed to join lobby',
+        retryable: true,
+      });
     }
   });
 

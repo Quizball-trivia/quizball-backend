@@ -304,6 +304,26 @@ describe('ranked-matchmaking.service queue behavior', () => {
     });
   });
 
+  it('passes queued session country to AI fallback', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.zRangeByScore.mockResolvedValue(['search-1']);
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback', 'MA'];
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      return [];
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'u-fallback', {
+      skipSearchEmit: true,
+      playerCountryCode: 'MA',
+    });
+  });
+
   it('emits ranked:match_found with opponent RP from ensured profiles', async () => {
     const service = await loadService();
     const io = createIoMock();
@@ -332,6 +352,41 @@ describe('ranked-matchmaking.service queue behavior', () => {
       expect.arrayContaining([
         ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', rp: 2222 }) })],
         ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', rp: 1111 }) })],
+      ])
+    );
+  });
+
+  it('uses queued session countries over saved user countries in human match_found payloads', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    getUserByIdMock.mockImplementation(async (userId: string) => ({
+      id: userId,
+      nickname: userId,
+      avatar_url: null,
+      country: 'US',
+    }));
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 'MA', 's2', 'u2', 'GE'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const matchFoundCalls = emitFns
+      .flatMap((emit) => emit.mock.calls)
+      .filter(([event]) => event === 'ranked:match_found');
+
+    expect(matchFoundCalls).toEqual(
+      expect.arrayContaining([
+        ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', countryCode: 'GE' }) })],
+        ['ranked:match_found', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', countryCode: 'MA' }) })],
       ])
     );
   });

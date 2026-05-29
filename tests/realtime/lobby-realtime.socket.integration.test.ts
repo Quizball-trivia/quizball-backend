@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
+import type { LobbyJoinByCodeResult } from '../../src/realtime/socket.types.js';
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
 import { lobbyRealtimeService } from '../../src/realtime/services/lobby-realtime.service.js';
 import '../setup.js';
@@ -82,7 +83,7 @@ function listOpenLobbiesForUser(userId: string): Array<LobbyRow & { joined_at: s
 class TestSocket {
   public data: QuizballSocket['data'];
   public emitted: Array<{ event: string; payload: unknown }> = [];
-  private readonly inbound = new Map<string, ((payload?: unknown) => void | Promise<void>)[]>();
+  private readonly inbound = new Map<string, ((payload?: unknown, ack?: (result: unknown) => void) => void | Promise<void>)[]>();
   private readonly outbound = new Map<string, ((payload?: unknown) => void)[]>();
   private readonly rooms = new Set<string>();
 
@@ -101,7 +102,7 @@ class TestSocket {
     } as QuizballSocket['data'];
   }
 
-  on(event: string, handler: (payload?: unknown) => void | Promise<void>): this {
+  on(event: string, handler: (payload?: unknown, ack?: (result: unknown) => void) => void | Promise<void>): this {
     const handlers = this.inbound.get(event) ?? [];
     handlers.push(handler);
     this.inbound.set(event, handlers);
@@ -138,6 +139,18 @@ class TestSocket {
     for (const handler of handlers) {
       await handler(payload);
     }
+  }
+
+  async triggerWithAck<T = unknown>(event: string, payload?: unknown): Promise<T | undefined> {
+    const handlers = this.inbound.get(event) ?? [];
+    let ackPayload: T | undefined;
+    const ack = (result: T) => {
+      ackPayload = result;
+    };
+    for (const handler of handlers) {
+      await handler(payload, ack);
+    }
+    return ackPayload;
   }
 
   join(room: string): this {
@@ -625,7 +638,14 @@ describe('lobby realtime socket integration', () => {
     const hostState = await hostStatePromise;
     expect(hostState.inviteCode).toBeTruthy();
 
-    await guest.trigger('lobby:join_by_code', { inviteCode: hostState.inviteCode });
+    const joinAck = await guest.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: hostState.inviteCode,
+    });
+    expect(joinAck).toMatchObject({
+      ok: true,
+      inviteCode: hostState.inviteCode,
+      alreadyMember: false,
+    });
 
     const lobby = [...store.lobbies.values()][0];
     expect(lobby).toBeDefined();
@@ -810,7 +830,14 @@ describe('lobby realtime socket integration', () => {
     }
     expect(createdState.inviteCode).toBeTruthy();
 
-    await user.trigger('lobby:join_by_code', { inviteCode: 'BAD999' });
+    const joinAck = await user.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: 'BAD999',
+    });
+    expect(joinAck).toMatchObject({
+      ok: false,
+      code: 'LOBBY_NOT_FOUND',
+      retryable: false,
+    });
 
     const error = user.emitted.find(
       (entry) =>

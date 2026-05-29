@@ -1247,6 +1247,30 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
+  it('S29b: beginMatchForLobby prefers current socket countries over saved user countries', async () => {
+    fakeRedis.isOpen = true;
+    const { rememberCurrentCountry } = await import('../../src/realtime/session-country.js');
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+
+    await rememberCurrentCountry('u1', 'MA');
+    await rememberCurrentCountry('u2', 'GE');
+
+    await beginMatchForLobby(io, 'l1', 'm1');
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const emitCalls = emitFns.flatMap((emit) => emit.mock.calls).filter(([event]) => event === 'match:start');
+
+    expect(emitCalls).toEqual(
+      expect.arrayContaining([
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', countryCode: 'GE' }) })],
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', countryCode: 'MA' }) })],
+      ])
+    );
+  });
+
   it('S30: play again creates a new friendly lobby with reset category settings and carried visibility', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const socket = createSocketMock('u1', 'rematch-match-1');

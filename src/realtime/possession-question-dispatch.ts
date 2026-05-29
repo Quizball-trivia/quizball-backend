@@ -156,6 +156,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         question: cache.currentQuestion.questionDTO,
         playableAt: cache.currentQuestion.shownAt ?? undefined,
         deadlineAt: cache.currentQuestion.deadlineAt ?? new Date().toISOString(),
+        serverNow: new Date().toISOString(),
         // MCQ correctIndex is shipped so the client can show instant tap
         // feedback (matches Trivia Crack / QuizUp pattern). Server still
         // validates the selectedIndex independently when scoring.
@@ -438,6 +439,7 @@ export async function sendPossessionMatchQuestion(
       question: cache.currentQuestion.questionDTO,
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
+      serverNow: new Date().toISOString(),
       correctIndex: cache.currentQuestion.kind === 'multipleChoice'
         ? cache.currentQuestion.correctIndex
         : undefined,
@@ -512,6 +514,7 @@ export async function resumePossessionMatchQuestion(
     question: currentQuestion.questionDTO,
     playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
+    serverNow: new Date().toISOString(),
     correctIndex: currentQuestion.kind === 'multipleChoice'
       ? currentQuestion.correctIndex
       : undefined,

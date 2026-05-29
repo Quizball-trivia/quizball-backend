@@ -1,4 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
@@ -12,6 +13,7 @@ import { parseStoredAvatarCustomization } from '../../modules/users/avatar-custo
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { deleteMatchCache } from '../match-cache.js';
+import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   QUESTION_TIME_MS,
   cancelMatchQuestionTimer,
@@ -99,6 +101,7 @@ async function emitRejoinAvailable(
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+  const currentCountriesByUserId = await getCurrentCountriesForUsers(players.map((player) => player.user_id));
   socket.emit('match:rejoin_available', {
     matchId: match.id,
     mode: match.mode,
@@ -112,6 +115,7 @@ async function emitRejoinAvailable(
         avatarUrl: user?.avatar_url ?? null,
         avatarCustomization: parseStoredAvatarCustomization(user?.avatar_customization),
         seat: player.seat,
+        ...countryPayload(currentCountriesByUserId.get(player.user_id) ?? user?.country),
       };
     }),
     graceMs,
@@ -328,10 +332,12 @@ export async function resumePausedMatch(
     const rawEndsAt = await redis.get(countdownKey);
     const existingEndsAtMs = Number(rawEndsAt);
     if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+      const nowMs = Date.now();
       io.to(`user:${userId}`).emit('match:countdown', {
         matchId,
-        seconds: Math.max(1, Math.ceil((existingEndsAtMs - Date.now()) / 1000)),
+        seconds: Math.max(1, Math.ceil((existingEndsAtMs - nowMs) / 1000)),
         startsAt: new Date(existingEndsAtMs).toISOString(),
+        serverNow: new Date(nowMs).toISOString(),
         reason: 'resume',
       });
     }
@@ -342,6 +348,7 @@ export async function resumePausedMatch(
     matchId,
     seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
     startsAt: new Date(countdownEndsAtMs).toISOString(),
+    serverNow: new Date().toISOString(),
     reason: 'resume',
   });
 

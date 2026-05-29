@@ -1,4 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import type { LobbyJoinByCodeResult } from '../socket.types.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import {
   lobbiesService,
@@ -37,6 +38,8 @@ import {
   resolveLobbyId,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
+
+const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
 
 export async function createLobby(
   io: QuizballServer,
@@ -100,9 +103,14 @@ export async function createLobby(
   await userSessionGuardService.emitState(io, userId);
 }
 
-export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inviteCode: string): Promise<void> {
+export async function joinByCode(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  inviteCode: string
+): Promise<LobbyJoinByCodeResult> {
   const userId = socket.data.user.id;
   const normalizedCode = inviteCode.toUpperCase();
+  let result: LobbyJoinByCodeResult | null = null;
 
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
@@ -120,6 +128,13 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
           message: 'You are already in an active match',
           meta: { stateSnapshot: snapshot },
         });
+        result = {
+          ok: false,
+          code: 'ALREADY_IN_LOBBY',
+          message: 'You are already in an active match',
+          retryable: false,
+          stateSnapshot: snapshot,
+        };
         return;
       }
 
@@ -136,6 +151,13 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
           message: 'Invalid invite code',
           stateSnapshot: snapshot,
         });
+        result = {
+          ok: false,
+          code: 'LOBBY_NOT_FOUND',
+          message: 'Invalid invite code',
+          retryable: false,
+          stateSnapshot: snapshot,
+        };
         return;
       }
 
@@ -153,6 +175,13 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
           message: prepared.message ?? 'You are already in an active match',
           meta: { stateSnapshot: prepared.snapshot },
         });
+        result = {
+          ok: false,
+          code: 'ALREADY_IN_LOBBY',
+          message: prepared.message ?? 'You are already in an active match',
+          retryable: false,
+          stateSnapshot: prepared.snapshot,
+        };
         return;
       }
 
@@ -163,6 +192,12 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
           code: 'TRANSITION_IN_PROGRESS',
           message: 'Lobby transition in progress. Please retry.',
         });
+        result = {
+          ok: false,
+          code: 'TRANSITION_IN_PROGRESS',
+          message: 'Lobby transition in progress. Please retry.',
+          retryable: true,
+        };
         return;
       }
 
@@ -190,6 +225,13 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
             message: 'Lobby no longer exists',
             stateSnapshot: prepared.snapshot,
           });
+          result = {
+            ok: false,
+            code: 'LOBBY_NOT_FOUND',
+            message: 'Lobby no longer exists',
+            retryable: false,
+            stateSnapshot: prepared.snapshot,
+          };
           return;
         }
 
@@ -198,6 +240,12 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
         if (!alreadyMember && members.length >= FRIENDLY_LOBBY_MAX_MEMBERS) {
           logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
           socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
+          result = {
+            ok: false,
+            code: 'LOBBY_FULL',
+            message: 'Lobby is already full',
+            retryable: false,
+          };
           return;
         }
 
@@ -214,6 +262,12 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
           alreadyMember ? 'Lobby rejoined as existing member' : 'Lobby joined by code'
         );
         await emitLobbyState(io, lobby.id);
+        result = {
+          ok: true,
+          lobbyId: lobby.id,
+          inviteCode: normalizedCode,
+          alreadyMember,
+        };
       } finally {
         await releaseLock(lobbyLockKey, lobbyLock.token);
       }
@@ -222,11 +276,27 @@ export async function joinByCode(io: QuizballServer, socket: QuizballSocket, inv
       code: 'TRANSITION_IN_PROGRESS',
       message: 'Lobby state transition is in progress. Please retry.',
       operation: 'lobby:join_by_code',
+      waitMs: JOIN_BY_CODE_LOCK_WAIT_MS,
     }
   );
-  if (!completed) return;
+  if (!completed) {
+    const snapshot = await userSessionGuardService.resolveState(userId);
+    return {
+      ok: false,
+      code: 'TRANSITION_IN_PROGRESS',
+      message: 'Lobby state transition is in progress. Please retry.',
+      retryable: true,
+      stateSnapshot: snapshot,
+    };
+  }
 
   await userSessionGuardService.emitState(io, userId);
+  return result ?? {
+    ok: false,
+    code: 'LOBBY_JOIN_ERROR',
+    message: 'Failed to join lobby',
+    retryable: true,
+  };
 }
 
 export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean): Promise<void> {

@@ -47,6 +47,8 @@ export interface MatchParticipant {
   avatarCustomization?: AvatarCustomization | null;
   seat: number;
   rankPoints?: number;
+  country?: string;
+  countryCode?: string;
 }
 
 export interface LobbyState {
@@ -193,6 +195,7 @@ export interface MatchCountdownPayload {
   matchId: string;
   seconds: number;
   startsAt: string;
+  serverNow?: string;
   reason?: 'kickoff' | 'resume';
 }
 
@@ -203,6 +206,7 @@ export interface MatchQuestionPayload {
   question: GameQuestionDTO;
   playableAt?: string;
   deadlineAt: string;
+  serverNow?: string;
   correctIndex?: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
@@ -576,6 +580,27 @@ export interface SessionBlockedPayload {
   stateSnapshot: SessionStatePayload;
 }
 
+export type LobbyJoinByCodeResult =
+  | {
+      ok: true;
+      lobbyId: string;
+      inviteCode: string;
+      alreadyMember: boolean;
+    }
+  | {
+      ok: false;
+      code:
+        | 'ALREADY_IN_LOBBY'
+        | 'LOBBY_NOT_FOUND'
+        | 'LOBBY_FULL'
+        | 'TRANSITION_IN_PROGRESS'
+        | 'INVALID_INVITE'
+        | 'LOBBY_JOIN_ERROR';
+      message: string;
+      retryable: boolean;
+      stateSnapshot?: SessionStatePayload;
+    };
+
 export interface LobbyChallengeUser {
   id: string;
   username: string;
@@ -631,7 +656,7 @@ export interface ClientToServerEvents {
   'lobby:challenge': (data: { toUserId: string }) => void;
   'lobby:challenge_accept': (data: { invitationId: string }) => void;
   'lobby:challenge_decline': (data: { invitationId: string }) => void;
-  'lobby:join_by_code': (data: { inviteCode: string }) => void;
+  'lobby:join_by_code': (data: { inviteCode: string }, ack?: (result: LobbyJoinByCodeResult) => void) => void;
   'lobby:leave': () => void;
   'lobby:ready': (data: { ready: boolean }) => void;
   'lobby:update_settings': (data: {

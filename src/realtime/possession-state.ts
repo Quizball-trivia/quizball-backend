@@ -193,6 +193,7 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     },
     possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
+    speedStreakHolderSeat: asSeat(candidate.speedStreakHolderSeat) ?? null,
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
     normalQuestionsAnsweredInHalf: Math.max(0, Number(candidate.normalQuestionsAnsweredInHalf ?? 0)),
     normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),
@@ -279,6 +280,9 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
     phase: state.phase,
     half: state.half,
     possessionDiff: state.possessionDiff,
+    // 2× streak only applies during normal play — never surface a holder in
+    // halftime / last-attack / penalty / completed phases.
+    speedStreakHolderSeat: state.phase === 'NORMAL_PLAY' ? state.speedStreakHolderSeat : null,
     normalQuestionsAnsweredInHalf: state.normalQuestionsAnsweredInHalf,
     attackerSeat: state.lastAttack.attackerSeat,
     kickOffSeat: state.kickOffSeat,

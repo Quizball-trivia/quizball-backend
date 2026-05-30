@@ -88,12 +88,13 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
   async function createTestQuestion(
     prompt: I18nField,
     explanation?: I18nField | null,
-    payload?: Json
+    payload?: Json,
+    type = 'mcq_single'
   ) {
     const question = await questionsRepo.createWithPayload(
       {
         categoryId: testCategoryId,
-        type: 'mcq_single',
+        type,
         difficulty: 'easy',
         status: 'draft',
         prompt,
@@ -104,6 +105,37 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
     createdQuestionIds.push(question.id);
     return question;
   }
+
+  describe('list search behavior', () => {
+    it('should search text stored in daily challenge payloads', async () => {
+      if (!dbAvailable) return;
+
+      const question = await createTestQuestion(
+        { en: 'Daily challenge shell prompt' },
+        null,
+        {
+          type: 'countdown_list',
+          prompt: { en: 'Name the Manchester City clean sheet leaders' },
+          answer_groups: [
+            {
+              id: 'ederson',
+              display: { en: 'Ederson' },
+              accepted_answers: ['Ederson'],
+            },
+          ],
+        },
+        'countdown_list'
+      );
+
+      const result = await questionsRepo.list(
+        { categoryId: testCategoryId, search: 'Ederson' },
+        1,
+        20
+      );
+
+      expect(result.questions.map((item) => item.id)).toContain(question.id);
+    });
+  });
 
   /**
    * Helper to read question directly from DB to verify stored JSON

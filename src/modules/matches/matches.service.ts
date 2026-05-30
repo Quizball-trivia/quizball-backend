@@ -315,6 +315,13 @@ export interface PossessionStatePayload {
   half: 1 | 2;
   possessionDiff: number;
   kickOffSeat: 1 | 2;
+  /**
+   * Seat currently holding the 2× speed streak (earned by answering correct AND
+   * strictly faster than the opponent). While set, that seat's possession gain
+   * is doubled on the NEXT round. Cleared on wrong/slower/tie or a goal. null =
+   * no active streak.
+   */
+  speedStreakHolderSeat: 1 | 2 | null;
   goals: { seat1: number; seat2: number };
   penaltyGoals: { seat1: number; seat2: number };
   normalQuestionsPerHalf: number;
@@ -382,6 +389,7 @@ export function createInitialPossessionState(
     half: 1,
     possessionDiff: 0,
     kickOffSeat: 1,
+    speedStreakHolderSeat: null,
     goals: { seat1: 0, seat2: 0 },
     penaltyGoals: { seat1: 0, seat2: 0 },
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,

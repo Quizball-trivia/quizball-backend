@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MatchQuestionEvaluation } from '../../src/modules/matches/matches.service.js';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
+import { fuzzyMatchesAnswer } from '../../src/realtime/possession-answer-matching.js';
 import {
   COUNTDOWN_QUESTION_TIME_MS,
   PUT_IN_ORDER_QUESTION_TIME_MS,
@@ -110,19 +111,25 @@ describe('countdownMatch — prefix matching', () => {
       { id: 'a2', display: { en: 'Martins' }, acceptedAnswers: ['Martins'] },
     ]);
 
-    // "mar" / "mart" are ambiguous prefixes of both groups → null
+    // "mar" / "mart" / "martin" are ambiguous prefixes of both groups → null
     expect(countdownMatch(evalWithSimilarNames, 'mar', new Set())).toBeNull();
     expect(countdownMatch(evalWithSimilarNames, 'mart', new Set())).toBeNull();
+    expect(countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']))).toBeNull();
 
-    // Once a1 is found, "martin" is a unique prefix of a2.
-    const result = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
+    const result = countdownMatch(evalWithSimilarNames, 'martins', new Set(['a1']));
     expect(result).not.toBeNull();
     expect(result!.id).toBe('a2');
   });
 
-  it('resolves ambiguity when one group is already found', () => {
-    // "ron" with Ronaldo (g1) already found → only Ronaldinho (g5) remains → unique prefix
+  it('keeps an ambiguous prefix rejected even after one matching group is already found', () => {
+    // "ron" still describes Ronaldo (found) and Ronaldinho (unfound), so the
+    // player must type enough letters to identify Ronaldinho specifically.
     const result = countdownMatch(FOOTBALL_EVALUATION, 'ron', new Set(['g1']));
+    expect(result).toBeNull();
+  });
+
+  it('accepts an ambiguous family after the typed prefix differentiates the remaining answer', () => {
+    const result = countdownMatch(FOOTBALL_EVALUATION, 'ronaldi', new Set(['g1']));
     expect(result).not.toBeNull();
     expect(result!.id).toBe('g5');
   });
@@ -175,6 +182,27 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     const result = countdownMatch(FOOTBALL_EVALUATION, 'Messy', new Set());
     expect(result).not.toBeNull();
     expect(result!.id).toBe('g2');
+  });
+
+  it('accepts a one-letter typo against a token in a multi-word accepted answer', () => {
+    const evalWithManager = makeEvaluation([
+      { id: 'm1', display: { en: 'Fabio Capello' }, acceptedAnswers: ['Fabio Capello'] },
+    ]);
+
+    const result = countdownMatch(evalWithManager, 'capelo', new Set());
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('m1');
+  });
+
+  it('rejects duplicated short aliases instead of consuming several answers with the same text', () => {
+    const evalWithDuplicateAliases = makeEvaluation([
+      { id: 'm1', display: { en: 'Marco Silva' }, acceptedAnswers: ['Marco Silva', 'mar'] },
+      { id: 'm2', display: { en: 'Marcelo Bielsa' }, acceptedAnswers: ['Marcelo Bielsa', 'mar'] },
+      { id: 'm3', display: { en: 'Mario Gomez' }, acceptedAnswers: ['Mario Gomez', 'mar'] },
+    ]);
+
+    expect(countdownMatch(evalWithDuplicateAliases, 'mar', new Set())).toBeNull();
+    expect(countdownMatch(evalWithDuplicateAliases, 'mar', new Set(['m1', 'm2']))).toBeNull();
   });
 
   it('rejects an interior substring (not a whole-word) match', () => {
@@ -247,6 +275,12 @@ describe('calculateCountdownScore', () => {
 
   it('returns 0 when totalGroups is negative', () => {
     expect(calculateCountdownScore(1, -1)).toBe(0);
+  });
+});
+
+describe('fuzzyMatchesAnswer', () => {
+  it('accepts a one-letter typo for who-am-I style multi-word answers', () => {
+    expect(fuzzyMatchesAnswer('capelo', ['Fabio Capello'])).toBe(true);
   });
 });
 

@@ -5,6 +5,56 @@ import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
 import { nextSeat, QUESTION_TIME_MS, type Seat } from './possession-state.js';
 import { clamp } from './scoring.js';
 
+/** One seat's answer this round, for speed-streak resolution. */
+export interface StreakAnswer {
+  /** Did this seat answer correctly? (timeout / no-answer counts as false.) */
+  correct: boolean;
+  /** Authoritative elapsed time in ms. Lower = faster. */
+  timeMs: number;
+}
+
+/**
+ * Pure 2× speed-streak resolver.
+ *
+ * - `boostedSeat`: the seat whose points were doubled THIS round (the previous
+ *   holder, if still present) — for the client "boost fired" flourish.
+ * - `nextHolderSeat`: who holds the streak going INTO the next round.
+ *
+ * Rules: a seat earns/keeps the streak only by being correct AND *strictly*
+ * faster than the opponent this round. Equal time (tie), being slower, or a
+ * wrong/timeout answer clears it. A goal always clears it. Only one holder.
+ */
+export function resolveSpeedStreak(params: {
+  previousHolderSeat: Seat | null;
+  seat1: StreakAnswer;
+  seat2: StreakAnswer;
+  goalScoredBySeat: Seat | null;
+}): { boostedSeat: Seat | null; nextHolderSeat: Seat | null } {
+  const { previousHolderSeat, seat1, seat2, goalScoredBySeat } = params;
+
+  const boostedSeat = previousHolderSeat;
+
+  if (goalScoredBySeat !== null) {
+    return { boostedSeat, nextHolderSeat: null };
+  }
+
+  // The next holder is whichever seat is correct AND strictly faster than the
+  // other. If only one seat is correct, that seat holds it. If both are correct
+  // with equal time (tie), or both wrong, no one holds it.
+  let nextHolderSeat: Seat | null = null;
+  if (seat1.correct && !seat2.correct) {
+    nextHolderSeat = 1;
+  } else if (seat2.correct && !seat1.correct) {
+    nextHolderSeat = 2;
+  } else if (seat1.correct && seat2.correct) {
+    if (seat1.timeMs < seat2.timeMs) nextHolderSeat = 1;
+    else if (seat2.timeMs < seat1.timeMs) nextHolderSeat = 2;
+    // equal time → tie → null
+  }
+
+  return { boostedSeat, nextHolderSeat };
+}
+
 export function applyDeltaAndGoalCheck(
   state: PossessionStatePayload,
   seat1Points: number,
@@ -35,6 +85,7 @@ export function beginSecondHalf(state: PossessionStatePayload): void {
   state.half = 2;
   state.phase = 'NORMAL_PLAY';
   state.possessionDiff = 0;
+  state.speedStreakHolderSeat = null;
   state.kickOffSeat = nextSeat(state.kickOffSeat);
   state.lastAttack.attackerSeat = null;
   state.halftime.deadlineAt = null;
@@ -50,6 +101,8 @@ export function transitionAfterHalfBoundary(
   state: PossessionStatePayload,
   options?: { presetSecondHalfCategoryId?: string | null }
 ): void {
+  // The 2× streak does not carry across a half boundary or into penalties.
+  state.speedStreakHolderSeat = null;
   if (state.half === 1) {
     if (options?.presetSecondHalfCategoryId) {
       beginSecondHalf(state);

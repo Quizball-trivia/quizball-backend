@@ -37,6 +37,7 @@ import {
   applyLastAttackResolution,
   applyNormalResolution,
   applyPenaltyResolution,
+  resolveSpeedStreak,
 } from './possession-resolution.js';
 import {
   asSeat,
@@ -210,26 +211,72 @@ export async function resolvePossessionRound(
     const answerByUserId = toCachedAnswerByUserId(cache);
     let possessionDelta = 0;
     let goalScoredBySeat: Seat | null = null;
+    let speedStreakBoostedSeat: Seat | null = null;
+    // Snapshot before resolution so we can tell if this round crossed a
+    // half/phase boundary (which clears the 2× streak) — the preset-second-half
+    // path stays in NORMAL_PLAY but bumps the half, so a phase check alone
+    // isn't enough.
+    const preResolutionHalf = state.half;
+    const preResolutionPhase = state.phase;
 
     if (question.phaseKind === 'normal' || question.phaseKind === 'last_attack') {
       const seat1UserId = getUserIdByCachedSeat(cache.players, 1);
       const seat2UserId = getUserIdByCachedSeat(cache.players, 2);
       const seat1Answer = seat1UserId ? cache.answers[seat1UserId] : undefined;
       const seat2Answer = seat2UserId ? cache.answers[seat2UserId] : undefined;
-      const seat1Points = seat1UserId ? (seat1Answer?.pointsEarned ?? 0) : 0;
-      const seat2Points = seat2UserId ? (seat2Answer?.pointsEarned ?? 0) : 0;
+      const seat1Correct = seat1Answer?.isCorrect ?? false;
+      const seat2Correct = seat2Answer?.isCorrect ?? false;
+      const seat1BasePoints = seat1UserId ? (seat1Answer?.pointsEarned ?? 0) : 0;
+      const seat2BasePoints = seat2UserId ? (seat2Answer?.pointsEarned ?? 0) : 0;
+      let seat1Points = seat1BasePoints;
+      let seat2Points = seat2BasePoints;
+
+      // 2× speed-streak applies to NORMAL play only: double the *previous*
+      // holder's points before computing this round's swing.
+      const previousHolderSeat = question.phaseKind === 'normal'
+        ? state.speedStreakHolderSeat
+        : null;
+      if (previousHolderSeat === 1) seat1Points *= 2;
+      else if (previousHolderSeat === 2) seat2Points *= 2;
+      // The boost only "fired" if the holder actually earned points to double.
+      const boostHadEffect =
+        (previousHolderSeat === 1 && seat1BasePoints > 0) ||
+        (previousHolderSeat === 2 && seat2BasePoints > 0);
+
       const result = question.phaseKind === 'normal'
         ? applyNormalResolution(
           state,
           seat1Points,
           seat2Points,
-          seat1Answer?.isCorrect ?? false,
-          seat2Answer?.isCorrect ?? false,
+          seat1Correct,
+          seat2Correct,
           cache.categoryBId
         )
         : applyLastAttackResolution(state, seat1Points, seat2Points, cache.categoryBId);
       possessionDelta = result.delta;
       goalScoredBySeat = result.goalScoredBySeat;
+
+      // Recompute the streak holder for the next round from THIS round's
+      // answers (normal play only). last_attack neither earns nor applies it.
+      if (question.phaseKind === 'normal') {
+        const streak = resolveSpeedStreak({
+          previousHolderSeat: previousHolderSeat,
+          seat1: { correct: seat1Correct, timeMs: seat1Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
+          seat2: { correct: seat2Correct, timeMs: seat2Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
+          goalScoredBySeat,
+        });
+        speedStreakBoostedSeat = boostHadEffect ? streak.boostedSeat : null;
+        // Only carry a holder forward if we stayed within the SAME normal-play
+        // segment. Any boundary crossing this round — phase change OR a half
+        // bump (the preset-second-half path stays NORMAL_PLAY but increments
+        // the half) — already cleared the streak; don't resurrect it.
+        const stayedInSameSegment =
+          state.phase === 'NORMAL_PLAY' &&
+          preResolutionPhase === 'NORMAL_PLAY' &&
+          state.half === preResolutionHalf;
+        state.speedStreakHolderSeat = stayedInSameSegment ? streak.nextHolderSeat : null;
+      }
+
       if (result.goalScoredBySeat) {
         const scorerUserId = getUserIdByCachedSeat(cache.players, result.goalScoredBySeat);
         const scorer = scorerUserId ? cache.players.find((player) => player.userId === scorerUserId) : null;
@@ -286,6 +333,7 @@ export async function resolvePossessionRound(
       possessionDelta,
       penaltyOutcome: null,
       goalScoredBySeat,
+      speedStreakBoostedSeat,
     };
 
     if (question.phaseKind === 'penalty') {

@@ -287,6 +287,10 @@ export interface MatchRoundResultDeltas {
   possessionDelta: number;
   penaltyOutcome: 'goal' | 'saved' | null;
   goalScoredBySeat: 1 | 2 | null;
+  /** Seat whose possession gain was doubled by the 2× speed streak THIS round
+   *  (the previous holder). null when no boost was applied. The live streak
+   *  holder for the NEXT round travels in the match state payload. */
+  speedStreakBoostedSeat?: 1 | 2 | null;
 }
 
 export interface MultipleChoiceRoundReveal {
@@ -421,6 +425,8 @@ export interface MatchStatePayload {
   phase: MatchPhase;
   half: 1 | 2;
   possessionDiff: number;
+  /** Live 2× speed-streak holder (drives the sticky HUD badge). null = none. */
+  speedStreakHolderSeat?: 1 | 2 | null;
   normalQuestionsAnsweredInHalf: number;
   attackerSeat: 1 | 2 | null;
   kickOffSeat: 1 | 2;

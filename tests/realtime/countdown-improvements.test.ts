@@ -223,6 +223,18 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     expect(result!.id).toBe('m1');
   });
 
+  it('accepts common club abbreviations in either direction', () => {
+    const evalWithManchesterClubs = makeEvaluation([
+      { id: 'mu', display: { en: 'Manchester United' }, acceptedAnswers: ['Man United', 'Man Utd'] },
+      { id: 'mc', display: { en: 'Manchester City' }, acceptedAnswers: ['Man City'] },
+    ]);
+
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester United', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester Utd', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Man United', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester', new Set())).toBeNull();
+  });
+
   it('returns null when no match is found', () => {
     const result = countdownMatch(FOOTBALL_EVALUATION, 'Zidane', new Set());
     expect(result).toBeNull();

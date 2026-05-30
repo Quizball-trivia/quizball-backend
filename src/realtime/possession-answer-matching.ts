@@ -3,7 +3,7 @@ import { clamp } from './scoring.js';
 
 const MIN_PREFIX_LENGTH = 3;
 
-type AcceptedAnswerMatchKind = 'exact' | 'wholeWord' | 'typo';
+type AcceptedAnswerMatchKind = 'exact' | 'wholeWord' | 'alias' | 'typo';
 
 interface AcceptedAnswerMatch {
   kind: AcceptedAnswerMatchKind;
@@ -62,6 +62,26 @@ function answerTokens(value: string): string[] {
   return value.split(' ').filter(Boolean);
 }
 
+function tokensMatchByAlias(inputToken: string, acceptedToken: string): boolean {
+  if (inputToken === acceptedToken) return true;
+
+  const aliases = new Map([
+    ['man', 'manchester'],
+    ['utd', 'united'],
+  ]);
+
+  return aliases.get(inputToken) === acceptedToken
+    || aliases.get(acceptedToken) === inputToken;
+}
+
+function hasTokenAliasMatch(normalizedInput: string, normalizedAccepted: string): boolean {
+  const inputTokens = answerTokens(normalizedInput);
+  const acceptedTokens = answerTokens(normalizedAccepted);
+  if (inputTokens.length < 2 || inputTokens.length !== acceptedTokens.length) return false;
+
+  return inputTokens.every((token, index) => tokensMatchByAlias(token, acceptedTokens[index]));
+}
+
 function maxTypoDistance(target: string): number {
   if (target.length < 5) return 0;
   return target.length > 6 ? 2 : 1;
@@ -76,6 +96,7 @@ function betterAcceptedMatch(
   const kindRank: Record<AcceptedAnswerMatchKind, number> = {
     exact: 3,
     wholeWord: 2,
+    alias: 2,
     typo: 1,
   };
 
@@ -93,6 +114,9 @@ function matchNormalizedAcceptedAnswer(
   if (normalizedInput === normalizedAccepted) return { kind: 'exact', distance: 0 };
   if (normalizedInput.length >= 4 && containsWholeWord(normalizedAccepted, normalizedInput)) {
     return { kind: 'wholeWord', distance: 0 };
+  }
+  if (hasTokenAliasMatch(normalizedInput, normalizedAccepted)) {
+    return { kind: 'alias', distance: 0 };
   }
 
   if (normalizedInput.length < 4) return null;
@@ -156,7 +180,7 @@ export function countdownMatch(
     return matches;
   }, []);
 
-  for (const kind of ['exact', 'wholeWord', 'typo'] satisfies AcceptedAnswerMatchKind[]) {
+  for (const kind of ['exact', 'wholeWord', 'alias', 'typo'] satisfies AcceptedAnswerMatchKind[]) {
     const matchesForKind = candidates.filter((candidate) => candidate.match.kind === kind);
     if (matchesForKind.length > 0) {
       const uniqueGroupIds = new Set(matchesForKind.map((candidate) => candidate.id));

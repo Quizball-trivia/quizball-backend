@@ -28,6 +28,13 @@ import {
   isRedisAvailable,
   withAnswerLock,
 } from './possession-answer-lock.js';
+import {
+  answerInputLogFields,
+  answerLogFields,
+  cacheLogFields,
+  idListLogFields,
+  questionLogFields,
+} from './possession-debug-logging.js';
 import { buildCachedAnswerAckPayload } from './possession-payload-mappers.js';
 import {
   asSeat,
@@ -60,6 +67,19 @@ export async function handlePossessionAnswer(
   }
 
   const { matchId, qIndex, selectedIndex, timeMs } = payload;
+  const userId = socket.data.user.id;
+  logger.info(
+    {
+      eventName: 'match:answer',
+      matchId,
+      qIndex,
+      userId,
+      socketId: socket.id,
+      selectedIndex,
+      clientTimeMs: timeMs,
+    },
+    'Possession MCQ answer received'
+  );
 
   type Committed = {
     question: NonNullable<MatchCache['currentQuestion']>;
@@ -73,18 +93,55 @@ export async function handlePossessionAnswer(
 
   const committed = await withAnswerLock<Committed | null>(matchId, 'answer', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return null;
-    if (cache.currentQIndex !== qIndex) return null;
-    if (!cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return null;
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { eventName: 'match:answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession MCQ answer ignored: inactive or missing cache'
+      );
+      return null;
+    }
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) {
+      logger.warn(
+        {
+          eventName: 'match:answer',
+          matchId,
+          qIndex,
+          userId,
+          ...cacheLogFields(cache),
+          ...questionLogFields(cache.currentQuestion),
+        },
+        'Possession MCQ answer ignored: stale or missing current question'
+      );
+      return null;
+    }
 
-    const player = getCachedPlayer(cache, socket.data.user.id);
-    if (!player) return null;
+    const player = getCachedPlayer(cache, userId);
+    if (!player) {
+      logger.warn(
+        { eventName: 'match:answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession MCQ answer ignored: user is not a match player'
+      );
+      return null;
+    }
 
     const question = cache.currentQuestion;
     if (question.phaseKind === 'penalty') {
       const shooterSeat = asSeat(question.shooterSeat);
       const keeperSeat = shooterSeat === 1 ? 2 : 1;
       if (player.seat !== shooterSeat && player.seat !== keeperSeat) {
+        logger.warn(
+          {
+            eventName: 'match:answer',
+            matchId,
+            qIndex,
+            userId,
+            playerSeat: player.seat,
+            shooterSeat,
+            keeperSeat,
+            ...questionLogFields(question),
+          },
+          'Possession MCQ answer rejected: penalty participant mismatch'
+        );
         socket.emit('error', {
           code: 'MATCH_NOT_ALLOWED',
           message: 'Only the shooter or keeper can answer this penalty question.',
@@ -93,7 +150,7 @@ export async function handlePossessionAnswer(
       }
     }
 
-    const existingAnswer = cache.answers[socket.data.user.id];
+    const existingAnswer = cache.answers[userId];
     if (existingAnswer) {
       const expectedCount = getExpectedUserIds(cache).length;
       const currentAnswerCount = answerCount(cache);
@@ -112,10 +169,27 @@ export async function handlePossessionAnswer(
         phaseRound: question.phaseRound,
         shooterSeat: question.shooterSeat,
       });
+      logger.info(
+        {
+          eventName: 'match:answer',
+          matchId,
+          qIndex,
+          userId,
+          expectedCount,
+          answerCount: currentAnswerCount,
+          ...questionLogFields(question),
+          ...answerLogFields(existingAnswer),
+        },
+        'Possession MCQ answer replayed existing ack'
+      );
       return null;
     }
 
     if (question.kind !== 'multipleChoice' || question.evaluation.kind !== 'multipleChoice') {
+      logger.warn(
+        { eventName: 'match:answer', matchId, qIndex, userId, ...questionLogFields(question) },
+        'Possession MCQ answer rejected: active question requires a dedicated event'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'This question type requires a dedicated answer event.',
@@ -139,7 +213,7 @@ export async function handlePossessionAnswer(
         {
           matchId,
           qIndex,
-          userId: socket.data.user.id,
+          userId,
           serverTimeMs: authoritativeTimeMs,
           clientTimeMs,
           diffMs,
@@ -151,7 +225,7 @@ export async function handlePossessionAnswer(
     const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, getQuestionDurationMs(question.kind));
 
     const answer: CachedAnswer = {
-      userId: socket.data.user.id,
+      userId,
       questionKind: question.kind,
       selectedIndex,
       isCorrect,
@@ -163,7 +237,7 @@ export async function handlePossessionAnswer(
       answeredAt: new Date().toISOString(),
     };
 
-    cache.answers[socket.data.user.id] = answer;
+    cache.answers[userId] = answer;
     player.totalPoints += pointsEarned;
     if (isCorrect) player.correctAnswers += 1;
 
@@ -171,6 +245,24 @@ export async function handlePossessionAnswer(
     const currentAnswerCount = answerCount(cache);
 
     await setMatchCache(cache);
+    logger.info(
+      {
+        eventName: 'match:answer',
+        matchId,
+        qIndex,
+        userId,
+        selectedIndex,
+        correctIndex: question.evaluation.correctIndex,
+        isCorrect,
+        pointsEarned,
+        answerTimeMs: authoritativeTimeMs,
+        expectedCount,
+        answerCount: currentAnswerCount,
+        myTotalPoints: player.totalPoints,
+        ...questionLogFields(question),
+      },
+      'Possession MCQ answer committed'
+    );
 
     return {
       question,
@@ -191,7 +283,7 @@ export async function handlePossessionAnswer(
     await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
-      userId: socket.data.user.id,
+      userId,
       selectedIndex,
       isCorrect: committed.isCorrect,
       timeMs: committed.answerTimeMs,
@@ -204,7 +296,7 @@ export async function handlePossessionAnswer(
   fireAndForget('updatePlayerTotals(handlePossessionAnswer)', async () => {
     await matchPlayersRepo.updatePlayerTotals(
       matchId,
-      socket.data.user.id,
+      userId,
       committed.pointsEarned,
       committed.isCorrect
     );
@@ -238,6 +330,17 @@ export async function handlePossessionAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
+    logger.info(
+      {
+        eventName: 'match:answer',
+        matchId,
+        qIndex,
+        userId,
+        answerCount: committed.answerCount,
+        expectedCount: committed.expectedCount,
+      },
+      'Possession MCQ answer triggering round resolve'
+    );
     await resolvePossessionRound(io, matchId, qIndex, false);
   }
 }
@@ -257,16 +360,56 @@ export async function handlePossessionCountdownGuess(
 
   const { matchId, qIndex, guess } = payload;
   const userId = socket.data.user.id;
+  logger.info(
+    {
+      eventName: 'match:countdown_guess',
+      matchId,
+      qIndex,
+      userId,
+      socketId: socket.id,
+      ...answerInputLogFields(guess),
+    },
+    'Possession countdown guess received'
+  );
 
   const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return;
-  if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return;
+  if (!cache || cache.status !== 'active') {
+    logger.warn(
+      { eventName: 'match:countdown_guess', matchId, qIndex, userId, ...cacheLogFields(cache) },
+      'Possession countdown guess ignored: inactive or missing cache'
+    );
+    return;
+  }
+  if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) {
+    logger.warn(
+      {
+        eventName: 'match:countdown_guess',
+        matchId,
+        qIndex,
+        userId,
+        ...cacheLogFields(cache),
+        ...questionLogFields(cache.currentQuestion),
+      },
+      'Possession countdown guess ignored: stale or missing current question'
+    );
+    return;
+  }
 
   const player = getCachedPlayer(cache, userId);
-  if (!player) return;
+  if (!player) {
+    logger.warn(
+      { eventName: 'match:countdown_guess', matchId, qIndex, userId, ...cacheLogFields(cache) },
+      'Possession countdown guess ignored: user is not a match player'
+    );
+    return;
+  }
 
   const question = cache.currentQuestion;
   if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') {
+    logger.warn(
+      { eventName: 'match:countdown_guess', matchId, qIndex, userId, ...questionLogFields(question) },
+      'Possession countdown guess rejected: active question is not countdown'
+    );
     socket.emit('error', {
       code: 'MATCH_NOT_ALLOWED',
       message: 'The active question is not a countdown round.',
@@ -279,6 +422,21 @@ export async function handlePossessionCountdownGuess(
 
   const matched = countdownMatch(question.evaluation, guess, foundIds);
   if (!matched) {
+    logger.info(
+      {
+        eventName: 'match:countdown_guess',
+        matchId,
+        qIndex,
+        userId,
+        accepted: false,
+        duplicate: false,
+        foundCount: foundIds.size,
+        totalGroups: question.evaluation.answerGroups.length,
+        ...answerInputLogFields(guess),
+        ...questionLogFields(question),
+      },
+      'Possession countdown guess rejected by matcher'
+    );
     socket.emit('match:countdown_guess_ack', {
       matchId,
       qIndex,
@@ -291,6 +449,22 @@ export async function handlePossessionCountdownGuess(
 
   const addResult = await countdownAddFound(matchId, userId, matched.id);
   if (!addResult.added) {
+    logger.info(
+      {
+        eventName: 'match:countdown_guess',
+        matchId,
+        qIndex,
+        userId,
+        accepted: false,
+        duplicate: true,
+        matchedAnswerGroupId: matched.id,
+        foundCount: addResult.foundCount,
+        totalGroups: question.evaluation.answerGroups.length,
+        ...answerInputLogFields(guess),
+        ...questionLogFields(question),
+      },
+      'Possession countdown guess ignored as duplicate'
+    );
     socket.emit('match:countdown_guess_ack', {
       matchId,
       qIndex,
@@ -301,6 +475,22 @@ export async function handlePossessionCountdownGuess(
     return;
   }
 
+  logger.info(
+    {
+      eventName: 'match:countdown_guess',
+      matchId,
+      qIndex,
+      userId,
+      accepted: true,
+      duplicate: false,
+      matchedAnswerGroupId: matched.id,
+      foundCount: addResult.foundCount,
+      totalGroups: question.evaluation.answerGroups.length,
+      ...answerInputLogFields(guess),
+      ...questionLogFields(question),
+    },
+    'Possession countdown guess accepted'
+  );
   socket.emit('match:countdown_guess_ack', {
     matchId,
     qIndex,
@@ -337,6 +527,19 @@ export async function handlePossessionPutInOrderAnswer(
   }
 
   const { matchId, qIndex, orderedItemIds, timeMs } = payload;
+  const userId = socket.data.user.id;
+  logger.info(
+    {
+      eventName: 'match:put_in_order_answer',
+      matchId,
+      qIndex,
+      userId,
+      socketId: socket.id,
+      clientTimeMs: timeMs,
+      ...idListLogFields('submittedOrder', orderedItemIds),
+    },
+    'Possession put-in-order answer received'
+  );
 
   type Committed = {
     question: NonNullable<MatchCache['currentQuestion']>;
@@ -351,14 +554,43 @@ export async function handlePossessionPutInOrderAnswer(
 
   const committed = await withAnswerLock<Committed | null>(matchId, 'put_in_order_answer', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return null;
-    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return null;
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { eventName: 'match:put_in_order_answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession put-in-order answer ignored: inactive or missing cache'
+      );
+      return null;
+    }
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) {
+      logger.warn(
+        {
+          eventName: 'match:put_in_order_answer',
+          matchId,
+          qIndex,
+          userId,
+          ...cacheLogFields(cache),
+          ...questionLogFields(cache.currentQuestion),
+        },
+        'Possession put-in-order answer ignored: stale or missing current question'
+      );
+      return null;
+    }
 
-    const player = getCachedPlayer(cache, socket.data.user.id);
-    if (!player) return null;
+    const player = getCachedPlayer(cache, userId);
+    if (!player) {
+      logger.warn(
+        { eventName: 'match:put_in_order_answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession put-in-order answer ignored: user is not a match player'
+      );
+      return null;
+    }
 
     const question = cache.currentQuestion;
     if (question.kind !== 'putInOrder' || question.evaluation.kind !== 'putInOrder') {
+      logger.warn(
+        { eventName: 'match:put_in_order_answer', matchId, qIndex, userId, ...questionLogFields(question) },
+        'Possession put-in-order answer rejected: active question is not put-in-order'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'The active question is not a put-in-order round.',
@@ -366,10 +598,21 @@ export async function handlePossessionPutInOrderAnswer(
       return null;
     }
 
-    const existingAnswer = cache.answers[socket.data.user.id];
+    const existingAnswer = cache.answers[userId];
     if (existingAnswer) {
-      const answerAck = buildCachedAnswerAckPayload(cache, socket.data.user.id);
+      const answerAck = buildCachedAnswerAckPayload(cache, userId);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
+      logger.info(
+        {
+          eventName: 'match:put_in_order_answer',
+          matchId,
+          qIndex,
+          userId,
+          ...questionLogFields(question),
+          ...answerLogFields(existingAnswer),
+        },
+        'Possession put-in-order answer replayed existing ack'
+      );
       return null;
     }
 
@@ -394,8 +637,8 @@ export async function handlePossessionPutInOrderAnswer(
     );
     const pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
 
-    cache.answers[socket.data.user.id] = {
-      userId: socket.data.user.id,
+    cache.answers[userId] = {
+      userId,
       questionKind: question.kind,
       selectedIndex: null,
       isCorrect,
@@ -412,6 +655,25 @@ export async function handlePossessionPutInOrderAnswer(
     const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
     await setMatchCache(cache);
+    logger.info(
+      {
+        eventName: 'match:put_in_order_answer',
+        matchId,
+        qIndex,
+        userId,
+        isCorrect,
+        pointsEarned,
+        answerTimeMs: authoritativeTimeMs,
+        foundCount,
+        expectedCount,
+        answerCount: currentAnswerCount,
+        myTotalPoints: player.totalPoints + pointsEarned,
+        ...idListLogFields('submittedOrder', orderedItemIds),
+        ...idListLogFields('correctOrder', correctOrderIds),
+        ...questionLogFields(question),
+      },
+      'Possession put-in-order answer committed'
+    );
 
     return {
       question,
@@ -449,7 +711,7 @@ export async function handlePossessionPutInOrderAnswer(
     await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
-      userId: socket.data.user.id,
+      userId,
       selectedIndex: null,
       isCorrect: committed.isCorrect,
       timeMs: committed.answerTimeMs,
@@ -478,6 +740,17 @@ export async function handlePossessionPutInOrderAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
+    logger.info(
+      {
+        eventName: 'match:put_in_order_answer',
+        matchId,
+        qIndex,
+        userId,
+        answerCount: committed.answerCount,
+        expectedCount: committed.expectedCount,
+      },
+      'Possession put-in-order answer triggering round resolve'
+    );
     await resolvePossessionRound(io, matchId, qIndex, false);
   }
 }
@@ -507,8 +780,23 @@ export async function handlePossessionCluesAnswer(
   }
 
   const { matchId, qIndex, timeMs } = payload;
+  const userId = socket.data.user.id;
   const giveUp = payload.kind === 'giveUp';
   const guess = payload.kind === 'guess' ? payload.guess : '';
+  logger.info(
+    {
+      eventName: 'match:clues_answer',
+      matchId,
+      qIndex,
+      userId,
+      socketId: socket.id,
+      action: payload.kind,
+      giveUp,
+      clientTimeMs: timeMs,
+      ...answerInputLogFields(guess),
+    },
+    'Possession clues answer received'
+  );
 
   type Committed = {
     question: NonNullable<MatchCache['currentQuestion']>;
@@ -526,14 +814,43 @@ export async function handlePossessionCluesAnswer(
 
   const outcome = await withAnswerLock<LockOutcome>(matchId, 'clues_answer', () => emitMatchBusy(socket), async () => {
     const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return { kind: 'noop' };
-    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) return { kind: 'noop' };
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { eventName: 'match:clues_answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession clues answer ignored: inactive or missing cache'
+      );
+      return { kind: 'noop' };
+    }
+    if (cache.currentQIndex !== qIndex || !cache.currentQuestion || cache.currentQuestion.qIndex !== qIndex) {
+      logger.warn(
+        {
+          eventName: 'match:clues_answer',
+          matchId,
+          qIndex,
+          userId,
+          ...cacheLogFields(cache),
+          ...questionLogFields(cache.currentQuestion),
+        },
+        'Possession clues answer ignored: stale or missing current question'
+      );
+      return { kind: 'noop' };
+    }
 
-    const player = getCachedPlayer(cache, socket.data.user.id);
-    if (!player) return { kind: 'noop' };
+    const player = getCachedPlayer(cache, userId);
+    if (!player) {
+      logger.warn(
+        { eventName: 'match:clues_answer', matchId, qIndex, userId, ...cacheLogFields(cache) },
+        'Possession clues answer ignored: user is not a match player'
+      );
+      return { kind: 'noop' };
+    }
 
     const question = cache.currentQuestion;
     if (question.kind !== 'clues' || question.evaluation.kind !== 'clues') {
+      logger.warn(
+        { eventName: 'match:clues_answer', matchId, qIndex, userId, ...questionLogFields(question) },
+        'Possession clues answer rejected: active question is not clues'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'The active question is not a clues round.',
@@ -541,10 +858,21 @@ export async function handlePossessionCluesAnswer(
       return { kind: 'noop' };
     }
 
-    const existingAnswer = cache.answers[socket.data.user.id];
+    const existingAnswer = cache.answers[userId];
     if (existingAnswer) {
-      const answerAck = buildCachedAnswerAckPayload(cache, socket.data.user.id);
+      const answerAck = buildCachedAnswerAckPayload(cache, userId);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
+      logger.info(
+        {
+          eventName: 'match:clues_answer',
+          matchId,
+          qIndex,
+          userId,
+          ...questionLogFields(question),
+          ...answerLogFields(existingAnswer),
+        },
+        'Possession clues answer replayed existing ack'
+      );
       return { kind: 'noop' };
     }
 
@@ -564,8 +892,8 @@ export async function handlePossessionCluesAnswer(
     const expectedCount = getExpectedUserIds(cache).length;
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 
-    cache.answers[socket.data.user.id] = {
-      userId: socket.data.user.id,
+    cache.answers[userId] = {
+      userId,
       questionKind: question.kind,
       selectedIndex: null,
       isCorrect,
@@ -580,6 +908,27 @@ export async function handlePossessionCluesAnswer(
 
     const currentAnswerCount = answerCount(cache);
     await setMatchCache(cache);
+    logger.info(
+      {
+        eventName: 'match:clues_answer',
+        matchId,
+        qIndex,
+        userId,
+        action: payload.kind,
+        giveUp,
+        isCorrect,
+        pointsEarned,
+        answerTimeMs: authoritativeTimeMs,
+        clueIndex,
+        clueCount: question.evaluation.clues.length,
+        expectedCount,
+        answerCount: currentAnswerCount,
+        myTotalPoints: player.totalPoints + pointsEarned,
+        ...answerInputLogFields(guess),
+        ...questionLogFields(question),
+      },
+      'Possession clues answer committed'
+    );
 
     return {
       kind: 'committed',
@@ -609,7 +958,7 @@ export async function handlePossessionCluesAnswer(
     await matchAnswersRepo.insertMatchAnswerIfMissing({
       matchId,
       qIndex,
-      userId: socket.data.user.id,
+      userId,
       selectedIndex: null,
       isCorrect: committed.isCorrect,
       timeMs: committed.answerTimeMs,
@@ -655,6 +1004,17 @@ export async function handlePossessionCluesAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
+    logger.info(
+      {
+        eventName: 'match:clues_answer',
+        matchId,
+        qIndex,
+        userId,
+        answerCount: committed.answerCount,
+        expectedCount: committed.expectedCount,
+      },
+      'Possession clues answer triggering round resolve'
+    );
     await resolvePossessionRound(io, matchId, qIndex, false);
   }
 }

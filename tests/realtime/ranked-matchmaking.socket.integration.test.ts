@@ -392,6 +392,7 @@ class TestIo {
 }
 
 const mockStartDraft = vi.fn();
+const mockGetWallet = vi.fn(async () => ({ coins: 0, tickets: 1 }));
 const mockStartRankedAiForUser = vi.fn(async (io: QuizballServer, userId: string) => {
   io.to(`user:${userId}`).emit('ranked:match_found', {
     lobbyId: `ai-lobby-${userId}`,
@@ -484,6 +485,12 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
       placement_played: 3,
       placement_wins: 2,
     })),
+  },
+}));
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    getWallet: (...args: unknown[]) => mockGetWallet(...args),
   },
 }));
 
@@ -592,6 +599,8 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     lobbyCounter = 0;
     lobbyMembers.clear();
     mockStartDraft.mockReset();
+    mockGetWallet.mockReset();
+    mockGetWallet.mockResolvedValue({ coins: 0, tickets: 1 });
     mockStartRankedAiForUser.mockClear();
     vi.resetModules();
 
@@ -706,6 +715,23 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(fakeRedis.getUserSearchId('cancel-user')).toBeNull();
     fakeRedis.forceAllTimeoutsDue(Date.now());
     await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
+  it('blocks ranked search before queueing when the user has no tickets', async () => {
+    mockGetWallet.mockResolvedValueOnce({ coins: 0, tickets: 0 });
+    const user = createSocket('no-ticket-user');
+    const errorEvent = waitForEvent<{ code: string; meta?: { tickets?: number } }>(user, 'error', 2000);
+    const queueLeft = waitForEvent(user, 'ranked:queue_left', 2000);
+
+    await user.trigger('ranked:queue_join', {});
+
+    const error = await errorEvent;
+    await queueLeft;
+
+    expect(error.code).toBe('INSUFFICIENT_TICKETS');
+    expect(error.meta?.tickets).toBe(0);
+    expect(fakeRedis.getUserSearchId('no-ticket-user')).toBeNull();
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
   });
 });

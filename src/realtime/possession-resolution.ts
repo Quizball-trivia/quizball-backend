@@ -18,41 +18,76 @@ export interface StreakAnswer {
  *
  * - `boostedSeat`: the seat whose points were doubled THIS round (the previous
  *   holder, if still present) — for the client "boost fired" flourish.
- * - `nextHolderSeat`: who holds the streak going INTO the next round.
+ * - `nextHolderSeat`: who holds the active streak going INTO the next round.
+ * - `nextCandidateSeat` / `nextCandidateCount`: qualification progress toward
+ *   the next active streak. A player needs two qualifying rounds in a row.
  *
- * Rules: a seat earns/keeps the streak only by being correct AND *strictly*
- * faster than the opponent this round. Equal time (tie), being slower, or a
- * wrong/timeout answer clears it. A goal always clears it. Only one holder.
+ * Rules: a seat qualifies only by being correct and winning the answer race
+ * this round (strictly faster when both are correct; a sole correct answer
+ * beats a wrong/timeout opponent). Equal time (tie), being slower, or a
+ * wrong/timeout answer clears progress. A goal always clears it. Only one
+ * holder.
  */
 export function resolveSpeedStreak(params: {
   previousHolderSeat: Seat | null;
+  previousCandidateSeat: Seat | null;
+  previousCandidateCount: number;
   seat1: StreakAnswer;
   seat2: StreakAnswer;
   goalScoredBySeat: Seat | null;
-}): { boostedSeat: Seat | null; nextHolderSeat: Seat | null } {
-  const { previousHolderSeat, seat1, seat2, goalScoredBySeat } = params;
+}): {
+  boostedSeat: Seat | null;
+  nextHolderSeat: Seat | null;
+  nextCandidateSeat: Seat | null;
+  nextCandidateCount: number;
+} {
+  const {
+    previousHolderSeat,
+    previousCandidateSeat,
+    previousCandidateCount,
+    seat1,
+    seat2,
+    goalScoredBySeat,
+  } = params;
 
   const boostedSeat = previousHolderSeat;
 
   if (goalScoredBySeat !== null) {
-    return { boostedSeat, nextHolderSeat: null };
+    return { boostedSeat, nextHolderSeat: null, nextCandidateSeat: null, nextCandidateCount: 0 };
   }
 
-  // The next holder is whichever seat is correct AND strictly faster than the
-  // other. If only one seat is correct, that seat holds it. If both are correct
-  // with equal time (tie), or both wrong, no one holds it.
-  let nextHolderSeat: Seat | null = null;
+  // The qualifying seat is whichever seat is correct AND strictly faster than
+  // the other. If only one seat is correct, that seat wins the round. If both
+  // are correct with equal time (tie), or both wrong, no one qualifies.
+  let qualifyingSeat: Seat | null = null;
   if (seat1.correct && !seat2.correct) {
-    nextHolderSeat = 1;
+    qualifyingSeat = 1;
   } else if (seat2.correct && !seat1.correct) {
-    nextHolderSeat = 2;
+    qualifyingSeat = 2;
   } else if (seat1.correct && seat2.correct) {
-    if (seat1.timeMs < seat2.timeMs) nextHolderSeat = 1;
-    else if (seat2.timeMs < seat1.timeMs) nextHolderSeat = 2;
+    if (seat1.timeMs < seat2.timeMs) qualifyingSeat = 1;
+    else if (seat2.timeMs < seat1.timeMs) qualifyingSeat = 2;
     // equal time → tie → null
   }
 
-  return { boostedSeat, nextHolderSeat };
+  if (qualifyingSeat === null) {
+    return { boostedSeat, nextHolderSeat: null, nextCandidateSeat: null, nextCandidateCount: 0 };
+  }
+
+  const nextCandidateCount = qualifyingSeat === previousCandidateSeat
+    ? Math.min(2, previousCandidateCount + 1)
+    : 1;
+  const nextHolderSeat =
+    previousHolderSeat === qualifyingSeat || nextCandidateCount >= 2
+      ? qualifyingSeat
+      : null;
+
+  return {
+    boostedSeat,
+    nextHolderSeat,
+    nextCandidateSeat: qualifyingSeat,
+    nextCandidateCount,
+  };
 }
 
 export function applyDeltaAndGoalCheck(
@@ -86,6 +121,8 @@ export function beginSecondHalf(state: PossessionStatePayload): void {
   state.phase = 'NORMAL_PLAY';
   state.possessionDiff = 0;
   state.speedStreakHolderSeat = null;
+  state.speedStreakCandidateSeat = null;
+  state.speedStreakCandidateCount = 0;
   state.kickOffSeat = nextSeat(state.kickOffSeat);
   state.lastAttack.attackerSeat = null;
   state.halftime.deadlineAt = null;
@@ -103,6 +140,8 @@ export function transitionAfterHalfBoundary(
 ): void {
   // The 2× streak does not carry across a half boundary or into penalties.
   state.speedStreakHolderSeat = null;
+  state.speedStreakCandidateSeat = null;
+  state.speedStreakCandidateCount = 0;
   if (state.half === 1) {
     if (options?.presetSecondHalfCategoryId) {
       beginSecondHalf(state);

@@ -180,6 +180,19 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     return fallback;
   }
 
+  const speedStreakCandidateSeat = asSeat(candidate.speedStreakCandidateSeat) ?? null;
+  const speedStreakCandidateCount = Math.max(
+    0,
+    Math.min(2, Number(candidate.speedStreakCandidateCount ?? 0))
+  );
+  const parsedSpeedStreakHolderSeat = asSeat(candidate.speedStreakHolderSeat) ?? null;
+  const speedStreakHolderSeat =
+    parsedSpeedStreakHolderSeat !== null &&
+    speedStreakCandidateSeat === parsedSpeedStreakHolderSeat &&
+    speedStreakCandidateCount >= 2
+      ? parsedSpeedStreakHolderSeat
+      : null;
+
   return {
     ...fallback,
     ...candidate,
@@ -193,7 +206,9 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     },
     possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
-    speedStreakHolderSeat: asSeat(candidate.speedStreakHolderSeat) ?? null,
+    speedStreakHolderSeat,
+    speedStreakCandidateSeat,
+    speedStreakCandidateCount,
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
     normalQuestionsAnsweredInHalf: Math.max(0, Number(candidate.normalQuestionsAnsweredInHalf ?? 0)),
     normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),

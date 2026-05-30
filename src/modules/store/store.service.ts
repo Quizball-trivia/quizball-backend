@@ -722,6 +722,31 @@ export const storeService = {
 
     return sql.begin(async (tx) => {
       const wallets: Record<string, StoreWalletResponse> = {};
+      const hydratedWallets: Record<string, StoreWalletResponse> = {};
+
+      for (const userId of dedupedUserIds) {
+        const wallet = await ticketRefillService.hydrateTicketsInTx(tx, userId);
+        if (!wallet) {
+          throw new NotFoundError('User not found');
+        }
+        hydratedWallets[userId] = {
+          coins: wallet.coins,
+          tickets: wallet.tickets,
+        };
+      }
+
+      const insufficientUserIds = dedupedUserIds.filter((userId) => (hydratedWallets[userId]?.tickets ?? 0) < 1);
+      if (insufficientUserIds.length > 0) {
+        logger.info(
+          {
+            userIds: dedupedUserIds,
+            insufficientUserIds,
+            wallets: hydratedWallets,
+          },
+          'Ranked ticket consumption aborted before decrement: insufficient tickets'
+        );
+        return null;
+      }
 
       for (const userId of dedupedUserIds) {
         const result = await ticketRefillService.consumeRankedTicketInTx(tx, userId);
@@ -729,7 +754,16 @@ export const storeService = {
           throw new NotFoundError('User not found');
         }
         if (!result.consumed) {
-          return null;
+          throw new AppError(
+            'Ranked ticket consumption failed after preflight',
+            409,
+            ErrorCode.CONFLICT,
+            {
+              userId,
+              userIds: dedupedUserIds,
+              preflightWallet: hydratedWallets[userId] ?? null,
+            }
+          );
         }
         wallets[userId] = {
           coins: result.wallet.coins,
@@ -737,6 +771,54 @@ export const storeService = {
         };
       }
 
+      logger.info(
+        {
+          userIds: dedupedUserIds,
+          wallets,
+        },
+        'Ranked tickets consumed'
+      );
+      return { wallets };
+    });
+  },
+
+  async refundRankedTickets(
+    userIds: string[]
+  ): Promise<{ wallets: Record<string, StoreWalletResponse> }> {
+    const dedupedUserIds = [...new Set(userIds)].sort((left, right) => left.localeCompare(right));
+    if (dedupedUserIds.length === 0) {
+      return { wallets: {} };
+    }
+
+    return sql.begin(async (tx) => {
+      const wallets: Record<string, StoreWalletResponse> = {};
+
+      for (const userId of dedupedUserIds) {
+        const wallet = await ticketRefillService.hydrateTicketsInTx(tx, userId);
+        if (!wallet) {
+          throw new NotFoundError('User not found');
+        }
+
+        const nextTickets = Math.min(MAX_TICKETS, wallet.tickets + 1);
+        const nextAnchor = nextTickets >= MAX_TICKETS ? null : wallet.tickets_refill_started_at;
+        const updated = await storeRepo.setTicketsStateInTx(tx, userId, nextTickets, nextAnchor);
+        if (!updated) {
+          throw new NotFoundError('User not found');
+        }
+
+        wallets[userId] = {
+          coins: updated.coins,
+          tickets: updated.tickets,
+        };
+      }
+
+      logger.info(
+        {
+          userIds: dedupedUserIds,
+          wallets,
+        },
+        'Ranked tickets refunded'
+      );
       return { wallets };
     });
   },

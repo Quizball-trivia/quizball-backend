@@ -2,10 +2,12 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby, matchRealtimeService } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
+import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
@@ -45,6 +47,35 @@ async function startMatchFromDraft(
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
   if (members.length !== 2) return null;
 
+  let consumedRankedTicketUserIds: string[] = [];
+
+  if (lobby.mode === 'ranked') {
+    const aiUserId = await resolveRankedAiUserId(lobbyId, members);
+    const ticketUserIds = members
+      .filter((member) => member.user_id !== aiUserId)
+      .map((member) => member.user_id);
+
+    if (ticketUserIds.length > 0) {
+      const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
+      if (!consumedTickets) {
+        logger.warn(
+          { lobbyId, ticketUserIds },
+          'Ranked match creation aborted: insufficient tickets'
+        );
+        await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
+        return null;
+      }
+      logger.info(
+        { lobbyId, ticketUserIds, wallets: consumedTickets.wallets },
+        'Ranked match creation consumed tickets'
+      );
+      consumedRankedTicketUserIds = ticketUserIds;
+    }
+  }
+
+  io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
+  logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
+
   let result;
   try {
     result = await matchesService.createMatchFromLobby({
@@ -56,6 +87,24 @@ async function startMatchFromDraft(
       categoryBId: null,
     });
   } catch (error) {
+    if (consumedRankedTicketUserIds.length > 0) {
+      try {
+        const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
+        logger.info(
+          { lobbyId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
+          'Refunded ranked tickets after match creation failure'
+        );
+      } catch (refundError) {
+        logger.error(
+          {
+            lobbyId,
+            ticketUserIds: consumedRankedTicketUserIds,
+            error: refundError instanceof Error ? refundError.message : refundError,
+          },
+          'Failed to refund ranked tickets after match creation failure'
+        );
+      }
+    }
     logger.warn(
       { lobbyId, error: error instanceof Error ? error.message : error },
       'Failed to create match from draft; restarting draft'
@@ -200,8 +249,6 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   }
 
   const halfOneCategoryId = remaining[0].id;
-  io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
-  logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
   return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 

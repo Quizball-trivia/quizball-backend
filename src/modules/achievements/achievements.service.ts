@@ -19,7 +19,7 @@ function computeProgress(achievementId: string, metrics: UserAchievementMetrics)
     case 'clean_sheet':
       return metrics.hasCleanSheet ? 1 : 0;
     case 'winning_streak':
-      return Math.min(5, metrics.bestWinStreak);
+      return Math.min(5, metrics.currentWinStreak);
     case 'multiplayer_master':
       return Math.min(10, metrics.totalWins);
     case 'trophy_collector':
@@ -54,8 +54,10 @@ export const achievementsService = {
     return ACHIEVEMENT_DEFINITIONS.map((definition) => {
       const stored = rowById.get(definition.id);
       const computedProgress = computeProgress(definition.id, metrics);
-      const progress = Math.max(stored?.progress ?? 0, computedProgress);
       const unlockedAt = stored?.unlocked_at ?? null;
+      const progress = definition.id === 'winning_streak' && unlockedAt === null
+        ? computedProgress
+        : Math.max(stored?.progress ?? 0, computedProgress);
 
       return {
         id: definition.id,

@@ -110,7 +110,10 @@ export const achievementsRepo = {
       FROM user_matches
     `;
 
-    const bestWinStreak = await this.getBestWinStreak(userId);
+    const [bestWinStreak, currentWinStreak] = await Promise.all([
+      this.getBestWinStreak(userId),
+      this.getCurrentWinStreak(userId),
+    ]);
 
     return {
       completedMatches: row?.completed_matches ?? 0,
@@ -119,8 +122,18 @@ export const achievementsRepo = {
       hasPerfectMatch: row?.has_perfect_match ?? false,
       hasLightningCounter: row?.has_lightning_counter ?? false,
       hasCleanSheet: row?.has_clean_sheet ?? false,
+      currentWinStreak,
       bestWinStreak,
     };
+  },
+
+  async getCurrentWinStreak(userId: string): Promise<number> {
+    const [row] = await sql<{ current_win_streak: number | null }[]>`
+      SELECT current_win_streak
+      FROM ranked_profiles
+      WHERE user_id = ${userId}
+    `;
+    return Math.max(0, Number(row?.current_win_streak ?? 0));
   },
 
   async getBestWinStreak(userId: string): Promise<number> {

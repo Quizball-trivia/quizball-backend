@@ -1,7 +1,6 @@
 import type { QuizballServer } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
-import { storeService } from '../../modules/store/store.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -121,17 +120,6 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       if (lobby.mode === 'ranked') {
         rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
         rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
-        const ticketUserIds = rankedMembers
-          .filter((member) => member.user_id !== rankedAiUserId)
-          .map((member) => member.user_id);
-
-        const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
-        span.setAttribute('quizball.ticket_users_count', ticketUserIds.length);
-        span.setAttribute('quizball.tickets_consumed', Boolean(consumedTickets));
-        if (!consumedTickets) {
-          await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
-          return;
-        }
       }
 
       await lobbiesRepo.clearLobbyCategoryBans(lobbyId);

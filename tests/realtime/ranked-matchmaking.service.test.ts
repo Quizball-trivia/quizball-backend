@@ -27,6 +27,7 @@ const startDraftMock = vi.fn();
 const startRankedAiForUserMock = vi.fn();
 const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
+const getWalletMock = vi.fn();
 
 let redisMock: FakeRedis;
 
@@ -92,6 +93,12 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
     ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    getWallet: (...args: unknown[]) => getWalletMock(...args),
   },
 }));
 
@@ -212,6 +219,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
       placement_points_against_sum: 0,
       current_win_streak: 0,
     }));
+    getWalletMock.mockResolvedValue({ coins: 0, tickets: 1 });
     startDraftMock.mockResolvedValue(undefined);
     startRankedAiForUserMock.mockResolvedValue(undefined);
   });

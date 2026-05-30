@@ -34,6 +34,11 @@ import {
   scheduleNextPossessionQuestion,
 } from './possession-question-dispatch.js';
 import {
+  answerLogFields,
+  cacheLogFields,
+  questionLogFields,
+} from './possession-debug-logging.js';
+import {
   applyLastAttackResolution,
   applyNormalResolution,
   applyPenaltyResolution,
@@ -64,27 +69,81 @@ export async function resolvePossessionRound(
 
   const lockKey = `lock:match:${matchId}:resolve`;
   const lock = await acquireLock(lockKey, 5000);
-  if (!lock.acquired || !lock.token) return;
+  if (!lock.acquired || !lock.token) {
+    logger.warn({ eventName: 'match:round_result', matchId, qIndex, fromTimeout }, 'Possession round resolve skipped: lock busy');
+    return;
+  }
 
   try {
     const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return;
-    if (cache.currentQIndex > qIndex) return;
-    if (cache.currentQIndex !== qIndex) return;
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+        'Possession round resolve skipped: inactive or missing cache'
+      );
+      return;
+    }
+    if (cache.currentQIndex > qIndex) {
+      logger.info(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+        'Possession round resolve skipped: qIndex already advanced'
+      );
+      return;
+    }
+    if (cache.currentQIndex !== qIndex) {
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+        'Possession round resolve skipped: qIndex mismatch'
+      );
+      return;
+    }
 
     const question = cache.currentQuestion;
-    if (!question) return;
+    if (!question) {
+      logger.warn(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+        'Possession round resolve skipped: missing current question'
+      );
+      return;
+    }
 
     const expectedUserIds = getExpectedUserIds(cache);
     if (!fromTimeout && answerCount(cache) < expectedUserIds.length) {
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          fromTimeout,
+          answerCount: answerCount(cache),
+          expectedCount: expectedUserIds.length,
+          expectedUserIds,
+          ...questionLogFields(question),
+        },
+        'Possession round resolve waiting for more answers'
+      );
       return;
     }
+    logger.info(
+      {
+        matchId,
+        eventName: 'match:round_result',
+        qIndex,
+        fromTimeout,
+        answerCount: answerCount(cache),
+        expectedCount: expectedUserIds.length,
+        expectedUserIds,
+        ...questionLogFields(question),
+      },
+      'Possession round resolve started'
+    );
 
     if (fromTimeout) {
       const timeoutDurationMs = getQuestionDurationMs(
         question.kind,
         question.evaluation.kind === 'clues' ? question.evaluation.clues.length : undefined
       );
+      let backfilledCount = 0;
       for (const userId of expectedUserIds) {
         if (cache.answers[userId]) continue;
         const backfill: CachedAnswer = {
@@ -104,6 +163,7 @@ export async function resolvePossessionRound(
           clueIndex: question.kind === 'clues' ? null : undefined,
         };
         cache.answers[userId] = backfill;
+        backfilledCount += 1;
         fireAndForget('insertMatchAnswerIfMissing(timeout)', async () => {
           await matchAnswersRepo.insertMatchAnswerIfMissing({
             matchId,
@@ -120,6 +180,18 @@ export async function resolvePossessionRound(
           });
         });
       }
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          timeoutDurationMs,
+          backfilledCount,
+          expectedCount: expectedUserIds.length,
+          ...questionLogFields(question),
+        },
+        'Possession round timeout backfilled missing answers'
+      );
     }
 
     if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
@@ -164,6 +236,24 @@ export async function resolvePossessionRound(
           : (answer.foundCount ?? 0) > seat1FoundCount;
       }
 
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          totalGroups,
+          seat1UserId,
+          seat2UserId,
+          seat1FoundCount,
+          seat2FoundCount,
+          answers: expectedUserIds.map((userId) => ({
+            userId,
+            ...answerLogFields(cache.answers[userId]),
+          })),
+          ...questionLogFields(question),
+        },
+        'Possession countdown round scored'
+      );
       await deleteCountdownPlayerKeys(matchId, expectedUserIds);
     }
 
@@ -201,6 +291,22 @@ export async function resolvePossessionRound(
           );
         });
       }
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          answers: cache.players.map((player) => ({
+            userId: player.userId,
+            seat: player.seat,
+            totalPoints: player.totalPoints,
+            correctAnswers: player.correctAnswers,
+            ...answerLogFields(cache.answers[player.userId]),
+          })),
+          ...questionLogFields(question),
+        },
+        'Possession special answer totals applied'
+      );
     }
 
     const playersPayload = buildPlayersPayloadFromCache(cache);
@@ -236,6 +342,12 @@ export async function resolvePossessionRound(
       const previousHolderSeat = question.phaseKind === 'normal'
         ? state.speedStreakHolderSeat
         : null;
+      const previousCandidateSeat = question.phaseKind === 'normal'
+        ? state.speedStreakCandidateSeat
+        : null;
+      const previousCandidateCount = question.phaseKind === 'normal'
+        ? state.speedStreakCandidateCount
+        : 0;
       if (previousHolderSeat === 1) seat1Points *= 2;
       else if (previousHolderSeat === 2) seat2Points *= 2;
       // The boost only "fired" if the holder actually earned points to double.
@@ -261,6 +373,8 @@ export async function resolvePossessionRound(
       if (question.phaseKind === 'normal') {
         const streak = resolveSpeedStreak({
           previousHolderSeat: previousHolderSeat,
+          previousCandidateSeat,
+          previousCandidateCount,
           seat1: { correct: seat1Correct, timeMs: seat1Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
           seat2: { correct: seat2Correct, timeMs: seat2Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
           goalScoredBySeat,
@@ -275,8 +389,44 @@ export async function resolvePossessionRound(
           preResolutionPhase === 'NORMAL_PLAY' &&
           state.half === preResolutionHalf;
         state.speedStreakHolderSeat = stayedInSameSegment ? streak.nextHolderSeat : null;
+        state.speedStreakCandidateSeat = stayedInSameSegment ? streak.nextCandidateSeat : null;
+        state.speedStreakCandidateCount = stayedInSameSegment ? streak.nextCandidateCount : 0;
       }
 
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          phaseKind: question.phaseKind,
+          previousHolderSeat,
+          boostHadEffect,
+          speedStreakBoostedSeat,
+          nextSpeedStreakHolderSeat: state.speedStreakHolderSeat,
+          nextSpeedStreakCandidateSeat: state.speedStreakCandidateSeat,
+          nextSpeedStreakCandidateCount: state.speedStreakCandidateCount,
+          seat1: {
+            userId: seat1UserId,
+            correct: seat1Correct,
+            basePoints: seat1BasePoints,
+            resolvedPoints: seat1Points,
+            timeMs: seat1Answer?.timeMs ?? null,
+          },
+          seat2: {
+            userId: seat2UserId,
+            correct: seat2Correct,
+            basePoints: seat2BasePoints,
+            resolvedPoints: seat2Points,
+            timeMs: seat2Answer?.timeMs ?? null,
+          },
+          possessionDelta,
+          goalScoredBySeat,
+          statePhase: state.phase,
+          half: state.half,
+          ...questionLogFields(question),
+        },
+        'Possession normal/last-attack resolution computed'
+      );
       if (result.goalScoredBySeat) {
         const scorerUserId = getUserIdByCachedSeat(cache.players, result.goalScoredBySeat);
         const scorer = scorerUserId ? cache.players.find((player) => player.userId === scorerUserId) : null;
@@ -293,6 +443,20 @@ export async function resolvePossessionRound(
         const scorer = cache.players.find((player) => player.userId === penaltyOutcome.goalScoredByUserId);
         goalScoredBySeat = scorer?.seat ?? null;
       }
+      logger.info(
+        {
+          matchId,
+          eventName: 'match:round_result',
+          qIndex,
+          shooterSeat: asSeat(question.shooterSeat) ?? state.penalty.shooterSeat,
+          goalScoredBySeat,
+          goalScoredByUserId: penaltyOutcome.goalScoredByUserId,
+          statePhase: state.phase,
+          penaltyRound: state.penalty.round,
+          ...questionLogFields(question),
+        },
+        'Possession penalty resolution computed'
+      );
     }
 
     state.currentQuestion = null;
@@ -347,6 +511,32 @@ export async function resolvePossessionRound(
       }
     }
 
+    logger.info(
+      {
+        matchId,
+        eventName: 'match:round_result',
+        qIndex,
+        statePhase: state.phase,
+        half: state.half,
+        possessionDiff: state.possessionDiff,
+        goalScoredBySeat: deltas.goalScoredBySeat,
+        possessionDelta: deltas.possessionDelta,
+        penaltyOutcome: deltas.penaltyOutcome,
+        speedStreakHolderSeat: state.speedStreakHolderSeat,
+        speedStreakBoostedSeat: deltas.speedStreakBoostedSeat,
+        players: Object.entries(playersPayload).map(([userId, player]) => ({
+          userId,
+          totalPoints: player.totalPoints,
+          pointsEarned: player.pointsEarned,
+          isCorrect: player.isCorrect,
+          selectedIndex: player.selectedIndex,
+          timeMs: player.timeMs,
+          answer: answerLogFields(cache.answers[userId]),
+        })),
+        ...questionLogFields(question),
+      },
+      'Possession round result emitting'
+    );
     io.to(`match:${matchId}`).emit('match:round_result', {
       matchId,
       qIndex,
@@ -375,14 +565,30 @@ export async function resolvePossessionRound(
       await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
     });
     await emitMatchState(io, matchId, state);
+    logger.info(
+      {
+        matchId,
+        eventName: 'match:state',
+        resolvedQIndex: qIndex,
+        nextIndex,
+        statePhase: state.phase,
+        half: state.half,
+        possessionDiff: state.possessionDiff,
+        speedStreakHolderSeat: state.speedStreakHolderSeat,
+        goalScoredBySeat,
+      },
+      'Possession round advanced state'
+    );
 
     if (state.phase === 'HALFTIME') {
+      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
       return;
     }
 
     if (state.phase === 'COMPLETED') {
+      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
       await completePossessionMatch(io, matchId, state, cache);
       return;
     }

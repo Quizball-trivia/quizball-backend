@@ -154,7 +154,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     redisClientMock = null;
   });
 
-  it('consumes tickets for both human players before starting a human ranked draft', async () => {
+  it('starts a human ranked draft without consuming tickets before match creation', async () => {
     const { io, roomEmit } = createIo();
     const { startDraft } = await import('../../src/realtime/services/lobby-realtime.service.js');
 
@@ -168,18 +168,12 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { user_id: 'u1' },
       { user_id: 'u2' },
     ]);
-    consumeRankedTicketsMock.mockResolvedValue({
-      wallets: {
-        u1: { coins: 0, tickets: 9 },
-        u2: { coins: 0, tickets: 8 },
-      },
-    });
 
     await startDraft(io, 'lobby-1');
 
     expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
-    expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(setLobbyStatusMock).toHaveBeenCalledWith('lobby-1', 'active');
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
@@ -187,7 +181,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     }));
   });
 
-  it('consumes tickets only for the human player in ranked-vs-AI drafts', async () => {
+  it('starts a ranked-vs-AI draft without consuming the human ticket before match creation', async () => {
     const { io } = createIo();
     const { startDraft } = await import('../../src/realtime/services/lobby-realtime.service.js');
 
@@ -205,46 +199,11 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       id: userId,
       is_ai: userId === 'ai-1',
     }));
-    consumeRankedTicketsMock.mockResolvedValue({
-      wallets: {
-        u1: { coins: 0, tickets: 9 },
-      },
-    });
 
     await startDraft(io, 'lobby-1');
 
     expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
-    expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1']);
-  });
-
-  it('aborts ranked draft start cleanly when a player has no tickets', async () => {
-    const { io, roomEmit, userEmit, lobbySockets } = createIo();
-    const { startDraft } = await import('../../src/realtime/services/lobby-realtime.service.js');
-
-    getByIdMock.mockResolvedValue({
-      id: 'lobby-1',
-      mode: 'ranked',
-      status: 'waiting',
-      host_user_id: 'u1',
-    });
-    listMembersWithUserMock.mockResolvedValue([
-      { user_id: 'u1' },
-      { user_id: 'u2' },
-    ]);
-    consumeRankedTicketsMock.mockResolvedValue(null);
-
-    await startDraft(io, 'lobby-1');
-
-    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
-    expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
-    expect(deleteLobbyMock).toHaveBeenCalledWith('lobby-1');
-    expect(roomEmit).not.toHaveBeenCalledWith('draft:start', expect.anything());
-    expect(userEmit).toHaveBeenCalledWith('ranked:queue_left');
-    expect(userEmit).toHaveBeenCalledWith('error', expect.objectContaining({
-      code: 'INSUFFICIENT_TICKETS',
-    }));
-    expect(emitStateMock).toHaveBeenCalledTimes(2);
-    expect(lobbySockets.every((socket) => socket.data.lobbyId === undefined)).toBe(true);
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
   });
 });

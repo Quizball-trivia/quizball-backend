@@ -43,5 +43,6 @@ export interface UserAchievementMetrics {
   hasPerfectMatch: boolean;
   hasLightningCounter: boolean;
   hasCleanSheet: boolean;
+  currentWinStreak: number;
   bestWinStreak: number;
 }

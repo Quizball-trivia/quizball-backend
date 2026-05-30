@@ -263,9 +263,11 @@ describe('calculateCountdownScore', () => {
     expect(calculateCountdownScore(0, 1)).toBe(0);
   });
 
-  it('rounds correctly for non-even divisions', () => {
-    expect(calculateCountdownScore(1, 3)).toBe(33);
-    expect(calculateCountdownScore(2, 3)).toBe(67);
+  it('rounds non-even divisions to clean 5-point buckets', () => {
+    expect(calculateCountdownScore(1, 3)).toBe(35);
+    expect(calculateCountdownScore(2, 3)).toBe(65);
+    expect(calculateCountdownScore(2, 15)).toBe(15);
+    expect(calculateCountdownScore(4, 15)).toBe(25);
   });
 
   it('returns 0 when totalGroups is 0', () => {

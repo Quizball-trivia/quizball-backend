@@ -9,6 +9,7 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { statsService } from '../../modules/stats/stats.service.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
@@ -59,6 +60,46 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
   if (!lobby) return;
   const state = await lobbiesService.buildLobbyState(lobby);
   io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
+}
+
+function emitInsufficientTickets(
+  io: QuizballServer,
+  userId: string,
+  source: string,
+  tickets: number
+): void {
+  io.to(`user:${userId}`).emit('ranked:queue_left');
+  io.to(`user:${userId}`).emit('error', {
+    code: 'INSUFFICIENT_TICKETS',
+    message: 'You need a ticket to start ranked.',
+    meta: {
+      source,
+      tickets,
+    },
+  });
+}
+
+async function getRankedTicketWallets(userIds: string[]): Promise<Record<string, { coins: number; tickets: number }>> {
+  const entries = await Promise.all(
+    [...new Set(userIds)].map(async (userId) => {
+      const wallet = await storeService.getWallet(userId);
+      return [userId, wallet] as const;
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+async function hasTicketForRankedQueue(io: QuizballServer, userId: string, source: string): Promise<boolean> {
+  const wallet = await storeService.getWallet(userId);
+  if (wallet.tickets >= 1) {
+    logger.info({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
+    return true;
+  }
+
+  logger.warn({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight blocked queue start');
+  emitInsufficientTickets(io, userId, source, wallet.tickets);
+  await userSessionGuardService.emitState(io, userId);
+  return false;
 }
 
 async function attachUserSocketsToLobby(
@@ -117,6 +158,28 @@ async function startHumanRankedMatch(
       rankedService.ensureProfile(userAId),
       rankedService.ensureProfile(userBId),
     ]);
+    const wallets = await getRankedTicketWallets([userAId, userBId]);
+    const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
+    if (insufficientUserIds.length > 0) {
+      logger.warn(
+        {
+          userAId,
+          userBId,
+          insufficientUserIds,
+          wallets,
+        },
+        'Ranked human match creation skipped: insufficient tickets after pairing'
+      );
+      for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
+        io.to(`user:${userId}`).emit('ranked:queue_left');
+      }
+      for (const userId of insufficientUserIds) {
+        emitInsufficientTickets(io, userId, 'ranked_human_pair_preflight', wallets[userId]?.tickets ?? 0);
+      }
+      await Promise.all([userSessionGuardService.emitState(io, userAId), userSessionGuardService.emitState(io, userBId)]);
+      span.setAttribute('quizball.skipped_insufficient_tickets', true);
+      return;
+    }
 
     const lobby = await lobbiesRepo.createLobby({
       mode: 'ranked',
@@ -197,6 +260,9 @@ async function startAiFallbackWithCountry(
     const redis = getRedisClient();
     if (redis && await redis.get(cancelKey(userId))) {
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
+      return;
+    }
+    if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
       return;
     }
     await startRankedAiForUser(io, userId, {
@@ -333,6 +399,10 @@ export const rankedMatchmakingService = {
     }, async (span) => {
       logger.info({ userId }, 'Ranked queue join requested');
       appMetrics.rankedQueueJoins.add(1);
+      if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
+        span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
+        return;
+      }
 
       if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');

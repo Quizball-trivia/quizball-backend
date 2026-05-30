@@ -476,6 +476,49 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
   });
 
+  it('S15 reload race: a fresh replacement socket does not suppress pause and gets resume countdown', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const emit = vi.fn();
+      const replacementSocket = {
+        id: 'new-socket',
+        data: {
+          user: { id: 'u1', role: 'user' },
+          matchId: 'm1',
+          connectedAt: Date.now(),
+        },
+      };
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn((room: string) => ({
+          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [replacementSocket] : [])),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+      const oldSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
+      oldSocket.id = 'old-socket';
+      oldSocket.data.connectedAt = Date.now() - 30_000;
+
+      fakeRedis.isOpen = true;
+
+      await matchRealtimeService.handleMatchDisconnect(io, oldSocket);
+
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+      expect(emit).toHaveBeenCalledWith(
+        'match:countdown',
+        expect.objectContaining({
+          matchId: 'm1',
+          reason: 'resume',
+          seconds: 5,
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15a: match:leave rejects requested active matches where the socket user is not a participant', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();

@@ -65,6 +65,7 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
+const LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
 const GRACE_TTL_SEC = 65;
@@ -156,7 +157,9 @@ export async function handleMatchLeave(
         return;
       }
 
-      const pauseResult = await pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId);
+      const pauseResult = await pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId, {
+        ignoreSocketId: socket.id,
+      });
 
       socket.leave(`match:${activeMatch.id}`);
       socket.data.matchId = undefined;
@@ -273,7 +276,10 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
 
   const userId = socket.data.user.id;
   const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
-    await pauseMatchForDisconnectedPlayer(io, matchId, userId);
+    await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
+      ignoreSocketId: socket.id,
+      autoResumeReplacementSocket: true,
+    });
   }, {
     operation: 'match:disconnect',
   });
@@ -402,7 +408,11 @@ export async function resumePausedMatch(
 export async function pauseMatchForDisconnectedPlayer(
   io: QuizballServer,
   matchId: string,
-  userId: string
+  userId: string,
+  options: {
+    ignoreSocketId?: string;
+    autoResumeReplacementSocket?: boolean;
+  } = {}
 ): Promise<{ graceMs: number; remainingReconnects: number; finalized: boolean }> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') {
@@ -425,10 +435,19 @@ export async function pauseMatchForDisconnectedPlayer(
   }
 
   const sockets = await io.in(`match:${matchId}`).fetchSockets();
-  const stillPresent = sockets.some((connectedSocket) => connectedSocket.data.user.id === userId);
-  if (stillPresent) {
+  const sameUserSockets = sockets.filter(
+    (connectedSocket) =>
+      connectedSocket.id !== options.ignoreSocketId &&
+      connectedSocket.data.user.id === userId
+  );
+  const nowMs = Date.now();
+  const stableLiveSocket = sameUserSockets.some((connectedSocket) => {
+    const connectedAt = connectedSocket.data.connectedAt;
+    return typeof connectedAt !== 'number' || nowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
+  });
+  if (stableLiveSocket) {
     logger.info(
-      { matchId, userId, socketCount: sockets.length },
+      { matchId, userId, socketCount: sockets.length, sameUserSocketCount: sameUserSockets.length },
       'Match disconnect pause skipped because user still has a live match socket'
     );
     return {
@@ -524,6 +543,13 @@ export async function pauseMatchForDisconnectedPlayer(
 
   const graceKey = matchGraceKey(matchId);
   const acquired = await redis.set(graceKey, String(Date.now()), { NX: true, EX: GRACE_TTL_SEC });
+  if (options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
+    logger.info(
+      { matchId, userId, socketCount: sameUserSockets.length },
+      'Auto-resuming match after fast socket replacement'
+    );
+    await resumePausedMatch(io, matchId, userId);
+  }
   if (acquired !== 'OK') {
     return {
       graceMs: MATCH_DISCONNECT_GRACE_MS,

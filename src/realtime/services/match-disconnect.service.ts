@@ -12,6 +12,7 @@ import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { acquireLock, releaseLock } from '../locks.js';
 import { deleteMatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
@@ -72,6 +73,12 @@ const GRACE_TTL_SEC = 65;
 const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
 
+function getStateObject(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? { ...(raw as Record<string, unknown>) }
+    : {};
+}
+
 export function toRemainingReconnects(disconnectCount: number): number {
   return Math.max(0, MAX_MATCH_DISCONNECTS - disconnectCount);
 }
@@ -90,6 +97,105 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
   const nextCount = (await getDisconnectCount(matchId, userId)) + 1;
   await redis.set(matchReconnectCountKey(matchId, userId), String(nextCount), { EX: FORFEIT_TTL_SEC });
   return nextCount;
+}
+
+async function completeMultiplayerPartyQuizAfterDropouts(params: {
+  io: QuizballServer;
+  matchId: string;
+  activeUserIds: Set<string>;
+  players: Awaited<ReturnType<typeof matchPlayersRepo.listMatchPlayers>>;
+}): Promise<boolean> {
+  if (params.activeUserIds.size > 1) return false;
+
+  const lockKey = `lock:match:${params.matchId}:party-dropouts`;
+  const lock = await acquireLock(lockKey, 15_000);
+  if (!lock.acquired || !lock.token) return false;
+
+  try {
+    const activeMatch = await matchesRepo.getMatch(params.matchId);
+    if (!activeMatch || activeMatch.status !== 'active') return true;
+    if (resolveMatchVariant(activeMatch.state_payload, activeMatch.mode) !== 'friendly_party_quiz') return false;
+
+    const activeWinnerId = [...params.activeUserIds][0] ?? null;
+    const standingsWinnerId = buildStandings(params.players)[0]?.userId ?? null;
+    const winnerId = activeWinnerId ?? standingsWinnerId;
+    const winnerDecisionMethod = activeWinnerId ? 'forfeit' : 'total_points';
+    const nextStatePayload = {
+      ...getStateObject(activeMatch.state_payload),
+      currentQuestion: null,
+      answeredUserIds: [],
+      winnerDecisionMethod,
+    };
+
+    cancelMatchQuestionTimer(params.matchId, activeMatch.current_q_index);
+    await matchesRepo.setMatchStatePayload(params.matchId, nextStatePayload, activeMatch.current_q_index);
+    await matchesService.completeMatch(params.matchId, winnerId);
+    await deleteMatchCache(params.matchId);
+
+    try {
+      const avgTimes = await matchesService.computeAvgTimes(params.matchId);
+      await Promise.all(
+        params.players.map((player) =>
+          matchPlayersRepo.updatePlayerAvgTime(
+            params.matchId,
+            player.user_id,
+            avgTimes.get(player.user_id) ?? null
+          )
+        )
+      );
+    } catch (err) {
+      logger.warn({ err, matchId: params.matchId }, 'Party quiz dropout avg-time update failed');
+    }
+
+    try { await progressionService.awardCompletedMatchXp(params.matchId); }
+    catch (err) { logger.warn({ err, matchId: params.matchId }, 'Party quiz dropout XP award failed'); }
+
+    try { await objectivesService.evaluateForMatchBestEffort(params.matchId); }
+    catch (err) { logger.warn({ err, matchId: params.matchId }, 'Party quiz dropout objectives evaluation failed'); }
+
+    const resultVersion = Date.now();
+    const finalPayload = await buildFinalResultsPayload(params.matchId, resultVersion);
+
+    const redis = getRedisClient();
+    if (redis) {
+      await redis.del([
+        matchPauseKey(params.matchId),
+        matchGraceKey(params.matchId),
+        matchResumeCountdownKey(params.matchId),
+        ...params.players.flatMap((player) => [
+          matchDisconnectKey(params.matchId, player.user_id),
+          matchPresenceKey(params.matchId, player.user_id),
+          matchReconnectCountKey(params.matchId, player.user_id),
+        ]),
+      ]);
+      await Promise.all(
+        params.players.map((player) =>
+          redis.set(
+            lastMatchKey(player.user_id),
+            JSON.stringify({ matchId: params.matchId, resultVersion }),
+            { EX: FORFEIT_TTL_SEC }
+          )
+        )
+      );
+    }
+
+    if (finalPayload) {
+      await emitFinalResultsToMatchParticipants(params.io, params.matchId, finalPayload);
+    }
+
+    logger.info(
+      {
+        matchId: params.matchId,
+        winnerId,
+        activeUserCount: params.activeUserIds.size,
+        winnerDecisionMethod,
+      },
+      'Party quiz completed after multiplayer dropouts'
+    );
+    return true;
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
 }
 
 async function emitRejoinAvailable(
@@ -457,6 +563,41 @@ export async function pauseMatchForDisconnectedPlayer(
     };
   }
 
+  const players = await matchPlayersRepo.listMatchPlayers(matchId);
+  if (variant === 'friendly_party_quiz' && players.length > 2) {
+    const activeUserIds = new Set(
+      sockets
+        .filter((connectedSocket) => connectedSocket.id !== options.ignoreSocketId)
+        .map((connectedSocket) => connectedSocket.data.user.id)
+        .filter((connectedUserId) =>
+          players.some((player) => player.user_id === connectedUserId)
+        )
+    );
+    const finalized = await completeMultiplayerPartyQuizAfterDropouts({
+      io,
+      matchId,
+      activeUserIds,
+      players,
+    });
+    if (finalized) {
+      return {
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
+        remainingReconnects: 0,
+        finalized: true,
+      };
+    }
+
+    logger.info(
+      { matchId, userId, participantCount: players.length, activeUserCount: activeUserIds.size },
+      'Party quiz disconnect did not pause multiplayer match'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
+      finalized: false,
+    };
+  }
+
   const disconnectedAtMs = Date.now();
   const disconnectCount = await incrementDisconnectCount(matchId, userId);
   const remainingReconnects = toRemainingReconnects(disconnectCount);
@@ -479,7 +620,6 @@ export async function pauseMatchForDisconnectedPlayer(
     cancelPossessionHalftimeTimer(matchId);
   }
 
-  const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const remainingPlayers = players.filter((player) => player.user_id !== userId);
   remainingPlayers.forEach((player) => {
     io.to(`user:${player.user_id}`).emit('match:opponent_disconnected', {

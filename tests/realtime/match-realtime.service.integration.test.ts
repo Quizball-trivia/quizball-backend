@@ -276,6 +276,28 @@ function createIoMock(): QuizballServer {
   } as unknown as QuizballServer;
 }
 
+function createIoWithMatchSockets(matchId: string, userIds: string[]): QuizballServer {
+  const emit = vi.fn();
+  const to = vi.fn(() => ({ emit }));
+  const sockets = userIds.map((userId) => ({
+    id: `socket-${userId}`,
+    data: {
+      user: { id: userId, role: 'user' },
+      matchId,
+      connectedAt: Date.now() - 30_000,
+    },
+  }));
+  const inFn = vi.fn((room: string) => ({
+    fetchSockets: vi.fn(async () => (room === `match:${matchId}` ? sockets : [])),
+    socketsJoin: vi.fn(async () => undefined),
+  }));
+
+  return {
+    to,
+    in: inFn,
+  } as unknown as QuizballServer;
+}
+
 function createSocketMock(userId: string, matchId?: string): QuizballSocket {
   return {
     data: {
@@ -532,6 +554,170 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
     expect(socket.leave).not.toHaveBeenCalled();
     expect((io.to as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('user:u9');
+  });
+
+  it('S15a1: six-player party quiz leave does not pause or complete the match', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoWithMatchSockets('m1', ['u1', 'u2', 'u3', 'u4', 'u5', 'u6']);
+    const socket = createSocketMock('u1', 'm1');
+    (socket as QuizballSocket & { id: string }).id = 'socket-u1';
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue(
+      Array.from({ length: 6 }, (_, index) => ({
+        user_id: `u${index + 1}`,
+        seat: index + 1,
+        total_points: 100 - index,
+        correct_answers: 1,
+        goals: 0,
+        penalty_goals: 0,
+        avg_time_ms: null,
+      }))
+    );
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalled();
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(socket.leave).toHaveBeenCalledWith('match:m1');
+  });
+
+  it('S15a2: four-player party quiz completes with the sole remaining player as winner', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoWithMatchSockets('m1', ['u4']);
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+    };
+    getMatchMock
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u4',
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        winnerDecisionMethod: 'forfeit',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({
+        currentQuestion: null,
+        answeredUserIds: [],
+        winnerDecisionMethod: 'forfeit',
+      }),
+      2
+    );
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u4');
+    expect(fakeRedisStore.values.get('user:last_match:u1')).toBeTruthy();
+    expect(fakeRedisStore.values.get('user:last_match:u4')).toBeTruthy();
+  });
+
+  it('S15a3: four-player party quiz with nobody left completes by current standings', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoWithMatchSockets('m1', []);
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+    };
+    getMatchMock
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValueOnce(activeMatch)
+      .mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u2',
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        winnerDecisionMethod: 'total_points',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 350, correct_answers: 4, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({
+        currentQuestion: null,
+        answeredUserIds: [],
+        winnerDecisionMethod: 'total_points',
+      }),
+      2
+    );
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(fakeRedisStore.values.get('user:last_match:u1')).toBeTruthy();
+    expect(fakeRedisStore.values.get('user:last_match:u4')).toBeTruthy();
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {

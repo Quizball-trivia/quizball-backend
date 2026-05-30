@@ -131,6 +131,16 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     }
   }
 
+  // The SMS hook/status endpoints fail open (skip auth) when the secret is
+  // unset, which is acceptable only locally. Require it outside local so the
+  // server refuses to boot with unauthenticated SMS endpoints in staging/prod.
+  if (result.data.NODE_ENV !== "local" && !result.data.SUPABASE_SMS_HOOK_SECRET?.trim()) {
+    throw new ConfigError(
+      "Invalid configuration: SUPABASE_SMS_HOOK_SECRET is required outside local environment.",
+      { nodeEnv: result.data.NODE_ENV },
+    );
+  }
+
   const hasAnyStripeConfig = Boolean(
     result.data.STRIPE_SECRET_KEY ||
     result.data.STRIPE_WEBHOOK_SECRET ||

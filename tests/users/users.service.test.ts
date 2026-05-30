@@ -4,6 +4,7 @@ import '../setup.js';
 
 const getByIdMock = vi.fn();
 const updateMock = vi.fn();
+const getActiveByPhoneNumberMock = vi.fn();
 const requestDeletionMock = vi.fn();
 const cancelPendingDeletionMock = vi.fn();
 const createWithIdentityMock = vi.fn();
@@ -34,6 +35,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     getById: (...args: unknown[]) => getByIdMock(...args),
     searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    getActiveByPhoneNumber: (...args: unknown[]) => getActiveByPhoneNumberMock(...args),
     requestDeletion: (...args: unknown[]) => requestDeletionMock(...args),
     cancelPendingDeletion: (...args: unknown[]) => cancelPendingDeletionMock(...args),
     createWithIdentity: (...args: unknown[]) => createWithIdentityMock(...args),
@@ -511,5 +513,57 @@ describe('usersService account deletion', () => {
 
     expect(setCachedUserMock).not.toHaveBeenCalled();
     expect(updateCachedUserMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('usersService.getOrCreateFromIdentity phone backfill', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('skips the phone backfill when the number is already held by another active user', async () => {
+    // Cached user has no phone yet; the identity carries a phone already linked
+    // to a different active account — backfilling it would violate
+    // uq_users_phone_number_active and break this otherwise-valid login.
+    getCachedUserMock.mockReturnValue({ ...MOCK_USER, phone_number: null, phone_verified_at: null });
+    getActiveByPhoneNumberMock.mockResolvedValue({ ...MOCK_USER, id: 'someone-else', phone_number: '+995577123456' });
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    const result = await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      phoneNumber: '+995577123456',
+      claims: {},
+    });
+
+    expect(getActiveByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    // No update at all (only field would have been the conflicting phone) → login still succeeds.
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'user-target-id' });
+  });
+
+  it('backfills the phone when the number is free', async () => {
+    getCachedUserMock.mockReturnValue({ ...MOCK_USER, phone_number: null, phone_verified_at: null });
+    getActiveByPhoneNumberMock.mockResolvedValue(null);
+    updateMock.mockResolvedValue({ ...MOCK_USER, phone_number: '+995577123456', phone_verified_at: '2026-05-29T00:00:00.000Z' });
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      phoneNumber: '+995577123456',
+      phoneVerifiedAt: '2026-05-29T00:00:00.000Z',
+      claims: {},
+    });
+
+    expect(updateMock).toHaveBeenCalledWith(
+      'user-target-id',
+      expect.objectContaining({
+        phoneNumber: '+995577123456',
+        phoneVerifiedAt: '2026-05-29T00:00:00.000Z',
+      })
+    );
   });
 });

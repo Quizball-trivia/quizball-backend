@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { Webhook } from 'standardwebhooks';
 import { getAuthClient } from './supabase-auth-client.js';
 import { authService } from './auth.service.js';
@@ -81,12 +82,22 @@ function getAccessTokenFromRequest(req: Request): string {
   throw new AuthenticationError('Missing auth token');
 }
 
+function secretsMatch(expected: string, actual: string | undefined): boolean {
+  if (actual === undefined) return false;
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const actualBuf = Buffer.from(actual, 'utf8');
+  // timingSafeEqual requires equal-length buffers; an unequal length is itself
+  // a mismatch, so guard before comparing to avoid the length leak it throws on.
+  if (expectedBuf.length !== actualBuf.length) return false;
+  return timingSafeEqual(expectedBuf, actualBuf);
+}
+
 function assertSmsOfficeStatusAuthorization(authorization: string | undefined): void {
   if (!config.SUPABASE_SMS_HOOK_SECRET) {
     return;
   }
   const expected = `Bearer ${config.SUPABASE_SMS_HOOK_SECRET}`;
-  if (authorization !== expected) {
+  if (!secretsMatch(expected, authorization)) {
     throw new AuthenticationError('Invalid SMSOffice status authorization');
   }
 }
@@ -138,7 +149,7 @@ function assertSupabaseSmsHookAuthorization(req: Request, authorization: string 
   }
 
   const expected = `Bearer ${config.SUPABASE_SMS_HOOK_SECRET}`;
-  if (authorization !== expected) {
+  if (!secretsMatch(expected, authorization)) {
     throw new AuthenticationError('Invalid SMS hook authorization');
   }
 }

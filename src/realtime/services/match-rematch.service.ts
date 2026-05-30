@@ -17,6 +17,12 @@ import type { MatchPlayAgainPayload } from '../schemas/match.schemas.js';
 
 const FRIENDLY_REMATCH_LOBBY_TTL_MS = 30 * 60 * 1000;
 const FRIENDLY_REMATCH_LOCK_TTL_MS = 5000;
+const REMATCH_LOOKUP_RETRY_DELAY_MS = 50;
+const REMATCH_LOOKUP_RETRY_ATTEMPTS = 5;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const rematchLobbyByMatchId = new Map<string, { lobbyId: string; createdAt: number }>();
 
@@ -140,7 +146,12 @@ async function createOrJoinFriendlyRematchLobby(
     const lockKey = `lock:rematch:${matchId}`;
     const lock = await acquireLock(lockKey, FRIENDLY_REMATCH_LOCK_TTL_MS);
     if (!lock.acquired || !lock.token) {
-      rematchLobbyId = await getWaitingRematchLobbyId(matchId);
+      // The lock holder is mid-creation; re-check briefly so the racing player
+      // joins the lobby it is about to publish instead of bailing immediately.
+      for (let attempt = 0; attempt < REMATCH_LOOKUP_RETRY_ATTEMPTS && !rematchLobbyId; attempt++) {
+        await delay(REMATCH_LOOKUP_RETRY_DELAY_MS);
+        rematchLobbyId = await getWaitingRematchLobbyId(matchId);
+      }
       if (!rematchLobbyId) {
         return null;
       }

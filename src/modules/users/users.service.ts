@@ -35,19 +35,25 @@ function assertUserAccountActive(user: User): void {
   }
 }
 
-function buildIdentityBackfill(
+async function buildIdentityBackfill(
   user: User,
   identity: AuthIdentity,
   detectedCountry?: string | null,
-): UpdateUserData {
+): Promise<UpdateUserData> {
   const backfill: UpdateUserData = {};
   if (!user.country && detectedCountry) {
     backfill.country = detectedCountry;
   }
   if (identity.phoneNumber) {
     if (user.phone_number !== identity.phoneNumber) {
-      backfill.phoneNumber = identity.phoneNumber;
-      backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
+      // Skip the phone backfill if the number is already held by another active
+      // user — writing it would violate uq_users_phone_number_active and break
+      // an otherwise-valid login. Explicit linking handles conflicts separately.
+      const existing = await usersRepo.getActiveByPhoneNumber(identity.phoneNumber);
+      if (!existing || existing.id === user.id) {
+        backfill.phoneNumber = identity.phoneNumber;
+        backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
+      }
     } else if (!user.phone_verified_at) {
       backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
     }
@@ -121,7 +127,7 @@ export const usersService = {
       assertUserAccountActive(cached);
 
       // Backfill missing fields for existing users
-      const backfill = buildIdentityBackfill(cached, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(cached, identity, detectedCountry);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(cached.id, backfill);
@@ -149,7 +155,7 @@ export const usersService = {
       assertUserAccountActive(existingUser);
 
       // Backfill missing fields for existing users
-      const backfill = buildIdentityBackfill(existingUser, identity, detectedCountry);
+      const backfill = await buildIdentityBackfill(existingUser, identity, detectedCountry);
 
       if (Object.keys(backfill).length > 0) {
         const updated = await usersRepo.update(existingUser.id, backfill);

@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_sms_delivery_events_status_created
   ON public.sms_delivery_events (status, created_at DESC);
 
 DROP TRIGGER IF EXISTS trg_sms_delivery_events_set_updated_at ON public.sms_delivery_events;
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 CREATE TRIGGER trg_sms_delivery_events_set_updated_at
   BEFORE UPDATE ON public.sms_delivery_events
   FOR EACH ROW

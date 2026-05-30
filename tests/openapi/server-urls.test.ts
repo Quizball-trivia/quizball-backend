@@ -33,6 +33,7 @@ describe('OpenAPI Server URLs', () => {
     process.env.DOCS_ENABLED = 'false'; // Disable docs to avoid auth requirement
     process.env.DOCS_USERNAME = 'test';
     process.env.DOCS_PASSWORD = 'test';
+    process.env.SUPABASE_SMS_HOOK_SECRET = 'test-sms-secret'; // Required outside local
 
     const { generateOpenApiDocument } = await import('../../src/http/openapi/registry.js');
     const doc = generateOpenApiDocument();
@@ -55,6 +56,7 @@ describe('OpenAPI Server URLs', () => {
     process.env.DOCS_ENABLED = 'false';
     process.env.DOCS_USERNAME = 'test';
     process.env.DOCS_PASSWORD = 'test';
+    process.env.SUPABASE_SMS_HOOK_SECRET = 'test-sms-secret'; // Required outside local
 
     const { generateOpenApiDocument } = await import('../../src/http/openapi/registry.js');
     const doc = generateOpenApiDocument();

@@ -29,4 +29,10 @@ export function registerCommonSchemas(registry: OpenAPIRegistry): void {
     scheme: 'bearer',
     bearerFormat: 'JWT',
   });
+
+  registry.registerComponent('securitySchemes', 'smsCallbackSecret', {
+    type: 'apiKey',
+    in: 'query',
+    name: 'secret',
+  });
 }

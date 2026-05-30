@@ -7,6 +7,8 @@ interface EndpointResponse {
   description: string;
   /** Omit `schema` for 204 No Content responses. */
   schema?: ZodTypeAny;
+  /** Response media type for `schema`. Defaults to `application/json`. */
+  mediaType?: string;
 }
 
 export interface EndpointSpec {
@@ -45,9 +47,9 @@ export function registerEndpoint(
   if (spec.pathParams) request.params = spec.pathParams;
 
   const responses: RouteConfig['responses'] = {};
-  for (const [code, { description, schema }] of Object.entries(spec.responses)) {
+  for (const [code, { description, schema, mediaType }] of Object.entries(spec.responses)) {
     responses[Number(code)] = schema
-      ? { description, content: { 'application/json': { schema } } }
+      ? { description, content: { [mediaType ?? 'application/json']: { schema } } }
       : { description };
   }
 

@@ -23,11 +23,28 @@ import {
   handlePartyQuizReadyForNextQuestion,
 } from '../party-quiz-match-flow.js';
 
+async function rejectIfMatchPaused(socket: QuizballSocket, matchId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (redis) {
+    const paused = await redis.exists(matchPauseKey(matchId));
+    if (paused) {
+      socket.emit('error', {
+        code: 'MATCH_PAUSED',
+        message: 'Match is paused. Please wait for your opponent to return.',
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function handleHalftimeBan(
   io: QuizballServer,
   socket: QuizballSocket,
   payload: { matchId: string; categoryId: string }
 ): Promise<void> {
+  if (await rejectIfMatchPaused(socket, payload.matchId)) return;
+
   const match = await matchesRepo.getMatch(payload.matchId);
   if (!match || match.status !== 'active') {
     socket.emit('error', {
@@ -55,17 +72,7 @@ export async function handleAnswer(
 ): Promise<void> {
   const { matchId } = payload;
 
-  const redis = getRedisClient();
-  if (redis) {
-    const paused = await redis.exists(matchPauseKey(matchId));
-    if (paused) {
-      socket.emit('error', {
-        code: 'MATCH_PAUSED',
-        message: 'Match is paused. Please wait for your opponent to return.',
-      });
-      return;
-    }
-  }
+  if (await rejectIfMatchPaused(socket, matchId)) return;
 
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') {
@@ -88,17 +95,7 @@ export async function handleCountdownGuess(
   socket: QuizballSocket,
   payload: MatchCountdownGuessPayload
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (redis) {
-    const paused = await redis.exists(matchPauseKey(payload.matchId));
-    if (paused) {
-      socket.emit('error', {
-        code: 'MATCH_PAUSED',
-        message: 'Match is paused. Please wait for your opponent to return.',
-      });
-      return;
-    }
-  }
+  if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
   const match = await matchesRepo.getMatch(payload.matchId);
   if (!match || match.status !== 'active') {
@@ -125,17 +122,7 @@ export async function handlePutInOrderAnswer(
   socket: QuizballSocket,
   payload: MatchPutInOrderAnswerPayload
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (redis) {
-    const paused = await redis.exists(matchPauseKey(payload.matchId));
-    if (paused) {
-      socket.emit('error', {
-        code: 'MATCH_PAUSED',
-        message: 'Match is paused. Please wait for your opponent to return.',
-      });
-      return;
-    }
-  }
+  if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
   const match = await matchesRepo.getMatch(payload.matchId);
   if (!match || match.status !== 'active') {
@@ -162,17 +149,7 @@ export async function handleCluesAnswer(
   socket: QuizballSocket,
   payload: MatchCluesAnswerPayload
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (redis) {
-    const paused = await redis.exists(matchPauseKey(payload.matchId));
-    if (paused) {
-      socket.emit('error', {
-        code: 'MATCH_PAUSED',
-        message: 'Match is paused. Please wait for your opponent to return.',
-      });
-      return;
-    }
-  }
+  if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
   const match = await matchesRepo.getMatch(payload.matchId);
   if (!match || match.status !== 'active') {

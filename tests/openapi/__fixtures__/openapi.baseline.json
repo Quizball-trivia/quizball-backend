@@ -17,6 +17,11 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT"
+      },
+      "smsCallbackSecret": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "secret"
       }
     },
     "schemas": {
@@ -6188,9 +6193,14 @@
     "/api/v1/auth/sms/supabase-hook": {
       "post": {
         "summary": "Supabase Send SMS hook for SMSOffice",
-        "description": "Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice.",
+        "description": "Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice. Authenticated by the shared hook secret in the Authorization Bearer header.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "requestBody": {
           "required": true,
@@ -6267,9 +6277,14 @@
     "/api/v1/auth/sms/smsoffice-callback": {
       "get": {
         "summary": "SMSOffice delivery callback",
-        "description": "Receives SMSOffice delivery status updates. Responds with plain text OK.",
+        "description": "Receives SMSOffice delivery status updates. Responds with plain text OK. Authenticated by the shared callback secret in the `secret` query parameter.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "smsCallbackSecret": []
+          }
         ],
         "parameters": [
           {
@@ -6337,7 +6352,15 @@
         ],
         "responses": {
           "200": {
-            "description": "Callback accepted"
+            "description": "Callback accepted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "example": "OK"
+                }
+              }
+            }
           },
           "401": {
             "description": "Invalid callback secret",
@@ -6355,9 +6378,14 @@
     "/api/v1/auth/sms/smsoffice-status": {
       "get": {
         "summary": "Check SMSOffice message status",
-        "description": "Polls SMSOffice message status by destination and reference. Intended for manual/internal verification.",
+        "description": "Polls SMSOffice message status by destination and reference. Intended for manual/internal verification. Authenticated by the shared hook secret in the Authorization Bearer header.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {

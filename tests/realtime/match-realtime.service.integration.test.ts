@@ -1567,4 +1567,144 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(thirdPlayerSocket.join).toHaveBeenCalledWith('lobby:rematch-lobby-2');
     expect(thirdPlayerSocket.data.lobbyId).toBe('rematch-lobby-2');
   });
+
+  it('S32: a player who loses the rematch-creation lock re-checks and joins the lobby the holder publishes', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u2', 'rematch-match-3');
+    const io = createIoWithUserSocket('u2', socket);
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-3',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 400, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 1, penalty_goals: 0, avg_time_ms: 1400 },
+    ]);
+    listMembersWithUserMock.mockResolvedValue([]);
+    getLobbyByIdMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby-3') {
+        return {
+          id: 'rematch-lobby-3',
+          invite_code: 'RACE01',
+          mode: 'friendly',
+          game_mode: 'friendly_possession',
+          friendly_random: true,
+          friendly_category_a_id: null,
+          friendly_category_b_id: null,
+          is_public: false,
+          display_name: 'Rematch Lobby',
+          host_user_id: 'u1',
+          status: 'waiting',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return null;
+    });
+
+    fakeRedis.isOpen = true;
+    // The other player already holds the creation lock, so acquireLock fails here.
+    fakeRedisStore.values.set('lock:rematch:rematch-match-3', 'other-player-token');
+    // The lock holder publishes the lobby shortly after — during this player's
+    // bounded re-check window (5 × 50ms), not before the first poll.
+    setTimeout(() => {
+      fakeRedisStore.values.set(
+        'rematch:rematch-match-3',
+        JSON.stringify({ lobbyId: 'rematch-lobby-3', createdAt: Date.now() })
+      );
+    }, 60);
+
+    await matchRealtimeService.handlePlayAgain(io, socket, { matchId: 'rematch-match-3' });
+
+    // It must NOT create a competing lobby (it lost the lock)...
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    // ...and must NOT bail with the unavailable error — it joined the published lobby.
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_PLAY_AGAIN_UNAVAILABLE' })
+    );
+    expect(addMemberMock).toHaveBeenCalledWith('rematch-lobby-3', 'u2', false);
+    expect(socket.join).toHaveBeenCalledWith('lobby:rematch-lobby-3');
+    expect(socket.data.lobbyId).toBe('rematch-lobby-3');
+  });
+
+  it('S33: a player who loses the lock still bails with MATCH_PLAY_AGAIN_UNAVAILABLE if no lobby is ever published', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u2', 'rematch-match-4');
+    const io = createIoWithUserSocket('u2', socket);
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-4',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 400, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 1, penalty_goals: 0, avg_time_ms: 1400 },
+    ]);
+    getLobbyByIdMock.mockResolvedValue(null);
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('lock:rematch:rematch-match-4', 'other-player-token');
+
+    await matchRealtimeService.handlePlayAgain(io, socket, { matchId: 'rematch-match-4' });
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(addMemberMock).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_PLAY_AGAIN_UNAVAILABLE' })
+    );
+  });
+
+  it('S34: handleHalftimeBan rejects the ban while the match is paused', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now()));
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+
+    await matchRealtimeService.handleHalftimeBan(io, socket, { matchId: 'm1', categoryId: 'cat-a' });
+
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PAUSED',
+      message: 'Match is paused. Please wait for your opponent to return.',
+    });
+    // The pause guard must short-circuit before any active-match / mode checks.
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_NOT_ACTIVE' })
+    );
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_NOT_ALLOWED' })
+    );
+  });
 });

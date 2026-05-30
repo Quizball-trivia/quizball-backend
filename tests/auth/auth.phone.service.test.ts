@@ -59,13 +59,16 @@ describe('authService SMSOffice delivery', () => {
     apiKey: config.SMSOFFICE_API_KEY,
     sender: config.SMSOFFICE_SENDER,
     dryRun: config.SMSOFFICE_DRY_RUN,
+    callbackSecret: config.SMSOFFICE_CALLBACK_SECRET,
   };
+  const callbackSecret = 'test-callback-secret';
 
   beforeEach(() => {
     vi.clearAllMocks();
     config.SMSOFFICE_API_KEY = 'sms-key';
     config.SMSOFFICE_SENDER = 'QuizBall';
     config.SMSOFFICE_DRY_RUN = false;
+    config.SMSOFFICE_CALLBACK_SECRET = callbackSecret;
   });
 
   afterEach(() => {
@@ -73,6 +76,7 @@ describe('authService SMSOffice delivery', () => {
     config.SMSOFFICE_API_KEY = original.apiKey;
     config.SMSOFFICE_SENDER = original.sender;
     config.SMSOFFICE_DRY_RUN = original.dryRun;
+    config.SMSOFFICE_CALLBACK_SECRET = original.callbackSecret;
   });
 
   it('dry-runs locally without calling SMSOffice', async () => {
@@ -192,6 +196,7 @@ describe('authService SMSOffice delivery', () => {
       destination: '995577123456',
       timestamp: '20260528203045',
       operator: '28202',
+      secret: callbackSecret,
     });
 
     expect(smsDeliveryUpsertMock).toHaveBeenCalledWith(expect.objectContaining({

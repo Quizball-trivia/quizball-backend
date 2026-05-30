@@ -264,8 +264,10 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     path: '/api/v1/auth/sms/supabase-hook',
     summary: 'Supabase Send SMS hook for SMSOffice',
     description:
-      'Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice.',
+      'Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice. ' +
+      'Authenticated by the shared hook secret in the Authorization Bearer header.',
     tags: ['Auth'],
+    security: [{ bearerAuth: [] }],
     body: z.object({
       user: z.object({
         phone: z.string().nullable().optional(),
@@ -286,8 +288,10 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     path: '/api/v1/auth/sms/smsoffice-callback',
     summary: 'SMSOffice delivery callback',
     description:
-      'Receives SMSOffice delivery status updates. Responds with plain text OK.',
+      'Receives SMSOffice delivery status updates. Responds with plain text OK. ' +
+      'Authenticated by the shared callback secret in the `secret` query parameter.',
     tags: ['Auth'],
+    security: [{ smsCallbackSecret: [] }],
     query: z.object({
       reference: z.string().min(1).max(20),
       status: z.string().min(1).max(32),
@@ -298,7 +302,11 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       secret: z.string().optional(),
     }),
     responses: {
-      200: { description: 'Callback accepted' },
+      200: {
+        description: 'Callback accepted',
+        mediaType: 'text/plain',
+        schema: z.string().openapi({ example: 'OK' }),
+      },
       401: { description: 'Invalid callback secret', schema: errorResponseSchema },
     },
   });
@@ -308,8 +316,10 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     path: '/api/v1/auth/sms/smsoffice-status',
     summary: 'Check SMSOffice message status',
     description:
-      'Polls SMSOffice message status by destination and reference. Intended for manual/internal verification.',
+      'Polls SMSOffice message status by destination and reference. Intended for manual/internal verification. ' +
+      'Authenticated by the shared hook secret in the Authorization Bearer header.',
     tags: ['Auth'],
+    security: [{ bearerAuth: [] }],
     query: z.object({
       destination: z.string().min(9).max(32),
       reference: z.string().min(1).max(20),

@@ -700,6 +700,8 @@ export async function pauseMatchForDisconnectedPlayer(
       if (finalPayload) {
         await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
       }
+    } catch (err) {
+      logger.warn({ err, matchId }, 'Grace expiry handler failed');
     } finally {
       await redis.del(matchGraceKey(matchId));
       await redis.del(matchPauseKey(matchId));

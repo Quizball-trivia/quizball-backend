@@ -9,6 +9,7 @@ import { emitLobbyState } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
+import { trackDraftStarted } from '../../core/analytics/game-events.js';
 import {
   detachAllSocketsFromLobby,
   emitClosedLobbyStateForMode,
@@ -150,6 +151,16 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         categories,
         turnUserId,
       });
+
+      // Analytics: per-member draft_started event.
+      try {
+        const draftMembers = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+        for (const member of draftMembers) {
+          trackDraftStarted({ userId: member.user_id, lobbyId, mode: lobby.mode });
+        }
+      } catch (err) {
+        logger.warn({ err, lobbyId }, 'draft_started analytics failed');
+      }
       void import('./draft-realtime.service.js')
         .then(({ scheduleDraftAutoBan }) => {
           scheduleDraftAutoBan(io, lobbyId);

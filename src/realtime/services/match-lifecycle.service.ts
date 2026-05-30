@@ -12,6 +12,7 @@ import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.s
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { trackPartyQuizStarted } from '../../core/analytics/game-events.js';
 import { buildInitialCache, setMatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
@@ -288,6 +289,14 @@ export async function beginMatchForLobby(
 
   if (variant === 'friendly_party_quiz') {
     await emitPartyQuizState(io, matchId);
+    // Analytics: per-member party_quiz_started event.
+    try {
+      for (const member of members) {
+        trackPartyQuizStarted({ userId: member.user_id, matchId, playerCount: members.length });
+      }
+    } catch (err) {
+      logger.warn({ err, matchId }, 'party_quiz_started analytics failed');
+    }
   } else if (initialPossessionCache) {
     await emitMatchState(io, matchId, initialPossessionCache.statePayload);
   }

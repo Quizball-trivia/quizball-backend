@@ -3,7 +3,12 @@ import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { matchesService } from '../modules/matches/matches.service.js';
+import { trackPenaltyTaken, trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { acquireLock, releaseLock } from './locks.js';
+
+/** Regular penalty rounds before sudden-death kicks in. Mirrors the
+ *  frontend constant in `features/possession/types/possession.types.ts`. */
+const MAX_PENALTY_ROUNDS = 5;
 import {
   answerCount,
   buildAnswerPayload,
@@ -457,6 +462,24 @@ export async function resolvePossessionRound(
         },
         'Possession penalty resolution computed'
       );
+
+      // Analytics: per-shooter penalty attempt. `attemptNumber` is the
+      // current penalty round; rounds > MAX_PENALTY_ROUNDS are sudden-death.
+      try {
+        const shooterSeat = asSeat(question.shooterSeat) ?? state.penalty.shooterSeat;
+        const shooterUserId = shooterSeat ? getUserIdByCachedSeat(cache.players, shooterSeat) : null;
+        if (shooterUserId) {
+          trackPenaltyTaken({
+            userId: shooterUserId,
+            matchId,
+            scored: Boolean(penaltyOutcome.goalScoredByUserId),
+            attemptNumber: state.penalty.round,
+            suddenDeath: state.penalty.round > MAX_PENALTY_ROUNDS,
+          });
+        }
+      } catch (err) {
+        logger.warn({ err, matchId }, 'penalty_taken analytics failed');
+      }
     }
 
     state.currentQuestion = null;
@@ -579,6 +602,32 @@ export async function resolvePossessionRound(
       },
       'Possession round advanced state'
     );
+
+    // Analytics: per-player phase transition events.
+    // Emit once-per-transition (compare snapshot vs final state). Covers:
+    //   first_half → second_half  (half flipped 1 → 2)
+    //   * → last_attack            (phase newly LAST_ATTACK)
+    //   * → penalty                (phase newly PENALTY_SHOOTOUT)
+    if (preResolutionPhase !== state.phase || preResolutionHalf !== state.half) {
+      try {
+        let phaseLabel: 'first_half' | 'second_half' | 'last_attack' | 'penalty' | null = null;
+        if (preResolutionPhase !== 'PENALTY_SHOOTOUT' && state.phase === 'PENALTY_SHOOTOUT') {
+          phaseLabel = 'penalty';
+        } else if (preResolutionPhase !== 'LAST_ATTACK' && state.phase === 'LAST_ATTACK') {
+          phaseLabel = 'last_attack';
+        } else if (preResolutionHalf === 1 && state.half === 2) {
+          phaseLabel = 'second_half';
+        }
+        if (phaseLabel) {
+          const trackPhase = phaseLabel;
+          for (const player of cache.players) {
+            trackPossessionPhaseEntered({ userId: player.userId, matchId, phase: trackPhase });
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, matchId }, 'possession_phase_entered analytics failed');
+      }
+    }
 
     if (state.phase === 'HALFTIME') {
       logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');

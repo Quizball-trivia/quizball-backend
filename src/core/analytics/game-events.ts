@@ -223,3 +223,66 @@ export function trackSocketDisconnected(
     session_duration_ms: durationMs,
   });
 }
+
+// Possession-match round-level events
+export function trackPenaltyTaken(params: {
+  userId: string;
+  matchId: string;
+  scored: boolean;
+  attemptNumber: number;
+  /** Sudden-death (round > MAX_PENALTY_ROUNDS) vs regular phase */
+  suddenDeath: boolean;
+}): void {
+  trackEvent('penalty_taken', params.userId, {
+    match_id: params.matchId,
+    scored: params.scored,
+    attempt_number: params.attemptNumber,
+    sudden_death: params.suddenDeath,
+  });
+}
+
+export function trackPossessionPhaseEntered(params: {
+  userId: string;
+  matchId: string;
+  phase: 'first_half' | 'second_half' | 'last_attack' | 'penalty';
+}): void {
+  trackEvent('possession_phase_entered', params.userId, {
+    match_id: params.matchId,
+    phase: params.phase,
+  });
+}
+
+export function trackDraftStarted(params: {
+  userId: string;
+  lobbyId: string;
+  mode: string;
+}): void {
+  trackEvent('draft_started', params.userId, {
+    lobby_id: params.lobbyId,
+    mode: params.mode,
+  });
+}
+
+export function trackDraftCompleted(params: {
+  userId: string;
+  lobbyId: string;
+  matchId: string;
+  durationMs: number;
+}): void {
+  trackEvent('draft_completed', params.userId, {
+    lobby_id: params.lobbyId,
+    match_id: params.matchId,
+    duration_ms: params.durationMs,
+  });
+}
+
+export function trackPartyQuizStarted(params: {
+  userId: string;
+  matchId: string;
+  playerCount: number;
+}): void {
+  trackEvent('party_quiz_started', params.userId, {
+    match_id: params.matchId,
+    player_count: params.playerCount,
+  });
+}

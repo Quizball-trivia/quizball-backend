@@ -7,6 +7,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby, matchRealtimeService } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
+import { trackDraftCompleted } from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
@@ -118,6 +119,20 @@ async function startMatchFromDraft(
     { lobbyId, matchId, mode: lobby.mode, halfOneCategoryId },
     'Match created from draft'
   );
+
+  // Analytics: per-member draft_completed event. Duration relative to
+  // the match created_at timestamp is the closest proxy we have without
+  // dedicated draft-start tracking.
+  try {
+    const matchStartedAt = result.match.started_at ? new Date(result.match.started_at).getTime() : Date.now();
+    const durationMs = Math.max(0, Date.now() - matchStartedAt);
+    for (const member of members) {
+      trackDraftCompleted({ userId: member.user_id, lobbyId, matchId, durationMs });
+    }
+  } catch (err) {
+    logger.warn({ err, lobbyId, matchId }, 'draft_completed analytics failed');
+  }
+
   await beginMatchForLobby(io, lobbyId, matchId);
 
   const redis = getRedisClient();

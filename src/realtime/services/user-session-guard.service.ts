@@ -7,6 +7,7 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import type { LobbyWithJoinedAt } from '../../modules/lobbies/lobbies.types.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
+import { trackMatchAbandoned } from '../../core/analytics/game-events.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
@@ -191,6 +192,16 @@ async function cleanupStaleOrphanActiveMatch(
 
   const abandoned = await matchesRepo.abandonMatch(activeMatch.id);
   if (!abandoned) return;
+
+  // Analytics: per-participant match_abandoned event.
+  try {
+    const roster = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+    for (const player of roster) {
+      trackMatchAbandoned(player.user_id, activeMatch.id, activeMatch.mode, 'session_guard_stale_orphan');
+    }
+  } catch (err) {
+    logger.warn({ err, matchId: activeMatch.id }, 'match_abandoned analytics failed');
+  }
 
   logger.warn(
     {

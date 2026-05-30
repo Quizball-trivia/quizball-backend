@@ -3,6 +3,7 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { achievementsService } from '../modules/achievements/index.js';
+import { trackMatchCompleted } from '../core/analytics/game-events.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
@@ -383,6 +384,36 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       if (payload) {
         io.to(`match:${matchId}`).emit('match:final_results', payload);
+      }
+
+      // Analytics: per-player match_completed event for party-quiz mode.
+      // Mirrors the possession-mode call in `possession-completion.ts`. Goals/penalty
+      // counters are always 0 here because party-quiz is score-only.
+      try {
+        const winnerUserId = standings[0]?.userId ?? null;
+        const matchStartedAt = activeMatch.started_at ? new Date(activeMatch.started_at).getTime() : null;
+        const durationMs = matchStartedAt ? Math.max(0, Date.now() - matchStartedAt) : 0;
+        for (const player of players) {
+          const opponent = players.find((p) => p.user_id !== player.user_id) ?? null;
+          trackMatchCompleted({
+            userId: player.user_id,
+            matchId,
+            mode: activeMatch.mode,
+            won: winnerUserId === player.user_id,
+            score: player.total_points,
+            opponentScore: opponent?.total_points ?? 0,
+            durationMs,
+            goalsFor: 0,
+            goalsAgainst: 0,
+            penaltyGoalsFor: 0,
+            penaltyGoalsAgainst: 0,
+            winnerDecisionMethod: state.winnerDecisionMethod ?? 'total_points',
+            totalQuestions: activeMatch.total_questions,
+            correctAnswers: player.correct_answers,
+          });
+        }
+      } catch (err) {
+        logger.warn({ err, matchId }, 'Party quiz match_completed analytics failed');
       }
 
       void (async () => {

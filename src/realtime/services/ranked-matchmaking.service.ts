@@ -144,6 +144,15 @@ async function startHumanRankedMatch(
         return;
       }
     }
+    const isCancelled = async () => {
+      const latestRedis = getRedisClient();
+      if (!latestRedis) return false;
+      const [userACancelled, userBCancelled] = await Promise.all([
+        latestRedis.get(cancelKey(userAId)),
+        latestRedis.get(cancelKey(userBId)),
+      ]);
+      return Boolean(userACancelled || userBCancelled);
+    };
 
     const usersById = await usersRepo.getByIds([userAId, userBId]);
     const userA = usersById.get(userAId) ?? null;
@@ -178,6 +187,11 @@ async function startHumanRankedMatch(
       }
       await Promise.all([userSessionGuardService.emitState(io, userAId), userSessionGuardService.emitState(io, userBId)]);
       span.setAttribute('quizball.skipped_insufficient_tickets', true);
+      return;
+    }
+    if (await isCancelled()) {
+      logger.info({ userAId, userBId }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
+      span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
       return;
     }
 
@@ -241,6 +255,10 @@ async function startHumanRankedMatch(
 
     setTimeout(() => {
       void (async () => {
+        if (await isCancelled()) {
+          logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human draft start skipped because a player cancelled search');
+          return;
+        }
         const latest = await lobbiesRepo.getById(lobby.id);
         if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
         await startDraft(io, lobby.id);

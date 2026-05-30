@@ -22,6 +22,17 @@ import { randomIntBetween, RANKED_AI_KEY_TTL_SEC } from './lobby-lifecycle.helpe
 const RANKED_SIM_SEARCH_MIN_MS = 3000;
 const RANKED_SIM_SEARCH_MAX_MS = 10000;
 const RANKED_SIM_FOUND_MODAL_MS = 1200;
+const RANKED_MM_CANCEL_KEY_PREFIX = 'ranked:mm:cancel:';
+
+function rankedCancelKey(userId: string): string {
+  return `${RANKED_MM_CANCEL_KEY_PREFIX}${userId}`;
+}
+
+async function hasRankedCancelRequest(userId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+  return Boolean(await redis.get(rankedCancelKey(userId)));
+}
 
 function generateAiRecentForm(): Array<'W' | 'L' | 'D'> {
   const outcomes: Array<'W' | 'L' | 'D'> = ['W', 'W', 'W', 'L', 'L', 'D'];
@@ -49,6 +60,11 @@ export async function startRankedAiForUser(
       username: generateRankedAiUsernameAvoiding(takenLower),
       avatarUrl: generateRankedAiAvatarUrl(96),
     };
+    if (await hasRankedCancelRequest(userId)) {
+      logger.info({ userId }, 'Ranked AI search preparation skipped because user cancelled search');
+      span.setAttribute('quizball.skipped_cancelled', true);
+      return;
+    }
     const aiUser = await usersRepo.create({
       nickname: aiProfile.username,
       avatarUrl: aiProfile.avatarUrl,
@@ -131,6 +147,11 @@ async function handleRankedAiMatchFound(params: {
     params;
 
   try {
+    if (await hasRankedCancelRequest(userId)) {
+      logger.info({ lobbyId, userId, aiUserId: aiUser.id }, 'Ranked AI match_found skipped because user cancelled search');
+      return;
+    }
+
     const latestLobby = await lobbiesRepo.getById(lobbyId);
     if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
       return;
@@ -169,6 +190,7 @@ async function handleRankedAiMatchFound(params: {
         void startRankedAiDraft({
           io,
           lobbyId,
+          userId,
           lobbiesRepo,
           logger,
           startDraft,
@@ -183,12 +205,17 @@ async function handleRankedAiMatchFound(params: {
 async function startRankedAiDraft(params: {
   io: QuizballServer;
   lobbyId: string;
+  userId: string;
   lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, lobbiesRepo, logger, startDraft } = params;
+  const { io, lobbyId, userId, lobbiesRepo, logger, startDraft } = params;
   try {
+    if (await hasRankedCancelRequest(userId)) {
+      logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped because user cancelled search');
+      return;
+    }
     const readyLobby = await lobbiesRepo.getById(lobbyId);
     if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
       return;

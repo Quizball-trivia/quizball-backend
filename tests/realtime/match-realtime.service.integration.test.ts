@@ -118,22 +118,41 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
-    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
-    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
-    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
-    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
-    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
-    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
-    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
-    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
-    completeMatch: (...args: unknown[]) => completeMatchMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
+    updatePlayerTotals: (...args: unknown[]) => updatePlayerTotalsMock(...args),
+    updatePlayerGoalTotals: (...args: unknown[]) => updatePlayerGoalTotalsMock(...args),
     updatePlayerAvgTime: (...args: unknown[]) => updatePlayerAvgTimeMock(...args),
     setPlayerForfeitWinTotals: (...args: unknown[]) => setPlayerForfeitWinTotalsMock(...args),
     setPlayerFinalTotals: (...args: unknown[]) => setPlayerFinalTotalsMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    getAnswerForUser: (...args: unknown[]) => getAnswerForUserMock(...args),
+    insertMatchAnswer: (...args: unknown[]) => insertMatchAnswerMock(...args),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
+    getMatchQuestionTiming: (...args: unknown[]) => getMatchQuestionTimingMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-events.repo.js', () => ({
+  matchEventsRepo: {
+    insertGoalEventIfMissing: (...args: unknown[]) => insertGoalEventIfMissingMock(...args),
   },
 }));
 
@@ -146,6 +165,10 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
       abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
+      // completeMatch moved from matches.repo to matches.service in the
+      // layering-violation cleanup; tests still call it `completeMatchMock`
+      // for continuity and assert call-site behavior, not implementation.
+      completeMatch: (...args: unknown[]) => completeMatchMock(...args),
     },
   };
 });
@@ -164,15 +187,26 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   },
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
-  usersRepo: {
-    getById: vi.fn(async (id: string) => ({
-      id,
-      nickname: id,
-      avatar_url: null,
-    })),
-  },
-}));
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn(async (id: string) => ({
+    id,
+    nickname: id,
+    avatar_url: null,
+  }));
+  return {
+    usersRepo: {
+      getById,
+      getByIds: vi.fn(async (ids: string[]) => {
+        const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+        for (const id of [...new Set(ids)]) {
+          const user = await getById(id);
+          if (user) usersById.set(id, user);
+        }
+        return usersById;
+      }),
+    },
+  };
+});
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
@@ -236,6 +270,28 @@ function createIoMock(): QuizballServer {
   const emit = vi.fn();
   const to = vi.fn(() => ({ emit }));
   const inFn = vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) }));
+  return {
+    to,
+    in: inFn,
+  } as unknown as QuizballServer;
+}
+
+function createIoWithMatchSockets(matchId: string, userIds: string[]): QuizballServer {
+  const emit = vi.fn();
+  const to = vi.fn(() => ({ emit }));
+  const sockets = userIds.map((userId) => ({
+    id: `socket-${userId}`,
+    data: {
+      user: { id: userId, role: 'user' },
+      matchId,
+      connectedAt: Date.now() - 30_000,
+    },
+  }));
+  const inFn = vi.fn((room: string) => ({
+    fetchSockets: vi.fn(async () => (room === `match:${matchId}` ? sockets : [])),
+    socketsJoin: vi.fn(async () => undefined),
+  }));
+
   return {
     to,
     in: inFn,
@@ -442,6 +498,113 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
   });
 
+  it('S15 reload race: a fresh replacement socket does not suppress pause and gets resume countdown', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const emit = vi.fn();
+      const replacementSocket = {
+        id: 'new-socket',
+        data: {
+          user: { id: 'u1', role: 'user' },
+          matchId: 'm1',
+          connectedAt: Date.now(),
+        },
+      };
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn((room: string) => ({
+          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [replacementSocket] : [])),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+      const oldSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
+      oldSocket.id = 'old-socket';
+      oldSocket.data.connectedAt = Date.now() - 30_000;
+
+      fakeRedis.isOpen = true;
+
+      await matchRealtimeService.handleMatchDisconnect(io, oldSocket);
+
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+      expect(emit).toHaveBeenCalledWith(
+        'match:countdown',
+        expect.objectContaining({
+          matchId: 'm1',
+          reason: 'resume',
+          seconds: 5,
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15 party reload race: same-user sockets do not auto-resume party quiz disconnects', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const emit = vi.fn();
+      const replacementSocket = {
+        id: 'new-socket',
+        data: {
+          user: { id: 'u1', role: 'user' },
+          matchId: 'm1',
+          connectedAt: Date.now(),
+        },
+      };
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn((room: string) => ({
+          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [replacementSocket] : [])),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+      const oldSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
+      oldSocket.id = 'old-socket';
+      oldSocket.data.connectedAt = Date.now() - 30_000;
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 2,
+        total_questions: 10,
+        started_at: new Date().toISOString(),
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          currentQuestion: { qIndex: 2, correctIndex: 1 },
+        },
+      });
+      listMatchPlayersMock.mockResolvedValue([
+        { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      ]);
+
+      await matchRealtimeService.handleMatchDisconnect(io, oldSocket);
+
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:resume_countdown:m1')).toBe(false);
+      expect(io.to).toHaveBeenCalledWith('user:u1');
+      expect(emit).toHaveBeenCalledWith(
+        'match:rejoin_available',
+        expect.objectContaining({
+          matchId: 'm1',
+          variant: 'friendly_party_quiz',
+          graceMs: 60000,
+        })
+      );
+      expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
+      expect(resumePartyQuizQuestionMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15a: match:leave rejects requested active matches where the socket user is not a participant', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
@@ -455,6 +618,386 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
     expect(socket.leave).not.toHaveBeenCalled();
     expect((io.to as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalledWith('user:u9');
+  });
+
+  it('S15a1: six-player party quiz leave pauses with shared grace and does not complete the match', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoWithMatchSockets('m1', ['u1', 'u2', 'u3', 'u4', 'u5', 'u6']);
+    const socket = createSocketMock('u1', 'm1');
+    (socket as QuizballSocket & { id: string }).id = 'socket-u1';
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue(
+      Array.from({ length: 6 }, (_, index) => ({
+        user_id: `u${index + 1}`,
+        seat: index + 1,
+        total_points: 100 - index,
+        correct_answers: 1,
+        goals: 0,
+        penalty_goals: 0,
+        avg_time_ms: null,
+      }))
+    );
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+    expect(cancelMatchQuestionTimer).toHaveBeenCalledWith('m1', 2);
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(socket.leave).toHaveBeenCalledWith('match:m1');
+    expect(socket.emit).toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.objectContaining({
+        matchId: 'm1',
+        graceMs: 60000,
+      })
+    );
+  });
+
+  it('S15a2: one party quiz disconnect expires, drops that player, and resumes with 3 active players', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoWithMatchSockets('m1', ['u2', 'u3', 'u4']);
+      const socket = createSocketMock('u1', 'm1');
+      const nowIso = new Date().toISOString();
+      const activeMatch = {
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 2,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          currentQuestion: { qIndex: 2, correctIndex: 1 },
+        },
+      };
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue(activeMatch);
+      listMatchPlayersMock.mockResolvedValue([
+        { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      ]);
+
+      await matchRealtimeService.handleMatchDisconnect(io, socket);
+      expect(completeMatchMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+        'm1',
+        expect.objectContaining({
+          droppedUserIds: ['u1'],
+          answeredUserIds: [],
+        }),
+        2
+      );
+      expect(completeMatchMock).not.toHaveBeenCalled();
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+      expect(resumePartyQuizQuestionMock).toHaveBeenCalledWith(io, 'm1', 2, expect.any(Number));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15a3: three party quiz disconnects share one grace window, then the sole active player wins', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoWithMatchSockets('m1', ['u4']);
+      const nowIso = new Date().toISOString();
+      const activeMatch = {
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 2,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          currentQuestion: { qIndex: 2, correctIndex: 1 },
+        },
+      };
+      const completedMatch = {
+        ...activeMatch,
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+        winner_user_id: 'u4',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          winnerDecisionMethod: 'forfeit',
+          droppedUserIds: ['u1', 'u2', 'u3'],
+        },
+      };
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue(activeMatch).mockResolvedValueOnce(activeMatch);
+      listMatchPlayersMock.mockResolvedValue([
+        { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      ]);
+
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u1', 'm1'));
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u2', 'm1'));
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u3', 'm1'));
+      expect(fakeRedisStore.values.get('match:grace:m1')).toBeTruthy();
+
+      getMatchMock.mockResolvedValue(completedMatch);
+      getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+        'm1',
+        expect.objectContaining({
+          currentQuestion: null,
+          answeredUserIds: [],
+          droppedUserIds: ['u1', 'u2', 'u3'],
+          winnerDecisionMethod: 'forfeit',
+        }),
+        2
+      );
+      expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u4');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15a4: all party quiz players disconnect, then highest current score wins after grace', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoWithMatchSockets('m1', []);
+      const nowIso = new Date().toISOString();
+      const activeMatch = {
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 2,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          currentQuestion: { qIndex: 2, correctIndex: 1 },
+        },
+      };
+      const completedMatch = {
+        ...activeMatch,
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+        winner_user_id: 'u2',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          winnerDecisionMethod: 'total_points',
+          droppedUserIds: ['u1', 'u2', 'u3', 'u4'],
+        },
+      };
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue(activeMatch);
+      listMatchPlayersMock.mockResolvedValue([
+        { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u2', seat: 2, total_points: 350, correct_answers: 4, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      ]);
+
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u1', 'm1'));
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u2', 'm1'));
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u3', 'm1'));
+      await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u4', 'm1'));
+
+      getMatchMock.mockResolvedValue(completedMatch);
+      getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+        'm1',
+        expect.objectContaining({
+          currentQuestion: null,
+          answeredUserIds: [],
+          droppedUserIds: ['u1', 'u2', 'u3', 'u4'],
+          winnerDecisionMethod: 'total_points',
+        }),
+        2
+      );
+      expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15a5: party quiz forfeit that leaves one active player emits pending win before results', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const roomEvents: Array<{ room: string; event: string; payload: unknown }> = [];
+    const io = {
+      to: vi.fn((room: string) => ({
+        emit: (event: string, payload?: unknown) => {
+          roomEvents.push({ room, event, payload });
+        },
+      })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const socket = createSocketMock('u1', 'm1');
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+      },
+    };
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(activeMatch);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(roomEvents).toContainEqual({
+      room: 'user:u2',
+      event: 'match:forfeit_pending',
+      payload: expect.objectContaining({
+        matchId: 'm1',
+        reason: 'opponent_forfeit',
+      }),
+    });
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+  });
+
+  it('S15a6: party dropout merges the latest dropped state under the lock', async () => {
+    const { applyPartyQuizDropouts } = await import('../../src/realtime/services/party-quiz-dropout.service.js');
+    const roomEvents: Array<{ room: string; event: string; payload: unknown }> = [];
+    const io = {
+      to: vi.fn((room: string) => ({
+        emit: (event: string, payload?: unknown) => {
+          roomEvents.push({ room, event, payload });
+        },
+      })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const staleMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: [],
+      },
+    };
+    const latestMatch = {
+      ...staleMatch,
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: ['u1'],
+      },
+    };
+    const players = [
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ];
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(latestMatch);
+    listMatchPlayersMock.mockResolvedValue(players);
+
+    const result = await applyPartyQuizDropouts({
+      io,
+      match: staleMatch,
+      players,
+      droppedUserIds: ['u2'],
+      reason: 'disconnect_timeout',
+      resumeIfContinuing: false,
+    });
+
+    expect(result).toEqual({ completed: false, continued: true, activeCount: 2 });
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({
+        droppedUserIds: ['u1', 'u2'],
+      }),
+      2
+    );
+    expect(roomEvents).toContainEqual({
+      room: 'user:u2',
+      event: 'match:party_dropout',
+      payload: expect.objectContaining({ matchId: 'm1', reason: 'disconnect_timeout' }),
+    });
+  });
+
+  it('S15a7: already-dropped party forfeit does not cancel the active question timer', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: ['u1'],
+      },
+    };
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(activeMatch);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalledWith('m1', 2);
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(completeMatchMock).not.toHaveBeenCalled();
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
@@ -1213,6 +1756,30 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
+  it('S29b: beginMatchForLobby prefers current socket countries over saved user countries', async () => {
+    fakeRedis.isOpen = true;
+    const { rememberCurrentCountry } = await import('../../src/realtime/session-country.js');
+    const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+
+    await rememberCurrentCountry('u1', 'MA');
+    await rememberCurrentCountry('u2', 'GE');
+
+    await beginMatchForLobby(io, 'l1', 'm1');
+
+    const emitFns = (io.to as unknown as ReturnType<typeof vi.fn>).mock.results
+      .map((result) => (result.value as { emit?: ReturnType<typeof vi.fn> } | undefined)?.emit)
+      .filter((emit): emit is ReturnType<typeof vi.fn> => Boolean(emit));
+    const emitCalls = emitFns.flatMap((emit) => emit.mock.calls).filter(([event]) => event === 'match:start');
+
+    expect(emitCalls).toEqual(
+      expect.arrayContaining([
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u2', countryCode: 'GE' }) })],
+        ['match:start', expect.objectContaining({ opponent: expect.objectContaining({ id: 'u1', countryCode: 'MA' }) })],
+      ])
+    );
+  });
+
   it('S30: play again creates a new friendly lobby with reset category settings and carried visibility', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const socket = createSocketMock('u1', 'rematch-match-1');
@@ -1465,5 +2032,145 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
     expect(thirdPlayerSocket.join).toHaveBeenCalledWith('lobby:rematch-lobby-2');
     expect(thirdPlayerSocket.data.lobbyId).toBe('rematch-lobby-2');
+  });
+
+  it('S32: a player who loses the rematch-creation lock re-checks and joins the lobby the holder publishes', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u2', 'rematch-match-3');
+    const io = createIoWithUserSocket('u2', socket);
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-3',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 400, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 1, penalty_goals: 0, avg_time_ms: 1400 },
+    ]);
+    listMembersWithUserMock.mockResolvedValue([]);
+    getLobbyByIdMock.mockImplementation(async (lobbyId: string) => {
+      if (lobbyId === 'rematch-lobby-3') {
+        return {
+          id: 'rematch-lobby-3',
+          invite_code: 'RACE01',
+          mode: 'friendly',
+          game_mode: 'friendly_possession',
+          friendly_random: true,
+          friendly_category_a_id: null,
+          friendly_category_b_id: null,
+          is_public: false,
+          display_name: 'Rematch Lobby',
+          host_user_id: 'u1',
+          status: 'waiting',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return null;
+    });
+
+    fakeRedis.isOpen = true;
+    // The other player already holds the creation lock, so acquireLock fails here.
+    fakeRedisStore.values.set('lock:rematch:rematch-match-3', 'other-player-token');
+    // The lock holder publishes the lobby shortly after — during this player's
+    // bounded re-check window (5 × 50ms), not before the first poll.
+    setTimeout(() => {
+      fakeRedisStore.values.set(
+        'rematch:rematch-match-3',
+        JSON.stringify({ lobbyId: 'rematch-lobby-3', createdAt: Date.now() })
+      );
+    }, 60);
+
+    await matchRealtimeService.handlePlayAgain(io, socket, { matchId: 'rematch-match-3' });
+
+    // It must NOT create a competing lobby (it lost the lock)...
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    // ...and must NOT bail with the unavailable error — it joined the published lobby.
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_PLAY_AGAIN_UNAVAILABLE' })
+    );
+    expect(addMemberMock).toHaveBeenCalledWith('rematch-lobby-3', 'u2', false);
+    expect(socket.join).toHaveBeenCalledWith('lobby:rematch-lobby-3');
+    expect(socket.data.lobbyId).toBe('rematch-lobby-3');
+  });
+
+  it('S33: a player who loses the lock still bails with MATCH_PLAY_AGAIN_UNAVAILABLE if no lobby is ever published', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u2', 'rematch-match-4');
+    const io = createIoWithUserSocket('u2', socket);
+
+    getMatchMock.mockResolvedValue({
+      id: 'rematch-match-4',
+      mode: 'friendly',
+      status: 'completed',
+      current_q_index: 9,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: 'u1',
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 400, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: 1200 },
+      { user_id: 'u2', seat: 2, total_points: 300, correct_answers: 3, goals: 1, penalty_goals: 0, avg_time_ms: 1400 },
+    ]);
+    getLobbyByIdMock.mockResolvedValue(null);
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('lock:rematch:rematch-match-4', 'other-player-token');
+
+    await matchRealtimeService.handlePlayAgain(io, socket, { matchId: 'rematch-match-4' });
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(addMemberMock).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_PLAY_AGAIN_UNAVAILABLE' })
+    );
+  });
+
+  it('S34: handleHalftimeBan rejects the ban while the match is paused', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now()));
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+    });
+
+    await matchRealtimeService.handleHalftimeBan(io, socket, { matchId: 'm1', categoryId: 'cat-a' });
+
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_PAUSED',
+      message: 'Match is paused. Please wait for your opponent to return.',
+    });
+    // The pause guard must short-circuit before any active-match / mode checks.
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_NOT_ACTIVE' })
+    );
+    expect(socket.emit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'MATCH_NOT_ALLOWED' })
+    );
   });
 });

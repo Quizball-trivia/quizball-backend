@@ -91,8 +91,19 @@ export const questionsRepo = {
     const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
     const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
     const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
-    const searchFilter = filter?.search
-      ? sql`AND (q.prompt->>'en' ILIKE ${'%' + filter.search + '%'} OR q.prompt->>'ka' ILIKE ${'%' + filter.search + '%'})`
+    const searchTerm = filter?.search?.trim();
+    const searchPattern = searchTerm ? `%${searchTerm}%` : null;
+    const searchFilter = searchPattern
+      ? sql`AND (
+          COALESCE(q.prompt->>'en', '') ILIKE ${searchPattern}
+          OR COALESCE(q.prompt->>'ka', '') ILIKE ${searchPattern}
+          OR COALESCE(q.prompt::text, '') ILIKE ${searchPattern}
+          OR COALESCE(q.explanation->>'en', '') ILIKE ${searchPattern}
+          OR COALESCE(q.explanation->>'ka', '') ILIKE ${searchPattern}
+          OR COALESCE(q.explanation::text, '') ILIKE ${searchPattern}
+          OR COALESCE(q.type, '') ILIKE ${searchPattern}
+          OR COALESCE(qp.payload::text, '') ILIKE ${searchPattern}
+        )`
       : sql``;
 
     // Get paginated results with payload and total count in single query

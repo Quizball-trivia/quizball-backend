@@ -1,4 +1,5 @@
 import { matchesRepo } from '../matches/matches.repo.js';
+import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { trackLevelUp } from '../../core/analytics/game-events.js';
 import { getProgressionFromTotalXp, getMatchXpReward } from './progression.logic.js';
@@ -35,13 +36,16 @@ export const progressionService = {
       return;
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     if (players.length === 0) {
       return;
     }
 
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    const humanPlayers = players.filter((_, index) => users[index] && !users[index]!.is_ai);
+    const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+    const humanPlayers = players.filter((player) => {
+      const user = usersById.get(player.user_id);
+      return user && !user.is_ai;
+    });
     if (humanPlayers.length === 0) {
       return;
     }

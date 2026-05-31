@@ -1,5 +1,7 @@
 import { logger } from '../core/logger.js';
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { usersRepo } from '../modules/users/users.repo.js';
 import { acquireLock, releaseLock } from './locks.js';
@@ -24,6 +26,11 @@ import {
   getQuestionPreAnswerDelayMs,
   type Seat,
 } from './possession-state.js';
+import {
+  answerLogFields,
+  cacheLogFields,
+  questionLogFields,
+} from './possession-debug-logging.js';
 
 type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTimeout: boolean) => Promise<void>;
 
@@ -84,7 +91,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       }
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     for (const player of players) {
       const user = await usersRepo.getById(player.user_id);
       if (user?.is_ai) {
@@ -139,18 +146,48 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const key = questionTimerKey(matchId, qIndex);
     clearAiAnswerTimer(matchId, qIndex);
     const cache = await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return;
-    if (cache.currentQIndex !== qIndex) return;
-    if (!cache.currentQuestion) return;
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { eventName: 'possession_ai_answer', matchId, qIndex, ...cacheLogFields(cache) },
+        'Possession AI answer schedule skipped: inactive or missing cache'
+      );
+      return;
+    }
+    if (cache.currentQIndex !== qIndex) {
+      logger.warn(
+        { eventName: 'possession_ai_answer', matchId, qIndex, ...cacheLogFields(cache) },
+        'Possession AI answer schedule skipped: qIndex mismatch'
+      );
+      return;
+    }
+    if (!cache.currentQuestion) {
+      logger.warn(
+        { eventName: 'possession_ai_answer', matchId, qIndex, ...cacheLogFields(cache) },
+        'Possession AI answer schedule skipped: missing current question'
+      );
+      return;
+    }
 
     const aiUserId = await resolveAiUserIdForMatch(matchId);
     if (!aiUserId) return;
 
     const hasAi = cache.players.some((player) => player.userId === aiUserId);
-    if (!hasAi) return;
+    if (!hasAi) {
+      logger.warn(
+        { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(cache) },
+        'Possession AI answer schedule skipped: AI user is not a match player'
+      );
+      return;
+    }
 
     const expectedUserIds = getExpectedUserIds(cache);
-    if (!expectedUserIds.includes(aiUserId)) return;
+    if (!expectedUserIds.includes(aiUserId)) {
+      logger.warn(
+        { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, expectedUserIds, ...questionLogFields(cache.currentQuestion) },
+        'Possession AI answer schedule skipped: AI user is not expected for this question'
+      );
+      return;
+    }
 
     const nowMs = Date.now();
     const playableAtMs = options.playableAt?.getTime();
@@ -201,16 +238,26 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       plannedAnswerTimeMs,
       plannedClueIndex,
     });
-    logger.debug(
+    logger.info(
       {
+        eventName: 'possession_ai_answer',
         matchId,
         qIndex,
+        aiUserId,
         questionKind: options.questionKind,
+        phaseKind: options.phaseKind,
+        phaseRound: options.phaseRound,
+        shooterSeat: options.shooterSeat,
         authoritativeWindow: hasAuthoritativeWindow,
         preAnswerDelayMs,
+        aiThinkTimeMs,
+        aiCorrectness,
         plannedAnswerTimeMs,
+        plannedClueIndex,
+        playableAt: hasAuthoritativeWindow ? new Date(playableAtMs as number).toISOString() : null,
         dueAt: new Date(dueAtMs).toISOString(),
         deadlineAt: hasAuthoritativeWindow ? new Date(deadlineAtMs as number).toISOString() : null,
+        ...questionLogFields(cache.currentQuestion),
       },
       'Scheduled possession AI answer'
     );
@@ -226,10 +273,27 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     try {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
       if (!aiUserId) return;
+      logger.info(
+        {
+          eventName: 'possession_ai_answer',
+          matchId,
+          qIndex,
+          aiUserId,
+          plannedAnswerTimeMs,
+          plannedClueIndex,
+        },
+        'Possession AI answer timer fired'
+      );
 
       const lockKey = `lock:match:${matchId}:answer`;
       const lock = await acquireLock(lockKey, 2000);
-      if (!lock.acquired || !lock.token) return;
+      if (!lock.acquired || !lock.token) {
+        logger.warn(
+          { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId },
+          'Possession AI answer skipped: answer lock busy'
+        );
+        return;
+      }
 
       let committed: {
         questionKind: MatchQuestionKind;
@@ -251,16 +315,46 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
       try {
         const fresh = await getMatchCacheOrRebuild(matchId);
-        if (!fresh || fresh.status !== 'active') return;
-        if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) return;
-        if (hasUserAnswered(fresh, aiUserId)) return;
+        if (!fresh || fresh.status !== 'active') {
+          logger.warn(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
+            'Possession AI answer skipped: inactive or missing cache'
+          );
+          return;
+        }
+        if (fresh.currentQIndex !== qIndex || !fresh.currentQuestion) {
+          logger.warn(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh), ...questionLogFields(fresh.currentQuestion) },
+            'Possession AI answer skipped: stale or missing current question'
+          );
+          return;
+        }
+        if (hasUserAnswered(fresh, aiUserId)) {
+          logger.info(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...questionLogFields(fresh.currentQuestion) },
+            'Possession AI answer skipped: AI already answered'
+          );
+          return;
+        }
 
         const expected = getExpectedUserIds(fresh);
-        if (!expected.includes(aiUserId)) return;
+        if (!expected.includes(aiUserId)) {
+          logger.warn(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, expectedUserIds: expected, ...questionLogFields(fresh.currentQuestion) },
+            'Possession AI answer skipped: AI user is not expected for this question'
+          );
+          return;
+        }
 
         const question = fresh.currentQuestion;
         const aiPlayer = getCachedPlayer(fresh, aiUserId);
-        if (!aiPlayer) return;
+        if (!aiPlayer) {
+          logger.warn(
+            { eventName: 'possession_ai_answer', matchId, qIndex, aiUserId, ...cacheLogFields(fresh) },
+            'Possession AI answer skipped: AI user is not a match player'
+          );
+          return;
+        }
 
         const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
         const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
@@ -357,6 +451,21 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         }
 
         await setMatchCache(fresh);
+        logger.info(
+          {
+            eventName: 'possession_ai_answer',
+            matchId,
+            qIndex,
+            aiUserId,
+            aiCorrectness,
+            answerCount: answerCount(fresh),
+            expectedCount: expected.length,
+            totalPoints: aiPlayer.totalPoints + (question.kind === 'multipleChoice' ? 0 : pointsEarned),
+            ...questionLogFields(question),
+            ...answerLogFields(answer),
+          },
+          'Possession AI answer committed'
+        );
 
         committed = {
           questionKind: question.kind,
@@ -383,7 +492,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
       if (committed.questionKind === 'multipleChoice') {
         fireAndForget('insertMatchAnswer(ai)', async () => {
-          await matchesRepo.insertMatchAnswerIfMissing({
+          await matchAnswersRepo.insertMatchAnswerIfMissing({
             matchId,
             qIndex,
             userId: aiUserId,
@@ -398,7 +507,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         });
 
         fireAndForget('updatePlayerTotals(ai)', async () => {
-          await matchesRepo.updatePlayerTotals(
+          await matchPlayersRepo.updatePlayerTotals(
             matchId,
             aiUserId,
             committed.pointsEarned,
@@ -417,12 +526,35 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           isCorrect: committed.isCorrect,
           selectedIndex: committed.selectedIndex,
         });
+        logger.info(
+          {
+            eventName: 'match:opponent_answered',
+            matchId,
+            qIndex,
+            aiUserId,
+            questionKind: committed.questionKind,
+            isCorrect: committed.isCorrect,
+            pointsEarned: committed.pointsEarned,
+            selectedIndex: committed.selectedIndex,
+          },
+          'Possession AI opponent_answered emitted'
+        );
       }
 
       // AI commits all countdown answers at once; drip-feed them so the human sees a typing pace.
       if (committed.questionKind === 'countdown' && committed.foundCount && committed.foundCount > 0) {
         const totalFound = committed.foundCount;
         const emitQIndex = qIndex;
+        logger.info(
+          {
+            eventName: 'match:opponent_countdown_progress',
+            matchId,
+            qIndex,
+            aiUserId,
+            totalFound,
+          },
+          'Possession AI countdown drip scheduled'
+        );
         for (let i = 1; i <= totalFound; i += 1) {
           const stepDelay = 600 + Math.floor(Math.random() * 800) + (i - 1) * 250;
           setTimeout(() => {
@@ -438,6 +570,17 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
                   opponentUserId: aiUserId,
                   foundCount: i,
                 });
+                logger.info(
+                  {
+                    eventName: 'match:opponent_countdown_progress',
+                    matchId,
+                    qIndex: emitQIndex,
+                    aiUserId,
+                    foundCount: i,
+                    totalFound,
+                  },
+                  'Possession AI countdown progress emitted'
+                );
               } catch (error) {
                 logger.warn({ error, matchId, qIndex: emitQIndex }, 'AI countdown drip emit failed');
               }
@@ -447,10 +590,22 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       }
 
       if (committed.questionKind !== 'countdown' && committed.answerCount >= committed.expectedCount) {
+        logger.info(
+          {
+            eventName: 'match:round_result',
+            matchId,
+            qIndex,
+            aiUserId,
+            answerCount: committed.answerCount,
+            expectedCount: committed.expectedCount,
+            questionKind: committed.questionKind,
+          },
+          'Possession AI answer triggering round resolve'
+        );
         await resolveRound(io, matchId, qIndex, false);
       }
     } catch (error) {
-      logger.warn({ error, matchId, qIndex }, 'Possession AI answer failed');
+      logger.warn({ error, eventName: 'possession_ai_answer', matchId, qIndex }, 'Possession AI answer failed');
     }
   }
 

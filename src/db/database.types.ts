@@ -712,6 +712,8 @@ export type Database = {
           nickname: string | null
           onboarding_complete: boolean
           pending_deletion_at: string | null
+          phone_number: string | null
+          phone_verified_at: string | null
           preferred_language: string
           role: string
           total_xp: number
@@ -732,6 +734,8 @@ export type Database = {
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null
+          phone_number?: string | null
+          phone_verified_at?: string | null
           preferred_language?: string
           role?: string
           total_xp?: number
@@ -752,9 +756,59 @@ export type Database = {
           nickname?: string | null
           onboarding_complete?: boolean
           pending_deletion_at?: string | null
+          phone_number?: string | null
+          phone_verified_at?: string | null
           preferred_language?: string
           role?: string
           total_xp?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sms_delivery_events: {
+        Row: {
+          created_at: string
+          delivered_at: string | null
+          destination: string
+          error_code: number | null
+          error_message: string | null
+          id: string
+          message_type: string
+          provider: string
+          raw_callback: Json | null
+          reference: string
+          sent_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          delivered_at?: string | null
+          destination: string
+          error_code?: number | null
+          error_message?: string | null
+          id?: string
+          message_type?: string
+          provider?: string
+          raw_callback?: Json | null
+          reference: string
+          sent_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          delivered_at?: string | null
+          destination?: string
+          error_code?: number | null
+          error_message?: string | null
+          id?: string
+          message_type?: string
+          provider?: string
+          raw_callback?: Json | null
+          reference?: string
+          sent_at?: string | null
+          status?: string
           updated_at?: string
         }
         Relationships: []

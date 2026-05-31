@@ -8,6 +8,7 @@ const listMatchPlayersMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
 const getActiveMatchForLobbyMock = vi.fn();
+const removeMemberMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -26,7 +27,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
     getById: vi.fn(),
-    removeMember: vi.fn(),
+    removeMember: (...args: unknown[]) => removeMemberMock(...args),
     countMembers: vi.fn(),
     deleteLobby: vi.fn(),
     listMembersWithUser: vi.fn(),
@@ -43,9 +44,14 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
-    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
     abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
     getActiveMatchForLobby: (...args: unknown[]) => getActiveMatchForLobbyMock(...args),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
+    listMatchPlayers: (...args: unknown[]) => listMatchPlayersMock(...args),
   },
 }));
 
@@ -63,6 +69,7 @@ describe('user-session-guard.service', () => {
     ]);
     abandonMatchMock.mockResolvedValue(false);
     getActiveMatchForLobbyMock.mockResolvedValue(null);
+    removeMemberMock.mockResolvedValue(undefined);
     finalizeMatchAsForfeitMock.mockResolvedValue({
       matchId: 'm1',
       winnerId: 'u2',
@@ -197,5 +204,36 @@ describe('user-session-guard.service', () => {
     expect(getActiveMatchForLobbyMock).not.toHaveBeenCalled();
     expect(snapshot.state).toBe('IN_WAITING_LOBBY');
     expect(snapshot.waitingLobbyId).toBe('draft-lobby');
+  });
+
+  it('does not clean up a lobby membership created after connect cleanup started', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const joinedAfterCleanupStarted = new Date(Date.now() + 10_000).toISOString();
+    const lateJoinedLobby = {
+      id: 'fresh-lobby',
+      mode: 'friendly',
+      status: 'waiting',
+      host_user_id: 'host',
+      joined_at: joinedAfterCleanupStarted,
+    };
+    listOpenLobbiesForUserMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([lateJoinedLobby])
+      .mockResolvedValueOnce([lateJoinedLobby]);
+
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => []),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
+
+    expect(removeMemberMock).not.toHaveBeenCalled();
+    expect(snapshot.state).toBe('IN_WAITING_LOBBY');
+    expect(snapshot.waitingLobbyId).toBe('fresh-lobby');
   });
 });

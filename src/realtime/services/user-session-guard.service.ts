@@ -5,7 +5,9 @@ import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import type { LobbyWithJoinedAt } from '../../modules/lobbies/lobbies.types.js';
+import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
+import { trackMatchAbandoned } from '../../core/analytics/game-events.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
@@ -13,6 +15,7 @@ import { withSpan } from '../../core/tracing.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import { matchDisconnectKey, matchPresenceKey } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -76,11 +79,14 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
       ? redis.hGet(RANKED_USER_MAP_KEY, userId)
       : Promise.resolve<string | null>(null);
 
-    const [activeMatch, openLobbies, queueSearchId] = await Promise.all([
+    const [rawActiveMatch, openLobbies, queueSearchId] = await Promise.all([
       matchesRepo.getActiveMatchForUser(userId),
       lobbiesRepo.listOpenLobbiesForUser(userId),
       queueSearchIdPromise,
     ]);
+    const activeMatch = rawActiveMatch && isUserDroppedFromPartyMatch(rawActiveMatch, userId)
+      ? null
+      : rawActiveMatch;
 
     span.setAttribute('quizball.has_active_match', Boolean(activeMatch?.id));
     span.setAttribute('quizball.open_lobby_count', openLobbies.length);
@@ -145,7 +151,7 @@ async function cleanupStaleOrphanActiveMatch(
   }
 
   if (activeMatch.mode === 'ranked') {
-    const players = await matchesRepo.listMatchPlayers(activeMatch.id);
+    const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
     const finalized = await finalizeMatchAsForfeit({
       matchId: activeMatch.id,
       forfeitingUserId: userId,
@@ -190,6 +196,16 @@ async function cleanupStaleOrphanActiveMatch(
 
   const abandoned = await matchesRepo.abandonMatch(activeMatch.id);
   if (!abandoned) return;
+
+  // Analytics: per-participant match_abandoned event.
+  try {
+    const roster = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+    for (const player of roster) {
+      trackMatchAbandoned(player.user_id, activeMatch.id, activeMatch.mode, 'session_guard_stale_orphan');
+    }
+  } catch (err) {
+    logger.warn({ err, matchId: activeMatch.id }, 'match_abandoned analytics failed');
+  }
 
   logger.warn(
     {
@@ -314,10 +330,29 @@ async function cleanupOpenLobbies(
     keepLobbyId?: string;
     keepWaitingLobbyId?: string;
     preserveActiveMatchId?: string | null;
+    cleanupStartedAtMs?: number;
   } = {}
 ): Promise<void> {
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
   for (const lobby of openLobbies) {
+    const joinedAtMs = Date.parse(lobby.joined_at);
+    if (
+      typeof options.cleanupStartedAtMs === 'number' &&
+      Number.isFinite(joinedAtMs) &&
+      joinedAtMs > options.cleanupStartedAtMs
+    ) {
+      logger.info(
+        {
+          userId,
+          lobbyId: lobby.id,
+          joinedAt: lobby.joined_at,
+          cleanupStartedAt: new Date(options.cleanupStartedAtMs).toISOString(),
+        },
+        'Session guard skipped lobby cleanup for membership joined after cleanup started'
+      );
+      continue;
+    }
+
     if (options.keepLobbyId && lobby.id === options.keepLobbyId) {
       continue;
     }
@@ -457,11 +492,12 @@ export const userSessionGuardService = {
       code?: string;
       message?: string;
       operation?: string;
+      waitMs?: number;
     }
   ): Promise<boolean> {
     const userId = socket.data.user.id;
     const locked = await this.withUserSessionLock(userId, work, {
-      waitMs: SESSION_LOCK_WAIT_MS,
+      waitMs: options?.waitMs ?? SESSION_LOCK_WAIT_MS,
     });
     if (locked !== null) {
       return true;
@@ -489,6 +525,7 @@ export const userSessionGuardService = {
   },
 
   async prepareForConnect(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
+    const cleanupStartedAtMs = Date.now();
     let context = await resolveContext(userId);
     await cleanupStaleOrphanActiveMatch(io, userId, context);
     context = await resolveContext(userId);
@@ -497,6 +534,7 @@ export const userSessionGuardService = {
       await cancelRankedQueueSearch(userId);
       await cleanupOpenLobbies(io, userId, {
         preserveActiveMatchId: context.activeMatch.id,
+        cleanupStartedAtMs,
       });
       return this.resolveState(userId);
     }
@@ -509,6 +547,7 @@ export const userSessionGuardService = {
       keepLobbyId,
       keepWaitingLobbyId: context.waitingLobbies[0]?.id,
       preserveActiveMatchId: null,
+      cleanupStartedAtMs,
     });
     return this.resolveState(userId);
   },

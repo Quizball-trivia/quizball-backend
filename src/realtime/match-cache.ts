@@ -1,7 +1,11 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import { ExternalServiceError } from '../core/errors.js';
 import type { Json } from '../db/types.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
+import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   createInitialPossessionState,
@@ -398,7 +402,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       span.setAttribute('quizball.match_found', false);
       return null;
     }
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     const state = sanitizePossessionState(match.state_payload, match.mode);
 
     const cache = buildInitialCache({
@@ -412,7 +416,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
     const rawQuestionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
     const questionPayload = normalizeMatchQuestionPayload(rawQuestionPayload);
     const timing = questionPayload
-      ? await matchesRepo.getMatchQuestionTiming(matchId, currentQuestionIndex)
+      ? await matchQuestionsRepo.getMatchQuestionTiming(matchId, currentQuestionIndex)
       : null;
 
     if (questionPayload) {
@@ -436,7 +440,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
         evaluation: questionPayload.evaluation,
         reveal: questionPayload.reveal,
       };
-      const answers = await matchesRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
+      const answers = await matchAnswersRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
       cache.answers = toCachedAnswer(answers);
     } else {
       cache.currentQuestion = null;
@@ -579,7 +583,7 @@ export async function countdownAddFound(
 ): Promise<CountdownAddResult> {
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) {
-    throw new Error('Redis unavailable for countdown state');
+    throw new ExternalServiceError('Redis unavailable for countdown state');
   }
   const key = countdownPlayerKey(matchId, userId);
   const [wasAdded, count] = await redis.eval(COUNTDOWN_ADD_FOUND_SCRIPT, {

@@ -12,15 +12,31 @@ vi.mock('../../src/core/logger.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
+  matchPlayersRepo: {
     listMatchPlayers: vi.fn(),
   },
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
-  usersRepo: {
-    getById: vi.fn(),
-  },
-}));
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn();
+  return {
+    usersRepo: {
+      getById,
+      getByIds: vi.fn(async (ids: string[]) => {
+        const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+        for (const id of [...new Set(ids)]) {
+          const user = await getById(id);
+          if (user) usersById.set(id, user);
+        }
+        return usersById;
+      }),
+    },
+  };
+});
 
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
   rankedRepo: {
@@ -34,6 +50,7 @@ vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
 }));
 
 import { matchesRepo } from '../../src/modules/matches/matches.repo.js';
+import { matchPlayersRepo } from '../../src/modules/matches/match-players.repo.js';
 import { usersRepo } from '../../src/modules/users/users.repo.js';
 import { rankedRepo } from '../../src/modules/ranked/ranked.repo.js';
 import { rankedService } from '../../src/modules/ranked/ranked.service.js';
@@ -251,7 +268,7 @@ describe('rankedService', () => {
     { name: 'clamp loss at zero RP floor', playerRp: 7, opponentRp: 1200, winnerUserId: 'u-2', delta: -7, newRp: 0 },
   ])('applies ranked RP formula correctly: $name', async ({ playerRp, opponentRp, winnerUserId, delta, newRp }) => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', winnerUserId));
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 800),
       createPlayer('u-2', 2, 700),
     ]);
@@ -291,7 +308,7 @@ describe('rankedService', () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'u-2', undefined, 'forfeit')
     );
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 400),
       createPlayer('u-2', 2, 900),
     ]);
@@ -331,7 +348,7 @@ describe('rankedService', () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'u-2', undefined, 'forfeit')
     );
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 400),
       createPlayer('u-2', 2, 900),
     ]);
@@ -369,7 +386,7 @@ describe('rankedService', () => {
 
   it('returns null for completed ranked match without winner_user_id', async () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', null));
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 800),
       createPlayer('u-2', 2, 700),
     ]);
@@ -390,7 +407,7 @@ describe('rankedService', () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', null, undefined, 'forfeit')
     );
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 800),
       createPlayer('u-2', 2, 700),
     ]);
@@ -430,7 +447,7 @@ describe('rankedService', () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
     );
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('human-1', 1, 900, 6),
       createPlayer('ai-1', 2, 400, 4),
     ]);
@@ -471,7 +488,7 @@ describe('rankedService', () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
     );
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('human-1', 1, 8200, 8),
       createPlayer('ai-1', 2, 0, 0),
     ]);
@@ -508,7 +525,7 @@ describe('rankedService', () => {
 
   it('uses pre-existing rp changes (idempotent read path) without reapplying settlement', async () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', 'u-1'));
-    (matchesRepo.listMatchPlayers as Mock).mockResolvedValue([
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('u-1', 1, 900),
       createPlayer('u-2', 2, 800),
     ]);

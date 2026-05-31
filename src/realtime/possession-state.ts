@@ -18,8 +18,9 @@ export const CLUES_PER_CLUE_MS = 10000;
 export const CLUES_MAX_CLUES = 5;
 export const CLUES_QUESTION_TIME_MS = CLUES_PER_CLUE_MS * CLUES_MAX_CLUES;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
-export const FRONTEND_TRANSITION_DELAY_MS = 2500; // Synced with frontend TRANSITION_DELAY_MS
-export const FRONTEND_RESULT_HOLD_MS = 2500; // Synced with frontend ROUND_RESULT_HOLD_MS
+export const FRONTEND_TRANSITION_DELAY_MS = 1000; // Synced with frontend TRANSITION_DELAY_MS
+export const FRONTEND_FIELD_RESULT_COMPARE_MS = 1500; // Synced with frontend FIELD_RESULT_COMPARE_MS
+export const FRONTEND_RESULT_HOLD_MS = 2000; // Synced with frontend ROUND_RESULT_HOLD_MS
 export const FRONTEND_GOAL_CELEBRATION_MS = 4000; // Synced with frontend GOAL_CELEBRATION_MS
 export const FRONTEND_SPECIAL_RESULT_EXTRA_MS = 3000; // Extra hold for special question reveals (countdown, put-in-order, clues)
 export const FRONTEND_FIRST_QUESTION_INTRO_MS = 2000; // Synced with first-question intro overlay
@@ -108,9 +109,9 @@ export function getQuestionPreAnswerDelayMs(params: {
     return FRONTEND_REVEAL_MS;
   }
   // First question after halftime has no round result to promote from, but the
-  // client still shows a second-half transition before the normal reveal.
+  // client still resets the field, shows the second-half transition, then reveals.
   if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
-    return FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
+    return FRONTEND_FIELD_RESULT_COMPARE_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
   }
   // Special question reveals (countdown, put-in-order, clues) need extra hold time
   // so players can read the correct answers before transitioning to the next round.
@@ -180,6 +181,19 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     return fallback;
   }
 
+  const speedStreakCandidateSeat = asSeat(candidate.speedStreakCandidateSeat) ?? null;
+  const speedStreakCandidateCount = Math.max(
+    0,
+    Math.min(2, Number(candidate.speedStreakCandidateCount ?? 0))
+  );
+  const parsedSpeedStreakHolderSeat = asSeat(candidate.speedStreakHolderSeat) ?? null;
+  const speedStreakHolderSeat =
+    parsedSpeedStreakHolderSeat !== null &&
+    speedStreakCandidateSeat === parsedSpeedStreakHolderSeat &&
+    speedStreakCandidateCount >= 2
+      ? parsedSpeedStreakHolderSeat
+      : null;
+
   return {
     ...fallback,
     ...candidate,
@@ -193,6 +207,9 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     },
     possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
+    speedStreakHolderSeat,
+    speedStreakCandidateSeat,
+    speedStreakCandidateCount,
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
     normalQuestionsAnsweredInHalf: Math.max(0, Number(candidate.normalQuestionsAnsweredInHalf ?? 0)),
     normalQuestionsAnsweredTotal: Math.max(0, Number(candidate.normalQuestionsAnsweredTotal ?? 0)),
@@ -279,6 +296,9 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
     phase: state.phase,
     half: state.half,
     possessionDiff: state.possessionDiff,
+    // 2× streak only applies during normal play — never surface a holder in
+    // halftime / last-attack / penalty / completed phases.
+    speedStreakHolderSeat: state.phase === 'NORMAL_PLAY' ? state.speedStreakHolderSeat : null,
     normalQuestionsAnsweredInHalf: state.normalQuestionsAnsweredInHalf,
     attackerSeat: state.lastAttack.attackerSeat,
     kickOffSeat: state.kickOffSeat,

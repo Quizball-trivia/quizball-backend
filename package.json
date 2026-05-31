@@ -28,6 +28,8 @@
     "db:types": "supabase gen types typescript --local > src/db/database.types.ts",
     "db:types:remote": "supabase gen types typescript --linked > src/db/database.types.ts",
     "audit:backfill-question-types": "tsx scripts/backfill-question-audit-types.ts",
+    "db:sync-questions": "tsx scripts/sync-questions-prod-to-staging.ts",
+    "db:sync-questions:execute": "tsx scripts/sync-questions-prod-to-staging.ts --execute",
     "docker:start": "./scripts/docker-start.sh",
     "docker:stop": "./scripts/docker-stop.sh",
     "docker:logs": "docker compose logs -f api",
@@ -63,6 +65,7 @@
     "posthog-node": "^5.24.11",
     "redis": "^4.6.12",
     "socket.io": "^4.7.5",
+    "standardwebhooks": "^1.0.0",
     "stripe": "^20.3.1",
     "swagger-ui-express": "^5.0.1",
     "zod": "^3.23.8"

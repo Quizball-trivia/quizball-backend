@@ -2,10 +2,13 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby, matchRealtimeService } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
+import { trackDraftCompleted } from '../../core/analytics/game-events.js';
+import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
@@ -45,6 +48,35 @@ async function startMatchFromDraft(
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
   if (members.length !== 2) return null;
 
+  let consumedRankedTicketUserIds: string[] = [];
+
+  if (lobby.mode === 'ranked') {
+    const aiUserId = await resolveRankedAiUserId(lobbyId, members);
+    const ticketUserIds = members
+      .filter((member) => member.user_id !== aiUserId)
+      .map((member) => member.user_id);
+
+    if (ticketUserIds.length > 0) {
+      const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
+      if (!consumedTickets) {
+        logger.warn(
+          { lobbyId, ticketUserIds },
+          'Ranked match creation aborted: insufficient tickets'
+        );
+        await abortRankedDraftStartForTickets(io, lobby, ticketUserIds);
+        return null;
+      }
+      logger.info(
+        { lobbyId, ticketUserIds, wallets: consumedTickets.wallets },
+        'Ranked match creation consumed tickets'
+      );
+      consumedRankedTicketUserIds = ticketUserIds;
+    }
+  }
+
+  io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
+  logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
+
   let result;
   try {
     result = await matchesService.createMatchFromLobby({
@@ -56,6 +88,24 @@ async function startMatchFromDraft(
       categoryBId: null,
     });
   } catch (error) {
+    if (consumedRankedTicketUserIds.length > 0) {
+      try {
+        const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
+        logger.info(
+          { lobbyId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
+          'Refunded ranked tickets after match creation failure'
+        );
+      } catch (refundError) {
+        logger.error(
+          {
+            lobbyId,
+            ticketUserIds: consumedRankedTicketUserIds,
+            error: refundError instanceof Error ? refundError.message : refundError,
+          },
+          'Failed to refund ranked tickets after match creation failure'
+        );
+      }
+    }
     logger.warn(
       { lobbyId, error: error instanceof Error ? error.message : error },
       'Failed to create match from draft; restarting draft'
@@ -69,13 +119,30 @@ async function startMatchFromDraft(
     { lobbyId, matchId, mode: lobby.mode, halfOneCategoryId },
     'Match created from draft'
   );
+
+  // Analytics: per-member draft_completed event. Duration relative to
+  // the match created_at timestamp is the closest proxy we have without
+  // dedicated draft-start tracking.
+  try {
+    const matchStartedAt = result.match.started_at ? new Date(result.match.started_at).getTime() : Date.now();
+    const durationMs = Math.max(0, Date.now() - matchStartedAt);
+    for (const member of members) {
+      trackDraftCompleted({ userId: member.user_id, lobbyId, matchId, durationMs });
+    }
+  } catch (err) {
+    logger.warn({ err, lobbyId, matchId }, 'draft_completed analytics failed');
+  }
+
   await beginMatchForLobby(io, lobbyId, matchId);
 
   const redis = getRedisClient();
   if (redis) {
-    for (const member of members) {
-      const absent = await redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id));
-      if (!absent) continue;
+    const absentFlags = await Promise.all(
+      members.map((member) => redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id)))
+    );
+    for (let index = 0; index < members.length; index++) {
+      if (!absentFlags[index]) continue;
+      const member = members[index];
       logger.info(
         { lobbyId, matchId, userId: member.user_id },
         'Pausing newly-created match for player absent after draft grace'
@@ -145,12 +212,11 @@ async function resolveRankedAiUserId(
     }
   }
 
-  const users = await Promise.all(
-    members.map(async (member) => ({
-      userId: member.user_id,
-      user: await usersRepo.getById(member.user_id),
-    }))
-  );
+  const usersById = await usersRepo.getByIds(members.map((member) => member.user_id));
+  const users = members.map((member) => ({
+    userId: member.user_id,
+    user: usersById.get(member.user_id) ?? null,
+  }));
   const aiMember = users.find((entry) => entry.user?.is_ai);
   if (!aiMember) return null;
 
@@ -198,8 +264,6 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   }
 
   const halfOneCategoryId = remaining[0].id;
-  io.to(`lobby:${lobbyId}`).emit('draft:complete', { halfOneCategoryId });
-  logger.info({ lobbyId, halfOneCategoryId }, 'Draft complete');
   return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 
@@ -266,6 +330,11 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
 
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     if (updatedBans.length < 2) {
+      const nextActorUserId = getNextActorId(members, updatedBans, firstActorUserId);
+      if (lobby.mode === 'ranked' && aiUserId && nextActorUserId === aiUserId) {
+        scheduleRankedAiBan(io, lobbyId, aiUserId);
+        return;
+      }
       scheduleDraftAutoBan(io, lobbyId);
     }
   } catch (error) {
@@ -294,12 +363,10 @@ async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Pro
   const redis = getRedisClient();
   if (!redis) return false;
 
-  for (const userId of userIds) {
-    if (await redis.exists(draftDisconnectKey(lobbyId, userId))) {
-      return true;
-    }
-  }
-  return false;
+  const existsResults = await Promise.all(
+    userIds.map((userId) => redis.exists(draftDisconnectKey(lobbyId, userId)))
+  );
+  return existsResults.some((exists) => exists === 1);
 }
 
 function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): void {
@@ -465,12 +532,12 @@ export const draftRealtimeService = {
         if (!activeLobby || activeLobby.status !== 'active') return;
 
         const activeMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-        const disconnectedUserIds: string[] = [];
-        for (const member of activeMembers) {
-          if (await redis.exists(draftDisconnectKey(lobbyId, member.user_id))) {
-            disconnectedUserIds.push(member.user_id);
-          }
-        }
+        const disconnectedExists = await Promise.all(
+          activeMembers.map((member) => redis.exists(draftDisconnectKey(lobbyId, member.user_id)))
+        );
+        const disconnectedUserIds = activeMembers
+          .filter((_, index) => disconnectedExists[index] === 1)
+          .map((member) => member.user_id);
         if (disconnectedUserIds.length === 0) return;
 
         await Promise.all(

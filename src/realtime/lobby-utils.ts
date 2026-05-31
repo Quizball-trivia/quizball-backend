@@ -121,7 +121,29 @@ export async function emitLobbyState(io: QuizballServer, lobbyId: string): Promi
   if (!lobby) return;
 
   const state = await lobbiesService.buildLobbyState(lobby);
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
+  const memberUserIds = new Set(state.members.map((member) => member.userId));
+  const room = `lobby:${lobbyId}`;
+  const sockets = await io.in(room).fetchSockets();
+  sockets.forEach((socket) => {
+    if (memberUserIds.has(socket.data.user.id)) return;
+    socket.leave(room);
+    if (socket.data.lobbyId === lobbyId) {
+      socket.data.lobbyId = undefined;
+    }
+    logger.warn(
+      {
+        lobbyId,
+        socketUserId: socket.data.user.id,
+        memberUserIds: [...memberUserIds],
+      },
+      'Removed non-member socket from lobby room before lobby state emit'
+    );
+  });
+
+  const memberRooms = [...memberUserIds].map((userId) => `user:${userId}`);
+  for (const room of memberRooms) {
+    io.to(room).emit('lobby:state', state);
+  }
   logger.debug(
     {
       lobbyId,
@@ -140,9 +162,21 @@ export async function attachUserSocketsToLobby(
   userId: string,
   lobbyId: string
 ): Promise<void> {
-  await io.in(`user:${userId}`).socketsJoin(`lobby:${lobbyId}`);
   const sockets = await io.in(`user:${userId}`).fetchSockets();
   sockets.forEach((socket) => {
+    if (socket.data.user.id !== userId) {
+      socket.leave(`user:${userId}`);
+      logger.warn(
+        {
+          lobbyId,
+          expectedUserId: userId,
+          socketUserId: socket.data.user.id,
+        },
+        'Skipped attaching socket from mismatched user room to lobby'
+      );
+      return;
+    }
+    socket.join(`lobby:${lobbyId}`);
     socket.data.lobbyId = lobbyId;
   });
 }

@@ -8,8 +8,15 @@ export interface AuthClient {
   /**
    * Sign up with email and password.
    * May return accessToken=null if email confirmation is required.
+   * `locale` is persisted as user metadata so the confirmation email can be
+   * localized via the Supabase template ({{ .Data.locale }}).
    */
-  signUp(email: string, password: string): Promise<AuthSession>;
+  signUp(
+    email: string,
+    password: string,
+    redirectTo?: string,
+    locale?: string,
+  ): Promise<AuthSession>;
 
   /**
    * Sign in with email and password.
@@ -30,6 +37,12 @@ export interface AuthClient {
    * Reset password using access token.
    */
   resetPassword(accessToken: string, newPassword: string): Promise<void>;
+
+  /**
+   * Start a phone-change flow for the currently authenticated Supabase user.
+   * Supabase sends the OTP through the configured Send SMS hook.
+   */
+  updateUserPhone(accessToken: string, phone: string): Promise<void>;
 
   /**
    * Generate OAuth authorization URL.
@@ -57,4 +70,20 @@ export interface AuthClient {
     idToken: string,
     nonce?: string,
   ): Promise<AuthSession>;
+
+  /**
+   * Start Supabase phone OTP flow. SMS delivery is handled by Supabase's
+   * configured Send SMS hook.
+   */
+  sendPhoneOtp(phone: string): Promise<void>;
+
+  /**
+   * Verify a Supabase phone OTP and return a normal Supabase session.
+   */
+  verifyPhoneOtp(phone: string, token: string): Promise<AuthSession>;
+
+  /**
+   * Verify a phone-change OTP for the currently authenticated Supabase user.
+   */
+  verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession>;
 }

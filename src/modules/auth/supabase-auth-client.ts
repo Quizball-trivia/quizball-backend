@@ -3,6 +3,7 @@ import {
   ExternalServiceError,
   AuthenticationError,
   BadRequestError,
+  RateLimitError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
@@ -25,13 +26,26 @@ export class SupabaseAuthClient implements AuthClient {
     this.anonKey = config.SUPABASE_ANON_KEY;
   }
 
-  async signUp(email: string, password: string): Promise<AuthSession> {
+  async signUp(
+    email: string,
+    password: string,
+    redirectTo?: string,
+    locale?: string,
+  ): Promise<AuthSession> {
     return withSpan('auth.signup', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
-      const response = await this.request('/auth/v1/signup', {
+      const path = redirectTo
+        ? `/auth/v1/signup?${new URLSearchParams({ redirect_to: redirectTo }).toString()}`
+        : '/auth/v1/signup';
+      // `data` lands in raw_user_meta_data; the confirmation email template
+      // reads it as {{ .Data.locale }} to localize the message.
+      const body = locale
+        ? { email, password, data: { locale } }
+        : { email, password };
+      const response = await this.request(path, {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(body),
       });
 
       return this.normalizeSession(response);
@@ -98,6 +112,20 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
+  async updateUserPhone(accessToken: string, phone: string): Promise<void> {
+    await withSpan('auth.update_user_phone', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/user', {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ phone }),
+      });
+    });
+  }
+
   async signInWithIdToken(
     provider: string,
     idToken: string,
@@ -115,6 +143,57 @@ export class SupabaseAuthClient implements AuthClient {
           ...(nonce ? { nonce } : {}),
         }),
       });
+      return this.normalizeSession(response);
+    });
+  }
+
+  async sendPhoneOtp(phone: string): Promise<void> {
+    await withSpan('auth.phone_otp_send', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      await this.request('/auth/v1/otp', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone,
+          create_user: false,
+        }),
+      });
+    });
+  }
+
+  async verifyPhoneOtp(phone: string, token: string): Promise<AuthSession> {
+    return withSpan('auth.phone_otp_verify', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request('/auth/v1/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone,
+          token,
+          type: 'sms',
+        }),
+      });
+
+      return this.normalizeSession(response);
+    });
+  }
+
+  async verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession> {
+    return withSpan('auth.phone_change_verify', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const response = await this.request('/auth/v1/verify', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          phone,
+          token,
+          type: 'phone_change',
+        }),
+      });
+
       return this.normalizeSession(response);
     });
   }
@@ -177,7 +256,8 @@ export class SupabaseAuthClient implements AuthClient {
       } catch (error) {
         if (error instanceof ExternalServiceError ||
             error instanceof AuthenticationError ||
-            error instanceof BadRequestError) {
+            error instanceof BadRequestError ||
+            error instanceof RateLimitError) {
           throw error;
         }
 
@@ -208,6 +288,10 @@ export class SupabaseAuthClient implements AuthClient {
         throw new AuthenticationError(message);
       case 422:
         throw new BadRequestError(message);
+      case 429:
+        // Supabase email/auth rate limit — surface as our own 429 so clients
+        // can back off, instead of masking it as a 502 upstream failure.
+        throw new RateLimitError(message);
       default:
         throw new ExternalServiceError(message, { statusCode: status });
     }
@@ -225,6 +309,8 @@ export class SupabaseAuthClient implements AuthClient {
       user?: {
         id?: string;
         email?: string;
+        phone?: string;
+        phone_confirmed_at?: string | null;
       };
     };
 
@@ -236,6 +322,8 @@ export class SupabaseAuthClient implements AuthClient {
       user: session.user
         ? {
             email: session.user.email ?? null,
+            phone: session.user.phone ?? null,
+            phoneConfirmedAt: session.user.phone_confirmed_at ?? null,
             providerSub: session.user.id ?? '',
           }
         : null,

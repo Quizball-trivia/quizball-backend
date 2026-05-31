@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
+import { authMiddleware } from '../middleware/auth.js';
 import { injectRefreshTokenFromCookie } from '../middleware/refresh-token-cookie.js';
 import { authController } from '../../modules/auth/index.js';
 import {
@@ -11,6 +12,15 @@ import {
   resetPasswordHeadersSchema,
   socialLoginSchema,
   socialLoginTokenSchema,
+  georgianPhoneOtpStartSchema,
+  georgianPhoneOtpVerifySchema,
+  georgianPhoneLinkStartSchema,
+  georgianPhoneLinkVerifySchema,
+  supabaseSmsHookHeadersSchema,
+  supabaseSmsHookSchema,
+  smsOfficeCallbackQuerySchema,
+  smsOfficeStatusHeadersSchema,
+  smsOfficeStatusQuerySchema,
 } from '../../modules/auth/index.js';
 
 const router = Router();
@@ -81,6 +91,87 @@ router.post(
   '/social-login-token',
   validate({ body: socialLoginTokenSchema }),
   authController.socialLoginToken
+);
+
+/**
+ * GET /api/v1/auth/phone/ge/availability
+ * Detect whether Georgian phone auth should be shown for this request.
+ */
+router.get(
+  '/phone/ge/availability',
+  authController.georgianPhoneAvailability
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/start
+ * Start passwordless auth for Georgian mobile numbers.
+ */
+router.post(
+  '/phone/ge/start',
+  validate({ body: georgianPhoneOtpStartSchema }),
+  authController.startGeorgianPhoneOtp
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/verify
+ * Verify Georgian phone OTP and issue a session.
+ */
+router.post(
+  '/phone/ge/verify',
+  validate({ body: georgianPhoneOtpVerifySchema }),
+  authController.verifyGeorgianPhoneOtp
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/link/start
+ * Start adding/changing a Georgian phone number for the current account.
+ */
+router.post(
+  '/phone/ge/link/start',
+  authMiddleware,
+  validate({ body: georgianPhoneLinkStartSchema }),
+  authController.startGeorgianPhoneLink
+);
+
+/**
+ * POST /api/v1/auth/phone/ge/link/verify
+ * Verify adding/changing a Georgian phone number for the current account.
+ */
+router.post(
+  '/phone/ge/link/verify',
+  authMiddleware,
+  validate({ body: georgianPhoneLinkVerifySchema }),
+  authController.verifyGeorgianPhoneLink
+);
+
+/**
+ * POST /api/v1/auth/sms/supabase-hook
+ * Supabase Send SMS hook for SMSOffice delivery.
+ */
+router.post(
+  '/sms/supabase-hook',
+  validate({ body: supabaseSmsHookSchema, headers: supabaseSmsHookHeadersSchema }),
+  authController.supabaseSmsHook
+);
+
+/**
+ * GET /api/v1/auth/sms/smsoffice-callback
+ * SMSOffice delivery status callback.
+ */
+router.get(
+  '/sms/smsoffice-callback',
+  validate({ query: smsOfficeCallbackQuerySchema }),
+  authController.smsOfficeCallback
+);
+
+/**
+ * GET /api/v1/auth/sms/smsoffice-status
+ * Manual SMSOffice status polling for a sent reference.
+ */
+router.get(
+  '/sms/smsoffice-status',
+  validate({ query: smsOfficeStatusQuerySchema, headers: smsOfficeStatusHeadersSchema }),
+  authController.smsOfficeStatus
 );
 
 /**

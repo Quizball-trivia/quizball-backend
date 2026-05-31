@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
+import type { LobbyJoinByCodeResult } from '../../src/realtime/socket.types.js';
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
 import { lobbyRealtimeService } from '../../src/realtime/services/lobby-realtime.service.js';
 import '../setup.js';
@@ -82,7 +83,7 @@ function listOpenLobbiesForUser(userId: string): Array<LobbyRow & { joined_at: s
 class TestSocket {
   public data: QuizballSocket['data'];
   public emitted: Array<{ event: string; payload: unknown }> = [];
-  private readonly inbound = new Map<string, ((payload?: unknown) => void | Promise<void>)[]>();
+  private readonly inbound = new Map<string, ((payload?: unknown, ack?: (result: unknown) => void) => void | Promise<void>)[]>();
   private readonly outbound = new Map<string, ((payload?: unknown) => void)[]>();
   private readonly rooms = new Set<string>();
 
@@ -101,7 +102,7 @@ class TestSocket {
     } as QuizballSocket['data'];
   }
 
-  on(event: string, handler: (payload?: unknown) => void | Promise<void>): this {
+  on(event: string, handler: (payload?: unknown, ack?: (result: unknown) => void) => void | Promise<void>): this {
     const handlers = this.inbound.get(event) ?? [];
     handlers.push(handler);
     this.inbound.set(event, handlers);
@@ -138,6 +139,18 @@ class TestSocket {
     for (const handler of handlers) {
       await handler(payload);
     }
+  }
+
+  async triggerWithAck<T = unknown>(event: string, payload?: unknown): Promise<T | undefined> {
+    const handlers = this.inbound.get(event) ?? [];
+    let ackPayload: T | undefined;
+    const ack = (result: T) => {
+      ackPayload = result;
+    };
+    for (const handler of handlers) {
+      await handler(payload, ack);
+    }
+    return ackPayload;
   }
 
   join(room: string): this {
@@ -251,25 +264,36 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   beginMatchForLobby: vi.fn(),
 }));
 
-vi.mock('../../src/modules/users/users.repo.js', () => ({
+vi.mock('../../src/modules/users/users.repo.js', () => {
+  const getById = vi.fn(async (id: string) => ({
+    id,
+    nickname: id,
+    avatar_url: null,
+    avatar_customization: null,
+    is_deleted: false,
+    deleted_at: null,
+    pending_deletion_at: null,
+  }));
+  return {
   isUserAccountInactive: () => false,
   usersRepo: {
-    getById: vi.fn(async (id: string) => ({
-      id,
-      nickname: id,
-      avatar_url: null,
-      avatar_customization: null,
-      is_deleted: false,
-      deleted_at: null,
-      pending_deletion_at: null,
-    })),
+    getById,
+    getByIds: vi.fn(async (ids: string[]) => {
+      const usersById = new Map<string, Awaited<ReturnType<typeof getById>>>();
+      for (const id of [...new Set(ids)]) {
+        const user = await getById(id);
+        if (user) usersById.set(id, user);
+      }
+      return usersById;
+    }),
     create: vi.fn(async ({ nickname, avatarUrl }: { nickname: string; avatarUrl: string | null }) => ({
       id: `ai-${nickname}`,
       nickname,
       avatar_url: avatarUrl,
     })),
   },
-}));
+  };
+});
 
 vi.mock('../../src/modules/friends/friends.repo.js', () => ({
   friendsRepo: {
@@ -614,7 +638,14 @@ describe('lobby realtime socket integration', () => {
     const hostState = await hostStatePromise;
     expect(hostState.inviteCode).toBeTruthy();
 
-    await guest.trigger('lobby:join_by_code', { inviteCode: hostState.inviteCode });
+    const joinAck = await guest.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: hostState.inviteCode,
+    });
+    expect(joinAck).toMatchObject({
+      ok: true,
+      inviteCode: hostState.inviteCode,
+      alreadyMember: false,
+    });
 
     const lobby = [...store.lobbies.values()][0];
     expect(lobby).toBeDefined();
@@ -623,6 +654,37 @@ describe('lobby realtime socket integration', () => {
     await host.trigger('lobby:leave');
     expect(store.lobbies.get(lobby.id)?.host_user_id).toBe('guest-u');
     expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['guest-u']);
+  });
+
+  it('waits through a short lobby transition when joining by code', async () => {
+    const host = createSocket('host-u');
+    const guest = createSocket('guest-u');
+
+    const hostStatePromise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+    await host.trigger('lobby:create', { mode: 'friendly', isPublic: true });
+    const hostState = await hostStatePromise;
+    const lobby = [...store.lobbies.values()][0];
+    const lockKey = `lock:lobby:${lobby.id}`;
+    lockStore.set(lockKey, 'external-transition');
+    const releaseTransition = setTimeout(() => {
+      lockStore.delete(lockKey);
+    }, 100);
+
+    try {
+      const joinAck = await guest.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+        inviteCode: hostState.inviteCode,
+      });
+
+      expect(joinAck).toMatchObject({
+        ok: true,
+        inviteCode: hostState.inviteCode,
+        alreadyMember: false,
+      });
+      expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['host-u', 'guest-u']);
+    } finally {
+      clearTimeout(releaseTransition);
+      lockStore.delete(lockKey);
+    }
   });
 
   it('creates a private friend challenge lobby and emits invite to challenged user', async () => {
@@ -799,7 +861,14 @@ describe('lobby realtime socket integration', () => {
     }
     expect(createdState.inviteCode).toBeTruthy();
 
-    await user.trigger('lobby:join_by_code', { inviteCode: 'BAD999' });
+    const joinAck = await user.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: 'BAD999',
+    });
+    expect(joinAck).toMatchObject({
+      ok: false,
+      code: 'LOBBY_NOT_FOUND',
+      retryable: false,
+    });
 
     const error = user.emitted.find(
       (entry) =>

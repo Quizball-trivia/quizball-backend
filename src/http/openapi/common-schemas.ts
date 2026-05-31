@@ -29,4 +29,17 @@ export function registerCommonSchemas(registry: OpenAPIRegistry): void {
     scheme: 'bearer',
     bearerFormat: 'JWT',
   });
+
+  registry.registerComponent('securitySchemes', 'smsCallbackSecret', {
+    type: 'apiKey',
+    in: 'query',
+    name: 'secret',
+  });
+
+  // Shared SMS hook secret sent as `Authorization: Bearer <secret>`. Distinct
+  // from bearerAuth (a user JWT) — this is a static shared secret, not a JWT.
+  registry.registerComponent('securitySchemes', 'smsHookSecret', {
+    type: 'http',
+    scheme: 'bearer',
+  });
 }

@@ -141,7 +141,12 @@ export function createApp(): Express {
   }
 
   // Body Parsing
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      // Supabase Auth HTTP hooks are signed over the exact raw JSON payload.
+      (req as express.Request).rawBody = buf.toString('utf8');
+    },
+  }));
   app.use(express.urlencoded({ extended: true }));
 
   // Routes

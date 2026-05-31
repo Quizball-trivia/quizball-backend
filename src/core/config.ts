@@ -38,6 +38,14 @@ const configSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SMSOFFICE_API_KEY: z.string().optional(),
+  SMSOFFICE_SENDER: z.string().default("QuizBall"),
+  SMSOFFICE_DRY_RUN: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  SMSOFFICE_CALLBACK_SECRET: z.string().optional(),
+  SUPABASE_SMS_HOOK_SECRET: z.string().optional(),
 
   // JWT Verification
   SUPABASE_JWKS_URL: z.string().url().optional(),
@@ -121,6 +129,16 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
         },
       );
     }
+  }
+
+  // The SMS hook/status endpoints fail open (skip auth) when the secret is
+  // unset, which is acceptable only locally. Require it outside local so the
+  // server refuses to boot with unauthenticated SMS endpoints in staging/prod.
+  if (result.data.NODE_ENV !== "local" && !result.data.SUPABASE_SMS_HOOK_SECRET?.trim()) {
+    throw new ConfigError(
+      "Invalid configuration: SUPABASE_SMS_HOOK_SECRET is required outside local environment.",
+      { nodeEnv: result.data.NODE_ENV },
+    );
   }
 
   const hasAnyStripeConfig = Boolean(

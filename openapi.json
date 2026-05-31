@@ -46,6 +46,13 @@
           "request_id"
         ]
       },
+      "I18nField": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
       "AuthUser": {
         "type": "object",
         "properties": {
@@ -54,12 +61,17 @@
             "nullable": true,
             "format": "email"
           },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
           "provider_sub": {
             "type": "string"
           }
         },
         "required": [
           "email",
+          "phone",
           "provider_sub"
         ]
       },
@@ -115,6 +127,52 @@
           "message"
         ]
       },
+      "PhoneLinkStartResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MessageResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "phone": {
+                "type": "string"
+              },
+              "otp_required": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "phone",
+              "otp_required"
+            ]
+          }
+        ]
+      },
+      "SmsOfficeStatusResponse": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "reference",
+          "destination",
+          "status",
+          "message"
+        ]
+      },
       "SocialLoginResponse": {
         "type": "object",
         "properties": {
@@ -125,170 +183,6 @@
         },
         "required": [
           "url"
-        ]
-      },
-      "ProgressionResponse": {
-        "type": "object",
-        "properties": {
-          "level": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
-          },
-          "totalXp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "currentLevelXp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "xpForNextLevel": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
-          },
-          "progressPct": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100
-          }
-        },
-        "required": [
-          "level",
-          "totalXp",
-          "currentLevelXp",
-          "xpForNextLevel",
-          "progressPct"
-        ]
-      },
-      "UserResponse": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "email": {
-            "type": "string",
-            "nullable": true,
-            "format": "email"
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "admin",
-              "user"
-            ]
-          },
-          "nickname": {
-            "type": "string",
-            "nullable": true
-          },
-          "country": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatar_url": {
-            "type": "string",
-            "nullable": true,
-            "format": "uri"
-          },
-          "avatar_customization": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "skin": {
-                "type": "string",
-                "enum": [
-                  "skin_male_white",
-                  "skin_male_white_alt",
-                  "skin_male_dark",
-                  "skin_male_dark_alt"
-                ]
-              },
-              "jersey": {
-                "type": "string",
-                "enum": [
-                  "jersey_green",
-                  "jersey_blue",
-                  "jersey_yellow",
-                  "jersey_red",
-                  "jersey_violet",
-                  "jersey_pink",
-                  "jersey_real",
-                  "jersey_liverpool",
-                  "jersey_barcelona",
-                  "jersey_milan",
-                  "jersey_bayern",
-                  "jersey_brazil_retro",
-                  "jersey_argentina_retro",
-                  "jersey_france_retro",
-                  "jersey_germany_retro",
-                  "jersey_netherlands_retro"
-                ]
-              },
-              "hair": {
-                "type": "string",
-                "enum": [
-                  "hair_boy_basic",
-                  "hair_girl_basic",
-                  "hair_hamsik",
-                  "hair_ramos",
-                  "hair_ronaldo_brazil",
-                  "hair_ronaldo_goat"
-                ]
-              },
-              "glasses": {
-                "type": "string",
-                "enum": [
-                  "glasses_wayfarer",
-                  "glasses_round",
-                  "glasses_aviator"
-                ]
-              },
-              "facialHair": {
-                "type": "string",
-                "enum": [
-                  "stache",
-                  "beard"
-                ]
-              }
-            },
-            "additionalProperties": false
-          },
-          "favorite_club": {
-            "type": "string",
-            "nullable": true
-          },
-          "preferred_language": {
-            "type": "string",
-            "nullable": true
-          },
-          "onboarding_complete": {
-            "type": "boolean"
-          },
-          "progression": {
-            "$ref": "#/components/schemas/ProgressionResponse"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "role",
-          "nickname",
-          "country",
-          "avatar_url",
-          "avatar_customization",
-          "favorite_club",
-          "preferred_language",
-          "onboarding_complete",
-          "progression",
-          "created_at"
         ]
       },
       "HeadToHeadResponse": {
@@ -705,163 +599,6 @@
           "lastRankedMatchAt"
         ]
       },
-      "PublicProfileResponse": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "nickname": {
-            "type": "string",
-            "nullable": true
-          },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true,
-            "format": "uri"
-          },
-          "avatarCustomization": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "skin": {
-                "type": "string",
-                "enum": [
-                  "skin_male_white",
-                  "skin_male_white_alt",
-                  "skin_male_dark",
-                  "skin_male_dark_alt"
-                ]
-              },
-              "jersey": {
-                "type": "string",
-                "enum": [
-                  "jersey_green",
-                  "jersey_blue",
-                  "jersey_yellow",
-                  "jersey_red",
-                  "jersey_violet",
-                  "jersey_pink",
-                  "jersey_real",
-                  "jersey_liverpool",
-                  "jersey_barcelona",
-                  "jersey_milan",
-                  "jersey_bayern",
-                  "jersey_brazil_retro",
-                  "jersey_argentina_retro",
-                  "jersey_france_retro",
-                  "jersey_germany_retro",
-                  "jersey_netherlands_retro"
-                ]
-              },
-              "hair": {
-                "type": "string",
-                "enum": [
-                  "hair_boy_basic",
-                  "hair_girl_basic",
-                  "hair_hamsik",
-                  "hair_ramos",
-                  "hair_ronaldo_brazil",
-                  "hair_ronaldo_goat"
-                ]
-              },
-              "glasses": {
-                "type": "string",
-                "enum": [
-                  "glasses_wayfarer",
-                  "glasses_round",
-                  "glasses_aviator"
-                ]
-              },
-              "facialHair": {
-                "type": "string",
-                "enum": [
-                  "stache",
-                  "beard"
-                ]
-              }
-            },
-            "additionalProperties": false
-          },
-          "country": {
-            "type": "string",
-            "nullable": true
-          },
-          "favoriteClub": {
-            "type": "string",
-            "nullable": true
-          },
-          "progression": {
-            "$ref": "#/components/schemas/ProgressionResponse"
-          },
-          "ranked": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RankedProfileResponse"
-              }
-            ],
-            "nullable": true
-          },
-          "stats": {
-            "$ref": "#/components/schemas/StatsSummaryResponse"
-          },
-          "headToHead": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/HeadToHeadResponse"
-              }
-            ],
-            "nullable": true
-          },
-          "globalRank": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "rank": {
-                "type": "integer"
-              },
-              "total": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "rank",
-              "total"
-            ]
-          },
-          "countryRank": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "rank": {
-                "type": "integer"
-              },
-              "total": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "rank",
-              "total"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "nickname",
-          "avatarUrl",
-          "avatarCustomization",
-          "country",
-          "favoriteClub",
-          "progression",
-          "ranked",
-          "stats",
-          "headToHead",
-          "globalRank",
-          "countryRank"
-        ]
-      },
       "StoreProductsResponse": {
         "type": "object",
         "properties": {
@@ -1130,7 +867,8 @@
               "fulfillment_succeeded",
               "fulfillment_failed",
               "manual_adjustment_succeeded",
-              "manual_adjustment_failed"
+              "manual_adjustment_failed",
+              "objective_reward_succeeded"
             ]
           },
           "outcome": {
@@ -1257,7 +995,8 @@
                     "fulfillment_succeeded",
                     "fulfillment_failed",
                     "manual_adjustment_succeeded",
-                    "manual_adjustment_failed"
+                    "manual_adjustment_failed",
+                    "objective_reward_succeeded"
                   ]
                 },
                 "outcome": {
@@ -1390,6 +1129,418 @@
           "totalPages"
         ]
       },
+      "ProgressionResponse": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "totalXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentLevelXp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpForNextLevel": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "progressPct": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "level",
+          "totalXp",
+          "currentLevelXp",
+          "xpForNextLevel",
+          "progressPct"
+        ]
+      },
+      "UserResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true,
+            "format": "email"
+          },
+          "phone_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone_verified_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "user"
+            ]
+          },
+          "nickname": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_url": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "avatar_customization": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "skin": {
+                "type": "string",
+                "enum": [
+                  "skin_male_white",
+                  "skin_male_white_alt",
+                  "skin_male_dark",
+                  "skin_male_dark_alt"
+                ]
+              },
+              "jersey": {
+                "type": "string",
+                "enum": [
+                  "jersey_green",
+                  "jersey_blue",
+                  "jersey_yellow",
+                  "jersey_red",
+                  "jersey_violet",
+                  "jersey_pink",
+                  "jersey_real",
+                  "jersey_liverpool",
+                  "jersey_barcelona",
+                  "jersey_milan",
+                  "jersey_bayern",
+                  "jersey_brazil_retro",
+                  "jersey_argentina_retro",
+                  "jersey_france_retro",
+                  "jersey_germany_retro",
+                  "jersey_netherlands_retro"
+                ]
+              },
+              "hair": {
+                "type": "string",
+                "enum": [
+                  "hair_boy_basic",
+                  "hair_girl_basic",
+                  "hair_hamsik",
+                  "hair_ramos",
+                  "hair_ronaldo_brazil",
+                  "hair_ronaldo_goat"
+                ]
+              },
+              "glasses": {
+                "type": "string",
+                "enum": [
+                  "glasses_wayfarer",
+                  "glasses_round",
+                  "glasses_aviator"
+                ]
+              },
+              "facialHair": {
+                "type": "string",
+                "enum": [
+                  "stache",
+                  "beard"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "favorite_club": {
+            "type": "string",
+            "nullable": true
+          },
+          "preferred_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "onboarding_complete": {
+            "type": "boolean"
+          },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "phone_number",
+          "phone_verified_at",
+          "role",
+          "nickname",
+          "country",
+          "avatar_url",
+          "avatar_customization",
+          "favorite_club",
+          "preferred_language",
+          "onboarding_complete",
+          "progression",
+          "created_at"
+        ]
+      },
+      "PublicProfileResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nickname": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          },
+          "avatarCustomization": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "skin": {
+                "type": "string",
+                "enum": [
+                  "skin_male_white",
+                  "skin_male_white_alt",
+                  "skin_male_dark",
+                  "skin_male_dark_alt"
+                ]
+              },
+              "jersey": {
+                "type": "string",
+                "enum": [
+                  "jersey_green",
+                  "jersey_blue",
+                  "jersey_yellow",
+                  "jersey_red",
+                  "jersey_violet",
+                  "jersey_pink",
+                  "jersey_real",
+                  "jersey_liverpool",
+                  "jersey_barcelona",
+                  "jersey_milan",
+                  "jersey_bayern",
+                  "jersey_brazil_retro",
+                  "jersey_argentina_retro",
+                  "jersey_france_retro",
+                  "jersey_germany_retro",
+                  "jersey_netherlands_retro"
+                ]
+              },
+              "hair": {
+                "type": "string",
+                "enum": [
+                  "hair_boy_basic",
+                  "hair_girl_basic",
+                  "hair_hamsik",
+                  "hair_ramos",
+                  "hair_ronaldo_brazil",
+                  "hair_ronaldo_goat"
+                ]
+              },
+              "glasses": {
+                "type": "string",
+                "enum": [
+                  "glasses_wayfarer",
+                  "glasses_round",
+                  "glasses_aviator"
+                ]
+              },
+              "facialHair": {
+                "type": "string",
+                "enum": [
+                  "stache",
+                  "beard"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "favoriteClub": {
+            "type": "string",
+            "nullable": true
+          },
+          "progression": {
+            "$ref": "#/components/schemas/ProgressionResponse"
+          },
+          "ranked": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RankedProfileResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "stats": {
+            "$ref": "#/components/schemas/StatsSummaryResponse"
+          },
+          "headToHead": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HeadToHeadResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "globalRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          },
+          "countryRank": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rank": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rank",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "nickname",
+          "avatarUrl",
+          "avatarCustomization",
+          "country",
+          "favoriteClub",
+          "progression",
+          "ranked",
+          "stats",
+          "headToHead",
+          "globalRank",
+          "countryRank"
+        ]
+      },
+      "AccountDeletionResponse": {
+        "type": "object",
+        "properties": {
+          "deletionRequestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pendingDeletionAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "deletionRequestedAt",
+          "pendingDeletionAt"
+        ]
+      },
+      "AchievementsResponse": {
+        "type": "object",
+        "properties": {
+          "achievements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "description": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "icon": {
+                  "type": "string"
+                },
+                "unlocked": {
+                  "type": "boolean"
+                },
+                "progress": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "target": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "unlockedAt": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "description",
+                "icon",
+                "unlocked",
+                "progress",
+                "target",
+                "unlockedAt"
+              ]
+            }
+          }
+        },
+        "required": [
+          "achievements"
+        ]
+      },
       "FriendsResponse": {
         "type": "object",
         "properties": {
@@ -1479,6 +1630,9 @@
                   "minimum": 0,
                   "exclusiveMinimum": true
                 },
+                "pendingDeletion": {
+                  "type": "boolean"
+                },
                 "ranked": {
                   "type": "object",
                   "nullable": true,
@@ -1557,6 +1711,7 @@
                 "avatarUrl",
                 "avatarCustomization",
                 "level",
+                "pendingDeletion",
                 "ranked",
                 "friendStatus"
               ]
@@ -1667,6 +1822,9 @@
                       "minimum": 0,
                       "exclusiveMinimum": true
                     },
+                    "pendingDeletion": {
+                      "type": "boolean"
+                    },
                     "ranked": {
                       "type": "object",
                       "nullable": true,
@@ -1746,6 +1904,7 @@
                     "avatarUrl",
                     "avatarCustomization",
                     "level",
+                    "pendingDeletion",
                     "ranked",
                     "friendStatus"
                   ]
@@ -1855,6 +2014,9 @@
                       "minimum": 0,
                       "exclusiveMinimum": true
                     },
+                    "pendingDeletion": {
+                      "type": "boolean"
+                    },
                     "ranked": {
                       "type": "object",
                       "nullable": true,
@@ -1934,6 +2096,7 @@
                     "avatarUrl",
                     "avatarCustomization",
                     "level",
+                    "pendingDeletion",
                     "ranked",
                     "friendStatus"
                   ]
@@ -1990,12 +2153,274 @@
           "success"
         ]
       },
-      "I18nField": {
+      "ObjectivesResponse": {
         "type": "object",
-        "additionalProperties": {
-          "type": "string",
-          "minLength": 1
-        }
+        "properties": {
+          "daily": {
+            "type": "object",
+            "properties": {
+              "periodStart": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "periodEnd": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "completedCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "totalCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "objectives": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "periodType": {
+                      "type": "string",
+                      "enum": [
+                        "daily",
+                        "weekly"
+                      ]
+                    },
+                    "title": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "description": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "icon": {
+                      "type": "string"
+                    },
+                    "progress": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "target": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "completed": {
+                      "type": "boolean"
+                    },
+                    "rewarded": {
+                      "type": "boolean"
+                    },
+                    "completedAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "rewardedAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "rewardCoins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rewardXp": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "leadingCategoryId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "leadingCategoryName": {
+                          "type": "string"
+                        },
+                        "categoryProgress": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "periodType",
+                    "title",
+                    "description",
+                    "icon",
+                    "progress",
+                    "target",
+                    "completed",
+                    "rewarded",
+                    "completedAt",
+                    "rewardedAt",
+                    "rewardCoins",
+                    "rewardXp"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "periodStart",
+              "periodEnd",
+              "completedCount",
+              "totalCount",
+              "objectives"
+            ]
+          },
+          "weekly": {
+            "type": "object",
+            "properties": {
+              "periodStart": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "periodEnd": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "completedCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "totalCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "objectives": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "periodType": {
+                      "type": "string",
+                      "enum": [
+                        "daily",
+                        "weekly"
+                      ]
+                    },
+                    "title": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "description": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "icon": {
+                      "type": "string"
+                    },
+                    "progress": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "target": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "completed": {
+                      "type": "boolean"
+                    },
+                    "rewarded": {
+                      "type": "boolean"
+                    },
+                    "completedAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "rewardedAt": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "rewardCoins": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rewardXp": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "leadingCategoryId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "leadingCategoryName": {
+                          "type": "string"
+                        },
+                        "categoryProgress": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "periodType",
+                    "title",
+                    "description",
+                    "icon",
+                    "progress",
+                    "target",
+                    "completed",
+                    "rewarded",
+                    "completedAt",
+                    "rewardedAt",
+                    "rewardCoins",
+                    "rewardXp"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "periodStart",
+              "periodEnd",
+              "completedCount",
+              "totalCount",
+              "objectives"
+            ]
+          }
+        },
+        "required": [
+          "daily",
+          "weekly"
+        ]
       },
       "CategoryResponse": {
         "type": "object",
@@ -2191,6 +2616,36 @@
           "children",
           "questions",
           "featured"
+        ]
+      },
+      "FeaturedCategoryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryResponse"
+          }
+        },
+        "required": [
+          "id",
+          "category_id",
+          "sort_order",
+          "created_at",
+          "category"
         ]
       },
       "QuestionPayload": {
@@ -2819,36 +3274,6 @@
           "limit",
           "total",
           "total_pages"
-        ]
-      },
-      "FeaturedCategoryResponse": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "category_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "sort_order": {
-            "type": "integer"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "category": {
-            "$ref": "#/components/schemas/CategoryResponse"
-          }
-        },
-        "required": [
-          "id",
-          "category_id",
-          "sort_order",
-          "created_at",
-          "category"
         ]
       },
       "BulkCreateResponse": {
@@ -4920,6 +5345,17 @@
                   "password": {
                     "type": "string",
                     "minLength": 8
+                  },
+                  "redirect_to": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka"
+                    ]
                   }
                 },
                 "required": [
@@ -5102,8 +5538,14 @@
     "/api/v1/auth/reset-password": {
       "post": {
         "summary": "Reset password",
+        "description": "Sets a new password for the session identified by the Authorization Bearer token (a Supabase recovery session, or a logged-in user adding/changing a password). The token is read from the Authorization header, not the body.",
         "tags": [
           "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5112,16 +5554,12 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "access_token": {
-                    "type": "string"
-                  },
                   "new_password": {
                     "type": "string",
                     "minLength": 8
                   }
                 },
                 "required": [
-                  "access_token",
                   "new_password"
                 ]
               }
@@ -5197,6 +5635,742 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SocialLoginResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/social-login-token": {
+      "post": {
+        "summary": "Exchange a provider-issued OIDC id_token for a session",
+        "description": "Used by client-side OAuth flows like Google Identity Services and Sign in with Apple that return a signed id_token instead of doing a browser redirect. Required for in-app browsers where the classic OAuth redirect endpoint is blocked.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "google",
+                      "apple"
+                    ]
+                  },
+                  "id_token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "required": [
+                  "provider",
+                  "id_token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid id_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/start": {
+      "post": {
+        "summary": "Start Georgian phone OTP sign-in or sign-up",
+        "description": "Starts Supabase phone OTP for Georgian mobile numbers only. SMS delivery is handled by the configured Supabase Send SMS hook.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "phone"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification code sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported or invalid phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/verify": {
+      "post": {
+        "summary": "Verify Georgian phone OTP",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  },
+                  "token": {
+                    "type": "string",
+                    "pattern": "^\\d{6}$"
+                  }
+                },
+                "required": [
+                  "phone",
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid OTP",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/link/start": {
+      "post": {
+        "summary": "Start linking a Georgian phone number",
+        "description": "Starts a Supabase phone-change OTP for the authenticated account. Use this from Settings so Google/email users link a phone to the same account.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "phone"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification code sent or already linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneLinkStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported or invalid phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Phone number already linked elsewhere",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/phone/ge/link/verify": {
+      "post": {
+        "summary": "Verify linked Georgian phone number",
+        "description": "Verifies the phone-change OTP and stores the verified phone number on the current QuizBall user.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 9,
+                    "maxLength": 32
+                  },
+                  "token": {
+                    "type": "string",
+                    "pattern": "^\\d{6}$"
+                  }
+                },
+                "required": [
+                  "phone",
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Phone number linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "email"
+                    },
+                    "phone_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "phone_verified_at": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "admin",
+                        "user"
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "country": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "avatar_url": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uri"
+                    },
+                    "avatar_customization": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "skin": {
+                          "type": "string",
+                          "enum": [
+                            "skin_male_white",
+                            "skin_male_white_alt",
+                            "skin_male_dark",
+                            "skin_male_dark_alt"
+                          ]
+                        },
+                        "jersey": {
+                          "type": "string",
+                          "enum": [
+                            "jersey_green",
+                            "jersey_blue",
+                            "jersey_yellow",
+                            "jersey_red",
+                            "jersey_violet",
+                            "jersey_pink",
+                            "jersey_real",
+                            "jersey_liverpool",
+                            "jersey_barcelona",
+                            "jersey_milan",
+                            "jersey_bayern",
+                            "jersey_brazil_retro",
+                            "jersey_argentina_retro",
+                            "jersey_france_retro",
+                            "jersey_germany_retro",
+                            "jersey_netherlands_retro"
+                          ]
+                        },
+                        "hair": {
+                          "type": "string",
+                          "enum": [
+                            "hair_boy_basic",
+                            "hair_girl_basic",
+                            "hair_hamsik",
+                            "hair_ramos",
+                            "hair_ronaldo_brazil",
+                            "hair_ronaldo_goat"
+                          ]
+                        },
+                        "glasses": {
+                          "type": "string",
+                          "enum": [
+                            "glasses_wayfarer",
+                            "glasses_round",
+                            "glasses_aviator"
+                          ]
+                        },
+                        "facialHair": {
+                          "type": "string",
+                          "enum": [
+                            "stache",
+                            "beard"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "favorite_club": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "preferred_language": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "onboarding_complete": {
+                      "type": "boolean"
+                    },
+                    "progression": {
+                      "type": "object",
+                      "properties": {
+                        "level": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "totalXp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "currentLevelXp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "xpForNextLevel": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "progressPct": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "level",
+                        "totalXp",
+                        "currentLevelXp",
+                        "xpForNextLevel",
+                        "progressPct"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "email",
+                    "phone_number",
+                    "phone_verified_at",
+                    "role",
+                    "nickname",
+                    "country",
+                    "avatar_url",
+                    "avatar_customization",
+                    "favorite_club",
+                    "preferred_language",
+                    "onboarding_complete",
+                    "progression",
+                    "created_at"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid OTP or not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Phone number already linked elsewhere",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/supabase-hook": {
+      "post": {
+        "summary": "Supabase Send SMS hook for SMSOffice",
+        "description": "Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user": {
+                    "type": "object",
+                    "properties": {
+                      "phone": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "sms": {
+                    "type": "object",
+                    "properties": {
+                      "otp": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16
+                      }
+                    },
+                    "required": [
+                      "otp"
+                    ]
+                  }
+                },
+                "required": [
+                  "user",
+                  "sms"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SMS accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid hook authorization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "SMS provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/smsoffice-callback": {
+      "get": {
+        "summary": "SMSOffice delivery callback",
+        "description": "Receives SMSOffice delivery status updates. Responds with plain text OK.",
+        "tags": [
+          "Auth"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "required": true,
+            "name": "reference",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "reason",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "destination",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "timestamp",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "operator",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "secret",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Callback accepted"
+          },
+          "401": {
+            "description": "Invalid callback secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/smsoffice-status": {
+      "get": {
+        "summary": "Check SMSOffice message status",
+        "description": "Polls SMSOffice message status by destination and reference. Intended for manual/internal verification.",
+        "tags": [
+          "Auth"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 32
+            },
+            "required": true,
+            "name": "destination",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "required": true,
+            "name": "reference",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SMSOffice status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsOfficeStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid status authorization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "SMS provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -6728,7 +7902,8 @@
                 "fulfillment_succeeded",
                 "fulfillment_failed",
                 "manual_adjustment_succeeded",
-                "manual_adjustment_failed"
+                "manual_adjustment_failed",
+                "objective_reward_succeeded"
               ]
             },
             "required": false,
@@ -6814,7 +7989,8 @@
                               "fulfillment_succeeded",
                               "fulfillment_failed",
                               "manual_adjustment_succeeded",
-                              "manual_adjustment_failed"
+                              "manual_adjustment_failed",
+                              "objective_reward_succeeded"
                             ]
                           },
                           "outcome": {
@@ -7176,6 +8352,41 @@
         }
       }
     },
+    "/api/v1/users/me/deletion": {
+      "post": {
+        "summary": "Schedule current user account for deletion",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account deletion scheduled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/{userId}/profile": {
       "get": {
         "summary": "Get public profile for a user",
@@ -7205,6 +8416,220 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublicProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/reset-onboarding": {
+      "post": {
+        "summary": "Reset onboarding flag for the current admin (dev-only)",
+        "description": "Dev-only. Requires admin role and NODE_ENV='local'. Flips onboarding_complete back to false so the onboarding flow can be re-tested. Operates on the caller's own user.",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Onboarding reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{userId}/deletion/restore": {
+      "post": {
+        "summary": "Restore a user account pending deletion",
+        "description": "Requires admin role. Only works before the 30-day grace period expires.",
+        "tags": [
+          "Admin Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account deletion cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Account is not restorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/achievements": {
+      "get": {
+        "summary": "Get achievements for the current user",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Achievements list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AchievementsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{userId}/achievements": {
+      "get": {
+        "summary": "Get achievements for a specific user",
+        "tags": [
+          "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Achievements list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AchievementsResponse"
                 }
               }
             }
@@ -7349,6 +8774,9 @@
                             "minimum": 0,
                             "exclusiveMinimum": true
                           },
+                          "pendingDeletion": {
+                            "type": "boolean"
+                          },
                           "ranked": {
                             "type": "object",
                             "nullable": true,
@@ -7430,6 +8858,7 @@
                           "avatarUrl",
                           "avatarCustomization",
                           "level",
+                          "pendingDeletion",
                           "ranked",
                           "friendStatus"
                         ]
@@ -7561,6 +8990,9 @@
                             "minimum": 0,
                             "exclusiveMinimum": true
                           },
+                          "pendingDeletion": {
+                            "type": "boolean"
+                          },
                           "ranked": {
                             "type": "object",
                             "nullable": true,
@@ -7639,6 +9071,7 @@
                           "avatarUrl",
                           "avatarCustomization",
                           "level",
+                          "pendingDeletion",
                           "ranked",
                           "friendStatus"
                         ]
@@ -7781,6 +9214,9 @@
                                 "minimum": 0,
                                 "exclusiveMinimum": true
                               },
+                              "pendingDeletion": {
+                                "type": "boolean"
+                              },
                               "ranked": {
                                 "type": "object",
                                 "nullable": true,
@@ -7860,6 +9296,7 @@
                               "avatarUrl",
                               "avatarCustomization",
                               "level",
+                              "pendingDeletion",
                               "ranked",
                               "friendStatus"
                             ]
@@ -7969,6 +9406,9 @@
                                 "minimum": 0,
                                 "exclusiveMinimum": true
                               },
+                              "pendingDeletion": {
+                                "type": "boolean"
+                              },
                               "ranked": {
                                 "type": "object",
                                 "nullable": true,
@@ -8048,6 +9488,7 @@
                               "avatarUrl",
                               "avatarCustomization",
                               "level",
+                              "pendingDeletion",
                               "ranked",
                               "friendStatus"
                             ]
@@ -8502,6 +9943,307 @@
           },
           "422": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/objectives": {
+      "get": {
+        "summary": "List current daily and weekly objectives for the current user",
+        "tags": [
+          "Objectives"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current objective progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "daily": {
+                      "type": "object",
+                      "properties": {
+                        "periodStart": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "periodEnd": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "completedCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "totalCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "objectives": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "periodType": {
+                                "type": "string",
+                                "enum": [
+                                  "daily",
+                                  "weekly"
+                                ]
+                              },
+                              "title": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "description": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "icon": {
+                                "type": "string"
+                              },
+                              "progress": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "target": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              },
+                              "completed": {
+                                "type": "boolean"
+                              },
+                              "rewarded": {
+                                "type": "boolean"
+                              },
+                              "completedAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              },
+                              "rewardedAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              },
+                              "rewardCoins": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "rewardXp": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "metadata": {
+                                "type": "object",
+                                "properties": {
+                                  "leadingCategoryId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "leadingCategoryName": {
+                                    "type": "string"
+                                  },
+                                  "categoryProgress": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "periodType",
+                              "title",
+                              "description",
+                              "icon",
+                              "progress",
+                              "target",
+                              "completed",
+                              "rewarded",
+                              "completedAt",
+                              "rewardedAt",
+                              "rewardCoins",
+                              "rewardXp"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "periodStart",
+                        "periodEnd",
+                        "completedCount",
+                        "totalCount",
+                        "objectives"
+                      ]
+                    },
+                    "weekly": {
+                      "type": "object",
+                      "properties": {
+                        "periodStart": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "periodEnd": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "completedCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "totalCount": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "objectives": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "periodType": {
+                                "type": "string",
+                                "enum": [
+                                  "daily",
+                                  "weekly"
+                                ]
+                              },
+                              "title": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "description": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "icon": {
+                                "type": "string"
+                              },
+                              "progress": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "target": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true
+                              },
+                              "completed": {
+                                "type": "boolean"
+                              },
+                              "rewarded": {
+                                "type": "boolean"
+                              },
+                              "completedAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              },
+                              "rewardedAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time"
+                              },
+                              "rewardCoins": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "rewardXp": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "metadata": {
+                                "type": "object",
+                                "properties": {
+                                  "leadingCategoryId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "leadingCategoryName": {
+                                    "type": "string"
+                                  },
+                                  "categoryProgress": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "periodType",
+                              "title",
+                              "description",
+                              "icon",
+                              "progress",
+                              "target",
+                              "completed",
+                              "rewarded",
+                              "completedAt",
+                              "rewardedAt",
+                              "rewardCoins",
+                              "rewardXp"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "periodStart",
+                        "periodEnd",
+                        "completedCount",
+                        "totalCount",
+                        "objectives"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "daily",
+                    "weekly"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
             "content": {
               "application/json": {
                 "schema": {
@@ -9469,7 +11211,8 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "integer",
+              "minimum": 1
             },
             "required": false,
             "name": "page",
@@ -9477,7 +11220,9 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
             },
             "required": false,
             "name": "limit",
@@ -10179,6 +11924,94 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DuplicatesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/questions/check-duplicates": {
+      "post": {
+        "summary": "Check for duplicate prompts before bulk upload",
+        "description": "Check if question prompts already exist in the database. Used during bulk upload preview to show users which questions are duplicates. Requires admin role.",
+        "tags": [
+          "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompts": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/I18nField"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "description": "Array of question prompts to check",
+                    "example": [
+                      {
+                        "en": "What is the capital of France?"
+                      },
+                      {
+                        "en": "What is 2+2?"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "prompts"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate check completed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckDuplicatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g., too many prompts)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -12147,94 +13980,6 @@
           },
           "403": {
             "description": "Insufficient permissions",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/questions/check-duplicates": {
-      "post": {
-        "summary": "Check for duplicate prompts before bulk upload",
-        "description": "Check if question prompts already exist in the database. Used during bulk upload preview to show users which questions are duplicates. Requires admin role.",
-        "tags": [
-          "Questions"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "prompts": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/I18nField"
-                    },
-                    "minItems": 1,
-                    "maxItems": 100,
-                    "description": "Array of question prompts to check",
-                    "example": [
-                      {
-                        "en": "What is the capital of France?"
-                      },
-                      {
-                        "en": "What is 2+2?"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "prompts"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Duplicate check completed successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckDuplicatesResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request (e.g., too many prompts)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Insufficient permissions (admin role required)",
             "content": {
               "application/json": {
                 "schema": {

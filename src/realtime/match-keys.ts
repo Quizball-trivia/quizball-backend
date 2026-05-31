@@ -30,6 +30,10 @@ export function matchForfeitPendingUserKey(userId: string): string {
   return `user:match_forfeit_pending:${userId}`;
 }
 
+export function matchPartyDropoutPendingUserKey(userId: string): string {
+  return `user:match_party_dropout_pending:${userId}`;
+}
+
 export function lastMatchKey(userId: string): string {
   return `user:last_match:${userId}`;
 }

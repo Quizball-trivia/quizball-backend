@@ -1,5 +1,6 @@
 import { Writable } from 'stream';
 import { config } from './config.js';
+import { ExternalServiceError } from './errors.js';
 
 const FLUSH_INTERVAL_MS = 2000;
 const MAX_BATCH_SIZE = 100;
@@ -89,7 +90,7 @@ class LokiLogStream extends Writable {
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
-        throw new Error(`Loki push failed: ${response.status} ${body}`);
+        throw new ExternalServiceError(`Loki push failed: ${response.status} ${body}`);
       }
     } catch (error) {
       // Re-queue failed batch at the front, trimming oldest entries if needed.

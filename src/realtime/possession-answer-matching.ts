@@ -3,6 +3,19 @@ import { clamp } from './scoring.js';
 
 const MIN_PREFIX_LENGTH = 3;
 
+type AcceptedAnswerMatchKind = 'exact' | 'wholeWord' | 'alias' | 'typo';
+
+interface AcceptedAnswerMatch {
+  kind: AcceptedAnswerMatchKind;
+  distance: number;
+}
+
+interface CountdownCandidate {
+  id: string;
+  display: Record<string, string>;
+  match: AcceptedAnswerMatch;
+}
+
 export function normalizeAnswer(value: string): string {
   return value
     .normalize('NFKD')
@@ -45,17 +58,105 @@ function containsWholeWord(haystack: string, needle: string): boolean {
   return haystack.includes(` ${needle} `);
 }
 
-export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
-  const normalizedInput = normalizeAnswer(input);
-  if (!normalizedInput) return false;
+function answerTokens(value: string): string[] {
+  return value.split(' ').filter(Boolean);
+}
 
-  return acceptedAnswers.some((acceptedAnswer) => {
-    const normalizedAccepted = normalizeAnswer(acceptedAnswer);
+function tokensMatchByAlias(inputToken: string, acceptedToken: string): boolean {
+  if (inputToken === acceptedToken) return true;
+
+  const aliases = new Map([
+    ['man', 'manchester'],
+    ['utd', 'united'],
+  ]);
+
+  return aliases.get(inputToken) === acceptedToken
+    || aliases.get(acceptedToken) === inputToken;
+}
+
+function hasTokenAliasMatch(normalizedInput: string, normalizedAccepted: string): boolean {
+  const inputTokens = answerTokens(normalizedInput);
+  const acceptedTokens = answerTokens(normalizedAccepted);
+  if (inputTokens.length < 2 || inputTokens.length !== acceptedTokens.length) return false;
+
+  return inputTokens.every((token, index) => tokensMatchByAlias(token, acceptedTokens[index]));
+}
+
+function maxTypoDistance(target: string): number {
+  if (target.length < 5) return 0;
+  return target.length > 6 ? 2 : 1;
+}
+
+function betterAcceptedMatch(
+  current: AcceptedAnswerMatch | null,
+  next: AcceptedAnswerMatch
+): AcceptedAnswerMatch {
+  if (!current) return next;
+
+  const kindRank: Record<AcceptedAnswerMatchKind, number> = {
+    exact: 3,
+    wholeWord: 2,
+    alias: 2,
+    typo: 1,
+  };
+
+  const currentRank = kindRank[current.kind];
+  const nextRank = kindRank[next.kind];
+  if (nextRank !== currentRank) return nextRank > currentRank ? next : current;
+  return next.distance < current.distance ? next : current;
+}
+
+function matchNormalizedAcceptedAnswer(
+  normalizedInput: string,
+  normalizedAccepted: string
+): AcceptedAnswerMatch | null {
+  if (!normalizedAccepted) return null;
+  if (normalizedInput === normalizedAccepted) return { kind: 'exact', distance: 0 };
+  if (normalizedInput.length >= 4 && containsWholeWord(normalizedAccepted, normalizedInput)) {
+    return { kind: 'wholeWord', distance: 0 };
+  }
+  if (hasTokenAliasMatch(normalizedInput, normalizedAccepted)) {
+    return { kind: 'alias', distance: 0 };
+  }
+
+  if (normalizedInput.length < 4) return null;
+
+  const typoTargets = [normalizedAccepted, ...answerTokens(normalizedAccepted)];
+  let bestTypo: AcceptedAnswerMatch | null = null;
+
+  for (const target of typoTargets) {
+    const allowedDistance = maxTypoDistance(target);
+    if (allowedDistance <= 0) continue;
+
+    const distance = levenshtein(normalizedInput, target);
+    if (distance <= allowedDistance) {
+      bestTypo = betterAcceptedMatch(bestTypo, { kind: 'typo', distance });
+    }
+  }
+
+  return bestTypo;
+}
+
+function matchAcceptedAnswers(input: string, acceptedAnswers: string[]): AcceptedAnswerMatch | null {
+  const normalizedInput = normalizeAnswer(input);
+  if (!normalizedInput) return null;
+
+  return acceptedAnswers.reduce<AcceptedAnswerMatch | null>((best, acceptedAnswer) => {
+    const match = matchNormalizedAcceptedAnswer(normalizedInput, normalizeAnswer(acceptedAnswer));
+    return match ? betterAcceptedMatch(best, match) : best;
+  }, null);
+}
+
+export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
+  return matchAcceptedAnswers(input, acceptedAnswers) !== null;
+}
+
+function hasPrefixMatch(acceptedAnswers: string[], normalizedGuess: string): boolean {
+  return acceptedAnswers.some((accepted) => {
+    const normalizedAccepted = normalizeAnswer(accepted);
     if (!normalizedAccepted) return false;
-    if (normalizedInput === normalizedAccepted) return true;
-    if (normalizedInput.length >= 4 && containsWholeWord(normalizedAccepted, normalizedInput)) return true;
-    const maxDistance = normalizedAccepted.length > 6 ? 2 : 1;
-    return levenshtein(normalizedInput, normalizedAccepted) <= maxDistance;
+    return normalizedAccepted.startsWith(normalizedGuess)
+      || answerTokens(normalizedAccepted).some((token) => token.startsWith(normalizedGuess));
   });
 }
 
@@ -67,29 +168,44 @@ export function countdownMatch(
   const normalizedGuess = normalizeAnswer(guess);
   if (!normalizedGuess) return null;
 
-  for (const answerGroup of evaluation.answerGroups) {
-    if (foundIds.has(answerGroup.id)) continue;
-    if (fuzzyMatchesAnswer(guess, answerGroup.acceptedAnswers)) {
-      return {
+  const candidates = evaluation.answerGroups.reduce<CountdownCandidate[]>((matches, answerGroup) => {
+    const match = matchAcceptedAnswers(guess, answerGroup.acceptedAnswers);
+    if (match) {
+      matches.push({
         id: answerGroup.id,
         display: answerGroup.display,
-      };
+        match,
+      });
+    }
+    return matches;
+  }, []);
+
+  for (const kind of ['exact', 'wholeWord', 'alias', 'typo'] satisfies AcceptedAnswerMatchKind[]) {
+    const matchesForKind = candidates.filter((candidate) => candidate.match.kind === kind);
+    if (matchesForKind.length > 0) {
+      const uniqueGroupIds = new Set(matchesForKind.map((candidate) => candidate.id));
+      if (uniqueGroupIds.size !== 1) return null;
+
+      const candidate = matchesForKind[0];
+      if (!foundIds.has(candidate.id)) {
+        return {
+          id: candidate.id,
+          display: candidate.display,
+        };
+      }
     }
   }
 
   if (normalizedGuess.length >= MIN_PREFIX_LENGTH) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
-      if (foundIds.has(answerGroup.id)) continue;
-      const hasPrefix = answerGroup.acceptedAnswers.some((accepted) =>
-        normalizeAnswer(accepted).startsWith(normalizedGuess)
-      );
-      if (hasPrefix) {
+      if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
     if (prefixCandidates.length === 1) {
-      return prefixCandidates[0];
+      const candidate = prefixCandidates[0];
+      if (!foundIds.has(candidate.id)) return candidate;
     }
   }
 
@@ -100,23 +216,4 @@ export function clueIndexForTimeMs(clueCount: number, timeMs: number, questionTi
   if (clueCount <= 1) return 0;
   const sliceMs = questionTimeMs / clueCount;
   return clamp(Math.floor(timeMs / sliceMs), 0, clueCount - 1);
-}
-
-export function shouldFinalizeWrongCluesGuess(params: {
-  clueCount: number;
-  currentAnswerCount: number;
-  expectedCount: number;
-  existingRevealCount: number;
-  timedClueIndex: number;
-}): boolean {
-  const opponentAlreadyAnswered = params.expectedCount > 1
-    && params.currentAnswerCount >= params.expectedCount - 1;
-  if (opponentAlreadyAnswered) return true;
-
-  const nextRevealCount = clamp(
-    Math.max(params.existingRevealCount, params.timedClueIndex + 2),
-    1,
-    params.clueCount
-  );
-  return nextRevealCount >= params.clueCount;
 }

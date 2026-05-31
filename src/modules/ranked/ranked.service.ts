@@ -1,5 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../matches/matches.repo.js';
+import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
 import { rankedRepo } from './ranked.repo.js';
 import type {
@@ -209,14 +210,14 @@ export const rankedService = {
       return null;
     }
 
-    const players = await matchesRepo.listMatchPlayers(matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
     if (players.length < 2) {
       logger.debug({ matchId, playerCount: players.length }, 'Ranked settlement skipped: not enough players');
       return null;
     }
 
-    const users = await Promise.all(players.map((player) => usersRepo.getById(player.user_id)));
-    const byUserId = new Map(players.map((player, index) => [player.user_id, users[index]]));
+    const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+    const byUserId = new Map(players.map((player) => [player.user_id, usersById.get(player.user_id) ?? null]));
     const humanPlayers = players.filter((player) => !byUserId.get(player.user_id)?.is_ai);
     if (humanPlayers.length === 0) {
       logger.debug({ matchId }, 'Ranked settlement skipped: no human players');

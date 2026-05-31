@@ -29,11 +29,14 @@ export function calculatePoints(isCorrect: boolean, timeMs: number, questionTime
 
 /**
  * Calculate countdown round points based on how many answer groups were found.
- * Points are proportional to the fraction found, capped at 100.
+ * Points are proportional to the fraction found, capped at 100, and rounded to
+ * clean 5-point buckets so live special rounds show readable values like 15,
+ * 25, 30 instead of odd numbers like 13 or 27.
  */
 export function calculateCountdownScore(foundCount: number, totalGroups: number): number {
   if (totalGroups <= 0) return 0;
-  return Math.round((clamp(foundCount, 0, totalGroups) / totalGroups) * 100);
+  const rawScore = (clamp(foundCount, 0, totalGroups) / totalGroups) * 100;
+  return clamp(Math.round(rawScore / 5) * 5, 0, 100);
 }
 
 /**
@@ -55,10 +58,4 @@ export function calculateCluesScore(isCorrect: boolean, clueIndex: number): numb
   if (!isCorrect) return 0;
   const normalizedIndex = Math.max(0, Math.floor(clueIndex));
   return Math.max(20, 100 - normalizedIndex * 20);
-}
-
-export function clueIndexForScoring(timedClueIndex: number, revealedClueCount: number): number {
-  const normalizedTimedIndex = Math.max(0, Math.floor(timedClueIndex));
-  const normalizedRevealIndex = Math.max(0, Math.floor(revealedClueCount) - 1);
-  return Math.max(normalizedTimedIndex, normalizedRevealIndex);
 }

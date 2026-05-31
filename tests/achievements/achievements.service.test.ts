@@ -45,6 +45,7 @@ describe('achievementsService', () => {
       hasPerfectMatch: false,
       hasLightningCounter: true,
       hasCleanSheet: false,
+      currentWinStreak: 3,
       bestWinStreak: 3,
     });
 
@@ -89,6 +90,7 @@ describe('achievementsService', () => {
       hasPerfectMatch: true,
       hasLightningCounter: true,
       hasCleanSheet: true,
+      currentWinStreak: 5,
       bestWinStreak: 5,
     });
     upsertProgressMock.mockImplementation(async (params: unknown) => params);
@@ -119,6 +121,49 @@ describe('achievementsService', () => {
     expect(trackAchievementUnlockedMock).toHaveBeenCalledWith('user-1', 'hat_trick_hero', 'Hat-Trick Hero');
   });
 
+  it('does not unlock winning streak from an old best streak after the current streak was reset', async () => {
+    listForUserMock.mockResolvedValue([
+      {
+        user_id: 'user-1',
+        achievement_id: 'winning_streak',
+        progress: 4,
+        unlocked_at: null,
+        source_match_id: null,
+        created_at: '2026-03-08T00:00:00.000Z',
+        updated_at: '2026-03-08T00:00:00.000Z',
+      },
+    ]);
+    getMetricsForUserMock.mockResolvedValue({
+      completedMatches: 12,
+      totalWins: 10,
+      partyQuizWins: 1,
+      hasPerfectMatch: false,
+      hasLightningCounter: false,
+      hasCleanSheet: false,
+      currentWinStreak: 1,
+      bestWinStreak: 5,
+    });
+    upsertProgressMock.mockImplementation(async (params: unknown) => params);
+
+    const { achievementsService } = await import('../../src/modules/achievements/achievements.service.js');
+    const unlocked = await achievementsService.evaluateForMatch('match-1', ['user-1'], 'ranked_sim');
+
+    expect(unlocked['user-1']).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'winning_streak' }),
+      ])
+    );
+    expect(upsertProgressMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        achievementId: 'winning_streak',
+        progress: 1,
+        unlockedAt: null,
+        sourceMatchId: null,
+      })
+    );
+  });
+
   it('allows party-quiz-only achievements to unlock during party quiz matches', async () => {
     listForUserMock.mockResolvedValue([]);
     getMetricsForUserMock.mockResolvedValue({
@@ -128,6 +173,7 @@ describe('achievementsService', () => {
       hasPerfectMatch: false,
       hasLightningCounter: false,
       hasCleanSheet: false,
+      currentWinStreak: 2,
       bestWinStreak: 2,
     });
     upsertProgressMock.mockImplementation(async (params: unknown) => params);

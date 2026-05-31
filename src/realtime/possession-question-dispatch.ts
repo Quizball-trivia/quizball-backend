@@ -1,6 +1,7 @@
 import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
+import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
@@ -25,6 +26,11 @@ import {
   schedulePossessionAiHalftimeBan,
 } from './possession-match-flow.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
+import {
+  answerLogFields,
+  cacheLogFields,
+  questionLogFields,
+} from './possession-debug-logging.js';
 import {
   buildCachedAnswerAckPayload,
   questionKindForType,
@@ -92,6 +98,18 @@ function scheduleQuestionTimeout(
 
 export async function emitMatchState(io: QuizballServer, matchId: string, state: PossessionStatePayload): Promise<void> {
   io.to(`match:${matchId}`).emit('match:state', toMatchStatePayload(matchId, state));
+  logger.info(
+    {
+      eventName: 'match:state',
+      matchId,
+      statePhase: state.phase,
+      half: state.half,
+      possessionDiff: state.possessionDiff,
+      currentQuestionQIndex: state.currentQuestion?.qIndex ?? null,
+      speedStreakHolderSeat: state.speedStreakHolderSeat,
+    },
+    'Possession match state emitted'
+  );
 }
 
 async function emitPossessionAnswerSnapshotToSocket(
@@ -102,24 +120,23 @@ async function emitPossessionAnswerSnapshotToSocket(
   const answerAck = buildCachedAnswerAckPayload(cache, userId);
   if (answerAck) {
     socket.emit('match:answer_ack', answerAck);
+    logger.info(
+      {
+        eventName: 'match:answer_ack',
+        matchId: cache.matchId,
+        qIndex: cache.currentQuestion?.qIndex ?? null,
+        userId,
+        socketId: socket.id,
+        ...questionLogFields(cache.currentQuestion),
+        ...answerLogFields(cache.answers[userId]),
+      },
+      'Possession cached answer snapshot emitted to socket'
+    );
     return;
   }
 
   const question = cache.currentQuestion;
   if (!question) return;
-
-  if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
-    const reveal = cache.clueReveals?.[userId];
-    if (!reveal || reveal.qIndex !== question.qIndex || reveal.revealCount <= 1) return;
-
-    socket.emit('match:clues_guess_ack', {
-      matchId: cache.matchId,
-      qIndex: question.qIndex,
-      clueIndex: reveal.revealCount - 1,
-      revealCount: reveal.revealCount,
-    });
-    return;
-  }
 
   if (question.kind !== 'countdown' || question.evaluation.kind !== 'countdown') return;
 
@@ -141,12 +158,34 @@ async function emitPossessionAnswerSnapshotToSocket(
     acceptedDisplay: latestDisplay,
     acceptedDisplays,
   });
+  logger.info(
+    {
+      eventName: 'match:countdown_guess_ack',
+      matchId: cache.matchId,
+      qIndex: question.qIndex,
+      userId,
+      socketId: socket.id,
+      foundCount: foundIds.length,
+      ...questionLogFields(question),
+    },
+    'Possession countdown snapshot emitted to socket'
+  );
 }
 
 export async function emitPossessionStateToSocket(socket: QuizballSocket, matchId: string): Promise<void> {
   const cache = await getMatchCacheOrRebuild(matchId);
   if (cache) {
     socket.emit('match:state', toMatchStatePayload(matchId, cache.statePayload));
+    logger.info(
+      {
+        eventName: 'match:state',
+        matchId,
+        userId: socket.data.user.id,
+        socketId: socket.id,
+        ...cacheLogFields(cache),
+      },
+      'Possession cached state emitted to socket'
+    );
     if (cache.currentQuestion) {
       socket.emit('match:question', {
         matchId,
@@ -155,6 +194,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         question: cache.currentQuestion.questionDTO,
         playableAt: cache.currentQuestion.shownAt ?? undefined,
         deadlineAt: cache.currentQuestion.deadlineAt ?? new Date().toISOString(),
+        serverNow: new Date().toISOString(),
         // MCQ correctIndex is shipped so the client can show instant tap
         // feedback (matches Trivia Crack / QuizUp pattern). Server still
         // validates the selectedIndex independently when scoring.
@@ -166,6 +206,18 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         shooterSeat: cache.currentQuestion.shooterSeat,
         attackerSeat: cache.currentQuestion.attackerSeat,
       });
+      logger.info(
+        {
+          eventName: 'match:question',
+          matchId,
+          qIndex: cache.currentQuestion.qIndex,
+          userId: socket.data.user.id,
+          socketId: socket.id,
+          totalQuestions: cache.totalQuestions,
+          ...questionLogFields(cache.currentQuestion),
+        },
+        'Possession cached question emitted to socket'
+      );
     }
     await emitPossessionAnswerSnapshotToSocket(socket, cache);
     return;
@@ -175,6 +227,18 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   if (!match) return;
   const state = parsePossessionState(match.state_payload);
   socket.emit('match:state', toMatchStatePayload(matchId, state));
+  logger.info(
+    {
+      eventName: 'match:state',
+      matchId,
+      userId: socket.data.user.id,
+      socketId: socket.id,
+      statePhase: state.phase,
+      half: state.half,
+      currentQuestionQIndex: state.currentQuestion?.qIndex ?? null,
+    },
+    'Possession DB state emitted to socket'
+  );
 }
 
 async function maybePickQuestionForState(
@@ -198,7 +262,7 @@ async function maybePickQuestionForState(
     correctIndex: number;
     questionKind: MatchQuestionKind;
   } | null> => {
-    const rows = await matchesRepo.getRandomQuestionCandidatesForMatch({
+    const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
@@ -206,15 +270,36 @@ async function maybePickQuestionForState(
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
 
+    let invalidCandidateCount = 0;
     for (const row of rows) {
       const parsed = questionPayloadSchema.safeParse(row.payload);
-      if (!parsed.success || parsed.data.type !== questionType) continue;
+      if (!parsed.success || parsed.data.type !== questionType) {
+        invalidCandidateCount += 1;
+        continue;
+      }
 
       const correctIndex = parsed.data.type === 'mcq_single'
         ? parsed.data.options.findIndex((option) => option.is_correct)
         : 0;
-      if (parsed.data.type === 'mcq_single' && correctIndex < 0) continue;
+      if (parsed.data.type === 'mcq_single' && correctIndex < 0) {
+        invalidCandidateCount += 1;
+        continue;
+      }
 
+      logger.info(
+        {
+          matchId,
+          questionType,
+          categoryIds,
+          difficulties,
+          candidateCount: rows.length,
+          invalidCandidateCount,
+          questionId: row.id,
+          categoryId: row.category_id,
+          questionKind: questionKindForType(questionType),
+        },
+        'Possession question candidate picked'
+      );
       return {
         questionId: row.id,
         categoryId: row.category_id,
@@ -223,6 +308,17 @@ async function maybePickQuestionForState(
       };
     }
 
+    logger.warn(
+      {
+        matchId,
+        questionType,
+        categoryIds,
+        difficulties,
+        candidateCount: rows.length,
+        invalidCandidateCount,
+      },
+      'Possession question candidate search returned no valid question'
+    );
     return null;
   };
 
@@ -247,8 +343,16 @@ export async function scheduleNextPossessionQuestion(
   }
 ): Promise<void> {
   const { phase, phaseKind, resolvedQIndex, nextIndex, goalScoredBySeat } = params;
+  logger.info(
+    { matchId, phase, phaseKind, resolvedQIndex, nextIndex, goalScoredBySeat },
+    'Possession next question scheduling requested'
+  );
   const dispatch = (opts?: { postReadyAck?: boolean }) => {
     const fire = () => {
+      logger.info(
+        { matchId, nextIndex, postReadyAck: opts?.postReadyAck ?? false },
+        'Possession next question dispatch firing'
+      );
       void sendPossessionMatchQuestion(io, matchId, nextIndex, opts).catch((error) => {
         logger.error({ error, matchId, nextIndex }, 'Failed to send next possession question');
       });
@@ -267,10 +371,18 @@ export async function scheduleNextPossessionQuestion(
       }
     }
     if (humanUserIds.length === 0) {
+      logger.info(
+        { matchId, resolvedQIndex, nextIndex, goalScoredBySeat },
+        'Possession goal transition has no human ready gate waiters'
+      );
       setTimeout(() => dispatch({ postReadyAck: true }), 0);
       return;
     }
 
+    logger.info(
+      { matchId, resolvedQIndex, nextIndex, goalScoredBySeat, waitingUserIds: humanUserIds },
+      'Possession goal transition waiting for ready acks'
+    );
     pendingReadyGates.open({
       scopeId: matchId,
       token: resolvedQIndex,
@@ -285,6 +397,7 @@ export async function scheduleNextPossessionQuestion(
   }
 
   const delay = getNextQuestionDelayMs({ phase });
+  logger.info({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
   setTimeout(() => dispatch(), delay);
 }
 
@@ -300,7 +413,13 @@ export async function sendPossessionMatchQuestion(
   }, async (span) => {
     const startedAt = Date.now();
     const cache = preloaded?.cache ?? await getMatchCacheOrRebuild(matchId);
-    if (!cache || cache.status !== 'active') return null;
+    if (!cache || cache.status !== 'active') {
+      logger.warn(
+        { matchId, qIndex, postReadyAck: preloaded?.postReadyAck ?? false, ...cacheLogFields(cache) },
+        'Possession question dispatch skipped: inactive or missing cache'
+      );
+      return null;
+    }
     const totalQuestions = cache.totalQuestions;
     const state = cache.statePayload;
 
@@ -310,6 +429,7 @@ export async function sendPossessionMatchQuestion(
     });
 
     if (state.phase === 'HALFTIME') {
+      logger.info({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
       await ensureHalftimeCategories(state, cache.categoryAId, matchId);
       if (!state.halftime.deadlineAt) {
         state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
@@ -325,6 +445,7 @@ export async function sendPossessionMatchQuestion(
       return null;
     }
     if (state.phase === 'COMPLETED') {
+      logger.info({ matchId, qIndex }, 'Possession question dispatch skipped: match already completed');
       return null;
     }
 
@@ -348,7 +469,10 @@ export async function sendPossessionMatchQuestion(
     const categoryIds = categoryIdsForCurrentHalf(state, cache);
     const picked = await maybePickQuestionForState(matchId, state, categoryIds);
     if (!picked) {
-      logger.error({ matchId, phaseKind }, 'Failed to pick a valid question for possession state');
+      logger.error(
+        { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },
+        'Failed to pick a valid question for possession state'
+      );
       return null;
     }
 
@@ -357,7 +481,7 @@ export async function sendPossessionMatchQuestion(
       'quizball.category_id': picked.categoryId,
     });
 
-    const inserted = await matchesRepo.insertMatchQuestionIfMissing({
+    const inserted = await matchQuestionsRepo.insertMatchQuestionIfMissing({
       matchId,
       qIndex,
       questionId: picked.questionId,
@@ -423,13 +547,29 @@ export async function sendPossessionMatchQuestion(
       await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
     });
     try {
-      await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+      await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
     } catch (error) {
       logger.error({ error, matchId, qIndex }, 'setQuestionTiming failed before emitting match:question');
     }
 
     await emitMatchState(io, matchId, state);
 
+    logger.info(
+      {
+        eventName: 'match:question',
+        matchId,
+        qIndex,
+        totalQuestions,
+        pickedQuestionId: picked.questionId,
+        pickedCategoryId: picked.categoryId,
+        previousQuestionKind,
+        playableAt: playableAt.toISOString(),
+        deadlineAt: deadlineAt.toISOString(),
+        postReadyAck: preloaded?.postReadyAck ?? false,
+        ...questionLogFields(cache.currentQuestion),
+      },
+      'Possession question dispatch emitting match:question'
+    );
     io.to(`match:${matchId}`).emit('match:question', {
       matchId,
       qIndex,
@@ -437,6 +577,7 @@ export async function sendPossessionMatchQuestion(
       question: cache.currentQuestion.questionDTO,
       playableAt: playableAt.toISOString(),
       deadlineAt: deadlineAt.toISOString(),
+      serverNow: new Date().toISOString(),
       correctIndex: cache.currentQuestion.kind === 'multipleChoice'
         ? cache.currentQuestion.correctIndex
         : undefined,
@@ -453,6 +594,18 @@ export async function sendPossessionMatchQuestion(
     });
 
     scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex,
+        deadlineAt: deadlineAt.toISOString(),
+        questionKind: payload.question.kind,
+        phaseKind: runtimePhaseKind,
+        phaseRound,
+      },
+      'Possession question timers scheduled'
+    );
     void schedulePossessionAiAnswer(io, matchId, qIndex, {
       questionKind: payload.question.kind,
       evaluation: payload.evaluation,
@@ -476,10 +629,20 @@ export async function resumePossessionMatchQuestion(
   pauseStartedAtMs: number
 ): Promise<boolean> {
   const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return false;
+  if (!cache || cache.status !== 'active') {
+    logger.warn(
+      { matchId, qIndex, pauseStartedAtMs, ...cacheLogFields(cache) },
+      'Possession question resume skipped: inactive or missing cache'
+    );
+    return false;
+  }
 
   const currentQuestion = cache.currentQuestion;
   if (!currentQuestion || currentQuestion.qIndex !== qIndex) {
+    logger.warn(
+      { matchId, qIndex, pauseStartedAtMs, ...cacheLogFields(cache), ...questionLogFields(currentQuestion) },
+      'Possession question resume skipped: stale or missing current question'
+    );
     return false;
   }
 
@@ -500,10 +663,22 @@ export async function resumePossessionMatchQuestion(
 
   await setMatchCache(cache);
   fireAndForget('setQuestionTiming(resumeQuestion)', async () => {
-    await matchesRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
   });
 
   await emitMatchState(io, matchId, cache.statePayload);
+  logger.info(
+    {
+      eventName: 'match:question',
+      matchId,
+      qIndex,
+      pauseStartedAtMs,
+      playableAt: playableAt.toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+      ...questionLogFields(currentQuestion),
+    },
+    'Possession resumed question emitting match:question'
+  );
   io.to(`match:${matchId}`).emit('match:question', {
     matchId,
     qIndex,
@@ -511,6 +686,7 @@ export async function resumePossessionMatchQuestion(
     question: currentQuestion.questionDTO,
     playableAt: playableAt.toISOString(),
     deadlineAt: deadlineAt.toISOString(),
+    serverNow: new Date().toISOString(),
     correctIndex: currentQuestion.kind === 'multipleChoice'
       ? currentQuestion.correctIndex
       : undefined,
@@ -521,6 +697,10 @@ export async function resumePossessionMatchQuestion(
   });
 
   scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
+  logger.info(
+    { eventName: 'match:question_timer', matchId, qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
+    'Possession resumed question timers scheduled'
+  );
   void schedulePossessionAiAnswer(io, matchId, qIndex, {
     questionKind: currentQuestion.kind,
     evaluation: currentQuestion.evaluation,
@@ -541,20 +721,31 @@ export async function ensurePossessionActiveTimers(
   matchId: string
 ): Promise<boolean> {
   const cache = await getMatchCacheOrRebuild(matchId);
-  if (!cache || cache.status !== 'active') return false;
+  if (!cache || cache.status !== 'active') {
+    logger.warn({ eventName: 'match:question_timer', matchId, ...cacheLogFields(cache) }, 'Possession timer ensure skipped: inactive or missing cache');
+    return false;
+  }
 
   const state = cache.statePayload;
   if (state.phase === 'HALFTIME') {
+    logger.info({ eventName: 'match:halftime_timer', matchId, half: state.half }, 'Possession timer ensure scheduling halftime timers');
     scheduleHalftimeTimeout(io, matchId);
     schedulePossessionAiHalftimeBan(io, matchId);
     return true;
   }
 
   const currentQuestion = cache.currentQuestion;
-  if (!currentQuestion) return false;
+  if (!currentQuestion) {
+    logger.warn({ eventName: 'match:question_timer', matchId, ...cacheLogFields(cache) }, 'Possession timer ensure skipped: missing current question');
+    return false;
+  }
 
   const deadlineAt = currentQuestion.deadlineAt ? new Date(currentQuestion.deadlineAt) : null;
   if (!deadlineAt || Number.isNaN(deadlineAt.getTime())) {
+    logger.warn(
+      { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAtRaw: currentQuestion.deadlineAt, ...questionLogFields(currentQuestion) },
+      'Possession timer ensure resolving question with invalid deadline'
+    );
     await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
     return true;
   }
@@ -565,7 +756,17 @@ export async function ensurePossessionActiveTimers(
   // deadline forward, breaking live timing for ongoing rounds.
   const aiAnswerKey = questionTimerKey(matchId, currentQuestion.qIndex);
   const aiAlreadyScheduled = await hasPendingRealtimeTimer('possession_ai_answer', aiAnswerKey);
-  if (aiAlreadyScheduled) return true;
+  if (aiAlreadyScheduled) {
+    logger.info(
+      { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
+      'Possession timer ensure kept existing AI answer timer'
+    );
+    return true;
+  }
+  logger.info(
+    { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAt: deadlineAt.toISOString(), ...questionLogFields(currentQuestion) },
+    'Possession timer ensure scheduling question and AI timers'
+  );
   void schedulePossessionAiAnswer(io, matchId, currentQuestion.qIndex, {
     questionKind: currentQuestion.kind,
     evaluation: currentQuestion.evaluation,

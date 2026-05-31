@@ -7,6 +7,8 @@ dist/
 # Environment
 .env
 .env.remote
+.env.prod.bak
+.env.*.bak
 !.env.local
 !.env.example
 

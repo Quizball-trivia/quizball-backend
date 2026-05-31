@@ -1,6 +1,8 @@
 import { trackEvent } from '../core/analytics.js';
 import { trackMatchCompleted } from '../core/analytics/game-events.js';
 import { logger } from '../core/logger.js';
+import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
+import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import {
@@ -74,7 +76,7 @@ async function flushCacheToDB(cache: MatchCache): Promise<void> {
   await matchesRepo.setMatchStatePayload(cache.matchId, cache.statePayload, cache.currentQIndex);
   await Promise.all(
     cache.players.map((player) =>
-      matchesRepo.setPlayerFinalTotals(cache.matchId, player.userId, {
+      matchPlayersRepo.setPlayerFinalTotals(cache.matchId, player.userId, {
         totalPoints: player.totalPoints,
         correctAnswers: player.correctAnswers,
         goals: player.goals,
@@ -99,7 +101,7 @@ async function buildFinalQuestionResults(
 
   if (safeTotal === 0) return results;
 
-  const answers = await matchesRepo.listAnswersForMatch(matchId);
+  const answers = await matchAnswersRepo.listAnswersForMatch(matchId);
   for (const answer of answers) {
     const playerResults = results[answer.user_id];
     if (!playerResults) continue;
@@ -129,7 +131,7 @@ export async function completePossessionMatch(
       seat: player.seat,
       total_points: player.totalPoints,
     }))
-    : (await matchesRepo.listMatchPlayers(matchId)).map((player) => ({
+    : (await matchPlayersRepo.listMatchPlayers(matchId)).map((player) => ({
       user_id: player.user_id,
       seat: player.seat,
       total_points: player.total_points,
@@ -151,7 +153,7 @@ export async function completePossessionMatch(
     await matchesRepo.setMatchStatePayload(matchId, state, match.current_q_index);
   }
 
-  await matchesRepo.completeMatch(matchId, decision.winnerId);
+  await matchesService.completeMatch(matchId, decision.winnerId);
 
   const [avgTimes, playerRows] = await Promise.all([
     matchesService.computeAvgTimes(matchId),
@@ -163,7 +165,7 @@ export async function completePossessionMatch(
         goals: player.goals,
         penalty_goals: player.penaltyGoals,
       })))
-      : matchesRepo.listMatchPlayers(matchId),
+      : matchPlayersRepo.listMatchPlayers(matchId),
   ]);
   const finalPlayers = playerRows.map((player) => ({
     ...player,
@@ -172,7 +174,7 @@ export async function completePossessionMatch(
 
   await Promise.all(
     finalPlayers.map((player) =>
-      matchesRepo.updatePlayerAvgTime(matchId, player.user_id, player.avg_time_ms)
+      matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, player.avg_time_ms)
     )
   );
 

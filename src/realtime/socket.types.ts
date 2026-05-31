@@ -47,6 +47,8 @@ export interface MatchParticipant {
   avatarCustomization?: AvatarCustomization | null;
   seat: number;
   rankPoints?: number;
+  country?: string;
+  countryCode?: string;
 }
 
 export interface LobbyState {
@@ -193,6 +195,7 @@ export interface MatchCountdownPayload {
   matchId: string;
   seconds: number;
   startsAt: string;
+  serverNow?: string;
   reason?: 'kickoff' | 'resume';
 }
 
@@ -203,6 +206,7 @@ export interface MatchQuestionPayload {
   question: GameQuestionDTO;
   playableAt?: string;
   deadlineAt: string;
+  serverNow?: string;
   correctIndex?: number;
   phaseKind?: MatchPhaseKind;
   phaseRound?: number | null;
@@ -239,6 +243,7 @@ export interface MatchAnswerAckPayload {
   shooterSeat?: 1 | 2 | null;
   foundCount?: number;
   clueIndex?: number | null;
+  cluesDisplayAnswer?: Record<string, string>;
   submittedOrderIds?: string[];
 }
 
@@ -282,6 +287,10 @@ export interface MatchRoundResultDeltas {
   possessionDelta: number;
   penaltyOutcome: 'goal' | 'saved' | null;
   goalScoredBySeat: 1 | 2 | null;
+  /** Seat whose possession gain was doubled by the 2× speed streak THIS round
+   *  (the previous holder). null when no boost was applied. The live streak
+   *  holder for the NEXT round travels in the match state payload. */
+  speedStreakBoostedSeat?: 1 | 2 | null;
 }
 
 export interface MultipleChoiceRoundReveal {
@@ -416,6 +425,8 @@ export interface MatchStatePayload {
   phase: MatchPhase;
   half: 1 | 2;
   possessionDiff: number;
+  /** Live 2× speed-streak holder (drives the sticky HUD badge). null = none. */
+  speedStreakHolderSeat?: 1 | 2 | null;
   normalQuestionsAnsweredInHalf: number;
   attackerSeat: 1 | 2 | null;
   kickOffSeat: 1 | 2;
@@ -451,6 +462,7 @@ export interface MatchPartyPlayerState {
   answered: boolean;
   rank: number;
   avgTimeMs: number | null;
+  status: 'active' | 'dropped';
 }
 
 export interface MatchPartyStatePayload {
@@ -483,6 +495,12 @@ export interface MatchRejoinAvailablePayload {
   participants: MatchParticipant[];
   graceMs: number;
   remainingReconnects: number;
+}
+
+export interface MatchPartyDropoutPayload {
+  matchId: string;
+  reason: 'disconnect_timeout' | 'self_forfeit';
+  message: string;
 }
 
 export interface RankedSearchStartedPayload {
@@ -576,6 +594,27 @@ export interface SessionBlockedPayload {
   stateSnapshot: SessionStatePayload;
 }
 
+export type LobbyJoinByCodeResult =
+  | {
+      ok: true;
+      lobbyId: string;
+      inviteCode: string;
+      alreadyMember: boolean;
+    }
+  | {
+      ok: false;
+      code:
+        | 'ALREADY_IN_LOBBY'
+        | 'LOBBY_NOT_FOUND'
+        | 'LOBBY_FULL'
+        | 'TRANSITION_IN_PROGRESS'
+        | 'INVALID_INVITE'
+        | 'LOBBY_JOIN_ERROR';
+      message: string;
+      retryable: boolean;
+      stateSnapshot?: SessionStatePayload;
+    };
+
 export interface LobbyChallengeUser {
   id: string;
   username: string;
@@ -631,7 +670,7 @@ export interface ClientToServerEvents {
   'lobby:challenge': (data: { toUserId: string }) => void;
   'lobby:challenge_accept': (data: { invitationId: string }) => void;
   'lobby:challenge_decline': (data: { invitationId: string }) => void;
-  'lobby:join_by_code': (data: { inviteCode: string }) => void;
+  'lobby:join_by_code': (data: { inviteCode: string }, ack?: (result: LobbyJoinByCodeResult) => void) => void;
   'lobby:leave': () => void;
   'lobby:ready': (data: { ready: boolean }) => void;
   'lobby:update_settings': (data: {
@@ -707,6 +746,7 @@ export interface ServerToClientEvents {
   'match:final_results': (data: MatchFinalResultsPayload) => void;
   'match:forfeit_pending': (data: MatchForfeitPendingPayload) => void;
   'match:opponent_disconnected': (data: MatchOpponentDisconnectedPayload) => void;
+  'match:party_dropout': (data: MatchPartyDropoutPayload) => void;
   'match:resume': (data: MatchResumePayload) => void;
   'match:rejoin_available': (data: MatchRejoinAvailablePayload) => void;
   'ranked:search_started': (data: RankedSearchStartedPayload) => void;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MatchQuestionEvaluation } from '../../src/modules/matches/matches.service.js';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
+import { fuzzyMatchesAnswer } from '../../src/realtime/possession-answer-matching.js';
 import {
   COUNTDOWN_QUESTION_TIME_MS,
   PUT_IN_ORDER_QUESTION_TIME_MS,
@@ -10,9 +11,7 @@ import {
   calculateCountdownScore,
   calculatePutInOrderScore,
   calculateCluesScore,
-  clueIndexForScoring,
 } from '../../src/realtime/scoring.js';
-import { shouldFinalizeWrongCluesGuess } from '../../src/realtime/possession-answer-matching.js';
 
 const { normalizeAnswer, countdownMatch } = __possessionInternals;
 
@@ -66,38 +65,6 @@ describe('timer constants', () => {
   });
 });
 
-describe('Who Am I wrong guess finalization', () => {
-  it('finalizes a wrong clue guess when the opponent has already answered', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 1,
-      expectedCount: 2,
-      existingRevealCount: 1,
-      timedClueIndex: 0,
-    })).toBe(true);
-  });
-
-  it('keeps revealing clues when the opponent has not answered and more clues remain', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 0,
-      expectedCount: 2,
-      existingRevealCount: 1,
-      timedClueIndex: 0,
-    })).toBe(false);
-  });
-
-  it('finalizes a wrong clue guess once there are no more clues to reveal', () => {
-    expect(shouldFinalizeWrongCluesGuess({
-      clueCount: 5,
-      currentAnswerCount: 0,
-      expectedCount: 2,
-      existingRevealCount: 4,
-      timedClueIndex: 3,
-    })).toBe(true);
-  });
-});
-
 // ── normalizeAnswer tests ──
 
 describe('normalizeAnswer', () => {
@@ -144,19 +111,25 @@ describe('countdownMatch — prefix matching', () => {
       { id: 'a2', display: { en: 'Martins' }, acceptedAnswers: ['Martins'] },
     ]);
 
-    // "mar" / "mart" are ambiguous prefixes of both groups → null
+    // "mar" / "mart" / "martin" are ambiguous prefixes of both groups → null
     expect(countdownMatch(evalWithSimilarNames, 'mar', new Set())).toBeNull();
     expect(countdownMatch(evalWithSimilarNames, 'mart', new Set())).toBeNull();
+    expect(countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']))).toBeNull();
 
-    // Once a1 is found, "martin" is a unique prefix of a2.
-    const result = countdownMatch(evalWithSimilarNames, 'martin', new Set(['a1']));
+    const result = countdownMatch(evalWithSimilarNames, 'martins', new Set(['a1']));
     expect(result).not.toBeNull();
     expect(result!.id).toBe('a2');
   });
 
-  it('resolves ambiguity when one group is already found', () => {
-    // "ron" with Ronaldo (g1) already found → only Ronaldinho (g5) remains → unique prefix
+  it('keeps an ambiguous prefix rejected even after one matching group is already found', () => {
+    // "ron" still describes Ronaldo (found) and Ronaldinho (unfound), so the
+    // player must type enough letters to identify Ronaldinho specifically.
     const result = countdownMatch(FOOTBALL_EVALUATION, 'ron', new Set(['g1']));
+    expect(result).toBeNull();
+  });
+
+  it('accepts an ambiguous family after the typed prefix differentiates the remaining answer', () => {
+    const result = countdownMatch(FOOTBALL_EVALUATION, 'ronaldi', new Set(['g1']));
     expect(result).not.toBeNull();
     expect(result!.id).toBe('g5');
   });
@@ -211,6 +184,27 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     expect(result!.id).toBe('g2');
   });
 
+  it('accepts a one-letter typo against a token in a multi-word accepted answer', () => {
+    const evalWithManager = makeEvaluation([
+      { id: 'm1', display: { en: 'Fabio Capello' }, acceptedAnswers: ['Fabio Capello'] },
+    ]);
+
+    const result = countdownMatch(evalWithManager, 'capelo', new Set());
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('m1');
+  });
+
+  it('rejects duplicated short aliases instead of consuming several answers with the same text', () => {
+    const evalWithDuplicateAliases = makeEvaluation([
+      { id: 'm1', display: { en: 'Marco Silva' }, acceptedAnswers: ['Marco Silva', 'mar'] },
+      { id: 'm2', display: { en: 'Marcelo Bielsa' }, acceptedAnswers: ['Marcelo Bielsa', 'mar'] },
+      { id: 'm3', display: { en: 'Mario Gomez' }, acceptedAnswers: ['Mario Gomez', 'mar'] },
+    ]);
+
+    expect(countdownMatch(evalWithDuplicateAliases, 'mar', new Set())).toBeNull();
+    expect(countdownMatch(evalWithDuplicateAliases, 'mar', new Set(['m1', 'm2']))).toBeNull();
+  });
+
   it('rejects an interior substring (not a whole-word) match', () => {
     // "aldo" sits inside "Ronaldo" but isn't a complete token, so it should
     // no longer match — only whole-word, prefix, suffix, or fuzzy-distance
@@ -227,6 +221,18 @@ describe('countdownMatch — exact and fuzzy matching', () => {
     const result = countdownMatch(evalWithMultiWord, 'messi', new Set());
     expect(result).not.toBeNull();
     expect(result!.id).toBe('m1');
+  });
+
+  it('accepts common club abbreviations in either direction', () => {
+    const evalWithManchesterClubs = makeEvaluation([
+      { id: 'mu', display: { en: 'Manchester United' }, acceptedAnswers: ['Man United', 'Man Utd'] },
+      { id: 'mc', display: { en: 'Manchester City' }, acceptedAnswers: ['Man City'] },
+    ]);
+
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester United', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester Utd', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Man United', new Set())?.id).toBe('mu');
+    expect(countdownMatch(evalWithManchesterClubs, 'Manchester', new Set())).toBeNull();
   });
 
   it('returns null when no match is found', () => {
@@ -269,9 +275,11 @@ describe('calculateCountdownScore', () => {
     expect(calculateCountdownScore(0, 1)).toBe(0);
   });
 
-  it('rounds correctly for non-even divisions', () => {
-    expect(calculateCountdownScore(1, 3)).toBe(33);
-    expect(calculateCountdownScore(2, 3)).toBe(67);
+  it('rounds non-even divisions to clean 5-point buckets', () => {
+    expect(calculateCountdownScore(1, 3)).toBe(35);
+    expect(calculateCountdownScore(2, 3)).toBe(65);
+    expect(calculateCountdownScore(2, 15)).toBe(15);
+    expect(calculateCountdownScore(4, 15)).toBe(25);
   });
 
   it('returns 0 when totalGroups is 0', () => {
@@ -281,6 +289,12 @@ describe('calculateCountdownScore', () => {
 
   it('returns 0 when totalGroups is negative', () => {
     expect(calculateCountdownScore(1, -1)).toBe(0);
+  });
+});
+
+describe('fuzzyMatchesAnswer', () => {
+  it('accepts a one-letter typo for who-am-I style multi-word answers', () => {
+    expect(fuzzyMatchesAnswer('capelo', ['Fabio Capello'])).toBe(true);
   });
 });
 
@@ -311,13 +325,4 @@ describe('calculateCluesScore', () => {
     expect(calculateCluesScore(true, 10)).toBe(20);
   });
 
-  it('scores by the latest revealed clue when wrong guesses reveal ahead of time', () => {
-    expect(clueIndexForScoring(0, 2)).toBe(1);
-    expect(calculateCluesScore(true, clueIndexForScoring(0, 2))).toBe(80);
-  });
-
-  it('keeps time-based scoring when timed clues are ahead of manual reveals', () => {
-    expect(clueIndexForScoring(3, 1)).toBe(3);
-    expect(calculateCluesScore(true, clueIndexForScoring(3, 1))).toBe(40);
-  });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { config } from '../../core/config.js';
+import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -8,6 +9,7 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { statsService } from '../../modules/stats/stats.service.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
@@ -60,6 +62,46 @@ async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void
   io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
 }
 
+function emitInsufficientTickets(
+  io: QuizballServer,
+  userId: string,
+  source: string,
+  tickets: number
+): void {
+  io.to(`user:${userId}`).emit('ranked:queue_left');
+  io.to(`user:${userId}`).emit('error', {
+    code: 'INSUFFICIENT_TICKETS',
+    message: 'You need a ticket to start ranked.',
+    meta: {
+      source,
+      tickets,
+    },
+  });
+}
+
+async function getRankedTicketWallets(userIds: string[]): Promise<Record<string, { coins: number; tickets: number }>> {
+  const entries = await Promise.all(
+    [...new Set(userIds)].map(async (userId) => {
+      const wallet = await storeService.getWallet(userId);
+      return [userId, wallet] as const;
+    })
+  );
+  return Object.fromEntries(entries);
+}
+
+async function hasTicketForRankedQueue(io: QuizballServer, userId: string, source: string): Promise<boolean> {
+  const wallet = await storeService.getWallet(userId);
+  if (wallet.tickets >= 1) {
+    logger.info({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
+    return true;
+  }
+
+  logger.warn({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight blocked queue start');
+  emitInsufficientTickets(io, userId, source, wallet.tickets);
+  await userSessionGuardService.emitState(io, userId);
+  return false;
+}
+
 async function attachUserSocketsToLobby(
   io: QuizballServer,
   userId: string,
@@ -75,7 +117,11 @@ async function attachUserSocketsToLobby(
 async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
-  userBId: string
+  userBId: string,
+  sessionCountries?: {
+    userA?: string | null;
+    userB?: string | null;
+  }
 ): Promise<void> {
   await withSpan('ranked.match_found.human', {
     'quizball.user_a_id': userAId,
@@ -98,11 +144,19 @@ async function startHumanRankedMatch(
         return;
       }
     }
+    const isCancelled = async () => {
+      const latestRedis = getRedisClient();
+      if (!latestRedis) return false;
+      const [userACancelled, userBCancelled] = await Promise.all([
+        latestRedis.get(cancelKey(userAId)),
+        latestRedis.get(cancelKey(userBId)),
+      ]);
+      return Boolean(userACancelled || userBCancelled);
+    };
 
-    const [userA, userB] = await Promise.all([
-      usersRepo.getById(userAId),
-      usersRepo.getById(userBId),
-    ]);
+    const usersById = await usersRepo.getByIds([userAId, userBId]);
+    const userA = usersById.get(userAId) ?? null;
+    const userB = usersById.get(userBId) ?? null;
     if (!userA || !userB) {
       logger.warn({ userAId, userBId }, 'Ranked pairing skipped: user missing');
       span.setAttribute('quizball.skipped_missing_user', true);
@@ -113,6 +167,33 @@ async function startHumanRankedMatch(
       rankedService.ensureProfile(userAId),
       rankedService.ensureProfile(userBId),
     ]);
+    const wallets = await getRankedTicketWallets([userAId, userBId]);
+    const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
+    if (insufficientUserIds.length > 0) {
+      logger.warn(
+        {
+          userAId,
+          userBId,
+          insufficientUserIds,
+          wallets,
+        },
+        'Ranked human match creation skipped: insufficient tickets after pairing'
+      );
+      for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
+        io.to(`user:${userId}`).emit('ranked:queue_left');
+      }
+      for (const userId of insufficientUserIds) {
+        emitInsufficientTickets(io, userId, 'ranked_human_pair_preflight', wallets[userId]?.tickets ?? 0);
+      }
+      await Promise.all([userSessionGuardService.emitState(io, userAId), userSessionGuardService.emitState(io, userBId)]);
+      span.setAttribute('quizball.skipped_insufficient_tickets', true);
+      return;
+    }
+    if (await isCancelled()) {
+      logger.info({ userAId, userBId }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
+      span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
+      return;
+    }
 
     const lobby = await lobbiesRepo.createLobby({
       mode: 'ranked',
@@ -151,10 +232,7 @@ async function startHumanRankedMatch(
         favoriteClub: userB.favorite_club ?? null,
         recentForm: formB,
         rp: profileB.rp,
-        // Frontend resolves country (ISO 3166-1 alpha-2) to the matchmaking map
-        // pin/city. Without this Georgian players land on the Denver fallback.
-        country: userB.country ?? undefined,
-        countryCode: userB.country ?? undefined,
+        ...countryPayload(sessionCountries?.userB ?? userB.country),
       },
     });
     io.to(`user:${userBId}`).emit('ranked:match_found', {
@@ -168,8 +246,7 @@ async function startHumanRankedMatch(
         favoriteClub: userA.favorite_club ?? null,
         recentForm: formA,
         rp: profileA.rp,
-        country: userA.country ?? undefined,
-        countryCode: userA.country ?? undefined,
+        ...countryPayload(sessionCountries?.userA ?? userA.country),
       },
     });
 
@@ -178,6 +255,10 @@ async function startHumanRankedMatch(
 
     setTimeout(() => {
       void (async () => {
+        if (await isCancelled()) {
+          logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human draft start skipped because a player cancelled search');
+          return;
+        }
         const latest = await lobbiesRepo.getById(lobby.id);
         if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
         await startDraft(io, lobby.id);
@@ -186,7 +267,11 @@ async function startHumanRankedMatch(
   });
 }
 
-async function startAiFallback(io: QuizballServer, userId: string): Promise<void> {
+async function startAiFallbackWithCountry(
+  io: QuizballServer,
+  userId: string,
+  playerCountryCode: string | null | undefined,
+): Promise<void> {
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
   }, async () => {
@@ -195,7 +280,13 @@ async function startAiFallback(io: QuizballServer, userId: string): Promise<void
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
       return;
     }
-    await startRankedAiForUser(io, userId, { skipSearchEmit: true });
+    if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
+      return;
+    }
+    await startRankedAiForUser(io, userId, {
+      skipSearchEmit: true,
+      ...(playerCountryCode ? { playerCountryCode } : {}),
+    });
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
     appMetrics.rankedAiFallbacks.add(1);
   });
@@ -224,8 +315,9 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       const result = toStringArray(resultRaw);
       const userId = result[0];
       if (!userId) continue;
+      const countryCode = result[1] || null;
       fallbackCount += 1;
-      await startAiFallback(io, userId);
+      await startAiFallbackWithCountry(io, userId, countryCode);
     }
     span.setAttribute('quizball.fallback_count', fallbackCount);
   });
@@ -249,10 +341,16 @@ async function processPairs(io: QuizballServer): Promise<void> {
       if (result.length < 4) break;
 
       const userAId = result[1];
-      const userBId = result[3];
+      const hasCountryCodes = result.length >= 6;
+      const userACountryCode = hasCountryCodes ? result[2] || null : null;
+      const userBId = hasCountryCodes ? result[4] : result[3];
+      const userBCountryCode = hasCountryCodes ? result[5] || null : null;
       if (!userAId || !userBId) break;
       pairCount += 1;
-      await startHumanRankedMatch(io, userAId, userBId);
+      await startHumanRankedMatch(io, userAId, userBId, {
+        userA: userACountryCode,
+        userB: userBCountryCode,
+      });
     }
     span.setAttribute('quizball.pair_count', pairCount);
   });
@@ -319,6 +417,10 @@ export const rankedMatchmakingService = {
     }, async (span) => {
       logger.info({ userId }, 'Ranked queue join requested');
       appMetrics.rankedQueueJoins.add(1);
+      if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
+        span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
+        return;
+      }
 
       if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
@@ -327,7 +429,9 @@ export const rankedMatchmakingService = {
         if (redis) {
           await redis.del(cancelKey(userId));
         }
-        await startRankedAiForUser(io, userId);
+        await startRankedAiForUser(io, userId, {
+          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
+        });
         return;
       }
 
@@ -335,7 +439,9 @@ export const rankedMatchmakingService = {
       if (!redis) {
         logger.warn({ userId }, 'Redis unavailable for ranked queue join, falling back to AI');
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
-        await startRankedAiForUser(io, userId);
+        await startRankedAiForUser(io, userId, {
+          ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
+        });
         return;
       }
 
@@ -449,14 +555,19 @@ export const rankedMatchmakingService = {
           }
 
           const newSearchId = randomUUID();
+          const searchFields: Record<string, string> = {
+            userId,
+            status: 'queued',
+            queuedAt: String(now),
+            deadlineAt: String(deadlineAt),
+          };
+          if (socket.data.currentCountry) {
+            searchFields.countryCode = socket.data.currentCountry;
+          }
+
           const multiResult = await redis
             .multi()
-            .hSet(searchKey(newSearchId), {
-              userId,
-              status: 'queued',
-              queuedAt: String(now),
-              deadlineAt: String(deadlineAt),
-            })
+            .hSet(searchKey(newSearchId), searchFields)
             .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
             .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
             .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })

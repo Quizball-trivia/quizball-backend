@@ -10,6 +10,9 @@ const createMatchFromLobbyMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
 const pauseMatchForDisconnectedPlayerMock = vi.fn();
 const getUserByIdMock = vi.fn();
+const consumeRankedTicketsMock = vi.fn();
+const refundRankedTicketsMock = vi.fn();
+const abortRankedDraftStartForTicketsMock = vi.fn();
 const redisGetMock = vi.fn();
 const redisSetMock = vi.fn();
 const redisExistsMock = vi.fn();
@@ -42,6 +45,13 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    consumeRankedTickets: (...args: unknown[]) => consumeRankedTicketsMock(...args),
+    refundRankedTickets: (...args: unknown[]) => refundRankedTicketsMock(...args),
+  },
+}));
+
 vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   beginMatchForLobby: (...args: unknown[]) => beginMatchForLobbyMock(...args),
   matchRealtimeService: {
@@ -51,6 +61,10 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
 
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startDraft: vi.fn(),
+}));
+
+vi.mock('../../src/realtime/services/lobby-draft-start.service.js', () => ({
+  abortRankedDraftStartForTickets: (...args: unknown[]) => abortRankedDraftStartForTicketsMock(...args),
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -64,6 +78,14 @@ vi.mock('../../src/realtime/ai-ranked.constants.js', () => ({
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
+    getByIds: async (ids: string[]) => {
+      const usersById = new Map<string, Awaited<ReturnType<typeof getUserByIdMock>>>();
+      for (const id of [...new Set(ids)]) {
+        const user = await getUserByIdMock(id);
+        if (user) usersById.set(id, user);
+      }
+      return usersById;
+    },
   },
 }));
 
@@ -125,6 +147,19 @@ describe('draftRealtimeService', () => {
       is_ai: userId.startsWith('ai-'),
     }));
 
+    consumeRankedTicketsMock.mockResolvedValue({
+      wallets: {
+        u1: { coins: 0, tickets: 9 },
+        u2: { coins: 0, tickets: 9 },
+      },
+    });
+    refundRankedTicketsMock.mockResolvedValue({
+      wallets: {
+        u1: { coins: 0, tickets: 10 },
+        u2: { coins: 0, tickets: 10 },
+      },
+    });
+    abortRankedDraftStartForTicketsMock.mockResolvedValue(undefined);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
     beginMatchForLobbyMock.mockResolvedValue(undefined);
   });
@@ -163,6 +198,77 @@ describe('draftRealtimeService', () => {
     expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
   });
 
+  it('consumes ranked tickets only after the ranked draft is complete', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(emit).toHaveBeenCalledWith('draft:complete', { halfOneCategoryId: 'cat-c' });
+    expect(createMatchFromLobbyMock).toHaveBeenCalledWith({
+      lobbyId: 'l1',
+      mode: 'ranked',
+      variant: 'ranked_sim',
+      hostUserId: 'u1',
+      categoryAId: 'cat-c',
+      categoryBId: null,
+    });
+    expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+  });
+
+  it('does not complete the ranked draft or create a match when ticket consumption fails', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const lobby = {
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    };
+    getLobbyByIdMock.mockResolvedValue(lobby);
+    consumeRankedTicketsMock.mockResolvedValue(null);
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+    expect(abortRankedDraftStartForTicketsMock).toHaveBeenCalledWith(io, lobby, ['u1', 'u2']);
+  });
+
+  it('refunds ranked tickets when match creation fails after consumption', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    createMatchFromLobbyMock.mockRejectedValueOnce(new Error('match create failed'));
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+  });
+
   it('auto-bans for ranked AI even when redis AI key is missing', async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
@@ -195,6 +301,59 @@ describe('draftRealtimeService', () => {
       await vi.advanceTimersByTimeAsync(800);
 
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+      expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+    } finally {
+      const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      stopRealtimeTimerScheduler();
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the fast AI ban timer after the human draft ban times out in ranked-vs-AI', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const {
+        runDraftAutoBan,
+        runRankedAiDraftBan,
+        scheduleDraftAutoBan,
+      } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      const { io } = createIoMock();
+      stopRealtimeTimerScheduler();
+      startRealtimeTimerScheduler(io, {
+        draft_ai_ban: async (server, payload) => {
+          if (payload.kind === 'draft_ai_ban') await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+        },
+        draft_auto_ban: async (server, payload) => {
+          if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
+        },
+      });
+
+      getLobbyByIdMock.mockResolvedValue({
+        id: 'l1',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'u1',
+      });
+      listMembersWithUserMock.mockResolvedValue([
+        { user_id: 'u1' },
+        { user_id: 'ai-1' },
+      ]);
+
+      scheduleDraftAutoBan(io, 'l1');
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(1);
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', expect.any(String));
+      expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(700);
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(2);
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
       expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
       expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');

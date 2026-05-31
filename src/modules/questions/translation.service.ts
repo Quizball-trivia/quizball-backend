@@ -284,6 +284,10 @@ function payloadNeedsTranslation(payload: QuestionPayload | null): boolean {
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 export const translationService = {
+  isConfigured(): boolean {
+    return getTranslationProvider().isConfigured();
+  },
+
   /**
    * Translate a list of questions by ID. Skips already-translated ones.
    * Idempotent — safe to call multiple times.

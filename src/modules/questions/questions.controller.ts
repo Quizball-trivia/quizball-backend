@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { questionsService } from './questions.service.js';
 import { translationService } from './translation.service.js';
+import { ExternalServiceError } from '../../core/errors.js';
 import {
   toQuestionResponse,
   toPaginatedResponse,
@@ -196,6 +197,13 @@ export const questionsController = {
    * Returns immediately with counts, translation runs in background.
    */
   async translateBackfill(_req: Request, res: Response): Promise<void> {
+    if (!translationService.isConfigured()) {
+      logger.warn('Translation backfill rejected: OpenRouter API key not configured');
+      throw new ExternalServiceError('Translation is not configured. Set OPENROUTER_API_KEY in Railway and redeploy before using Translate All.', {
+        missing: ['OPENROUTER_API_KEY'],
+      });
+    }
+
     const counts = await translationService.getBackfillCounts();
 
     if (counts.questions === 0 && counts.categories === 0) {

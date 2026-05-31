@@ -17,6 +17,7 @@ import { adminDailyChallengesRoutes } from './admin-daily-challenges.routes.js';
 import { adminUsersRoutes } from './admin-users.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { translationRoutes } from './translation.routes.js';
+import { opsRoutes } from './ops.routes.js';
 import { swaggerRoutes } from '../openapi/index.js';
 import { config } from '../../core/config.js';
 
@@ -48,5 +49,6 @@ router.use('/api/v1/admin/activity', activityRoutes);
 router.use('/api/v1/admin/daily-challenges', adminDailyChallengesRoutes);
 router.use('/api/v1/admin/users', adminUsersRoutes);
 router.use('/api/v1/admin/translation', translationRoutes);
+router.use('/api/v1/internal/ops', opsRoutes);
 
 export const routes = router;

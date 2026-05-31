@@ -83,6 +83,12 @@ const configSchema = z.object({
   GRAFANA_LOKI_USER: z.string().optional(),
   GRAFANA_LOKI_API_KEY: z.string().optional(),
   GRAFANA_LOKI_JOB: z.string().default("quizball-backend"),
+
+  // Resend transactional email (used by the ops/daily-report endpoint)
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().default("Quizball Ops <ops@quizball.io>"),
+  // Shared secret the scheduled report agent presents to POST the daily report.
+  OPS_REPORT_TOKEN: z.string().optional(),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;

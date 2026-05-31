@@ -521,6 +521,32 @@ describe('usersService.getOrCreateFromIdentity phone backfill', () => {
     vi.clearAllMocks();
   });
 
+  it('normalizes blank identity phone numbers before creating a new user', async () => {
+    getCachedUserMock.mockReturnValue(null);
+    getByProviderSubjectMock.mockResolvedValue(null);
+    createWithIdentityMock.mockResolvedValue(MOCK_USER);
+
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+    await usersService.getOrCreateFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      phoneNumber: '',
+      claims: {},
+    });
+
+    expect(createWithIdentityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phoneNumber: null,
+        phoneVerifiedAt: null,
+      }),
+      expect.objectContaining({
+        provider: 'supabase',
+        subject: 'provider-sub',
+      })
+    );
+  });
+
   it('skips the phone backfill when the number is already held by another active user', async () => {
     // Cached user has no phone yet; the identity carries a phone already linked
     // to a different active account — backfilling it would violate

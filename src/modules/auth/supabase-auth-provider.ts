@@ -6,6 +6,12 @@ import { withSpan } from '../../core/tracing.js';
 import type { AuthIdentity } from '../../core/types.js';
 import type { AuthProvider } from './auth.provider.js';
 
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /**
  * Supabase auth provider.
  * JWKS-first verification with introspection fallback.
@@ -153,7 +159,7 @@ export class SupabaseAuthProvider implements AuthProvider {
       provider: 'supabase',
       subject: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
-      phoneNumber: typeof payload.phone === 'string' ? payload.phone : undefined,
+      phoneNumber: normalizeOptionalText(payload.phone),
       phoneVerifiedAt: typeof payload.phone_confirmed_at === 'string' ? payload.phone_confirmed_at : null,
       name,
       avatarUrl,

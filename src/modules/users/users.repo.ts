@@ -31,6 +31,11 @@ export interface UpdateUserData {
   onboardingComplete?: boolean;
 }
 
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
 export function isUserAccountInactive(user: Pick<User, 'is_deleted' | 'deleted_at' | 'pending_deletion_at'>): boolean {
   return Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at);
 }
@@ -102,9 +107,10 @@ export const usersRepo = {
   },
 
   async create(data: CreateUserData): Promise<User> {
+    const phoneNumber = normalizeOptionalText(data.phoneNumber);
     const [user] = await sql<User[]>`
       INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${data.phoneNumber ?? null}, ${data.phoneVerifiedAt ?? null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${phoneNumber}, ${phoneNumber ? data.phoneVerifiedAt ?? null : null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
       RETURNING *
     `;
     return user;
@@ -122,14 +128,15 @@ export const usersRepo = {
       const avatarCustomizationJson = userData.avatarCustomization == null
         ? null
         : JSON.stringify(userData.avatarCustomization);
+      const phoneNumber = normalizeOptionalText(userData.phoneNumber);
       const result = await tx.unsafe<User[]>(
         `INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::jsonb, false, false)
          RETURNING *`,
         [
           userData.email ?? null,
-          userData.phoneNumber ?? null,
-          userData.phoneVerifiedAt ?? null,
+          phoneNumber,
+          phoneNumber ? userData.phoneVerifiedAt ?? null : null,
           userData.nickname ?? null,
           userData.country ?? null,
           userData.avatarUrl ?? null,
@@ -258,6 +265,11 @@ export const usersRepo = {
   },
 
   async update(id: string, data: UpdateUserData): Promise<User | null> {
+    const phoneNumber = normalizeOptionalText(data.phoneNumber);
+    const phoneVerifiedAt =
+      data.phoneNumber !== undefined && !phoneNumber
+        ? null
+        : data.phoneVerifiedAt ?? null;
     // Use CASE to only update fields that are explicitly provided (not undefined)
     // undefined = keep existing, null = set to null, value = set to value
     const [user] = await sql<User[]>`
@@ -265,8 +277,12 @@ export const usersRepo = {
       SET
         nickname = CASE WHEN ${data.nickname !== undefined} THEN ${data.nickname ?? null} ELSE nickname END,
         country = CASE WHEN ${data.country !== undefined} THEN ${data.country ?? null} ELSE country END,
-        phone_number = CASE WHEN ${data.phoneNumber !== undefined} THEN ${data.phoneNumber ?? null} ELSE phone_number END,
-        phone_verified_at = CASE WHEN ${data.phoneVerifiedAt !== undefined} THEN ${data.phoneVerifiedAt ?? null} ELSE phone_verified_at END,
+        phone_number = CASE WHEN ${data.phoneNumber !== undefined} THEN ${phoneNumber} ELSE phone_number END,
+        phone_verified_at = CASE
+          WHEN ${data.phoneNumber !== undefined && !phoneNumber} THEN null
+          WHEN ${data.phoneVerifiedAt !== undefined} THEN ${phoneVerifiedAt}
+          ELSE phone_verified_at
+        END,
         avatar_url = CASE WHEN ${data.avatarUrl !== undefined} THEN ${data.avatarUrl ?? null} ELSE avatar_url END,
         avatar_customization = CASE WHEN ${data.avatarCustomization !== undefined} THEN ${sql.json((data.avatarCustomization ?? null) as Json)}::jsonb ELSE avatar_customization END,
         favorite_club = CASE WHEN ${data.favoriteClub !== undefined} THEN ${data.favoriteClub ?? null} ELSE favorite_club END,

@@ -35,23 +35,29 @@ function assertUserAccountActive(user: User): void {
   }
 }
 
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
 async function buildIdentityBackfill(
   user: User,
   identity: AuthIdentity,
   detectedCountry?: string | null,
 ): Promise<UpdateUserData> {
   const backfill: UpdateUserData = {};
+  const phoneNumber = normalizeOptionalText(identity.phoneNumber);
   if (!user.country && detectedCountry) {
     backfill.country = detectedCountry;
   }
-  if (identity.phoneNumber) {
-    if (user.phone_number !== identity.phoneNumber) {
+  if (phoneNumber) {
+    if (user.phone_number !== phoneNumber) {
       // Skip the phone backfill if the number is already held by another active
       // user — writing it would violate uq_users_phone_number_active and break
       // an otherwise-valid login. Explicit linking handles conflicts separately.
-      const existing = await usersRepo.getActiveByPhoneNumber(identity.phoneNumber);
+      const existing = await usersRepo.getActiveByPhoneNumber(phoneNumber);
       if (!existing || existing.id === user.id) {
-        backfill.phoneNumber = identity.phoneNumber;
+        backfill.phoneNumber = phoneNumber;
         backfill.phoneVerifiedAt = identity.phoneVerifiedAt ?? new Date().toISOString();
       }
     } else if (!user.phone_verified_at) {
@@ -184,11 +190,12 @@ export const usersService = {
       'Creating new user for identity'
     );
 
+    const phoneNumber = normalizeOptionalText(identity.phoneNumber);
     const newUser = await usersRepo.createWithIdentity(
       {
         email: identity.email,
-        phoneNumber: identity.phoneNumber,
-        phoneVerifiedAt: identity.phoneNumber
+        phoneNumber,
+        phoneVerifiedAt: phoneNumber
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
         nickname: identity.name,

@@ -267,6 +267,11 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
+  private normalizeOptionalText(value: string | null | undefined): string | null {
+    const trimmed = value?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : null;
+  }
+
   /**
    * Handle Supabase error responses.
    */
@@ -322,7 +327,7 @@ export class SupabaseAuthClient implements AuthClient {
       user: session.user
         ? {
             email: session.user.email ?? null,
-            phone: session.user.phone ?? null,
+            phone: this.normalizeOptionalText(session.user.phone),
             phoneConfirmedAt: session.user.phone_confirmed_at ?? null,
             providerSub: session.user.id ?? '',
           }

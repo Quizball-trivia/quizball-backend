@@ -102,7 +102,7 @@ router.get(
   '/translate/status',
   authMiddleware,
   requireRole('admin'),
-  validate({ query: z.object({}).strict() }),
+  validate({ query: z.object({ cache_bust: z.coerce.number().optional() }).strict() }),
   questionsController.translateStatus
 );
 

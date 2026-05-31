@@ -541,6 +541,70 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('S15 party reload race: same-user sockets do not auto-resume party quiz disconnects', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const emit = vi.fn();
+      const replacementSocket = {
+        id: 'new-socket',
+        data: {
+          user: { id: 'u1', role: 'user' },
+          matchId: 'm1',
+          connectedAt: Date.now(),
+        },
+      };
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn((room: string) => ({
+          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [replacementSocket] : [])),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+      const oldSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
+      oldSocket.id = 'old-socket';
+      oldSocket.data.connectedAt = Date.now() - 30_000;
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 2,
+        total_questions: 10,
+        started_at: new Date().toISOString(),
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'friendly_party_quiz',
+          currentQuestion: { qIndex: 2, correctIndex: 1 },
+        },
+      });
+      listMatchPlayersMock.mockResolvedValue([
+        { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+        { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      ]);
+
+      await matchRealtimeService.handleMatchDisconnect(io, oldSocket);
+
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:resume_countdown:m1')).toBe(false);
+      expect(io.to).toHaveBeenCalledWith('user:u1');
+      expect(emit).toHaveBeenCalledWith(
+        'match:rejoin_available',
+        expect.objectContaining({
+          matchId: 'm1',
+          variant: 'friendly_party_quiz',
+          graceMs: 60000,
+        })
+      );
+      expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
+      expect(resumePartyQuizQuestionMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15a: match:leave rejects requested active matches where the socket user is not a participant', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
@@ -703,7 +767,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(fakeRedisStore.values.get('match:grace:m1')).toBeTruthy();
 
       getMatchMock.mockResolvedValue(completedMatch);
-      getMatchMock.mockResolvedValueOnce(activeMatch);
+      getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
@@ -768,7 +832,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       await matchRealtimeService.handleMatchDisconnect(io, createSocketMock('u4', 'm1'));
 
       getMatchMock.mockResolvedValue(completedMatch);
-      getMatchMock.mockResolvedValueOnce(activeMatch);
+      getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
@@ -831,6 +895,109 @@ describe('match-realtime.service high-risk integration behavior', () => {
       }),
     });
     expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+  });
+
+  it('S15a6: party dropout merges the latest dropped state under the lock', async () => {
+    const { applyPartyQuizDropouts } = await import('../../src/realtime/services/party-quiz-dropout.service.js');
+    const roomEvents: Array<{ room: string; event: string; payload: unknown }> = [];
+    const io = {
+      to: vi.fn((room: string) => ({
+        emit: (event: string, payload?: unknown) => {
+          roomEvents.push({ room, event, payload });
+        },
+      })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const staleMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: [],
+      },
+    };
+    const latestMatch = {
+      ...staleMatch,
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: ['u1'],
+      },
+    };
+    const players = [
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u4', seat: 4, total_points: 50, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ];
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(latestMatch);
+    listMatchPlayersMock.mockResolvedValue(players);
+
+    const result = await applyPartyQuizDropouts({
+      io,
+      match: staleMatch,
+      players,
+      droppedUserIds: ['u2'],
+      reason: 'disconnect_timeout',
+      resumeIfContinuing: false,
+    });
+
+    expect(result).toEqual({ completed: false, continued: true, activeCount: 2 });
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({
+        droppedUserIds: ['u1', 'u2'],
+      }),
+      2
+    );
+    expect(roomEvents).toContainEqual({
+      room: 'user:u2',
+      event: 'match:party_dropout',
+      payload: expect.objectContaining({ matchId: 'm1', reason: 'disconnect_timeout' }),
+    });
+  });
+
+  it('S15a7: already-dropped party forfeit does not cancel the active question timer', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+        droppedUserIds: ['u1'],
+      },
+    };
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(activeMatch);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u3', seat: 3, total_points: 200, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalledWith('m1', 2);
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(completeMatchMock).not.toHaveBeenCalled();
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {

@@ -48,6 +48,7 @@ import {
   sanitizePartyQuizState,
 } from '../party-quiz-state.js';
 import { getRedisClient } from '../redis.js';
+import type { MatchRejoinAvailablePayload } from '../socket.types.js';
 import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
@@ -103,18 +104,17 @@ async function incrementDisconnectCount(matchId: string, userId: string): Promis
   return nextCount;
 }
 
-async function emitRejoinAvailable(
-  socket: QuizballSocket,
+async function buildRejoinAvailablePayload(
   match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
   userId: string,
   graceMs: number,
   remainingReconnects: number
-): Promise<void> {
+): Promise<MatchRejoinAvailablePayload> {
   const opponent = await getOpponentInfo(match.id, userId);
   const players = await matchPlayersRepo.listMatchPlayers(match.id);
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
   const currentCountriesByUserId = await getCurrentCountriesForUsers(players.map((player) => player.user_id));
-  socket.emit('match:rejoin_available', {
+  return {
     matchId: match.id,
     mode: match.mode,
     variant: resolveMatchVariant(match.state_payload, match.mode),
@@ -132,7 +132,33 @@ async function emitRejoinAvailable(
     }),
     graceMs,
     remainingReconnects,
-  });
+  };
+}
+
+async function emitRejoinAvailable(
+  socket: QuizballSocket,
+  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
+  userId: string,
+  graceMs: number,
+  remainingReconnects: number
+): Promise<void> {
+  socket.emit(
+    'match:rejoin_available',
+    await buildRejoinAvailablePayload(match, userId, graceMs, remainingReconnects)
+  );
+}
+
+async function emitRejoinAvailableToUser(
+  io: QuizballServer,
+  match: { id: string; mode: 'friendly' | 'ranked'; state_payload: unknown },
+  userId: string,
+  graceMs: number,
+  remainingReconnects: number
+): Promise<void> {
+  io.to(`user:${userId}`).emit(
+    'match:rejoin_available',
+    await buildRejoinAvailablePayload(match, userId, graceMs, remainingReconnects)
+  );
 }
 
 export async function handleMatchLeave(
@@ -537,7 +563,7 @@ export async function pauseMatchForDisconnectedPlayer(
 
   const pauseRecipients = partyState
     ? getActivePartyPlayers(players, partyState.droppedUserIds)
-        .filter((player) => player.user_id !== userId || sameUserSockets.length > 0)
+        .filter((player) => player.user_id !== userId)
     : players.filter((player) => player.user_id !== userId);
   pauseRecipients.forEach((player) => {
     io.to(`user:${player.user_id}`).emit('match:opponent_disconnected', {
@@ -547,6 +573,9 @@ export async function pauseMatchForDisconnectedPlayer(
       remainingReconnects,
     });
   });
+  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
+    await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
+  }
 
   if (disconnectCount > MAX_MATCH_DISCONNECTS) {
     logger.warn(
@@ -622,7 +651,7 @@ export async function pauseMatchForDisconnectedPlayer(
 
   const graceKey = matchGraceKey(matchId);
   const acquired = await redis.set(graceKey, String(Date.now()), { NX: true, EX: GRACE_TTL_SEC });
-  if (options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
+  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
     logger.info(
       { matchId, userId, socketCount: sameUserSockets.length },
       'Auto-resuming match after fast socket replacement'

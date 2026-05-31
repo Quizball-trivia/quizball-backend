@@ -202,9 +202,9 @@ export async function applyPartyQuizDropouts(params: {
   resumeIfContinuing: boolean;
   pauseStartedAtMs?: number | null;
 }): Promise<{ completed: boolean; continued: boolean; activeCount: number }> {
-  const { io, match, players, droppedUserIds, reason } = params;
+  const { io, match, players: initialPlayers, droppedUserIds, reason } = params;
   if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
-    return { completed: false, continued: false, activeCount: players.length };
+    return { completed: false, continued: false, activeCount: initialPlayers.length };
   }
 
   // Serialize the read-modify-write of droppedUserIds + the completion/resume
@@ -214,28 +214,57 @@ export async function applyPartyQuizDropouts(params: {
   const lockKey = `lock:match:${match.id}:party-dropout`;
   const lock = await acquireLock(lockKey, 15_000);
   if (!lock.acquired || !lock.token) {
-    return { completed: false, continued: false, activeCount: players.length };
+    return { completed: false, continued: false, activeCount: initialPlayers.length };
   }
 
   try {
-    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    const lockedMatch = await matchesRepo.getMatch(match.id);
+    if (!lockedMatch || lockedMatch.status !== 'active') {
+      return { completed: false, continued: false, activeCount: 0 };
+    }
+    if (resolveMatchVariant(lockedMatch.state_payload, lockedMatch.mode) !== 'friendly_party_quiz') {
+      return { completed: false, continued: false, activeCount: initialPlayers.length };
+    }
+
+    const players = await matchPlayersRepo.listMatchPlayers(lockedMatch.id);
+    const playerIds = new Set(players.map((player) => player.user_id));
+    const requestedDroppedUserIds = [...new Set(droppedUserIds)].filter((userId) => playerIds.has(userId));
+    const state = sanitizePartyQuizState(lockedMatch.state_payload, lockedMatch.total_questions);
+    const alreadyDroppedUserIds = new Set(state.droppedUserIds);
+    const newlyDroppedUserIds = requestedDroppedUserIds.filter((userId) => !alreadyDroppedUserIds.has(userId));
     const nextDroppedUserIds = [
       ...new Set([
         ...state.droppedUserIds,
-        ...droppedUserIds.filter((userId) => players.some((player) => player.user_id === userId)),
+        ...requestedDroppedUserIds,
       ]),
     ];
+    const redis = getRedisClient();
+    if (newlyDroppedUserIds.length === 0) {
+      if (redis && requestedDroppedUserIds.length > 0) {
+        await redis.del([
+          ...requestedDroppedUserIds.flatMap((userId) => [
+            matchDisconnectKey(lockedMatch.id, userId),
+            matchPresenceKey(lockedMatch.id, userId),
+          ]),
+        ]);
+      }
+      return {
+        completed: false,
+        continued: false,
+        activeCount: getActivePartyPlayers(players, nextDroppedUserIds).length,
+      };
+    }
+
     state.droppedUserIds = nextDroppedUserIds;
     state.answeredUserIds = state.answeredUserIds.filter((userId) => !nextDroppedUserIds.includes(userId));
     bumpStateVersion(state);
 
     const activePlayers = getActivePartyPlayers(players, nextDroppedUserIds);
-    await matchesRepo.setMatchStatePayload(match.id, state, match.current_q_index);
+    await matchesRepo.setMatchStatePayload(lockedMatch.id, state, lockedMatch.current_q_index);
 
-    const redis = getRedisClient();
-    const payload = buildPartyDropoutPayload(match.id, reason);
+    const payload = buildPartyDropoutPayload(lockedMatch.id, reason);
     await Promise.all(
-      droppedUserIds.map(async (userId) => {
+      newlyDroppedUserIds.map(async (userId) => {
         await setPartyDropoutPendingForUser(userId, payload);
         io.to(`user:${userId}`).emit('match:party_dropout', payload);
       })
@@ -243,13 +272,13 @@ export async function applyPartyQuizDropouts(params: {
 
     if (activePlayers.length <= 1) {
       if (activePlayers.length === 1) {
-        emitPartyOpponentForfeitPending(io, match.id, activePlayers, reason);
+        emitPartyOpponentForfeitPending(io, lockedMatch.id, activePlayers, reason);
       }
       const standingsWinnerId = buildStandings(players)[0]?.userId ?? null;
       await completePartyQuizDropoutMatch({
         io,
         match: {
-          ...match,
+          ...lockedMatch,
           state_payload: state as unknown as Record<string, unknown>,
         },
         players,
@@ -261,38 +290,42 @@ export async function applyPartyQuizDropouts(params: {
 
     if (redis) {
       await redis.del([
-        ...droppedUserIds.flatMap((userId) => [
-          matchDisconnectKey(match.id, userId),
-          matchPresenceKey(match.id, userId),
+        ...requestedDroppedUserIds.flatMap((userId) => [
+          matchDisconnectKey(lockedMatch.id, userId),
+          matchPresenceKey(lockedMatch.id, userId),
         ]),
       ]);
     }
 
-    await emitPartyQuizState(io, match.id);
+    await emitPartyQuizState(io, lockedMatch.id);
 
     if (params.resumeIfContinuing && redis) {
       const disconnectedExists = await Promise.all(
-        activePlayers.map((player) => redis.exists(matchDisconnectKey(match.id, player.user_id)))
+        activePlayers.map((player) => redis.exists(matchDisconnectKey(lockedMatch.id, player.user_id)))
       );
       const stillWaitingForActivePlayer = disconnectedExists.some((exists) => exists === 1);
       if (!stillWaitingForActivePlayer) {
-        await redis.del([matchPauseKey(match.id), matchGraceKey(match.id), matchResumeCountdownKey(match.id)]);
-        io.to(`match:${match.id}`).emit('match:resume', {
-          matchId: match.id,
-          nextQIndex: match.current_q_index,
+        await redis.del([
+          matchPauseKey(lockedMatch.id),
+          matchGraceKey(lockedMatch.id),
+          matchResumeCountdownKey(lockedMatch.id),
+        ]);
+        io.to(`match:${lockedMatch.id}`).emit('match:resume', {
+          matchId: lockedMatch.id,
+          nextQIndex: lockedMatch.current_q_index,
         });
         if (state.currentQuestion) {
           await resumePartyQuizQuestion(
             io,
-            match.id,
+            lockedMatch.id,
             state.currentQuestion.qIndex,
             params.pauseStartedAtMs ?? Date.now()
           );
-        } else if (match.current_q_index >= match.total_questions) {
+        } else if (lockedMatch.current_q_index >= lockedMatch.total_questions) {
           await completePartyQuizDropoutMatch({
             io,
             match: {
-              ...match,
+              ...lockedMatch,
               state_payload: state as unknown as Record<string, unknown>,
             },
             players,
@@ -301,7 +334,7 @@ export async function applyPartyQuizDropouts(params: {
           });
           return { completed: true, continued: false, activeCount: activePlayers.length };
         } else {
-          await sendPartyQuizQuestion(io, match.id, match.current_q_index);
+          await sendPartyQuizQuestion(io, lockedMatch.id, lockedMatch.current_q_index);
         }
       }
     }

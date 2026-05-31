@@ -288,8 +288,8 @@ export async function handleMatchForfeit(
         return;
       }
 
-      cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
       if (variant !== 'friendly_party_quiz') {
+        cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
         cancelPossessionHalftimeTimer(activeMatch.id);
       }
       if (variant === 'friendly_party_quiz') {

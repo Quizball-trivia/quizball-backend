@@ -22,6 +22,7 @@ import {
   emitPendingForfeitIfAny,
   handleMatchForfeit,
 } from './match-forfeit.service.js';
+import { emitPendingPartyDropoutIfAny } from './party-quiz-dropout.service.js';
 import {
   handleAnswer,
   handleCluesAnswer,
@@ -52,6 +53,7 @@ export const matchRealtimeService = {
   handleMatchRejoin,
   emitLastMatchResultIfAny,
   emitPendingForfeitIfAny,
+  emitPendingPartyDropoutIfAny,
   handlePlayAgain,
   handleFinalResultsAck,
   resumePausedMatch,

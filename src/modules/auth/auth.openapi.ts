@@ -267,7 +267,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       'Called by Supabase Auth Send SMS hook. Sends only Georgian phone OTP messages through SMSOffice. ' +
       'Authenticated by the shared hook secret in the Authorization Bearer header.',
     tags: ['Auth'],
-    security: [{ bearerAuth: [] }],
+    security: [{ smsHookSecret: [] }],
     body: z.object({
       user: z.object({
         phone: z.string().nullable().optional(),
@@ -291,6 +291,10 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       'Receives SMSOffice delivery status updates. Responds with plain text OK. ' +
       'Authenticated by the shared callback secret in the `secret` query parameter.',
     tags: ['Auth'],
+    // The `secret` credential is documented via the smsCallbackSecret security
+    // scheme (apiKey in the `secret` query param), so it is intentionally omitted
+    // from these documented params to avoid declaring the same credential twice.
+    // Runtime validation still covers `secret` via smsOfficeCallbackQuerySchema.
     security: [{ smsCallbackSecret: [] }],
     query: z.object({
       reference: z.string().min(1).max(20),
@@ -299,7 +303,6 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       destination: z.string().min(9).max(32),
       timestamp: z.string().optional(),
       operator: z.string().optional(),
-      secret: z.string().optional(),
     }),
     responses: {
       200: {
@@ -319,7 +322,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       'Polls SMSOffice message status by destination and reference. Intended for manual/internal verification. ' +
       'Authenticated by the shared hook secret in the Authorization Bearer header.',
     tags: ['Auth'],
-    security: [{ bearerAuth: [] }],
+    security: [{ smsHookSecret: [] }],
     query: z.object({
       destination: z.string().min(9).max(32),
       reference: z.string().min(1).max(20),

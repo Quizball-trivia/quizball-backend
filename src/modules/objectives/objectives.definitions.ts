@@ -68,7 +68,7 @@ export const OBJECTIVE_DEFINITIONS = [
   {
     id: 'weekly_win_10_competitive',
     periodType: 'weekly',
-    title: { en: 'Win 10 Competitive Matches', ka: 'მოიგე 10 კონკურენტული მატჩი' },
+    title: { en: 'Win 10 Competitive Matches', ka: 'მოიგე 10 რეიტინგული მატჩი' },
     description: { en: 'Win 10 ranked matches this week.', ka: 'მოიგე 10 რეიტინგული მატჩი ამ კვირას.' },
     icon: 'Crown',
     target: 10,

@@ -374,6 +374,7 @@ export interface PartyQuizStatePayload {
     correctIndex?: number;
   } | null;
   answeredUserIds: string[];
+  droppedUserIds: string[];
   winnerDecisionMethod: MatchWinnerDecisionMethod | null;
   stateVersionCounter: number;
 }
@@ -442,6 +443,7 @@ export function createInitialPartyQuizState(
     totalQuestions,
     currentQuestion: null,
     answeredUserIds: [],
+    droppedUserIds: [],
     winnerDecisionMethod: null,
     stateVersionCounter: 0,
   };

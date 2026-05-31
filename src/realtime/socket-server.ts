@@ -160,6 +160,7 @@ async function runPostConnectHydration(
           stateSnapshot: snapshot,
         });
         await matchRealtimeService.emitPendingForfeitIfAny(socket);
+        await matchRealtimeService.emitPendingPartyDropoutIfAny(socket);
       } catch (error) {
         logger.warn({ error, userId }, 'Failed to emit blocked state on connect');
       }
@@ -212,6 +213,7 @@ async function runPostConnectHydration(
   if (!socket.data.matchId) {
     try {
       await matchRealtimeService.emitPendingForfeitIfAny(socket);
+      await matchRealtimeService.emitPendingPartyDropoutIfAny(socket);
       await matchRealtimeService.emitLastMatchResultIfAny(io, socket);
     } catch (error) {
       logger.warn({ error, userId }, 'Failed to emit last match results on connect');

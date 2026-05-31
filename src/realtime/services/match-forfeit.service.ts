@@ -30,6 +30,7 @@ import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
+import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 const FORFEIT_PENDING_TTL_SEC = 60;
@@ -290,6 +291,24 @@ export async function handleMatchForfeit(
       cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
       if (variant !== 'friendly_party_quiz') {
         cancelPossessionHalftimeTimer(activeMatch.id);
+      }
+      if (variant === 'friendly_party_quiz') {
+        const redis = getRedisClient();
+        const pauseStartedRaw = redis ? await redis.get(matchPauseKey(activeMatch.id)) : null;
+        const pauseStartedAtMs = Number(pauseStartedRaw);
+        const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+        await applyPartyQuizDropouts({
+          io,
+          match: activeMatch,
+          players,
+          droppedUserIds: [userId],
+          reason: 'self_forfeit',
+          resumeIfContinuing: true,
+          pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : Date.now(),
+        });
+        socket.leave(`match:${activeMatch.id}`);
+        socket.data.matchId = undefined;
+        return;
       }
       const cleanupKeys = [
         matchPauseKey(activeMatch.id),

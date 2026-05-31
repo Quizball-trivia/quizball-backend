@@ -10,7 +10,6 @@ import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { objectivesService } from '../modules/objectives/index.js';
 import {
-  createInitialPartyQuizState,
   matchesService,
   resolveMatchVariant,
   type PartyQuizStatePayload,
@@ -32,6 +31,12 @@ import {
 } from './match-keys.js';
 import { buildStandings, bumpStateVersion } from './match-utils.js';
 import { deleteMatchCache } from './match-cache.js';
+import {
+  getActivePartyPlayers,
+  getDroppedUserIds,
+  isPartyQuizDropped,
+  sanitizePartyQuizState,
+} from './party-quiz-state.js';
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import type { MatchAnswerPayload } from './schemas/match.schemas.js';
 import type {
@@ -50,43 +55,14 @@ const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
 
-function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
-  const fallback = createInitialPartyQuizState(totalQuestions);
-  if (!raw || typeof raw !== 'object') {
-    return fallback;
-  }
-
-  const candidate = raw as Partial<PartyQuizStatePayload>;
-  return {
-    version: 1,
-    variant: 'friendly_party_quiz',
-    totalQuestions,
-    currentQuestion:
-      candidate.currentQuestion && typeof candidate.currentQuestion.qIndex === 'number'
-        ? {
-          qIndex: Math.max(0, candidate.currentQuestion.qIndex),
-          ...(typeof candidate.currentQuestion.correctIndex === 'number'
-            ? { correctIndex: candidate.currentQuestion.correctIndex }
-            : {}),
-        }
-        : null,
-    answeredUserIds: Array.isArray(candidate.answeredUserIds)
-      ? candidate.answeredUserIds.filter((userId): userId is string => typeof userId === 'string')
-      : [],
-    winnerDecisionMethod:
-      candidate.winnerDecisionMethod === 'total_points' || candidate.winnerDecisionMethod === 'forfeit'
-        ? candidate.winnerDecisionMethod
-        : null,
-    stateVersionCounter: Math.max(0, Number(candidate.stateVersionCounter ?? 0)),
-  };
-}
-
 function buildPartyStatePayloadFromRows(
   match: MatchRow,
   state: PartyQuizStatePayload,
   players: MatchPlayerRow[],
   answers: MatchAnswerRow[]
 ): MatchPartyStatePayload {
+  const droppedUserIds = getDroppedUserIds(state);
+  const droppedSet = new Set(droppedUserIds);
   const standings = buildStandings(players);
   const rankByUserId = new Map(standings.map((standing) => [standing.userId, standing.rank]));
   const answeredSet = new Set(answers.map((answer) => answer.user_id));
@@ -105,6 +81,7 @@ function buildPartyStatePayloadFromRows(
       answered: answeredSet.has(player.user_id),
       rank: rankByUserId.get(player.user_id) ?? standings.length,
       avgTimeMs: player.avg_time_ms,
+      status: droppedSet.has(player.user_id) ? 'dropped' : 'active',
     })),
     stateVersion,
   };
@@ -698,8 +675,10 @@ export async function resolvePartyQuizRound(
       }
 
       const players = await matchPlayersRepo.listMatchPlayers(matchId);
+      const activePlayers = getActivePartyPlayers(players, state.droppedUserIds);
       const answers = await matchAnswersRepo.listAnswersForQuestion(matchId, qIndex);
       span.setAttribute('quizball.player_count', players.length);
+      span.setAttribute('quizball.active_player_count', activePlayers.length);
       span.setAttribute('quizball.answer_count', answers.length);
       const answerByUserId = new Map(answers.map((answer) => [answer.user_id, answer]));
       const roundPlayers: MatchRoundResultPayload['players'] = {};
@@ -750,7 +729,7 @@ export async function resolvePartyQuizRound(
         variant: 'friendly_party_quiz',
       });
 
-      const participantUserIds = players.map((player) => player.user_id);
+      const participantUserIds = activePlayers.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
         schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
           void completePartyQuizMatch(io, matchId).catch((error) => {
@@ -801,6 +780,14 @@ export async function handlePartyQuizAnswer(
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    const redis = getRedisClient();
+    if (redis && await redis.exists(matchPauseKey(payload.matchId))) {
+      socket.emit('error', {
+        code: 'MATCH_PAUSED',
+        message: 'Match is paused while a player reconnects',
+      });
+      return;
+    }
     if (!state.currentQuestion || state.currentQuestion.qIndex !== payload.qIndex) {
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
@@ -816,6 +803,13 @@ export async function handlePartyQuizAnswer(
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'You are not a participant in this match',
+      });
+      return;
+    }
+    if (isPartyQuizDropped(state, userId)) {
+      socket.emit('error', {
+        code: 'MATCH_NOT_ALLOWED',
+        message: 'You are no longer active in this party quiz',
       });
       return;
     }
@@ -892,6 +886,10 @@ export async function handlePartyQuizAnswer(
       matchPlayersRepo.listMatchPlayers(payload.matchId),
       matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
     ]);
+    const activePlayers = getActivePartyPlayers(livePlayers, state.droppedUserIds);
+    const activeAnswerCount = answers.filter((answer) =>
+      activePlayers.some((player) => player.user_id === answer.user_id)
+    ).length;
     io.to(`match:${payload.matchId}`).emit(
       'match:party_state',
       buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
@@ -902,10 +900,11 @@ export async function handlePartyQuizAnswer(
       userId,
       answerCount: answers.length,
       participantCount: livePlayers.length,
+      activeParticipantCount: activePlayers.length,
       inserted: recorded.inserted,
     }, 'Party answer live state emitted');
 
-    if (livePlayers.length > 0 && answers.length >= livePlayers.length) {
+    if (activePlayers.length > 0 && activeAnswerCount >= activePlayers.length) {
       await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
     }
   });

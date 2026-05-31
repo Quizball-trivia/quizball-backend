@@ -23,6 +23,10 @@ import {
   matchPresenceKey,
 } from '../match-keys.js';
 import {
+  isPartyQuizDropped,
+  sanitizePartyQuizState,
+} from '../party-quiz-state.js';
+import {
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
   emitMatchState,
@@ -37,6 +41,10 @@ import {
   getDisconnectCount,
   toRemainingReconnects,
 } from './match-disconnect.service.js';
+import {
+  buildPartyDropoutPayload,
+  setPartyDropoutPendingForUser,
+} from './party-quiz-dropout.service.js';
 import {
   buildParticipantPayloads,
   getOpponentInfo,
@@ -360,6 +368,15 @@ export async function rejoinActiveMatchOnConnect(
   const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
   const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
   const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (variant === 'friendly_party_quiz') {
+    const partyState = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    if (isPartyQuizDropped(partyState, userId)) {
+      const payload = buildPartyDropoutPayload(match.id, 'disconnect_timeout');
+      await setPartyDropoutPendingForUser(userId, payload);
+      socket.emit('match:party_dropout', payload);
+      return;
+    }
+  }
 
   if (redis && isPaused && wasDisconnected) {
     const graceTtlSec = await redis.ttl(matchGraceKey(match.id));

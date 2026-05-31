@@ -129,6 +129,7 @@ describe('matches.service friendly-party-quiz variants', () => {
       totalQuestions: PARTY_QUIZ_TOTAL_QUESTIONS,
       currentQuestion: null,
       answeredUserIds: [],
+      droppedUserIds: [],
       winnerDecisionMethod: null,
       stateVersionCounter: 0,
     });

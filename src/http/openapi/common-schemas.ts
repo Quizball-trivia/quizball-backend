@@ -35,4 +35,11 @@ export function registerCommonSchemas(registry: OpenAPIRegistry): void {
     in: 'query',
     name: 'secret',
   });
+
+  // Shared SMS hook secret sent as `Authorization: Bearer <secret>`. Distinct
+  // from bearerAuth (a user JWT) — this is a static shared secret, not a JWT.
+  registry.registerComponent('securitySchemes', 'smsHookSecret', {
+    type: 'http',
+    scheme: 'bearer',
+  });
 }

@@ -15,6 +15,7 @@ import { withSpan } from '../../core/tracing.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import { matchDisconnectKey, matchPresenceKey } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -78,11 +79,14 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
       ? redis.hGet(RANKED_USER_MAP_KEY, userId)
       : Promise.resolve<string | null>(null);
 
-    const [activeMatch, openLobbies, queueSearchId] = await Promise.all([
+    const [rawActiveMatch, openLobbies, queueSearchId] = await Promise.all([
       matchesRepo.getActiveMatchForUser(userId),
       lobbiesRepo.listOpenLobbiesForUser(userId),
       queueSearchIdPromise,
     ]);
+    const activeMatch = rawActiveMatch && isUserDroppedFromPartyMatch(rawActiveMatch, userId)
+      ? null
+      : rawActiveMatch;
 
     span.setAttribute('quizball.has_active_match', Boolean(activeMatch?.id));
     span.setAttribute('quizball.open_lobby_count', openLobbies.length);

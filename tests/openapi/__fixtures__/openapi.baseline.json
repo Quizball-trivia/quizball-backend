@@ -22,6 +22,10 @@
         "type": "apiKey",
         "in": "query",
         "name": "secret"
+      },
+      "smsHookSecret": {
+        "type": "http",
+        "scheme": "bearer"
       }
     },
     "schemas": {
@@ -6211,7 +6215,7 @@
         ],
         "security": [
           {
-            "bearerAuth": []
+            "smsHookSecret": []
           }
         ],
         "requestBody": {
@@ -6352,14 +6356,6 @@
             "required": false,
             "name": "operator",
             "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "secret",
-            "in": "query"
           }
         ],
         "responses": {
@@ -6396,7 +6392,7 @@
         ],
         "security": [
           {
-            "bearerAuth": []
+            "smsHookSecret": []
           }
         ],
         "parameters": [

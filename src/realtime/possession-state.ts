@@ -19,6 +19,7 @@ export const CLUES_MAX_CLUES = 5;
 export const CLUES_QUESTION_TIME_MS = CLUES_PER_CLUE_MS * CLUES_MAX_CLUES;
 export const FRONTEND_REVEAL_MS = 3000; // Frontend shows question text before unlocking options
 export const FRONTEND_TRANSITION_DELAY_MS = 1000; // Synced with frontend TRANSITION_DELAY_MS
+export const FRONTEND_FIELD_RESULT_COMPARE_MS = 1500; // Synced with frontend FIELD_RESULT_COMPARE_MS
 export const FRONTEND_RESULT_HOLD_MS = 2000; // Synced with frontend ROUND_RESULT_HOLD_MS
 export const FRONTEND_GOAL_CELEBRATION_MS = 4000; // Synced with frontend GOAL_CELEBRATION_MS
 export const FRONTEND_SPECIAL_RESULT_EXTRA_MS = 3000; // Extra hold for special question reveals (countdown, put-in-order, clues)
@@ -108,9 +109,9 @@ export function getQuestionPreAnswerDelayMs(params: {
     return FRONTEND_REVEAL_MS;
   }
   // First question after halftime has no round result to promote from, but the
-  // client still shows a second-half transition before the normal reveal.
+  // client still resets the field, shows the second-half transition, then reveals.
   if (state.half === 2 && state.normalQuestionsAnsweredInHalf === 0) {
-    return FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
+    return FRONTEND_FIELD_RESULT_COMPARE_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS;
   }
   // Special question reveals (countdown, put-in-order, clues) need extra hold time
   // so players can read the correct answers before transitioning to the next round.

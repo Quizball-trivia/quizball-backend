@@ -462,6 +462,7 @@ export interface MatchPartyPlayerState {
   answered: boolean;
   rank: number;
   avgTimeMs: number | null;
+  status: 'active' | 'dropped';
 }
 
 export interface MatchPartyStatePayload {
@@ -494,6 +495,12 @@ export interface MatchRejoinAvailablePayload {
   participants: MatchParticipant[];
   graceMs: number;
   remainingReconnects: number;
+}
+
+export interface MatchPartyDropoutPayload {
+  matchId: string;
+  reason: 'disconnect_timeout' | 'self_forfeit';
+  message: string;
 }
 
 export interface RankedSearchStartedPayload {
@@ -739,6 +746,7 @@ export interface ServerToClientEvents {
   'match:final_results': (data: MatchFinalResultsPayload) => void;
   'match:forfeit_pending': (data: MatchForfeitPendingPayload) => void;
   'match:opponent_disconnected': (data: MatchOpponentDisconnectedPayload) => void;
+  'match:party_dropout': (data: MatchPartyDropoutPayload) => void;
   'match:resume': (data: MatchResumePayload) => void;
   'match:rejoin_available': (data: MatchRejoinAvailablePayload) => void;
   'ranked:search_started': (data: RankedSearchStartedPayload) => void;

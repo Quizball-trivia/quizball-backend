@@ -509,10 +509,61 @@ describe('usersService account deletion', () => {
     })).rejects.toMatchObject({
       statusCode: 401,
       message: 'Account is scheduled for deletion',
+      details: { reason: 'pending_deletion' },
     });
 
     expect(setCachedUserMock).not.toHaveBeenCalled();
     expect(updateCachedUserMock).not.toHaveBeenCalled();
+  });
+
+  it('self-restores a pending deletion account from a verified identity', async () => {
+    getByProviderSubjectMock.mockResolvedValue({
+      id: 'identity-id',
+      provider: 'supabase',
+      subject: 'provider-sub',
+      user_id: 'user-target-id',
+      email: 'target@example.com',
+      created_at: '2026-05-07T12:00:00.000Z',
+      user: {
+        ...MOCK_USER,
+        deletion_requested_at: '2026-05-07T12:00:00.000Z',
+        pending_deletion_at: '2026-06-06T12:00:00.000Z',
+      },
+    });
+    cancelPendingDeletionMock.mockResolvedValue(MOCK_USER);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletionFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    })).resolves.toEqual(MOCK_USER);
+
+    expect(cancelPendingDeletionMock).toHaveBeenCalledWith('user-target-id');
+    expect(invalidateByUserIdMock).toHaveBeenCalledWith('user-target-id');
+  });
+
+  it('treats self-restore as success when the matching account is already active', async () => {
+    getByProviderSubjectMock.mockResolvedValue({
+      id: 'identity-id',
+      provider: 'supabase',
+      subject: 'provider-sub',
+      user_id: 'user-target-id',
+      email: 'target@example.com',
+      created_at: '2026-05-07T12:00:00.000Z',
+      user: MOCK_USER,
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletionFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      claims: {},
+    })).resolves.toEqual(MOCK_USER);
+
+    expect(cancelPendingDeletionMock).not.toHaveBeenCalled();
+    expect(invalidateByUserIdMock).not.toHaveBeenCalled();
   });
 });
 

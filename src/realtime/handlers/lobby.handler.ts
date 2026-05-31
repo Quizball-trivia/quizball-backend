@@ -1,9 +1,11 @@
+import crypto from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   lobbyCreateSchema,
   lobbyChallengeDecisionSchema,
   lobbyChallengeSchema,
   lobbyJoinByCodeSchema,
+  lobbyLeaveSchema,
   lobbyReadySchema,
   lobbyStartSchema,
   lobbyUpdateSettingsSchema,
@@ -12,22 +14,51 @@ import { logger } from '../../core/logger.js';
 import { trackLobbyCreated, trackLobbyJoined } from '../../core/analytics/game-events.js';
 import { lobbyRealtimeService } from '../services/lobby-realtime.service.js';
 
+function readCorrelationId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const value = (payload as { correlationId?: unknown }).correlationId;
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 ? value : undefined;
+}
+
+function normalizeCorrelationId(payload: unknown): string {
+  return readCorrelationId(payload) ?? `srv_${crypto.randomUUID()}`;
+}
+
 export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket): void {
-  socket.on('lobby:create', async (payload) => {
+  socket.on('lobby:create', async (payload, ack) => {
+    const correlationId = normalizeCorrelationId(payload);
     const parsed = lobbyCreateSchema.safeParse(payload);
     if (!parsed.success) {
-      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:create payload');
+      logger.warn({ correlationId, errors: parsed.error.flatten() }, 'Invalid lobby:create payload');
+      ack?.({
+        ok: false,
+        code: 'INVALID_LOBBY_CREATE',
+        message: 'Invalid lobby create payload',
+        retryable: false,
+        correlationId,
+      });
       return;
     }
 
     try {
-      await lobbyRealtimeService.createLobby(io, socket, parsed.data);
-      if (socket.data.lobbyId) {
-        trackLobbyCreated(socket.data.user.id, socket.data.lobbyId, 'friendly');
+      const result = await lobbyRealtimeService.createLobby(io, socket, {
+        ...parsed.data,
+        correlationId,
+      });
+      ack?.(result);
+      if (result.ok && result.lobbyId) {
+        trackLobbyCreated(socket.data.user.id, result.lobbyId, 'friendly');
       }
     } catch (error) {
-      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:create');
+      logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:create');
       socket.emit('error', { code: 'LOBBY_CREATE_ERROR', message: 'Failed to create lobby' });
+      ack?.({
+        ok: false,
+        code: 'LOBBY_CREATE_ERROR',
+        message: 'Failed to create lobby',
+        retryable: true,
+        correlationId,
+      });
     }
   });
 
@@ -77,32 +108,40 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
   });
 
   socket.on('lobby:join_by_code', async (payload, ack) => {
+    const correlationId = normalizeCorrelationId(payload);
     const parsed = lobbyJoinByCodeSchema.safeParse(payload);
     if (!parsed.success) {
-      logger.warn({ errors: parsed.error.flatten() }, 'Invalid lobby:join_by_code payload');
+      logger.warn({ correlationId, errors: parsed.error.flatten() }, 'Invalid lobby:join_by_code payload');
       ack?.({
         ok: false,
         code: 'INVALID_INVITE',
         message: 'Invalid invite code',
         retryable: false,
+        correlationId,
       });
       return;
     }
 
     try {
-      const result = await lobbyRealtimeService.joinByCode(io, socket, parsed.data.inviteCode);
+      const result = await lobbyRealtimeService.joinByCode(
+        io,
+        socket,
+        parsed.data.inviteCode,
+        correlationId
+      );
       ack?.(result);
       if (result.ok) {
         trackLobbyJoined(socket.data.user.id, result.lobbyId, result.inviteCode);
       }
     } catch (error) {
-      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:join_by_code');
+      logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:join_by_code');
       socket.emit('error', { code: 'LOBBY_JOIN_ERROR', message: 'Failed to join lobby' });
       ack?.({
         ok: false,
         code: 'LOBBY_JOIN_ERROR',
         message: 'Failed to join lobby',
         retryable: true,
+        correlationId,
       });
     }
   });
@@ -152,12 +191,34 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
   });
 
-  socket.on('lobby:leave', async () => {
+  socket.on('lobby:leave', async (payload, ack) => {
+    const correlationId = normalizeCorrelationId(payload);
+    const parsed = lobbyLeaveSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      logger.warn({ correlationId, errors: parsed.error.flatten() }, 'Invalid lobby:leave payload');
+      ack?.({
+        ok: false,
+        code: 'LOBBY_LEAVE_ERROR',
+        message: 'Invalid lobby leave payload',
+        retryable: false,
+        correlationId,
+      });
+      return;
+    }
+
     try {
-      await lobbyRealtimeService.leaveLobby(io, socket);
+      const result = await lobbyRealtimeService.leaveLobby(io, socket, correlationId);
+      ack?.(result);
     } catch (error) {
-      logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:leave');
+      logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:leave');
       socket.emit('error', { code: 'LOBBY_LEAVE_ERROR', message: 'Failed to leave lobby' });
+      ack?.({
+        ok: false,
+        code: 'LOBBY_LEAVE_ERROR',
+        message: 'Failed to leave lobby',
+        retryable: true,
+        correlationId,
+      });
     }
   });
 }

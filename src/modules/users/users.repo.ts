@@ -175,6 +175,33 @@ export const usersRepo = {
     return user ?? null;
   },
 
+  async getActiveOrPendingByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const [user] = await sql<User[]>`
+      SELECT * FROM users
+      WHERE phone_number = ${phoneNumber}
+        AND is_ai = false
+        AND is_deleted = false
+        AND deleted_at IS NULL
+      ORDER BY pending_deletion_at NULLS FIRST, updated_at DESC
+      LIMIT 1
+    `;
+    return user ?? null;
+  },
+
+  async getPendingDeletionByEmail(email: string): Promise<User | null> {
+    const [user] = await sql<User[]>`
+      SELECT * FROM users
+      WHERE lower(email) = lower(${email})
+        AND is_ai = false
+        AND is_deleted = false
+        AND deleted_at IS NULL
+        AND pending_deletion_at IS NOT NULL
+      ORDER BY pending_deletion_at DESC
+      LIMIT 1
+    `;
+    return user ?? null;
+  },
+
   /**
    * Batch fetch users by IDs.
    * More efficient than calling getById in a loop (avoids N+1 queries).

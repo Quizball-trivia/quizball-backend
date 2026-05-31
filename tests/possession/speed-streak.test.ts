@@ -97,13 +97,27 @@ describe('resolveSpeedStreak', () => {
     expect(r.nextCandidateCount).toBe(0);
   });
 
-  it('clears on a tie (both correct, equal time) — strictly faster required', () => {
+  it('clears on an exact tie when both players are correct', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
       seat1: ans(true, 3000),
       seat2: ans(true, 3000),
+      goalScoredBySeat: null,
+    });
+    expect(r.nextHolderSeat).toBeNull();
+    expect(r.nextCandidateSeat).toBeNull();
+    expect(r.nextCandidateCount).toBe(0);
+  });
+
+  it('clears on a near-tie inside the speed-streak tolerance', () => {
+    const r = resolveSpeedStreak({
+      previousHolderSeat: 1,
+      previousCandidateSeat: 1,
+      previousCandidateCount: 2,
+      seat1: ans(true, 3000),
+      seat2: ans(true, 3120),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull();

@@ -5,12 +5,15 @@ import { Webhook } from 'standardwebhooks';
 import '../setup.js';
 import { config } from '../../src/core/config.js';
 import { authController } from '../../src/modules/auth/auth.controller.js';
-import { authService, normalizeGeorgianPhone } from '../../src/modules/auth/auth.service.js';
+import { PendingDeletionSessionError, authService, normalizeGeorgianPhone } from '../../src/modules/auth/auth.service.js';
+import { AuthenticationError } from '../../src/core/errors.js';
 
 const getOrCreateFromIdentityMock = vi.fn();
 const assertPhoneCanBeLinkedMock = vi.fn();
 const getVerifiedByPhoneNumberMock = vi.fn();
+const getRestorableVerifiedByPhoneNumberMock = vi.fn();
 const setVerifiedPhoneNumberMock = vi.fn();
+const restorePendingDeletionFromIdentityMock = vi.fn();
 const smsDeliveryUpsertMock = vi.fn();
 const sendPhoneOtpMock = vi.fn();
 const verifyPhoneOtpMock = vi.fn();
@@ -22,7 +25,9 @@ vi.mock('../../src/modules/users/index.js', () => ({
     getOrCreateFromIdentity: (...args: unknown[]) => getOrCreateFromIdentityMock(...args),
     assertPhoneCanBeLinked: (...args: unknown[]) => assertPhoneCanBeLinkedMock(...args),
     getVerifiedByPhoneNumber: (...args: unknown[]) => getVerifiedByPhoneNumberMock(...args),
+    getRestorableVerifiedByPhoneNumber: (...args: unknown[]) => getRestorableVerifiedByPhoneNumberMock(...args),
     setVerifiedPhoneNumber: (...args: unknown[]) => setVerifiedPhoneNumberMock(...args),
+    restorePendingDeletionFromIdentity: (...args: unknown[]) => restorePendingDeletionFromIdentityMock(...args),
   },
 }));
 
@@ -248,7 +253,7 @@ describe('authService phone verification', () => {
   });
 
   it('starts OTP only for a verified linked phone number', async () => {
-    getVerifiedByPhoneNumberMock.mockResolvedValue({
+    getRestorableVerifiedByPhoneNumberMock.mockResolvedValue({
       id: 'user-1',
       phone_number: '+995577123456',
       phone_verified_at: '2026-05-29T12:00:00.000Z',
@@ -258,16 +263,16 @@ describe('authService phone verification', () => {
 
     await authService.startGeorgianPhoneOtp('577123456');
 
-    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(getRestorableVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
     expect(sendPhoneOtpMock).toHaveBeenCalledWith('+995577123456');
   });
 
   it('returns generic success without sending OTP for an unlinked phone number', async () => {
-    getVerifiedByPhoneNumberMock.mockResolvedValue(null);
+    getRestorableVerifiedByPhoneNumberMock.mockResolvedValue(null);
 
     await authService.startGeorgianPhoneOtp('577123456');
 
-    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(getRestorableVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
     expect(sendPhoneOtpMock).not.toHaveBeenCalled();
   });
 
@@ -295,6 +300,63 @@ describe('authService phone verification', () => {
       phoneNumber: '+995577123456',
       phoneVerifiedAt: expect.any(String),
     }));
+  });
+
+  it('preserves the verified session when OTP login hits a pending-deletion account', async () => {
+    const session = {
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresIn: 3600,
+      tokenType: 'bearer',
+      provider: 'supabase',
+      user: {
+        email: null,
+        phone: null,
+        phoneConfirmedAt: null,
+        providerSub: 'supabase-user-id',
+      },
+    };
+    verifyPhoneOtpMock.mockResolvedValue(session);
+    getOrCreateFromIdentityMock.mockRejectedValue(
+      new AuthenticationError('Account is scheduled for deletion', { reason: 'pending_deletion' })
+    );
+
+    await expect(authService.verifyGeorgianPhoneOtp('577123456', '123456')).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'pending_deletion' },
+      session: expect.objectContaining({ refreshToken: 'refresh-token' }),
+    });
+    await expect(authService.verifyGeorgianPhoneOtp('577123456', '123456')).rejects.toBeInstanceOf(
+      PendingDeletionSessionError
+    );
+  });
+
+  it('restores a pending-deletion phone account after a valid OTP when requested', async () => {
+    verifyPhoneOtpMock.mockResolvedValue({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresIn: 3600,
+      tokenType: 'bearer',
+      provider: 'supabase',
+      user: {
+        email: null,
+        phone: null,
+        phoneConfirmedAt: null,
+        providerSub: 'supabase-user-id',
+      },
+    });
+    restorePendingDeletionFromIdentityMock.mockResolvedValue({ id: 'user-1' });
+
+    await authService.verifyGeorgianPhoneOtp('577123456', '123456', true);
+
+    expect(verifyPhoneOtpMock).toHaveBeenCalledWith('+995577123456', '123456');
+    expect(restorePendingDeletionFromIdentityMock).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'supabase',
+      subject: 'supabase-user-id',
+      phoneNumber: '+995577123456',
+      phoneVerifiedAt: expect.any(String),
+    }));
+    expect(getOrCreateFromIdentityMock).not.toHaveBeenCalled();
   });
 });
 

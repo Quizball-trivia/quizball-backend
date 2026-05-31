@@ -16,6 +16,7 @@ import type {
   SmsOfficeCallbackQuery,
   SmsOfficeStatusResponse,
 } from './auth.schemas.js';
+import type { AuthIdentity } from '../../core/types.js';
 
 const GEORGIAN_MOBILE_RE = /^\+9955\d{8}$/;
 
@@ -34,6 +35,15 @@ type SmsOfficeStatusResponsePayload = {
   };
   ErrorCode?: number;
 };
+
+export class PendingDeletionSessionError extends AuthenticationError {
+  public readonly session: AuthSession;
+
+  constructor(session: AuthSession) {
+    super('Account is scheduled for deletion', { reason: 'pending_deletion' });
+    this.session = session;
+  }
+}
 
 export function normalizeGeorgianPhone(rawPhone: string): string {
   const compact = rawPhone.replace(/[\s()-]/g, '');
@@ -221,19 +231,79 @@ async function provisionIdentity(session: AuthSession): Promise<void> {
         phoneVerifiedAt: session.user.phoneConfirmedAt,
         claims: {},
       });
+      logger.info(
+        {
+          provider: session.provider,
+          userId: session.user.providerSub,
+          email: session.user.email ?? undefined,
+        },
+        'Identity provisioned during auth'
+      );
     } catch (error) {
       if (error instanceof AuthenticationError) {
         // Account-state errors (deletion etc.) MUST block auth.
         throw error;
       }
       // Transient errors are logged but don't break the auth flow.
+      // Pass the full `err` so pino serializes name/stack and any pg error
+      // code/constraint/detail — message-only logging hid the root cause of
+      // the 2026-05-31 signup/login provisioning failures.
       span.setAttribute('quizball.identity_provision_warning', true);
       logger.warn(
-        { error: error instanceof Error ? error.message : error, provider: session.provider, userId: session.user.providerSub },
+        {
+          err: error,
+          provider: session.provider,
+          userId: session.user.providerSub,
+          email: session.user.email ?? undefined,
+          hasEmail: Boolean(session.user.email),
+        },
         'Failed to provision identity during auth'
       );
     }
   });
+}
+
+function isPendingDeletionAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof AuthenticationError)) {
+    return false;
+  }
+  const details = error.details;
+  return Boolean(
+    details &&
+      typeof details === 'object' &&
+      'reason' in details &&
+      (details as { reason?: unknown }).reason === 'pending_deletion'
+  );
+}
+
+async function provisionIdentityOrThrowSession(session: AuthSession): Promise<void> {
+  try {
+    await provisionIdentity(session);
+  } catch (error) {
+    if (isPendingDeletionAuthenticationError(error) && session.refreshToken) {
+      throw new PendingDeletionSessionError(session);
+    }
+    throw error;
+  }
+}
+
+function toSessionIdentity(session: AuthSession): AuthIdentity {
+  if (!session.provider || !session.user?.providerSub) {
+    throw new BadRequestError('Session does not include a restorable identity');
+  }
+
+  return {
+    provider: session.provider,
+    subject: session.user.providerSub,
+    email: session.user.email ?? undefined,
+    phoneNumber: session.user.phone ?? undefined,
+    phoneVerifiedAt: session.user.phoneConfirmedAt,
+    claims: {},
+  };
+}
+
+async function restorePendingDeletionForSession(session: AuthSession): Promise<void> {
+  await usersService.restorePendingDeletionFromIdentity(toSessionIdentity(session));
 }
 
 export const authService = {
@@ -248,6 +318,12 @@ export const authService = {
         request.redirect_to,
         request.locale,
       );
+      if (session.alreadyRegistered) {
+        const pendingUser = await usersService.getPendingDeletionByEmail(request.email);
+        if (pendingUser) {
+          session.pendingDeletion = true;
+        }
+      }
       if (session.accessToken) {
         await provisionIdentity(session);
       }
@@ -261,7 +337,29 @@ export const authService = {
     }, async () => {
       const authClient = getAuthClient();
       const session = await authClient.signIn(request.email, request.password);
-      await provisionIdentity(session);
+      await provisionIdentityOrThrowSession(session);
+      return session;
+    });
+  },
+
+  async restorePendingDeletionWithLogin(request: LoginRequest): Promise<AuthSession> {
+    return withSpan('auth.restore_pending_deletion_login', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const authClient = getAuthClient();
+      const session = await authClient.signIn(request.email, request.password);
+      await restorePendingDeletionForSession(session);
+      return session;
+    });
+  },
+
+  async restorePendingDeletionWithRefreshToken(refreshToken: string): Promise<AuthSession> {
+    return withSpan('auth.restore_pending_deletion_refresh', {
+      'quizball.auth_provider': 'supabase',
+    }, async () => {
+      const authClient = getAuthClient();
+      const session = await authClient.refresh(refreshToken);
+      await restorePendingDeletionForSession(session);
       return session;
     });
   },
@@ -277,7 +375,11 @@ export const authService = {
         request.id_token,
         request.nonce,
       );
-      await provisionIdentity(session);
+      if (request.restore_pending_deletion) {
+        await restorePendingDeletionForSession(session);
+      } else {
+        await provisionIdentityOrThrowSession(session);
+      }
       return session;
     });
   },
@@ -287,7 +389,7 @@ export const authService = {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const phone = normalizeGeorgianPhone(rawPhone);
-      const linkedUser = await usersService.getVerifiedByPhoneNumber(phone);
+      const linkedUser = await usersService.getRestorableVerifiedByPhoneNumber(phone);
       if (!linkedUser) {
         logger.info('Phone OTP requested for unlinked phone; returning generic success');
         return;
@@ -298,7 +400,7 @@ export const authService = {
     });
   },
 
-  async verifyGeorgianPhoneOtp(rawPhone: string, token: string): Promise<AuthSession> {
+  async verifyGeorgianPhoneOtp(rawPhone: string, token: string, restorePendingDeletion = false): Promise<AuthSession> {
     return withSpan('auth.georgian_phone_otp_verify', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -309,7 +411,11 @@ export const authService = {
         session.user.phone = session.user.phone ?? phone;
         session.user.phoneConfirmedAt = session.user.phoneConfirmedAt ?? new Date().toISOString();
       }
-      await provisionIdentity(session);
+      if (restorePendingDeletion) {
+        await restorePendingDeletionForSession(session);
+      } else {
+        await provisionIdentityOrThrowSession(session);
+      }
       return session;
     });
   },

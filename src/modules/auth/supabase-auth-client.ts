@@ -48,7 +48,24 @@ export class SupabaseAuthClient implements AuthClient {
         body: JSON.stringify(body),
       });
 
-      return this.normalizeSession(response);
+      const session = this.normalizeSession(response);
+
+      // Supabase anti-enumeration: when the email already belongs to a
+      // confirmed account, /signup returns 200 with NO session tokens and a
+      // user object whose `identities` array is empty (a real new signup has
+      // exactly one identity). Detect that so the client can say "already
+      // registered — sign in instead" rather than a misleading "check your
+      // email" (no email is sent in this case).
+      const userObj = (response as { user?: { identities?: unknown[] } } | null)?.user;
+      const hasEmptyIdentities =
+        userObj !== undefined &&
+        Array.isArray(userObj.identities) &&
+        userObj.identities.length === 0;
+      if (!session.accessToken && hasEmptyIdentities) {
+        session.alreadyRegistered = true;
+      }
+
+      return session;
     });
   }
 

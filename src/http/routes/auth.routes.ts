@@ -7,6 +7,7 @@ import {
   registerSchema,
   loginSchema,
   refreshSchema,
+  restorePendingDeletionSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   resetPasswordHeadersSchema,
@@ -42,6 +43,16 @@ router.post(
 router.post('/login', validate({ body: loginSchema }), authController.login);
 
 /**
+ * POST /api/v1/auth/login/restore
+ * Restore a pending-deletion account after email/password proof.
+ */
+router.post(
+  '/login/restore',
+  validate({ body: loginSchema }),
+  authController.restorePendingDeletionLogin
+);
+
+/**
  * POST /api/v1/auth/refresh
  * Refresh access token.
  */
@@ -50,6 +61,17 @@ router.post(
   injectRefreshTokenFromCookie,
   validate({ body: refreshSchema }),
   authController.refresh
+);
+
+/**
+ * POST /api/v1/auth/restore-pending-deletion
+ * Restore a pending-deletion account after refresh-token proof.
+ */
+router.post(
+  '/restore-pending-deletion',
+  injectRefreshTokenFromCookie,
+  validate({ body: restorePendingDeletionSchema }),
+  authController.restorePendingDeletion
 );
 
 /**

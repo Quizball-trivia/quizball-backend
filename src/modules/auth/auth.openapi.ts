@@ -21,6 +21,8 @@ const authResponseSchema = z
     token_type: z.string(),
     user: authUserSchema.nullable(),
     provider: z.string(),
+    already_registered: z.boolean().optional(),
+    pending_deletion: z.boolean().optional(),
   })
   .openapi('AuthResponse');
 
@@ -96,6 +98,22 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
 
   registerEndpoint(registry, {
     method: 'post',
+    path: '/api/v1/auth/login/restore',
+    summary: 'Restore pending-deletion account with email and password',
+    tags: ['Auth'],
+    body: z.object({
+      email: z.string().email(),
+      password: z.string().min(1),
+    }),
+    responses: {
+      200: { description: 'Account restored and login successful', schema: authResponseSchema },
+      400: { description: 'Account is not restorable', schema: errorResponseSchema },
+      401: { description: 'Authentication failed', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
     path: '/api/v1/auth/refresh',
     summary: 'Refresh access token',
     tags: ['Auth'],
@@ -104,6 +122,24 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     }),
     responses: {
       200: { description: 'Token refreshed', schema: authResponseSchema },
+      401: { description: 'Invalid refresh token', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/auth/restore-pending-deletion',
+    summary: 'Restore pending-deletion account with refresh token',
+    description:
+      'Used by OAuth callback flows after the provider has returned a valid Supabase refresh token. ' +
+      'The endpoint restores only the account matching that token; it never accepts a user id.',
+    tags: ['Auth'],
+    body: z.object({
+      refresh_token: z.string().optional(),
+    }),
+    responses: {
+      200: { description: 'Account restored and session established', schema: authResponseSchema },
+      400: { description: 'Missing token or account is not restorable', schema: errorResponseSchema },
       401: { description: 'Invalid refresh token', schema: errorResponseSchema },
     },
   });
@@ -169,6 +205,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
       provider: z.enum(['google', 'apple']),
       id_token: z.string().min(1).max(8192),
       nonce: z.string().min(1).max(512).optional(),
+      restore_pending_deletion: z.boolean().optional(),
     }),
     responses: {
       200: { description: 'Session created', schema: authResponseSchema },
@@ -212,6 +249,7 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     body: z.object({
       phone: z.string().min(9).max(32),
       token: z.string().regex(/^\d{6}$/),
+      restore_pending_deletion: z.boolean().optional(),
     }),
     responses: {
       200: { description: 'Session created', schema: authResponseSchema },

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
-import type { LobbyJoinByCodeResult } from '../../src/realtime/socket.types.js';
+import type {
+  LobbyCreateResult,
+  LobbyJoinByCodeResult,
+  LobbyLeaveResult,
+} from '../../src/realtime/socket.types.js';
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
 import { lobbyRealtimeService } from '../../src/realtime/services/lobby-realtime.service.js';
 import '../setup.js';
@@ -629,6 +633,36 @@ describe('lobby realtime socket integration', () => {
     return socket;
   }
 
+  function lastEmittedPayload<T = unknown>(socket: TestSocket, event: string): T | undefined {
+    const entries = socket.emitted.filter((entry) => entry.event === event);
+    return entries.at(-1)?.payload as T | undefined;
+  }
+
+  it('acks lobby create and echoes the client correlation id', async () => {
+    const host = createSocket('ack-host');
+
+    const ack = await host.triggerWithAck<LobbyCreateResult>('lobby:create', {
+      mode: 'friendly',
+      isPublic: true,
+      correlationId: 'test-create-1',
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      correlationId: 'test-create-1',
+    });
+    if (!ack?.ok) {
+      throw new Error('Expected create ack to be successful');
+    }
+    expect(ack.lobbyId).toBeTruthy();
+    expect(ack.inviteCode).toBeTruthy();
+    expect(store.lobbies.get(ack.lobbyId!)).toMatchObject({
+      id: ack.lobbyId,
+      invite_code: ack.inviteCode,
+      is_public: true,
+    });
+  });
+
   it('creates friendly lobby, joins by code, and transfers host when host leaves (S02/S09)', async () => {
     const host = createSocket('host-u');
     const guest = createSocket('guest-u');
@@ -651,9 +685,88 @@ describe('lobby realtime socket integration', () => {
     expect(lobby).toBeDefined();
     expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['host-u', 'guest-u']);
 
-    await host.trigger('lobby:leave');
+    const leaveAck = await host.triggerWithAck<LobbyLeaveResult>('lobby:leave', {
+      correlationId: 'test-leave-host',
+    });
+    expect(leaveAck).toMatchObject({
+      ok: true,
+      lobbyId: lobby.id,
+      closed: false,
+      correlationId: 'test-leave-host',
+    });
     expect(store.lobbies.get(lobby.id)?.host_user_id).toBe('guest-u');
     expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['guest-u']);
+
+    const hostSession = lastEmittedPayload<{ waitingLobbyId: string | null }>(host, 'session:state');
+    const guestLobbyState = lastEmittedPayload<{
+      hostUserId: string;
+      members: Array<{ userId: string; isHost: boolean }>;
+    }>(guest, 'lobby:state');
+
+    expect(hostSession?.waitingLobbyId).toBeNull();
+    expect(guestLobbyState?.hostUserId).toBe('guest-u');
+    expect(guestLobbyState?.members).toEqual([
+      expect.objectContaining({ userId: 'guest-u', isHost: true }),
+    ]);
+  });
+
+  it('moves a user from lobby A to lobby B once when they open a new invite', async () => {
+    const hostA = createSocket('move-host-a');
+    const hostB = createSocket('move-host-b');
+    const movingUser = createSocket('move-user');
+
+    const createA = await hostA.triggerWithAck<LobbyCreateResult>('lobby:create', {
+      mode: 'friendly',
+      correlationId: 'test-create-a',
+    });
+    const createB = await hostB.triggerWithAck<LobbyCreateResult>('lobby:create', {
+      mode: 'friendly',
+      correlationId: 'test-create-b',
+    });
+    if (!createA?.ok || !createB?.ok || !createA.inviteCode || !createB.inviteCode || !createA.lobbyId || !createB.lobbyId) {
+      throw new Error('Expected both lobbies to be created');
+    }
+
+    const joinA = await movingUser.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: createA.inviteCode,
+      correlationId: 'test-join-a',
+    });
+    expect(joinA).toMatchObject({ ok: true, lobbyId: createA.lobbyId });
+    expect(listMembers(createA.lobbyId).map((member) => member.user_id)).toEqual([
+      'move-host-a',
+      'move-user',
+    ]);
+
+    const emittedBeforeJoinB = movingUser.emitted.length;
+    const joinB = await movingUser.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+      inviteCode: createB.inviteCode,
+      correlationId: 'test-join-b',
+    });
+
+    expect(joinB).toMatchObject({
+      ok: true,
+      lobbyId: createB.lobbyId,
+      correlationId: 'test-join-b',
+    });
+    expect(listMembers(createA.lobbyId).map((member) => member.user_id)).toEqual(['move-host-a']);
+    expect(listMembers(createB.lobbyId).map((member) => member.user_id)).toEqual([
+      'move-host-b',
+      'move-user',
+    ]);
+    expect(listMembers(createB.lobbyId).filter((member) => member.user_id === 'move-user')).toHaveLength(1);
+    expect(movingUser.emitted.some((entry) => entry.event === 'session:blocked')).toBe(false);
+
+    const emittedAfterJoinB = movingUser.emitted.slice(emittedBeforeJoinB);
+    const staleLobbyAState = emittedAfterJoinB.find((entry) => {
+      if (entry.event !== 'lobby:state') return false;
+      const payload = entry.payload as { lobbyId?: string; members?: Array<{ userId: string }> };
+      return payload.lobbyId === createA.lobbyId &&
+        Boolean(payload.members?.some((member) => member.userId === 'move-user'));
+    });
+    expect(staleLobbyAState).toBeUndefined();
+
+    const session = lastEmittedPayload<{ waitingLobbyId: string | null }>(movingUser, 'session:state');
+    expect(session?.waitingLobbyId).toBe(createB.lobbyId);
   });
 
   it('waits through a short lobby transition when joining by code', async () => {

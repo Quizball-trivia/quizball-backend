@@ -42,6 +42,7 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 // Mock the translation service used by bulk uploads and translation endpoints
 vi.mock('../../src/modules/questions/translation.service.js', () => ({
   translationService: {
+    isConfigured: vi.fn().mockReturnValue(true),
     translateInBackground: vi.fn().mockResolvedValue(undefined),
     getBackfillCounts: vi.fn().mockResolvedValue({ questions: 0, categories: 0 }),
     backfillAll: vi.fn().mockResolvedValue({
@@ -123,6 +124,7 @@ describe('Questions API', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (translationService.isConfigured as Mock).mockReturnValue(true);
     (translationService.translateInBackground as Mock).mockResolvedValue(undefined);
     (translationService.getBackfillCounts as Mock).mockResolvedValue({ questions: 0, categories: 0 });
     (translationService.backfillAll as Mock).mockResolvedValue({

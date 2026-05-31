@@ -1,5 +1,9 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import type { LobbyJoinByCodeResult } from '../socket.types.js';
+import type {
+  LobbyCreateResult,
+  LobbyJoinByCodeResult,
+  LobbyLeaveResult,
+} from '../socket.types.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import {
   lobbiesService,
@@ -44,9 +48,11 @@ const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
 export async function createLobby(
   io: QuizballServer,
   socket: QuizballSocket,
-  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean }
-): Promise<void> {
+  payload: { mode: 'friendly' | 'ranked'; isPublic?: boolean; correlationId?: string }
+): Promise<LobbyCreateResult> {
   const userId = socket.data.user.id;
+  const correlationId = payload.correlationId ?? 'missing';
+  let result: LobbyCreateResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
     socket,
@@ -63,12 +69,26 @@ export async function createLobby(
           message: prepared.message ?? 'You are already in an active match',
           meta: { stateSnapshot: prepared.snapshot },
         });
+        result = {
+          ok: false,
+          code: 'ALREADY_IN_LOBBY',
+          message: prepared.message ?? 'You are already in an active match',
+          retryable: false,
+          correlationId,
+          stateSnapshot: prepared.snapshot,
+        };
         return;
       }
 
       if (payload.mode === 'ranked') {
-        logger.info({ userId }, 'Lobby create (ranked AI simulation) requested');
+        logger.info({ userId, correlationId }, 'Lobby create (ranked AI simulation) requested');
         await startRankedAiForUser(io, userId);
+        result = {
+          ok: true,
+          lobbyId: null,
+          inviteCode: null,
+          correlationId,
+        };
         return;
       }
 
@@ -87,10 +107,16 @@ export async function createLobby(
 
       const redactedInvite = inviteCode ? `${inviteCode.slice(0, 2)}***` : null;
       logger.info(
-        { lobbyId: lobby.id, hostUserId: userId, inviteCode: redactedInvite },
+        { lobbyId: lobby.id, hostUserId: userId, inviteCode: redactedInvite, correlationId },
         'Lobby created'
       );
-      await emitLobbyState(io, lobby.id);
+      await emitLobbyState(io, lobby.id, { correlationId, operation: 'lobby:create' });
+      result = {
+        ok: true,
+        lobbyId: lobby.id,
+        inviteCode,
+        correlationId,
+      };
     },
     {
       code: 'TRANSITION_IN_PROGRESS',
@@ -98,15 +124,33 @@ export async function createLobby(
       operation: 'lobby:create',
     }
   );
-  if (!completed) return;
+  if (!completed) {
+    const snapshot = await userSessionGuardService.resolveState(userId);
+    return {
+      ok: false,
+      code: 'TRANSITION_IN_PROGRESS',
+      message: 'Lobby state transition is in progress. Please retry.',
+      retryable: true,
+      correlationId,
+      stateSnapshot: snapshot,
+    };
+  }
 
   await userSessionGuardService.emitState(io, userId);
+  return result ?? {
+    ok: false,
+    code: 'LOBBY_CREATE_ERROR',
+    message: 'Failed to create lobby',
+    retryable: true,
+    correlationId,
+  };
 }
 
 export async function joinByCode(
   io: QuizballServer,
   socket: QuizballSocket,
-  inviteCode: string
+  inviteCode: string,
+  correlationId = 'missing'
 ): Promise<LobbyJoinByCodeResult> {
   const userId = socket.data.user.id;
   const normalizedCode = inviteCode.toUpperCase();
@@ -133,6 +177,7 @@ export async function joinByCode(
           code: 'ALREADY_IN_LOBBY',
           message: 'You are already in an active match',
           retryable: false,
+          correlationId,
           stateSnapshot: snapshot,
         };
         return;
@@ -140,7 +185,10 @@ export async function joinByCode(
 
       const inviteLobby = await lobbiesRepo.getByInviteCode(normalizedCode);
       if (!inviteLobby) {
-        logger.warn({ inviteCode: `${normalizedCode.slice(0, 2)}***` }, 'Lobby not found for invite');
+        logger.warn(
+          { inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
+          'Lobby not found for invite'
+        );
         socket.emit('error', {
           code: 'LOBBY_NOT_FOUND',
           message: 'Invalid invite code',
@@ -156,6 +204,7 @@ export async function joinByCode(
           code: 'LOBBY_NOT_FOUND',
           message: 'Invalid invite code',
           retryable: false,
+          correlationId,
           stateSnapshot: snapshot,
         };
         return;
@@ -180,6 +229,7 @@ export async function joinByCode(
           code: 'ALREADY_IN_LOBBY',
           message: prepared.message ?? 'You are already in an active match',
           retryable: false,
+          correlationId,
           stateSnapshot: prepared.snapshot,
         };
         return;
@@ -197,6 +247,7 @@ export async function joinByCode(
           code: 'TRANSITION_IN_PROGRESS',
           message: 'Lobby transition in progress. Please retry.',
           retryable: true,
+          correlationId,
         };
         return;
       }
@@ -212,7 +263,7 @@ export async function joinByCode(
           lobby.invite_code.toUpperCase() !== normalizedCode
         ) {
           logger.warn(
-            { lobbyId: inviteLobby.id, inviteCode: `${normalizedCode.slice(0, 2)}***` },
+            { lobbyId: inviteLobby.id, inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
             'Lobby join failed after lock: invite target no longer valid'
           );
           socket.emit('error', {
@@ -230,6 +281,7 @@ export async function joinByCode(
             code: 'LOBBY_NOT_FOUND',
             message: 'Lobby no longer exists',
             retryable: false,
+            correlationId,
             stateSnapshot: prepared.snapshot,
           };
           return;
@@ -245,6 +297,7 @@ export async function joinByCode(
             code: 'LOBBY_FULL',
             message: 'Lobby is already full',
             retryable: false,
+            correlationId,
           };
           return;
         }
@@ -258,15 +311,16 @@ export async function joinByCode(
         await attachUserSocketsToLobby(io, userId, lobby.id);
 
         logger.info(
-          { lobbyId: lobby.id, userId, alreadyMember },
+          { lobbyId: lobby.id, userId, alreadyMember, correlationId },
           alreadyMember ? 'Lobby rejoined as existing member' : 'Lobby joined by code'
         );
-        await emitLobbyState(io, lobby.id);
+        await emitLobbyState(io, lobby.id, { correlationId, operation: 'lobby:join_by_code' });
         result = {
           ok: true,
           lobbyId: lobby.id,
           inviteCode: normalizedCode,
           alreadyMember,
+          correlationId,
         };
       } finally {
         await releaseLock(lobbyLockKey, lobbyLock.token);
@@ -286,6 +340,7 @@ export async function joinByCode(
       code: 'TRANSITION_IN_PROGRESS',
       message: 'Lobby state transition is in progress. Please retry.',
       retryable: true,
+      correlationId,
       stateSnapshot: snapshot,
     };
   }
@@ -296,6 +351,7 @@ export async function joinByCode(
     code: 'LOBBY_JOIN_ERROR',
     message: 'Failed to join lobby',
     retryable: true,
+    correlationId,
   };
 }
 
@@ -676,91 +732,140 @@ export async function startFriendlyMatch(
   }
 }
 
-export async function leaveLobby(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+export async function leaveLobby(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  correlationId = 'missing'
+): Promise<LobbyLeaveResult> {
   const userId = socket.data.user.id;
+  let result: LobbyLeaveResult | null = null;
   const completed = await userSessionGuardService.runWithUserTransitionLock(
     io,
     socket,
     async () => {
-    let lobbyId = socket.data.lobbyId;
-    if (!lobbyId) {
-      const existingLobby = await lobbiesRepo.findWaitingLobbyForUser(userId);
-      lobbyId = existingLobby?.id;
-      if (lobbyId) {
-        logger.info({ lobbyId, userId }, 'Lobby leave: resolved waiting lobby from DB');
+      let lobbyId = socket.data.lobbyId;
+      if (!lobbyId) {
+        const existingLobby = await lobbiesRepo.findWaitingLobbyForUser(userId);
+        lobbyId = existingLobby?.id;
+        if (lobbyId) {
+          logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: resolved waiting lobby from DB');
+        }
       }
-    }
 
-    if (!lobbyId) {
-      logger.info({ userId }, 'Lobby leave: no waiting lobby to leave');
-      return;
-    }
+      if (!lobbyId) {
+        logger.info({ userId, correlationId }, 'Lobby leave: no waiting lobby to leave');
+        result = {
+          ok: true,
+          lobbyId: null,
+          closed: false,
+          correlationId,
+        };
+        return;
+      }
 
-    const lobbyLockKey = `lock:lobby:${lobbyId}`;
-    const lobbyLock = await acquireLock(lobbyLockKey, 3000);
+      const lobbyLockKey = `lock:lobby:${lobbyId}`;
+      const lobbyLock = await acquireLock(lobbyLockKey, 3000);
       if (!lobbyLock.acquired || !lobbyLock.token) {
-        logger.warn({ lobbyId, userId }, 'Lobby leave skipped: lock not acquired');
+        logger.warn({ lobbyId, userId, correlationId }, 'Lobby leave skipped: lock not acquired');
         socket.emit('error', {
           code: 'LOBBY_BUSY',
           message: 'Lobby is currently busy. Please try again.',
           meta: { lobbyId },
         });
+        result = {
+          ok: false,
+          code: 'LOBBY_BUSY',
+          message: 'Lobby is currently busy. Please try again.',
+          retryable: true,
+          correlationId,
+        };
         return;
       }
 
-    try {
-      const lobby = await lobbiesRepo.getById(lobbyId);
-      if (!lobby) {
-        logger.info({ lobbyId, userId }, 'Lobby leave: target lobby already gone');
-        return;
-      }
+      try {
+        const lobby = await lobbiesRepo.getById(lobbyId);
+        if (!lobby) {
+          logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: target lobby already gone');
+          result = {
+            ok: true,
+            lobbyId,
+            closed: true,
+            correlationId,
+          };
+          return;
+        }
 
-      if (lobby.status !== 'waiting') {
-        socket.emit('error', {
-          code: 'LOBBY_ACTIVE',
-          message: 'Match already started. Please reconnect to the match.',
-        });
-        return;
-      }
+        if (lobby.status !== 'waiting') {
+          socket.emit('error', {
+            code: 'LOBBY_ACTIVE',
+            message: 'Match already started. Please reconnect to the match.',
+          });
+          result = {
+            ok: false,
+            code: 'LOBBY_ACTIVE',
+            message: 'Match already started. Please reconnect to the match.',
+            retryable: false,
+            correlationId,
+          };
+          return;
+        }
 
-      const membersBefore = await lobbiesRepo.listMembersWithUser(lobbyId);
-      const wasMember = membersBefore.some((member) => member.user_id === userId);
-      if (!wasMember) {
+        const membersBefore = await lobbiesRepo.listMembersWithUser(lobbyId);
+        const wasMember = membersBefore.some((member) => member.user_id === userId);
+        if (!wasMember) {
+          await removeUserFromLobbySockets(io, lobbyId, userId);
+          logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: user already removed');
+          result = {
+            ok: true,
+            lobbyId,
+            closed: false,
+            correlationId,
+          };
+          return;
+        }
+
+        await lobbiesRepo.removeMember(lobbyId, userId);
+        if (isRankedAiLobby(lobby)) {
+          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
+          if (aiUserId) {
+            await lobbiesRepo.removeMember(lobbyId, aiUserId);
+          }
+          const redis = getRedisClient();
+          if (redis) {
+            await redis.del(rankedAiLobbyKey(lobbyId));
+          }
+        }
+
         await removeUserFromLobbySockets(io, lobbyId, userId);
-        logger.info({ lobbyId, userId }, 'Lobby leave: user already removed');
-        return;
-      }
+        logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: removed member');
 
-      await lobbiesRepo.removeMember(lobbyId, userId);
-      if (isRankedAiLobby(lobby)) {
-        const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-        if (aiUserId) {
-          await lobbiesRepo.removeMember(lobbyId, aiUserId);
+        const closed = await closeLobbyIfEmpty(io, lobbyId);
+        if (closed) {
+          result = {
+            ok: true,
+            lobbyId,
+            closed: true,
+            correlationId,
+          };
+          return;
         }
-        const redis = getRedisClient();
-        if (redis) {
-          await redis.del(rankedAiLobbyKey(lobbyId));
+
+        if (lobby.host_user_id === userId) {
+          await transferHostIfNeeded(lobbyId, userId);
         }
+
+        await syncFriendlyLobbyModeForMemberCountLocked(lobbyId);
+
+        await emitLobbyState(io, lobbyId, { correlationId, operation: 'lobby:leave' });
+        result = {
+          ok: true,
+          lobbyId,
+          closed: false,
+          correlationId,
+        };
+      } finally {
+        await releaseLock(lobbyLockKey, lobbyLock.token);
       }
-
-      await removeUserFromLobbySockets(io, lobbyId, userId);
-      logger.info({ lobbyId, userId }, 'Lobby leave: removed member');
-
-      const closed = await closeLobbyIfEmpty(io, lobbyId);
-      if (closed) {
-        return;
-      }
-
-      if (lobby.host_user_id === userId) {
-        await transferHostIfNeeded(lobbyId, userId);
-      }
-
-      await syncFriendlyLobbyModeForMemberCountLocked(lobbyId);
-
-      await emitLobbyState(io, lobbyId);
-    } finally {
-      await releaseLock(lobbyLockKey, lobbyLock.token);
-    }
     },
     {
       code: 'TRANSITION_IN_PROGRESS',
@@ -768,7 +873,24 @@ export async function leaveLobby(io: QuizballServer, socket: QuizballSocket): Pr
       operation: 'lobby:leave',
     }
   );
-  if (!completed) return;
+  if (!completed) {
+    const snapshot = await userSessionGuardService.resolveState(userId);
+    return {
+      ok: false,
+      code: 'TRANSITION_IN_PROGRESS',
+      message: 'Lobby state transition is in progress. Please retry.',
+      retryable: true,
+      correlationId,
+      stateSnapshot: snapshot,
+    };
+  }
 
   await userSessionGuardService.emitState(io, userId);
+  return result ?? {
+    ok: false,
+    code: 'LOBBY_LEAVE_ERROR',
+    message: 'Failed to leave lobby',
+    retryable: true,
+    correlationId,
+  };
 }

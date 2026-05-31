@@ -67,6 +67,61 @@ describe('SupabaseAuthClient.signUp', () => {
   });
 });
 
+describe('SupabaseAuthClient session phone normalization', () => {
+  // Regression: OAuth (Google/Facebook) users come back from Supabase with an
+  // empty phone string (""). Storing that verbatim collides on the partial
+  // unique index `uq_users_phone_number_active` — the first OAuth user inserts
+  // "" fine, every later new user 500s on a duplicate-key error. The session
+  // must normalize blank phones to null so they never reach the DB.
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function stubSession(user: Record<string, unknown>) {
+    fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: 'a',
+        refresh_token: 'r',
+        expires_in: 3600,
+        token_type: 'bearer',
+        user,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('normalizes an empty-string phone to null (OAuth users)', async () => {
+    stubSession({ id: 'sub-1', email: 'oauth@quizball.io', phone: '' });
+    const client = new SupabaseAuthClient();
+
+    const session = await client.signInWithIdToken('google', 'id-token');
+
+    expect(session.user?.phone).toBeNull();
+  });
+
+  it('normalizes a whitespace-only phone to null', async () => {
+    stubSession({ id: 'sub-2', email: 'oauth2@quizball.io', phone: '   ' });
+    const client = new SupabaseAuthClient();
+
+    const session = await client.signInWithIdToken('facebook', 'id-token');
+
+    expect(session.user?.phone).toBeNull();
+  });
+
+  it('preserves a real phone number', async () => {
+    stubSession({ id: 'sub-3', email: null, phone: '+995577123456' });
+    const client = new SupabaseAuthClient();
+
+    const session = await client.signInWithIdToken('google', 'id-token');
+
+    expect(session.user?.phone).toBe('+995577123456');
+  });
+});
+
 describe('SupabaseAuthClient.sendPhoneOtp', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 

@@ -594,12 +594,29 @@ export interface SessionBlockedPayload {
   stateSnapshot: SessionStatePayload;
 }
 
+export type LobbyCreateResult =
+  | {
+      ok: true;
+      lobbyId: string | null;
+      inviteCode: string | null;
+      correlationId: string;
+    }
+  | {
+      ok: false;
+      code: 'ALREADY_IN_LOBBY' | 'TRANSITION_IN_PROGRESS' | 'INVALID_LOBBY_CREATE' | 'LOBBY_CREATE_ERROR';
+      message: string;
+      retryable: boolean;
+      correlationId: string;
+      stateSnapshot?: SessionStatePayload;
+    };
+
 export type LobbyJoinByCodeResult =
   | {
       ok: true;
       lobbyId: string;
       inviteCode: string;
       alreadyMember: boolean;
+      correlationId: string;
     }
   | {
       ok: false;
@@ -612,6 +629,23 @@ export type LobbyJoinByCodeResult =
         | 'LOBBY_JOIN_ERROR';
       message: string;
       retryable: boolean;
+      correlationId: string;
+      stateSnapshot?: SessionStatePayload;
+    };
+
+export type LobbyLeaveResult =
+  | {
+      ok: true;
+      lobbyId: string | null;
+      closed: boolean;
+      correlationId: string;
+    }
+  | {
+      ok: false;
+      code: 'LOBBY_BUSY' | 'LOBBY_ACTIVE' | 'TRANSITION_IN_PROGRESS' | 'LOBBY_LEAVE_ERROR';
+      message: string;
+      retryable: boolean;
+      correlationId: string;
       stateSnapshot?: SessionStatePayload;
     };
 
@@ -666,12 +700,18 @@ export type MatchCluesAnswerPayload =
   | MatchCluesAnswerGiveUpPayload;
 
 export interface ClientToServerEvents {
-  'lobby:create': (data: { mode: MatchMode; isPublic?: boolean }) => void;
+  'lobby:create': (
+    data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
+    ack?: (result: LobbyCreateResult) => void
+  ) => void;
   'lobby:challenge': (data: { toUserId: string }) => void;
   'lobby:challenge_accept': (data: { invitationId: string }) => void;
   'lobby:challenge_decline': (data: { invitationId: string }) => void;
-  'lobby:join_by_code': (data: { inviteCode: string }, ack?: (result: LobbyJoinByCodeResult) => void) => void;
-  'lobby:leave': () => void;
+  'lobby:join_by_code': (
+    data: { inviteCode: string; correlationId?: string },
+    ack?: (result: LobbyJoinByCodeResult) => void
+  ) => void;
+  'lobby:leave': (data?: { correlationId?: string }, ack?: (result: LobbyLeaveResult) => void) => void;
   'lobby:ready': (data: { ready: boolean }) => void;
   'lobby:update_settings': (data: {
     lobbyId?: string;

@@ -29,9 +29,18 @@ export interface AccountDeletionStatus {
   pendingDeletionAt: string;
 }
 
+const PENDING_DELETION_DETAILS = { reason: 'pending_deletion' } as const;
+
+function isPendingDeletionAccount(user: Pick<User, 'is_deleted' | 'deleted_at' | 'pending_deletion_at'>): boolean {
+  return Boolean(user.pending_deletion_at && !user.deleted_at && !user.is_deleted);
+}
+
 function assertUserAccountActive(user: User): void {
+  if (isPendingDeletionAccount(user)) {
+    throw new AuthenticationError('Account is scheduled for deletion', PENDING_DELETION_DETAILS);
+  }
   if (isUserAccountInactive(user)) {
-    throw new AuthenticationError('Account is scheduled for deletion');
+    throw new AuthenticationError('Account is no longer active', { reason: 'account_inactive' });
   }
 }
 
@@ -246,6 +255,21 @@ export const usersService = {
     }
     assertUserAccountActive(user);
     return user;
+  },
+
+  async getRestorableVerifiedByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const user = await usersRepo.getActiveOrPendingByPhoneNumber(phoneNumber);
+    if (!user || !user.phone_verified_at) {
+      return null;
+    }
+    if (user.is_deleted || user.deleted_at) {
+      return null;
+    }
+    return user;
+  },
+
+  async getPendingDeletionByEmail(email: string): Promise<User | null> {
+    return usersRepo.getPendingDeletionByEmail(email);
   },
 
   async setVerifiedPhoneNumber(userId: string, phoneNumber: string, verifiedAt?: string | null): Promise<User> {
@@ -477,5 +501,34 @@ export const usersService = {
     await invalidateByUserId(id);
     logger.info({ userId: id }, 'Admin restored pending account deletion');
     return user;
+  },
+
+  async restorePendingDeletionFromIdentity(identity: AuthIdentity): Promise<User> {
+    const existingIdentity = await identitiesRepo.getByProviderSubject(
+      identity.provider,
+      identity.subject
+    );
+
+    if (!existingIdentity) {
+      throw new BadRequestError('No restorable account found for this login');
+    }
+
+    const user = existingIdentity.user;
+    if (!isPendingDeletionAccount(user)) {
+      assertUserAccountActive(user);
+      return user;
+    }
+
+    const restored = await usersRepo.cancelPendingDeletion(user.id);
+    if (!restored) {
+      throw new BadRequestError('Account is not pending deletion or grace period has expired');
+    }
+
+    await invalidateByUserId(restored.id);
+    logger.info(
+      { userId: restored.id, provider: identity.provider },
+      'User restored pending account deletion'
+    );
+    return restored;
   },
 };

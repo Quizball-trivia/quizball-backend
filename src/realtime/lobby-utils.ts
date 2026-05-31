@@ -116,7 +116,11 @@ export async function syncFriendlyLobbyModeForMemberCountLocked(
   await syncFriendlyLobbyModeForMemberCountInternal(lobbyId, options);
 }
 
-export async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
+export async function emitLobbyState(
+  io: QuizballServer,
+  lobbyId: string,
+  context?: { correlationId?: string; operation?: string }
+): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
 
@@ -147,6 +151,8 @@ export async function emitLobbyState(io: QuizballServer, lobbyId: string): Promi
   logger.debug(
     {
       lobbyId,
+      correlationId: context?.correlationId ?? null,
+      operation: context?.operation ?? null,
       status: lobby.status,
       memberCount: state.members.length,
       memberIds: state.members.map((member) => member.userId),

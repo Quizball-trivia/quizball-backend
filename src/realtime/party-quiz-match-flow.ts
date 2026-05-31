@@ -492,6 +492,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
             winnerDecisionMethod: state.winnerDecisionMethod ?? 'total_points',
             totalQuestions: activeMatch.total_questions,
             correctAnswers: player.correct_answers,
+            opponentIsAi: false,
           });
         }
       } catch (err) {

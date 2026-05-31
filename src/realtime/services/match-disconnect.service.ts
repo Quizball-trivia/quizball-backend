@@ -155,9 +155,19 @@ async function emitRejoinAvailableToUser(
   graceMs: number,
   remainingReconnects: number
 ): Promise<void> {
-  io.to(`user:${userId}`).emit(
-    'match:rejoin_available',
-    await buildRejoinAvailablePayload(match, userId, graceMs, remainingReconnects)
+  const payload = await buildRejoinAvailablePayload(match, userId, graceMs, remainingReconnects);
+  io.to(`user:${userId}`).emit('match:rejoin_available', payload);
+  logger.info(
+    {
+      eventName: 'match:rejoin_available',
+      matchId: match.id,
+      userId,
+      variant: payload.variant,
+      graceMs,
+      remainingReconnects,
+      source: 'party_replacement_socket',
+    },
+    'Match rejoin available emitted to user room'
   );
 }
 
@@ -273,6 +283,16 @@ export async function handleMatchRejoin(
           const payload = buildPartyDropoutPayload(match.id, 'disconnect_timeout');
           await setPartyDropoutPendingForUser(userId, payload);
           socket.emit('match:party_dropout', payload);
+          logger.info(
+            {
+              eventName: 'match:party_dropout',
+              matchId: match.id,
+              userId,
+              reason: payload.reason,
+              source: 'rejoin_rejected_dropped',
+            },
+            'Dropped party quiz player tried to rejoin live match'
+          );
           return;
         }
       }
@@ -302,11 +322,27 @@ export async function handleMatchRejoin(
       const isPaused = redis ? (await redis.exists(matchPauseKey(match.id))) === 1 : false;
       const wasDisconnected = redis ? (await redis.exists(matchDisconnectKey(match.id, userId))) === 1 : false;
       if (redis && isPaused && wasDisconnected) {
+        if (variant === 'friendly_party_quiz') {
+          logger.info(
+            { eventName: 'party_rejoin_resume_requested', matchId: match.id, userId },
+            'Party quiz rejoin requested resume'
+          );
+        }
         await resumePausedMatch(io, match.id, userId);
         return;
       }
 
       if (variant === 'friendly_party_quiz') {
+        logger.info(
+          {
+            eventName: 'party_rejoin_live',
+            matchId: match.id,
+            userId,
+            isPaused,
+            wasDisconnected,
+          },
+          'Party quiz live match rejoined'
+        );
         await emitPartyQuizStateToSocket(socket, match.id);
         await ensurePartyQuizActiveTimer(io, match.id);
       } else {
@@ -528,6 +564,16 @@ export async function pauseMatchForDisconnectedPlayer(
     const payload = buildPartyDropoutPayload(matchId, 'disconnect_timeout');
     await setPartyDropoutPendingForUser(userId, payload);
     io.to(`user:${userId}`).emit('match:party_dropout', payload);
+    logger.info(
+      {
+        eventName: 'match:party_dropout',
+        matchId,
+        userId,
+        reason: payload.reason,
+        source: 'disconnect_after_drop',
+      },
+      'Dropped party quiz player disconnected again'
+    );
     return {
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       remainingReconnects: 0,
@@ -542,10 +588,17 @@ export async function pauseMatchForDisconnectedPlayer(
     {
       matchId,
       userId,
+      variant,
       qIndex: match.current_q_index,
       disconnectCount,
       remainingReconnects,
       graceMs: MATCH_DISCONNECT_GRACE_MS,
+      playerCount: players.length,
+      activePartyPlayerCount: partyState
+        ? getActivePartyPlayers(players, partyState.droppedUserIds).length
+        : undefined,
+      sameUserSocketCount: sameUserSockets.length,
+      autoResumeReplacementSocket: Boolean(options.autoResumeReplacementSocket),
     },
     'Match disconnect pause requested'
   );
@@ -573,6 +626,19 @@ export async function pauseMatchForDisconnectedPlayer(
       remainingReconnects,
     });
   });
+  if (variant === 'friendly_party_quiz') {
+    logger.info(
+      {
+        eventName: 'match:opponent_disconnected',
+        matchId,
+        disconnectedUserId: userId,
+        recipientUserIds: pauseRecipients.map((player) => player.user_id),
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
+        remainingReconnects,
+      },
+      'Party quiz opponent disconnected emitted'
+    );
+  }
   if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
     await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
   }
@@ -651,6 +717,18 @@ export async function pauseMatchForDisconnectedPlayer(
 
   const graceKey = matchGraceKey(matchId);
   const acquired = await redis.set(graceKey, String(Date.now()), { NX: true, EX: GRACE_TTL_SEC });
+  if (variant === 'friendly_party_quiz') {
+    logger.info(
+      {
+        eventName: 'party_grace_window',
+        matchId,
+        userId,
+        acquired: acquired === 'OK',
+        graceMs: MATCH_DISCONNECT_GRACE_MS,
+      },
+      acquired === 'OK' ? 'Party quiz shared grace window started' : 'Party quiz shared grace window already active'
+    );
+  }
   if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
     logger.info(
       { matchId, userId, socketCount: sameUserSockets.length },
@@ -690,9 +768,31 @@ export async function pauseMatchForDisconnectedPlayer(
         const newlyDropped = disconnected.filter((disconnectedUserId) =>
           !isPartyQuizDropped(state, disconnectedUserId)
         );
-        if (newlyDropped.length === 0) return;
+        if (newlyDropped.length === 0) {
+          logger.info(
+            {
+              eventName: 'party_grace_expired_noop',
+              matchId,
+              disconnectedUserIds: disconnected,
+              droppedUserIds: state.droppedUserIds,
+            },
+            'Party quiz grace expired but disconnected users were already dropped'
+          );
+          return;
+        }
         const pauseStartedRaw = await redis.get(matchPauseKey(matchId));
         const pauseStartedAtMs = Number(pauseStartedRaw);
+        logger.info(
+          {
+            eventName: 'party_grace_expired',
+            matchId,
+            disconnectedUserIds: disconnected,
+            newlyDroppedUserIds: newlyDropped,
+            droppedUserIds: state.droppedUserIds,
+            playerCount: roster.length,
+          },
+          'Party quiz grace expired; applying dropouts'
+        );
         await applyPartyQuizDropouts({
           io,
           match: activeMatch,

@@ -656,6 +656,37 @@ describe('lobby realtime socket integration', () => {
     expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['guest-u']);
   });
 
+  it('waits through a short lobby transition when joining by code', async () => {
+    const host = createSocket('host-u');
+    const guest = createSocket('guest-u');
+
+    const hostStatePromise = waitForEvent<{ inviteCode: string }>(host, 'lobby:state');
+    await host.trigger('lobby:create', { mode: 'friendly', isPublic: true });
+    const hostState = await hostStatePromise;
+    const lobby = [...store.lobbies.values()][0];
+    const lockKey = `lock:lobby:${lobby.id}`;
+    lockStore.set(lockKey, 'external-transition');
+    const releaseTransition = setTimeout(() => {
+      lockStore.delete(lockKey);
+    }, 100);
+
+    try {
+      const joinAck = await guest.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', {
+        inviteCode: hostState.inviteCode,
+      });
+
+      expect(joinAck).toMatchObject({
+        ok: true,
+        inviteCode: hostState.inviteCode,
+        alreadyMember: false,
+      });
+      expect(listMembers(lobby.id).map((member) => member.user_id)).toEqual(['host-u', 'guest-u']);
+    } finally {
+      clearTimeout(releaseTransition);
+      lockStore.delete(lockKey);
+    }
+  });
+
   it('creates a private friend challenge lobby and emits invite to challenged user', async () => {
     const challenger = createSocket(CHALLENGER_ID);
     const challenged = createSocket(CHALLENGED_ID);

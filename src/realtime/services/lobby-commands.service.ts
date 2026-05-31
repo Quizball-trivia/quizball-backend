@@ -186,7 +186,7 @@ export async function joinByCode(
       }
 
       const lobbyLockKey = `lock:lobby:${inviteLobby.id}`;
-      const lobbyLock = await acquireLock(lobbyLockKey, 3000);
+      const lobbyLock = await acquireLobbyLockWithRetry(inviteLobby.id, 3000, JOIN_BY_CODE_LOCK_WAIT_MS);
       if (!lobbyLock.acquired || !lobbyLock.token) {
         socket.emit('error', {
           code: 'TRANSITION_IN_PROGRESS',

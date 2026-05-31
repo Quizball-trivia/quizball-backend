@@ -93,6 +93,26 @@ function buildPartyStatePayloadFromRows(
   };
 }
 
+function partyStateLogFields(payload: MatchPartyStatePayload): Record<string, unknown> {
+  return {
+    eventName: 'match:party_state',
+    matchId: payload.matchId,
+    currentQuestionIndex: payload.currentQuestionIndex,
+    totalQuestions: payload.totalQuestions,
+    stateVersion: payload.stateVersion,
+    playerCount: payload.players.length,
+    activePlayerCount: payload.players.filter((player) => player.status === 'active').length,
+    droppedUserIds: payload.players
+      .filter((player) => player.status === 'dropped')
+      .map((player) => player.userId),
+    answeredUserIds: payload.players
+      .filter((player) => player.answered)
+      .map((player) => player.userId),
+    rankingOrder: payload.rankingOrder,
+    leaderUserId: payload.leaderUserId,
+  };
+}
+
 async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return null;
@@ -114,6 +134,7 @@ export async function emitPartyQuizState(io: QuizballServer, matchId: string): P
     const payload = await buildPartyStatePayload(matchId);
     if (!payload) return;
     io.to(`match:${matchId}`).emit('match:party_state', payload);
+    logger.info(partyStateLogFields(payload), 'Party quiz state emitted');
   });
 }
 
@@ -124,13 +145,23 @@ export async function emitPartyQuizStateToSocket(
   const payload = await buildPartyStatePayload(matchId);
   if (!payload) return;
   socket.emit('match:party_state', payload);
+  logger.info(
+    { ...partyStateLogFields(payload), recipientUserId: socket.data.user.id, source: 'socket_hydrate' },
+    'Party quiz state emitted to socket'
+  );
 
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return;
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
   const qIndex = state.currentQuestion?.qIndex;
   if (typeof qIndex !== 'number') return;
-  if (await isPartyQuizMatchPaused(matchId)) return;
+  if (await isPartyQuizMatchPaused(matchId)) {
+    logger.info(
+      { eventName: 'match:question', matchId, qIndex, recipientUserId: socket.data.user.id, skipped: true, reason: 'paused' },
+      'Party quiz question hydrate skipped while paused'
+    );
+    return;
+  }
 
   const [question, timing, existingAnswer, participants] = await Promise.all([
     matchesService.buildMatchQuestionPayload(matchId, qIndex).then((raw) => normalizeMatchQuestionPayload(raw)),
@@ -154,6 +185,21 @@ export async function emitPartyQuizStateToSocket(
     shooterSeat: null,
     attackerSeat: null,
   });
+  logger.info(
+    {
+      eventName: 'match:question',
+      matchId,
+      qIndex,
+      total: match.total_questions,
+      recipientUserId: socket.data.user.id,
+      source: 'socket_hydrate',
+      playableAt: timing?.shown_at ?? null,
+      deadlineAt: timing?.deadline_at ?? null,
+      questionKind: question.question.kind,
+      hasExistingAnswer: Boolean(existingAnswer),
+    },
+    'Party quiz question emitted to socket'
+  );
 
   if (!existingAnswer || correctIndex === null) return;
 
@@ -173,10 +219,26 @@ export async function emitPartyQuizStateToSocket(
       oppAnswered: answeredUserIds.size >= participants.length,
     })
   );
+  logger.info(
+    {
+      eventName: 'match:answer_ack',
+      matchId,
+      qIndex,
+      userId: socket.data.user.id,
+      source: 'socket_hydrate',
+      selectedIndex: existingAnswer.selected_index,
+      isCorrect: existingAnswer.is_correct,
+      pointsEarned: existingAnswer.points_earned,
+      answeredCount: answeredUserIds.size,
+      participantCount: participants.length,
+    },
+    'Party quiz existing answer ack emitted to socket'
+  );
 }
 
 export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): void {
   const key = questionTimerKey(matchId, qIndex);
+  logger.debug({ eventName: 'party_question_timer_cancel', matchId, qIndex, key }, 'Party quiz question timer cancel requested');
   void cancelRealtimeTimer('party_question', key).catch((error) => {
     logger.warn({ error, matchId, qIndex }, 'Failed to cancel party quiz question timer');
   });
@@ -188,6 +250,10 @@ export function handlePartyQuizReadyForNextQuestion(
   qIndex: number
 ): void {
   pendingReadyGates.acknowledge(userId, matchId, qIndex);
+  logger.info(
+    { eventName: 'match:ready_for_next_question', matchId, qIndex, userId },
+    'Party quiz ready ack received'
+  );
 }
 
 function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
@@ -208,6 +274,15 @@ function schedulePartyQuizTimeoutAt(
   }).catch((error) => {
     logger.error({ error, matchId, qIndex }, 'Failed to schedule party quiz question timer');
   });
+  logger.info(
+    {
+      eventName: 'party_question_timer_scheduled',
+      matchId,
+      qIndex,
+      deadlineAt: deadlineAt.toISOString(),
+    },
+    'Party quiz question timer scheduled'
+  );
 }
 
 function computeResumedDeadlineAt(
@@ -309,7 +384,13 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'active') return;
     span.setAttribute('quizball.total_questions', match.total_questions);
-    if (await isPartyQuizMatchPaused(matchId)) return;
+    if (await isPartyQuizMatchPaused(matchId)) {
+      logger.info(
+        { eventName: 'party_match_completion_skipped', matchId, reason: 'paused' },
+        'Party quiz completion skipped while match is paused'
+      );
+      return;
+    }
 
     const lockKey = `lock:match:${matchId}:complete`;
     const lock = await acquireLock(lockKey, 3000);
@@ -369,6 +450,22 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       if (payload) {
         io.to(`match:${matchId}`).emit('match:final_results', payload);
+        logger.info(
+          {
+            eventName: 'match:final_results',
+            matchId,
+            resultVersion,
+            winnerId: payload.winnerId,
+            winnerDecisionMethod: payload.winnerDecisionMethod,
+            playerCount: players.length,
+            standings: standings.map((standing) => ({
+              userId: standing.userId,
+              rank: standing.rank,
+              totalPoints: standing.totalPoints,
+            })),
+          },
+          'Party quiz final results emitted'
+        );
       }
 
       // Analytics: per-player match_completed event for party-quiz mode.
@@ -441,9 +538,28 @@ function schedulePartyQuizPostRoundAdvance(
     ceilingMs,
     dispatch,
     onTimeout: (missing) => {
-      logger.info({ matchId, resolvedQIndex, missing }, 'Party ready-ack ceiling reached — advancing anyway');
+      logger.info(
+        {
+          eventName: 'party_ready_ack_ceiling',
+          matchId,
+          resolvedQIndex,
+          missing,
+          ceilingMs,
+        },
+        'Party ready-ack ceiling reached; advancing'
+      );
     },
   });
+  logger.info(
+    {
+      eventName: 'party_ready_gate_opened',
+      matchId,
+      resolvedQIndex,
+      waitingUserIds: participantUserIds,
+      ceilingMs,
+    },
+    'Party quiz post-round ready gate opened'
+  );
 }
 
 export async function sendPartyQuizQuestion(
@@ -462,10 +578,17 @@ export async function sendPartyQuizQuestion(
       return null;
     }
     if (await isPartyQuizMatchPaused(matchId)) {
-      logger.info({ matchId, qIndex }, 'Party quiz question dispatch skipped while match is paused');
+      logger.info(
+        { eventName: 'match:question', matchId, qIndex, skipped: true, reason: 'paused', source: 'dispatch' },
+        'Party quiz question dispatch skipped while match is paused'
+      );
       return null;
     }
     if (qIndex >= match.total_questions) {
+      logger.info(
+        { eventName: 'party_match_completion_requested', matchId, qIndex, totalQuestions: match.total_questions },
+        'Party quiz question dispatch reached end of match'
+      );
       await completePartyQuizMatch(io, matchId);
       return null;
     }
@@ -545,6 +668,21 @@ export async function sendPartyQuizQuestion(
       shooterSeat: null,
       attackerSeat: null,
     });
+    logger.info(
+      {
+        eventName: 'match:question',
+        matchId,
+        qIndex,
+        total: match.total_questions,
+        source: questionSource,
+        questionKind: payload.question.kind,
+        playableAt: playableAt.toISOString(),
+        deadlineAt: deadlineAt.toISOString(),
+        stateVersion: state.stateVersionCounter,
+        durationMs: Date.now() - startedAt,
+      },
+      'Party quiz question emitted'
+    );
 
     span.setAttribute('quizball.question_source', questionSource);
     appMetrics.partyQuestionsSent.add(1, { source: questionSource });
@@ -567,7 +705,13 @@ export async function resumePartyQuizQuestion(
   pauseStartedAtMs: number
 ): Promise<boolean> {
   const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active') return false;
+  if (!match || match.status !== 'active') {
+    logger.info(
+      { eventName: 'party_question_resume_skipped', matchId, qIndex, reason: 'match_not_active', status: match?.status },
+      'Party quiz question resume skipped'
+    );
+    return false;
+  }
   if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
     return false;
   }
@@ -614,6 +758,22 @@ export async function resumePartyQuizQuestion(
     shooterSeat: null,
     attackerSeat: null,
   });
+  logger.info(
+    {
+      eventName: 'match:question',
+      matchId,
+      qIndex,
+      total: match.total_questions,
+      source: 'resume',
+      questionKind: question.question.kind,
+      playableAt: playableAt.toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+      previousShownAt: timing?.shown_at ?? null,
+      previousDeadlineAt: timing?.deadline_at ?? null,
+      pauseStartedAt: Number.isFinite(pauseStartedAtMs) ? new Date(pauseStartedAtMs).toISOString() : null,
+    },
+    'Party quiz question resumed and emitted'
+  );
 
   schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
   return true;
@@ -629,7 +789,10 @@ export async function ensurePartyQuizActiveTimer(
     return false;
   }
   if (await isPartyQuizMatchPaused(matchId)) {
-    logger.info({ matchId }, 'Party quiz active timer restore skipped while match is paused');
+    logger.info(
+      { eventName: 'party_question_timer_restore', matchId, skipped: true, reason: 'paused' },
+      'Party quiz active timer restore skipped while match is paused'
+    );
     return true;
   }
 
@@ -640,11 +803,24 @@ export async function ensurePartyQuizActiveTimer(
   const timing = await matchQuestionsRepo.getMatchQuestionTiming(matchId, qIndex);
   const deadlineAt = timing?.deadline_at ? new Date(timing.deadline_at) : null;
   if (!deadlineAt || Number.isNaN(deadlineAt.getTime())) {
+    logger.info(
+      { eventName: 'party_question_timer_restore', matchId, qIndex, skipped: true, reason: 'missing_deadline' },
+      'Party quiz active timer restore resolving round because deadline is missing'
+    );
     await resolvePartyQuizRound(io, matchId, qIndex, true);
     return true;
   }
 
   schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
+  logger.info(
+    {
+      eventName: 'party_question_timer_restore',
+      matchId,
+      qIndex,
+      deadlineAt: deadlineAt.toISOString(),
+    },
+    'Party quiz active timer restored'
+  );
   return true;
 }
 
@@ -674,12 +850,32 @@ export async function resolvePartyQuizRound(
         return;
       }
       if (await isPartyQuizMatchPaused(matchId)) {
-        logger.info({ matchId, qIndex, fromTimeout }, 'Party quiz round resolve skipped while match is paused');
+        logger.info(
+          {
+            eventName: 'party_round_resolve_skipped',
+            matchId,
+            qIndex,
+            fromTimeout,
+            reason: 'paused',
+          },
+          'Party quiz round resolve skipped while match is paused'
+        );
         return;
       }
 
       const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
       if (!state.currentQuestion || state.currentQuestion.qIndex !== qIndex) {
+        logger.info(
+          {
+            eventName: 'party_round_resolve_skipped',
+            matchId,
+            qIndex,
+            fromTimeout,
+            reason: 'stale_question',
+            currentQuestionIndex: state.currentQuestion?.qIndex ?? null,
+          },
+          'Party quiz round resolve skipped for stale question'
+        );
         return;
       }
 
@@ -716,6 +912,9 @@ export async function resolvePartyQuizRound(
       }
 
       const standings = buildStandings(players);
+      const activeAnswerCount = answers.filter((answer) =>
+        activePlayers.some((player) => player.user_id === answer.user_id)
+      ).length;
       state.currentQuestion = null;
       state.answeredUserIds = [];
       bumpStateVersion(state);
@@ -739,6 +938,24 @@ export async function resolvePartyQuizRound(
         shooterSeat: null,
         attackerSeat: null,
       });
+      logger.info(
+        {
+          eventName: 'match:round_result',
+          matchId,
+          qIndex,
+          source: fromTimeout ? 'timeout' : 'all_answered',
+          answerCount: answers.length,
+          activeAnswerCount,
+          playerCount: players.length,
+          activePlayerCount: activePlayers.length,
+          droppedUserIds: state.droppedUserIds,
+          nextQIndex: nextIndex,
+          totalQuestions: match.total_questions,
+          rankingOrder: standings.map((standing) => standing.userId),
+          durationMs: Date.now() - startedAt,
+        },
+        'Party quiz round result emitted'
+      );
 
       await emitPartyQuizState(io, matchId);
       appMetrics.partyRoundsResolved.add(1, {
@@ -751,6 +968,17 @@ export async function resolvePartyQuizRound(
 
       const participantUserIds = activePlayers.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
+        logger.info(
+          {
+            eventName: 'party_match_completion_scheduled',
+            matchId,
+            resolvedQIndex: qIndex,
+            nextQIndex: nextIndex,
+            totalQuestions: match.total_questions,
+            participantUserIds,
+          },
+          'Party quiz completion scheduled after final round'
+        );
         schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
           void completePartyQuizMatch(io, matchId).catch((error) => {
             logger.error({ error, matchId }, 'Failed to complete party quiz match');
@@ -764,6 +992,16 @@ export async function resolvePartyQuizRound(
           logger.error({ error, matchId, nextIndex, fromTimeout }, 'Failed to send next party quiz question');
         });
       });
+      logger.info(
+        {
+          eventName: 'party_next_question_scheduled',
+          matchId,
+          resolvedQIndex: qIndex,
+          nextQIndex: nextIndex,
+          participantUserIds,
+        },
+        'Party quiz next question scheduled after round'
+      );
     } finally {
       cancelPartyQuizQuestionTimer(matchId, qIndex);
       await releaseLock(lockKey, lock.token);
@@ -784,6 +1022,17 @@ export async function handlePartyQuizAnswer(
   }, async (span) => {
     const match = preloadedMatch ?? await matchesRepo.getMatch(payload.matchId);
     if (!match || match.status !== 'active') {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId: socket.data.user.id,
+          reason: 'match_not_active',
+          status: match?.status ?? null,
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
         message: 'Match is no longer active',
@@ -792,6 +1041,16 @@ export async function handlePartyQuizAnswer(
     }
 
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId: socket.data.user.id,
+          reason: 'invalid_variant',
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'Party quiz answer submitted for an invalid match variant',
@@ -802,6 +1061,16 @@ export async function handlePartyQuizAnswer(
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
     const redis = getRedisClient();
     if (redis && await redis.exists(matchPauseKey(payload.matchId))) {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId: socket.data.user.id,
+          reason: 'paused',
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_PAUSED',
         message: 'Match is paused while a player reconnects',
@@ -809,6 +1078,17 @@ export async function handlePartyQuizAnswer(
       return;
     }
     if (!state.currentQuestion || state.currentQuestion.qIndex !== payload.qIndex) {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId: socket.data.user.id,
+          reason: 'stale_question',
+          currentQuestionIndex: state.currentQuestion?.qIndex ?? null,
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ACTIVE',
         message: 'That question is no longer active',
@@ -820,6 +1100,16 @@ export async function handlePartyQuizAnswer(
     const participants = await matchPlayersRepo.listMatchPlayers(payload.matchId);
     const isParticipant = participants.some((player) => player.user_id === userId);
     if (!isParticipant) {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId,
+          reason: 'not_participant',
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'You are not a participant in this match',
@@ -827,6 +1117,17 @@ export async function handlePartyQuizAnswer(
       return;
     }
     if (isPartyQuizDropped(state, userId)) {
+      logger.info(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId,
+          reason: 'dropped',
+          droppedUserIds: state.droppedUserIds,
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'You are no longer active in this party quiz',
@@ -841,6 +1142,16 @@ export async function handlePartyQuizAnswer(
         await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
       );
       if (!question) {
+        logger.warn(
+          {
+            eventName: 'match:answer_rejected',
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            userId,
+            reason: 'missing_question_payload',
+          },
+          'Party quiz answer rejected'
+        );
         socket.emit('error', {
           code: 'INVALID_QUESTION',
           message: 'Question data is unavailable',
@@ -851,6 +1162,16 @@ export async function handlePartyQuizAnswer(
       correctIndex = getMultipleChoiceCorrectIndexFromPayload(question);
     }
     if (correctIndex === null) {
+      logger.warn(
+        {
+          eventName: 'match:answer_rejected',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          userId,
+          reason: 'invalid_question_payload',
+        },
+        'Party quiz answer rejected'
+      );
       socket.emit('error', {
         code: 'INVALID_QUESTION',
         message: 'Party quiz only supports multiple-choice questions',
@@ -901,6 +1222,22 @@ export async function handlePartyQuizAnswer(
         pointsEarned: recorded.answer.points_earned,
       })
     );
+    logger.info(
+      {
+        eventName: 'match:answer_ack',
+        matchId: payload.matchId,
+        qIndex: payload.qIndex,
+        userId,
+        selectedIndex: recorded.answer.selected_index,
+        isCorrect: recorded.answer.is_correct,
+        timeMs: recorded.answer.time_ms,
+        pointsEarned: recorded.answer.points_earned,
+        inserted: recorded.inserted,
+        myTotalPoints: recorded.player?.total_points
+          ?? totalPointsBefore + (recorded.inserted ? recorded.answer.points_earned : 0),
+      },
+      'Party quiz answer ack emitted'
+    );
 
     const [livePlayers, answers] = await Promise.all([
       matchPlayersRepo.listMatchPlayers(payload.matchId),
@@ -914,17 +1251,30 @@ export async function handlePartyQuizAnswer(
       'match:party_state',
       buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
     );
-    logger.debug({
+    logger.info({
+      eventName: 'match:party_state',
       matchId: payload.matchId,
       qIndex: payload.qIndex,
       userId,
       answerCount: answers.length,
       participantCount: livePlayers.length,
       activeParticipantCount: activePlayers.length,
+      activeAnswerCount,
+      droppedUserIds: state.droppedUserIds,
       inserted: recorded.inserted,
     }, 'Party answer live state emitted');
 
     if (activePlayers.length > 0 && activeAnswerCount >= activePlayers.length) {
+      logger.info(
+        {
+          eventName: 'party_all_active_players_answered',
+          matchId: payload.matchId,
+          qIndex: payload.qIndex,
+          activeAnswerCount,
+          activePlayerCount: activePlayers.length,
+        },
+        'Party quiz all active players answered'
+      );
       await resolvePartyQuizRound(io, payload.matchId, payload.qIndex);
     }
   });

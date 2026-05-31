@@ -78,6 +78,16 @@ function emitPartyOpponentForfeitPending(
   for (const player of activePlayers) {
     io.to(`user:${player.user_id}`).emit('match:forfeit_pending', payload);
   }
+  logger.info(
+    {
+      eventName: 'match:forfeit_pending',
+      matchId,
+      recipientUserIds: activePlayers.map((player) => player.user_id),
+      reason: payload.reason,
+      source: 'party_dropout',
+    },
+    'Party quiz opponent forfeit pending emitted'
+  );
 }
 
 function parsePartyDropoutPayload(raw: string): MatchPartyDropoutPayload | null {
@@ -124,6 +134,16 @@ export async function emitPendingPartyDropoutIfAny(socket: QuizballSocket): Prom
     return;
   }
   socket.emit('match:party_dropout', payload);
+  logger.info(
+    {
+      eventName: 'match:party_dropout',
+      matchId: payload.matchId,
+      userId: socket.data.user.id,
+      reason: payload.reason,
+      source: 'pending_replay',
+    },
+    'Pending party dropout emitted to reconnecting socket'
+  );
 }
 
 async function completePartyQuizDropoutMatch(params: {
@@ -139,6 +159,19 @@ async function completePartyQuizDropoutMatch(params: {
   state.answeredUserIds = [];
   state.winnerDecisionMethod = winnerDecisionMethod;
   bumpStateVersion(state);
+  logger.info(
+    {
+      eventName: 'party_dropout_match_complete',
+      matchId: match.id,
+      winnerId,
+      winnerDecisionMethod,
+      playerCount: players.length,
+      droppedUserIds: state.droppedUserIds,
+      currentQIndex: match.current_q_index,
+      totalQuestions: match.total_questions,
+    },
+    'Party quiz dropout completion started'
+  );
 
   cancelMatchQuestionTimer(match.id, match.current_q_index);
   await matchesRepo.setMatchStatePayload(match.id, state, match.current_q_index);
@@ -190,6 +223,17 @@ async function completePartyQuizDropoutMatch(params: {
   const finalPayload = await buildFinalResultsPayload(match.id, resultVersion);
   if (finalPayload) {
     await emitFinalResultsToMatchParticipants(io, match.id, finalPayload);
+    logger.info(
+      {
+        eventName: 'match:final_results',
+        matchId: match.id,
+        resultVersion,
+        winnerId: finalPayload.winnerId,
+        winnerDecisionMethod: finalPayload.winnerDecisionMethod,
+        source: 'party_dropout',
+      },
+      'Party quiz dropout final results emitted'
+    );
   }
 }
 
@@ -206,6 +250,16 @@ export async function applyPartyQuizDropouts(params: {
   if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
     return { completed: false, continued: false, activeCount: initialPlayers.length };
   }
+  logger.info(
+    {
+      eventName: 'party_dropouts_requested',
+      matchId: match.id,
+      requestedDroppedUserIds: droppedUserIds,
+      reason,
+      resumeIfContinuing: params.resumeIfContinuing,
+    },
+    'Party quiz dropouts requested'
+  );
 
   // Serialize the read-modify-write of droppedUserIds + the completion/resume
   // logic: concurrent dropouts (two disconnects, or a disconnect-timeout racing
@@ -214,12 +268,20 @@ export async function applyPartyQuizDropouts(params: {
   const lockKey = `lock:match:${match.id}:party-dropout`;
   const lock = await acquireLock(lockKey, 15_000);
   if (!lock.acquired || !lock.token) {
+    logger.warn(
+      { eventName: 'party_dropouts_skipped', matchId: match.id, reason: 'lock_not_acquired', requestedDroppedUserIds: droppedUserIds },
+      'Party quiz dropouts skipped'
+    );
     return { completed: false, continued: false, activeCount: initialPlayers.length };
   }
 
   try {
     const lockedMatch = await matchesRepo.getMatch(match.id);
     if (!lockedMatch || lockedMatch.status !== 'active') {
+      logger.info(
+        { eventName: 'party_dropouts_skipped', matchId: match.id, reason: 'match_not_active', status: lockedMatch?.status ?? null },
+        'Party quiz dropouts skipped'
+      );
       return { completed: false, continued: false, activeCount: 0 };
     }
     if (resolveMatchVariant(lockedMatch.state_payload, lockedMatch.mode) !== 'friendly_party_quiz') {
@@ -248,6 +310,16 @@ export async function applyPartyQuizDropouts(params: {
           ]),
         ]);
       }
+      logger.info(
+        {
+          eventName: 'party_dropouts_noop',
+          matchId: lockedMatch.id,
+          requestedDroppedUserIds,
+          existingDroppedUserIds: state.droppedUserIds,
+          activeCount: getActivePartyPlayers(players, nextDroppedUserIds).length,
+        },
+        'Party quiz dropouts were already applied'
+      );
       return {
         completed: false,
         continued: false,
@@ -261,6 +333,19 @@ export async function applyPartyQuizDropouts(params: {
 
     const activePlayers = getActivePartyPlayers(players, nextDroppedUserIds);
     await matchesRepo.setMatchStatePayload(lockedMatch.id, state, lockedMatch.current_q_index);
+    logger.info(
+      {
+        eventName: 'party_dropouts_applied',
+        matchId: lockedMatch.id,
+        reason,
+        newlyDroppedUserIds,
+        droppedUserIds: nextDroppedUserIds,
+        activeUserIds: activePlayers.map((player) => player.user_id),
+        activeCount: activePlayers.length,
+        currentQIndex: lockedMatch.current_q_index,
+      },
+      'Party quiz dropouts applied'
+    );
 
     const payload = buildPartyDropoutPayload(lockedMatch.id, reason);
     await Promise.all(
@@ -268,6 +353,15 @@ export async function applyPartyQuizDropouts(params: {
         await setPartyDropoutPendingForUser(userId, payload);
         io.to(`user:${userId}`).emit('match:party_dropout', payload);
       })
+    );
+    logger.info(
+      {
+        eventName: 'match:party_dropout',
+        matchId: lockedMatch.id,
+        recipientUserIds: newlyDroppedUserIds,
+        reason,
+      },
+      'Party quiz dropout emitted'
     );
 
     if (activePlayers.length <= 1) {
@@ -314,6 +408,16 @@ export async function applyPartyQuizDropouts(params: {
           matchId: lockedMatch.id,
           nextQIndex: lockedMatch.current_q_index,
         });
+        logger.info(
+          {
+            eventName: 'match:resume',
+            matchId: lockedMatch.id,
+            nextQIndex: lockedMatch.current_q_index,
+            source: 'party_dropout',
+            activeUserIds: activePlayers.map((player) => player.user_id),
+          },
+          'Party quiz resumed after dropouts'
+        );
         if (state.currentQuestion) {
           await resumePartyQuizQuestion(
             io,
@@ -336,6 +440,16 @@ export async function applyPartyQuizDropouts(params: {
         } else {
           await sendPartyQuizQuestion(io, lockedMatch.id, lockedMatch.current_q_index);
         }
+      } else {
+        logger.info(
+          {
+            eventName: 'party_resume_waiting',
+            matchId: lockedMatch.id,
+            activeUserIds: activePlayers.map((player) => player.user_id),
+            reason: 'active_player_still_disconnected',
+          },
+          'Party quiz remains paused after dropouts'
+        );
       }
     }
 

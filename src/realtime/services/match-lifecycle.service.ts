@@ -297,6 +297,17 @@ export async function beginMatchForLobby(
 
   if (variant === 'friendly_party_quiz') {
     await emitPartyQuizState(io, matchId);
+    logger.info(
+      {
+        eventName: 'party_match_started',
+        matchId,
+        lobbyId,
+        playerCount: members.length,
+        countdownSec,
+        totalQuestions: match.total_questions,
+      },
+      'Party quiz match started'
+    );
     // Analytics: per-member party_quiz_started event.
     try {
       for (const member of members) {
@@ -336,7 +347,7 @@ export async function beginMatchForLobby(
     reason: 'kickoff',
   });
   logger.info(
-    { matchId, seconds: countdownSec, startsAt },
+    { eventName: 'match:countdown', matchId, variant, seconds: countdownSec, startsAt, reason: 'kickoff' },
     'Match start countdown scheduled'
   );
 
@@ -348,6 +359,10 @@ export async function beginMatchForLobby(
           logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
           return;
         }
+        logger.info(
+          { eventName: 'match:first_question_dispatch', matchId, variant: resolveMatchVariant(match.state_payload, match.mode) },
+          'Dispatching first match question after countdown'
+        );
         await sendMatchQuestion(io, matchId, 0);
       } catch (error) {
         logger.error({ error, matchId }, 'Failed to send first match question after countdown');
@@ -374,6 +389,16 @@ export async function rejoinActiveMatchOnConnect(
       const payload = buildPartyDropoutPayload(match.id, 'disconnect_timeout');
       await setPartyDropoutPendingForUser(userId, payload);
       socket.emit('match:party_dropout', payload);
+      logger.info(
+        {
+          eventName: 'match:party_dropout',
+          matchId: match.id,
+          userId,
+          reason: payload.reason,
+          source: 'connect_dropped_party_user',
+        },
+        'Dropped party quiz player connected'
+      );
       return;
     }
   }
@@ -384,6 +409,20 @@ export async function rejoinActiveMatchOnConnect(
     const remainingReconnects = toRemainingReconnects(await getDisconnectCount(match.id, userId));
     appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
     await emitRejoinAvailable(socket, match, userId, graceMs, remainingReconnects);
+    if (variant === 'friendly_party_quiz') {
+      logger.info(
+        {
+          eventName: 'match:rejoin_available',
+          matchId: match.id,
+          userId,
+          variant,
+          graceMs,
+          remainingReconnects,
+          source: 'connect_paused_disconnected',
+        },
+        'Party quiz rejoin available emitted on connect'
+      );
+    }
     return;
   }
 
@@ -437,6 +476,16 @@ export async function rejoinActiveMatchOnConnect(
   }
 
   if (variant === 'friendly_party_quiz') {
+    logger.info(
+      {
+        eventName: 'party_rejoin_active_on_connect',
+        matchId: match.id,
+        userId,
+        isPaused,
+        wasDisconnected,
+      },
+      'Party quiz active match rejoined on connect'
+    );
     await emitPartyQuizStateToSocket(socket, match.id);
     await ensurePartyQuizActiveTimer(io, match.id);
   } else {

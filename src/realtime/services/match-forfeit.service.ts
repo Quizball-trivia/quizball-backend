@@ -297,6 +297,17 @@ export async function handleMatchForfeit(
         const pauseStartedRaw = redis ? await redis.get(matchPauseKey(activeMatch.id)) : null;
         const pauseStartedAtMs = Number(pauseStartedRaw);
         const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+        logger.info(
+          {
+            eventName: 'match:forfeit',
+            matchId: activeMatch.id,
+            userId,
+            variant,
+            playerCount: players.length,
+            pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : null,
+          },
+          'Party quiz forfeit requested'
+        );
         await applyPartyQuizDropouts({
           io,
           match: activeMatch,

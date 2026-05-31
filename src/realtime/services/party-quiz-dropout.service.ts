@@ -8,6 +8,7 @@ import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { deleteMatchCache } from '../match-cache.js';
+import { acquireLock, releaseLock } from '../locks.js';
 import {
   lastMatchKey,
   matchDisconnectKey,
@@ -22,13 +23,14 @@ import { buildStandings, bumpStateVersion } from '../match-utils.js';
 import {
   emitPartyQuizState,
   resumePartyQuizQuestion,
+  sendPartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
 import {
   getActivePartyPlayers,
   sanitizePartyQuizState,
 } from '../party-quiz-state.js';
 import { getRedisClient } from '../redis.js';
-import type { MatchPartyDropoutPayload } from '../socket.types.js';
+import type { MatchForfeitPendingPayload, MatchPartyDropoutPayload } from '../socket.types.js';
 import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
@@ -52,6 +54,32 @@ export function buildPartyDropoutPayload(
   };
 }
 
+function buildPartyOpponentForfeitPendingPayload(
+  matchId: string,
+  reason: PartyDropoutReason
+): MatchForfeitPendingPayload {
+  const pendingReason = reason === 'self_forfeit' ? 'opponent_forfeit' : 'opponent_reconnect_limit';
+  return {
+    matchId,
+    reason: pendingReason,
+    message: pendingReason === 'opponent_forfeit'
+      ? 'Opponent forfeited. Finalizing results...'
+      : 'Opponent did not reconnect in time. Finalizing results...',
+  };
+}
+
+function emitPartyOpponentForfeitPending(
+  io: QuizballServer,
+  matchId: string,
+  activePlayers: MatchPlayerRow[],
+  reason: PartyDropoutReason
+): void {
+  const payload = buildPartyOpponentForfeitPendingPayload(matchId, reason);
+  for (const player of activePlayers) {
+    io.to(`user:${player.user_id}`).emit('match:forfeit_pending', payload);
+  }
+}
+
 function parsePartyDropoutPayload(raw: string): MatchPartyDropoutPayload | null {
   try {
     const parsed = JSON.parse(raw) as Partial<MatchPartyDropoutPayload>;
@@ -64,7 +92,9 @@ function parsePartyDropoutPayload(raw: string): MatchPartyDropoutPayload | null 
     return {
       matchId: parsed.matchId,
       reason: parsed.reason,
-      message: parsed.message ?? buildPartyDropoutPayload(parsed.matchId, parsed.reason).message,
+      message: typeof parsed.message === 'string'
+        ? parsed.message
+        : buildPartyDropoutPayload(parsed.matchId, parsed.reason).message,
     };
   } catch {
     return null;
@@ -177,76 +207,107 @@ export async function applyPartyQuizDropouts(params: {
     return { completed: false, continued: false, activeCount: players.length };
   }
 
-  const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-  const nextDroppedUserIds = [
-    ...new Set([
-      ...state.droppedUserIds,
-      ...droppedUserIds.filter((userId) => players.some((player) => player.user_id === userId)),
-    ]),
-  ];
-  state.droppedUserIds = nextDroppedUserIds;
-  state.answeredUserIds = state.answeredUserIds.filter((userId) => !nextDroppedUserIds.includes(userId));
-  bumpStateVersion(state);
-
-  const activePlayers = getActivePartyPlayers(players, nextDroppedUserIds);
-  await matchesRepo.setMatchStatePayload(match.id, state, match.current_q_index);
-
-  const redis = getRedisClient();
-  const payload = buildPartyDropoutPayload(match.id, reason);
-  await Promise.all(
-    droppedUserIds.map(async (userId) => {
-      await setPartyDropoutPendingForUser(userId, payload);
-      io.to(`user:${userId}`).emit('match:party_dropout', payload);
-    })
-  );
-
-  if (activePlayers.length <= 1) {
-    const standingsWinnerId = buildStandings(players)[0]?.userId ?? null;
-    await completePartyQuizDropoutMatch({
-      io,
-      match: {
-        ...match,
-        state_payload: state as unknown as Record<string, unknown>,
-      },
-      players,
-      winnerId: activePlayers[0]?.user_id ?? standingsWinnerId,
-      winnerDecisionMethod: activePlayers.length === 1 ? 'forfeit' : 'total_points',
-    });
-    return { completed: true, continued: false, activeCount: activePlayers.length };
+  // Serialize the read-modify-write of droppedUserIds + the completion/resume
+  // logic: concurrent dropouts (two disconnects, or a disconnect-timeout racing
+  // a self-forfeit) would otherwise read the same state_payload and clobber each
+  // other's writes / double-complete the match.
+  const lockKey = `lock:match:${match.id}:party-dropout`;
+  const lock = await acquireLock(lockKey, 15_000);
+  if (!lock.acquired || !lock.token) {
+    return { completed: false, continued: false, activeCount: players.length };
   }
 
-  if (redis) {
-    await redis.del([
-      ...droppedUserIds.flatMap((userId) => [
-        matchDisconnectKey(match.id, userId),
-        matchPresenceKey(match.id, userId),
+  try {
+    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    const nextDroppedUserIds = [
+      ...new Set([
+        ...state.droppedUserIds,
+        ...droppedUserIds.filter((userId) => players.some((player) => player.user_id === userId)),
       ]),
-    ]);
-  }
+    ];
+    state.droppedUserIds = nextDroppedUserIds;
+    state.answeredUserIds = state.answeredUserIds.filter((userId) => !nextDroppedUserIds.includes(userId));
+    bumpStateVersion(state);
 
-  await emitPartyQuizState(io, match.id);
+    const activePlayers = getActivePartyPlayers(players, nextDroppedUserIds);
+    await matchesRepo.setMatchStatePayload(match.id, state, match.current_q_index);
 
-  if (params.resumeIfContinuing && redis) {
-    const disconnectedExists = await Promise.all(
-      activePlayers.map((player) => redis.exists(matchDisconnectKey(match.id, player.user_id)))
+    const redis = getRedisClient();
+    const payload = buildPartyDropoutPayload(match.id, reason);
+    await Promise.all(
+      droppedUserIds.map(async (userId) => {
+        await setPartyDropoutPendingForUser(userId, payload);
+        io.to(`user:${userId}`).emit('match:party_dropout', payload);
+      })
     );
-    const stillWaitingForActivePlayer = disconnectedExists.some((exists) => exists === 1);
-    if (!stillWaitingForActivePlayer) {
-      await redis.del([matchPauseKey(match.id), matchGraceKey(match.id), matchResumeCountdownKey(match.id)]);
-      io.to(`match:${match.id}`).emit('match:resume', {
-        matchId: match.id,
-        nextQIndex: match.current_q_index,
+
+    if (activePlayers.length <= 1) {
+      if (activePlayers.length === 1) {
+        emitPartyOpponentForfeitPending(io, match.id, activePlayers, reason);
+      }
+      const standingsWinnerId = buildStandings(players)[0]?.userId ?? null;
+      await completePartyQuizDropoutMatch({
+        io,
+        match: {
+          ...match,
+          state_payload: state as unknown as Record<string, unknown>,
+        },
+        players,
+        winnerId: activePlayers[0]?.user_id ?? standingsWinnerId,
+        winnerDecisionMethod: activePlayers.length === 1 ? 'forfeit' : 'total_points',
       });
-      if (state.currentQuestion) {
-        await resumePartyQuizQuestion(
-          io,
-          match.id,
-          state.currentQuestion.qIndex,
-          params.pauseStartedAtMs ?? Date.now()
-        );
+      return { completed: true, continued: false, activeCount: activePlayers.length };
+    }
+
+    if (redis) {
+      await redis.del([
+        ...droppedUserIds.flatMap((userId) => [
+          matchDisconnectKey(match.id, userId),
+          matchPresenceKey(match.id, userId),
+        ]),
+      ]);
+    }
+
+    await emitPartyQuizState(io, match.id);
+
+    if (params.resumeIfContinuing && redis) {
+      const disconnectedExists = await Promise.all(
+        activePlayers.map((player) => redis.exists(matchDisconnectKey(match.id, player.user_id)))
+      );
+      const stillWaitingForActivePlayer = disconnectedExists.some((exists) => exists === 1);
+      if (!stillWaitingForActivePlayer) {
+        await redis.del([matchPauseKey(match.id), matchGraceKey(match.id), matchResumeCountdownKey(match.id)]);
+        io.to(`match:${match.id}`).emit('match:resume', {
+          matchId: match.id,
+          nextQIndex: match.current_q_index,
+        });
+        if (state.currentQuestion) {
+          await resumePartyQuizQuestion(
+            io,
+            match.id,
+            state.currentQuestion.qIndex,
+            params.pauseStartedAtMs ?? Date.now()
+          );
+        } else if (match.current_q_index >= match.total_questions) {
+          await completePartyQuizDropoutMatch({
+            io,
+            match: {
+              ...match,
+              state_payload: state as unknown as Record<string, unknown>,
+            },
+            players,
+            winnerId: buildStandings(activePlayers)[0]?.userId ?? null,
+            winnerDecisionMethod: 'total_points',
+          });
+          return { completed: true, continued: false, activeCount: activePlayers.length };
+        } else {
+          await sendPartyQuizQuestion(io, match.id, match.current_q_index);
+        }
       }
     }
-  }
 
-  return { completed: false, continued: true, activeCount: activePlayers.length };
+    return { completed: false, continued: true, activeCount: activePlayers.length };
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
 }

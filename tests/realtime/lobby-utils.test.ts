@@ -4,10 +4,14 @@ import '../setup.js';
 import { acquireLock, releaseLock } from '../../src/realtime/locks.js';
 import { lobbiesRepo } from '../../src/modules/lobbies/lobbies.repo.js';
 import {
+  attachUserSocketsToLobby,
+  emitLobbyState,
   normalizeFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCount,
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../../src/realtime/lobby-utils.js';
+
+const buildLobbyStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -15,6 +19,12 @@ vi.mock('../../src/core/logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
+  lobbiesService: {
+    buildLobbyState: (...args: unknown[]) => buildLobbyStateMock(...args),
   },
 }));
 
@@ -105,5 +115,83 @@ describe('lobby-utils', () => {
     expect(releaseLock).not.toHaveBeenCalled();
     expect(lobbiesRepo.updateLobbySettings).not.toHaveBeenCalled();
     expect(lobbiesRepo.setAllReady).not.toHaveBeenCalled();
+  });
+
+  it('does not attach sockets from a mismatched user room to a lobby', async () => {
+    const goodSocket = {
+      data: { user: { id: 'u1' }, lobbyId: undefined },
+      join: vi.fn(),
+      leave: vi.fn(),
+    };
+    const staleSocket = {
+      data: { user: { id: 'u2' }, lobbyId: undefined },
+      join: vi.fn(),
+      leave: vi.fn(),
+    };
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => [goodSocket, staleSocket]),
+      })),
+    };
+
+    await attachUserSocketsToLobby(io as never, 'u1', 'lobby-1');
+
+    expect(goodSocket.join).toHaveBeenCalledWith('lobby:lobby-1');
+    expect(goodSocket.data.lobbyId).toBe('lobby-1');
+    expect(staleSocket.join).not.toHaveBeenCalled();
+    expect(staleSocket.leave).toHaveBeenCalledWith('user:u1');
+    expect(staleSocket.data.lobbyId).toBeUndefined();
+  });
+
+  it('emits lobby state only to member user rooms and removes stale lobby sockets', async () => {
+    const memberSocket = {
+      data: { user: { id: 'u1' }, lobbyId: 'lobby-1' },
+      leave: vi.fn(),
+    };
+    const staleSocket = {
+      data: { user: { id: 'u2' }, lobbyId: 'lobby-1' },
+      leave: vi.fn(),
+    };
+    const emit = vi.fn();
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => [memberSocket, staleSocket]),
+      })),
+      to: vi.fn(() => ({ emit })),
+    };
+    const lobby = {
+      id: 'lobby-1',
+      mode: 'friendly',
+      status: 'waiting',
+      game_mode: 'friendly_possession',
+    };
+    const state = {
+      lobbyId: 'lobby-1',
+      mode: 'friendly',
+      status: 'waiting',
+      inviteCode: 'ABC123',
+      displayName: 'Lobby',
+      isPublic: false,
+      hostUserId: 'u1',
+      settings: {
+        gameMode: 'friendly_possession',
+        friendlyRandom: true,
+        friendlyCategoryAId: null,
+        friendlyCategoryBId: null,
+      },
+      members: [
+        { userId: 'u1', username: 'u1', avatarUrl: null, isReady: false, isHost: true },
+      ],
+    };
+    vi.mocked(lobbiesRepo.getById).mockResolvedValue(lobby as never);
+    buildLobbyStateMock.mockResolvedValue(state);
+
+    await emitLobbyState(io as never, 'lobby-1');
+
+    expect(staleSocket.leave).toHaveBeenCalledWith('lobby:lobby-1');
+    expect(staleSocket.data.lobbyId).toBeUndefined();
+    expect(memberSocket.leave).not.toHaveBeenCalled();
+    expect(io.to).toHaveBeenCalledWith('user:u1');
+    expect(emit).toHaveBeenCalledWith('lobby:state', state);
   });
 });

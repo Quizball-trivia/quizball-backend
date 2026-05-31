@@ -20,6 +20,9 @@ const buildMatchQuestionPayloadMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const evaluateAchievementsForMatchMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
+const redisMockState = vi.hoisted(() => ({
+  pausedMatches: new Set<string>(),
+}));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -36,7 +39,9 @@ vi.mock('../../src/realtime/locks.js', () => ({
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
-  getRedisClient: () => null,
+  getRedisClient: () => ({
+    exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
+  }),
 }));
 
 vi.mock('../../src/modules/achievements/index.js', () => ({
@@ -134,6 +139,7 @@ describe('party quiz realtime flow', () => {
     totalQuestions: number;
     currentQuestion: { qIndex: number } | null;
     answeredUserIds: string[];
+    droppedUserIds: string[];
     winnerDecisionMethod: 'total_points' | 'forfeit' | null;
     stateVersionCounter: number;
   };
@@ -165,9 +171,11 @@ describe('party quiz realtime flow', () => {
       totalQuestions: 10,
       currentQuestion: { qIndex: 0 },
       answeredUserIds: [],
+      droppedUserIds: [],
       winnerDecisionMethod: null,
       stateVersionCounter: 0,
     };
+    redisMockState.pausedMatches.clear();
     players = [
       { user_id: 'u1', seat: 1, total_points: 120, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: 2200 },
       { user_id: 'u2', seat: 2, total_points: 90, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: 2100 },
@@ -390,6 +398,34 @@ describe('party quiz realtime flow', () => {
         expect.objectContaining({ userId: 'u3', rank: 3, answered: false }),
       ]),
     }));
+  });
+
+  it('does not resolve and reveal a party round while the match is paused', async () => {
+    const { resolvePartyQuizRound } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    redisMockState.pausedMatches.add('match:pause:match-1');
+    answers = [
+      { user_id: 'u1', selected_index: 2, is_correct: true, points_earned: 90, time_ms: 1000 },
+      { user_id: 'u2', selected_index: 1, is_correct: false, points_earned: 0, time_ms: 4000 },
+      { user_id: 'u3', selected_index: 2, is_correct: true, points_earned: 60, time_ms: 3500 },
+    ];
+
+    await resolvePartyQuizRound(io, 'match-1', 0, true);
+
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(events.some((entry) => entry.event === 'match:round_result')).toBe(false);
+  });
+
+  it('does not dispatch a party question while the match is paused', async () => {
+    const { sendPartyQuizQuestion } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    redisMockState.pausedMatches.add('match:pause:match-1');
+
+    await sendPartyQuizQuestion(io, 'match-1', 1);
+
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+    expect(setQuestionTimingMock).not.toHaveBeenCalled();
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(false);
   });
 
   it('derives answered users from answer rows instead of mutating match state', async () => {

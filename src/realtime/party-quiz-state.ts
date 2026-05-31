@@ -4,6 +4,12 @@ import {
 } from '../modules/matches/matches.service.js';
 import type { MatchPlayerRow, MatchRow } from '../modules/matches/matches.types.js';
 
+/** Coerce a possibly-malformed persisted value to a safe non-negative integer. */
+function toSafeCounter(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
 export function sanitizePartyQuizState(raw: unknown, totalQuestions: number): PartyQuizStatePayload {
   const fallback = createInitialPartyQuizState(totalQuestions);
   if (!raw || typeof raw !== 'object') {
@@ -34,7 +40,7 @@ export function sanitizePartyQuizState(raw: unknown, totalQuestions: number): Pa
       candidate.winnerDecisionMethod === 'total_points' || candidate.winnerDecisionMethod === 'forfeit'
         ? candidate.winnerDecisionMethod
         : null,
-    stateVersionCounter: Math.max(0, Number(candidate.stateVersionCounter ?? 0)),
+    stateVersionCounter: toSafeCounter(candidate.stateVersionCounter),
   };
 }
 

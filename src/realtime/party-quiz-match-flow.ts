@@ -55,6 +55,12 @@ const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
 
+async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+  return (await redis.exists(matchPauseKey(matchId))) === 1;
+}
+
 function buildPartyStatePayloadFromRows(
   match: MatchRow,
   state: PartyQuizStatePayload,
@@ -124,6 +130,7 @@ export async function emitPartyQuizStateToSocket(
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
   const qIndex = state.currentQuestion?.qIndex;
   if (typeof qIndex !== 'number') return;
+  if (await isPartyQuizMatchPaused(matchId)) return;
 
   const [question, timing, existingAnswer, participants] = await Promise.all([
     matchesService.buildMatchQuestionPayload(matchId, qIndex).then((raw) => normalizeMatchQuestionPayload(raw)),
@@ -302,6 +309,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'active') return;
     span.setAttribute('quizball.total_questions', match.total_questions);
+    if (await isPartyQuizMatchPaused(matchId)) return;
 
     const lockKey = `lock:match:${matchId}:complete`;
     const lock = await acquireLock(lockKey, 3000);
@@ -451,6 +459,10 @@ export async function sendPartyQuizQuestion(
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'active') return null;
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+      return null;
+    }
+    if (await isPartyQuizMatchPaused(matchId)) {
+      logger.info({ matchId, qIndex }, 'Party quiz question dispatch skipped while match is paused');
       return null;
     }
     if (qIndex >= match.total_questions) {
@@ -616,6 +628,10 @@ export async function ensurePartyQuizActiveTimer(
   if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
     return false;
   }
+  if (await isPartyQuizMatchPaused(matchId)) {
+    logger.info({ matchId }, 'Party quiz active timer restore skipped while match is paused');
+    return true;
+  }
 
   const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
   const qIndex = state.currentQuestion?.qIndex;
@@ -655,6 +671,10 @@ export async function resolvePartyQuizRound(
       const match = await matchesRepo.getMatch(matchId);
       if (!match || match.status !== 'active') return;
       if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+        return;
+      }
+      if (await isPartyQuizMatchPaused(matchId)) {
+        logger.info({ matchId, qIndex, fromTimeout }, 'Party quiz round resolve skipped while match is paused');
         return;
       }
 

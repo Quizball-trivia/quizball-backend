@@ -40,6 +40,7 @@ import {
   emitPartyQuizStateToSocket,
   ensurePartyQuizActiveTimer,
   resumePartyQuizQuestion,
+  sendPartyQuizQuestion,
 } from '../party-quiz-match-flow.js';
 import {
   getActivePartyPlayers,
@@ -305,6 +306,7 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
   if (!match || match.status !== 'active') return;
 
   const userId = socket.data.user.id;
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
   const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
     await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
       ignoreSocketId: socket.id,
@@ -312,6 +314,7 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
     });
   }, {
     operation: 'match:disconnect',
+    ...(variant === 'friendly_party_quiz' ? { waitMs: 5000 } : {}),
   });
   if (!completed) return;
   await userSessionGuardService.emitState(io, userId);
@@ -416,16 +419,20 @@ export async function resumePausedMatch(
           nextQIndex: activeMatch.current_q_index,
         });
 
+        const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
         const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
         if (activeQuestion) {
           const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
             ? pauseStartedAtMs
             : Date.now();
-          const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
           const resumed = variant === 'friendly_party_quiz'
             ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
             : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
           if (resumed) return;
+        }
+        if (variant === 'friendly_party_quiz') {
+          await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
+          return;
         }
         await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
       } catch (err) {
@@ -475,7 +482,7 @@ export async function pauseMatchForDisconnectedPlayer(
     const connectedAt = connectedSocket.data.connectedAt;
     return typeof connectedAt !== 'number' || nowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
   });
-  if (stableLiveSocket) {
+  if (stableLiveSocket && variant !== 'friendly_party_quiz') {
     logger.info(
       { matchId, userId, socketCount: sockets.length, sameUserSocketCount: sameUserSockets.length },
       'Match disconnect pause skipped because user still has a live match socket'
@@ -528,10 +535,11 @@ export async function pauseMatchForDisconnectedPlayer(
     cancelPossessionHalftimeTimer(matchId);
   }
 
-  const remainingPlayers = partyState
-    ? getActivePartyPlayers(players, partyState.droppedUserIds).filter((player) => player.user_id !== userId)
+  const pauseRecipients = partyState
+    ? getActivePartyPlayers(players, partyState.droppedUserIds)
+        .filter((player) => player.user_id !== userId || sameUserSockets.length > 0)
     : players.filter((player) => player.user_id !== userId);
-  remainingPlayers.forEach((player) => {
+  pauseRecipients.forEach((player) => {
     io.to(`user:${player.user_id}`).emit('match:opponent_disconnected', {
       matchId,
       opponentId: userId,

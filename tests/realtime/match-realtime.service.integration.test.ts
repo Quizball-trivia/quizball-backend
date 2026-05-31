@@ -787,6 +787,52 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('S15a5: party quiz forfeit that leaves one active player emits pending win before results', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const roomEvents: Array<{ room: string; event: string; payload: unknown }> = [];
+    const io = {
+      to: vi.fn((room: string) => ({
+        emit: (event: string, payload?: unknown) => {
+          roomEvents.push({ room, event, payload });
+        },
+      })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const socket = createSocketMock('u1', 'm1');
+    const activeMatch = {
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+        currentQuestion: { qIndex: 2, correctIndex: 1 },
+      },
+    };
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue(activeMatch);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(roomEvents).toContainEqual({
+      room: 'user:u2',
+      event: 'match:forfeit_pending',
+      payload: expect.objectContaining({
+        matchId: 'm1',
+        reason: 'opponent_forfeit',
+      }),
+    });
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+  });
+
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
     vi.useFakeTimers();
     try {

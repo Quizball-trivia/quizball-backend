@@ -330,10 +330,29 @@ async function cleanupOpenLobbies(
     keepLobbyId?: string;
     keepWaitingLobbyId?: string;
     preserveActiveMatchId?: string | null;
+    cleanupStartedAtMs?: number;
   } = {}
 ): Promise<void> {
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
   for (const lobby of openLobbies) {
+    const joinedAtMs = Date.parse(lobby.joined_at);
+    if (
+      typeof options.cleanupStartedAtMs === 'number' &&
+      Number.isFinite(joinedAtMs) &&
+      joinedAtMs > options.cleanupStartedAtMs
+    ) {
+      logger.info(
+        {
+          userId,
+          lobbyId: lobby.id,
+          joinedAt: lobby.joined_at,
+          cleanupStartedAt: new Date(options.cleanupStartedAtMs).toISOString(),
+        },
+        'Session guard skipped lobby cleanup for membership joined after cleanup started'
+      );
+      continue;
+    }
+
     if (options.keepLobbyId && lobby.id === options.keepLobbyId) {
       continue;
     }
@@ -506,6 +525,7 @@ export const userSessionGuardService = {
   },
 
   async prepareForConnect(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
+    const cleanupStartedAtMs = Date.now();
     let context = await resolveContext(userId);
     await cleanupStaleOrphanActiveMatch(io, userId, context);
     context = await resolveContext(userId);
@@ -514,6 +534,7 @@ export const userSessionGuardService = {
       await cancelRankedQueueSearch(userId);
       await cleanupOpenLobbies(io, userId, {
         preserveActiveMatchId: context.activeMatch.id,
+        cleanupStartedAtMs,
       });
       return this.resolveState(userId);
     }
@@ -526,6 +547,7 @@ export const userSessionGuardService = {
       keepLobbyId,
       keepWaitingLobbyId: context.waitingLobbies[0]?.id,
       preserveActiveMatchId: null,
+      cleanupStartedAtMs,
     });
     return this.resolveState(userId);
   },

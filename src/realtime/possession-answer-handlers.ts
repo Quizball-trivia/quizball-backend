@@ -317,17 +317,17 @@ export async function handlePossessionAnswer(
     shooterSeat: committed.question.shooterSeat,
   });
 
-  if (committed.question.phaseKind !== 'penalty') {
-    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
-      matchId,
-      qIndex,
-      questionKind: committed.question.kind,
-      opponentTotalPoints: committed.myTotalPoints,
-      pointsEarned: committed.pointsEarned,
-      isCorrect: committed.isCorrect,
-      selectedIndex,
-    });
-  }
+  // Emit live in all phases, penalties included, so the opponent's pick and
+  // score-flight surface the same way as a normal ranked question.
+  socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+    matchId,
+    qIndex,
+    questionKind: committed.question.kind,
+    opponentTotalPoints: committed.myTotalPoints,
+    pointsEarned: committed.pointsEarned,
+    isCorrect: committed.isCorrect,
+    selectedIndex,
+  });
 
   if (committed.answerCount >= committed.expectedCount) {
     logger.info(

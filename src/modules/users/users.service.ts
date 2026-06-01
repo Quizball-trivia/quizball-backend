@@ -19,6 +19,7 @@ import {
   parseStoredAvatarCustomization,
   type AvatarCustomization,
 } from './avatar-customization.js';
+import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
@@ -47,6 +48,25 @@ function assertUserAccountActive(user: User): void {
 function normalizeOptionalText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function assertNicknameAllowed(nickname: string, userId?: string): void {
+  const match = findBannedNicknameTerm(nickname);
+  if (!match) return;
+
+  logger.warn(
+    {
+      userId,
+      field: 'nickname',
+      reason: match.reason,
+      language: match.language,
+    },
+    'Blocked prohibited nickname'
+  );
+  throw new BadRequestError('Nickname is not allowed', {
+    field: 'nickname',
+    reason: 'prohibited_content',
+  });
 }
 
 async function buildIdentityBackfill(
@@ -200,6 +220,21 @@ export const usersService = {
     );
 
     const phoneNumber = normalizeOptionalText(identity.phoneNumber);
+    const proposedNickname = identity.name && isNicknameAllowed(identity.name)
+      ? identity.name
+      : null;
+    if (identity.name && !proposedNickname) {
+      logger.warn(
+        {
+          provider: identity.provider,
+          subject: identity.subject,
+          field: 'nickname',
+          reason: 'prohibited_content',
+        },
+        'Dropped prohibited identity nickname during user creation'
+      );
+    }
+
     const newUser = await usersRepo.createWithIdentity(
       {
         email: identity.email,
@@ -207,7 +242,7 @@ export const usersService = {
         phoneVerifiedAt: phoneNumber
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
-        nickname: identity.name,
+        nickname: proposedNickname,
         country: detectedCountry ?? undefined,
       },
       {
@@ -318,14 +353,24 @@ export const usersService = {
   ): Promise<User> {
     await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
 
-    if (typeof data.nickname === 'string' && data.nickname.trim().length > 0) {
-      const taken = await usersRepo.isNicknameTaken(data.nickname, id);
+    const updateData: typeof data = { ...data };
+    if (typeof data.nickname === 'string') {
+      const nickname = data.nickname.trim();
+      if (nickname.length === 0) {
+        throw new BadRequestError('Nickname is required', {
+          field: 'nickname',
+          reason: 'empty',
+        });
+      }
+      assertNicknameAllowed(nickname, id);
+      const taken = await usersRepo.isNicknameTaken(nickname, id);
       if (taken) {
         throw new ConflictError('Nickname is already taken', { field: 'nickname' });
       }
+      updateData.nickname = nickname;
     }
 
-    const user = await usersRepo.update(id, data);
+    const user = await usersRepo.update(id, updateData);
 
     if (!user) {
       throw new NotFoundError('User not found');

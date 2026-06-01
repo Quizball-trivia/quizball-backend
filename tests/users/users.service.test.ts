@@ -5,6 +5,7 @@ import '../setup.js';
 const getByIdMock = vi.fn();
 const updateMock = vi.fn();
 const getActiveByPhoneNumberMock = vi.fn();
+const isNicknameTakenMock = vi.fn();
 const requestDeletionMock = vi.fn();
 const cancelPendingDeletionMock = vi.fn();
 const createWithIdentityMock = vi.fn();
@@ -35,6 +36,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     getById: (...args: unknown[]) => getByIdMock(...args),
     searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    isNicknameTaken: (...args: unknown[]) => isNicknameTakenMock(...args),
     getActiveByPhoneNumber: (...args: unknown[]) => getActiveByPhoneNumberMock(...args),
     requestDeletion: (...args: unknown[]) => requestDeletionMock(...args),
     cancelPendingDeletion: (...args: unknown[]) => cancelPendingDeletionMock(...args),
@@ -155,6 +157,7 @@ describe('usersService.getPublicProfile', () => {
     vi.clearAllMocks();
     getByIdMock.mockResolvedValue(MOCK_USER);
     updateMock.mockResolvedValue({ ...MOCK_USER, avatar_customization: { skin: 'skin_male_white' } });
+    isNicknameTakenMock.mockResolvedValue(false);
     listInventoryWithProductsMock.mockResolvedValue([]);
     getProfileMock.mockResolvedValue(MOCK_RANKED_PROFILE);
     getUserRankMock.mockImplementation((_userId: string, country?: string) =>
@@ -344,6 +347,37 @@ describe('usersService.getPublicProfile', () => {
       avatarCustomization: {
         skin: 'skin_male_dark_alt',
       },
+    });
+  });
+
+  it('rejects prohibited nicknames before checking uniqueness', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      nickname: `Ni${'gge'}R`,
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Nickname is not allowed',
+      details: {
+        field: 'nickname',
+        reason: 'prohibited_content',
+      },
+    });
+
+    expect(isNicknameTakenMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('trims nickname before uniqueness checks and persistence', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      nickname: '  CleanName  ',
+    });
+
+    expect(isNicknameTakenMock).toHaveBeenCalledWith('CleanName', 'user-target-id');
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      nickname: 'CleanName',
     });
   });
 });

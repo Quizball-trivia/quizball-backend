@@ -347,13 +347,23 @@ export interface PossessionStatePayload {
       seat1: string | null;
       seat2: string | null;
     };
+    /**
+     * What this ban interlude is for. The penalty shootout reuses the entire
+     * HALFTIME ban machinery via this discriminator: 'penalty' makes finalize
+     * exit into PENALTY_SHOOTOUT (with the chosen category as penaltyCategoryId)
+     * instead of the second half.
+     */
+    purpose: 'second_half' | 'penalty';
   };
   penalty: {
     round: number;
     shooterSeat: 1 | 2;
     suddenDeath: boolean;
     kicksTaken: { seat1: number; seat2: number };
+    attempts?: { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> };
   };
+  /** Category chosen in the penalty ban phase; read only during PENALTY_SHOOTOUT. */
+  penaltyCategoryId: string | null;
   currentQuestion: {
     qIndex: number;
     phaseKind: 'normal' | 'last_attack' | 'penalty';
@@ -418,6 +428,7 @@ export function createInitialPossessionState(
         seat1: null,
         seat2: null,
       },
+      purpose: 'second_half',
     },
     penalty: {
       round: 0,
@@ -427,7 +438,12 @@ export function createInitialPossessionState(
         seat1: 0,
         seat2: 0,
       },
+      attempts: {
+        seat1: [],
+        seat2: [],
+      },
     },
+    penaltyCategoryId: null,
     currentQuestion: null,
     winnerDecisionMethod: null,
     stateVersionCounter: 0,

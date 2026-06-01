@@ -581,7 +581,7 @@ export async function resolvePossessionRound(
     });
 
     if (state.phase === 'HALFTIME') {
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
+      await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
     }
 
     const nextIndex = qIndex + 1;

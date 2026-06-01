@@ -430,7 +430,7 @@ export async function sendPossessionMatchQuestion(
 
     if (state.phase === 'HALFTIME') {
       logger.info({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
+      await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
       if (!state.halftime.deadlineAt) {
         state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
       }

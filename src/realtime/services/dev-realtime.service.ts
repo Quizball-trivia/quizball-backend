@@ -148,7 +148,11 @@ async function cleanupFailedQuickMatchLobby(
  * to quickly bootstrap matches for testing. Guarded by NODE_ENV check in the handler.
  */
 export const devRealtimeService = {
-  async handleQuickMatch(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+  async handleQuickMatch(
+    io: QuizballServer,
+    socket: QuizballSocket,
+    options?: { skipTo?: 'penalty_ban' | 'penalties' | 'halftime' | 'last_attack' | 'shot' | 'second_half' }
+  ): Promise<void> {
     const userId = socket.data.user.id;
     const completed = await userSessionGuardService.runWithUserTransitionLock(
       io,
@@ -230,9 +234,12 @@ export const devRealtimeService = {
           logger.warn({ matchId: result.match.id }, 'Redis unavailable during dev quick match; continuing without AI Redis marker');
         }
 
-        // 8. Start match (emits match:start, moves socket, sends first question)
+        // 8. Start match (emits match:start, moves socket). When skipTo is set,
+        // the match jumps straight to that phase and NO normal question 0 is
+        // ever dispatched (see beginMatchForLobby.initialDevSkipTarget).
         await beginMatchForLobby(io, lobby.id, result.match.id, {
           countdownSec: DEV_MATCH_START_COUNTDOWN_SEC,
+          initialDevSkipTarget: options?.skipTo,
         });
 
         logger.info(
@@ -257,7 +264,7 @@ export const devRealtimeService = {
 
   async handleSkipTo(
     _io: QuizballServer,
-    payload: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half' }
+    payload: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half' }
   ): Promise<void> {
     await devSkipToPossessionPhase(_io, payload.matchId, payload.target);
 

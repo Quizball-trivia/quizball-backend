@@ -66,6 +66,31 @@ function isValidWinnerDecisionMethod(
   return typeof value === 'string' && VALID_WINNER_DECISION_METHODS.has(value as NonNullable<PossessionStatePayload['winnerDecisionMethod']>);
 }
 
+function normalizePenaltyAttempts(params: {
+  attempts: unknown;
+  goals: { seat1: number; seat2: number };
+  kicksTaken: { seat1: number; seat2: number };
+}): { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> } {
+  const fromRaw = (value: unknown, goals: number, kicksTaken: number): Array<'goal' | 'miss'> => {
+    if (Array.isArray(value)) {
+      const sanitized = value.filter((entry): entry is 'goal' | 'miss' => entry === 'goal' || entry === 'miss');
+      if (sanitized.length > 0 || kicksTaken === 0) return sanitized.slice(0, Math.max(kicksTaken, sanitized.length));
+    }
+    return [
+      ...Array.from({ length: Math.max(0, goals) }, () => 'goal' as const),
+      ...Array.from({ length: Math.max(0, kicksTaken - goals) }, () => 'miss' as const),
+    ];
+  };
+
+  const raw = params.attempts && typeof params.attempts === 'object'
+    ? params.attempts as { seat1?: unknown; seat2?: unknown }
+    : {};
+  return {
+    seat1: fromRaw(raw.seat1, params.goals.seat1, params.kicksTaken.seat1),
+    seat2: fromRaw(raw.seat2, params.goals.seat2, params.kicksTaken.seat2),
+  };
+}
+
 // ── Seat helpers ──
 
 export function asSeat(value: number | null | undefined): Seat | null {
@@ -194,6 +219,15 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
       ? parsedSpeedStreakHolderSeat
       : null;
 
+  const penaltyGoals = {
+    seat1: Math.max(0, Number(candidate.penaltyGoals.seat1 ?? fallback.penaltyGoals.seat1)),
+    seat2: Math.max(0, Number(candidate.penaltyGoals.seat2 ?? fallback.penaltyGoals.seat2)),
+  };
+  const penaltyKicksTaken = {
+    seat1: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat1 ?? 0)),
+    seat2: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat2 ?? 0)),
+  };
+
   return {
     ...fallback,
     ...candidate,
@@ -201,10 +235,7 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
       seat1: Math.max(0, Number(candidate.goals.seat1 ?? fallback.goals.seat1)),
       seat2: Math.max(0, Number(candidate.goals.seat2 ?? fallback.goals.seat2)),
     },
-    penaltyGoals: {
-      seat1: Math.max(0, Number(candidate.penaltyGoals.seat1 ?? fallback.penaltyGoals.seat1)),
-      seat2: Math.max(0, Number(candidate.penaltyGoals.seat2 ?? fallback.penaltyGoals.seat2)),
-    },
+    penaltyGoals,
     possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
     speedStreakHolderSeat,
@@ -243,6 +274,9 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
         seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
         seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
       },
+      // Preserve the ban purpose so a rehydrate mid penalty-ban doesn't default
+      // to 'second_half' and finalize into normal play instead of penalties.
+      purpose: candidate.halftime?.purpose === 'penalty' ? 'penalty' : 'second_half',
     },
     lastAttack: {
       attackerSeat: asSeat(candidate.lastAttack?.attackerSeat),
@@ -251,11 +285,14 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
       round: Math.max(0, Number(candidate.penalty?.round ?? 0)),
       shooterSeat: asSeat(candidate.penalty?.shooterSeat) ?? 1,
       suddenDeath: Boolean(candidate.penalty?.suddenDeath),
-      kicksTaken: {
-        seat1: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat1 ?? 0)),
-        seat2: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat2 ?? 0)),
-      },
+      kicksTaken: penaltyKicksTaken,
+      attempts: normalizePenaltyAttempts({
+        attempts: candidate.penalty?.attempts,
+        goals: penaltyGoals,
+        kicksTaken: penaltyKicksTaken,
+      }),
     },
+    penaltyCategoryId: typeof candidate.penaltyCategoryId === 'string' ? candidate.penaltyCategoryId : null,
     currentQuestion: candidate.currentQuestion
       ? {
         qIndex: Number(candidate.currentQuestion.qIndex ?? 0),
@@ -310,6 +347,10 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
       seat1: state.penaltyGoals.seat1,
       seat2: state.penaltyGoals.seat2,
     },
+    penaltyAttempts: {
+      seat1: state.penalty.attempts?.seat1 ?? [],
+      seat2: state.penalty.attempts?.seat2 ?? [],
+    },
     phaseKind,
     phaseRound,
     shooterSeat: state.currentQuestion?.shooterSeat ?? (state.phase === 'PENALTY_SHOOTOUT' ? state.penalty.shooterSeat : null),
@@ -322,6 +363,7 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
         seat1: state.halftime.bans.seat1,
         seat2: state.halftime.bans.seat2,
       },
+      purpose: state.halftime.purpose,
     },
     penaltySuddenDeath: state.penalty.suddenDeath,
     stateVersion: state.stateVersionCounter,

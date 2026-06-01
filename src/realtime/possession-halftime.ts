@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
@@ -88,7 +89,8 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   async function ensureHalftimeCategories(
     state: PossessionStatePayload,
     categoryAId: string,
-    matchId: string
+    matchId: string,
+    categoryBId?: string | null
   ): Promise<void> {
     if (state.halftime.categoryOptions.length >= 3) return;
     try {
@@ -119,6 +121,11 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         : lobbiesService.selectRandomCategories.bind(lobbiesService);
 
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
+      // Penalty ban: also exclude the second-half category so penalties don't
+      // re-offer a category that was just played.
+      if (state.halftime.purpose === 'penalty' && categoryBId) {
+        excludedIds.add(categoryBId);
+      }
       const primary = await selectExcluding(3, Array.from(excludedIds));
       let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
 
@@ -213,27 +220,55 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const state = cache.statePayload;
       if (state.phase !== 'HALFTIME') return;
 
+      const isPenaltyBan = state.halftime.purpose === 'penalty';
       const halftimeResult = resolveHalftimeResult(state);
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
       state.halftime.uiReadyAt = null;
-
-      const halfTwoCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryAId;
-      cache.categoryBId = halfTwoCategoryId;
-      fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
-        await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
-      });
-
-      state.half = 2;
-      state.phase = 'NORMAL_PLAY';
-      state.possessionDiff = 0;
-      state.kickOffSeat = nextSeat(state.kickOffSeat);
-      state.lastAttack.attackerSeat = null;
       state.halftime.firstBanSeat = null;
-      state.currentQuestion = null;
-      state.normalQuestionsAnsweredInHalf = 0;
-      bumpStateVersion(state);
+
+      const chosenCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryBId ?? cache.categoryAId;
+
+      if (isPenaltyBan) {
+        // Penalty ban → enter the shootout with the chosen category. Keep the
+        // recorded second-half category (cache/DB categoryBId) untouched; the
+        // penalty category lives only in state.penaltyCategoryId.
+        state.penaltyCategoryId = chosenCategoryId;
+        state.phase = 'PENALTY_SHOOTOUT';
+        state.penalty.round = 1;
+        state.penalty.shooterSeat = 1;
+        state.penalty.suddenDeath = false;
+        state.penalty.kicksTaken = { seat1: 0, seat2: 0 };
+        state.halftime.purpose = 'second_half';
+        state.currentQuestion = null;
+        bumpStateVersion(state);
+
+        // Phase-entered analytics moved here: the round resolver no longer sees a
+        // direct →PENALTY_SHOOTOUT transition (it now goes via this ban interlude).
+        try {
+          for (const player of cache.players) {
+            trackPossessionPhaseEntered({ userId: player.userId, matchId, phase: 'penalty' });
+          }
+        } catch (err) {
+          logger.warn({ err, matchId }, 'possession_phase_entered (penalty) analytics failed');
+        }
+      } else {
+        const halfTwoCategoryId = chosenCategoryId;
+        cache.categoryBId = halfTwoCategoryId;
+        fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
+          await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
+        });
+
+        state.half = 2;
+        state.phase = 'NORMAL_PLAY';
+        state.possessionDiff = 0;
+        state.kickOffSeat = nextSeat(state.kickOffSeat);
+        state.lastAttack.attackerSeat = null;
+        state.currentQuestion = null;
+        state.normalQuestionsAnsweredInHalf = 0;
+        bumpStateVersion(state);
+      }
 
       cache.currentQuestion = null;
       cache.answers = {};

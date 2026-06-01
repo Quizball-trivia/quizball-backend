@@ -440,6 +440,10 @@ export interface MatchStatePayload {
     seat1: number;
     seat2: number;
   };
+  penaltyAttempts?: {
+    seat1: Array<'goal' | 'miss'>;
+    seat2: Array<'goal' | 'miss'>;
+  };
   phaseKind: MatchPhaseKind;
   phaseRound: number;
   shooterSeat: 1 | 2 | null;
@@ -452,6 +456,8 @@ export interface MatchStatePayload {
       seat1: string | null;
       seat2: string | null;
     };
+    /** Whether this ban interlude is the second-half pick or the pre-penalty pick. */
+    purpose?: 'second_half' | 'penalty';
   };
   penaltySuddenDeath?: boolean;
   stateVersion?: number;
@@ -743,8 +749,8 @@ export interface ClientToServerEvents {
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;
   'warmup:get_scores': () => void;
-  'dev:quick_match': () => void;
-  'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half' }) => void;
+  'dev:quick_match': (data?: { skipTo?: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half' }) => void;
+  'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half' }) => void;
   'dev:pause_match': (data: { matchId: string }) => void;
   'dev:resume_match': (data: { matchId: string }) => void;
 }

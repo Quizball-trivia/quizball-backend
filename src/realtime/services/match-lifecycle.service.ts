@@ -15,6 +15,7 @@ import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { trackPartyQuizStarted } from '../../core/analytics/game-events.js';
 import { buildInitialCache, setMatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
+import { devSkipToPossessionPhase } from '../possession-dev-skip.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   matchDisconnectKey,
@@ -95,7 +96,15 @@ export async function beginMatchForLobby(
   io: QuizballServer,
   lobbyId: string,
   matchId: string,
-  options?: { countdownSec?: number }
+  options?: {
+    countdownSec?: number;
+    /**
+     * Dev-only: instead of dispatching normal question 0 after the countdown,
+     * skip the match straight to this phase. This GUARANTEES no open-play
+     * question 0 is ever emitted (avoids the quick-match-then-skip race).
+     */
+    initialDevSkipTarget?: 'penalty_ban' | 'penalties' | 'halftime' | 'last_attack' | 'shot' | 'second_half';
+  }
 ): Promise<void> {
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
   type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
@@ -357,6 +366,18 @@ export async function beginMatchForLobby(
         const match = await matchesRepo.getMatch(matchId);
         if (!match || match.status !== 'active') {
           logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
+          return;
+        }
+        // Dev-only: skip straight to the requested phase instead of dispatching
+        // normal question 0. devSkipToPossessionPhase dispatches the appropriate
+        // phase question (or, for halftime/penalty_ban, schedules the ban) —
+        // so a normal open-play question 0 is never emitted.
+        if (options?.initialDevSkipTarget) {
+          logger.info(
+            { eventName: 'match:first_question_dev_skip', matchId, target: options.initialDevSkipTarget },
+            'Dev-skipping initial question to requested phase (no normal q0 emitted)'
+          );
+          await devSkipToPossessionPhase(io, matchId, options.initialDevSkipTarget);
           return;
         }
         logger.info(

@@ -248,6 +248,11 @@ vi.mock('../../src/realtime/match-flow.js', () => ({
   sendMatchQuestion: (...args: unknown[]) => sendMatchQuestionMock(...args),
 }));
 
+const devSkipToPossessionPhaseMock = vi.fn();
+vi.mock('../../src/realtime/possession-dev-skip.js', () => ({
+  devSkipToPossessionPhase: (...args: unknown[]) => devSkipToPossessionPhaseMock(...args),
+}));
+
 vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/realtime/possession-match-flow.js')>();
   return {
@@ -1753,6 +1758,26 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       await vi.advanceTimersByTimeAsync(1);
       expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S24b: beginMatchForLobby with initialDevSkipTarget skips to that phase and never dispatches normal question 0', async () => {
+    vi.useFakeTimers();
+    devSkipToPossessionPhaseMock.mockClear();
+    try {
+      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+
+      await beginMatchForLobby(io, 'l1', 'm1', { countdownSec: 0, initialDevSkipTarget: 'penalty_ban' });
+
+      // Advance past the (0s) countdown — the post-countdown work runs the dev
+      // skip, NOT a normal question-0 dispatch.
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(devSkipToPossessionPhaseMock).toHaveBeenCalledWith(io, 'm1', 'penalty_ban');
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

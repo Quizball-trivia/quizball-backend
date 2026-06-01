@@ -3,6 +3,7 @@ import { countryPayload } from '../../core/country.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { registerAiUserId, identifyUser } from '../../core/analytics.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
@@ -178,6 +179,25 @@ export async function buildParticipantPayloads(
   countryCode?: string;
 }>> {
   const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
+  // Safety net: re-register AI ids so analytics still skips them after a server
+  // restart clears the in-memory set built at AI-user creation time. Real users
+  // are identified so their server-side events carry a name/email and merge with
+  // the web-SDK person (same Supabase id as distinctId) instead of showing as a
+  // bare anonymous UUID.
+  for (const user of usersById.values()) {
+    if (!user) continue;
+    if (user.is_ai) {
+      registerAiUserId(user.id);
+    } else {
+      identifyUser(user.id, {
+        email: user.email ?? undefined,
+        nickname: user.nickname ?? undefined,
+        country: user.country ?? undefined,
+        favorite_club: user.favorite_club ?? undefined,
+        preferred_language: user.preferred_language ?? undefined,
+      });
+    }
+  }
   const currentCountriesByUserId = await getCurrentCountriesForUsers(players.map((player) => player.user_id));
   let rpByUserId = new Map<string, number>();
 

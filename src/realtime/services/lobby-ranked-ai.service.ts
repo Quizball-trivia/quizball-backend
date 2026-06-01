@@ -6,6 +6,7 @@ import { statsService } from '../../modules/stats/stats.service.js';
 import { getRedisClient } from '../redis.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
+import { registerAiUserId } from '../../core/analytics.js';
 import {
   generateRankedAiAvatarUrl,
   generateRankedAiUsernameAvoiding,
@@ -71,6 +72,7 @@ export async function startRankedAiForUser(
       country: aiGeo.countryCode,
       isAi: true,
     });
+    registerAiUserId(aiUser.id);
     const playerProfile = await rankedService.ensureProfile(userId);
     const rankedContext = rankedService.buildAiMatchContext(playerProfile);
 

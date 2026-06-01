@@ -241,8 +241,8 @@ const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; f
   { city: 'Riyadh',        country: 'Saudi Arabia',   countryCode: 'SA', flag: '\u{1F1F8}\u{1F1E6}', lat: 24.71, lon: 46.67 },
   { city: 'Jakarta',       country: 'Indonesia',      countryCode: 'ID', flag: '\u{1F1EE}\u{1F1E9}', lat: -6.21, lon: 106.85 },
   { city: 'Doha',          country: 'Qatar',          countryCode: 'QA', flag: '\u{1F1F6}\u{1F1E6}', lat: 25.29, lon: 51.53 },
-  { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.71, lon: -74.01 },
-  { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.05, lon: -118.24 },
+  { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.90, lon: -74.75 },
+  { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.15, lon: -117.65 },
   { city: 'Toronto',       country: 'Canada',         countryCode: 'CA', flag: '\u{1F1E8}\u{1F1E6}', lat: 43.65, lon: -79.38 },
   { city: 'Tbilisi',       country: 'Georgia',        countryCode: 'GE', flag: '\u{1F1EC}\u{1F1EA}', lat: 41.72, lon: 44.79 },
 ];

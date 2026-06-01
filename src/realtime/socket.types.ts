@@ -276,6 +276,8 @@ export interface MatchRoundResultPlayer {
   isCorrect: boolean;
   timeMs: number;
   pointsEarned: number;
+  /** Points used for possession movement after applying any current-round 2x boost. */
+  possessionPointsEarned?: number;
   totalPoints: number;
   foundCount?: number;
   foundAnswerIds?: string[];

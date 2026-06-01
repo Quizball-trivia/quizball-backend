@@ -1,5 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { registerAiUserId } from '../../core/analytics.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -186,6 +187,7 @@ export const devRealtimeService = {
           avatarUrl: aiProfile.avatarUrl,
           isAi: true,
         });
+        registerAiUserId(aiUser.id);
 
         // 2. Create lobby (mode: 'ranked' allows null invite code per DB constraint)
         const lobby = await lobbiesRepo.createLobby({

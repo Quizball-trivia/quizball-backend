@@ -5,14 +5,10 @@ import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
 import { nextSeat, QUESTION_TIME_MS, type Seat } from './possession-state.js';
 import { clamp } from './scoring.js';
 
-export const SPEED_STREAK_TIE_TOLERANCE_MS = 150;
-
 /** One seat's answer this round, for speed-streak resolution. */
 export interface StreakAnswer {
-  /** Did this seat answer correctly? (timeout / no-answer counts as false.) */
-  correct: boolean;
-  /** Authoritative elapsed time in ms. Lower = faster. */
-  timeMs: number;
+  /** Displayed/base points before any 2x possession boost. */
+  basePoints: number;
 }
 
 /**
@@ -24,11 +20,9 @@ export interface StreakAnswer {
  * - `nextCandidateSeat` / `nextCandidateCount`: qualification progress toward
  *   the next active streak. A player needs two qualifying rounds in a row.
  *
- * Rules: a seat qualifies only by being correct and winning the answer race
- * this round (meaningfully faster when both are correct; a sole correct answer
- * beats a wrong/timeout opponent). Equal/near-equal time (tie), being slower,
- * or a wrong/timeout answer clears progress. A goal always clears it. Only one
- * holder.
+ * Rules: a seat qualifies only by earning more displayed/base points than the
+ * opponent this round. Displayed ties (80-80, 0-0, etc.) clear progress, even
+ * when raw answer times differed. A goal always clears it. Only one holder.
  */
 export function resolveSpeedStreak(params: {
   previousHolderSeat: Seat | null;
@@ -58,19 +52,14 @@ export function resolveSpeedStreak(params: {
     return { boostedSeat, nextHolderSeat: null, nextCandidateSeat: null, nextCandidateCount: 0 };
   }
 
-  // The qualifying seat is whichever seat is correct and meaningfully faster
-  // than the other. If only one seat is correct, that seat wins the round.
-  // If both are correct with equal/near-equal time, or both wrong, no one qualifies.
+  // The qualifying seat is whichever seat earned more displayed/base points.
+  // The current-round 2x possession boost does not help a holder keep the
+  // streak; this comparison intentionally uses pre-boost points.
   let qualifyingSeat: Seat | null = null;
-  if (seat1.correct && !seat2.correct) {
+  if (seat1.basePoints > seat2.basePoints && seat1.basePoints > 0) {
     qualifyingSeat = 1;
-  } else if (seat2.correct && !seat1.correct) {
+  } else if (seat2.basePoints > seat1.basePoints && seat2.basePoints > 0) {
     qualifyingSeat = 2;
-  } else if (seat1.correct && seat2.correct) {
-    const diffMs = seat1.timeMs - seat2.timeMs;
-    if (diffMs < -SPEED_STREAK_TIE_TOLERANCE_MS) qualifyingSeat = 1;
-    else if (diffMs > SPEED_STREAK_TIE_TOLERANCE_MS) qualifyingSeat = 2;
-    // equal/near-equal time -> tie -> null
   }
 
   if (qualifyingSeat === null) {

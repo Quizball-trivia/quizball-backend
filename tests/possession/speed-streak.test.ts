@@ -7,17 +7,17 @@ import {
 import { parsePossessionState } from '../../src/realtime/possession-state.js';
 import { createInitialPossessionState } from '../../src/modules/matches/matches.service.js';
 
-// Helper: one seat's answer.
-const ans = (correct: boolean, timeMs: number) => ({ correct, timeMs });
+// Helper: one seat's displayed/base score before any 2x possession boost.
+const ans = (basePoints: number) => ({ basePoints });
 
 describe('resolveSpeedStreak', () => {
-  it('starts qualification after one correct + strictly faster round, without activating 2x yet', () => {
+  it('starts qualification after one higher displayed-score round, without activating 2x yet', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: null,
       previousCandidateSeat: null,
       previousCandidateCount: 0,
-      seat1: ans(true, 2000),
-      seat2: ans(true, 5000),
+      seat1: ans(90),
+      seat2: ans(80),
       goalScoredBySeat: null,
     });
     expect(r.boostedSeat).toBeNull(); // no prior holder → nothing doubled this round
@@ -31,8 +31,8 @@ describe('resolveSpeedStreak', () => {
       previousHolderSeat: null,
       previousCandidateSeat: 1,
       previousCandidateCount: 1,
-      seat1: ans(true, 1800),
-      seat2: ans(true, 5000),
+      seat1: ans(90),
+      seat2: ans(80),
       goalScoredBySeat: null,
     });
     expect(r.boostedSeat).toBeNull();
@@ -46,21 +46,21 @@ describe('resolveSpeedStreak', () => {
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(true, 2000),
-      seat2: ans(true, 5000),
+      seat1: ans(90),
+      seat2: ans(80),
       goalScoredBySeat: null,
     });
     expect(r.boostedSeat).toBe(1);
-    expect(r.nextHolderSeat).toBe(1); // still correct + faster → keeps it
+    expect(r.nextHolderSeat).toBe(1); // still higher base score -> keeps it
   });
 
-  it('clears the streak when a goal is scored (even if holder was correct + faster)', () => {
+  it('clears the streak when a goal is scored (even if holder had higher base points)', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(true, 1000),
-      seat2: ans(false, 9000),
+      seat1: ans(100),
+      seat2: ans(0),
       goalScoredBySeat: 1,
     });
     expect(r.boostedSeat).toBe(1); // boost still applied this round
@@ -69,13 +69,13 @@ describe('resolveSpeedStreak', () => {
     expect(r.nextCandidateCount).toBe(0);
   });
 
-  it('clears the holder and starts opponent qualification when the holder answers slower', () => {
+  it('clears the holder and starts opponent qualification when the opponent earns more base points', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(true, 6000),
-      seat2: ans(true, 3000),
+      seat1: ans(80),
+      seat2: ans(90),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull(); // seat2 must do it twice before holding 2x
@@ -88,8 +88,8 @@ describe('resolveSpeedStreak', () => {
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(false, 2000),
-      seat2: ans(false, 5000),
+      seat1: ans(0),
+      seat2: ans(0),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull(); // both wrong → no holder
@@ -97,13 +97,13 @@ describe('resolveSpeedStreak', () => {
     expect(r.nextCandidateCount).toBe(0);
   });
 
-  it('clears on an exact tie when both players are correct', () => {
+  it('clears on a displayed-score tie', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(true, 3000),
-      seat2: ans(true, 3000),
+      seat1: ans(80),
+      seat2: ans(80),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull();
@@ -111,13 +111,13 @@ describe('resolveSpeedStreak', () => {
     expect(r.nextCandidateCount).toBe(0);
   });
 
-  it('clears on a near-tie inside the speed-streak tolerance', () => {
+  it('ignores hidden raw speed when displayed points tie', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 1,
       previousCandidateSeat: 1,
       previousCandidateCount: 2,
-      seat1: ans(true, 3000),
-      seat2: ans(true, 3120),
+      seat1: ans(80),
+      seat2: ans(80),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull();
@@ -125,27 +125,27 @@ describe('resolveSpeedStreak', () => {
     expect(r.nextCandidateCount).toBe(0);
   });
 
-  it('a sole correct answerer starts qualification even without a speed comparison', () => {
+  it('a one-sided displayed score starts qualification', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: null,
       previousCandidateSeat: null,
       previousCandidateCount: 0,
-      seat1: ans(true, 8000),
-      seat2: ans(false, 1000),
+      seat1: ans(80),
+      seat2: ans(0),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull();
-    expect(r.nextCandidateSeat).toBe(1); // correct beats wrong regardless of time
+    expect(r.nextCandidateSeat).toBe(1);
     expect(r.nextCandidateCount).toBe(1);
   });
 
-  it('treats timeout (max time, wrong) as not earning the streak', () => {
+  it('starts opponent qualification when the previous holder earns zero base points', () => {
     const r = resolveSpeedStreak({
       previousHolderSeat: 2,
       previousCandidateSeat: 2,
       previousCandidateCount: 2,
-      seat1: ans(true, 4000),
-      seat2: ans(false, Number.MAX_SAFE_INTEGER),
+      seat1: ans(80),
+      seat2: ans(0),
       goalScoredBySeat: null,
     });
     expect(r.nextHolderSeat).toBeNull(); // seat1 needs a second qualifying round

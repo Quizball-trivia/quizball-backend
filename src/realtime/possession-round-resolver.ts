@@ -355,6 +355,12 @@ export async function resolvePossessionRound(
         : 0;
       if (previousHolderSeat === 1) seat1Points *= 2;
       else if (previousHolderSeat === 2) seat2Points *= 2;
+      if (seat1UserId && playersPayload[seat1UserId]) {
+        playersPayload[seat1UserId].possessionPointsEarned = seat1Points;
+      }
+      if (seat2UserId && playersPayload[seat2UserId]) {
+        playersPayload[seat2UserId].possessionPointsEarned = seat2Points;
+      }
       // The boost only "fired" if the holder actually earned points to double.
       const boostHadEffect =
         (previousHolderSeat === 1 && seat1BasePoints > 0) ||
@@ -380,8 +386,8 @@ export async function resolvePossessionRound(
           previousHolderSeat: previousHolderSeat,
           previousCandidateSeat,
           previousCandidateCount,
-          seat1: { correct: seat1Correct, timeMs: seat1Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
-          seat2: { correct: seat2Correct, timeMs: seat2Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
+          seat1: { basePoints: seat1BasePoints },
+          seat2: { basePoints: seat2BasePoints },
           goalScoredBySeat,
         });
         speedStreakBoostedSeat = boostHadEffect ? streak.boostedSeat : null;
@@ -551,6 +557,7 @@ export async function resolvePossessionRound(
           userId,
           totalPoints: player.totalPoints,
           pointsEarned: player.pointsEarned,
+          possessionPointsEarned: player.possessionPointsEarned,
           isCorrect: player.isCorrect,
           selectedIndex: player.selectedIndex,
           timeMs: player.timeMs,

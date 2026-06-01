@@ -41,6 +41,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
   isCorrect: boolean;
   timeMs: number;
   pointsEarned: number;
+  possessionPointsEarned?: number;
   totalPoints: number;
   foundCount?: number;
   foundAnswerIds?: string[];
@@ -52,6 +53,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
     isCorrect: boolean;
     timeMs: number;
     pointsEarned: number;
+    possessionPointsEarned?: number;
     totalPoints: number;
     foundCount?: number;
     foundAnswerIds?: string[];
@@ -67,6 +69,7 @@ export function buildPlayersPayloadFromCache(cache: MatchCache): Record<string, 
       isCorrect: answer.isCorrect,
       timeMs: answer.timeMs,
       pointsEarned: answer.pointsEarned,
+      possessionPointsEarned: answer.pointsEarned,
       totalPoints: player.totalPoints,
       foundCount: answer.foundCount,
       foundAnswerIds: answer.foundAnswerIds,

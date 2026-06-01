@@ -327,6 +327,7 @@ export async function handleMatchRejoin(
             { eventName: 'party_rejoin_resume_requested', matchId: match.id, userId },
             'Party quiz rejoin requested resume'
           );
+          await emitPartyQuizStateToSocket(socket, match.id);
         }
         await resumePausedMatch(io, match.id, userId);
         return;
@@ -476,11 +477,6 @@ export async function resumePausedMatch(
 
         await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
 
-        io.to(`match:${matchId}`).emit('match:resume', {
-          matchId,
-          nextQIndex: activeMatch.current_q_index,
-        });
-
         const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
         const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
         if (activeQuestion) {
@@ -490,8 +486,20 @@ export async function resumePausedMatch(
           const resumed = variant === 'friendly_party_quiz'
             ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
             : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
-          if (resumed) return;
+          if (resumed) {
+            io.to(`match:${matchId}`).emit('match:resume', {
+              matchId,
+              nextQIndex: activeMatch.current_q_index,
+            });
+            return;
+          }
         }
+
+        io.to(`match:${matchId}`).emit('match:resume', {
+          matchId,
+          nextQIndex: activeMatch.current_q_index,
+        });
+
         if (variant === 'friendly_party_quiz') {
           await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
           return;

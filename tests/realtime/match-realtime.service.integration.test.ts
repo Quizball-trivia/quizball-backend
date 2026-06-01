@@ -1101,6 +1101,66 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('S15c0: resume emits refreshed party question timing before clearing pause', async () => {
+    vi.useFakeTimers();
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const events: string[] = [];
+    const emit = vi.fn((event: string) => {
+      if (event === 'match:question' || event === 'match:resume') {
+        events.push(event);
+      }
+    });
+    const io = {
+      to: vi.fn(() => ({ emit })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+      ranked_context: null,
+    });
+    getMatchQuestionMock.mockResolvedValue({
+      match_id: 'm1',
+      q_index: 3,
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+    resumePartyQuizQuestionMock.mockImplementation(async () => {
+      events.push('match:question');
+      return true;
+    });
+
+    try {
+      await matchRealtimeService.resumePausedMatch(io, 'm1', 'u1');
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(resumePartyQuizQuestionMock).toHaveBeenCalledWith(
+        io,
+        'm1',
+        3,
+        expect.any(Number)
+      );
+      expect(events).toEqual(['match:question', 'match:resume']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15c1: passive socket reconnect only offers rejoin and does not resume a paused match', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();

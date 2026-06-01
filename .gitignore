@@ -32,3 +32,6 @@ supabase/.temp/
 
 # Secrets/scripts
 scripts/
+
+# Local agent instructions (not shared)
+CLAUDE.md

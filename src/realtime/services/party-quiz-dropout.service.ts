@@ -404,20 +404,6 @@ export async function applyPartyQuizDropouts(params: {
           matchGraceKey(lockedMatch.id),
           matchResumeCountdownKey(lockedMatch.id),
         ]);
-        io.to(`match:${lockedMatch.id}`).emit('match:resume', {
-          matchId: lockedMatch.id,
-          nextQIndex: lockedMatch.current_q_index,
-        });
-        logger.info(
-          {
-            eventName: 'match:resume',
-            matchId: lockedMatch.id,
-            nextQIndex: lockedMatch.current_q_index,
-            source: 'party_dropout',
-            activeUserIds: activePlayers.map((player) => player.user_id),
-          },
-          'Party quiz resumed after dropouts'
-        );
         if (state.currentQuestion) {
           await resumePartyQuizQuestion(
             io,
@@ -440,6 +426,20 @@ export async function applyPartyQuizDropouts(params: {
         } else {
           await sendPartyQuizQuestion(io, lockedMatch.id, lockedMatch.current_q_index);
         }
+        io.to(`match:${lockedMatch.id}`).emit('match:resume', {
+          matchId: lockedMatch.id,
+          nextQIndex: lockedMatch.current_q_index,
+        });
+        logger.info(
+          {
+            eventName: 'match:resume',
+            matchId: lockedMatch.id,
+            nextQIndex: lockedMatch.current_q_index,
+            source: 'party_dropout',
+            activeUserIds: activePlayers.map((player) => player.user_id),
+          },
+          'Party quiz resumed after dropouts'
+        );
       } else {
         logger.info(
           {

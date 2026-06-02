@@ -15,6 +15,9 @@ const getRestorableVerifiedByPhoneNumberMock = vi.fn();
 const setVerifiedPhoneNumberMock = vi.fn();
 const restorePendingDeletionFromIdentityMock = vi.fn();
 const smsDeliveryUpsertMock = vi.fn();
+const signUpMock = vi.fn();
+const signInMock = vi.fn();
+const signInWithIdTokenMock = vi.fn();
 const sendPhoneOtpMock = vi.fn();
 const verifyPhoneOtpMock = vi.fn();
 const updateUserPhoneMock = vi.fn();
@@ -39,12 +42,35 @@ vi.mock('../../src/modules/auth/sms-delivery.repo.js', () => ({
 
 vi.mock('../../src/modules/auth/supabase-auth-client.js', () => ({
   getAuthClient: () => ({
+    signUp: (...args: unknown[]) => signUpMock(...args),
+    signIn: (...args: unknown[]) => signInMock(...args),
+    signInWithIdToken: (...args: unknown[]) => signInWithIdTokenMock(...args),
     sendPhoneOtp: (...args: unknown[]) => sendPhoneOtpMock(...args),
     verifyPhoneOtp: (...args: unknown[]) => verifyPhoneOtpMock(...args),
     updateUserPhone: (...args: unknown[]) => updateUserPhoneMock(...args),
     verifyPhoneChange: (...args: unknown[]) => verifyPhoneChangeMock(...args),
   }),
 }));
+
+const MOCK_SESSION = {
+  accessToken: 'access-token',
+  refreshToken: 'refresh-token',
+  expiresIn: 3600,
+  tokenType: 'bearer',
+  provider: 'supabase',
+  user: {
+    email: 'user@example.com',
+    phone: null,
+    phoneConfirmedAt: null,
+    providerSub: 'supabase-user-id',
+  },
+};
+
+async function flushProvisioningRetries<T>(promise: Promise<T>): Promise<T> {
+  await vi.advanceTimersByTimeAsync(150);
+  await vi.advanceTimersByTimeAsync(300);
+  return promise;
+}
 
 describe('Georgian phone auth helpers', () => {
   it('normalizes Georgian mobile formats to E.164', () => {
@@ -357,6 +383,123 @@ describe('authService phone verification', () => {
       phoneVerifiedAt: expect.any(String),
     }));
     expect(getOrCreateFromIdentityMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('authService strict provisioning', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries login provisioning twice, then fails closed as an external service error', async () => {
+    signInMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.login({ email: 'user@example.com', password: 'secret' });
+    const assertion = expect(result).rejects.toMatchObject({
+      statusCode: 502,
+      details: expect.objectContaining({ reason: 'profile_provisioning_failed' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(300);
+    await assertion;
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns the social token session when strict provisioning succeeds on retry', async () => {
+    signInWithIdTokenMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockResolvedValueOnce({ id: 'user-1' });
+
+    const result = authService.socialLoginToken({
+      provider: 'google',
+      id_token: 'google-token',
+    });
+
+    await expect(flushProvisioningRetries(result)).resolves.toEqual(MOCK_SESSION);
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('propagates account-state auth errors without retrying', async () => {
+    signInMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock.mockRejectedValueOnce(
+      new AuthenticationError('Account is no longer active', { reason: 'account_inactive' })
+    );
+
+    await expect(authService.login({ email: 'user@example.com', password: 'secret' })).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'account_inactive' },
+    });
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed for register-with-session provisioning failures', async () => {
+    signUpMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.register({
+      email: 'user@example.com',
+      password: 'secret',
+      redirect_to: 'https://quizball.io/auth/callback',
+    });
+    const assertion = expect(result).rejects.toMatchObject({
+      statusCode: 502,
+      details: expect.objectContaining({ reason: 'profile_provisioning_failed' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(300);
+    await assertion;
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('authService refresh account check provisioning tolerance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries non-auth provisioning failures, then tolerates them so rotated refresh tokens can be returned', async () => {
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.ensureSessionAccountActive(MOCK_SESSION);
+
+    await expect(flushProvisioningRetries(result)).resolves.toBeUndefined();
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('still propagates terminal account-state auth errors on refresh', async () => {
+    getOrCreateFromIdentityMock.mockRejectedValueOnce(
+      new AuthenticationError('Account is no longer active', { reason: 'account_inactive' })
+    );
+
+    await expect(authService.ensureSessionAccountActive(MOCK_SESSION)).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'account_inactive' },
+    });
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(1);
   });
 });
 

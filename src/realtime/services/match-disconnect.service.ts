@@ -29,7 +29,6 @@ import {
   matchReconnectCountKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
-import { buildStandings } from '../match-utils.js';
 import {
   cancelPossessionHalftimeTimer,
   emitPossessionStateToSocket,
@@ -48,6 +47,10 @@ import {
   sanitizePartyQuizState,
 } from '../party-quiz-state.js';
 import { getRedisClient } from '../redis.js';
+import {
+  cancelRealtimeTimer,
+  scheduleRealtimeTimer,
+} from '../realtime-timer-scheduler.js';
 import type { MatchRejoinAvailablePayload } from '../socket.types.js';
 import {
   buildFinalResultsPayload,
@@ -422,6 +425,10 @@ export async function resumePausedMatch(
   }
 
   await redis.del(matchGraceKey(matchId));
+  // The match resumed before the grace window expired — drop the pending durable
+  // forfeit timer so it can't fire after a successful reconnect. (The handler also
+  // re-checks the grace key, so this is belt-and-suspenders.)
+  await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
   const countdownEndsAtMs = Date.now() + MATCH_RESUME_COUNTDOWN_MS;
   const countdownKey = matchResumeCountdownKey(matchId);
@@ -752,202 +759,224 @@ export async function pauseMatchForDisconnectedPlayer(
     };
   }
 
-  setTimeout(async () => {
-    try {
-      const graceStillActive = (await redis.exists(matchGraceKey(matchId))) === 1;
-      if (!graceStillActive) return;
-
-      const activeMatch = await matchesRepo.getMatch(matchId);
-      if (!activeMatch || activeMatch.status !== 'active') return;
-
-      const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-      const disconnectedExists = await Promise.all(
-        roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
-      );
-      const disconnected = roster
-        .filter((_, index) => disconnectedExists[index])
-        .map((player) => player.user_id);
-
-      if (disconnected.length === 0) return;
-
-      const activeVariant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
-      if (activeVariant === 'friendly_party_quiz') {
-        const state = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
-        const newlyDropped = disconnected.filter((disconnectedUserId) =>
-          !isPartyQuizDropped(state, disconnectedUserId)
-        );
-        if (newlyDropped.length === 0) {
-          logger.info(
-            {
-              eventName: 'party_grace_expired_noop',
-              matchId,
-              disconnectedUserIds: disconnected,
-              droppedUserIds: state.droppedUserIds,
-            },
-            'Party quiz grace expired but disconnected users were already dropped'
-          );
-          return;
-        }
-        const pauseStartedRaw = await redis.get(matchPauseKey(matchId));
-        const pauseStartedAtMs = Number(pauseStartedRaw);
-        logger.info(
-          {
-            eventName: 'party_grace_expired',
-            matchId,
-            disconnectedUserIds: disconnected,
-            newlyDroppedUserIds: newlyDropped,
-            droppedUserIds: state.droppedUserIds,
-            playerCount: roster.length,
-          },
-          'Party quiz grace expired; applying dropouts'
-        );
-        await applyPartyQuizDropouts({
-          io,
-          match: activeMatch,
-          players: roster,
-          droppedUserIds: newlyDropped,
-          reason: 'disconnect_timeout',
-          resumeIfContinuing: true,
-          pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : Date.now(),
-        });
-        return;
-      }
-
-      if (disconnected.length === roster.length) {
-        if (activeMatch.mode === 'ranked') {
-          const finalized = await finalizeMatchAsForfeit({
-            matchId,
-            forfeitingUserId: userId,
-            activeMatch,
-            cleanupRedisKeys: [
-              rankedAiMatchKey(matchId),
-              ...roster.flatMap((player) => [
-                matchDisconnectKey(matchId, player.user_id),
-                matchPresenceKey(matchId, player.user_id),
-                matchReconnectCountKey(matchId, player.user_id),
-              ]),
-            ],
-          });
-          if (finalized.completed) {
-            const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
-            if (finalPayload) {
-              await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
-            }
-            return;
-          }
-        }
-
-        await matchesService.abandonMatch(matchId);
-        await deleteMatchCache(matchId);
-        if (variant !== 'friendly_party_quiz') {
-          cancelPossessionHalftimeTimer(matchId);
-        }
-        io.to(`match:${matchId}`).emit('error', {
-          code: 'MATCH_ABANDONED',
-          message: 'Match abandoned because all players disconnected',
-        });
-        await redis.del(rankedAiMatchKey(matchId));
-        await Promise.all(
-          roster.map((player) =>
-            redis.set(lastMatchKey(player.user_id), matchId, { EX: FORFEIT_TTL_SEC })
-          )
-        );
-        await redis.del(matchPauseKey(matchId));
-        return;
-      }
-
-      const winnerId =
-        variant === 'friendly_party_quiz'
-          ? buildStandings(
-              (await matchPlayersRepo.listMatchPlayers(matchId)).filter((player) => !disconnected.includes(player.user_id))
-            )[0]?.userId ?? null
-          : roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
-      const opponentPendingPayload = buildOpponentForfeitPendingPayload(matchId, 'opponent_reconnect_limit');
-      for (const player of roster) {
-        if (disconnected.includes(player.user_id)) continue;
-        io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
-      }
-      if (winnerId && variant !== 'friendly_party_quiz') {
-        const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
-        const fullCorrectAnswers = activeMatch.total_questions;
-
-        // Fetch current player stats to compute max values (business logic in service)
-        const players = await matchPlayersRepo.listMatchPlayers(matchId);
-        const winnerPlayer = players.find((p) => p.user_id === winnerId);
-        const currentPoints = winnerPlayer?.total_points ?? 0;
-        const currentCorrect = winnerPlayer?.correct_answers ?? 0;
-
-        // Apply max logic here instead of in SQL
-        const finalPoints = Math.max(currentPoints, fullPoints);
-        const finalCorrect = Math.max(currentCorrect, fullCorrectAnswers);
-
-        await matchPlayersRepo.setPlayerForfeitWinTotals(
-          matchId,
-          winnerId,
-          finalPoints,
-          finalCorrect
-        );
-      }
-
-      // Mark decision method as forfeit before completing
-      const statePayload = (activeMatch.state_payload ?? {}) as Record<string, unknown>;
-      await matchesRepo.setMatchStatePayload(matchId, {
-        ...statePayload,
-        winnerDecisionMethod: 'forfeit',
-      });
-
-      await matchesService.completeMatch(matchId, winnerId);
-      await deleteMatchCache(matchId);
-      if (variant !== 'friendly_party_quiz') {
-        cancelPossessionHalftimeTimer(matchId);
-      }
-
-      if (activeMatch.mode === 'ranked') {
-        try { await rankedService.settleCompletedRankedMatch(matchId); }
-        catch (err) { logger.warn({ err, matchId }, 'Ranked settlement failed in grace expiry'); }
-      }
-
-      try { await progressionService.awardCompletedMatchXp(matchId); }
-      catch (err) { logger.warn({ err, matchId }, 'Match XP award failed in grace expiry'); }
-
-      try { await objectivesService.evaluateForMatchBestEffort(matchId); }
-      catch (err) { logger.warn({ err, matchId }, 'Objectives evaluation failed in grace expiry'); }
-
-      const avgTimes = await matchesService.computeAvgTimes(matchId);
-      await Promise.all(
-        roster.map((player) =>
-          matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
-        )
-      );
-
-      const resultVersion = Date.now();
-      const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
-
-      await redis.del(rankedAiMatchKey(matchId));
-      await redis.set(matchForfeitKey(matchId), winnerId ?? 'draw', { EX: FORFEIT_TTL_SEC });
-      await Promise.all(
-        roster.map((player) =>
-          redis.set(
-            lastMatchKey(player.user_id),
-            JSON.stringify({ matchId, resultVersion }),
-            { EX: FORFEIT_TTL_SEC }
-          )
-        )
-      );
-      if (finalPayload) {
-        await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
-      }
-    } catch (err) {
-      logger.warn({ err, matchId }, 'Grace expiry handler failed');
-    } finally {
-      await redis.del(matchGraceKey(matchId));
-      await redis.del(matchPauseKey(matchId));
-    }
-  }, MATCH_DISCONNECT_GRACE_MS);
+  // Durable: the grace-expiry forfeit is scheduled on the Redis sorted-set timer
+  // (the same mechanism question/halftime timers use) instead of an in-process
+  // setTimeout. This survives a backend restart mid-grace — previously a restart
+  // dropped the timer and orphaned the match in `status='active'` forever.
+  await scheduleRealtimeTimer(
+    'match_disconnect_forfeit',
+    matchId,
+    new Date(Date.now() + MATCH_DISCONNECT_GRACE_MS),
+    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId }
+  );
 
   return {
     graceMs: MATCH_DISCONNECT_GRACE_MS,
     remainingReconnects,
     finalized: false,
   };
+}
+
+/**
+ * Run when a disconnect grace window expires (fired by the durable realtime
+ * timer scheduler). Resolves the match: drops party-quiz players, abandons /
+ * forfeits when everyone is gone, or forfeits the disconnected side so the
+ * present player is credited the win. Re-checks all state, so it is safe to
+ * fire late (e.g. after a restart replays an overdue timer) and idempotent
+ * against the `status='active'` guards in the finalize paths it calls.
+ */
+export async function resolveExpiredGraceWindow(
+  io: QuizballServer,
+  matchId: string,
+  disconnectedUserId: string
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  try {
+    const graceStillActive = (await redis.exists(matchGraceKey(matchId))) === 1;
+    if (!graceStillActive) return;
+
+    const activeMatch = await matchesRepo.getMatch(matchId);
+    if (!activeMatch || activeMatch.status !== 'active') return;
+
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+
+    const roster = await matchPlayersRepo.listMatchPlayers(matchId);
+    const disconnectedExists = await Promise.all(
+      roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+    );
+    const disconnected = roster
+      .filter((_, index) => disconnectedExists[index])
+      .map((player) => player.user_id);
+
+    if (disconnected.length === 0) return;
+
+    if (variant === 'friendly_party_quiz') {
+      const state = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
+      const newlyDropped = disconnected.filter((droppedUserId) =>
+        !isPartyQuizDropped(state, droppedUserId)
+      );
+      if (newlyDropped.length === 0) {
+        logger.info(
+          {
+            eventName: 'party_grace_expired_noop',
+            matchId,
+            disconnectedUserIds: disconnected,
+            droppedUserIds: state.droppedUserIds,
+          },
+          'Party quiz grace expired but disconnected users were already dropped'
+        );
+        return;
+      }
+      const pauseStartedRaw = await redis.get(matchPauseKey(matchId));
+      const pauseStartedAtMs = Number(pauseStartedRaw);
+      logger.info(
+        {
+          eventName: 'party_grace_expired',
+          matchId,
+          disconnectedUserIds: disconnected,
+          newlyDroppedUserIds: newlyDropped,
+          droppedUserIds: state.droppedUserIds,
+          playerCount: roster.length,
+        },
+        'Party quiz grace expired; applying dropouts'
+      );
+      await applyPartyQuizDropouts({
+        io,
+        match: activeMatch,
+        players: roster,
+        droppedUserIds: newlyDropped,
+        reason: 'disconnect_timeout',
+        resumeIfContinuing: true,
+        pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : Date.now(),
+      });
+      return;
+    }
+
+    if (disconnected.length === roster.length) {
+      if (activeMatch.mode === 'ranked') {
+        const finalized = await finalizeMatchAsForfeit({
+          matchId,
+          forfeitingUserId: disconnectedUserId,
+          activeMatch,
+          cleanupRedisKeys: [
+            rankedAiMatchKey(matchId),
+            ...roster.flatMap((player) => [
+              matchDisconnectKey(matchId, player.user_id),
+              matchPresenceKey(matchId, player.user_id),
+              matchReconnectCountKey(matchId, player.user_id),
+            ]),
+          ],
+        });
+        if (finalized.completed) {
+          const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
+          if (finalPayload) {
+            await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+          }
+          return;
+        }
+        // finalize returned false → either another resolver holds the forfeit
+        // lock, or the match was already settled. Do NOT fall through to abandon
+        // (that would clobber a forfeit-in-progress); leave it for the lock holder
+        // or the next retry.
+        return;
+      }
+
+      await matchesService.abandonMatch(matchId);
+      await deleteMatchCache(matchId);
+      cancelPossessionHalftimeTimer(matchId);
+      io.to(`match:${matchId}`).emit('error', {
+        code: 'MATCH_ABANDONED',
+        message: 'Match abandoned because all players disconnected',
+      });
+      await redis.del(rankedAiMatchKey(matchId));
+      await Promise.all(
+        roster.map((player) =>
+          redis.set(lastMatchKey(player.user_id), matchId, { EX: FORFEIT_TTL_SEC })
+        )
+      );
+      await redis.del(matchPauseKey(matchId));
+      return;
+    }
+
+    const winnerId = roster.find((player) => !disconnected.includes(player.user_id))?.user_id ?? null;
+    const opponentPendingPayload = buildOpponentForfeitPendingPayload(matchId, 'opponent_reconnect_limit');
+    for (const player of roster) {
+      if (disconnected.includes(player.user_id)) continue;
+      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+    }
+    if (winnerId) {
+      const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
+      const fullCorrectAnswers = activeMatch.total_questions;
+
+      // Fetch current player stats to compute max values (business logic in service)
+      const players = await matchPlayersRepo.listMatchPlayers(matchId);
+      const winnerPlayer = players.find((p) => p.user_id === winnerId);
+      const currentPoints = winnerPlayer?.total_points ?? 0;
+      const currentCorrect = winnerPlayer?.correct_answers ?? 0;
+
+      // Apply max logic here instead of in SQL
+      const finalPoints = Math.max(currentPoints, fullPoints);
+      const finalCorrect = Math.max(currentCorrect, fullCorrectAnswers);
+
+      await matchPlayersRepo.setPlayerForfeitWinTotals(
+        matchId,
+        winnerId,
+        finalPoints,
+        finalCorrect
+      );
+    }
+
+    // Mark decision method as forfeit before completing
+    const statePayload = (activeMatch.state_payload ?? {}) as Record<string, unknown>;
+    await matchesRepo.setMatchStatePayload(matchId, {
+      ...statePayload,
+      winnerDecisionMethod: 'forfeit',
+    });
+
+    await matchesService.completeMatch(matchId, winnerId);
+    await deleteMatchCache(matchId);
+    cancelPossessionHalftimeTimer(matchId);
+
+    if (activeMatch.mode === 'ranked') {
+      try { await rankedService.settleCompletedRankedMatch(matchId); }
+      catch (err) { logger.warn({ err, matchId }, 'Ranked settlement failed in grace expiry'); }
+    }
+
+    try { await progressionService.awardCompletedMatchXp(matchId); }
+    catch (err) { logger.warn({ err, matchId }, 'Match XP award failed in grace expiry'); }
+
+    try { await objectivesService.evaluateForMatchBestEffort(matchId); }
+    catch (err) { logger.warn({ err, matchId }, 'Objectives evaluation failed in grace expiry'); }
+
+    const avgTimes = await matchesService.computeAvgTimes(matchId);
+    await Promise.all(
+      roster.map((player) =>
+        matchPlayersRepo.updatePlayerAvgTime(matchId, player.user_id, avgTimes.get(player.user_id) ?? null)
+      )
+    );
+
+    const resultVersion = Date.now();
+    const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
+
+    await redis.del(rankedAiMatchKey(matchId));
+    await redis.set(matchForfeitKey(matchId), winnerId ?? 'draw', { EX: FORFEIT_TTL_SEC });
+    await Promise.all(
+      roster.map((player) =>
+        redis.set(
+          lastMatchKey(player.user_id),
+          JSON.stringify({ matchId, resultVersion }),
+          { EX: FORFEIT_TTL_SEC }
+        )
+      )
+    );
+    if (finalPayload) {
+      await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+    }
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Grace expiry handler failed');
+  } finally {
+    await redis.del(matchGraceKey(matchId));
+    await redis.del(matchPauseKey(matchId));
+  }
 }

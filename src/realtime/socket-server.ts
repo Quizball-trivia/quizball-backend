@@ -27,6 +27,8 @@ import {
   startRealtimeTimerScheduler,
   type RealtimeTimerPayload,
 } from './realtime-timer-scheduler.js';
+import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
+import { resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import {
   runDraftAutoBan,
   runRankedAiDraftBan,
@@ -286,7 +288,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       if (payload.kind !== 'possession_question') return;
       await resolvePossessionRound(server, payload.matchId, payload.qIndex, true);
     },
+    match_disconnect_forfeit: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'match_disconnect_forfeit') return;
+      await resolveExpiredGraceWindow(server, payload.matchId, payload.disconnectedUserId);
+    },
   });
+
+  startStaleMatchSweeper(io);
 
   rankedMatchmakingService.start(io);
 

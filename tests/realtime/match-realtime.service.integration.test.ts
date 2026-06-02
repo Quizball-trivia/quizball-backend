@@ -65,6 +65,14 @@ const fakeRedis = {
     // No persistent timers in this fake; tests don't exercise that path.
     return null;
   },
+  async zAdd(_key: string, _entries: Array<{ score: number; value: string }>): Promise<number> {
+    // Durable timer scheduling is a no-op here; resume/disconnect tests don't
+    // assert on the realtime:timers zset.
+    return 0;
+  },
+  async zRem(_key: string, _member: string): Promise<number> {
+    return 0;
+  },
   async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
     const key = payload.keys[0];
     const token = payload.arguments[0];
@@ -708,7 +716,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
       await matchRealtimeService.handleMatchDisconnect(io, socket);
       expect(completeMatchMock).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -773,7 +783,11 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       getMatchMock.mockResolvedValue(completedMatch);
       getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer fires this on expiry. Run it under real timers so
+      // the resolution's internal async (tracing/locks) isn't blocked by faked time.
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -838,7 +852,11 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       getMatchMock.mockResolvedValue(completedMatch);
       getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer fires this on expiry. Run it under real timers so
+      // the resolution's internal async (tracing/locks) isn't blocked by faked time.
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -1006,8 +1024,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
       const socket = createSocketMock('u1', 'm1');
@@ -1028,16 +1045,52 @@ describe('match-realtime.service high-risk integration behavior', () => {
         },
       });
 
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+
       await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
 
       fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer would fire this on expiry; invoke its handler
+      // directly (real timers — no 60s wall-clock wait needed).
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
       expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(abandonMatchMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
+    }
+  });
+
+  it('S15b1: ranked all-disconnected does NOT abandon when forfeit finalization is locked', async () => {
+    {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+      const socket = createSocketMock('u1', 'm1');
+      const nowIso = new Date().toISOString();
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 0,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+      });
+
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+
+      await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+      fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
+      // Simulate another resolver already holding the forfeit lock → finalize
+      // returns completed:false. The grace handler must NOT fall through to abandon.
+      fakeRedisStore.values.set('lock:match:m1:forfeit', 'someone-else');
+
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+      expect(abandonMatchMock).not.toHaveBeenCalled();
+      expect(completeMatchMock).not.toHaveBeenCalled();
     }
   });
 

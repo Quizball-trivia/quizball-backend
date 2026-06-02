@@ -19,6 +19,8 @@ import type {
 import type { AuthIdentity } from '../../core/types.js';
 
 const GEORGIAN_MOBILE_RE = /^\+9955\d{8}$/;
+const PROFILE_PROVISIONING_DETAILS = { reason: 'profile_provisioning_failed' } as const;
+const PROVISION_RETRY_DELAYS_MS = [150, 300] as const;
 
 type SmsOfficeSendResponse = {
   Success?: boolean;
@@ -199,65 +201,111 @@ async function sendSmsOfficeOtp(phone: string, otp: string): Promise<{ reference
   return { reference, destination, dryRun: false };
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createProfileProvisioningError(error: unknown): ExternalServiceError {
+  return new ExternalServiceError('Failed to provision user profile', {
+    ...PROFILE_PROVISIONING_DETAILS,
+    cause: error instanceof Error ? error.message : String(error),
+  });
+}
+
+function getProvisioningIdentity(session: AuthSession): AuthIdentity {
+  if (!session.provider || !session.user?.providerSub) {
+    throw createProfileProvisioningError(
+      new Error('Session is missing provider or provider subject')
+    );
+  }
+
+  return {
+    provider: session.provider,
+    subject: session.user.providerSub,
+    email: session.user.email ?? undefined,
+    phoneNumber: session.user.phone ?? undefined,
+    phoneVerifiedAt: session.user.phoneConfirmedAt,
+    claims: {},
+  };
+}
+
+async function getOrCreateProvisionedIdentity(session: AuthSession): Promise<void> {
+  const identity = getProvisioningIdentity(session);
+  await usersService.getOrCreateFromIdentity(identity);
+}
+
+async function provisionIdentityWithRetry(session: AuthSession): Promise<void> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= PROVISION_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await getOrCreateProvisionedIdentity(session);
+      logger.info(
+        {
+          provider: session.provider,
+          userId: session.user?.providerSub,
+          email: session.user?.email ?? undefined,
+          attempts: attempt + 1,
+        },
+        'Identity provisioned during auth'
+      );
+      return;
+    } catch (error) {
+      if (error instanceof AuthenticationError) {
+        throw error;
+      }
+      lastError = error;
+      if (attempt < PROVISION_RETRY_DELAYS_MS.length) {
+        const delayMs = PROVISION_RETRY_DELAYS_MS[attempt];
+        logger.warn(
+          {
+            err: error,
+            provider: session.provider,
+            userId: session.user?.providerSub,
+            delayMs,
+            attempt: attempt + 1,
+          },
+          'Identity provisioning failed, retrying'
+        );
+        await wait(delayMs);
+      }
+    }
+  }
+
+  throw createProfileProvisioningError(lastError);
+}
+
 /**
  * Provision user identity in our database.
  * Called after successful auth to ensure user record exists.
  *
- * Best-effort: transient infrastructure errors (DB hiccup, network blip) are logged and
- * swallowed so a flaky DB doesn't lock everyone out of login. AuthenticationError is the
- * only typed error that propagates — it signals an account-state problem (e.g. scheduled
- * deletion) that MUST block the auth flow.
+ * Best-effort: used only for the routine refresh path. A successful Supabase
+ * refresh can rotate the refresh token, so transient app-profile hiccups must
+ * not withhold the new session from the browser.
  */
 async function provisionIdentity(session: AuthSession): Promise<void> {
   await withSpan('auth.provision_identity', {
     'quizball.auth_provider': session.provider ?? 'unknown',
   }, async (span) => {
-    if (!session.provider || !session.user?.providerSub) {
-      span.setAttribute('quizball.identity_provision_skipped', true);
-      logger.warn(
-        { provider: session.provider, providerSub: session.user?.providerSub },
-        'Missing provider or providerSub, skipping identity provisioning'
-      );
-      return;
-    }
-
-    span.setAttribute('quizball.user_subject', session.user.providerSub);
     try {
-      await usersService.getOrCreateFromIdentity({
-        provider: session.provider,
-        subject: session.user.providerSub,
-        email: session.user.email ?? undefined,
-        phoneNumber: session.user.phone ?? undefined,
-        phoneVerifiedAt: session.user.phoneConfirmedAt,
-        claims: {},
-      });
-      logger.info(
-        {
-          provider: session.provider,
-          userId: session.user.providerSub,
-          email: session.user.email ?? undefined,
-        },
-        'Identity provisioned during auth'
-      );
+      span.setAttribute('quizball.user_subject', session.user?.providerSub ?? 'unknown');
+      await provisionIdentityWithRetry(session);
     } catch (error) {
       if (error instanceof AuthenticationError) {
         // Account-state errors (deletion etc.) MUST block auth.
         throw error;
       }
-      // Transient errors are logged but don't break the auth flow.
-      // Pass the full `err` so pino serializes name/stack and any pg error
-      // code/constraint/detail — message-only logging hid the root cause of
-      // the 2026-05-31 signup/login provisioning failures.
       span.setAttribute('quizball.identity_provision_warning', true);
       logger.warn(
         {
           err: error,
           provider: session.provider,
-          userId: session.user.providerSub,
-          email: session.user.email ?? undefined,
-          hasEmail: Boolean(session.user.email),
+          userId: session.user?.providerSub,
+          email: session.user?.email ?? undefined,
+          hasEmail: Boolean(session.user?.email),
+          reason: PROFILE_PROVISIONING_DETAILS.reason,
         },
-        'Failed to provision identity during auth'
+        'Failed to provision identity during refresh; returning rotated session'
       );
     }
   });
@@ -278,7 +326,7 @@ function isPendingDeletionAuthenticationError(error: unknown): boolean {
 
 async function provisionIdentityOrThrowSession(session: AuthSession): Promise<void> {
   try {
-    await provisionIdentity(session);
+    await provisionIdentityWithRetry(session);
   } catch (error) {
     if (isPendingDeletionAuthenticationError(error) && session.refreshToken) {
       throw new PendingDeletionSessionError(session);
@@ -325,7 +373,7 @@ export const authService = {
         }
       }
       if (session.accessToken) {
-        await provisionIdentity(session);
+        await provisionIdentityOrThrowSession(session);
       }
       return session;
     });
@@ -559,8 +607,9 @@ export const authService = {
 
   /**
    * Verifies the session belongs to an account that is still allowed to authenticate.
-   * Reuses the provisioning flow because it already loads the user and runs the deletion check.
-   * Only AuthenticationError propagates — transient errors are swallowed inside provisionIdentity.
+   * Refresh is intentionally tolerant of transient app-profile provisioning failures:
+   * Supabase may already have rotated the refresh token, so the new session must
+   * be returned to the browser. Account-state AuthenticationError still blocks.
    */
   async ensureSessionAccountActive(session: AuthSession): Promise<void> {
     await provisionIdentity(session);

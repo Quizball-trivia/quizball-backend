@@ -33,7 +33,8 @@
     "docker:start": "./scripts/docker-start.sh",
     "docker:stop": "./scripts/docker-stop.sh",
     "docker:logs": "docker compose logs -f api",
-    "api:export": "tsx scripts/export-openapi.ts"
+    "api:export": "tsx scripts/export-openapi.ts",
+    "moderate:nicknames": "tsx scripts/moderate-nicknames.ts"
   },
   "keywords": [],
   "author": "",

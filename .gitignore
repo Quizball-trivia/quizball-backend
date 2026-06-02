@@ -31,7 +31,8 @@ coverage/
 supabase/.temp/
 
 # Secrets/scripts
-scripts/
+scripts/*
+!scripts/moderate-nicknames.ts
 
 # Local agent instructions (not shared)
 CLAUDE.md

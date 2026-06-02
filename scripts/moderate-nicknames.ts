@@ -47,16 +47,27 @@ try {
   });
 
   let updatedCount = 0;
+  const failures: Array<{ userId: string; replacementNickname: string; error: string }> = [];
   if (shouldApply) {
     for (const user of flagged) {
-      const result = await sql`
-        UPDATE users
-        SET nickname = ${user.replacementNickname},
-            updated_at = NOW()
-        WHERE id = ${user.userId}
-          AND COALESCE(is_ai, false) = false
-      `;
-      updatedCount += result.count;
+      try {
+        const result = await sql`
+          UPDATE users
+          SET nickname = ${user.replacementNickname},
+              updated_at = NOW()
+          WHERE id = ${user.userId}
+            AND COALESCE(is_ai, false) = false
+        `;
+        updatedCount += result.count;
+      } catch (error) {
+        // A single-row failure (e.g. a unique-index collision on lower(nickname))
+        // must not abort the whole batch — record it and keep going.
+        failures.push({
+          userId: user.userId,
+          replacementNickname: user.replacementNickname,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -65,6 +76,8 @@ try {
     scannedCount: users.length,
     flaggedCount: flagged.length,
     updatedCount,
+    failedCount: failures.length,
+    failures,
     flagged,
   }, null, 2));
 } finally {

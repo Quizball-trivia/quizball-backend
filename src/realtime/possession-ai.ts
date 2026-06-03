@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { getRandom } from '../core/rng.js';
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
@@ -40,30 +41,30 @@ const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 function getAiAnswerDelayMs(questionKind?: string): number {
   // Countdown is open-ended typing, so the AI uses a much slower range than other kinds.
   if (questionKind === 'countdown') {
-    return Math.floor(Math.random() * 10000) + 12000;
+    return Math.floor(getRandom() * 10000) + 12000;
   }
-  return Math.floor(Math.random() * 5000) + 2000;
+  return Math.floor(getRandom() * 5000) + 2000;
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
   const candidates = Array.from({ length: optionCount }, (_, index) => index).filter(
     (index) => index !== correctIndex
   );
-  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  const picked = candidates[Math.floor(getRandom() * candidates.length)];
   return picked ?? correctIndex;
 }
 
 function getAiCountdownFoundCount(totalAnswers: number, aiCorrectness: number): number {
   const cappedAnswers = Math.max(1, totalAnswers);
   const baseline = Math.round(cappedAnswers * aiCorrectness * 0.75);
-  const variance = Math.floor(Math.random() * 3) - 1;
+  const variance = Math.floor(getRandom() * 3) - 1;
   return clamp(baseline + variance, 0, cappedAnswers);
 }
 
 function getAiClueIndex(clueCount: number, aiCorrectness: number): number {
   const maxIndex = Math.max(0, clueCount - 1);
   const weighted = Math.round((1 - aiCorrectness) * maxIndex);
-  const variance = Math.floor(Math.random() * 2);
+  const variance = Math.floor(getRandom() * 2);
   return clamp(weighted + variance, 0, maxIndex);
 }
 
@@ -374,7 +375,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           const optionCount = question.questionDTO.kind === 'multipleChoice'
             ? question.questionDTO.options.length
             : 4;
-          isCorrect = Math.random() < aiCorrectness;
+          isCorrect = getRandom() < aiCorrectness;
           selectedIndex = isCorrect
             ? question.evaluation.correctIndex
             : pickIncorrectIndex(question.evaluation.correctIndex, optionCount);
@@ -390,7 +391,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           const correctOrderIds = [...question.evaluation.items]
             .sort((left, right) => left.sortValue - right.sortValue)
             .map((item) => item.id);
-          isCorrect = Math.random() < aiCorrectness;
+          isCorrect = getRandom() < aiCorrectness;
           selectedIndex = null;
           // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
           // by 0.55 so an AI that "would have" got the question right
@@ -412,7 +413,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           }
           pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
         } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
-          isCorrect = Math.random() < aiCorrectness;
+          isCorrect = getRandom() < aiCorrectness;
           clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
           selectedIndex = null;
           pointsEarned = calculateCluesScore(isCorrect, clueIndex);
@@ -556,7 +557,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           'Possession AI countdown drip scheduled'
         );
         for (let i = 1; i <= totalFound; i += 1) {
-          const stepDelay = 600 + Math.floor(Math.random() * 800) + (i - 1) * 250;
+          const stepDelay = 600 + Math.floor(getRandom() * 800) + (i - 1) * 250;
           setTimeout(() => {
             void (async () => {
               try {

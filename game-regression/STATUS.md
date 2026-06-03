@@ -40,6 +40,26 @@ real players hit (e.g. the orphaned-match disconnect bug).
 4. Run 1000 → report. (LLM trace reviewer later.)
 Rationale: a fuzzer is only useful if the invariants are solid first.
 
+## EXPANDED SCOPE (user, 2026-06-03) — cover ALL modes & entry flows, not just ranked-vs-AI
+The harness must EVENTUALLY test every game mode and entry path, the same way it tests
+ranked-vs-AI now. Concretely:
+- **Game variants (all 3):**
+  - `ranked_sim` — possession vs AI (DONE — current harness)
+  - `friendly_possession` — possession in a friend lobby
+  - `friendly_party_quiz` — party-quiz mode
+- **Entry/lobby flows:**
+  - create a lobby
+  - join by INVITE CODE / share LINK
+  - lobby ready → host starts the match
+  - human-vs-human (two real bot "humans" in one lobby, not just vs AI)
+- This reuses MOST of the existing foundation (adapter, clock, fixtures, trace,
+  invariants are mode-agnostic). What's new per mode: the BOOT path (lobby create/join
+  vs ranked queue), the bot's lobby actions (ready/start/ban), and mode-specific
+  invariants (party-quiz dropout rules, friendly-lobby category selection, 2-human
+  seating). Build these AFTER the ranked fuzzer is proven, mode by mode.
+Order: finish ranked scenarios + fuzzer first (it's the deepest path), then add a
+lobby-boot path + friendly_possession, then friendly_party_quiz, then human-vs-human.
+
 ## Local stack (NATIVE — no Docker)
 Both Postgres and Redis run natively via Homebrew (Docker is no longer used).
 

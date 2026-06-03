@@ -1,5 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { getRandom } from '../../core/rng.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -269,11 +270,12 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
-  void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + DRAFT_AUTO_BAN_MS), {
+  const autoBanMs = harnessDelayMs(DRAFT_AUTO_BAN_MS);
+  void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + autoBanMs), {
     kind: 'draft_auto_ban',
     lobbyId,
   }).catch((error) => {
-    logger.error({ error, lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Failed to schedule draft auto-ban timer');
+    logger.error({ error, lobbyId, delayMs: autoBanMs }, 'Failed to schedule draft auto-ban timer');
   });
   logger.debug({ lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Scheduled automatic draft ban fallback');
 }

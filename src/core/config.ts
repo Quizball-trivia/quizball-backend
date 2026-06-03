@@ -114,17 +114,18 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
-  // REGRESSION_DETERMINISTIC pins question randomness for the test harness. It
-  // MUST never run outside local — in staging/prod it would make question
-  // selection deterministic (always the same questions), a correctness bug.
-  // Checked first so a misconfiguration fails the boot immediately.
-  if (
-    (process.env.REGRESSION_DETERMINISTIC === "1" || process.env.REGRESSION_DETERMINISTIC === "true") &&
-    result.data.NODE_ENV !== "local"
-  ) {
+  // REGRESSION_* harness flags pin question randomness / collapse matchmaking
+  // delays for the test harness. They MUST never run outside local — in
+  // staging/prod they would change real gameplay (deterministic questions, near-
+  // instant matchmaking). Checked first so a misconfiguration fails boot fast.
+  const regressionFlag =
+    (["REGRESSION_DETERMINISTIC", "REGRESSION_FAST_TIMERS"] as const).find(
+      (k) => process.env[k] === "1" || process.env[k] === "true",
+    );
+  if (regressionFlag && result.data.NODE_ENV !== "local") {
     throw new ConfigError(
-      "Invalid configuration: REGRESSION_DETERMINISTIC may only be set in the local environment (it pins question randomness for the regression harness).",
-      { nodeEnv: result.data.NODE_ENV },
+      `Invalid configuration: ${regressionFlag} may only be set in the local environment (it is a regression-harness-only flag).`,
+      { nodeEnv: result.data.NODE_ENV, flag: regressionFlag },
     );
   }
 

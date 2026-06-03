@@ -9,8 +9,6 @@
  *
  * Consumed from a vitest test (fake timers live there). `vi` is injected.
  */
-import type { FakeTimerApi } from './clock.mjs';
-import { createHarnessClock } from './clock.mjs';
 import { FakeIo, createTrace, type EventTrace, type FakeSocket } from './adapter.mjs';
 import { seedFixtures, seedTestUserWithTicket, type SeededFixtures } from './fixtures.mjs';
 
@@ -28,20 +26,29 @@ export interface RunMatchResult {
 }
 
 export interface RunMatchOptions {
-  vi: FakeTimerApi & { setSystemTime?: (t: number) => void };
   botUserId?: string;
   seed?: string;
-  /** Max fake-ms to wait for the match to start before giving up. */
+  /** Max real-ms to wait for the match to start. With REGRESSION_FAST_TIMERS the
+   *  whole boot is a few hundred ms, so a couple of seconds is ample. */
   startTimeoutMs?: number;
 }
 
 const BOT_USER_ID = '00000000-0000-0000-0000-0000000000b0';
 
+/** Real-time poll until `predicate` is true or `maxMs` elapses. */
+async function waitUntil(predicate: () => boolean, maxMs: number, stepMs = 25): Promise<boolean> {
+  const deadline = Date.now() + maxMs;
+  if (predicate()) return true;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, stepMs));
+    if (predicate()) return true;
+  }
+  return false;
+}
+
 /** Boot a ranked-AI match and return the trace once a match:start is observed. */
-export async function bootMatch(options: RunMatchOptions): Promise<RunMatchResult> {
-  const vi = options.vi;
+export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatchResult> {
   const botUserId = options.botUserId ?? BOT_USER_ID;
-  const clock = createHarnessClock(vi);
 
   const now = () => Date.now();
   const trace = createTrace(now);
@@ -53,6 +60,12 @@ export async function bootMatch(options: RunMatchOptions): Promise<RunMatchResul
 
   // 2. Redis + the durable timer scheduler + the matchmaking loop.
   await initRedisClients();
+  // Flush ALL Redis state so leftover matchmaking/queue/timer entries from a
+  // prior (or killed) run can't confuse this one — the realtime engine keys are
+  // transient and the harness Redis is local + isolated. This was the cause of a
+  // stale-queued-search blocking the AI fallback between runs.
+  const redisForFlush = getRedisClient();
+  if (redisForFlush?.isOpen) await redisForFlush.flushAll();
   startRealtimeTimerScheduler(io as never, buildRealtimeTimerHandlers());
   rankedMatchmakingService.start(io as never);
 
@@ -66,10 +79,11 @@ export async function bootMatch(options: RunMatchOptions): Promise<RunMatchResul
   // 4. Join the ranked queue (real production entry point).
   await rankedMatchmakingService.handleQueueJoin(io as never, botSocket as never);
 
-  // 5. Advance fake time past the queue search window so processFallbacks starts AI.
-  const startTimeout = options.startTimeoutMs ?? 30_000;
-  const started = await clock.advanceUntil(
-    () => trace.byEvent('match:start').length > 0,
+  // 5. Wait (real, fast time) for queue -> AI fallback -> draft -> match:start ->
+  //    first question. With REGRESSION_FAST_TIMERS the delays are ~5ms each.
+  const startTimeout = options.startTimeoutMs ?? 10_000;
+  const started = await waitUntil(
+    () => trace.byEvent('match:start').length > 0 && trace.byEvent('match:question').length > 0,
     startTimeout,
   );
 

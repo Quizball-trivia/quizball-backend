@@ -26,6 +26,15 @@ export interface FakeTimerApi {
   runOnlyPendingTimersAsync?: () => Promise<void>;
 }
 
+// Captured BEFORE vitest fakes timers, so the harness can yield to the REAL
+// event loop (letting pending DB/Redis I/O settle) between fake-time steps.
+// Without this, advanceTimersByTimeAsync fires the engine's scheduled timers but
+// the network awaits they trigger never resolve, and the match appears to hang.
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+function realYield(): Promise<void> {
+  return new Promise((resolve) => realSetTimeout(resolve, 0));
+}
+
 export interface HarnessClock {
   /**
    * Advance fake time by `ms`, in small steps, firing all due timers/intervals and
@@ -42,7 +51,10 @@ const DEFAULT_STEP_MS = 250; // < scheduler poll (500ms) so no poll is skipped
 
 async function flushMicrotasks(): Promise<void> {
   // Let awaited promises chained off timer handlers settle before the next step.
+  // A real macrotask yield is required so pending DB/Redis I/O (not JS timers)
+  // can resolve — microtask flushes alone aren't enough for network awaits.
   await Promise.resolve();
+  await realYield();
   await Promise.resolve();
 }
 

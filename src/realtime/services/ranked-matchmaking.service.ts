@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { config } from '../../core/config.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
@@ -494,7 +495,7 @@ export const rankedMatchmakingService = {
           await redis.del(cancelKey(userId));
 
           const now = Date.now();
-          const deadlineAt = now + SEARCH_DURATION_MS;
+          const deadlineAt = now + harnessDelayMs(SEARCH_DURATION_MS);
           const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
           if (existingSearchId) {
             const existing = await redis.hGetAll(searchKey(existingSearchId));

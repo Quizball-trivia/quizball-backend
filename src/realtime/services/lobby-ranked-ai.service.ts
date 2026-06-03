@@ -1,5 +1,6 @@
 import type { QuizballServer } from '../socket-server.js';
 import { getRandom } from '../../core/rng.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -101,7 +102,7 @@ export async function startRankedAiForUser(
 
     const searchDurationMs =
       options?.searchDurationMs ??
-      randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS);
+      harnessDelayMs(randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS));
     span.setAttribute('quizball.search_duration_ms', searchDurationMs);
     if (!options?.skipSearchEmit) {
       io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });

@@ -1,3 +1,4 @@
+import { getRandom } from '../../core/rng.js';
 import { matchesRepo } from './matches.repo.js';
 import { matchAnswersRepo } from './match-answers.repo.js';
 import { matchEventsRepo } from './match-events.repo.js';
@@ -67,7 +68,7 @@ function getPutInOrderInstruction(direction: 'asc' | 'desc'): Record<string, str
 function shuffleArray<T>(input: readonly T[]): T[] {
   const arr = [...input];
   for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(getRandom() * (i + 1));
     [arr[i], arr[j]] = [arr[j]!, arr[i]!];
   }
   return arr;

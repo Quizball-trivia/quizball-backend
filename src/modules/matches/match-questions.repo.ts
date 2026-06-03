@@ -9,6 +9,13 @@ import type {
 } from './matches.types.js';
 import type { QuestionType } from '../questions/questions.schemas.js';
 
+// Regression-harness determinism: when REGRESSION_DETERMINISTIC is set (NEVER in
+// prod), the otherwise-random question ordering becomes a stable md5 over the
+// row id so a seeded match replays the SAME questions. Prod uses RANDOM().
+const RANDOM_ORDER_SQL = process.env.REGRESSION_DETERMINISTIC === '1'
+  ? `md5(q.id::text || '${(process.env.REGRESSION_DETERMINISTIC_SALT ?? 'reg').replace(/'/g, '')}')`
+  : 'RANDOM()';
+
 /**
  * Pure-data repo for the `match_questions` table.
  *
@@ -136,7 +143,7 @@ export const matchQuestionsRepo = {
           AND q.status = 'published'
           AND q.type = 'mcq_single'
         ${VALID_PAYLOAD_CONDITIONS}
-        ORDER BY RANDOM()
+        ORDER BY ${RANDOM_ORDER_SQL}
         LIMIT $2
       `, [categoryId, limit]);
     }
@@ -158,7 +165,7 @@ export const matchQuestionsRepo = {
         AND q.status = 'published'
         AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
-      ORDER BY RANDOM()
+      ORDER BY ${RANDOM_ORDER_SQL}
       LIMIT $2
       `,
       [categoryId, sampleLimit],
@@ -183,7 +190,7 @@ export const matchQuestionsRepo = {
         AND q.type = 'mcq_single'
       ${VALID_PAYLOAD_CONDITIONS}
       ${excludeCondition}
-      ORDER BY RANDOM()
+      ORDER BY ${RANDOM_ORDER_SQL}
       LIMIT $2
       `,
       [categoryId, remaining, ...excludeIds],
@@ -225,7 +232,7 @@ export const matchQuestionsRepo = {
             WHERE mq.match_id = $1
               AND mq.question_id = q.id
           )
-        ORDER BY RANDOM()
+        ORDER BY ${RANDOM_ORDER_SQL}
         LIMIT $${params.difficulties?.length ? 5 : 4}
         `,
         [

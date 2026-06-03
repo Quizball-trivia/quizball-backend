@@ -1,10 +1,44 @@
 # Game Regression Harness — STATUS (overnight build)
 
 ## TL;DR
-The hard architecture is PROVEN: a real ranked-AI match boots end-to-end in-process
-(queue → AI fallback → draft → category ban → match:start → first question) against
-the local Supabase DB + Redis, in an automated vitest test, with a full event trace.
-Two issues remain before the harness can run many matches reliably (see KNOWN ISSUES).
+The hard architecture is PROVEN: a real ranked-AI match boots AND plays to completion
+in-process (queue → AI → draft → ban → all 12 questions → halftime → COMPLETED →
+final_results) against a NATIVE local Postgres + Redis, in an automated vitest test,
+with a full event trace. Invariants module ("the referee") is written. Next: wire
+invariants into scenario tests, build named scenarios, then the fuzzing runner.
+
+## Multi-match runner design (DECIDED)
+Loop, per the user's plan:
+```
+START: clear everything + seed question POOL once
+for each match:
+  flush Redis; clean match/lobby/player/answer/rp rows (NOT questions); reset user ticket
+  play match with a per-match RANDOM SEED (different scenario each time)
+  check invariants
+  if failure: ALWAYS persist BEFORE next cleanup wipes it →
+    {event trace JSON, invariant findings, matchId, seed, run index, key DB rows}
+    if STOP_ON_FIRST_FAILURE=1 → stop
+debug modes: clean-before-each (Option 1) + stop-and-keep (Option 3) as flags.
+```
+Reuse the question pool across matches (don't re-seed 1000×). Persisting failure
+artifacts before cleanup is MANDATORY — else the next match wipes the evidence.
+
+## Fuzzing — what varies per match (the whole point of 1000 games)
+Each match is a different RANDOM scenario (seeded, reproducible): which categories
+banned, correct/wrong/random answers, fast/slow/timeout timing, answer-or-skip
+specials, and lifecycle chaos — disconnect (mid-match, at varying qIndex/phase),
+reconnect-within-grace (resume), disconnect→abandon (grace expires), forfeit/quit,
+halftime ban actively / time out / withhold ui_ready. This covers the bug CLASSES
+real players hit (e.g. the orphaned-match disconnect bug).
+
+## Build order (DECIDED: invariants/scenarios FIRST, then fuzzer)
+1. Wire invariants into a CLEAN full-match test (baseline: a clean match passes all 6). ← NEXT
+2. Named scenarios (disconnect/reconnect/abandon/forfeit/halftime/timeout) + prove
+   each invariant catches its bug by reverting the corresponding fix.
+3. Fuzzing runner (random seed per match composes the named behaviors) + artifact
+   persistence + STOP_ON_FIRST_FAILURE + reuse-pool.
+4. Run 1000 → report. (LLM trace reviewer later.)
+Rationale: a fuzzer is only useful if the invariants are solid first.
 
 ## Local stack (NATIVE — no Docker)
 Both Postgres and Redis run natively via Homebrew (Docker is no longer used).

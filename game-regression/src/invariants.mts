@@ -42,7 +42,15 @@ const terminalStateReached: Invariant = (trace) => {
   }];
 };
 
-/** Per round, each player's possessionPointsEarned ("bars") must equal pointsEarned ("score"). */
+/**
+ * Per round, the bar points (possessionPointsEarned) must reconcile with the
+ * score (pointsEarned). They are NOT always equal: a 2× speed-streak bonus
+ * (NORMAL play) intentionally DOUBLES the holder's possession points
+ * (possession-round-resolver.ts:386). So the valid relationship is:
+ *   possessionPointsEarned === pointsEarned   (no boost)
+ *   OR possessionPointsEarned === pointsEarned * 2   (speed-streak boost)
+ * Any OTHER value is the real "+8 bars / +0 score" class of bug.
+ */
 const scoreMatchesBars: Invariant = (trace) => {
   const out: Violation[] = [];
   for (const evt of trace.byEvent('match:round_result')) {
@@ -53,10 +61,12 @@ const scoreMatchesBars: Invariant = (trace) => {
     for (const [userId, p] of Object.entries(payload.players ?? {})) {
       const score = p.pointsEarned;
       const bars = p.possessionPointsEarned;
-      if (typeof score === 'number' && typeof bars === 'number' && score !== bars) {
+      if (typeof score !== 'number' || typeof bars !== 'number') continue;
+      const reconciles = bars === score || bars === score * 2;
+      if (!reconciles) {
         out.push({
           invariant: 'scoreMatchesBars',
-          message: `Round ${payload.qIndex}: player score (${score}) != bar points (${bars}).`,
+          message: `Round ${payload.qIndex}: bar points (${bars}) do not reconcile with score (${score}) — expected ${score} or ${score * 2} (2× streak).`,
           seq: evt.seq,
           detail: { qIndex: payload.qIndex, userId, pointsEarned: score, possessionPointsEarned: bars },
         });
@@ -66,17 +76,25 @@ const scoreMatchesBars: Invariant = (trace) => {
   return out;
 };
 
-/** The dispatched question index must always be < total. */
+/**
+ * For NORMAL-play questions, qIndex must be < total ("question 13 of 12" guard).
+ * Exempt: last_attack / penalty phase questions are intentionally numbered PAST
+ * the normal `total` (e.g. q12 with total 12 is the last-attack bonus question),
+ * so they don't count as an overflow.
+ */
 const questionCounterInRange: Invariant = (trace) => {
   const out: Violation[] = [];
   for (const evt of trace.byEvent('match:question')) {
-    const { qIndex, total } = evt.payload as { qIndex?: number; total?: number };
-    if (typeof qIndex === 'number' && typeof total === 'number' && qIndex >= total) {
+    const { qIndex, total, phaseKind } = evt.payload as {
+      qIndex?: number; total?: number; phaseKind?: string;
+    };
+    const isNormal = phaseKind === undefined || phaseKind === 'normal';
+    if (isNormal && typeof qIndex === 'number' && typeof total === 'number' && qIndex >= total) {
       out.push({
         invariant: 'questionCounterInRange',
-        message: `Dispatched question qIndex ${qIndex} >= total ${total}.`,
+        message: `Normal-play question qIndex ${qIndex} >= total ${total} ("question ${qIndex + 1} of ${total}").`,
         seq: evt.seq,
-        detail: { qIndex, total },
+        detail: { qIndex, total, phaseKind },
       });
     }
   }

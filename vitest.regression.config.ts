@@ -33,6 +33,8 @@ export default defineConfig({
       'tests/regression/penalty-shootout.test.ts',
       'tests/regression/halftime-uiready-withheld.test.ts',
       'tests/regression/question-timeout.test.ts',
+      'tests/regression/friendly-possession-lobby.test.ts',
+      'tests/regression/friendly-party-quiz-lobby.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     // ── Serialize at the FILE level: one match owns the shared DB/Redis at a

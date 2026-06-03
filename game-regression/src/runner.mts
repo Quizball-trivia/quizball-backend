@@ -40,6 +40,9 @@ import {
 } from '../../src/realtime/services/lobby-commands.service.js';
 // Variant-routing answer entry (party_quiz -> handlePartyQuizAnswer; else possession).
 import { handleAnswer } from '../../src/realtime/services/match-question-dispatch.service.js';
+// Party-quiz advances to the next question via a ready-ack gate; the bot must ack
+// (like a real client) or each round waits the full ~8s ceiling.
+import { handlePartyQuizReadyForNextQuestion } from '../../src/realtime/party-quiz-match-flow.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -277,6 +280,9 @@ export async function playLobbyMatch(
   const answerMode = opts.answerMode ?? 'correct';
   // qIndexes each seat has already answered.
   const answeredBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
+  // Party quiz advances via a ready-ack gate per resolved round; track which
+  // qIndexes each seat has acked so the bot "taps next" like a real client.
+  const ackedBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
@@ -304,6 +310,21 @@ export async function playLobbyMatch(
           }
         } catch {
           // late/duplicate/invalid — engine guards it; round still resolves.
+        }
+      }
+    }
+
+    // Party quiz: after a round resolves, every seat acks "ready for next" so the
+    // post-round gate advances immediately instead of waiting the ~8s ceiling.
+    if (run.variant === 'friendly_party_quiz' && run.matchId) {
+      for (const evt of trace.byEvent('match:round_result')) {
+        const qIndex = (evt.payload as { qIndex?: number }).qIndex;
+        if (typeof qIndex !== 'number') continue;
+        for (const seat of seats) {
+          const acked = ackedBySeat.get(seat.userId)!;
+          if (acked.has(qIndex)) continue;
+          acked.add(qIndex);
+          try { handlePartyQuizReadyForNextQuestion(seat.userId, run.matchId, qIndex); } catch { /* gate guards it */ }
         }
       }
     }

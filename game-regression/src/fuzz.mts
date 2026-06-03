@@ -35,8 +35,9 @@ process.env.REGRESSION_DETERMINISTIC = '1';
 process.env.REGRESSION_FAST_TIMERS = '1';
 process.env.LOG_LEVEL = 'silent';
 
-const { bootMatch, playMatch, teardownRun } = await import('./runner.mjs');
+const { bootMatch, playMatch, bootFriendlyLobbyMatch, playLobbyMatch, teardownRun } = await import('./runner.mjs');
 const { checkInvariants, formatViolation } = await import('./invariants.mjs');
+const { checkPartyInvariants } = await import('./party-invariants.mjs');
 const { checkPostMatchState, formatPostMatchViolation } = await import('./post-match.mjs');
 const { reviewTrace, formatLlmFinding } = await import('./llm-reviewer.mjs');
 const { sql } = await import('../../src/db/index.js');
@@ -48,6 +49,14 @@ const ARTIFACT_DIR = resolve(process.env.FUZZ_ARTIFACT_DIR ?? 'game-regression/a
 // LLM judge: 0 = off (default, fast), N = review every Nth match (1 = every match).
 // On a coded-invariant FAILURE the judge always runs to explain it.
 const LLM_EVERY = Number(process.env.FUZZ_LLM_EVERY ?? 0);
+// Which match types to fuzz: 'ranked' (default), 'possession' (friendly h-v-h),
+// 'party' (friendly_party_quiz), or 'mix' (rotate through all three).
+const MODE = (process.env.FUZZ_MODE ?? 'ranked') as 'ranked' | 'possession' | 'party' | 'mix';
+const MIX_ROTATION = ['ranked', 'possession', 'party'] as const;
+function modeFor(i: number): 'ranked' | 'possession' | 'party' {
+  if (MODE === 'mix') return MIX_ROTATION[(i - 1) % MIX_ROTATION.length];
+  return MODE;
+}
 // new Date() is unavailable in workflow scripts but fine in a plain tsx run; still,
 // keep the run id index-based + a coarse epoch passed via env for stable artifact names.
 const RUN_TAG = process.env.FUZZ_RUN_TAG ?? String(process.env.FUZZ_EPOCH ?? Math.floor(Date.now() / 1000));
@@ -101,24 +110,40 @@ for (let i = 1; i <= COUNT; i++) {
     index: i, matchId: null, booted: false, completed: false, ok: false,
     traceViolations: [], postViolations: [],
   };
+  const mode = modeFor(i);
   try {
-    const run = await bootMatch({ startTimeoutMs: 25_000 });
-    outcome.matchId = run.matchId;
-    outcome.booted = !!run.matchId;
+    // Boot + play by mode. ranked = AI queue path; possession/party = lobby h-v-h.
+    let trace: import('./adapter.mjs').EventTrace;
+    let matchId: string | null;
+    let isParty = false;
+    if (mode === 'ranked') {
+      const run = await bootMatch({ startTimeoutMs: 25_000 });
+      trace = run.trace; matchId = run.matchId;
+      if (matchId) await playMatch(run, { maxMs: PLAY_MAX_MS });
+    } else {
+      const variant = mode === 'party' ? 'friendly_party_quiz' : 'friendly_possession';
+      isParty = mode === 'party';
+      const run = await bootFriendlyLobbyMatch({ variant, startTimeoutMs: 25_000 });
+      trace = run.trace; matchId = run.matchId;
+      if (matchId) await playLobbyMatch(run, { maxMs: PLAY_MAX_MS });
+    }
+    outcome.matchId = matchId;
+    outcome.booted = !!matchId;
 
-    if (!run.matchId) {
+    if (!matchId) {
       bootFailures++;
-      console.log(`[fuzz] #${i} BOOT FAILED`);
+      console.log(`[fuzz] #${i} BOOT FAILED (${mode})`);
       await teardownRun();
       // A boot failure is environmental, not a game bug — don't stop the run.
       continue;
     }
 
-    await playMatch(run, { maxMs: PLAY_MAX_MS });
-    outcome.completed = run.trace.byEvent('match:final_results').length > 0;
+    outcome.completed = trace.byEvent('match:final_results').length > 0;
 
-    const inv = checkInvariants(run.trace);
+    // Party quiz uses its own invariant set; possession/ranked share the possession one.
+    const inv = isParty ? checkPartyInvariants(trace) : checkInvariants(trace);
     outcome.traceViolations = inv.violations.map(formatViolation);
+    const run = { trace, matchId } as { trace: import('./adapter.mjs').EventTrace; matchId: string };
 
     // Post-match settlement (RP/XP) is fire-and-forget; poll until it lands (or a
     // short ceiling) instead of a fixed sleep — faster on the common case.

@@ -143,15 +143,38 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
   }
 }
 
-/** Seed (or reset) a test user with a ranked ticket. Returns the user id. */
+/**
+ * Seed (or RESET) a test user to a known wallet/user baseline. Critical: the
+ * ranked ticket preflight goes through storeService.getWallet, which hydrates
+ * tickets from `tickets_refill_started_at`. So a per-scenario reset must clear
+ * that anchor (and other state) — not just bump `tickets` — or refill logic can
+ * mutate the ticket count between scenarios. Returns the user id.
+ */
 export async function seedTestUserWithTicket(
-  opts: { userId: string; nickname?: string; tickets?: number },
+  opts: { userId: string; nickname?: string; tickets?: number; coins?: number },
 ): Promise<string> {
+  const tickets = opts.tickets ?? 1;
+  const coins = opts.coins ?? 100;
   await sql`
-    INSERT INTO users (id, nickname, onboarding_complete, is_ai, tickets, coins)
-    VALUES (${opts.userId}, ${opts.nickname ?? 'RegressionBot'}, true, false,
-            ${opts.tickets ?? 1}, 100)
-    ON CONFLICT (id) DO UPDATE SET tickets = ${opts.tickets ?? 1}
+    INSERT INTO users (
+      id, nickname, onboarding_complete, is_ai, tickets, coins,
+      tickets_refill_started_at, is_deleted, deleted_at, pending_deletion_at
+    )
+    VALUES (
+      ${opts.userId}, ${opts.nickname ?? 'RegressionBot'}, true, false, ${tickets}, ${coins},
+      NULL, false, NULL, NULL
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      nickname = EXCLUDED.nickname,
+      onboarding_complete = true,
+      is_ai = false,
+      tickets = EXCLUDED.tickets,
+      coins = EXCLUDED.coins,
+      tickets_refill_started_at = NULL,
+      is_deleted = false,
+      deleted_at = NULL,
+      pending_deletion_at = NULL,
+      updated_at = NOW()
   `;
   return opts.userId;
 }

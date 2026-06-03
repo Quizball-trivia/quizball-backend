@@ -79,12 +79,15 @@ The same bot logic + same invariants, behind a small `MatchClient` interface:
      optional; RP/profile context is generated/loaded in the ranked-AI flow.)
   The fake-time loop (below) must therefore also drive this `setInterval`, not only the
   realtime-timer scheduler.
-- **AI behaviour has a correctness seam but is NOT deterministic (corrected per review P2).**
-  `aiCorrectness` is read from `ranked_context.aiCorrectness` (`possession-ai.ts:113`) — we
-  can SET it at match creation. BUT the AI also calls global `Math.random()` for answer
-  timing, clue index, and countdown-found counts (lines 43/52/59/66), and there is **no RNG
-  injection seam** in the engine. So setting `aiCorrectness` alone does not make outcomes
-  reproducible, and "forced draw" cannot be assumed. See the draw-control decision below.
+- **AI behaviour: correctness seam + RNG seam now IMPLEMENTED (updated — RNG commits landed).**
+  `aiCorrectness` is read from `ranked_context.aiCorrectness` (`possession-ai.ts`) and can be
+  SET at match creation. The engine's nondeterministic `Math.random()` sites across the
+  ranked-AI/draft/halftime path AND the put_in_order shuffle now go through the seeded
+  `getRandom()` seam (`core/rng.ts`, commits 7475f45 / 570651a / this round). SQL question
+  randomness (`ORDER BY RANDOM()` in the MCQ picker) is pinned via `REGRESSION_DETERMINISTIC=1`
+  (deterministic md5 order; prod still RANDOM()) — proven: same seed → same question. Setting
+  `aiCorrectness` alone still doesn't dial an exact scoreline (timing/kind matter) — the score
+  PLANNER handles that — but a seeded run is now fully REPLAYABLE.
 - The match clock (question deadlines, AI answers, halftime) runs through the durable
   **realtime timer scheduler** (`realtime:timers` ZSET + `pollDueTimers`). Ticking that
   deterministically advances the whole match — one clock to drive.
@@ -229,7 +232,10 @@ the determinism foundation — seedable RNG is the cleanest way to make the whol
 reproducible and is a prerequisite for trustworthy fuzzing in Slice 2. B only if A is
 rejected. The chosen mechanism is an explicit Slice 1 deliverable, not left to runtime luck.
 
-**DECIDED (user-approved): adopt Option A — add the seedable RNG seam to the engine.**
+**DONE (Option A implemented — commits 7475f45 / 570651a + this round):** the seedable RNG
+seam is in `core/rng.ts`; all scenario-path `Math.random()` sites + the put_in_order shuffle
+route through it; SQL question randomness is pinned via `REGRESSION_DETERMINISTIC`. Original
+note kept below for context.**
 A tiny RNG module (e.g. `src/core/rng.ts`) exposes `getRandom()` defaulting to `Math.random`
 in prod. Replace the nondeterministic `Math.random()` call sites in `possession-ai.ts`
 (answer timing, clue index, countdown-found) and the JS shuffles in `lobbies.service.ts`

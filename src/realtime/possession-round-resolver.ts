@@ -5,6 +5,7 @@ import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { matchesService } from '../modules/matches/matches.service.js';
 import { trackPenaltyTaken, trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { matchPauseKey } from './match-keys.js';
 
 /** Regular penalty rounds before sudden-death kicks in. Mirrors the
  *  frontend constant in `features/possession/types/possession.types.ts`. */
@@ -16,6 +17,7 @@ import {
   deleteCountdownPlayerKeys,
   getExpectedUserIds,
   getMatchCacheOrRebuild,
+  rebuildCacheFromDB,
   setMatchCache,
   type CachedAnswer,
 } from './match-cache.js';
@@ -80,13 +82,24 @@ export async function resolvePossessionRound(
   }
 
   try {
-    const cache = await getMatchCacheOrRebuild(matchId);
+    let cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: inactive or missing cache'
       );
       return;
+    }
+    if (fromTimeout && (cache.currentQIndex !== qIndex || !cache.currentQuestion)) {
+      const rebuilt = await rebuildCacheFromDB(matchId);
+      if (rebuilt) {
+        cache = rebuilt;
+        await setMatchCache(rebuilt);
+        logger.info(
+          { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+          'Possession round resolve refreshed cache before timeout resolution'
+        );
+      }
     }
     if (cache.currentQIndex > qIndex) {
       logger.info(
@@ -108,6 +121,23 @@ export async function resolvePossessionRound(
       logger.warn(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: missing current question'
+      );
+      return;
+    }
+
+    const pauseStartedAt = await redis.get(matchPauseKey(matchId));
+    if (pauseStartedAt) {
+      logger.info(
+        {
+          eventName: 'match:round_result',
+          matchId,
+          qIndex,
+          fromTimeout,
+          pauseStartedAt,
+          ...cacheLogFields(cache),
+          ...questionLogFields(question),
+        },
+        'Possession round resolve skipped: match paused'
       );
       return;
     }

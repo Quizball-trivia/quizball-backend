@@ -5,6 +5,8 @@ import {
   PENALTY_INTRO_DELAY_MS,
   QUESTION_TIME_MS,
   ROUND_RESULT_DELAY_MS,
+  TIMEOUT_RESOLVE_BUFFER_MS,
+  TIMEOUT_RESOLVE_GRACE_MS,
 } from './possession-state.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
@@ -100,4 +102,26 @@ export function computeResumedPossessionTiming(params: {
     playableAt: new Date(params.resumedAtMs + revealRemainingMs),
     deadlineAt: new Date(params.resumedAtMs + answerRemainingMs),
   };
+}
+
+export function shouldResolveExpiredQuestionOnResume(
+  deadlineAtRaw: string | null,
+  pauseStartedAtMs: number
+): boolean {
+  const deadlineAtMs = deadlineAtRaw ? new Date(deadlineAtRaw).getTime() : Number.NaN;
+  return Number.isFinite(deadlineAtMs)
+    && Number.isFinite(pauseStartedAtMs)
+    && deadlineAtMs <= pauseStartedAtMs;
+}
+
+export function shouldResolveQuestionTimeoutNow(
+  deadlineAtRaw: string | null,
+  nowMs: number,
+  graceMs = TIMEOUT_RESOLVE_GRACE_MS,
+  bufferMs = TIMEOUT_RESOLVE_BUFFER_MS
+): boolean {
+  const deadlineAtMs = deadlineAtRaw ? new Date(deadlineAtRaw).getTime() : Number.NaN;
+  return Number.isFinite(deadlineAtMs)
+    && Number.isFinite(nowMs)
+    && deadlineAtMs + graceMs + bufferMs <= nowMs;
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
+import {
+  shouldResolveExpiredQuestionOnResume,
+  shouldResolveQuestionTimeoutNow,
+} from '../../src/realtime/possession-timing.js';
 
 const { buildPlayableQuestionTiming, computeAuthoritativeTimeMs } = __possessionInternals;
 
@@ -83,5 +87,26 @@ describe('possession authoritative timer fix', () => {
     expect(timing.deadlineAt.toISOString()).toBe('2026-03-24T12:00:15.500Z');
 
     vi.useRealTimers();
+  });
+
+  it('resolves instead of replaying when a question expired before disconnect pause', () => {
+    const deadlineAt = '2026-03-24T12:00:30.000Z';
+    const pauseStartedAtMs = Date.parse('2026-03-24T12:00:31.000Z');
+
+    expect(shouldResolveExpiredQuestionOnResume(deadlineAt, pauseStartedAtMs)).toBe(true);
+  });
+
+  it('does not resolve on resume when the disconnect pause preserved answer time', () => {
+    const deadlineAt = '2026-03-24T12:00:30.000Z';
+    const pauseStartedAtMs = Date.parse('2026-03-24T12:00:29.000Z');
+
+    expect(shouldResolveExpiredQuestionOnResume(deadlineAt, pauseStartedAtMs)).toBe(false);
+  });
+
+  it('resolves stale active questions immediately after timeout grace has elapsed', () => {
+    const deadlineAt = '2026-03-24T12:00:30.000Z';
+    const nowMs = Date.parse('2026-03-24T12:00:30.300Z');
+
+    expect(shouldResolveQuestionTimeoutNow(deadlineAt, nowMs)).toBe(true);
   });
 });

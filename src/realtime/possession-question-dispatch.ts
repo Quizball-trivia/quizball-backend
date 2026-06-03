@@ -14,7 +14,7 @@ import {
   setMatchCache,
   type MatchCache,
 } from './match-cache.js';
-import { questionTimerKey } from './match-keys.js';
+import { matchPauseKey, questionTimerKey } from './match-keys.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   ensureHalftimeCategories,
@@ -51,10 +51,16 @@ import {
   toMatchStatePayload,
   type Seat,
 } from './possession-state.js';
-import { computeResumedPossessionTiming, getNextQuestionDelayMs } from './possession-timing.js';
+import {
+  computeResumedPossessionTiming,
+  getNextQuestionDelayMs,
+  shouldResolveExpiredQuestionOnResume,
+  shouldResolveQuestionTimeoutNow,
+} from './possession-timing.js';
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { createReadyGateRegistry } from './ready-gate.js';
 import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
+import { getRedisClient } from './redis.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
@@ -63,6 +69,12 @@ const GOAL_ROUND_READY_ACK_CEILING_MS =
   FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+
+async function getPauseStartedAt(matchId: string): Promise<string | null> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return null;
+  return redis.get(matchPauseKey(matchId));
+}
 
 export function handlePossessionReadyForNextQuestion(
   userId: string,
@@ -420,6 +432,23 @@ export async function sendPossessionMatchQuestion(
       );
       return null;
     }
+
+    const pauseStartedAt = await getPauseStartedAt(matchId);
+    if (pauseStartedAt) {
+      logger.info(
+        {
+          eventName: 'match:question',
+          matchId,
+          qIndex,
+          pauseStartedAt,
+          postReadyAck: preloaded?.postReadyAck ?? false,
+          ...cacheLogFields(cache),
+        },
+        'Possession question dispatch skipped: match paused'
+      );
+      return null;
+    }
+
     const totalQuestions = cache.totalQuestions;
     const state = cache.statePayload;
 
@@ -646,6 +675,22 @@ export async function resumePossessionMatchQuestion(
     return false;
   }
 
+  if (shouldResolveExpiredQuestionOnResume(currentQuestion.deadlineAt, pauseStartedAtMs)) {
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex,
+        pauseStartedAtMs,
+        existingDeadlineAt: currentQuestion.deadlineAt,
+        ...questionLogFields(currentQuestion),
+      },
+      'Possession question resume resolving expired question instead of replaying'
+    );
+    await resolvePossessionRound(io, matchId, qIndex, true);
+    return true;
+  }
+
   const resumedAtMs = Date.now();
   const { playableAt, deadlineAt } = computeResumedPossessionTiming({
     shownAtRaw: currentQuestion.shownAt,
@@ -745,6 +790,23 @@ export async function ensurePossessionActiveTimers(
     logger.warn(
       { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAtRaw: currentQuestion.deadlineAt, ...questionLogFields(currentQuestion) },
       'Possession timer ensure resolving question with invalid deadline'
+    );
+    await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
+    return true;
+  }
+
+  const nowMs = Date.now();
+  if (shouldResolveQuestionTimeoutNow(currentQuestion.deadlineAt, nowMs)) {
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex: currentQuestion.qIndex,
+        deadlineAt: deadlineAt.toISOString(),
+        checkedAt: new Date(nowMs).toISOString(),
+        ...questionLogFields(currentQuestion),
+      },
+      'Possession timer ensure resolving expired question immediately'
     );
     await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
     return true;

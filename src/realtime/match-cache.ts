@@ -448,6 +448,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
     });
 
     const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
+    cache.currentQIndex = currentQuestionIndex;
     span.setAttribute('quizball.current_q_index', currentQuestionIndex);
     const rawQuestionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
     const questionPayload = normalizeMatchQuestionPayload(rawQuestionPayload);

@@ -81,15 +81,33 @@ function clueChainPayload(seedLabel: string) {
   };
 }
 
-/** Remove previously-seeded regression fixtures so re-runs don't collide on slug. */
+/**
+ * Reset the transient game state on the LOCAL harness DB so each run starts clean.
+ * Categories are referenced by a web of tables (lobbies, lobby_categories,
+ * lobby_category_bans, matches, match_questions, …), so we clear children first,
+ * then the regression categories/questions. This is destructive — it wipes ALL
+ * match/lobby rows — which is correct for an isolated local test DB.
+ */
 export async function clearFixtures(): Promise<void> {
-  // questions + payloads cascade from categories via FK; delete the regression
-  // categories (identified by slug prefix) and their dependents.
+  // Children of matches.
+  await sql`TRUNCATE
+    match_answers, match_goal_events, match_players, match_questions,
+    ranked_rp_changes
+    RESTART IDENTITY CASCADE`;
+  // Matches + lobbies + their category links.
+  await sql`TRUNCATE
+    matches, lobby_categories, lobby_category_bans, lobby_members,
+    lobby_challenge_invitations, lobbies
+    RESTART IDENTITY CASCADE`;
+  // Regression-seeded questions/categories (payloads cascade from questions).
   await sql`DELETE FROM question_payloads WHERE question_id IN (
     SELECT q.id FROM questions q JOIN categories c ON c.id = q.category_id
     WHERE c.slug LIKE 'regression-%'
   )`;
   await sql`DELETE FROM questions WHERE category_id IN (
+    SELECT id FROM categories WHERE slug LIKE 'regression-%'
+  )`;
+  await sql`DELETE FROM featured_categories WHERE category_id IN (
     SELECT id FROM categories WHERE slug LIKE 'regression-%'
   )`;
   await sql`DELETE FROM categories WHERE slug LIKE 'regression-%'`;

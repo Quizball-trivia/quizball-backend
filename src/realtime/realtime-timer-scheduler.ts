@@ -33,7 +33,7 @@ export type RealtimeTimerHandler = (
   payload: RealtimeTimerPayload
 ) => Promise<void>;
 
-type RealtimeTimerHandlers = Partial<Record<RealtimeTimerKind, RealtimeTimerHandler>>;
+export type RealtimeTimerHandlers = Partial<Record<RealtimeTimerKind, RealtimeTimerHandler>>;
 
 let activeIo: QuizballServer | null = null;
 let activeHandlers: RealtimeTimerHandlers = {};

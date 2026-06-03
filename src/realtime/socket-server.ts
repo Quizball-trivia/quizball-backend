@@ -26,6 +26,7 @@ import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from 
 import {
   startRealtimeTimerScheduler,
   type RealtimeTimerPayload,
+  type RealtimeTimerHandlers,
 } from './realtime-timer-scheduler.js';
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
 import { resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
@@ -229,35 +230,13 @@ async function runPostConnectHydration(
   }
 }
 
-export async function initSocketServer(httpServer: HttpServer): Promise<QuizballServer> {
-  const io: QuizballServer = new Server(httpServer, {
-    cors: {
-      origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
-      credentials: true,
-    },
-    // Gameplay needs near-immediate disconnect feedback: if a player stops
-    // answering heartbeats for ~3s, the opponent should see the 60s grace
-    // overlay within ~5s worst case.
-    pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
-    pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
-  });
-
-  const { pubClient, subClient } = await initRedisClients();
-
-  pubClient.on('error', (err) => {
-    logger.error({ err }, 'Redis pub client error');
-  });
-  subClient.on('error', (err) => {
-    logger.error({ err }, 'Redis sub client error');
-  });
-
-  io.adapter(createAdapter(pubClient, subClient));
-
-  // Lets services force-disconnect a user's sockets without importing socket-server
-  // (which would create a cycle through socket-auth → users.service).
-  setAuthRealtimeServer(io);
-
-  startRealtimeTimerScheduler(io, {
+/**
+ * The durable realtime-timer handler map. Exported so the regression harness can
+ * drive the exact same timer wiring the production server uses (avoids drift
+ * between what the harness exercises and what actually runs).
+ */
+export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
+  return {
     draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_ai_ban') return;
       await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
@@ -292,7 +271,38 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       if (payload.kind !== 'match_disconnect_forfeit') return;
       await resolveExpiredGraceWindow(server, payload.matchId, payload.disconnectedUserId);
     },
+  };
+}
+
+export async function initSocketServer(httpServer: HttpServer): Promise<QuizballServer> {
+  const io: QuizballServer = new Server(httpServer, {
+    cors: {
+      origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
+      credentials: true,
+    },
+    // Gameplay needs near-immediate disconnect feedback: if a player stops
+    // answering heartbeats for ~3s, the opponent should see the 60s grace
+    // overlay within ~5s worst case.
+    pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
+    pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
   });
+
+  const { pubClient, subClient } = await initRedisClients();
+
+  pubClient.on('error', (err) => {
+    logger.error({ err }, 'Redis pub client error');
+  });
+  subClient.on('error', (err) => {
+    logger.error({ err }, 'Redis sub client error');
+  });
+
+  io.adapter(createAdapter(pubClient, subClient));
+
+  // Lets services force-disconnect a user's sockets without importing socket-server
+  // (which would create a cycle through socket-auth → users.service).
+  setAuthRealtimeServer(io);
+
+  startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
   startStaleMatchSweeper(io);
 

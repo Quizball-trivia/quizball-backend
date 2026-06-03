@@ -114,6 +114,20 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
+  // REGRESSION_DETERMINISTIC pins question randomness for the test harness. It
+  // MUST never run outside local — in staging/prod it would make question
+  // selection deterministic (always the same questions), a correctness bug.
+  // Checked first so a misconfiguration fails the boot immediately.
+  if (
+    (process.env.REGRESSION_DETERMINISTIC === "1" || process.env.REGRESSION_DETERMINISTIC === "true") &&
+    result.data.NODE_ENV !== "local"
+  ) {
+    throw new ConfigError(
+      "Invalid configuration: REGRESSION_DETERMINISTIC may only be set in the local environment (it pins question randomness for the regression harness).",
+      { nodeEnv: result.data.NODE_ENV },
+    );
+  }
+
   // Auto-disable docs in production unless explicitly enabled
   // Parse DOCS_ENABLED: true/1 = enabled, false/0 = disabled, undefined = auto (enabled except prod)
   const docsEnabled =

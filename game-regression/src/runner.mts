@@ -230,6 +230,10 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   if (run.matchId) {
     await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+    // Rejoin schedules a resume countdown (collapsed under fast-timers) that emits
+    // match:resume + re-dispatches the question. Wait for it so play can continue.
+    const before = run.trace.byEvent('match:resume').length;
+    await waitUntil(() => run.trace.byEvent('match:resume').length > before, 5_000);
   }
 }
 

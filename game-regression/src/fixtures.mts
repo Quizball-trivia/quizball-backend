@@ -18,6 +18,7 @@
 // engine share the exact same DB connection (config.DATABASE_URL). This avoids a
 // second `postgres` dependency in this folder and guarantees they hit one DB.
 import { sql } from '../../src/db/index.js';
+import { invalidateCategoryCache } from '../../src/modules/lobbies/lobbies.service.js';
 
 /** Name(s) the harness is allowed to TRUNCATE. Override via REGRESSION_DB_NAME. */
 const REGRESSION_DB_NAME = process.env.REGRESSION_DB_NAME ?? 'quizball_regression';
@@ -191,6 +192,13 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
         result.questionIdsByCategory[category.id].push(question.id);
       }
     }
+
+    // CRITICAL across matches in one process: lobbiesService caches the valid/
+    // ranked category list for 5 minutes. After re-seeding (which DELETED the
+    // previous match's categories), the cache would still hand out stale (now
+    // deleted) category IDs, and the next match's draft would fail with an FK
+    // violation (lobby_categories_category_id_fkey). Invalidate it here.
+    invalidateCategoryCache();
 
     return result;
   }

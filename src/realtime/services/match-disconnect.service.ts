@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { appMetrics } from '../../core/metrics.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../../modules/matches/match-questions.repo.js';
@@ -430,7 +431,9 @@ export async function resumePausedMatch(
   // re-checks the grace key, so this is belt-and-suspenders.)
   await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
-  const countdownEndsAtMs = Date.now() + MATCH_RESUME_COUNTDOWN_MS;
+  // Harness collapses the resume countdown so reconnect-resume completes fast.
+  const resumeCountdownMs = harnessDelayMs(MATCH_RESUME_COUNTDOWN_MS);
+  const countdownEndsAtMs = Date.now() + resumeCountdownMs;
   const countdownKey = matchResumeCountdownKey(matchId);
   const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
     NX: true,
@@ -516,7 +519,7 @@ export async function resumePausedMatch(
         logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
       }
     })();
-  }, MATCH_RESUME_COUNTDOWN_MS);
+  }, resumeCountdownMs);
 }
 
 export async function pauseMatchForDisconnectedPlayer(

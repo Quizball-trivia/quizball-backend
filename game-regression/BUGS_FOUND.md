@@ -4,36 +4,70 @@ Status legend: 🔴 likely real bug · 🟡 needs investigation (could be harnes
 
 ---
 
-## 🟡 #2 — Reconnect-then-resume is flaky: duplicate question dispatch OR stuck match
+## 🔴 #2 — Reconnect/resume DOUBLE-DRIVES the round loop (rewinds & replays rounds; ~2/3 of runs)
 
-Across 3 disconnect→reconnect→resume runs (2026-06-03), the reconnect path is NOT
-reliably clean — 1/3 passed, and the other two each hit a DIFFERENT issue:
+**Classification (2026-06-03, after Codex P1/P2 review): REAL engine bug, flaky (~2/3).**
+NOT a harness artifact, NOT a concurrency-contamination artifact, NOT fast-timers-only.
 
-- **run1 — duplicate room dispatch:** `oneQuestionPerQIndex @seq53 qIndex 5 re-dispatched
-  with no intervening resume`. There was exactly 1 `match:resume` (for the disconnect
-  point), but a LATER question (q5) got dispatched to the match ROOM twice with no resume
-  between. This is NOT a false positive in the invariant (we verified the resume-aware
-  logic on the clean case) — it's a genuine extra room-level `match:question` after resume.
-- **run2 — stuck match:** after reconnect the match resumed (`resumes=1`) but never reached
-  a terminal state (`final=0`, 21 `match:state` events, stuck in NORMAL_PLAY). The match
-  hangs post-resume rather than finishing.
+### How it was ruled IN as real (the isolation work Codex asked for)
+- Reproduced in **single-run, FRESH-process** matches (one `bootMatch` per OS process, no
+  loop, no shared scheduler/DB across runs): **3 single runs → 1 stuck, 1 clean, 1 duplicate-
+  dispatch.** Single-process reproduction excludes the P1 parallel-DB contamination and any
+  in-process loop leakage.
+- The bot now **respects `playableAt`** (waits out the reveal window before answering, incl.
+  the resume's reveal-remaining offset) — `runner.mts playMatch`. The failure persists with
+  that fidelity fix in place, so it is not "the bot answered before the question was playable."
+- Hydration is ruled out: rejoin hydration re-emits with `socket.emit`
+  (`possession-question-dispatch.ts:202`, recorded as `server->socket`); the duplicate
+  dispatches are `server->room` broadcasts, which only the engine's room dispatch path emits.
 
-Both could be: (a) a REAL engine bug in resume/continue-after-reconnect, or (b) a harness
-fidelity issue — e.g. after `botReconnect` swaps the fake socket, the AI-answer scheduling
-or the bot's continued answering double-fires or stalls because the resumed question's
-timing/cache state isn't what the engine expects.
+### The mechanism (captured trace, fast-timers, one failing run)
+After the bot disconnects (post-q2) and **one** `match:resume` fires, the round loop advances
+normally q3→q4→q5 — then **rewinds to q3** and replays q3→q4→q5 a SECOND time:
+```
+32 match:opponent_disconnected
+38 match:resume                 ← exactly ONE resume
+40 match:question q=3   42 round_result q=3
+45 match:question q=4   48 round_result q=4
+51 match:question q=5            ← progressed to q5
+54 match:question q=3   55 round_result q=3   ← ⚠️ REWIND to q3, resolved AGAIN
+60 match:question q=4   62 round_result q=4   ← q4 resolved AGAIN
+65 match:question q=5   67 round_result q=5
+70 match:question q=6 … → q10 → final_results  (this run happened to recover)
+```
+Invariants that fire: `oneQuestionPerQIndex` (q3/q4/q5 re-dispatched, no intervening resume)
+and `oneRoundResultPerQIndex` (q3/q4 resolved twice).
 
-**Next step to classify (do NOT change engine yet):**
-1. Capture the FULL trace for a failing run (all events around the duplicate / the stall),
-   incl. AI-answer timers and match:state transitions.
-2. Check whether the duplicate dispatch comes from the AI-answer path re-triggering, or from
-   the resume re-dispatch racing the bot's next answer.
-3. Check whether the stall is the bot failing to answer the resumed question (harness) vs the
-   engine not advancing (engine). If real, this is a meaningful reconnect bug; if harness,
-   fix the bot's post-resume answering.
+**Diagnosis:** the resume/rejoin path starts a SECOND question-advancement driver that races
+the original (pre-disconnect) round chain. The two drivers double-dispatch and double-resolve
+the rounds that were in flight across the pause. The two observed outcomes are the two ways the
+race lands:
+- **duplicate dispatch (recovers):** both drivers run, rounds 3-5 resolve twice, but the loop
+  re-converges and the match still reaches `final_results`.
+- **stuck match (wedges):** the racing drivers leave the state machine inconsistent; the match
+  never reaches terminal — DB left `status='active'`, `phase='NORMAL_PLAY'`. (In the stuck
+  capture, Redis still held live `possession_ai_answer` / `possession_question` timer keys for
+  the in-flight qIndex, i.e. timers were scheduled but the loop didn't advance.)
 
-The clean-match, disconnect→grace→terminal, and forfeit scenarios are all green; only the
-reconnect-then-continue path is flaky.
+This is the orphaned-active-match class (see project memory `orphaned_active_matches`) — a
+disconnect/resume can strand a match in `active` forever.
+
+### Why the harness suite didn't catch it every time
+The single reconnect test in `disconnect-scenarios.test.ts` passed in one suite run purely
+because that run hit the ~1/3 clean case. The test is itself **flaky** against this bug — it is
+NOT a reliable green. (Options: run the reconnect scenario N× and require all-clean, or mark it
+`fails`/quarantined until the engine fix lands so it documents the bug rather than flapping CI.)
+
+### For review — do NOT change the engine unilaterally (per "document big ones for me to review")
+Likely fix sites to investigate (engine owner): the rejoin/resume entry
+(`match-disconnect.service.ts` resume countdown → `possession-question-dispatch.ts` resume
+re-dispatch) must be **idempotent** w.r.t. an already-running round chain — i.e. resuming must
+ADOPT the in-flight round driver, not spawn a parallel one. Suspect: a resume-scheduled
+`sendQuestion`/round-advance firing alongside a pre-disconnect AI-answer/question timer that
+survived the pause in Redis.
+
+Repro: `npm run test:regression` (flaky), or the focused probe described in this folder's
+status notes (single-run, fresh process, ~2/3 fail).
 
 ---
 

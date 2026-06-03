@@ -91,9 +91,22 @@ redis-cli -p 6379 -a changeme ping                                  # -> PONG
 ## How to run
 ```
 cd backend-node
+# Whole DB-driven regression set (boots real matches) — runs SERIALLY, isolated
+# per file (vitest.regression.config.ts). The default `npm test` EXCLUDES these.
 REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
-  npx vitest run tests/regression/match-boot.test.ts
+REGRESSION_REDIS_URL=redis://:changeme@127.0.0.1:6379 \
+  npm run test:regression
+
+# Or one file:
+REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
+  npx vitest run --config vitest.regression.config.ts tests/regression/match-boot.test.ts
 ```
+**Serialization (Codex P1):** these scenarios share ONE `quizball_regression` DB +
+Redis, so they MUST NOT run in parallel — a 2nd worker's `seedFixtures()` TRUNCATEs a
+live match. `vitest.regression.config.ts` enforces `fileParallelism: false` (one match
+owns the DB at a time) while keeping a fresh fork per file (singleFork would leak engine
+singletons → 2nd boot fails). The default `vitest.config.ts` excludes these 3 files.
+
 Env flags (local-only, config-guarded): `REGRESSION_DETERMINISTIC=1` (pins question
 SQL randomness), `REGRESSION_FAST_TIMERS=1` (collapses matchmaking/draft/round delays).
 

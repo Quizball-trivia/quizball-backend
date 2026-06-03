@@ -118,7 +118,19 @@ interface QuestionEventPayload {
   qIndex: number;
   question?: { kind?: string; items?: Array<{ id: string }> };
   correctIndex?: number;
+  playableAt?: string;
   deadlineAt?: string;
+}
+
+/** ms until a question becomes answerable (`playableAt`), clamped to >= 0. A real
+ *  client cannot submit before the reveal window ends; on RESUME the engine sets a
+ *  fresh reveal-remaining `playableAt` in the future, so answering instantly is a
+ *  fidelity violation that can look like a stuck match. */
+function msUntilPlayable(q: QuestionEventPayload): number {
+  if (!q.playableAt) return 0;
+  const at = new Date(q.playableAt).getTime();
+  if (!Number.isFinite(at)) return 0;
+  return Math.max(0, at - Date.now());
 }
 
 /** Submit a bot answer for whatever question kind was dispatched, so the round
@@ -175,6 +187,11 @@ export async function playMatch(
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
     if (latest && !answered.has(latest.qIndex)) {
       answered.add(latest.qIndex);
+      // Respect the reveal window: don't answer before playableAt (a real client
+      // can't). Matters on RESUME, where the question's playableAt is pushed into
+      // the future by the reveal-remaining offset.
+      const wait = msUntilPlayable(latest);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait + 5));
       try {
         await answerQuestion(io, botSocket, latest);
       } catch {

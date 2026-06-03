@@ -23,6 +23,13 @@ import {
   handlePossessionPutInOrderAnswer,
   handlePossessionCluesAnswer,
 } from '../../src/realtime/possession-answer-handlers.js';
+import {
+  handleMatchDisconnect,
+  handleMatchRejoin,
+  resolveExpiredGraceWindow,
+} from '../../src/realtime/services/match-disconnect.service.js';
+import { handleMatchForfeit } from '../../src/realtime/services/match-forfeit.service.js';
+import { matchRealtimeService } from '../../src/realtime/services/match-realtime.service.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -184,6 +191,51 @@ export async function runFullMatch(options: RunMatchOptions = {}): Promise<RunMa
   const run = await bootMatch(options);
   if (run.matchId) await playMatch(run);
   return run;
+}
+
+// ── Lifecycle / chaos actions (drive the REAL socket lifecycle layer) ──
+// These go through the same entry points the socket server wires, so they
+// exercise the session guard, presence keys, grace timer, and resume path —
+// where the orphaned-match/freeze bugs live.
+
+/** The bot disconnects (transport drop) — pauses the match, starts the grace window. */
+export async function botDisconnect(run: RunMatchResult): Promise<void> {
+  await handleMatchDisconnect(run.io as never, run.botSocket as never);
+}
+
+/**
+ * Force the grace window to expire NOW (what the durable match_disconnect_forfeit
+ * timer would do after 60s). Resolves the match: forfeit the absent bot / abandon.
+ */
+export async function expireGrace(run: RunMatchResult): Promise<void> {
+  if (run.matchId) {
+    await resolveExpiredGraceWindow(run.io as never, run.matchId, run.botUserId);
+  }
+}
+
+/**
+ * The bot reconnects: drop the old fake socket, make a NEW one for the same user,
+ * run connect hydration + rejoin (the real reconnect path).
+ */
+export async function botReconnect(run: RunMatchResult): Promise<void> {
+  run.io.removeSocket(run.botSocket);
+  const fresh = run.io.createSocket(`bot-socket-${Date.now()}`, {
+    user: { id: run.botUserId },
+    connectedAt: Date.now(),
+    ...(run.matchId ? { matchId: run.matchId } : {}),
+  });
+  fresh.join(`user:${run.botUserId}`);
+  run.botSocket = fresh;
+  // Connect hydration (rejoinActiveMatchOnConnect) then explicit rejoin.
+  await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
+  if (run.matchId) {
+    await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+  }
+}
+
+/** The bot explicitly forfeits/quits the match. */
+export async function botForfeit(run: RunMatchResult): Promise<void> {
+  await handleMatchForfeit(run.io as never, run.botSocket as never, run.matchId);
 }
 
 /** Tear down scheduler + matchmaking loop + redis between runs. */

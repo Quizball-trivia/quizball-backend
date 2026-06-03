@@ -4,6 +4,39 @@ Status legend: 🔴 likely real bug · 🟡 needs investigation (could be harnes
 
 ---
 
+## 🟡 #2 — Reconnect-then-resume is flaky: duplicate question dispatch OR stuck match
+
+Across 3 disconnect→reconnect→resume runs (2026-06-03), the reconnect path is NOT
+reliably clean — 1/3 passed, and the other two each hit a DIFFERENT issue:
+
+- **run1 — duplicate room dispatch:** `oneQuestionPerQIndex @seq53 qIndex 5 re-dispatched
+  with no intervening resume`. There was exactly 1 `match:resume` (for the disconnect
+  point), but a LATER question (q5) got dispatched to the match ROOM twice with no resume
+  between. This is NOT a false positive in the invariant (we verified the resume-aware
+  logic on the clean case) — it's a genuine extra room-level `match:question` after resume.
+- **run2 — stuck match:** after reconnect the match resumed (`resumes=1`) but never reached
+  a terminal state (`final=0`, 21 `match:state` events, stuck in NORMAL_PLAY). The match
+  hangs post-resume rather than finishing.
+
+Both could be: (a) a REAL engine bug in resume/continue-after-reconnect, or (b) a harness
+fidelity issue — e.g. after `botReconnect` swaps the fake socket, the AI-answer scheduling
+or the bot's continued answering double-fires or stalls because the resumed question's
+timing/cache state isn't what the engine expects.
+
+**Next step to classify (do NOT change engine yet):**
+1. Capture the FULL trace for a failing run (all events around the duplicate / the stall),
+   incl. AI-answer timers and match:state transitions.
+2. Check whether the duplicate dispatch comes from the AI-answer path re-triggering, or from
+   the resume re-dispatch racing the bot's next answer.
+3. Check whether the stall is the bot failing to answer the resumed question (harness) vs the
+   engine not advancing (engine). If real, this is a meaningful reconnect bug; if harness,
+   fix the bot's post-resume answering.
+
+The clean-match, disconnect→grace→terminal, and forfeit scenarios are all green; only the
+reconnect-then-continue path is flaky.
+
+---
+
 ## 🟡 #1 — A normal-play question dispatched at qIndex 12 (13th normal question)
 
 **Invariant:** `questionCounterInRange` — a NORMAL-play question must have `qIndex < total`.

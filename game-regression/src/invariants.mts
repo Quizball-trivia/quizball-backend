@@ -199,11 +199,15 @@ const oneQuestionPerQIndex: Invariant = (trace) => {
     if (typeof qIndex !== 'number') continue;
     const prevSeq = lastDispatchSeq.get(qIndex);
     if (prevSeq !== undefined) {
-      const resumedBetween = trace.events.some(
-        (e) => (e.event === 'match:resume' || e.event === 'match:rejoin_available') &&
-          e.seq > prevSeq && e.seq < evt.seq,
+      // Only an actual RESUME legitimizes a room re-dispatch of the in-progress
+      // question. match:rejoin_available merely means "you may rejoin" (still
+      // paused) and does NOT. The resume re-dispatch can be at/just-before this
+      // event in sequence, so accept any match:resume AFTER the previous dispatch
+      // and at-or-before this one (not strictly between).
+      const resumedSincePrev = trace.events.some(
+        (e) => e.event === 'match:resume' && e.seq > prevSeq && e.seq <= evt.seq,
       );
-      if (!resumedBetween) {
+      if (!resumedSincePrev) {
         out.push({
           invariant: 'oneQuestionPerQIndex',
           message: `qIndex ${qIndex} re-dispatched with no intervening resume (duplicate match:question).`,

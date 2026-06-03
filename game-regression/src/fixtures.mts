@@ -42,6 +42,21 @@ async function assertRegressionDatabase(): Promise<void> {
   dbVerified = true;
 }
 
+// A fixed advisory-lock key so ANY concurrent harness process/worker serializes
+// the clear+seed critical section. Without this, two workers truncating the same
+// match/lobby tables deadlock, and the fixed category slugs collide on the unique
+// index. We hold the lock across the whole reseed, then release.
+const FIXTURE_LOCK_KEY = 728_113n; // arbitrary but stable
+
+async function withFixtureLock<T>(fn: () => Promise<T>): Promise<T> {
+  await sql`SELECT pg_advisory_lock(${FIXTURE_LOCK_KEY})`;
+  try {
+    return await fn();
+  } finally {
+    await sql`SELECT pg_advisory_unlock(${FIXTURE_LOCK_KEY})`;
+  }
+}
+
 export interface SeedOptions {
   categoryCount?: number; // ranked-eligible categories to create (default 3)
   mcqPerCategory?: number; // MCQs per category (>= 3; default 5)
@@ -147,11 +162,12 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
   // runs out of valid candidates mid-game and stalls.
   const mcqPerDifficulty = Math.max(4, options.mcqPerCategory ?? 8);
 
-  await clearFixtures();
-
   const result: SeededFixtures = { categoryIds: [], questionIdsByCategory: {} };
 
-  {
+  // Serialize the whole clear+seed against any concurrent harness worker — the
+  // truncates would deadlock and the fixed category slugs would collide otherwise.
+  await withFixtureLock(async () => {
+    await clearFixtures();
     for (let c = 0; c < categoryCount; c++) {
       const label = `cat${c}`;
       const [category] = await sql<{ id: string }[]>`
@@ -199,9 +215,9 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
     // deleted) category IDs, and the next match's draft would fail with an FK
     // violation (lobby_categories_category_id_fkey). Invalidate it here.
     invalidateCategoryCache();
+  });
 
-    return result;
-  }
+  return result;
 }
 
 /**

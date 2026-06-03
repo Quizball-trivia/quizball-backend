@@ -78,7 +78,14 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     expect(run.matchId).toBeTruthy();
     await playMatch(run, { maxMs: 6_000 });
     await botDisconnect(run);
-    await botReconnect(run);
+    await botReconnect(run); // throws if match:resume never fires
+
+    // Explicitly assert the resume actually happened (the "resume never fired" bug).
+    expect(
+      run.trace.byEvent('match:resume').length,
+      'reconnect must emit match:resume',
+    ).toBeGreaterThan(0);
+
     await playMatch(run, { maxMs: 90_000 }); // finish after resuming
 
     expect(

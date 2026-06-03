@@ -232,8 +232,13 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
     await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
     // Rejoin schedules a resume countdown (collapsed under fast-timers) that emits
     // match:resume + re-dispatches the question. Wait for it so play can continue.
+    // THROW if it never fires — "resume never happened" was a real bug, so this
+    // helper must fail loudly rather than silently continue on a stuck match.
     const before = run.trace.byEvent('match:resume').length;
-    await waitUntil(() => run.trace.byEvent('match:resume').length > before, 5_000);
+    const resumed = await waitUntil(() => run.trace.byEvent('match:resume').length > before, 8_000);
+    if (!resumed) {
+      throw new Error('botReconnect: match:resume never fired after rejoin (resume stuck).');
+    }
   }
 }
 

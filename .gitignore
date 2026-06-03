@@ -37,3 +37,4 @@ scripts/*
 # Local agent instructions (not shared)
 CLAUDE.md
 game-regression/.env.local
+dump.rdb

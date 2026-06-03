@@ -1,4 +1,5 @@
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import type { CachedPlayer, MatchCache } from './match-cache.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
@@ -141,7 +142,7 @@ export function transitionAfterHalfBoundary(
     }
 
     state.phase = 'HALFTIME';
-    state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+    state.halftime.deadlineAt = new Date(Date.now() + harnessDelayMs(HALFTIME_DURATION_MS)).toISOString();
     return;
   }
 
@@ -153,7 +154,7 @@ export function transitionAfterHalfBoundary(
     // state.penalty is initialised at finalize, not here.
     state.phase = 'HALFTIME';
     state.halftime.purpose = 'penalty';
-    state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+    state.halftime.deadlineAt = new Date(Date.now() + harnessDelayMs(HALFTIME_DURATION_MS)).toISOString();
     state.halftime.uiReadyAt = null;
     state.halftime.categoryOptions = [];
     state.halftime.firstBanSeat = null;

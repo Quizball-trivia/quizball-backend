@@ -1,5 +1,6 @@
 import { logger } from '../core/logger.js';
 import { getRandom } from '../core/rng.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
@@ -360,6 +361,8 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
   function scheduleFinalizeHalftime(_io: QuizballServer, matchId: string, delayMs: number): void {
     clearHalftimeTimer(matchId);
+    // Collapse the post-ban reveal wait in the harness (prod untouched).
+    delayMs = harnessDelayMs(delayMs);
     void scheduleRealtimeTimer('possession_halftime', matchId, new Date(Date.now() + delayMs), {
       kind: 'possession_halftime',
       matchId,
@@ -476,9 +479,13 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         state?.halftime.deadlineAt
         && state.halftime.uiReadyAt === state.halftime.deadlineAt
       );
-      const delayMs = isInitialBan && !uiReadyForDeadline
-        ? HALFTIME_AI_BAN_NO_UI_READY_DELAY_MS
-        : getHalftimeAiBanDelayMs();
+      // Harness collapses the AI-ban think time so matches don't sit ~3.5s at
+      // each halftime (prod untouched unless REGRESSION_FAST_TIMERS).
+      const delayMs = harnessDelayMs(
+        isInitialBan && !uiReadyForDeadline
+          ? HALFTIME_AI_BAN_NO_UI_READY_DELAY_MS
+          : getHalftimeAiBanDelayMs(),
+      );
       logger.info(
         {
           eventName: 'match:halftime_ai_ban',

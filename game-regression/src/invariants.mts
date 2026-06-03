@@ -221,6 +221,100 @@ const oneQuestionPerQIndex: Invariant = (trace) => {
   return out;
 };
 
+/**
+ * The results screen must be sendable: a completed match emits exactly ONE
+ * match:final_results whose payload is well-formed — a winnerId field (string or
+ * null), a non-empty players map, each player carrying numeric totalPoints and
+ * correctAnswers, plus durationMs and resultVersion. A blank/duplicate results
+ * screen is exactly the "match ended but results didn't display right" class.
+ */
+interface FinalResultsPayload {
+  winnerId?: string | null;
+  players?: Record<string, { totalPoints?: unknown; correctAnswers?: unknown }>;
+  durationMs?: unknown;
+  resultVersion?: unknown;
+}
+const finalResultsWellFormed: Invariant = (trace) => {
+  const out: Violation[] = [];
+  const finals = trace.byEvent('match:final_results');
+  if (finals.length === 0) return out; // terminalStateReached owns the "never finished" case.
+  if (finals.length > 1) {
+    out.push({
+      invariant: 'finalResultsWellFormed',
+      message: `match:final_results emitted ${finals.length} times to the room (results screen should fire once).`,
+      seq: finals[finals.length - 1].seq,
+      detail: { count: finals.length },
+    });
+  }
+  const evt = finals[0];
+  const p = evt.payload as FinalResultsPayload;
+  const problems: string[] = [];
+  if (!('winnerId' in (p as object))) problems.push('missing winnerId');
+  const players = p.players ?? {};
+  const ids = Object.keys(players);
+  if (ids.length === 0) problems.push('empty players map');
+  for (const id of ids) {
+    const pl = players[id];
+    if (typeof pl?.totalPoints !== 'number') problems.push(`player ${id} totalPoints not numeric`);
+    if (typeof pl?.correctAnswers !== 'number') problems.push(`player ${id} correctAnswers not numeric`);
+  }
+  if (typeof p.durationMs !== 'number') problems.push('durationMs not numeric');
+  if (typeof p.resultVersion !== 'number') problems.push('resultVersion not numeric');
+  if (problems.length > 0) {
+    out.push({
+      invariant: 'finalResultsWellFormed',
+      message: `Results payload malformed: ${problems.join('; ')}.`,
+      seq: evt.seq,
+      detail: { problems },
+    });
+  }
+  return out;
+};
+
+/**
+ * The winner declared on the results screen must reconcile with the scores it
+ * reports: if a winnerId is given it must be one of the listed players, and that
+ * player's totalPoints must be >= every other player's (ties/penalty decide the
+ * winnerDecisionMethod, but the winner is never strictly out-scored). Catches a
+ * results screen that shows the wrong winner.
+ */
+const winnerMatchesResults: Invariant = (trace) => {
+  const out: Violation[] = [];
+  const finals = trace.byEvent('match:final_results');
+  if (finals.length === 0) return out;
+  const p = finals[0].payload as FinalResultsPayload & { winnerDecisionMethod?: string | null };
+  const players = p.players ?? {};
+  if (p.winnerId == null) return out; // draw — nothing to reconcile.
+  if (!(p.winnerId in players)) {
+    out.push({
+      invariant: 'winnerMatchesResults',
+      message: `winnerId ${p.winnerId} is not among the results players.`,
+      seq: finals[0].seq,
+      detail: { winnerId: p.winnerId, playerIds: Object.keys(players) },
+    });
+    return out;
+  }
+  // Goals/penalties can decide a winner who is not the top scorer, so only assert
+  // the score relationship when the decision was by total points.
+  const method = p.winnerDecisionMethod;
+  if (method === 'total_points' || method === 'total_points_fallback' || method == null) {
+    const winnerPts = (players[p.winnerId]?.totalPoints as number) ?? 0;
+    for (const [id, pl] of Object.entries(players)) {
+      if (id === p.winnerId) continue;
+      const pts = (pl?.totalPoints as number) ?? 0;
+      if (pts > winnerPts) {
+        out.push({
+          invariant: 'winnerMatchesResults',
+          message: `Declared winner ${p.winnerId} (${winnerPts}) was out-scored by ${id} (${pts}) under ${method ?? 'default'} decision.`,
+          seq: finals[0].seq,
+          detail: { winnerId: p.winnerId, winnerPts, otherId: id, otherPts: pts, method },
+        });
+      }
+    }
+  }
+  return out;
+};
+
 export const ALL_INVARIANTS: Array<{ name: string; check: Invariant }> = [
   { name: 'terminalStateReached', check: terminalStateReached },
   { name: 'scoreMatchesBars', check: scoreMatchesBars },
@@ -228,6 +322,8 @@ export const ALL_INVARIANTS: Array<{ name: string; check: Invariant }> = [
   { name: 'legalPhaseOrder', check: legalPhaseOrder },
   { name: 'oneRoundResultPerQIndex', check: oneRoundResultPerQIndex },
   { name: 'oneQuestionPerQIndex', check: oneQuestionPerQIndex },
+  { name: 'finalResultsWellFormed', check: finalResultsWellFormed },
+  { name: 'winnerMatchesResults', check: winnerMatchesResults },
 ];
 
 /** Run all invariants against a trace and collect violations. */

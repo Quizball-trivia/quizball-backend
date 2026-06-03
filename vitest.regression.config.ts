@@ -30,6 +30,9 @@ export default defineConfig({
       'tests/regression/match-boot.test.ts',
       'tests/regression/clean-match-invariants.test.ts',
       'tests/regression/disconnect-scenarios.test.ts',
+      'tests/regression/penalty-shootout.test.ts',
+      'tests/regression/halftime-uiready-withheld.test.ts',
+      'tests/regression/question-timeout.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     // ── Serialize at the FILE level: one match owns the shared DB/Redis at a

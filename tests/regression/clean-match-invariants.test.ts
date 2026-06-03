@@ -51,4 +51,23 @@ describeLocal('regression: clean full match passes all invariants', () => {
     }
     expect(result.ok, 'all invariants should pass on a clean match').toBe(true);
   }, 120_000);
+
+  it('the post-match pipeline runs: completed, ranked RP settled, XP awarded', async () => {
+    const { bootMatch, playMatch } = await import('../../game-regression/src/runner.mjs');
+    const { checkPostMatchState, formatPostMatchViolation } = await import('../../game-regression/src/post-match.mjs');
+
+    const run = await bootMatch({ startTimeoutMs: 25_000 });
+    expect(run.matchId, 'match should boot').toBeTruthy();
+    await playMatch(run, { maxMs: 90_000 });
+    expect(run.trace.byEvent('match:final_results').length, 'match should finish').toBeGreaterThan(0);
+
+    // The settlement (rank/XP/objectives) is fire-and-forget after final_results;
+    // give it a moment to land before reading DB state.
+    await new Promise((r) => setTimeout(r, 1_500));
+
+    const post = await checkPostMatchState(run.matchId!);
+    if (!post.ok) console.error('Post-match violations:\n' + post.violations.map(formatPostMatchViolation).join('\n'));
+    console.info('Post-match facts:', JSON.stringify(post.facts));
+    expect(post.ok, 'post-match DB state should be coherent (completed, RP, XP)').toBe(true);
+  }, 120_000);
 });

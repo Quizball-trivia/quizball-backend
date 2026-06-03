@@ -30,6 +30,16 @@ import {
 } from '../../src/realtime/services/match-disconnect.service.js';
 import { handleMatchForfeit } from '../../src/realtime/services/match-forfeit.service.js';
 import { matchRealtimeService } from '../../src/realtime/services/match-realtime.service.js';
+import { devSkipToPossessionPhase } from '../../src/realtime/possession-match-flow.js';
+import {
+  createLobby,
+  joinByCode,
+  setReady,
+  updateSettings,
+  startFriendlyMatch,
+} from '../../src/realtime/services/lobby-commands.service.js';
+// Variant-routing answer entry (party_quiz -> handlePartyQuizAnswer; else possession).
+import { handleAnswer } from '../../src/realtime/services/match-question-dispatch.service.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -49,6 +59,26 @@ export interface RunMatchOptions {
 }
 
 const BOT_USER_ID = '00000000-0000-0000-0000-0000000000b0';
+// Second human seat for friendly human-vs-human lobby matches.
+const BOT2_USER_ID = '00000000-0000-0000-0000-0000000000b1';
+
+/** A friendly lobby match driven by TWO human bot seats (no AI). */
+export interface RunLobbyResult {
+  trace: EventTrace;
+  fixtures: SeededFixtures;
+  lobbyId: string | null;
+  inviteCode: string | null;
+  matchId: string | null;
+  variant: 'friendly_possession' | 'friendly_party_quiz';
+  io: FakeIo;
+  /** seat sockets, host first. */
+  hostUserId: string;
+  joinerUserId: string;
+  hostSocket: FakeSocket;
+  joinerSocket: FakeSocket;
+  /** all human seats, for play loops. */
+  seats: Array<{ userId: string; socket: FakeSocket }>;
+}
 
 /** Real-time poll until `predicate` is true or `maxMs` elapses. */
 async function waitUntil(predicate: () => boolean, maxMs: number, stepMs = 25): Promise<boolean> {
@@ -133,32 +163,45 @@ function msUntilPlayable(q: QuestionEventPayload): number {
   return Math.max(0, at - Date.now());
 }
 
+/** How the bot answers. 'correct' scores; 'wrong' submits a deliberately-wrong
+ *  answer (0 points) so neither side accumulates possession — useful for steering
+ *  the match toward a low-scoring draw → PENALTY_SHOOTOUT. */
+export type AnswerMode = 'correct' | 'wrong';
+
 /** Submit a bot answer for whatever question kind was dispatched, so the round
  *  resolves on both-answered instead of waiting for the timeout. */
 async function answerQuestion(
   io: FakeIo,
   botSocket: FakeSocket,
   q: QuestionEventPayload,
+  mode: AnswerMode = 'correct',
 ): Promise<void> {
   const base = { matchId: q.matchId, qIndex: q.qIndex, timeMs: 300 };
   const kind = q.question?.kind;
   if (kind === 'multipleChoice') {
+    // 'wrong' picks any index != correctIndex (engine validates → 0 points).
+    const correct = typeof q.correctIndex === 'number' ? q.correctIndex : 0;
+    const wrong = correct === 0 ? 1 : 0;
     await handlePossessionAnswer(io as never, botSocket as never, {
       ...base,
-      selectedIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+      selectedIndex: mode === 'wrong' ? wrong : correct,
     });
   } else if (kind === 'countdown') {
     await handlePossessionCountdownGuess(botSocket as never, {
-      matchId: q.matchId, qIndex: q.qIndex, guess: 'one',
+      matchId: q.matchId, qIndex: q.qIndex,
+      guess: mode === 'wrong' ? 'zzzznotananswer' : 'one',
     });
   } else if (kind === 'putInOrder') {
+    const ids = (q.question?.items ?? []).map((i) => i.id);
+    // 'wrong' reverses the order so it scores 0 (or near-0).
     await handlePossessionPutInOrderAnswer(io as never, botSocket as never, {
       ...base,
-      orderedItemIds: (q.question?.items ?? []).map((i) => i.id),
+      orderedItemIds: mode === 'wrong' ? [...ids].reverse() : ids,
     });
   } else if (kind === 'clues') {
     await handlePossessionCluesAnswer(io as never, botSocket as never, {
-      kind: 'guess', matchId: q.matchId, qIndex: q.qIndex, guess: 'answer', timeMs: 300,
+      kind: 'guess', matchId: q.matchId, qIndex: q.qIndex,
+      guess: mode === 'wrong' ? 'zzzznotananswer' : 'answer', timeMs: 300,
     });
   }
 }
@@ -172,10 +215,19 @@ async function answerQuestion(
  */
 export async function playMatch(
   run: RunMatchResult,
-  opts: { maxMs?: number; answerEveryMs?: number } = {},
+  opts: {
+    maxMs?: number;
+    answerEveryMs?: number;
+    answerMode?: AnswerMode;
+    /** qIndexes the bot deliberately does NOT answer, forcing the engine's
+     *  question-timeout to resolve those rounds (the timeout-expire scenario). */
+    skipQIndices?: Iterable<number>;
+  } = {},
 ): Promise<void> {
   const { trace, io, botSocket } = run;
   const maxMs = opts.maxMs ?? 30_000;
+  const answerMode = opts.answerMode ?? 'correct';
+  const skip = new Set<number>(opts.skipQIndices ?? []);
   const answered = new Set<number>();
   const deadline = Date.now() + maxMs;
 
@@ -185,7 +237,7 @@ export async function playMatch(
     // Answer the latest unanswered question (any kind) so the round resolves.
     const questions = trace.byEvent('match:question');
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
-    if (latest && !answered.has(latest.qIndex)) {
+    if (latest && !answered.has(latest.qIndex) && !skip.has(latest.qIndex)) {
       answered.add(latest.qIndex);
       // Respect the reveal window: don't answer before playableAt (a real client
       // can't). Matters on RESUME, where the question's playableAt is pushed into
@@ -193,7 +245,7 @@ export async function playMatch(
       const wait = msUntilPlayable(latest);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait + 5));
       try {
-        await answerQuestion(io, botSocket, latest);
+        await answerQuestion(io, botSocket, latest, answerMode);
       } catch {
         // A late/duplicate/invalid answer can throw; ignore — the engine guards
         // it and the round still resolves on timeout if needed.
@@ -208,6 +260,55 @@ export async function runFullMatch(options: RunMatchOptions = {}): Promise<RunMa
   const run = await bootMatch(options);
   if (run.matchId) await playMatch(run);
   return run;
+}
+
+/**
+ * Drive a FRIENDLY (human-vs-human) match where EVERY seat answers each question.
+ * For friendly_possession both seats answer the current question; for
+ * friendly_party_quiz all seats answer (MCQ only). Each seat answers a given
+ * qIndex at most once. Returns when final_results is observed or maxMs elapses.
+ */
+export async function playLobbyMatch(
+  run: RunLobbyResult,
+  opts: { maxMs?: number; answerEveryMs?: number; answerMode?: AnswerMode } = {},
+): Promise<void> {
+  const { trace, io, seats } = run;
+  const maxMs = opts.maxMs ?? 90_000;
+  const answerMode = opts.answerMode ?? 'correct';
+  // qIndexes each seat has already answered.
+  const answeredBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
+  const deadline = Date.now() + maxMs;
+
+  while (Date.now() < deadline) {
+    if (trace.byEvent('match:final_results').length > 0) return;
+
+    const questions = trace.byEvent('match:question');
+    const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
+    if (latest) {
+      const wait = msUntilPlayable(latest);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait + 5));
+      for (const seat of seats) {
+        const done = answeredBySeat.get(seat.userId)!;
+        if (done.has(latest.qIndex)) continue;
+        done.add(latest.qIndex);
+        try {
+          if (run.variant === 'friendly_party_quiz') {
+            // Party quiz is MCQ-only; route through the variant-aware entry.
+            const correct = typeof latest.correctIndex === 'number' ? latest.correctIndex : 0;
+            await handleAnswer(io as never, seat.socket as never, {
+              matchId: latest.matchId, qIndex: latest.qIndex, timeMs: 300,
+              selectedIndex: answerMode === 'wrong' ? (correct === 0 ? 1 : 0) : correct,
+            } as never);
+          } else {
+            await answerQuestion(io, seat.socket, latest, answerMode);
+          }
+        } catch {
+          // late/duplicate/invalid — engine guards it; round still resolves.
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, opts.answerEveryMs ?? 50));
+  }
 }
 
 // ── Lifecycle / chaos actions (drive the REAL socket lifecycle layer) ──
@@ -262,6 +363,124 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
 /** The bot explicitly forfeits/quits the match. */
 export async function botForfeit(run: RunMatchResult): Promise<void> {
   await handleMatchForfeit(run.io as never, run.botSocket as never, run.matchId);
+}
+
+/**
+ * Deterministically jump the match to a phase via the production dev-skip seam
+ * (`devSkipToPossessionPhase`). Used to reach phases that are otherwise gated on
+ * a stochastic outcome — e.g. 'penalty_ban' (a tied match) routes through the
+ * HALFTIME ban interlude into PENALTY_SHOOTOUT, which a normal run only reaches
+ * on a draw (the harness AI is non-deterministic, so a draw can't be forced by
+ * play alone). This goes through the same engine path the dev route uses.
+ */
+export async function botSkipToPhase(
+  run: RunMatchResult,
+  target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half',
+): Promise<void> {
+  if (!run.matchId) throw new Error('botSkipToPhase: no matchId');
+  await devSkipToPossessionPhase(run.io as never, run.matchId, target);
+}
+
+// ── Friendly lobby (human-vs-human) boot ──
+// Drives the REAL lobby flow: createLobby -> joinByCode -> setReady(x2) ->
+// startFriendlyMatch -> beginMatchForLobby. No AI; both seats are bot humans.
+
+export interface FriendlyLobbyOptions {
+  variant?: 'friendly_possession' | 'friendly_party_quiz';
+  /** extra joiners for party_quiz (3..6 players). Each gets a derived bot user. */
+  extraPlayers?: number;
+  startTimeoutMs?: number;
+}
+
+/** Boot a friendly human-vs-human match through the production lobby path. */
+export async function bootFriendlyLobbyMatch(opts: FriendlyLobbyOptions = {}): Promise<RunLobbyResult> {
+  const variant = opts.variant ?? 'friendly_possession';
+  const now = () => Date.now();
+  const trace = createTrace(now);
+  const io = new FakeIo(trace);
+
+  // 1. Fixtures + the two (or more) ticketed bot users. Friendly doesn't spend a
+  //    ranked ticket, but seedTestUserWithTicket also creates the users row.
+  const fixtures = await seedFixtures({ categoryCount: 3, mcqPerCategory: 5 });
+  const extra = variant === 'friendly_party_quiz' ? Math.max(0, opts.extraPlayers ?? 0) : 0;
+  const playerIds = [BOT_USER_ID, BOT2_USER_ID];
+  for (let i = 0; i < extra; i++) {
+    // Derive stable extra user ids: ...b2, b3, ...
+    playerIds.push(`00000000-0000-0000-0000-0000000000b${i + 2}`);
+  }
+  for (let i = 0; i < playerIds.length; i++) {
+    await seedTestUserWithTicket({ userId: playerIds[i], nickname: `LobbyBot${i + 1}`, tickets: 1 });
+  }
+
+  // 2. Redis + scheduler (no matchmaking loop needed for friendly).
+  await initRedisClients();
+  const redisForFlush = getRedisClient();
+  if (redisForFlush?.isOpen) await redisForFlush.flushAll();
+  startRealtimeTimerScheduler(io as never, buildRealtimeTimerHandlers());
+
+  // 3. Sockets, one per seat, each in its own user room.
+  const sockets = playerIds.map((userId, i) => {
+    const s = io.createSocket(`lobby-bot-${i}`, { user: { id: userId }, connectedAt: now() });
+    s.join(`user:${userId}`);
+    return s;
+  });
+  const hostSocket = sockets[0];
+  const joinerSockets = sockets.slice(1);
+
+  // 4. Host creates the lobby.
+  const created = await createLobby(io as never, hostSocket as never, { mode: 'friendly' });
+  const lobbyId = created.ok ? created.lobbyId : null;
+  const inviteCode = created.ok ? created.inviteCode : null;
+  if (!lobbyId || !inviteCode) {
+    return buildLobbyResult(trace, fixtures, null, inviteCode, null, variant, io, playerIds, sockets);
+  }
+
+  // 5. Everyone else joins by code.
+  for (const js of joinerSockets) {
+    await joinByCode(io as never, js as never, inviteCode);
+  }
+
+  // 6. Host sets the game mode/variant (possession is the default; switch for party).
+  if (variant === 'friendly_party_quiz') {
+    await updateSettings(io as never, hostSocket as never, { gameMode: 'friendly_party_quiz', friendlyRandom: true });
+  } else {
+    await updateSettings(io as never, hostSocket as never, { gameMode: 'friendly_possession', friendlyRandom: true });
+  }
+
+  // 7. Everyone readies up.
+  for (const s of sockets) {
+    await setReady(io as never, s as never, true);
+  }
+
+  // 8. Host starts → beginMatchForLobby → match:start + countdown + first question.
+  await startFriendlyMatch(io as never, hostSocket as never);
+
+  const startTimeout = opts.startTimeoutMs ?? 25_000;
+  const started = await waitUntil(
+    () => trace.byEvent('match:start').length > 0 && trace.byEvent('match:question').length > 0,
+    startTimeout,
+  );
+  let matchId: string | null = null;
+  if (started) {
+    const startEvt = trace.byEvent('match:start')[0];
+    matchId = (startEvt.payload as { matchId?: string } | undefined)?.matchId ?? null;
+    if (matchId) for (const s of sockets) s.data.matchId = matchId;
+  }
+
+  return buildLobbyResult(trace, fixtures, lobbyId, inviteCode, matchId, variant, io, playerIds, sockets);
+}
+
+function buildLobbyResult(
+  trace: EventTrace, fixtures: SeededFixtures, lobbyId: string | null, inviteCode: string | null,
+  matchId: string | null, variant: 'friendly_possession' | 'friendly_party_quiz', io: FakeIo,
+  playerIds: string[], sockets: FakeSocket[],
+): RunLobbyResult {
+  return {
+    trace, fixtures, lobbyId, inviteCode, matchId, variant, io,
+    hostUserId: playerIds[0], joinerUserId: playerIds[1],
+    hostSocket: sockets[0], joinerSocket: sockets[1],
+    seats: playerIds.map((userId, i) => ({ userId, socket: sockets[i] })),
+  };
 }
 
 /** Tear down scheduler + matchmaking loop + redis between runs. */

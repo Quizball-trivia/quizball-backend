@@ -15,6 +15,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { matchPauseKey, questionTimerKey } from './match-keys.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   ensureHalftimeCategories,
@@ -399,7 +400,10 @@ export async function scheduleNextPossessionQuestion(
       scopeId: matchId,
       token: resolvedQIndex,
       waitingUserIds: humanUserIds,
-      ceilingMs: GOAL_ROUND_READY_ACK_CEILING_MS,
+      // Harness has no real client to send the post-goal ready ack, so it would
+      // sit the full ~9s ceiling on EVERY goal. Collapse the ceiling under
+      // fast-timers (prod untouched) so goals don't dominate match time.
+      ceilingMs: harnessDelayMs(GOAL_ROUND_READY_ACK_CEILING_MS),
       dispatch: () => dispatch({ postReadyAck: true }),
       onTimeout: (missing) => {
         logger.info({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
@@ -408,7 +412,11 @@ export async function scheduleNextPossessionQuestion(
     return;
   }
 
-  const delay = getNextQuestionDelayMs({ phase });
+  // The inter-question delay mirrors the FRONTEND result-hold + transition + reveal
+  // (~6s/round). In the regression harness this is the dominant per-match cost
+  // (~13 rounds => ~80s), so collapse it to a few ms when fast-timers are on.
+  // Production is untouched (harnessDelayMs returns prodMs unless REGRESSION_FAST_TIMERS).
+  const delay = harnessDelayMs(getNextQuestionDelayMs({ phase }));
   logger.info({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
   setTimeout(() => dispatch(), delay);
 }

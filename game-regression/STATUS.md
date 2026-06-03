@@ -39,16 +39,34 @@ wait. Both now go through harnessDelayMs. The boot test is **4/4 reliable at ~5s
 (was ~10s and ~1/3 flaky). The earlier "stall at search" was the same countdown delay
 pushing match:question past the test's 10s budget on slower iterations — not a real race.
 
-## KNOWN ISSUE (next session)
-### Full match doesn't yet reach match:final_results within budget
-The bot answers MCQs and lets specials (countdown/putInOrder/clues) time out. Even with
-windows collapsed to 2s, ~6s/question means a full match (~12+ q + halftime) exceeds the
-30s play budget (observed: 5 questions, no halftime/final). Next steps:
-- Have the bot ANSWER specials too (handlers exist: handlePossessionCountdownGuess,
-  handlePossessionPutInOrderAnswer, handlePossessionCluesAnswer) so rounds resolve on
-  both-answered instead of waiting the (collapsed) timeout.
-- Check the AI countdown answer delay collapse is taking effect; profile per-round time.
-- Then a full match should complete in a few seconds; raise playMatch maxMs as needed.
+## KNOWN ISSUE (next session) — PRECISELY DIAGNOSED
+### Full match completes only the MCQ rounds fast; special rounds are the bottleneck
+Per-round profiling (see below) shows the architecture works great for MCQ but stalls on
+special questions (countdown / putInOrder / clues):
+```
++3467ms  Q0 (MCQ)  -> round_result +4018ms   (~550ms ✓)
++4049ms  Q1 (MCQ)  -> round_result +4512ms   (~460ms ✓)
++4542ms  Q2 (MCQ)  -> round_result +5025ms   (~480ms ✓)
++5027ms ........... 9-SECOND GAP ...........
++14052ms Q3 (SPECIAL) -> NO answer_ack from bot -> round_result +17032ms (timeout)
+```
+Two concrete sub-issues for the special-question path:
+1. **The bot's special answer isn't registering** — Q3 has no `match:answer_ack`, so the
+   bot's countdown/putInOrder/clues submission (just wired in runner.answerQuestion) is
+   being rejected. Likely the special handlers need the question to be in its "playable"
+   window (post-reveal) or a different payload/timing than MCQ. Debug: log the handler
+   result / why it's a no-op for the special kind.
+2. **A ~9s gap BEFORE the special dispatches** — almost certainly the AI's special answer
+   delay on the PREVIOUS round, or the special pre-answer reveal not fully collapsed. The
+   AI countdown delay (getAiAnswerDelayMs countdown branch = 12-22s) IS wrapped in
+   harnessDelayMs — verify it's taking effect for the countdown kind; profile the AI
+   answer scheduling for specials.
+Once specials answer + resolve fast, a full match should finish in a few seconds and reach
+halftime + match:final_results. Then build invariants on the completed-match trace.
+
+### Per-round timing is otherwise excellent
+MCQ rounds resolve in ~500ms (bot answers, AI answers, round_result). Boot ~5s. The whole
+approach is sound — only the special-question answer/timing path remains.
 
 ## Engine changes made for the harness (all prod-safe, flag-gated)
 - `core/harness-timing.ts` (NEW): `harnessDelayMs(prodMs, fastMs)` — returns fast value

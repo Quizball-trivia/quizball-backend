@@ -17,7 +17,12 @@ import { getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
 import { rankedMatchmakingService } from '../../src/realtime/services/ranked-matchmaking.service.js';
 import { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } from '../../src/realtime/realtime-timer-scheduler.js';
 import { buildRealtimeTimerHandlers } from '../../src/realtime/socket-server.js';
-import { handlePossessionAnswer } from '../../src/realtime/possession-answer-handlers.js';
+import {
+  handlePossessionAnswer,
+  handlePossessionCountdownGuess,
+  handlePossessionPutInOrderAnswer,
+  handlePossessionCluesAnswer,
+} from '../../src/realtime/possession-answer-handlers.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -104,9 +109,39 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
 interface QuestionEventPayload {
   matchId: string;
   qIndex: number;
-  question?: { kind?: string };
+  question?: { kind?: string; items?: Array<{ id: string }> };
   correctIndex?: number;
   deadlineAt?: string;
+}
+
+/** Submit a bot answer for whatever question kind was dispatched, so the round
+ *  resolves on both-answered instead of waiting for the timeout. */
+async function answerQuestion(
+  io: FakeIo,
+  botSocket: FakeSocket,
+  q: QuestionEventPayload,
+): Promise<void> {
+  const base = { matchId: q.matchId, qIndex: q.qIndex, timeMs: 300 };
+  const kind = q.question?.kind;
+  if (kind === 'multipleChoice') {
+    await handlePossessionAnswer(io as never, botSocket as never, {
+      ...base,
+      selectedIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+    });
+  } else if (kind === 'countdown') {
+    await handlePossessionCountdownGuess(botSocket as never, {
+      matchId: q.matchId, qIndex: q.qIndex, guess: 'one',
+    });
+  } else if (kind === 'putInOrder') {
+    await handlePossessionPutInOrderAnswer(io as never, botSocket as never, {
+      ...base,
+      orderedItemIds: (q.question?.items ?? []).map((i) => i.id),
+    });
+  } else if (kind === 'clues') {
+    await handlePossessionCluesAnswer(io as never, botSocket as never, {
+      kind: 'guess', matchId: q.matchId, qIndex: q.qIndex, guess: 'answer', timeMs: 300,
+    });
+  }
 }
 
 /**
@@ -128,22 +163,16 @@ export async function playMatch(
   while (Date.now() < deadline) {
     if (trace.byEvent('match:final_results').length > 0) return;
 
-    // Answer the latest unanswered MCQ question.
+    // Answer the latest unanswered question (any kind) so the round resolves.
     const questions = trace.byEvent('match:question');
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
-    if (latest && !answered.has(latest.qIndex) && latest.question?.kind === 'multipleChoice') {
+    if (latest && !answered.has(latest.qIndex)) {
       answered.add(latest.qIndex);
-      // Answer correctly when the server reveals the index (it does for MCQ).
-      const selectedIndex = typeof latest.correctIndex === 'number' ? latest.correctIndex : 0;
       try {
-        await handlePossessionAnswer(io as never, botSocket as never, {
-          matchId: latest.matchId,
-          qIndex: latest.qIndex,
-          selectedIndex,
-          timeMs: 300,
-        });
+        await answerQuestion(io, botSocket, latest);
       } catch {
-        // A late/duplicate answer can throw; ignore — the engine guards it.
+        // A late/duplicate/invalid answer can throw; ignore — the engine guards
+        // it and the round still resolves on timeout if needed.
       }
     }
     await new Promise((r) => setTimeout(r, opts.answerEveryMs ?? 50));

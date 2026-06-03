@@ -11,7 +11,7 @@ import {
   lobbyUpdateSettingsSchema,
 } from '../schemas/lobby.schemas.js';
 import { logger } from '../../core/logger.js';
-import { trackLobbyCreated, trackLobbyJoined } from '../../core/analytics/game-events.js';
+import { trackLobbyCreated, trackLobbyJoined, trackLobbyLeft } from '../../core/analytics/game-events.js';
 import { lobbyRealtimeService } from '../services/lobby-realtime.service.js';
 
 function readCorrelationId(payload: unknown): string | undefined {
@@ -208,6 +208,9 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
 
     try {
       const result = await lobbyRealtimeService.leaveLobby(io, socket, correlationId);
+      if (result.ok && result.lobbyId) {
+        trackLobbyLeft(socket.data.user.id, result.lobbyId, result.closed ? 'closed' : 'left');
+      }
       ack?.(result);
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:leave');

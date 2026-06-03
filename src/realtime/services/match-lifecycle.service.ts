@@ -13,7 +13,7 @@ import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.s
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
-import { trackPartyQuizStarted } from '../../core/analytics/game-events.js';
+import { trackPartyQuizStarted, trackMatchCreated } from '../../core/analytics/game-events.js';
 import { buildInitialCache, setMatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
 import { devSkipToPossessionPhase } from '../possession-dev-skip.js';
@@ -283,6 +283,9 @@ export async function beginMatchForLobby(
   await Promise.all(
     members.map(async (member) => {
       const opponent = members.find((candidate) => candidate.user_id !== member.user_id) ?? member;
+      // Analytics: match started, per member. AI users are suppressed downstream
+      // by the analytics AI-guard, so firing for all members is safe.
+      trackMatchCreated(member.user_id, matchId, match.mode, match.category_a_id ?? undefined);
       io.to(`user:${member.user_id}`).emit('match:start', {
         matchId,
         mode: match.mode,

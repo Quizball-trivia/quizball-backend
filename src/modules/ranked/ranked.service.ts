@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
@@ -483,6 +484,12 @@ export const rankedService = {
       { matchId, outcome: Object.values(outcome.byUserId).map((o) => ({ userId: o.userId, oldRp: o.oldRp, newRp: o.newRp, deltaRp: o.deltaRp, placementStatus: o.placementStatus, placementPlayed: o.placementPlayed, isPlacement: o.isPlacement })) },
       'Ranked settlement completed'
     );
+
+    // Analytics: emit once per human player when RP is FRESHLY settled (not on the
+    // idempotent re-read path above), so ranked progression is visible in PostHog.
+    for (const o of Object.values(outcome.byUserId)) {
+      trackRankPointsChanged(o.userId, o.oldRp, o.newRp, o.isPlacement ? 'placement' : 'ranked_match');
+    }
 
     return outcome;
   },

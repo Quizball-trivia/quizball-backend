@@ -1,6 +1,7 @@
 import type { QuizballServer } from '../socket-server.js';
 import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import { trackRankedMatchFound } from '../../core/analytics/game-events.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -165,6 +166,11 @@ async function handleRankedAiMatchFound(params: {
     const hasHost = members.some((member) => member.user_id === userId);
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
+
+    // Analytics: the ranked search resolved (AI fallback). Fired for the human
+    // player only (the opponent is the AI). timeSec=0 — the precise queue wait is
+    // not threaded here; the queue-join event carries the start.
+    trackRankedMatchFound(userId, aiUser.id, 0);
 
     const myRecentForm = await statsService
       .getRecentFormForUser(userId, 3)

@@ -1,4 +1,5 @@
 import type { QuizballServer } from '../socket-server.js';
+import { getRandom } from '../../core/rng.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
@@ -37,7 +38,7 @@ async function hasRankedCancelRequest(userId: string): Promise<boolean> {
 
 function generateAiRecentForm(): Array<'W' | 'L' | 'D'> {
   const outcomes: Array<'W' | 'L' | 'D'> = ['W', 'W', 'W', 'L', 'L', 'D'];
-  return Array.from({ length: 3 }, () => outcomes[Math.floor(Math.random() * outcomes.length)]);
+  return Array.from({ length: 3 }, () => outcomes[Math.floor(getRandom() * outcomes.length)]);
 }
 
 export async function startRankedAiForUser(

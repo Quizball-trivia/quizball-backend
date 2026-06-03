@@ -1,4 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { getRandom } from '../../core/rng.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -174,7 +175,7 @@ function getNextActorId(
 }
 
 function getAiBanDelayMs(): number {
-  return Math.floor(Math.random() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
+  return Math.floor(getRandom() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
 }
 
 async function clearPendingAiBanTimer(lobbyId: string): Promise<void> {
@@ -304,7 +305,7 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
 
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
-    const autoChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    const autoChoice = candidates[Math.floor(getRandom() * candidates.length)];
     if (!autoChoice) return;
 
     let inserted = false;
@@ -404,7 +405,7 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
-    const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    const aiChoice = candidates[Math.floor(getRandom() * candidates.length)];
     if (!aiChoice) return;
 
     try {

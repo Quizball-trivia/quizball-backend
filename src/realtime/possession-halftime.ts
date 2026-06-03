@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { getRandom } from '../core/rng.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
@@ -49,7 +50,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   }
 
   function getHalftimeAiBanDelayMs(): number {
-    return Math.floor(Math.random() * (HALFTIME_AI_BAN_DELAY_MAX_MS - HALFTIME_AI_BAN_DELAY_MIN_MS + 1))
+    return Math.floor(getRandom() * (HALFTIME_AI_BAN_DELAY_MAX_MS - HALFTIME_AI_BAN_DELAY_MIN_MS + 1))
       + HALFTIME_AI_BAN_DELAY_MIN_MS;
   }
 
@@ -108,7 +109,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
       if (!state.halftime.firstBanSeat) {
         state.halftime.firstBanSeat = match?.is_dev
-          ? (Math.random() < 0.5 ? 1 : 2)
+          ? (getRandom() < 0.5 ? 1 : 2)
           : 2;
       }
 
@@ -172,7 +173,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   ): string | null {
     const candidates = categoryIds.filter((categoryId) => !excludedCategoryIds.has(categoryId));
     if (candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
+    return candidates[Math.floor(getRandom() * candidates.length)] ?? null;
   }
 
   function resolveHalftimeResult(

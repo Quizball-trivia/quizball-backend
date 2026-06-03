@@ -23,6 +23,7 @@
  */
 
 import { normalizeCountryCode } from '../core/country.js';
+import { getRandom } from '../core/rng.js';
 
 export const RANKED_AI_CORRECTNESS = 0.45;
 
@@ -102,7 +103,7 @@ function randomFrom<T>(values: T[]): T {
   if (values.length === 0) {
     throw new Error('randomFrom called with empty array');
   }
-  return values[Math.floor(Math.random() * values.length)];
+  return values[Math.floor(getRandom() * values.length)];
 }
 
 function encodeSegment(value: string): string {
@@ -122,7 +123,7 @@ export function generateRankedAiUsername(): string {
 export function generateRankedAiUsernameAvoiding(takenLowerNicknames: Set<string>): string {
   const available = AI_NICKNAMES.filter((name) => !takenLowerNicknames.has(name.toLowerCase()));
   if (available.length > 0) return randomFrom(available);
-  const suffix = Math.floor(Math.random() * 9000 + 1000);
+  const suffix = Math.floor(getRandom() * 9000 + 1000);
   return `${randomFrom(AI_NICKNAMES)}_${suffix}`;
 }
 
@@ -298,7 +299,7 @@ const RANKED_AI_FAVORITE_CLUBS = [
 ];
 
 export function generateRankedAiFavoriteClub(): string {
-  return RANKED_AI_FAVORITE_CLUBS[Math.floor(Math.random() * RANKED_AI_FAVORITE_CLUBS.length)];
+  return RANKED_AI_FAVORITE_CLUBS[Math.floor(getRandom() * RANKED_AI_FAVORITE_CLUBS.length)];
 }
 
 export function rankedAiLobbyKey(lobbyId: string): string {

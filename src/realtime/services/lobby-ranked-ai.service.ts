@@ -124,7 +124,7 @@ export async function startRankedAiForUser(
           rankedContext,
           lobbiesRepo,
           logger,
-          foundModalMs: RANKED_SIM_FOUND_MODAL_MS,
+          foundModalMs: harnessDelayMs(RANKED_SIM_FOUND_MODAL_MS),
           startDraft,
         }),
       searchDurationMs

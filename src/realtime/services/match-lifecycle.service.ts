@@ -1,5 +1,6 @@
 import type { User } from '../../db/types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -128,7 +129,7 @@ export async function beginMatchForLobby(
       ? Math.floor(options?.countdownSec ?? defaultCountdownSec)
       : defaultCountdownSec
   );
-  const countdownMs = countdownSec * 1000;
+  const countdownMs = harnessDelayMs(countdownSec * 1000, 300);
   const variant = variantForCountdown;
 
   let members: MatchStartMember[];

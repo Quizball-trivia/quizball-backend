@@ -17,12 +17,15 @@ import { getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
 import { rankedMatchmakingService } from '../../src/realtime/services/ranked-matchmaking.service.js';
 import { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } from '../../src/realtime/realtime-timer-scheduler.js';
 import { buildRealtimeTimerHandlers } from '../../src/realtime/socket-server.js';
+import { handlePossessionAnswer } from '../../src/realtime/possession-answer-handlers.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
   fixtures: SeededFixtures;
   botUserId: string;
   matchId: string | null;
+  io: FakeIo;
+  botSocket: FakeSocket;
 }
 
 export interface RunMatchOptions {
@@ -95,7 +98,63 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
     if (matchId) botSocket.data.matchId = matchId;
   }
 
-  return { trace, fixtures, botUserId, matchId };
+  return { trace, fixtures, botUserId, matchId, io, botSocket };
+}
+
+interface QuestionEventPayload {
+  matchId: string;
+  qIndex: number;
+  question?: { kind?: string };
+  correctIndex?: number;
+  deadlineAt?: string;
+}
+
+/**
+ * Drive the bot to play the match to completion. The bot answers MCQ questions
+ * (correctly, deterministically — score control comes later via the planner) and
+ * lets non-MCQ specials time out (the engine resolves them); the AI side is
+ * server-driven. Halftime banning auto-resolves via its timer. Returns when
+ * match:final_results is observed or the timeout elapses.
+ */
+export async function playMatch(
+  run: RunMatchResult,
+  opts: { maxMs?: number; answerEveryMs?: number } = {},
+): Promise<void> {
+  const { trace, io, botSocket } = run;
+  const maxMs = opts.maxMs ?? 30_000;
+  const answered = new Set<number>();
+  const deadline = Date.now() + maxMs;
+
+  while (Date.now() < deadline) {
+    if (trace.byEvent('match:final_results').length > 0) return;
+
+    // Answer the latest unanswered MCQ question.
+    const questions = trace.byEvent('match:question');
+    const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
+    if (latest && !answered.has(latest.qIndex) && latest.question?.kind === 'multipleChoice') {
+      answered.add(latest.qIndex);
+      // Answer correctly when the server reveals the index (it does for MCQ).
+      const selectedIndex = typeof latest.correctIndex === 'number' ? latest.correctIndex : 0;
+      try {
+        await handlePossessionAnswer(io as never, botSocket as never, {
+          matchId: latest.matchId,
+          qIndex: latest.qIndex,
+          selectedIndex,
+          timeMs: 300,
+        });
+      } catch {
+        // A late/duplicate answer can throw; ignore — the engine guards it.
+      }
+    }
+    await new Promise((r) => setTimeout(r, opts.answerEveryMs ?? 50));
+  }
+}
+
+/** Boot + play a full match to completion; returns the result with its trace. */
+export async function runFullMatch(options: RunMatchOptions = {}): Promise<RunMatchResult> {
+  const run = await bootMatch(options);
+  if (run.matchId) await playMatch(run);
+  return run;
 }
 
 /** Tear down scheduler + matchmaking loop + redis between runs. */

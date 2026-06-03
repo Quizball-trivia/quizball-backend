@@ -1,5 +1,6 @@
 import { logger } from '../core/logger.js';
 import { getRandom } from '../core/rng.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
@@ -41,9 +42,9 @@ const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
 function getAiAnswerDelayMs(questionKind?: string): number {
   // Countdown is open-ended typing, so the AI uses a much slower range than other kinds.
   if (questionKind === 'countdown') {
-    return Math.floor(getRandom() * 10000) + 12000;
+    return harnessDelayMs(Math.floor(getRandom() * 10000) + 12000);
   }
-  return Math.floor(getRandom() * 5000) + 2000;
+  return harnessDelayMs(Math.floor(getRandom() * 5000) + 2000);
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {

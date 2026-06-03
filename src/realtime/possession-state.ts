@@ -4,6 +4,7 @@ import {
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
 import { clamp } from './scoring.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayload } from './socket.types.js';
 
 // ── Constants ──
@@ -178,9 +179,15 @@ export function buildPlayableQuestionTiming(params: {
   playableAt: Date;
   deadlineAt: Date;
 } {
-  const preAnswerDelayMs = getQuestionPreAnswerDelayMs(params);
+  const preAnswerDelayMs = harnessDelayMs(getQuestionPreAnswerDelayMs(params));
   const playableAt = new Date(Date.now() + preAnswerDelayMs);
-  const durationMs = getQuestionDurationMs(params.questionKind ?? 'multipleChoice', params.clueCount);
+  // Collapse the answer WINDOW (deadline) in harness mode so unanswered specials
+  // time out quickly. Use a larger fast value (2s) so the bot still has room to
+  // answer. Scoring is unaffected — it uses the actual answer timeMs, not this.
+  const durationMs = harnessDelayMs(
+    getQuestionDurationMs(params.questionKind ?? 'multipleChoice', params.clueCount),
+    2000,
+  );
   const deadlineAt = new Date(playableAt.getTime() + durationMs);
   return { playableAt, deadlineAt };
 }

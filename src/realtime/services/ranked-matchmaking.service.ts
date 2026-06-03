@@ -495,7 +495,10 @@ export const rankedMatchmakingService = {
           await redis.del(cancelKey(userId));
 
           const now = Date.now();
-          const deadlineAt = now + harnessDelayMs(SEARCH_DURATION_MS);
+          // Larger fast value (1s) than the per-round default: a too-tight queue
+          // deadline can expire before the search hash is consistent, so the
+          // fallback claim no-ops and the match never starts.
+          const deadlineAt = now + harnessDelayMs(SEARCH_DURATION_MS, 1000);
           const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
           if (existingSearchId) {
             const existing = await redis.hGetAll(searchKey(existingSearchId));

@@ -77,34 +77,45 @@ const scoreMatchesBars: Invariant = (trace) => {
 };
 
 /**
- * For NORMAL-play questions, qIndex must be < total ("question 13 of 12" guard).
- * Exempt: last_attack / penalty phase questions are intentionally numbered PAST
- * the normal `total` (e.g. q12 with total 12 is the last-attack bonus question),
- * so they don't count as an overflow.
+ * The "question 13 of 12" guard. IMPORTANT (per Codex review): `qIndex` is a GLOBAL
+ * round index that includes last_attack/penalty bonus phases, so `qIndex < total`
+ * is wrong — a global qIndex of 12 is normal when a last_attack round was inserted.
+ * The right counter for normal questions is `phaseRound`
+ * (= normalQuestionsAnsweredTotal + 1, possession-question-dispatch.ts:487), which
+ * the client should display as "phaseRound of total". So for NORMAL-play questions
+ * we assert `phaseRound <= total`. Non-normal phases are exempt.
  */
 const questionCounterInRange: Invariant = (trace) => {
   const out: Violation[] = [];
   for (const evt of trace.byEvent('match:question')) {
-    const { qIndex, total, phaseKind } = evt.payload as {
-      qIndex?: number; total?: number; phaseKind?: string;
+    const { total, phaseKind, phaseRound } = evt.payload as {
+      total?: number; phaseKind?: string; phaseRound?: number;
     };
     const isNormal = phaseKind === undefined || phaseKind === 'normal';
-    if (isNormal && typeof qIndex === 'number' && typeof total === 'number' && qIndex >= total) {
+    if (isNormal && typeof phaseRound === 'number' && typeof total === 'number' && phaseRound > total) {
       out.push({
         invariant: 'questionCounterInRange',
-        message: `Normal-play question qIndex ${qIndex} >= total ${total} ("question ${qIndex + 1} of ${total}").`,
+        message: `Normal-play phaseRound ${phaseRound} > total ${total} ("question ${phaseRound} of ${total}").`,
         seq: evt.seq,
-        detail: { qIndex, total, phaseKind },
+        detail: { phaseRound, total, phaseKind },
       });
     }
   }
   return out;
 };
 
-/** Phase transitions must follow the legal graph; no question after COMPLETED. */
+/**
+ * Phase transitions must follow the legal graph; no question after COMPLETED.
+ * IMPORTANT (per Codex review): a second-half DRAW routes into penalties THROUGH a
+ * HALFTIME-style ban interlude (possession-resolution.ts:148) — penalties are never
+ * entered directly from NORMAL_PLAY/LAST_ATTACK. So PENALTY_SHOOTOUT is reachable
+ * ONLY from HALFTIME; allowing NORMAL_PLAY→PENALTY_SHOOTOUT would let a "ban skipped"
+ * bug pass. LAST_ATTACK→HALFTIME is legal (last-attack resolution can enter the
+ * half boundary, resolution.ts:204/137).
+ */
 const ALLOWED_NEXT: Record<string, string[]> = {
-  NORMAL_PLAY: ['NORMAL_PLAY', 'LAST_ATTACK', 'HALFTIME', 'PENALTY_SHOOTOUT', 'COMPLETED'],
-  LAST_ATTACK: ['LAST_ATTACK', 'HALFTIME', 'NORMAL_PLAY', 'PENALTY_SHOOTOUT', 'COMPLETED'],
+  NORMAL_PLAY: ['NORMAL_PLAY', 'LAST_ATTACK', 'HALFTIME', 'COMPLETED'],
+  LAST_ATTACK: ['LAST_ATTACK', 'HALFTIME', 'NORMAL_PLAY', 'COMPLETED'],
   HALFTIME: ['HALFTIME', 'NORMAL_PLAY', 'PENALTY_SHOOTOUT', 'COMPLETED'],
   PENALTY_SHOOTOUT: ['PENALTY_SHOOTOUT', 'COMPLETED'],
   COMPLETED: ['COMPLETED'],
@@ -165,23 +176,43 @@ const oneRoundResultPerQIndex: Invariant = (trace) => {
   return out;
 };
 
-/** Each qIndex must be dispatched (match:question) at most once. */
+/**
+ * A qIndex must be FRESHLY dispatched at most once. IMPORTANT (per Codex review):
+ * the engine legitimately RE-EMITS the current question on rejoin/resume:
+ *   - hydration replays via `socket.emit` (possession-question-dispatch.ts:201) —
+ *     these are per-socket (recorded as 'server->socket'), so we ignore them here
+ *     by only counting match-ROOM broadcasts.
+ *   - resume re-dispatches via `io.to(match:...).emit` (line 727) — same channel as
+ *     a fresh dispatch, so we treat a repeat room-broadcast as LEGAL only if a
+ *     `match:resume` (or rejoin) occurred since the previous dispatch of that qIndex.
+ * A repeat room-broadcast with NO intervening resume is the real duplicate-dispatch bug.
+ */
 const oneQuestionPerQIndex: Invariant = (trace) => {
   const out: Violation[] = [];
-  const seen = new Map<number, number>();
-  for (const evt of trace.byEvent('match:question')) {
+  const lastDispatchSeq = new Map<number, number>();
+  for (const evt of trace.events) {
+    if (evt.event !== 'match:question') continue;
+    // Only match-room broadcasts are "dispatches"; per-socket hydration replays
+    // (dir 'server->socket') are legal and ignored.
+    if (evt.dir !== 'server->room' || !String(evt.target ?? '').startsWith('match:')) continue;
     const qIndex = (evt.payload as { qIndex?: number }).qIndex;
     if (typeof qIndex !== 'number') continue;
-    const count = (seen.get(qIndex) ?? 0) + 1;
-    seen.set(qIndex, count);
-    if (count > 1) {
-      out.push({
-        invariant: 'oneQuestionPerQIndex',
-        message: `qIndex ${qIndex} dispatched ${count} times (duplicate match:question).`,
-        seq: evt.seq,
-        detail: { qIndex, count },
-      });
+    const prevSeq = lastDispatchSeq.get(qIndex);
+    if (prevSeq !== undefined) {
+      const resumedBetween = trace.events.some(
+        (e) => (e.event === 'match:resume' || e.event === 'match:rejoin_available') &&
+          e.seq > prevSeq && e.seq < evt.seq,
+      );
+      if (!resumedBetween) {
+        out.push({
+          invariant: 'oneQuestionPerQIndex',
+          message: `qIndex ${qIndex} re-dispatched with no intervening resume (duplicate match:question).`,
+          seq: evt.seq,
+          detail: { qIndex, prevSeq },
+        });
+      }
     }
+    lastDispatchSeq.set(qIndex, evt.seq);
   }
   return out;
 };

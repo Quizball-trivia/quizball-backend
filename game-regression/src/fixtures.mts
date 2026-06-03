@@ -19,6 +19,28 @@
 // second `postgres` dependency in this folder and guarantees they hit one DB.
 import { sql } from '../../src/db/index.js';
 
+/** Name(s) the harness is allowed to TRUNCATE. Override via REGRESSION_DB_NAME. */
+const REGRESSION_DB_NAME = process.env.REGRESSION_DB_NAME ?? 'quizball_regression';
+
+/**
+ * HARD safety guard. clearFixtures() truncates match/lobby tables, so before ANY
+ * destructive write we require the live connection to actually be the dedicated
+ * regression database — NOT just "localhost". A misconfigured DATABASE_URL pointing
+ * at a real (even local) DB must never be wiped. Throws if the name doesn't match.
+ */
+let dbVerified = false;
+async function assertRegressionDatabase(): Promise<void> {
+  if (dbVerified) return;
+  const [row] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+  if (row?.db !== REGRESSION_DB_NAME) {
+    throw new Error(
+      `Refusing destructive harness write: connected DB is "${row?.db}", expected "${REGRESSION_DB_NAME}". ` +
+        `Point DATABASE_URL at the regression DB (or set REGRESSION_DB_NAME).`,
+    );
+  }
+  dbVerified = true;
+}
+
 export interface SeedOptions {
   categoryCount?: number; // ranked-eligible categories to create (default 3)
   mcqPerCategory?: number; // MCQs per category (>= 3; default 5)
@@ -89,6 +111,7 @@ function clueChainPayload(seedLabel: string) {
  * match/lobby rows — which is correct for an isolated local test DB.
  */
 export async function clearFixtures(): Promise<void> {
+  await assertRegressionDatabase(); // never truncate a non-regression DB
   // Children of matches.
   await sql`TRUNCATE
     match_answers, match_goal_events, match_players, match_questions,
@@ -183,6 +206,7 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
 export async function seedTestUserWithTicket(
   opts: { userId: string; nickname?: string; tickets?: number; coins?: number },
 ): Promise<string> {
+  await assertRegressionDatabase(); // never write a test user into a non-regression DB
   const tickets = opts.tickets ?? 1;
   const coins = opts.coins ?? 100;
   await sql`

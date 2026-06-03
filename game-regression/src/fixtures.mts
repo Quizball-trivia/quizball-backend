@@ -113,9 +113,15 @@ export async function clearFixtures(): Promise<void> {
   await sql`DELETE FROM categories WHERE slug LIKE 'regression-%'`;
 }
 
+const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
+
 export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFixtures> {
   const categoryCount = options.categoryCount ?? 3;
-  const mcqPerCategory = Math.max(3, options.mcqPerCategory ?? 5);
+  // A full possession match consumes ~10 normal MCQs (2 halves) and the engine
+  // prefers a difficulty per round (easy early, harder later) with no repeats —
+  // so seed a generous pool PER difficulty, not just 5 medium ones, or the match
+  // runs out of valid candidates mid-game and stalls.
+  const mcqPerDifficulty = Math.max(4, options.mcqPerCategory ?? 8);
 
   await clearFixtures();
 
@@ -133,19 +139,25 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
       result.categoryIds.push(category.id);
       result.questionIdsByCategory[category.id] = [];
 
-      // Build the per-type question list: M MCQs + 1 each special type.
-      const specs: Array<{ type: string; payload: () => unknown }> = [];
-      for (let m = 0; m < mcqPerCategory; m++) {
-        specs.push({ type: 'mcq_single', payload: () => mcqPayload(`${label}-mcq${m}`) });
+      // Build the per-type question list: a generous MCQ pool across all three
+      // difficulties + a few of each special type per difficulty.
+      const specs: Array<{ type: string; difficulty: string; payload: () => unknown }> = [];
+      for (const difficulty of DIFFICULTIES) {
+        for (let m = 0; m < mcqPerDifficulty; m++) {
+          specs.push({ type: 'mcq_single', difficulty, payload: () => mcqPayload(`${label}-mcq-${difficulty}-${m}`) });
+        }
+        // 2 of each special kind per difficulty so specials don't run dry either.
+        for (let s = 0; s < 2; s++) {
+          specs.push({ type: 'countdown_list', difficulty, payload: () => countdownPayload(`${label}-cd-${difficulty}-${s}`) });
+          specs.push({ type: 'put_in_order', difficulty, payload: () => putInOrderPayload(`${label}-pio-${difficulty}-${s}`) });
+          specs.push({ type: 'clue_chain', difficulty, payload: () => clueChainPayload(`${label}-cc-${difficulty}-${s}`) });
+        }
       }
-      specs.push({ type: 'countdown_list', payload: () => countdownPayload(`${label}-cd`) });
-      specs.push({ type: 'put_in_order', payload: () => putInOrderPayload(`${label}-pio`) });
-      specs.push({ type: 'clue_chain', payload: () => clueChainPayload(`${label}-cc`) });
 
       for (const spec of specs) {
         const [question] = await sql<{ id: string }[]>`
           INSERT INTO questions (id, category_id, type, difficulty, status, prompt)
-          VALUES (gen_random_uuid(), ${category.id}, ${spec.type}, 'medium', 'published',
+          VALUES (gen_random_uuid(), ${category.id}, ${spec.type}, ${spec.difficulty}, 'published',
                   ${sql.json(i18n('Question prompt'))})
           RETURNING id
         `;

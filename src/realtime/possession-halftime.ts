@@ -252,7 +252,9 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const uiReadyAt = state.halftime.uiReadyAt;
       const deadlineAt = state.halftime.deadlineAt;
       const uiReadyForDeadline = Boolean(deadlineAt && uiReadyAt === deadlineAt);
-      if (!uiReadyForDeadline && !hadSeat1Ban && !hadSeat2Ban) {
+      const needsReadyDefer = !uiReadyForDeadline && !hadSeat1Ban && !hadSeat2Ban;
+      const aiUserId = needsReadyDefer ? await deps.resolveAiUserId(matchId) : null;
+      if (needsReadyDefer && aiUserId) {
         const rebasedDeadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
         state.halftime.deadlineAt = rebasedDeadlineAt;
         state.halftime.uiReadyAt = rebasedDeadlineAt;
@@ -270,6 +272,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
             purpose: state.halftime.purpose,
             deadlineAt,
             rebasedDeadlineAt,
+            aiUserId,
           },
           'Possession halftime finalize deferred until ban window is ready'
         );
@@ -277,6 +280,18 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         schedulePossessionAiHalftimeBan(io, matchId);
         keepHalftimeTimers = true;
         return;
+      }
+      if (needsReadyDefer && !aiUserId) {
+        logger.info(
+          {
+            eventName: 'match:halftime_finalize',
+            matchId,
+            half: state.half,
+            purpose: state.halftime.purpose,
+            deadlineAt,
+          },
+          'Possession halftime auto-resolving missing bans because match has no AI halftime actor'
+        );
       }
       const halftimeResult = resolveHalftimeResult(state);
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;

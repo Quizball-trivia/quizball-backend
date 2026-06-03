@@ -6,12 +6,31 @@ The hard architecture is PROVEN: a real ranked-AI match boots end-to-end in-proc
 the local Supabase DB + Redis, in an automated vitest test, with a full event trace.
 Two issues remain before the harness can run many matches reliably (see KNOWN ISSUES).
 
+## Local stack (NATIVE — no Docker)
+Both Postgres and Redis run natively via Homebrew (Docker is no longer used).
+
+**One-time setup:**
+```
+brew install postgresql@16 redis
+brew services start postgresql@16          # Postgres on :5432
+# create the regression DB + Supabase-compatible roles + pg_cron stub, then apply
+# the 66 migrations (stripping the CREATE EXTENSION pg_cron line). See
+# game-regression/setup-native-db.sh — run it once to (re)build quizball_regression.
+```
+
+**Start the stack (each session / after reboot):**
+```
+brew services start postgresql@16                                   # DB :5432
+redis-server --port 6379 --requirepass changeme --daemonize yes     # Redis :6379
+redis-cli -p 6379 -a changeme ping                                  # -> PONG
+```
+- DB URL: `postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression`
+- Redis URL: `redis://:changeme@127.0.0.1:6379` (password matches backend .env)
+
 ## How to run
 ```
 cd backend-node
-supabase start                 # local Postgres :54322
-docker compose up -d redis     # local Redis :6379
-REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
   npx vitest run tests/regression/match-boot.test.ts
 ```
 Env flags (local-only, config-guarded): `REGRESSION_DETERMINISTIC=1` (pins question

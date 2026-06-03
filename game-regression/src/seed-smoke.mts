@@ -4,7 +4,7 @@
  *
  * MUST run with DATABASE_URL pointing at the LOCAL DB (the engine's sql client
  * reads config.DATABASE_URL at import time):
- *   cd backend-node && DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+ *   cd backend-node && DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
  *     npx tsx ../game-regression/src/seed-smoke.mts
  */
 import { sql } from '../../src/db/index.js';

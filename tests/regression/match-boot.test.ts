@@ -2,9 +2,10 @@
  * High-risk integration: boot ONE real ranked-AI match in-process against the
  * LOCAL Supabase DB + Redis, and assert a match:start is observed.
  *
- * Requires the local stack:
- *   cd backend-node && supabase start         (Postgres :54322)
- *   docker compose up -d redis                (Redis :6379)
+ * Requires the local NATIVE stack (no Docker):
+ *   brew services start postgresql@16                          (Postgres :5432)
+ *   redis-server --port 6379 --requirepass changeme --daemonize yes  (Redis :6379)
+ *   Run with: REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression
  *
  * Runs in REAL time but with REGRESSION_FAST_TIMERS=1, which collapses the
  * matchmaking/draft delays (7s/7s/16s) to a few ms — so the whole boot is < 1s.

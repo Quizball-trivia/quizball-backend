@@ -120,7 +120,7 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
   // instant matchmaking). Checked first so a misconfiguration fails boot fast.
   const regressionFlag =
     (["REGRESSION_DETERMINISTIC", "REGRESSION_FAST_TIMERS"] as const).find(
-      (k) => process.env[k] === "1" || process.env[k] === "true",
+      (k) => env[k] === "1" || env[k] === "true",
     );
   if (regressionFlag && result.data.NODE_ENV !== "local") {
     throw new ConfigError(

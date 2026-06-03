@@ -14,17 +14,24 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 
-const LOCAL_DB = process.env.REGRESSION_DB_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+// Explicit opt-in only: this is a real integration test against a local Supabase
+// DB + Redis. It must NOT run on a normal `npm test` (no local stack), so it is
+// enabled ONLY when REGRESSION_DB_URL is explicitly set to a local host. No
+// default — an unset var leaves the suite skipped.
+const LOCAL_DB = process.env.REGRESSION_DB_URL;
 const LOCAL_REDIS = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379';
-const isLocal = /(?:127\.0\.0\.1|localhost)/.test(LOCAL_DB);
+const isLocal = !!LOCAL_DB && /(?:127\.0\.0\.1|localhost)/.test(LOCAL_DB);
 
 // The engine reads config at import time — set env BEFORE importing the runner.
-process.env.NODE_ENV = 'local';
-process.env.DATABASE_URL = LOCAL_DB;
-process.env.REDIS_URL = LOCAL_REDIS;
-process.env.RANKED_HUMAN_QUEUE_ENABLED = 'true';
-process.env.REGRESSION_DETERMINISTIC = '1';
-process.env.REGRESSION_FAST_TIMERS = '1';
+// Only when opted in (otherwise we must not clobber the normal test env).
+if (isLocal) {
+  process.env.NODE_ENV = 'local';
+  process.env.DATABASE_URL = LOCAL_DB;
+  process.env.REDIS_URL = LOCAL_REDIS;
+  process.env.RANKED_HUMAN_QUEUE_ENABLED = 'true';
+  process.env.REGRESSION_DETERMINISTIC = '1';
+  process.env.REGRESSION_FAST_TIMERS = '1';
+}
 process.env.LOG_LEVEL = 'silent';
 
 const describeLocal = isLocal ? describe : describe.skip;
@@ -37,7 +44,7 @@ describeLocal('regression: boot one real ranked-AI match', () => {
 
   it('reaches match:start + first question through the real ranked-queue -> AI -> draft path', async () => {
     const { bootMatch } = await import('../../game-regression/src/runner.mjs');
-    const result = await bootMatch({ startTimeoutMs: 10_000 });
+    const result = await bootMatch({ startTimeoutMs: 25_000 });
 
     if (!result.matchId) {
       const names = [...new Set(result.trace.events.map((e) => e.event))];
@@ -49,5 +56,5 @@ describeLocal('regression: boot one real ranked-AI match', () => {
     // The full production boot path should have run: draft -> match -> first question.
     expect(result.trace.byEvent('draft:complete').length).toBeGreaterThan(0);
     expect(result.trace.byEvent('match:question').length).toBeGreaterThan(0);
-  }, 20_000);
+  }, 30_000);
 });

@@ -22,9 +22,13 @@ SQL randomness), `REGRESSION_FAST_TIMERS=1` (collapses matchmaking/draft/round d
   seeded run replays the same questions. Proven.
 - **Local isolated DB/Redis**, **fixture seeder** (validated vs the engine's real
   ranked-eligibility query), full wallet/user reset, idempotent cleanup.
-- **Fake-time clock** (`game-regression/src/clock.mts`) — proven to drive the real
-  durable scheduler. (Note: the runner currently uses REAL fast timers, not this —
-  see below.)
+- **Fake-time clock** (`game-regression/src/clock.mts`) — proven (in a unit test) to
+  drive the real durable scheduler for a SINGLE scheduled timer. NOTE: it is NOT used
+  by the match runner and is NOT proven for full match playback (fake timers don't
+  compose with the engine's real DB/Redis I/O). The runner instead uses REAL fast
+  timers (`Date.now()` / `setTimeout`) with the REGRESSION_FAST_TIMERS delay seam.
+  The fake-time clock is kept for possible future use but should be treated as
+  unproven for end-to-end playback.
 - **Adapter + recorder** (`adapter.mts`) — FakeIo/FakeSocket capture every emit
   (match/user rooms + per-socket acks) into an EventTrace. Tested.
 - **Runner** (`runner.mts`) — `bootMatch()` boots a real match through the production
@@ -51,11 +55,12 @@ special questions (countdown / putInOrder / clues):
 +14052ms Q3 (SPECIAL) -> NO answer_ack from bot -> round_result +17032ms (timeout)
 ```
 Two concrete sub-issues for the special-question path:
-1. **The bot's special answer isn't registering** — Q3 has no `match:answer_ack`, so the
-   bot's countdown/putInOrder/clues submission (just wired in runner.answerQuestion) is
-   being rejected. Likely the special handlers need the question to be in its "playable"
-   window (post-reveal) or a different payload/timing than MCQ. Debug: log the handler
-   result / why it's a no-op for the special kind.
+1. **Ack-signal correction (per Codex review):** the earlier "Q3 has no match:answer_ack"
+   was the WRONG signal for countdown — countdown guesses emit `match:countdown_guess_ack`
+   (`possession-answer-handlers.ts:440`), NOT `match:answer_ack`. Put-in-order/clues DO emit
+   `match:answer_ack`. So before assuming the special answer is rejected, check the RIGHT
+   ack per kind: countdown→`match:countdown_guess_ack`, putInOrder/clues→`match:answer_ack`.
+   The countdown answer may already be registering. Re-profile with per-kind ack assertions.
 2. **A ~9s gap BEFORE the special dispatches** — almost certainly the AI's special answer
    delay on the PREVIOUS round, or the special pre-answer reveal not fully collapsed. The
    AI countdown delay (getAiAnswerDelayMs countdown branch = 12-22s) IS wrapped in

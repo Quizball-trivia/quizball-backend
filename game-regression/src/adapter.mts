@@ -14,6 +14,16 @@
  * The shapes are intentionally minimal but structurally compatible with the
  * engine's usage (verified against the io/socket call sites). They are cast to
  * the engine's QuizballServer/QuizballSocket at the boundary.
+ *
+ * SCOPE (important for lifecycle/rejoin scenarios): this adapter is OBSERVE-ONLY
+ * on the server→client direction — `io.to(room).emit` / `socket.emit` are RECORDED
+ * into the trace, not delivered to any client-side handler. The bot drives the
+ * match by calling the server's handler functions directly (handlePossessionAnswer,
+ * handleMatchLeave/Rejoin, …) and reading the resulting trace. There is no real
+ * client event loop. `FakeSocket.on`/`_deliver` exist for tests that want to
+ * simulate inbound client events, but the match runner does not rely on them.
+ * If a future scenario needs true round-trip client behavior, that has to be added
+ * explicitly.
  */
 
 export type TraceDir = 'server->room' | 'server->socket' | 'client->server';

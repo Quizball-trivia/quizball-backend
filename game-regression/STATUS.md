@@ -35,6 +35,13 @@ real players hit (e.g. the orphaned-match disconnect bug).
 1. Wire invariants into a CLEAN full-match test (baseline: a clean match passes all 6). ← NEXT
 2. Named scenarios (disconnect/reconnect/abandon/forfeit/halftime/timeout) + prove
    each invariant catches its bug by reverting the corresponding fix.
+   ✅ DISCONNECT FAMILY DONE (disconnect-scenarios.test.ts, 3/3): disconnect→grace→
+   terminal (orphaned-match guard); explicit forfeit→terminal; disconnect→reconnect→
+   resume→completes. Bot actions: botDisconnect/expireGrace/botReconnect/botForfeit.
+   Fixed 2 real harness bugs en route (5fc0962): stale category cache across matches
+   (every match after the 1st failed — critical for the runner) + resume countdown not
+   collapsed (reconnect never resumed). TODO: halftime-uiready-withheld + timeout-expire
+   scenarios, and prove each invariant catches its bug by reverting the fix.
 3. Fuzzing runner (random seed per match composes the named behaviors) + artifact
    persistence + STOP_ON_FIRST_FAILURE + reuse-pool.
 4. Run 1000 → report. (LLM trace reviewer later.)

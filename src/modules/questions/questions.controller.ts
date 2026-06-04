@@ -1,7 +1,9 @@
 import type { Request, Response } from 'express';
 import { questionsService } from './questions.service.js';
+import { imageMcqService } from './image-mcq.service.js';
 import { translationService } from './translation.service.js';
-import { ExternalServiceError } from '../../core/errors.js';
+import { stagingSyncService } from './staging-sync.service.js';
+import { AppError, ExternalServiceError } from '../../core/errors.js';
 import {
   toQuestionResponse,
   toPaginatedResponse,
@@ -13,7 +15,12 @@ import {
   type BulkCreateQuestionsRequest,
   type FindDuplicatesQuery,
   type CheckDuplicatesRequest,
+  type SyncQuestionsToStagingRequest,
 } from './questions.schemas.js';
+import type {
+  ImageMcqGeneratePreviewRequest,
+  ImageMcqSaveDraftsRequest,
+} from './image-mcq.schemas.js';
 import type { Json } from '../../db/types.js';
 import { logger } from '../../core/logger.js';
 
@@ -36,6 +43,7 @@ export const questionsController = {
         status: query.status,
         difficulty: query.difficulty,
         type: query.type,
+        mcqImage: query.mcq_image,
         search: query.search,
       },
       query.page,
@@ -189,6 +197,78 @@ export const questionsController = {
     const result = await questionsService.checkDuplicates(prompts, locale);
 
     res.status(200).json(result);
+  },
+
+  /**
+   * POST /api/v1/questions/sync-staging
+   * Copy selected prod questions and payloads into staging.
+   */
+  async syncQuestionsToStaging(req: Request, res: Response): Promise<void> {
+    const data = req.validated.body as SyncQuestionsToStagingRequest;
+    const result = await stagingSyncService.syncQuestions(data.question_ids);
+    res.status(200).json(result);
+  },
+
+  /**
+   * POST /api/v1/questions/image-mcq/generate-preview
+   * Generate image-backed MCQ review cards without creating questions.
+   */
+  async generateImageMcqPreview(req: Request, res: Response): Promise<void> {
+    const data = req.validated.body as ImageMcqGeneratePreviewRequest;
+    const result = await imageMcqService.generatePreview(data);
+    res.status(200).json(result);
+  },
+
+  /**
+   * POST /api/v1/questions/image-mcq/generate-preview-stream
+   * Generate image-backed MCQ review cards and stream progress as NDJSON.
+   */
+  async generateImageMcqPreviewStream(req: Request, res: Response): Promise<void> {
+    const data = req.validated.body as ImageMcqGeneratePreviewRequest;
+
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const writeEvent = (event: unknown) => {
+      if (!res.writableEnded) {
+        res.write(`${JSON.stringify(event)}\n`);
+      }
+    };
+
+    try {
+      const result = await imageMcqService.generatePreview(data, (event) => {
+        writeEvent({ type: 'progress', ...event });
+      });
+      writeEvent({ type: 'done', data: result });
+      res.end();
+    } catch (error) {
+      logger.error({ error }, 'Image MCQ streamed preview failed');
+      writeEvent({
+        type: 'error',
+        error: {
+          code: error instanceof AppError ? error.code : 'INTERNAL_ERROR',
+          message: error instanceof Error ? error.message : 'Image question generation failed',
+          details: error instanceof AppError ? error.details : null,
+          request_id: null,
+        },
+      });
+      res.end();
+    }
+  },
+
+  /**
+   * POST /api/v1/questions/image-mcq/save-drafts
+   * Upload accepted generated images and save accepted cards as draft questions.
+   */
+  async saveImageMcqDrafts(req: Request, res: Response): Promise<void> {
+    const data = req.validated.body as ImageMcqSaveDraftsRequest;
+    const result = await imageMcqService.saveDrafts(data.cards, req.user?.id, {
+      translateToKa: data.translate_to_ka,
+    });
+    res.status(result.failed > 0 ? 207 : 201).json(result);
   },
 
   /**

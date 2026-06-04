@@ -18,6 +18,7 @@ const configSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().optional(),
+  STAGING_DATABASE_URL: z.string().optional(),
 
   // Redis
   REDIS_URL: z.string().url().optional(),

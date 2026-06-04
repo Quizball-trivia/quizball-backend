@@ -142,12 +142,13 @@ export function createApp(): Express {
 
   // Body Parsing
   app.use(express.json({
+    limit: '500mb',
     verify: (req, _res, buf) => {
       // Supabase Auth HTTP hooks are signed over the exact raw JSON payload.
       (req as express.Request).rawBody = buf.toString('utf8');
     },
   }));
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 
   // Routes
   app.use(routes);

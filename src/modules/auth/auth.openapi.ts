@@ -132,9 +132,14 @@ export function registerAuthOpenApi(registry: OpenAPIRegistry): void {
     summary: 'Restore pending-deletion account with refresh token',
     description:
       'Used by OAuth callback flows after the provider has returned a valid Supabase refresh token. ' +
-      'The endpoint restores only the account matching that token; it never accepts a user id.',
+      'The endpoint restores only the account matching that token; it never accepts a user id. ' +
+      'The refresh token may be supplied either in the request body OR via the httpOnly ' +
+      'qb_refresh_token cookie (injected server-side), which is why `refresh_token` is optional ' +
+      'in the body schema; a 400 is returned when neither source provides one.',
     tags: ['Auth'],
     body: z.object({
+      // Optional in the body because the refresh token can also arrive via the
+      // httpOnly qb_refresh_token cookie (injectRefreshTokenFromCookie middleware).
       refresh_token: z.string().optional(),
     }),
     responses: {

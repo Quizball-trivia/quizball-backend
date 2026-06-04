@@ -785,6 +785,10 @@ export async function leaveLobby(
       try {
         const lobby = await lobbiesRepo.getById(lobbyId);
         if (!lobby) {
+          // The row is gone, but the socket may still carry socket.data.lobbyId.
+          // Clear it so later resolveLobbyId-based commands don't keep targeting a
+          // deleted lobby until the client reconnects.
+          await removeUserFromLobbySockets(io, lobbyId, userId);
           logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: target lobby already gone');
           result = {
             ok: true,

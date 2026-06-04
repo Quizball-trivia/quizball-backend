@@ -10,8 +10,15 @@ export function registerDevHandlers(io: QuizballServer, socket: QuizballSocket):
   socket.on('dev:quick_match', async (payload) => {
     // Payload is optional for back-compat: `dev:quick_match` with no args still
     // starts a normal quick match; `{ skipTo }` boots straight into that phase.
+    // But a payload that IS present and malformed is a caller bug — reject it
+    // explicitly rather than silently falling back to a plain quick match.
     const parsed = devQuickMatchSchema.safeParse(payload ?? {});
-    const skipTo = parsed.success ? parsed.data.skipTo : undefined;
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid dev:quick_match payload');
+      socket.emit('error', { code: 'VALIDATION_ERROR', message: 'Invalid dev:quick_match payload', meta: parsed.error.flatten() as Record<string, unknown> });
+      return;
+    }
+    const skipTo = parsed.data.skipTo;
     try {
       await devRealtimeService.handleQuickMatch(io, socket, { skipTo });
     } catch (error) {

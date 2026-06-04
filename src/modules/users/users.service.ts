@@ -220,10 +220,12 @@ export const usersService = {
     );
 
     const phoneNumber = normalizeOptionalText(identity.phoneNumber);
-    const proposedNickname = identity.name && isNicknameAllowed(identity.name)
-      ? identity.name
-      : null;
-    if (identity.name && !proposedNickname) {
+    const normalizedIdentityNickname = normalizeOptionalText(identity.name);
+    const proposedNickname =
+      normalizedIdentityNickname && isNicknameAllowed(normalizedIdentityNickname)
+        ? normalizedIdentityNickname
+        : null;
+    if (normalizedIdentityNickname && !proposedNickname) {
       logger.warn(
         {
           provider: identity.provider,

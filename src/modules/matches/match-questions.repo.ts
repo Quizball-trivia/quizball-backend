@@ -12,8 +12,14 @@ import type { QuestionType } from '../questions/questions.schemas.js';
 // Regression-harness determinism: when REGRESSION_DETERMINISTIC is set (NEVER in
 // prod), the otherwise-random question ordering becomes a stable md5 over the
 // row id so a seeded match replays the SAME questions. Prod uses RANDOM().
+//
+// The salt is interpolated into a sql.unsafe() ORDER BY, so it MUST NOT carry
+// any SQL-significant characters. We hard-restrict it to [A-Za-z0-9] (anything
+// else is dropped) — alphanumerics can't break out of the quoted literal, so
+// the value can never inject regardless of what the env var holds.
+const DETERMINISTIC_SALT = (process.env.REGRESSION_DETERMINISTIC_SALT ?? 'reg').replace(/[^A-Za-z0-9]/g, '') || 'reg';
 const RANDOM_ORDER_SQL = process.env.REGRESSION_DETERMINISTIC === '1'
-  ? `md5(q.id::text || '${(process.env.REGRESSION_DETERMINISTIC_SALT ?? 'reg').replace(/'/g, '')}')`
+  ? `md5(q.id::text || '${DETERMINISTIC_SALT}')`
   : 'RANDOM()';
 
 /**

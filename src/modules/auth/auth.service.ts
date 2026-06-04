@@ -244,7 +244,7 @@ async function provisionIdentityWithRetry(session: AuthSession): Promise<void> {
         {
           provider: session.provider,
           userId: session.user?.providerSub,
-          email: session.user?.email ?? undefined,
+          hasEmail: !!session.user?.email,
           attempts: attempt + 1,
         },
         'Identity provisioned during auth'
@@ -301,7 +301,6 @@ async function provisionIdentity(session: AuthSession): Promise<void> {
           err: error,
           provider: session.provider,
           userId: session.user?.providerSub,
-          email: session.user?.email ?? undefined,
           hasEmail: Boolean(session.user?.email),
           reason: PROFILE_PROVISIONING_DETAILS.reason,
         },

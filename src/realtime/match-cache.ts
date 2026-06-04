@@ -83,14 +83,22 @@ function normalizePenaltyAttempts(params: {
   kicksTaken: { seat1: number; seat2: number };
 }): { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> } {
   const fromRaw = (value: unknown, goals: number, kicksTaken: number): Array<'goal' | 'miss'> => {
+    const total = Math.max(0, kicksTaken);
+    // Canonical default: `goals` goals followed by misses, exactly `kicksTaken` long.
+    const result: Array<'goal' | 'miss'> = [
+      ...Array.from({ length: Math.min(total, Math.max(0, goals)) }, () => 'goal' as const),
+      ...Array.from({ length: Math.max(0, total - Math.max(0, goals)) }, () => 'miss' as const),
+    ];
+    // Overwrite the prefix with any real per-kick outcomes we have, but NEVER
+    // change the length — a rebuilt cache must keep attempts.length === kicksTaken,
+    // otherwise the penalty UI sees contradictory state (slice() can't pad).
     if (Array.isArray(value)) {
       const sanitized = value.filter((entry): entry is 'goal' | 'miss' => entry === 'goal' || entry === 'miss');
-      if (sanitized.length > 0 || kicksTaken === 0) return sanitized.slice(0, Math.max(kicksTaken, sanitized.length));
+      for (let i = 0; i < Math.min(sanitized.length, total); i += 1) {
+        result[i] = sanitized[i];
+      }
     }
-    return [
-      ...Array.from({ length: Math.max(0, goals) }, () => 'goal' as const),
-      ...Array.from({ length: Math.max(0, kicksTaken - goals) }, () => 'miss' as const),
-    ];
+    return result;
   };
 
   const raw = params.attempts && typeof params.attempts === 'object'

@@ -38,6 +38,7 @@ export function connectStaging(url: string, token: string, userId: string, share
   const socket: Socket = io(url, {
     transports: ['websocket'],
     auth: { token },
+    forceNew: true,
     autoConnect: true,
     reconnection: true,
   });

@@ -58,15 +58,21 @@ interface ScenarioResult {
  *  (countdown/putInOrder/clues) sit the full ~30s question timeout each, which on
  *  the real network blows past the play budget before the match can finish. */
 function autoAnswer(client: StagingClient): void {
-  const answered = new Set<number>();
-  client.socket.on('match:question', (q: {
+  type QuestionPayload = {
     matchId: string; qIndex: number; correctIndex?: number; playableAt?: string;
     question?: { kind?: string; items?: Array<{ id: string }> };
-  }) => {
-    if (answered.has(q.qIndex)) return;
-    answered.add(q.qIndex);
+  };
+
+  const completed = new Set<string>();
+  let activeQuestion: QuestionPayload | null = null;
+  const keyFor = (matchId: string, qIndex: number) => `${matchId}:${qIndex}`;
+
+  const sendAnswer = (q: QuestionPayload, retryDelayMs = 50) => {
+    const key = keyFor(q.matchId, q.qIndex);
+    if (completed.has(key)) return;
     const waitMs = q.playableAt ? Math.max(0, new Date(q.playableAt).getTime() - Date.now()) : 0;
     setTimeout(() => {
+      if (completed.has(key)) return;
       const kind = q.question?.kind ?? 'multipleChoice';
       const base = { matchId: q.matchId, qIndex: q.qIndex };
       if (kind === 'countdown') {
@@ -81,9 +87,33 @@ function autoAnswer(client: StagingClient): void {
           ...base, selectedIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0, timeMs: 500,
         });
       }
-      // Ack ready-for-next so possession goal-gates / party advance promptly.
-      client.socket.emit('match:ready_for_next_question', { matchId: q.matchId, qIndex: q.qIndex });
-    }, waitMs + 50);
+    }, waitMs + retryDelayMs);
+  };
+
+  client.socket.on('match:question', (q: QuestionPayload) => {
+    activeQuestion = q;
+    sendAnswer(q);
+  });
+
+  client.socket.on('match:answer_ack', (ack: { matchId?: string; qIndex?: number }) => {
+    if (ack.matchId && typeof ack.qIndex === 'number') completed.add(keyFor(ack.matchId, ack.qIndex));
+  });
+  client.socket.on('match:round_result', (result: { matchId?: string; qIndex?: number }) => {
+    if (result.matchId && typeof result.qIndex === 'number') {
+      completed.add(keyFor(result.matchId, result.qIndex));
+      // The ready gate opens after round_result. Ack here so possession goal
+      // transitions and party post-round transitions advance promptly.
+      client.socket.emit('match:ready_for_next_question', {
+        matchId: result.matchId,
+        qIndex: result.qIndex,
+      });
+    }
+  });
+  client.socket.on('match:resume', () => {
+    if (activeQuestion) sendAnswer(activeQuestion, 250);
+  });
+  client.socket.on('connect', () => {
+    if (activeQuestion) sendAnswer(activeQuestion, 250);
   });
 }
 
@@ -155,6 +185,11 @@ function verdict(name: string, trace: EventTrace, isParty: boolean): ScenarioRes
   };
 }
 
+function hasFinalResultsForMatch(trace: EventTrace, matchId: string | undefined): boolean {
+  if (!matchId) return trace.byEvent('match:final_results').length > 0;
+  return trace.byEvent('match:final_results', `match:${matchId}`).length > 0;
+}
+
 // ── Scenarios ──
 
 async function rankedAiSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
@@ -167,7 +202,8 @@ async function rankedAiSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
     // queue -> AI fallback -> draft -> match -> completion. Generous network waits.
     const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 60_000);
     if (!started) return { name: 'ranked_ai_smoke', ok: false, detail: 'match never started (no match:start/question within 60s)', violations: [] };
-    await client.waitFor(() => client.count("match:final_results") > 0, 420_000);
+    const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
+    await client.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 420_000);
     return verdict('ranked_ai_smoke', client.trace, false);
   } finally {
     client.disconnect();
@@ -175,8 +211,12 @@ async function rankedAiSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
 }
 
 async function friendlySmoke(name: string, party: boolean, users: { a: TestUser; b: TestUser }): Promise<ScenarioResult> {
+  // SEPARATE traces: host + guest each receive every match-room broadcast, so a
+  // SHARED trace would record each room event twice and the invariants would see
+  // phantom "duplicate dispatch". We verify on the HOST's trace only; the guest
+  // still drives answers, just into its own (discarded) trace.
   const host = connectStaging(URL, users.a.accessToken, users.a.userId);
-  const guest = connectStaging(URL, users.b.accessToken, users.b.userId, host.trace); // shared trace
+  const guest = connectStaging(URL, users.b.accessToken, users.b.userId);
   try {
     if (!(await waitConnected(host)) || !(await waitConnected(guest))) {
       return { name, ok: false, detail: 'sockets never connected', violations: [] };
@@ -185,28 +225,50 @@ async function friendlySmoke(name: string, party: boolean, users: { a: TestUser;
     autoAnswer(host); autoAnswer(guest); autoDraft(host); autoDraft(guest); autoHalftime(host); autoHalftime(guest);
 
     let inviteCode: string | null = null;
-    let readied = false;
-    host.socket.on('lobby:state', (state: { inviteCode?: string | null; members?: unknown[] }) => {
+    const targetGameMode = party ? 'friendly_party_quiz' : 'friendly_possession';
+    let memberCount = 0;
+    let settingsSent = false;
+    let settingsApplied = false;
+    host.socket.on('lobby:state', (state: {
+      inviteCode?: string | null;
+      members?: unknown[];
+      settings?: { gameMode?: string };
+    }) => {
+      memberCount = state.members?.length ?? 0;
+      // Host sees its own lobby -> guest joins by code.
       if (!inviteCode && state.inviteCode) {
         inviteCode = state.inviteCode;
-        guest.socket.emit('lobby:join_by_code', { inviteCode });
+        setTimeout(() => guest.socket.emit('lobby:join_by_code', { inviteCode }), 300);
       }
-      if (!readied && (state.members?.length ?? 0) >= 2) {
-        readied = true;
-        if (party) host.socket.emit('lobby:update_settings', { gameMode: 'friendly_party_quiz', friendlyRandom: true });
-        else host.socket.emit('lobby:update_settings', { gameMode: 'friendly_possession', friendlyRandom: true });
-        setTimeout(() => {
-          host.socket.emit('lobby:ready', { ready: true });
-          guest.socket.emit('lobby:ready', { ready: true });
-          setTimeout(() => host.socket.emit('lobby:start', {}), 800);
-        }, 500);
+      // Once BOTH members are present, set the variant (host-only) — once.
+      if (!settingsSent && memberCount >= 2) {
+        settingsSent = true;
+        host.socket.emit('lobby:update_settings', {
+          gameMode: targetGameMode, friendlyRandom: true,
+        });
+      }
+      if (state.settings?.gameMode === targetGameMode) {
+        settingsApplied = true;
       }
     });
 
     host.socket.emit('lobby:create', { mode: 'friendly' });
-    const started = await host.waitFor(() => host.count('match:start') > 0 && host.count('match:question') > 0, 60_000);
-    if (!started) return { name, ok: false, detail: 'friendly match never started within 60s', violations: [] };
-    await host.waitFor(() => host.count("match:final_results") > 0, 420_000);
+
+    // Once both joined + the server has echoed the requested mode, ready both
+    // seats then host-start. Polling this avoids racing lobby:update_settings.
+    const readyToStart = await host.waitFor(() => memberCount >= 2 && settingsApplied, 30_000);
+    if (readyToStart) {
+      await new Promise((r) => setTimeout(r, 500));
+      host.socket.emit('lobby:ready', { ready: true });
+      guest.socket.emit('lobby:ready', { ready: true });
+      await new Promise((r) => setTimeout(r, 1_500));
+      host.socket.emit('lobby:start', {});
+    }
+
+    const started = await host.waitFor(() => host.count('match:start') > 0 && host.count('match:question') > 0, 90_000);
+    if (!started) return { name, ok: false, detail: 'friendly match never started within 90s', violations: [], variant: party ? 'party' : 'possession' };
+    const matchId = host.latest<{ matchId?: string }>('match:start')?.matchId;
+    await host.waitFor(() => hasFinalResultsForMatch(host.trace, matchId), 420_000);
     return verdict(name, host.trace, party);
   } finally {
     host.disconnect(); guest.disconnect();
@@ -215,6 +277,7 @@ async function friendlySmoke(name: string, party: boolean, users: { a: TestUser;
 
 async function reconnectSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
   const client = connectStaging(URL, users.a.accessToken, users.a.userId);
+  let rejoined: StagingClient | null = null;
   try {
     if (!await waitConnected(client)) return { name: 'reconnect_smoke', ok: false, detail: 'socket never connected', violations: [] };
     await clearActiveMatch(client); // self-heal
@@ -230,18 +293,22 @@ async function reconnectSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
     client.socket.disconnect();
     await new Promise((r) => setTimeout(r, 2_000)); // stay gone briefly
 
-    // Reconnect (socket.io auto-reconnects; force it) and rejoin.
-    client.socket.connect();
-    await waitConnected(client, 20_000);
-    if (matchId) client.socket.emit('match:rejoin', { matchId });
+    // Reconnect as a fresh app/socket instance, sharing the same trace. Reusing
+    // a manually-disconnected Socket.IO client can tear itself down again during
+    // the resume window, causing the harness to miss match-room broadcasts.
+    rejoined = connectStaging(URL, users.a.accessToken, users.a.userId, client.trace);
+    autoAnswer(rejoined); autoDraft(rejoined); autoHalftime(rejoined);
+    await waitConnected(rejoined, 20_000);
+    if (matchId) rejoined.socket.emit('match:rejoin', { matchId });
 
     // Phase-aware: rejoin availability/state -> resume countdown -> resume -> finish.
-    const resumed = await client.waitFor(() => client.count('match:resume') > resumesBefore, 30_000);
-    await client.waitFor(() => client.count("match:final_results") > 0, 420_000);
+    const resumed = await rejoined.waitFor(() => client.count('match:resume') > resumesBefore, 30_000);
+    await rejoined.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 420_000);
     const v = verdict('reconnect_smoke', client.trace, false);
     if (!resumed) { v.ok = false; v.detail += ' | match:resume never fired after reconnect'; }
     return v;
   } finally {
+    rejoined?.disconnect();
     client.disconnect();
   }
 }

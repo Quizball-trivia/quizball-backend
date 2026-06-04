@@ -375,8 +375,10 @@ export async function beginMatchForLobby(
         // Dev-only: skip straight to the requested phase instead of dispatching
         // normal question 0. devSkipToPossessionPhase dispatches the appropriate
         // phase question (or, for halftime/penalty_ban, schedules the ban) —
-        // so a normal open-play question 0 is never emitted.
-        if (options?.initialDevSkipTarget) {
+        // so a normal open-play question 0 is never emitted. It drives the
+        // POSSESSION state machine only, so guard it to possession variants:
+        // a party-quiz match must fall through to its normal first question.
+        if (options?.initialDevSkipTarget && variant !== 'friendly_party_quiz') {
           logger.info(
             { eventName: 'match:first_question_dev_skip', matchId, target: options.initialDevSkipTarget },
             'Dev-skipping initial question to requested phase (no normal q0 emitted)'

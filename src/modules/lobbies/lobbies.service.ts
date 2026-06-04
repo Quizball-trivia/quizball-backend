@@ -153,7 +153,7 @@ export const lobbiesService = {
     const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
     const excludeSet = new Set(excludeCategoryIds);
     const filtered = allValid.filter((row) => !excludeSet.has(row.id));
-    const shuffled = filtered.sort(() => getRandom() - 0.5);
+    const shuffled = shuffle(filtered);
     const selected = shuffled.slice(0, count);
 
     return selected.map((row) => ({

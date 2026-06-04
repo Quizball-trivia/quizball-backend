@@ -47,7 +47,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
       });
       ack?.(result);
       if (result.ok && result.lobbyId) {
-        trackLobbyCreated(socket.data.user.id, result.lobbyId, 'friendly');
+        trackLobbyCreated(socket.data.user.id, result.lobbyId, parsed.data.mode);
       }
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id, correlationId }, 'Error handling lobby:create');

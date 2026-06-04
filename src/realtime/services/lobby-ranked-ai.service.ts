@@ -27,6 +27,7 @@ const RANKED_SIM_SEARCH_MIN_MS = 3000;
 const RANKED_SIM_SEARCH_MAX_MS = 10000;
 const RANKED_SIM_FOUND_MODAL_MS = 1200;
 const RANKED_MM_CANCEL_KEY_PREFIX = 'ranked:mm:cancel:';
+type RankedAiLobbiesRepo = typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
 
 function rankedCancelKey(userId: string): string {
   return `${RANKED_MM_CANCEL_KEY_PREFIX}${userId}`;
@@ -41,6 +42,64 @@ async function hasRankedCancelRequest(userId: string): Promise<boolean> {
 function generateAiRecentForm(): Array<'W' | 'L' | 'D'> {
   const outcomes: Array<'W' | 'L' | 'D'> = ['W', 'W', 'W', 'L', 'L', 'D'];
   return Array.from({ length: 3 }, () => outcomes[Math.floor(getRandom() * outcomes.length)]);
+}
+
+async function getSupersedingSessionState(
+  lobbiesRepoRef: RankedAiLobbiesRepo,
+  userId: string,
+  lobbyId: string
+): Promise<{
+  state: string;
+  activeMatchId: string | null;
+  waitingLobbyId: string | null;
+  queueSearchId: string | null;
+  otherOpenLobbyIds: string[];
+} | null> {
+  const [snapshot, openLobbies] = await Promise.all([
+    userSessionGuardService.resolveState(userId),
+    lobbiesRepoRef.listOpenLobbiesForUser(userId),
+  ]);
+  const otherOpenLobbyIds = openLobbies
+    .filter((lobby) => lobby.id !== lobbyId)
+    .map((lobby) => lobby.id);
+  const superseded = Boolean(
+    snapshot.activeMatchId ||
+    otherOpenLobbyIds.length > 0 ||
+    (snapshot.waitingLobbyId && snapshot.waitingLobbyId !== lobbyId) ||
+    snapshot.state === 'CORRUPT_MULTI_STATE'
+  );
+  if (!superseded) return null;
+  return {
+    state: snapshot.state,
+    activeMatchId: snapshot.activeMatchId,
+    waitingLobbyId: snapshot.waitingLobbyId,
+    queueSearchId: snapshot.queueSearchId,
+    otherOpenLobbyIds,
+  };
+}
+
+async function cleanupSupersededRankedAiLobby(params: {
+  lobbiesRepoRef: RankedAiLobbiesRepo;
+  lobbyId: string;
+  userId: string;
+  aiUserId: string;
+  reason: string;
+}): Promise<void> {
+  const { lobbiesRepoRef, lobbyId, userId, aiUserId, reason } = params;
+  const latestLobby = await lobbiesRepoRef.getById(lobbyId);
+  if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') return;
+
+  await lobbiesRepoRef.removeMember(lobbyId, userId);
+  await lobbiesRepoRef.removeMember(lobbyId, aiUserId);
+  const remainingMembers = await lobbiesRepoRef.countMembers(lobbyId);
+  if (remainingMembers === 0) {
+    await lobbiesRepoRef.deleteLobby(lobbyId);
+  }
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.del(rankedAiLobbyKey(lobbyId));
+  }
+  logger.info({ lobbyId, userId, aiUserId, reason }, 'Cleaned up superseded ranked AI lobby');
 }
 
 export async function startRankedAiForUser(
@@ -143,7 +202,7 @@ async function handleRankedAiMatchFound(params: {
   rankedContext: {
     aiAnchorRp: number;
   };
-  lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
+  lobbiesRepo: RankedAiLobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   foundModalMs: number;
   startDraft: typeof startDraft;
@@ -166,6 +225,22 @@ async function handleRankedAiMatchFound(params: {
     const hasHost = members.some((member) => member.user_id === userId);
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) return;
+
+    const supersedingSession = await getSupersedingSessionState(lobbiesRepo, userId, lobbyId);
+    if (supersedingSession) {
+      logger.info(
+        { lobbyId, userId, aiUserId: aiUser.id, session: supersedingSession },
+        'Ranked AI match_found skipped because user session moved elsewhere'
+      );
+      await cleanupSupersededRankedAiLobby({
+        lobbiesRepoRef: lobbiesRepo,
+        lobbyId,
+        userId,
+        aiUserId: aiUser.id,
+        reason: 'match_found_superseded',
+      });
+      return;
+    }
 
     // Analytics: the ranked search resolved (AI fallback). Fired for the human
     // player only (the opponent is the AI). timeSec=0 — the precise queue wait is
@@ -201,6 +276,7 @@ async function handleRankedAiMatchFound(params: {
           io,
           lobbyId,
           userId,
+          aiUserId: aiUser.id,
           lobbiesRepo,
           logger,
           startDraft,
@@ -216,11 +292,12 @@ async function startRankedAiDraft(params: {
   io: QuizballServer;
   lobbyId: string;
   userId: string;
-  lobbiesRepo: typeof import('../../modules/lobbies/lobbies.repo.js').lobbiesRepo;
+  aiUserId: string;
+  lobbiesRepo: RankedAiLobbiesRepo;
   logger: typeof import('../../core/logger.js').logger;
   startDraft: typeof startDraft;
 }): Promise<void> {
-  const { io, lobbyId, userId, lobbiesRepo, logger, startDraft } = params;
+  const { io, lobbyId, userId, aiUserId, lobbiesRepo, logger, startDraft } = params;
   try {
     if (await hasRankedCancelRequest(userId)) {
       logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped because user cancelled search');
@@ -228,6 +305,21 @@ async function startRankedAiDraft(params: {
     }
     const readyLobby = await lobbiesRepo.getById(lobbyId);
     if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
+      return;
+    }
+    const supersedingSession = await getSupersedingSessionState(lobbiesRepo, userId, lobbyId);
+    if (supersedingSession) {
+      logger.info(
+        { lobbyId, userId, aiUserId, session: supersedingSession },
+        'Ranked AI draft start skipped because user session moved elsewhere'
+      );
+      await cleanupSupersededRankedAiLobby({
+        lobbiesRepoRef: lobbiesRepo,
+        lobbyId,
+        userId,
+        aiUserId,
+        reason: 'draft_start_superseded',
+      });
       return;
     }
     await startDraft(io, lobbyId);

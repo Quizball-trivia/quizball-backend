@@ -434,6 +434,17 @@ vi.mock('../../src/realtime/locks.js', () => ({
 
 vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
   userSessionGuardService: {
+    resolveState: vi.fn(async (userId: string) => {
+      const queueSearchId = fakeRedis?.getUserSearchId(userId) ?? null;
+      return {
+        state: queueSearchId ? 'IN_QUEUE' : 'IDLE',
+        activeMatchId: null,
+        waitingLobbyId: null,
+        queueSearchId,
+        openLobbyIds: [],
+        resolvedAt: new Date().toISOString(),
+      };
+    }),
     runWithUserTransitionLock: vi.fn(async (_io: QuizballServer, _socket: QuizballSocket, work: () => Promise<void>) => {
       await work();
       return true;

@@ -182,7 +182,7 @@ export const usersRepo = {
         AND is_ai = false
         AND is_deleted = false
         AND deleted_at IS NULL
-      ORDER BY pending_deletion_at NULLS FIRST, updated_at DESC
+      ORDER BY pending_deletion_at NULLS LAST, updated_at DESC
       LIMIT 1
     `;
     return user ?? null;

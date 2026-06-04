@@ -132,6 +132,25 @@ function createIoMock(): QuizballServer {
   } as unknown as QuizballServer;
 }
 
+function makeOpenLobby(id: string, status: 'waiting' | 'active' = 'waiting') {
+  return {
+    id,
+    mode: 'ranked',
+    status,
+    host_user_id: 'u1',
+    invite_code: null,
+    display_name: null,
+    is_public: false,
+    game_mode: 'ranked_sim',
+    friendly_random: true,
+    friendly_category_a_id: null,
+    friendly_category_b_id: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    joined_at: new Date().toISOString(),
+  };
+}
+
 async function loadService() {
   const module = await import('../../src/realtime/services/ranked-matchmaking.service.js');
   return module.rankedMatchmakingService;
@@ -335,6 +354,33 @@ describe('ranked-matchmaking.service queue behavior', () => {
     });
   });
 
+  it('skips AI fallback when the claimed user already has a ranked lobby', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.zRangeByScore.mockResolvedValue(['search-1']);
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback'];
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      return [];
+    });
+    listOpenLobbiesForUserMock.mockImplementation(async (userId: string) => (
+      userId === 'u-fallback' ? [makeOpenLobby('existing-lobby')] : []
+    ));
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u-fallback',
+        session: expect.objectContaining({ waitingLobbyId: 'existing-lobby' }),
+      }),
+      'Ranked matchmaking fallback skipped because user already has session state'
+    );
+  });
+
   it('skips ghost fallback users and continues processing later due fallbacks', async () => {
     const service = await loadService();
     const io = createIoMock();
@@ -471,6 +517,34 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(logger.error).toHaveBeenCalledWith(
       { err: pairError, searchIdA: 's1', searchIdB: 's2', userAId: 'u1', userBId: 'u2' },
       'Ranked matchmaking pair failed for queued users'
+    );
+  });
+
+  it('skips human pair creation when either claimed user already has session state', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+    listOpenLobbiesForUserMock.mockImplementation(async (userId: string) => (
+      userId === 'u1' ? [makeOpenLobby('existing-lobby')] : []
+    ));
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userAId: 'u1',
+        userBId: 'u2',
+        userASession: expect.objectContaining({ waitingLobbyId: 'existing-lobby' }),
+      }),
+      'Ranked human match creation skipped because a player already has session state'
     );
   });
 

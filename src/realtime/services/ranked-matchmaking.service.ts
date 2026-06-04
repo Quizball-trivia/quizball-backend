@@ -85,6 +85,28 @@ async function handleStaleRankedQueueUser(
   await bestEffortCancelRankedQueueSearch(userId, source);
 }
 
+async function getRankedMatchmakingSessionBlock(userId: string): Promise<{
+  activeMatchId: string | null;
+  waitingLobbyId: string | null;
+  queueSearchId: string | null;
+  state: string;
+} | null> {
+  const snapshot = await userSessionGuardService.resolveState(userId);
+  const blocked = Boolean(
+    snapshot.activeMatchId ||
+    snapshot.waitingLobbyId ||
+    snapshot.queueSearchId ||
+    snapshot.state === 'CORRUPT_MULTI_STATE'
+  );
+  if (!blocked) return null;
+  return {
+    activeMatchId: snapshot.activeMatchId,
+    waitingLobbyId: snapshot.waitingLobbyId,
+    queueSearchId: snapshot.queueSearchId,
+    state: snapshot.state,
+  };
+}
+
 async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby) return;
@@ -240,6 +262,24 @@ async function startHumanRankedMatch(
       return;
     }
 
+    const [sessionBlockA, sessionBlockB] = await Promise.all([
+      getRankedMatchmakingSessionBlock(userAId),
+      getRankedMatchmakingSessionBlock(userBId),
+    ]);
+    if (sessionBlockA || sessionBlockB) {
+      logger.warn(
+        {
+          userAId,
+          userBId,
+          userASession: sessionBlockA,
+          userBSession: sessionBlockB,
+        },
+        'Ranked human match creation skipped because a player already has session state'
+      );
+      span.setAttribute('quizball.skipped_session_state', true);
+      return;
+    }
+
     const lobby = await lobbiesRepo.createLobby({
       mode: 'ranked',
       hostUserId: userAId,
@@ -323,6 +363,14 @@ async function startAiFallbackWithCountry(
     const redis = getRedisClient();
     if (redis && await redis.get(cancelKey(userId))) {
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
+      return;
+    }
+    const sessionBlock = await getRankedMatchmakingSessionBlock(userId);
+    if (sessionBlock) {
+      logger.warn(
+        { userId, session: sessionBlock },
+        'Ranked matchmaking fallback skipped because user already has session state'
+      );
       return;
     }
     if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {

@@ -75,10 +75,13 @@ export function createHarnessClock(vi: FakeTimerApi): HarnessClock {
     maxMs: number,
     stepMs: number = DEFAULT_STEP_MS,
   ): Promise<boolean> {
+    // Guard against a non-positive step: a 0/negative stepMs would never advance
+    // `elapsed`, trapping the loop forever (CodeRabbit). Clamp to at least 1ms.
+    const step = stepMs > 0 ? stepMs : DEFAULT_STEP_MS;
     let elapsed = 0;
     if (await predicate()) return true;
     while (elapsed < maxMs) {
-      const delta = Math.min(stepMs, maxMs - elapsed);
+      const delta = Math.min(step, maxMs - elapsed);
       await vi.advanceTimersByTimeAsync(delta);
       await flushMicrotasks();
       elapsed += delta;

@@ -10,7 +10,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 const LOCAL_DB = process.env.REGRESSION_DB_URL;
-const LOCAL_REDIS = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379';
+const LOCAL_REDIS = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379/15';
 const isLocal = !!LOCAL_DB && /(?:127\.0\.0\.1|localhost)/.test(LOCAL_DB);
 
 if (isLocal) {

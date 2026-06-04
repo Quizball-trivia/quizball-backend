@@ -108,12 +108,11 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
 
   // 2. Redis + the durable timer scheduler + the matchmaking loop.
   await initRedisClients();
-  // Flush ALL Redis state so leftover matchmaking/queue/timer entries from a
-  // prior (or killed) run can't confuse this one — the realtime engine keys are
-  // transient and the harness Redis is local + isolated. This was the cause of a
-  // stale-queued-search blocking the AI fallback between runs.
+  // Flush the selected regression Redis DB so leftover matchmaking/queue/timer
+  // entries from a prior (or killed) run can't confuse this one. Keep this scoped
+  // to the selected DB so a local dev backend on DB 0 cannot be disrupted.
   const redisForFlush = getRedisClient();
-  if (redisForFlush?.isOpen) await redisForFlush.flushAll();
+  if (redisForFlush?.isOpen) await redisForFlush.flushDb();
   startRealtimeTimerScheduler(io as never, buildRealtimeTimerHandlers());
   rankedMatchmakingService.start(io as never);
 
@@ -436,7 +435,7 @@ export async function bootFriendlyLobbyMatch(opts: FriendlyLobbyOptions = {}): P
   // 2. Redis + scheduler (no matchmaking loop needed for friendly).
   await initRedisClients();
   const redisForFlush = getRedisClient();
-  if (redisForFlush?.isOpen) await redisForFlush.flushAll();
+  if (redisForFlush?.isOpen) await redisForFlush.flushDb();
   startRealtimeTimerScheduler(io as never, buildRealtimeTimerHandlers());
 
   // 3. Sockets, one per seat, each in its own user room.

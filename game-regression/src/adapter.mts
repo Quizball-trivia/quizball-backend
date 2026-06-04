@@ -46,6 +46,9 @@ export interface EventTrace {
   /** All events whose name matches (optionally filtered by target room/socket). */
   byEvent(event: string, target?: string): TraceEvent[];
   last(event: string): TraceEvent | undefined;
+  /** Drop all recorded events (in place) and restart seq — used to discard
+   *  pre-scenario setup noise (e.g. a self-heal forfeit) before the real match. */
+  reset(): void;
 }
 
 export function createTrace(now: () => number): EventTrace {
@@ -62,6 +65,10 @@ export function createTrace(now: () => number): EventTrace {
     last(event) {
       for (let i = events.length - 1; i >= 0; i--) if (events[i].event === event) return events[i];
       return undefined;
+    },
+    reset() {
+      events.length = 0;
+      seq = 0;
     },
   };
 }
@@ -100,6 +107,11 @@ export class FakeSocket {
   emit(event: string, payload?: unknown): boolean {
     this.io._trace.record('server->socket', event, payload, this.id);
     return true;
+  }
+
+  /** Server -> room, excluding this socket in real Socket.IO. The harness records the broadcast target. */
+  to(room: string): RoomEmitter {
+    return new RoomEmitter(this.io, room);
   }
 
   /** Register a client-side handler (the engine's socket.on(...) equivalent). */

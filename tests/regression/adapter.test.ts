@@ -22,6 +22,16 @@ describe('harness adapter + recorder', () => {
     expect(recorded[0].dir).toBe('server->socket');
   });
 
+  it('records socket room broadcasts with their target room', () => {
+    const trace = createTrace(() => 2500);
+    const io = new FakeIo(trace);
+    const s = io.createSocket('sock-1', { user: { id: 'u1' } });
+    s.to('match:m1').emit('match:opponent_answered', { qIndex: 0 });
+    const recorded = trace.byEvent('match:opponent_answered', 'match:m1');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].dir).toBe('server->room');
+  });
+
   it('fetchSockets returns sockets in a room with id/data the engine reads', async () => {
     const trace = createTrace(() => vi.getMockedSystemTime?.()?.getTime?.() ?? 0);
     const io = new FakeIo(trace);

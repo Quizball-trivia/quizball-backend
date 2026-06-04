@@ -15,7 +15,7 @@
  * Run:
  *   FUZZ_COUNT=1000 \
  *   REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
- *   REGRESSION_REDIS_URL=redis://:changeme@127.0.0.1:6379 \
+ *   REGRESSION_REDIS_URL=redis://:changeme@127.0.0.1:6379/15 \
  *     npx tsx game-regression/src/fuzz.mts
  *
  * Env:
@@ -29,7 +29,7 @@ import { resolve } from 'node:path';
 
 process.env.NODE_ENV = 'local';
 process.env.DATABASE_URL = process.env.REGRESSION_DB_URL!;
-process.env.REDIS_URL = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379';
+process.env.REDIS_URL = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379/15';
 process.env.RANKED_HUMAN_QUEUE_ENABLED = 'true';
 process.env.REGRESSION_DETERMINISTIC = '1';
 process.env.REGRESSION_FAST_TIMERS = '1';

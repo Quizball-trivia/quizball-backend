@@ -42,3 +42,7 @@ dump.rdb
 
 # Game-regression fuzzer failure artifacts (local dumps)
 game-regression/artifacts/
+
+# Staging harness — local secrets + report bundles (never commit)
+game-regression/staging/.env.staging
+game-regression/staging/reports/

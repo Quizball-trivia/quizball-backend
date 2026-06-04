@@ -20,7 +20,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 // enabled ONLY when REGRESSION_DB_URL is explicitly set to a local host. No
 // default — an unset var leaves the suite skipped.
 const LOCAL_DB = process.env.REGRESSION_DB_URL;
-const LOCAL_REDIS = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379';
+const LOCAL_REDIS = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379/15';
 const isLocal = !!LOCAL_DB && /(?:127\.0\.0\.1|localhost)/.test(LOCAL_DB);
 
 // The engine reads config at import time — set env BEFORE importing the runner.

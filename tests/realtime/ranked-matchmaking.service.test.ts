@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
+import { NotFoundError } from '../../src/core/errors.js';
+import { logger } from '../../src/core/logger.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 import {
+  RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
   RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
@@ -330,6 +333,162 @@ describe('ranked-matchmaking.service queue behavior', () => {
       skipSearchEmit: true,
       playerCountryCode: 'MA',
     });
+  });
+
+  it('skips ghost fallback users and continues processing later due fallbacks', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.zRangeByScore.mockResolvedValue(['search-ghost', 'search-good']);
+    redisMock.eval.mockImplementation(async (script: string, options?: { arguments?: string[] }) => {
+      if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) {
+        const searchId = options?.arguments?.[0];
+        if (searchId === 'search-ghost') return ['ghost-user'];
+        if (searchId === 'search-good') return ['good-user'];
+      }
+      if (script === RANKED_MM_CANCEL_SEARCH_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      return [];
+    });
+    getWalletMock.mockImplementation(async (userId: string) => {
+      if (userId === 'ghost-user') {
+        throw new NotFoundError('User not found');
+      }
+      return { coins: 0, tickets: 1 };
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(startRankedAiForUserMock).toHaveBeenCalledTimes(1);
+    expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'good-user', {
+      skipSearchEmit: true,
+    });
+    expect(redisMock.eval).toHaveBeenCalledWith(
+      RANKED_MM_CANCEL_SEARCH_SCRIPT,
+      expect.objectContaining({
+        arguments: expect.arrayContaining(['ghost-user']),
+      })
+    );
+    expect(io.to).toHaveBeenCalledWith('user:ghost-user');
+  });
+
+  it('continues fallback loop after one AI fallback fails', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const fallbackError = new Error('ai fallback failed');
+
+    redisMock.zRangeByScore.mockResolvedValue(['search-bad', 'search-good']);
+    redisMock.eval.mockImplementation(async (script: string, options?: { arguments?: string[] }) => {
+      if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) {
+        const searchId = options?.arguments?.[0];
+        if (searchId === 'search-bad') return ['bad-user'];
+        if (searchId === 'search-good') return ['good-user'];
+      }
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      return [];
+    });
+    startRankedAiForUserMock.mockImplementation(async (_io: QuizballServer, userId: string) => {
+      if (userId === 'bad-user') throw fallbackError;
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(startRankedAiForUserMock).toHaveBeenCalledTimes(2);
+    expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'bad-user', {
+      skipSearchEmit: true,
+    });
+    expect(startRankedAiForUserMock).toHaveBeenCalledWith(io, 'good-user', {
+      skipSearchEmit: true,
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: fallbackError, searchId: 'search-bad', userId: 'bad-user' },
+      'Ranked matchmaking fallback failed for queued user'
+    );
+  });
+
+  it('runs human pairing when the fallback phase fails', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const fallbackPhaseError = new Error('fallback redis failed');
+
+    redisMock.zRangeByScore.mockRejectedValueOnce(fallbackPhaseError);
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: fallbackPhaseError },
+      'Ranked matchmaking fallback phase failed'
+    );
+  });
+
+  it('continues pair loop after one human pair fails', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const pairError = new Error('pair failed');
+    let pairScriptCalls = 0;
+
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      pairScriptCalls += 1;
+      if (pairScriptCalls === 1) return ['s1', 'u1', 's2', 'u2'];
+      if (pairScriptCalls === 2) return ['s3', 'u3', 's4', 'u4'];
+      return [];
+    });
+    createLobbyMock.mockImplementation(async ({ hostUserId }: { hostUserId: string }) => {
+      if (hostUserId === 'u1') throw pairError;
+      return {
+        id: `lobby-${hostUserId}`,
+        mode: 'ranked',
+        status: 'waiting',
+        host_user_id: hostUserId,
+        invite_code: null,
+        display_name: null,
+        is_public: false,
+        game_mode: 'ranked_sim',
+        friendly_random: true,
+        friendly_category_a_id: null,
+        friendly_category_b_id: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).toHaveBeenCalledTimes(2);
+    expect(createLobbyMock).toHaveBeenCalledWith(expect.objectContaining({ hostUserId: 'u3' }));
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: pairError, searchIdA: 's1', searchIdB: 's2', userAId: 'u1', userBId: 'u2' },
+      'Ranked matchmaking pair failed for queued users'
+    );
+  });
+
+  it('logs lock release failures without rejecting the tick', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const releaseError = new Error('release failed');
+
+    releaseLockMock.mockRejectedValueOnce(releaseError);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(releaseLockMock).toHaveBeenCalledWith('ranked:mm:tick-lock', 't1');
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: releaseError },
+      'Ranked matchmaking tick lock release failed'
+    );
   });
 
   it('emits ranked:match_found with opponent RP from ensured profiles', async () => {

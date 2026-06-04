@@ -20,8 +20,8 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       ka: 'მართალია თუ მცდარი',
     },
     description: {
-      en: 'Read each football statement and decide whether it is true or false.',
-      ka: 'წაიკითხე საფეხბურთო წინადადება და გადაწყვიტე, მართალია თუ მცდარი.',
+      en: 'Read each fact and decide whether it is true or false.',
+      ka: 'წაიკითხე ფაქტი და გადაწყვიტე, მართალია თუ მცდარი.',
     },
     iconToken: 'checkCircle',
   },
@@ -53,11 +53,11 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     challengeType: 'putInOrder',
     title: {
       en: 'Put in Order',
-      ka: 'დაალაგე რიგით',
+      ka: 'დაალაგე რიგის მიხედვით',
     },
     description: {
       en: 'Drag football events into the correct order.',
-      ka: 'გადაიტანე საფეხბურთო მოვლენები სწორ თანმიმდევრობაში.',
+      ka: 'დაალაგე საფეხბურთო მოვლენები სწორი თანმიმდევრობით.',
     },
     iconToken: 'list',
   },
@@ -68,8 +68,8 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
       ka: 'იმპოსტერი',
     },
     description: {
-      en: 'Spot the imposters and submit the exact set of correct football answers.',
-      ka: 'იპოვე ზედმეტები და გაგზავნე ზუსტად სწორი საფეხბურთო პასუხების სეტი.',
+      en: 'Spot the imposters and submit the exact set of correct answers.',
+      ka: 'იპოვე ვინ არის ზედმეტი მოცემული ვარიანტებიდან და აირციე სწორი სია.',
     },
     iconToken: 'users',
   },
@@ -81,7 +81,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     },
     description: {
       en: 'Read the club path and identify the player behind the journey.',
-      ka: 'წაიკითხე კლუბების გზა და გამოიცანი ფეხბურთელი.',
+      ka: 'წაიკითხე კლუბების გზა და გამოიცანი რომელი ფეხბურთელის კარიერას აღნიშნავს.',
     },
     iconToken: 'route',
   },

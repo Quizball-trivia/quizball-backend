@@ -49,12 +49,11 @@ export const MCQ_VALIDATION_CONDITIONS = sql`
 
 /**
  * Shared HAVING clause for ranked-eligible category queries.
- * Requires >= 3 valid MCQs plus at least 1 of each special type.
+ * Requires >= 4 valid MCQs plus at least 1 of each in-match special type.
  * Assumes `q` aliases `questions` and `qp` aliases `question_payloads`.
  */
 export const RANKED_ELIGIBILITY_HAVING = sql`
-  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 3
-    AND COUNT(*) FILTER (WHERE q.type = 'countdown_list') >= 1
+  HAVING COUNT(*) FILTER (WHERE ${MCQ_VALIDATION_CONDITIONS}) >= 4
     AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
 `;

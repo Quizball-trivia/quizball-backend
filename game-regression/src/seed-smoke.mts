@@ -34,7 +34,7 @@ async function main() {
     JOIN question_payloads qp ON qp.question_id = q.id
     WHERE c.is_active = true
       AND q.status = 'published'
-      AND q.type IN ('mcq_single', 'countdown_list', 'put_in_order', 'clue_chain')
+      AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
     GROUP BY c.id
     ${RANKED_ELIGIBILITY_HAVING}
   `;

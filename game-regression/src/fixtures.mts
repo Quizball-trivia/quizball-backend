@@ -4,8 +4,10 @@
  * A fresh local Supabase DB has 0 questions, so a real ranked match cannot start.
  * This seeds the minimum deterministic data the ranked-AI path needs:
  *   - N ranked-ELIGIBLE categories. Per RANKED_ELIGIBILITY_HAVING each needs
- *     >= 3 valid MCQs + >= 1 each of countdown_list / put_in_order / clue_chain,
+ *     >= 4 valid MCQs + >= 1 each of put_in_order / clue_chain,
  *     all `published`, with payloads shaped exactly as matches.service.ts expects.
+ *     Countdown questions are still seeded for daily/special regression coverage,
+ *     but possession matches no longer require them.
  *   - A test user with a ranked ticket (tickets/coins are columns on `users`).
  *
  * Fixed fixtures also PIN the engine's ORDER BY RANDOM() selection: with a known

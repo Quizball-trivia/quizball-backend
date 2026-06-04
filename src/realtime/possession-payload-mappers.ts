@@ -15,7 +15,7 @@ const NORMAL_HALF_SEQUENCE: QuestionType[] = [
   'mcq_single',
   'mcq_single',
   'mcq_single',
-  'countdown_list',
+  'mcq_single',
   'put_in_order',
   'clue_chain',
 ];

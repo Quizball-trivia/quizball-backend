@@ -126,6 +126,27 @@ describe('devRealtimeService.handleQuickMatch', () => {
     expect(emitBlockedMock).not.toHaveBeenCalled();
   });
 
+  it('forwards skipTo to beginMatchForLobby so the match boots straight into the penalty ban (no normal q0)', async () => {
+    const { devRealtimeService } = await import('../../src/realtime/services/dev-realtime.service.js');
+    const socket = {
+      data: { user: { id: 'u1' } },
+      join: vi.fn(),
+      emit: vi.fn(),
+    } as unknown as QuizballSocket;
+    const io = {} as QuizballServer;
+
+    await devRealtimeService.handleQuickMatch(io, socket, { skipTo: 'penalty_ban' });
+
+    // The match is started with initialDevSkipTarget set; beginMatchForLobby uses
+    // that to skip the initial question instead of dispatching normal question 0.
+    expect(beginMatchForLobbyMock).toHaveBeenCalledWith(
+      io,
+      'lobby-1',
+      'match-1',
+      expect.objectContaining({ initialDevSkipTarget: 'penalty_ban' })
+    );
+  });
+
   it('cleans up the created lobby when ranked category selection cannot fill the match', async () => {
     const { devRealtimeService } = await import('../../src/realtime/services/dev-realtime.service.js');
     selectRandomRankedCategoriesMock.mockResolvedValue([{ id: 'c1' }]);

@@ -50,6 +50,11 @@ export const refreshSchema = z.object({
 });
 export type RefreshRequest = z.infer<typeof refreshSchema>;
 
+export const restorePendingDeletionSchema = z.object({
+  refresh_token: z.string().min(1).optional(),
+});
+export type RestorePendingDeletionRequest = z.infer<typeof restorePendingDeletionSchema>;
+
 export const forgotPasswordSchema = z.object({
   email: z.string().email(),
   redirect_to: redirectUrlSchema.optional(),
@@ -77,6 +82,7 @@ export const socialLoginTokenSchema = z.object({
   provider: z.enum(['google', 'apple']),
   id_token: z.string().min(1).max(8192),
   nonce: z.string().min(1).max(512).optional(),
+  restore_pending_deletion: z.boolean().optional(),
 });
 export type SocialLoginTokenRequest = z.infer<typeof socialLoginTokenSchema>;
 
@@ -88,6 +94,7 @@ export type GeorgianPhoneOtpStartRequest = z.infer<typeof georgianPhoneOtpStartS
 export const georgianPhoneOtpVerifySchema = z.object({
   phone: z.string().min(9).max(32),
   token: z.string().regex(/^\d{6}$/, 'OTP must be a 6 digit code'),
+  restore_pending_deletion: z.boolean().optional(),
 });
 export type GeorgianPhoneOtpVerifyRequest = z.infer<typeof georgianPhoneOtpVerifySchema>;
 
@@ -158,6 +165,12 @@ export const authResponseSchema = z.object({
   token_type: z.string(),
   user: authUserSchema.nullable(),
   provider: z.string(),
+  // True only on /register when the email already belongs to an existing
+  // account. Supabase signals this with a 200 + empty `identities` array
+  // (no session, no email sent) to avoid leaking account existence; we surface
+  // it explicitly so the client can tell the user to sign in instead.
+  already_registered: z.boolean().optional(),
+  pending_deletion: z.boolean().optional(),
 });
 export type AuthResponse = z.infer<typeof authResponseSchema>;
 
@@ -204,6 +217,13 @@ export interface AuthSession {
     providerSub: string;
   } | null;
   provider: string;
+  /**
+   * Set by signUp when Supabase returns a 200 with an empty `identities`
+   * array — i.e. the email is already registered. No session/email is issued
+   * in that case. Undefined for all other flows.
+   */
+  alreadyRegistered?: boolean;
+  pendingDeletion?: boolean;
 }
 
 /**
@@ -223,5 +243,7 @@ export function toAuthResponse(session: AuthSession): AuthResponse {
         }
       : null,
     provider: session.provider,
+    ...(session.alreadyRegistered ? { already_registered: true } : {}),
+    ...(session.pendingDeletion ? { pending_deletion: true } : {}),
   };
 }

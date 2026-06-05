@@ -404,27 +404,29 @@ export async function applyPartyQuizDropouts(params: {
           matchGraceKey(lockedMatch.id),
           matchResumeCountdownKey(lockedMatch.id),
         ]);
-        io.to(`match:${lockedMatch.id}`).emit('match:resume', {
-          matchId: lockedMatch.id,
-          nextQIndex: lockedMatch.current_q_index,
-        });
-        logger.info(
-          {
-            eventName: 'match:resume',
-            matchId: lockedMatch.id,
-            nextQIndex: lockedMatch.current_q_index,
-            source: 'party_dropout',
-            activeUserIds: activePlayers.map((player) => player.user_id),
-          },
-          'Party quiz resumed after dropouts'
-        );
         if (state.currentQuestion) {
-          await resumePartyQuizQuestion(
+          // resumePartyQuizQuestion returns false when it can't re-dispatch the
+          // question (match inactive, missing payload, non-MCQ, etc). Don't emit
+          // match:resume in that case — clients would clear the pause UI without a
+          // refreshed match:question and get stuck on an empty board.
+          const resumed = await resumePartyQuizQuestion(
             io,
             lockedMatch.id,
             state.currentQuestion.qIndex,
             params.pauseStartedAtMs ?? Date.now()
           );
+          if (!resumed) {
+            logger.warn(
+              {
+                eventName: 'party_resume_failed',
+                matchId: lockedMatch.id,
+                qIndex: state.currentQuestion.qIndex,
+                activeUserIds: activePlayers.map((player) => player.user_id),
+              },
+              'Party quiz question resume failed; keeping pause UI (no match:resume emitted)'
+            );
+            return { completed: false, continued: true, activeCount: activePlayers.length };
+          }
         } else if (lockedMatch.current_q_index >= lockedMatch.total_questions) {
           await completePartyQuizDropoutMatch({
             io,
@@ -440,6 +442,20 @@ export async function applyPartyQuizDropouts(params: {
         } else {
           await sendPartyQuizQuestion(io, lockedMatch.id, lockedMatch.current_q_index);
         }
+        io.to(`match:${lockedMatch.id}`).emit('match:resume', {
+          matchId: lockedMatch.id,
+          nextQIndex: lockedMatch.current_q_index,
+        });
+        logger.info(
+          {
+            eventName: 'match:resume',
+            matchId: lockedMatch.id,
+            nextQIndex: lockedMatch.current_q_index,
+            source: 'party_dropout',
+            activeUserIds: activePlayers.map((player) => player.user_id),
+          },
+          'Party quiz resumed after dropouts'
+        );
       } else {
         logger.info(
           {

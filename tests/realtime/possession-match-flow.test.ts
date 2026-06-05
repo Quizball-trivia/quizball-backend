@@ -3,27 +3,30 @@ import { createInitialPossessionState, POSSESSION_QUESTIONS_PER_HALF } from '../
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
 
 describe('possession mixed-question sequencing', () => {
-  it('uses the ranked normal-play slot order for each half', () => {
+  it('uses the same normal-play slot order for ranked and friendly possession halves', () => {
     const expected = [
       'mcq_single',
       'mcq_single',
       'mcq_single',
-      'countdown_list',
+      'mcq_single',
       'put_in_order',
       'clue_chain',
     ];
 
-    [1, 2].forEach((half) => {
-      const state = createInitialPossessionState('ranked_sim');
-      state.half = half;
-      state.phase = 'NORMAL_PLAY';
+    (['ranked_sim', 'friendly_possession'] as const).forEach((variant) => {
+      [1, 2].forEach((half) => {
+        const state = createInitialPossessionState(variant);
+        state.half = half;
+        state.phase = 'NORMAL_PLAY';
 
-      const actual = expected.map((_, answeredInHalf) => {
-        state.normalQuestionsAnsweredInHalf = answeredInHalf;
-        return __possessionInternals.questionTypeForState(state);
+        const actual = expected.map((_, answeredInHalf) => {
+          state.normalQuestionsAnsweredInHalf = answeredInHalf;
+          return __possessionInternals.questionTypeForState(state);
+        });
+
+        expect(actual).toEqual(expected);
+        expect(actual).not.toContain('countdown_list');
       });
-
-      expect(actual).toEqual(expected);
     });
   });
 

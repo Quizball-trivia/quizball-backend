@@ -114,6 +114,12 @@
           },
           "provider": {
             "type": "string"
+          },
+          "already_registered": {
+            "type": "boolean"
+          },
+          "pending_deletion": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5481,6 +5487,70 @@
         }
       }
     },
+    "/api/v1/auth/login/restore": {
+      "post": {
+        "summary": "Restore pending-deletion account with email and password",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account restored and login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Account is not restorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/refresh": {
       "post": {
         "summary": "Refresh access token",
@@ -5512,6 +5582,62 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid refresh token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/restore-pending-deletion": {
+      "post": {
+        "summary": "Restore pending-deletion account with refresh token",
+        "description": "Used by OAuth callback flows after the provider has returned a valid Supabase refresh token. The endpoint restores only the account matching that token; it never accepts a user id. The refresh token may be supplied either in the request body OR via the httpOnly qb_refresh_token cookie (injected server-side), which is why `refresh_token` is optional in the body schema; a 400 is returned when neither source provides one.",
+        "tags": [
+          "Auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "refresh_token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account restored and session established",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing token or account is not restorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -5709,6 +5835,9 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 512
+                  },
+                  "restore_pending_deletion": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -5836,6 +5965,9 @@
                   "token": {
                     "type": "string",
                     "pattern": "^\\d{6}$"
+                  },
+                  "restore_pending_deletion": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

@@ -8,6 +8,7 @@ const releaseLockMock = vi.fn();
 const getMatchMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
+const listAnswersForQuestionMock = vi.fn();
 
 vi.mock('../../src/core/tracing.js', () => ({
   withSpan: async (_name: string, _attrs: Record<string, unknown>, work: (span: { setAttribute: (key: string, value: unknown) => void }) => Promise<unknown>) =>
@@ -62,7 +63,7 @@ vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
 
 vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   matchAnswersRepo: {
-    listAnswersForQuestion: vi.fn(),
+    listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
   },
 }));
 
@@ -110,6 +111,7 @@ describe('match-cache rebuild locking', () => {
     redisDelMock.mockResolvedValue(1);
     releaseLockMock.mockResolvedValue(true);
     buildMatchQuestionPayloadMock.mockResolvedValue(null);
+    listAnswersForQuestionMock.mockResolvedValue([]);
     getMatchMock.mockResolvedValue({
       id: 'm1',
       status: 'active',
@@ -190,5 +192,49 @@ describe('match-cache rebuild locking', () => {
       expect.objectContaining({ EX: 3600 })
     );
     expect(releaseLockMock).toHaveBeenCalledWith('match:cache:rebuild:m1', 'lock-token');
+  });
+
+  it('aligns currentQIndex with the active question from state payload', async () => {
+    redisGetMock.mockResolvedValue(null);
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      status: 'active',
+      mode: 'ranked',
+      total_questions: 12,
+      category_a_id: 'cat-a',
+      category_b_id: 'cat-b',
+      started_at: new Date().toISOString(),
+      current_q_index: 4,
+      state_payload: {
+        phase: 'NORMAL_PLAY',
+        currentQuestion: { qIndex: 5, phaseKind: 'normal', phaseRound: 6 },
+      },
+    });
+    buildMatchQuestionPayloadMock.mockResolvedValue({
+      question: {
+        id: 'question-5',
+        kind: 'multipleChoice',
+        prompt: 'Who won?',
+        options: [
+          { id: 'a', text: 'A' },
+          { id: 'b', text: 'B' },
+        ],
+      },
+      evaluation: { kind: 'multipleChoice', correctIndex: 0 },
+      reveal: { kind: 'multipleChoice', correctIndex: 0 },
+      categoryId: 'cat-a',
+      phaseKind: 'normal',
+      phaseRound: 6,
+      shooterSeat: null,
+      attackerSeat: null,
+    });
+
+    const { getMatchCacheOrRebuild } = await import('../../src/realtime/match-cache.js');
+    const result = await getMatchCacheOrRebuild('m1');
+
+    expect(buildMatchQuestionPayloadMock).toHaveBeenCalledWith('m1', 5);
+    expect(result?.currentQIndex).toBe(5);
+    expect(result?.currentQuestion?.qIndex).toBe(5);
   });
 });

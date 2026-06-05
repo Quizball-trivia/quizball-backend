@@ -26,6 +26,7 @@ import { createHash } from 'crypto';
 import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
 import postgres from 'postgres';
+import { storeQuestionPayloadImages, type QuestionImageIngestCache } from './question-image-storage.service.js';
 
 const normalizePayload = (payload: Json | undefined, context: string): Json | undefined => {
   if (payload == null) return payload;
@@ -84,7 +85,10 @@ export const questionsService = {
       throw new BadRequestError('Category not found');
     }
 
-    const normalizedPayload = normalizePayload(data.payload, 'create');
+    const normalizedPayload = await storeQuestionPayloadImages(
+      normalizePayload(data.payload, 'create'),
+      { categorySlug: category.slug }
+    );
 
     // Create question with payload atomically
     const question = await questionsRepo.createWithPayload(data, normalizedPayload);
@@ -150,9 +154,21 @@ export const questionsService = {
       }
     }
 
-    const normalizedPayload = data.payload !== undefined
+    const rawNormalizedPayload = data.payload !== undefined
       ? normalizePayload(data.payload, 'update')
       : undefined;
+    let normalizedPayload = rawNormalizedPayload;
+
+    if (rawNormalizedPayload !== undefined) {
+      const categoryId = data.categoryId ?? existing.category_id;
+      const category = await categoriesRepo.getById(categoryId);
+      if (!category) {
+        throw new BadRequestError('Category not found');
+      }
+      normalizedPayload = await storeQuestionPayloadImages(rawNormalizedPayload, {
+        categorySlug: category.slug,
+      });
+    }
 
     // Validate new payload matches type
     if (normalizedPayload !== undefined) {
@@ -398,6 +414,8 @@ export const questionsService = {
       errors: [],
     };
 
+    const imageCache: QuestionImageIngestCache = new Map();
+
     // Process each question sequentially
     for (let i = 0; i < questions.length; i++) {
       try {
@@ -405,6 +423,10 @@ export const questionsService = {
           questions[i].payload as Json | undefined,
           `bulkCreate index ${i}`
         );
+        const storedPayload = await storeQuestionPayloadImages(normalizedPayload, {
+          categorySlug: category.slug,
+          cache: imageCache,
+        });
         const questionData: CreateQuestionData = {
           categoryId,
           type: questions[i].type,
@@ -417,7 +439,7 @@ export const questionsService = {
 
         const question = await questionsRepo.createWithPayload(
           questionData,
-          normalizedPayload
+          storedPayload
         );
 
         results.created.push(toQuestionResponse(question));

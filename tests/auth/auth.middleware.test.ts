@@ -6,6 +6,7 @@ import {
   errorHandler,
   authMiddleware,
 } from '../../src/http/middleware/index.js';
+import { selectAuthToken } from '../../src/http/middleware/auth.js';
 
 // Import setup to configure test environment
 import '../setup.js';
@@ -121,5 +122,15 @@ describe('Auth Middleware', () => {
       );
       expect(response.body.request_id).toBe(requestId);
     });
+  });
+});
+
+describe('Auth token selection', () => {
+  it('prefers an explicit bearer token over a stale cookie token', () => {
+    expect(selectAuthToken('Bearer fresh-header-token', 'stale-cookie-token')).toBe('fresh-header-token');
+  });
+
+  it('falls back to the cookie token when no bearer token is present', () => {
+    expect(selectAuthToken(undefined, ' cookie-token ')).toBe('cookie-token');
   });
 });

@@ -1,4 +1,5 @@
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import type { CachedPlayer, MatchCache } from './match-cache.js';
 import { HALFTIME_DURATION_MS } from './possession-halftime.js';
 import { getUserIdByCachedSeat } from './possession-payload-mappers.js';
@@ -7,10 +8,8 @@ import { clamp } from './scoring.js';
 
 /** One seat's answer this round, for speed-streak resolution. */
 export interface StreakAnswer {
-  /** Did this seat answer correctly? (timeout / no-answer counts as false.) */
-  correct: boolean;
-  /** Authoritative elapsed time in ms. Lower = faster. */
-  timeMs: number;
+  /** Displayed/base points before any 2x possession boost. */
+  basePoints: number;
 }
 
 /**
@@ -22,11 +21,9 @@ export interface StreakAnswer {
  * - `nextCandidateSeat` / `nextCandidateCount`: qualification progress toward
  *   the next active streak. A player needs two qualifying rounds in a row.
  *
- * Rules: a seat qualifies only by being correct and winning the answer race
- * this round (strictly faster when both are correct; a sole correct answer
- * beats a wrong/timeout opponent). Equal time (tie), being slower, or a
- * wrong/timeout answer clears progress. A goal always clears it. Only one
- * holder.
+ * Rules: a seat qualifies only by earning more displayed/base points than the
+ * opponent this round. Displayed ties (80-80, 0-0, etc.) clear progress, even
+ * when raw answer times differed. A goal always clears it. Only one holder.
  */
 export function resolveSpeedStreak(params: {
   previousHolderSeat: Seat | null;
@@ -56,18 +53,14 @@ export function resolveSpeedStreak(params: {
     return { boostedSeat, nextHolderSeat: null, nextCandidateSeat: null, nextCandidateCount: 0 };
   }
 
-  // The qualifying seat is whichever seat is correct AND strictly faster than
-  // the other. If only one seat is correct, that seat wins the round. If both
-  // are correct with equal time (tie), or both wrong, no one qualifies.
+  // The qualifying seat is whichever seat earned more displayed/base points.
+  // The current-round 2x possession boost does not help a holder keep the
+  // streak; this comparison intentionally uses pre-boost points.
   let qualifyingSeat: Seat | null = null;
-  if (seat1.correct && !seat2.correct) {
+  if (seat1.basePoints > seat2.basePoints && seat1.basePoints > 0) {
     qualifyingSeat = 1;
-  } else if (seat2.correct && !seat1.correct) {
+  } else if (seat2.basePoints > seat1.basePoints && seat2.basePoints > 0) {
     qualifyingSeat = 2;
-  } else if (seat1.correct && seat2.correct) {
-    if (seat1.timeMs < seat2.timeMs) qualifyingSeat = 1;
-    else if (seat2.timeMs < seat1.timeMs) qualifyingSeat = 2;
-    // equal time → tie → null
   }
 
   if (qualifyingSeat === null) {
@@ -149,16 +142,24 @@ export function transitionAfterHalfBoundary(
     }
 
     state.phase = 'HALFTIME';
-    state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+    state.halftime.deadlineAt = new Date(Date.now() + harnessDelayMs(HALFTIME_DURATION_MS)).toISOString();
     return;
   }
 
   if (state.goals.seat1 === state.goals.seat2) {
-    state.phase = 'PENALTY_SHOOTOUT';
-    state.penalty.round = 1;
-    state.penalty.shooterSeat = 1;
-    state.penalty.suddenDeath = false;
-    state.penalty.kicksTaken = { seat1: 0, seat2: 0 };
+    // Draw → run a category-ban interlude (reusing the HALFTIME ban machinery)
+    // before the shootout. finalizeHalftime sees purpose==='penalty' and exits
+    // into PENALTY_SHOOTOUT with the chosen category. Categories are populated
+    // lazily by the HALFTIME question-dispatch branch (ensureHalftimeCategories).
+    // state.penalty is initialised at finalize, not here.
+    state.phase = 'HALFTIME';
+    state.halftime.purpose = 'penalty';
+    state.halftime.deadlineAt = new Date(Date.now() + harnessDelayMs(HALFTIME_DURATION_MS)).toISOString();
+    state.halftime.uiReadyAt = null;
+    state.halftime.categoryOptions = [];
+    state.halftime.firstBanSeat = null;
+    state.halftime.bans = { seat1: null, seat2: null };
+    state.currentQuestion = null;
     return;
   }
 
@@ -277,6 +278,10 @@ export function applyPenaltyResolution(
     goalScoredByUserId = shooterUserId;
   }
 
+  state.penalty.attempts ??= { seat1: [], seat2: [] };
+  if (shooterSeat === 1) state.penalty.attempts.seat1.push(isGoal ? 'goal' : 'miss');
+  else state.penalty.attempts.seat2.push(isGoal ? 'goal' : 'miss');
+
   if (shooterSeat === 1) state.penalty.kicksTaken.seat1 += 1;
   else state.penalty.kicksTaken.seat2 += 1;
 
@@ -302,9 +307,15 @@ export function applyPenaltyResolution(
 }
 
 export function categoryIdsForCurrentHalf(
-  state: Pick<PossessionStatePayload, 'half'>,
+  state: Pick<PossessionStatePayload, 'half' | 'phase' | 'penaltyCategoryId'>,
   cache: Pick<MatchCache, 'categoryAId' | 'categoryBId'>
 ): string[] {
+  // Penalty questions use the category chosen in the penalty ban phase. Gate
+  // strictly on PENALTY_SHOOTOUT so a stale penaltyCategoryId can never leak
+  // into normal second-half questions.
+  if (state.phase === 'PENALTY_SHOOTOUT') {
+    return [state.penaltyCategoryId ?? cache.categoryBId ?? cache.categoryAId];
+  }
   if (state.half === 1) return [cache.categoryAId];
   return cache.categoryBId ? [cache.categoryBId] : [cache.categoryAId];
 }

@@ -9,8 +9,10 @@ export function clamp(value: number, min: number, max: number): number {
 /**
  * GRACE_MS: any correct answer with elapsed time ≤ GRACE_MS earns full points.
  * Covers typical RTT + reaction so "instant" clicks reliably hit the max.
+ * Widened to 500ms so mobile / in-app-browser players on higher-latency
+ * connections can still reach the 100-point bucket on a genuinely fast tap.
  */
-const GRACE_MS = 300;
+const GRACE_MS = 500;
 
 /**
  * Calculate points for a round answer.

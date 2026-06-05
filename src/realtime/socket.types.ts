@@ -276,6 +276,8 @@ export interface MatchRoundResultPlayer {
   isCorrect: boolean;
   timeMs: number;
   pointsEarned: number;
+  /** Points used for possession movement after applying any current-round 2x boost. */
+  possessionPointsEarned?: number;
   totalPoints: number;
   foundCount?: number;
   foundAnswerIds?: string[];
@@ -438,6 +440,10 @@ export interface MatchStatePayload {
     seat1: number;
     seat2: number;
   };
+  penaltyAttempts?: {
+    seat1: Array<'goal' | 'miss'>;
+    seat2: Array<'goal' | 'miss'>;
+  };
   phaseKind: MatchPhaseKind;
   phaseRound: number;
   shooterSeat: 1 | 2 | null;
@@ -450,6 +456,8 @@ export interface MatchStatePayload {
       seat1: string | null;
       seat2: string | null;
     };
+    /** Whether this ban interlude is the second-half pick or the pre-penalty pick. */
+    purpose?: 'second_half' | 'penalty';
   };
   penaltySuddenDeath?: boolean;
   stateVersion?: number;
@@ -594,12 +602,29 @@ export interface SessionBlockedPayload {
   stateSnapshot: SessionStatePayload;
 }
 
+export type LobbyCreateResult =
+  | {
+      ok: true;
+      lobbyId: string | null;
+      inviteCode: string | null;
+      correlationId: string;
+    }
+  | {
+      ok: false;
+      code: 'ALREADY_IN_LOBBY' | 'TRANSITION_IN_PROGRESS' | 'INVALID_LOBBY_CREATE' | 'LOBBY_CREATE_ERROR';
+      message: string;
+      retryable: boolean;
+      correlationId: string;
+      stateSnapshot?: SessionStatePayload;
+    };
+
 export type LobbyJoinByCodeResult =
   | {
       ok: true;
       lobbyId: string;
       inviteCode: string;
       alreadyMember: boolean;
+      correlationId: string;
     }
   | {
       ok: false;
@@ -612,6 +637,23 @@ export type LobbyJoinByCodeResult =
         | 'LOBBY_JOIN_ERROR';
       message: string;
       retryable: boolean;
+      correlationId: string;
+      stateSnapshot?: SessionStatePayload;
+    };
+
+export type LobbyLeaveResult =
+  | {
+      ok: true;
+      lobbyId: string | null;
+      closed: boolean;
+      correlationId: string;
+    }
+  | {
+      ok: false;
+      code: 'LOBBY_BUSY' | 'LOBBY_ACTIVE' | 'TRANSITION_IN_PROGRESS' | 'LOBBY_LEAVE_ERROR';
+      message: string;
+      retryable: boolean;
+      correlationId: string;
       stateSnapshot?: SessionStatePayload;
     };
 
@@ -666,12 +708,18 @@ export type MatchCluesAnswerPayload =
   | MatchCluesAnswerGiveUpPayload;
 
 export interface ClientToServerEvents {
-  'lobby:create': (data: { mode: MatchMode; isPublic?: boolean }) => void;
+  'lobby:create': (
+    data: { mode: MatchMode; isPublic?: boolean; correlationId?: string },
+    ack?: (result: LobbyCreateResult) => void
+  ) => void;
   'lobby:challenge': (data: { toUserId: string }) => void;
   'lobby:challenge_accept': (data: { invitationId: string }) => void;
   'lobby:challenge_decline': (data: { invitationId: string }) => void;
-  'lobby:join_by_code': (data: { inviteCode: string }, ack?: (result: LobbyJoinByCodeResult) => void) => void;
-  'lobby:leave': () => void;
+  'lobby:join_by_code': (
+    data: { inviteCode: string; correlationId?: string },
+    ack?: (result: LobbyJoinByCodeResult) => void
+  ) => void;
+  'lobby:leave': (data?: { correlationId?: string }, ack?: (result: LobbyLeaveResult) => void) => void;
   'lobby:ready': (data: { ready: boolean }) => void;
   'lobby:update_settings': (data: {
     lobbyId?: string;
@@ -701,8 +749,8 @@ export interface ClientToServerEvents {
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;
   'warmup:get_scores': () => void;
-  'dev:quick_match': () => void;
-  'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half' }) => void;
+  'dev:quick_match': (data?: { skipTo?: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half' }) => void;
+  'dev:skip_to': (data: { matchId: string; target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half' }) => void;
   'dev:pause_match': (data: { matchId: string }) => void;
   'dev:resume_match': (data: { matchId: string }) => void;
 }

@@ -21,13 +21,36 @@ local searchKeyB = searchPrefix .. searchIdB
 
 local statusA = redis.call('HGET', searchKeyA, 'status')
 local statusB = redis.call('HGET', searchKeyB, 'status')
-if statusA ~= 'queued' or statusB ~= 'queued' then
+if statusA ~= 'queued' then
+  redis.call('ZREM', queueKey, searchIdA)
+  redis.call('ZREM', timeoutKey, searchIdA)
+  return {}
+end
+if statusB ~= 'queued' then
+  redis.call('ZREM', queueKey, searchIdB)
+  redis.call('ZREM', timeoutKey, searchIdB)
   return {}
 end
 
 local userIdA = redis.call('HGET', searchKeyA, 'userId')
 local userIdB = redis.call('HGET', searchKeyB, 'userId')
 if (not userIdA) or (not userIdB) then
+  redis.call('ZREM', queueKey, searchIdA, searchIdB)
+  redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
+  return {}
+end
+local mappedSearchIdA = redis.call('HGET', userMapKey, userIdA)
+local mappedSearchIdB = redis.call('HGET', userMapKey, userIdB)
+if mappedSearchIdA ~= searchIdA then
+  redis.call('HSET', searchKeyA, 'status', 'stale', 'staleAt', matchedAt)
+  redis.call('ZREM', queueKey, searchIdA)
+  redis.call('ZREM', timeoutKey, searchIdA)
+  return {}
+end
+if mappedSearchIdB ~= searchIdB then
+  redis.call('HSET', searchKeyB, 'status', 'stale', 'staleAt', matchedAt)
+  redis.call('ZREM', queueKey, searchIdB)
+  redis.call('ZREM', timeoutKey, searchIdB)
   return {}
 end
 local countryCodeA = redis.call('HGET', searchKeyA, 'countryCode') or ''
@@ -63,6 +86,15 @@ end
 
 local userId = redis.call('HGET', searchKey, 'userId')
 if not userId then
+  redis.call('ZREM', queueKey, searchId)
+  redis.call('ZREM', timeoutKey, searchId)
+  return {}
+end
+local mappedSearchId = redis.call('HGET', userMapKey, userId)
+if mappedSearchId ~= searchId then
+  redis.call('HSET', searchKey, 'status', 'stale', 'staleAt', fallbackAt)
+  redis.call('ZREM', queueKey, searchId)
+  redis.call('ZREM', timeoutKey, searchId)
   return {}
 end
 local countryCode = redis.call('HGET', searchKey, 'countryCode') or ''

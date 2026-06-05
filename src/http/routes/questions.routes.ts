@@ -13,7 +13,12 @@ import {
   bulkCreateQuestionsSchema,
   findDuplicatesQuerySchema,
   checkDuplicatesSchema,
+  syncQuestionsToStagingSchema,
 } from '../../modules/questions/index.js';
+import {
+  imageMcqGeneratePreviewSchema,
+  imageMcqSaveDraftsSchema,
+} from '../../modules/questions/image-mcq.schemas.js';
 
 const router = Router();
 
@@ -78,6 +83,54 @@ router.post(
   requireRole('admin'),
   validate({ body: checkDuplicatesSchema }),
   questionsController.checkDuplicates
+);
+
+/**
+ * POST /api/v1/questions/sync-staging
+ * Copy selected questions from the current DB into the configured staging DB.
+ */
+router.post(
+  '/sync-staging',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: syncQuestionsToStagingSchema }),
+  questionsController.syncQuestionsToStaging
+);
+
+/**
+ * POST /api/v1/questions/image-mcq/generate-preview
+ * Generate image-backed MCQ review cards. No questions or images are saved yet.
+ */
+router.post(
+  '/image-mcq/generate-preview',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: imageMcqGeneratePreviewSchema }),
+  questionsController.generateImageMcqPreview
+);
+
+/**
+ * POST /api/v1/questions/image-mcq/generate-preview-stream
+ * Generate image-backed MCQ review cards and stream progress. No questions or images are saved yet.
+ */
+router.post(
+  '/image-mcq/generate-preview-stream',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: imageMcqGeneratePreviewSchema }),
+  questionsController.generateImageMcqPreviewStream
+);
+
+/**
+ * POST /api/v1/questions/image-mcq/save-drafts
+ * Upload accepted generated images and save accepted cards as draft questions.
+ */
+router.post(
+  '/image-mcq/save-drafts',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: imageMcqSaveDraftsSchema }),
+  questionsController.saveImageMcqDrafts
 );
 
 /**

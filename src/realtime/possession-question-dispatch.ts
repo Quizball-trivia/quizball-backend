@@ -14,7 +14,8 @@ import {
   setMatchCache,
   type MatchCache,
 } from './match-cache.js';
-import { questionTimerKey } from './match-keys.js';
+import { matchPauseKey, questionTimerKey } from './match-keys.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   ensureHalftimeCategories,
@@ -51,10 +52,16 @@ import {
   toMatchStatePayload,
   type Seat,
 } from './possession-state.js';
-import { computeResumedPossessionTiming, getNextQuestionDelayMs } from './possession-timing.js';
+import {
+  computeResumedPossessionTiming,
+  getNextQuestionDelayMs,
+  shouldResolveExpiredQuestionOnResume,
+  shouldResolveQuestionTimeoutNow,
+} from './possession-timing.js';
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { createReadyGateRegistry } from './ready-gate.js';
 import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
+import { getRedisClient } from './redis.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
@@ -63,6 +70,12 @@ const GOAL_ROUND_READY_ACK_CEILING_MS =
   FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+
+async function getPauseStartedAt(matchId: string): Promise<string | null> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return null;
+  return redis.get(matchPauseKey(matchId));
+}
 
 export function handlePossessionReadyForNextQuestion(
   userId: string,
@@ -387,7 +400,10 @@ export async function scheduleNextPossessionQuestion(
       scopeId: matchId,
       token: resolvedQIndex,
       waitingUserIds: humanUserIds,
-      ceilingMs: GOAL_ROUND_READY_ACK_CEILING_MS,
+      // Harness has no real client to send the post-goal ready ack, so it would
+      // sit the full ~9s ceiling on EVERY goal. Collapse the ceiling under
+      // fast-timers (prod untouched) so goals don't dominate match time.
+      ceilingMs: harnessDelayMs(GOAL_ROUND_READY_ACK_CEILING_MS),
       dispatch: () => dispatch({ postReadyAck: true }),
       onTimeout: (missing) => {
         logger.info({ matchId, resolvedQIndex, missing }, 'Ready-ack ceiling reached — sending next question anyway');
@@ -396,7 +412,11 @@ export async function scheduleNextPossessionQuestion(
     return;
   }
 
-  const delay = getNextQuestionDelayMs({ phase });
+  // The inter-question delay mirrors the FRONTEND result-hold + transition + reveal
+  // (~6s/round). In the regression harness this is the dominant per-match cost
+  // (~13 rounds => ~80s), so collapse it to a few ms when fast-timers are on.
+  // Production is untouched (harnessDelayMs returns prodMs unless REGRESSION_FAST_TIMERS).
+  const delay = harnessDelayMs(getNextQuestionDelayMs({ phase }));
   logger.info({ matchId, nextIndex, phase, delayMs: delay }, 'Possession next question scheduled after delay');
   setTimeout(() => dispatch(), delay);
 }
@@ -420,6 +440,23 @@ export async function sendPossessionMatchQuestion(
       );
       return null;
     }
+
+    const pauseStartedAt = await getPauseStartedAt(matchId);
+    if (pauseStartedAt) {
+      logger.info(
+        {
+          eventName: 'match:question',
+          matchId,
+          qIndex,
+          pauseStartedAt,
+          postReadyAck: preloaded?.postReadyAck ?? false,
+          ...cacheLogFields(cache),
+        },
+        'Possession question dispatch skipped: match paused'
+      );
+      return null;
+    }
+
     const totalQuestions = cache.totalQuestions;
     const state = cache.statePayload;
 
@@ -430,7 +467,7 @@ export async function sendPossessionMatchQuestion(
 
     if (state.phase === 'HALFTIME') {
       logger.info({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
+      await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
       if (!state.halftime.deadlineAt) {
         state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
       }
@@ -646,6 +683,22 @@ export async function resumePossessionMatchQuestion(
     return false;
   }
 
+  if (shouldResolveExpiredQuestionOnResume(currentQuestion.deadlineAt, pauseStartedAtMs)) {
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex,
+        pauseStartedAtMs,
+        existingDeadlineAt: currentQuestion.deadlineAt,
+        ...questionLogFields(currentQuestion),
+      },
+      'Possession question resume resolving expired question instead of replaying'
+    );
+    await resolvePossessionRound(io, matchId, qIndex, true);
+    return true;
+  }
+
   const resumedAtMs = Date.now();
   const { playableAt, deadlineAt } = computeResumedPossessionTiming({
     shownAtRaw: currentQuestion.shownAt,
@@ -745,6 +798,23 @@ export async function ensurePossessionActiveTimers(
     logger.warn(
       { eventName: 'match:question_timer', matchId, qIndex: currentQuestion.qIndex, deadlineAtRaw: currentQuestion.deadlineAt, ...questionLogFields(currentQuestion) },
       'Possession timer ensure resolving question with invalid deadline'
+    );
+    await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
+    return true;
+  }
+
+  const nowMs = Date.now();
+  if (shouldResolveQuestionTimeoutNow(currentQuestion.deadlineAt, nowMs)) {
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex: currentQuestion.qIndex,
+        deadlineAt: deadlineAt.toISOString(),
+        checkedAt: new Date(nowMs).toISOString(),
+        ...questionLogFields(currentQuestion),
+      },
+      'Possession timer ensure resolving expired question immediately'
     );
     await resolvePossessionRound(io, matchId, currentQuestion.qIndex, true);
     return true;

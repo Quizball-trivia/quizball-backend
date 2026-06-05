@@ -27,16 +27,21 @@ function extractCookieToken(cookieToken: unknown): string | null {
   return cookieToken.trim() || null;
 }
 
+export function selectAuthToken(authHeader: string | undefined, cookieToken: unknown): string | null {
+  const bearerToken = extractBearerToken(authHeader);
+  return bearerToken ?? extractCookieToken(cookieToken);
+}
+
 /**
  * Auth middleware.
  * Verifies JWT and attaches user + identity to request.
  *
  * Token extraction supports cookies and Authorization header:
- * - extractCookieToken(req.cookies?.qb_access_token) — preferred
- * - extractBearerToken(req.headers.authorization) — fallback
+ * - extractBearerToken(req.headers.authorization) — preferred when present
+ * - extractCookieToken(req.cookies?.qb_access_token) — fallback for cookie sessions
  *
  * Flow:
- * 1. Extract token from cookies (preferred) or Authorization header
+ * 1. Extract token from Authorization header or cookies
  * 2. Verify JWT → get AuthIdentity
  * 3. Resolve internal user via getOrCreateFromIdentity()
  * 4. Attach req.user and req.identity
@@ -48,8 +53,7 @@ export async function authMiddleware(
 ): Promise<void> {
   try {
     // 1. Extract token from cookies or Authorization header
-    const cookieToken = extractCookieToken(req.cookies?.qb_access_token);
-    const token = cookieToken ?? extractBearerToken(req.headers.authorization);
+    const token = selectAuthToken(req.headers.authorization, req.cookies?.qb_access_token);
     if (!token) {
       throw new AuthenticationError('Missing auth token');
     }

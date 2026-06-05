@@ -1,8 +1,11 @@
 import { z } from 'zod';
 
+const correlationIdSchema = z.string().min(1).max(128).optional();
+
 export const lobbyCreateSchema = z.object({
   mode: z.enum(['friendly', 'ranked']),
   isPublic: z.boolean().optional(),
+  correlationId: correlationIdSchema,
 });
 
 export const lobbyJoinByCodeSchema = z.object({
@@ -11,6 +14,11 @@ export const lobbyJoinByCodeSchema = z.object({
     .min(3)
     .max(12)
     .regex(/^[A-Za-z0-9]+$/, 'Invite code must be alphanumeric'),
+  correlationId: correlationIdSchema,
+});
+
+export const lobbyLeaveSchema = z.object({
+  correlationId: correlationIdSchema,
 });
 
 export const lobbyReadySchema = z.object({
@@ -54,6 +62,7 @@ export const lobbyChallengeDecisionSchema = z.object({
 
 export type LobbyCreatePayload = z.infer<typeof lobbyCreateSchema>;
 export type LobbyJoinByCodePayload = z.infer<typeof lobbyJoinByCodeSchema>;
+export type LobbyLeavePayload = z.infer<typeof lobbyLeaveSchema>;
 export type LobbyReadyPayload = z.infer<typeof lobbyReadySchema>;
 export type LobbyUpdateSettingsPayload = z.infer<typeof lobbyUpdateSettingsSchema>;
 export type LobbyStartPayload = z.infer<typeof lobbyStartSchema>;

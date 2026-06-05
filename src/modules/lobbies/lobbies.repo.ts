@@ -332,7 +332,7 @@ export const lobbiesRepo = {
       JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
         AND q.status = 'published'
-        AND q.type IN ('mcq_single', 'countdown_list', 'put_in_order', 'clue_chain')
+        AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id, c.name, c.icon, c.image_url
       ${RANKED_ELIGIBILITY_HAVING}
     `;
@@ -412,7 +412,7 @@ export const lobbiesRepo = {
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
         AND q.status = 'published'
-        AND q.type IN ('mcq_single', 'countdown_list', 'put_in_order', 'clue_chain')
+        AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id
       ${RANKED_ELIGIBILITY_HAVING}
     `;

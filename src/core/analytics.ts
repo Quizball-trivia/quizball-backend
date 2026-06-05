@@ -19,6 +19,16 @@ const AI_LOOKUP_TTL_MS = 5 * 60 * 1000; // 5 min — well within a match lifetim
 const aiCache = new Map<string, { isAi: boolean; expiresAt: number }>();
 const aiLookupInFlight = new Map<string, Promise<boolean>>();
 
+// trackEvent/identifyUser defer the actual capture behind an async AI lookup
+// (fire-and-forget for callers). Track those pending promises so shutdown can
+// await them before closing the client — otherwise events emitted near shutdown
+// are captured against a shut-down client (lost).
+const pendingAnalytics = new Set<Promise<void>>();
+function runDeferred(task: () => Promise<void>): void {
+  const p = task().finally(() => pendingAnalytics.delete(p));
+  pendingAnalytics.add(p);
+}
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
@@ -92,6 +102,11 @@ export function getPostHogClient(): PostHog | null {
 
 export async function shutdownPostHog(): Promise<void> {
   if (posthogClient) {
+    // Let any in-flight deferred captures (behind the async AI lookup) settle so
+    // their events reach the client before we flush + close it.
+    if (pendingAnalytics.size > 0) {
+      await Promise.allSettled([...pendingAnalytics]);
+    }
     await posthogClient.shutdown();
     posthogClient = null;
     logger.info('PostHog client shutdown');
@@ -112,8 +127,9 @@ export function trackEvent(
   const occurredAt = new Date().toISOString();
 
   // Resolve AI status asynchronously, then capture. Callers stay synchronous
-  // (fire-and-forget); a known AI distinctId never reaches PostHog.
-  void (async () => {
+  // (fire-and-forget); a known AI distinctId never reaches PostHog. Registered as
+  // pending so shutdown awaits it.
+  runDeferred(async () => {
     try {
       if (await isAiUser(distinctId)) return;
       client.capture({
@@ -128,7 +144,7 @@ export function trackEvent(
     } catch (error) {
       logger.error({ error }, 'Failed to track PostHog event');
     }
-  })();
+  });
 }
 
 // Helper function to identify users (set user properties)
@@ -139,7 +155,7 @@ export function identifyUser(
   const client = getPostHogClient();
   if (!client) return;
 
-  void (async () => {
+  runDeferred(async () => {
     try {
       if (await isAiUser(userId)) return;
       client.identify({
@@ -151,7 +167,7 @@ export function identifyUser(
     } catch (error) {
       logger.error({ error }, 'Failed to identify user in PostHog');
     }
-  })();
+  });
 }
 
 // Alias user (link anonymous ID to identified user)

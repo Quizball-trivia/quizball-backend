@@ -18,6 +18,7 @@ const configSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().optional(),
+  STAGING_DATABASE_URL: z.string().optional(),
 
   // Redis
   REDIS_URL: z.string().url().optional(),
@@ -111,6 +112,21 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     throw new ConfigError(
       `Invalid configuration: ${JSON.stringify(fieldErrors)}`,
       { fieldErrors },
+    );
+  }
+
+  // REGRESSION_* harness flags pin question randomness / collapse matchmaking
+  // delays for the test harness. They MUST never run outside local — in
+  // staging/prod they would change real gameplay (deterministic questions, near-
+  // instant matchmaking). Checked first so a misconfiguration fails boot fast.
+  const regressionFlag =
+    (["REGRESSION_DETERMINISTIC", "REGRESSION_FAST_TIMERS"] as const).find(
+      (k) => env[k] === "1" || env[k] === "true",
+    );
+  if (regressionFlag && result.data.NODE_ENV !== "local") {
+    throw new ConfigError(
+      `Invalid configuration: ${regressionFlag} may only be set in the local environment (it is a regression-harness-only flag).`,
+      { nodeEnv: result.data.NODE_ENV, flag: regressionFlag },
     );
   }
 

@@ -65,6 +65,14 @@ const fakeRedis = {
     // No persistent timers in this fake; tests don't exercise that path.
     return null;
   },
+  async zAdd(_key: string, _entries: Array<{ score: number; value: string }>): Promise<number> {
+    // Durable timer scheduling is a no-op here; resume/disconnect tests don't
+    // assert on the realtime:timers zset.
+    return 0;
+  },
+  async zRem(_key: string, _member: string): Promise<number> {
+    return 0;
+  },
   async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
     const key = payload.keys[0];
     const token = payload.arguments[0];
@@ -246,6 +254,11 @@ vi.mock('../../src/realtime/match-flow.js', () => ({
   cancelMatchQuestionTimer: vi.fn(),
   resolveRound: (...args: unknown[]) => resolveRoundMock(...args),
   sendMatchQuestion: (...args: unknown[]) => sendMatchQuestionMock(...args),
+}));
+
+const devSkipToPossessionPhaseMock = vi.fn();
+vi.mock('../../src/realtime/possession-dev-skip.js', () => ({
+  devSkipToPossessionPhase: (...args: unknown[]) => devSkipToPossessionPhaseMock(...args),
 }));
 
 vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) => {
@@ -703,7 +716,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
       await matchRealtimeService.handleMatchDisconnect(io, socket);
       expect(completeMatchMock).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -768,7 +783,11 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       getMatchMock.mockResolvedValue(completedMatch);
       getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer fires this on expiry. Run it under real timers so
+      // the resolution's internal async (tracing/locks) isn't blocked by faked time.
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -833,7 +852,11 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       getMatchMock.mockResolvedValue(completedMatch);
       getMatchMock.mockResolvedValueOnce(activeMatch).mockResolvedValueOnce(activeMatch);
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer fires this on expiry. Run it under real timers so
+      // the resolution's internal async (tracing/locks) isn't blocked by faked time.
+      vi.useRealTimers();
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
         'm1',
@@ -1001,8 +1024,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
   });
 
   it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
       const socket = createSocketMock('u1', 'm1');
@@ -1023,16 +1045,52 @@ describe('match-realtime.service high-risk integration behavior', () => {
         },
       });
 
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+
       await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
 
       fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
-      await vi.advanceTimersByTimeAsync(60_000);
+      // The durable grace timer would fire this on expiry; invoke its handler
+      // directly (real timers — no 60s wall-clock wait needed).
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
       expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
       expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(abandonMatchMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
+    }
+  });
+
+  it('S15b1: ranked all-disconnected does NOT abandon when forfeit finalization is locked', async () => {
+    {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+      const socket = createSocketMock('u1', 'm1');
+      const nowIso = new Date().toISOString();
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 0,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+      });
+
+      const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+
+      await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+      fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
+      // Simulate another resolver already holding the forfeit lock → finalize
+      // returns completed:false. The grace handler must NOT fall through to abandon.
+      fakeRedisStore.values.set('lock:match:m1:forfeit', 'someone-else');
+
+      await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+      expect(abandonMatchMock).not.toHaveBeenCalled();
+      expect(completeMatchMock).not.toHaveBeenCalled();
     }
   });
 
@@ -1096,6 +1154,66 @@ describe('match-realtime.service high-risk integration behavior', () => {
       );
       expect(resolveRoundMock).not.toHaveBeenCalled();
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S15c0: resume emits refreshed party question timing before clearing pause', async () => {
+    vi.useFakeTimers();
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const events: string[] = [];
+    const emit = vi.fn((event: string) => {
+      if (event === 'match:question' || event === 'match:resume') {
+        events.push(event);
+      }
+    });
+    const io = {
+      to: vi.fn(() => ({ emit })),
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []), socketsJoin: vi.fn(async () => undefined) })),
+    } as unknown as QuizballServer;
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 5_000));
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'friendly_party_quiz',
+      },
+      ranked_context: null,
+    });
+    getMatchQuestionMock.mockResolvedValue({
+      match_id: 'm1',
+      q_index: 3,
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 300, correct_answers: 3, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 250, correct_answers: 2, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+    resumePartyQuizQuestionMock.mockImplementation(async () => {
+      events.push('match:question');
+      return true;
+    });
+
+    try {
+      await matchRealtimeService.resumePausedMatch(io, 'm1', 'u1');
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(resumePartyQuizQuestionMock).toHaveBeenCalledWith(
+        io,
+        'm1',
+        3,
+        expect.any(Number)
+      );
+      expect(events).toEqual(['match:question', 'match:resume']);
     } finally {
       vi.useRealTimers();
     }
@@ -1693,6 +1811,26 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       await vi.advanceTimersByTimeAsync(1);
       expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S24b: beginMatchForLobby with initialDevSkipTarget skips to that phase and never dispatches normal question 0', async () => {
+    vi.useFakeTimers();
+    devSkipToPossessionPhaseMock.mockClear();
+    try {
+      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+
+      await beginMatchForLobby(io, 'l1', 'm1', { countdownSec: 0, initialDevSkipTarget: 'penalty_ban' });
+
+      // Advance past the (0s) countdown — the post-countdown work runs the dev
+      // skip, NOT a normal question-0 dispatch.
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(devSkipToPossessionPhaseMock).toHaveBeenCalledWith(io, 'm1', 'penalty_ban');
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

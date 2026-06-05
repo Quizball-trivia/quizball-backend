@@ -77,6 +77,39 @@ function numberFromPayload(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function normalizePenaltyAttempts(params: {
+  attempts: unknown;
+  goals: { seat1: number; seat2: number };
+  kicksTaken: { seat1: number; seat2: number };
+}): { seat1: Array<'goal' | 'miss'>; seat2: Array<'goal' | 'miss'> } {
+  const fromRaw = (value: unknown, goals: number, kicksTaken: number): Array<'goal' | 'miss'> => {
+    const total = Math.max(0, kicksTaken);
+    // Canonical default: `goals` goals followed by misses, exactly `kicksTaken` long.
+    const result: Array<'goal' | 'miss'> = [
+      ...Array.from({ length: Math.min(total, Math.max(0, goals)) }, () => 'goal' as const),
+      ...Array.from({ length: Math.max(0, total - Math.max(0, goals)) }, () => 'miss' as const),
+    ];
+    // Overwrite the prefix with any real per-kick outcomes we have, but NEVER
+    // change the length — a rebuilt cache must keep attempts.length === kicksTaken,
+    // otherwise the penalty UI sees contradictory state (slice() can't pad).
+    if (Array.isArray(value)) {
+      const sanitized = value.filter((entry): entry is 'goal' | 'miss' => entry === 'goal' || entry === 'miss');
+      for (let i = 0; i < Math.min(sanitized.length, total); i += 1) {
+        result[i] = sanitized[i];
+      }
+    }
+    return result;
+  };
+
+  const raw = params.attempts && typeof params.attempts === 'object'
+    ? params.attempts as { seat1?: unknown; seat2?: unknown }
+    : {};
+  return {
+    seat1: fromRaw(raw.seat1, params.goals.seat1, params.kicksTaken.seat1),
+    seat2: fromRaw(raw.seat2, params.goals.seat2, params.kicksTaken.seat2),
+  };
+}
+
 export function buildAnswerPayload(answer: Pick<CachedAnswer,
   'questionKind' | 'foundCount' | 'foundAnswerIds' | 'submittedOrderIds' | 'clueIndex'
 >): Json {
@@ -159,6 +192,14 @@ function sanitizePossessionState(
   const fallback = createInitialPossessionState(fallbackVariant);
   if (!raw || typeof raw !== 'object') return fallback;
   const candidate = raw as Partial<PossessionStatePayload>;
+  const penaltyGoals = {
+    seat1: Math.max(0, Number(candidate.penaltyGoals?.seat1 ?? fallback.penaltyGoals.seat1)),
+    seat2: Math.max(0, Number(candidate.penaltyGoals?.seat2 ?? fallback.penaltyGoals.seat2)),
+  };
+  const penaltyKicksTaken = {
+    seat1: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat1 ?? 0)),
+    seat2: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat2 ?? 0)),
+  };
 
   return {
     ...fallback,
@@ -167,10 +208,7 @@ function sanitizePossessionState(
       seat1: Math.max(0, Number(candidate.goals?.seat1 ?? fallback.goals.seat1)),
       seat2: Math.max(0, Number(candidate.goals?.seat2 ?? fallback.goals.seat2)),
     },
-    penaltyGoals: {
-      seat1: Math.max(0, Number(candidate.penaltyGoals?.seat1 ?? fallback.penaltyGoals.seat1)),
-      seat2: Math.max(0, Number(candidate.penaltyGoals?.seat2 ?? fallback.penaltyGoals.seat2)),
-    },
+    penaltyGoals,
     possessionDiff: clamp(Number(candidate.possessionDiff ?? fallback.possessionDiff), -100, 100),
     kickOffSeat: asSeat(candidate.kickOffSeat) ?? fallback.kickOffSeat,
     normalQuestionsPerHalf: POSSESSION_QUESTIONS_PER_HALF,
@@ -206,6 +244,9 @@ function sanitizePossessionState(
         seat1: typeof candidate.halftime?.bans?.seat1 === 'string' ? candidate.halftime.bans.seat1 : null,
         seat2: typeof candidate.halftime?.bans?.seat2 === 'string' ? candidate.halftime.bans.seat2 : null,
       },
+      // Preserve the ban purpose across cache rebuild — a rebuild mid penalty-ban
+      // must NOT default back to 'second_half' or finalize would exit to normal play.
+      purpose: candidate.halftime?.purpose === 'penalty' ? 'penalty' : 'second_half',
     },
     lastAttack: {
       attackerSeat: asSeat(candidate.lastAttack?.attackerSeat),
@@ -214,11 +255,14 @@ function sanitizePossessionState(
       round: Math.max(0, Number(candidate.penalty?.round ?? 0)),
       shooterSeat: asSeat(candidate.penalty?.shooterSeat) ?? 1,
       suddenDeath: Boolean(candidate.penalty?.suddenDeath),
-      kicksTaken: {
-        seat1: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat1 ?? 0)),
-        seat2: Math.max(0, Number(candidate.penalty?.kicksTaken?.seat2 ?? 0)),
-      },
+      kicksTaken: penaltyKicksTaken,
+      attempts: normalizePenaltyAttempts({
+        attempts: candidate.penalty?.attempts,
+        goals: penaltyGoals,
+        kicksTaken: penaltyKicksTaken,
+      }),
     },
+    penaltyCategoryId: typeof candidate.penaltyCategoryId === 'string' ? candidate.penaltyCategoryId : null,
     currentQuestion: candidate.currentQuestion
       ? {
         qIndex: Number(candidate.currentQuestion.qIndex ?? 0),
@@ -412,6 +456,7 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
     });
 
     const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
+    cache.currentQIndex = currentQuestionIndex;
     span.setAttribute('quizball.current_q_index', currentQuestionIndex);
     const rawQuestionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);
     const questionPayload = normalizeMatchQuestionPayload(rawQuestionPayload);

@@ -19,6 +19,7 @@ import {
   parseStoredAvatarCustomization,
   type AvatarCustomization,
 } from './avatar-customization.js';
+import { findBannedNicknameTerm, isNicknameAllowed } from '../moderation/text-moderation.js';
 
 interface UpdateProfileOptions {
   requesterRole?: string | null;
@@ -29,15 +30,43 @@ export interface AccountDeletionStatus {
   pendingDeletionAt: string;
 }
 
+const PENDING_DELETION_DETAILS = { reason: 'pending_deletion' } as const;
+
+function isPendingDeletionAccount(user: Pick<User, 'is_deleted' | 'deleted_at' | 'pending_deletion_at'>): boolean {
+  return Boolean(user.pending_deletion_at && !user.deleted_at && !user.is_deleted);
+}
+
 function assertUserAccountActive(user: User): void {
+  if (isPendingDeletionAccount(user)) {
+    throw new AuthenticationError('Account is scheduled for deletion', PENDING_DELETION_DETAILS);
+  }
   if (isUserAccountInactive(user)) {
-    throw new AuthenticationError('Account is scheduled for deletion');
+    throw new AuthenticationError('Account is no longer active', { reason: 'account_inactive' });
   }
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function assertNicknameAllowed(nickname: string, userId?: string): void {
+  const match = findBannedNicknameTerm(nickname);
+  if (!match) return;
+
+  logger.warn(
+    {
+      userId,
+      field: 'nickname',
+      reason: match.reason,
+      language: match.language,
+    },
+    'Blocked prohibited nickname'
+  );
+  throw new BadRequestError('Nickname is not allowed', {
+    field: 'nickname',
+    reason: 'prohibited_content',
+  });
 }
 
 async function buildIdentityBackfill(
@@ -90,9 +119,20 @@ async function assertAvatarCustomizationAllowed(
   const ownedSlugs = new Set(inventory.map((item) => item.product_slug));
   const missingSlugs = requiredSlugs.filter((slug) => !ownedSlugs.has(slug));
 
-  if (missingSlugs.length > 0) {
+  if (missingSlugs.length === 0) {
+    return;
+  }
+
+  const currentUser = await usersRepo.getById(userId);
+  const currentCustomization = parseStoredAvatarCustomization(currentUser?.avatar_customization);
+  const alreadyEquippedSlugs = new Set(
+    currentCustomization ? getRequiredAvatarProductSlugs(currentCustomization) : []
+  );
+  const newlyMissingSlugs = missingSlugs.filter((slug) => !alreadyEquippedSlugs.has(slug));
+
+  if (newlyMissingSlugs.length > 0) {
     throw new BadRequestError('Avatar customization includes unowned items', {
-      missingProductSlugs: missingSlugs,
+      missingProductSlugs: newlyMissingSlugs,
     });
   }
 }
@@ -191,6 +231,23 @@ export const usersService = {
     );
 
     const phoneNumber = normalizeOptionalText(identity.phoneNumber);
+    const normalizedIdentityNickname = normalizeOptionalText(identity.name);
+    const proposedNickname =
+      normalizedIdentityNickname && isNicknameAllowed(normalizedIdentityNickname)
+        ? normalizedIdentityNickname
+        : null;
+    if (normalizedIdentityNickname && !proposedNickname) {
+      logger.warn(
+        {
+          provider: identity.provider,
+          subject: identity.subject,
+          field: 'nickname',
+          reason: 'prohibited_content',
+        },
+        'Dropped prohibited identity nickname during user creation'
+      );
+    }
+
     const newUser = await usersRepo.createWithIdentity(
       {
         email: identity.email,
@@ -198,7 +255,7 @@ export const usersService = {
         phoneVerifiedAt: phoneNumber
           ? identity.phoneVerifiedAt ?? new Date().toISOString()
           : null,
-        nickname: identity.name,
+        nickname: proposedNickname,
         country: detectedCountry ?? undefined,
       },
       {
@@ -248,6 +305,21 @@ export const usersService = {
     return user;
   },
 
+  async getRestorableVerifiedByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const user = await usersRepo.getActiveOrPendingByPhoneNumber(phoneNumber);
+    if (!user || !user.phone_verified_at) {
+      return null;
+    }
+    if (user.is_deleted || user.deleted_at) {
+      return null;
+    }
+    return user;
+  },
+
+  async getPendingDeletionByEmail(email: string): Promise<User | null> {
+    return usersRepo.getPendingDeletionByEmail(email);
+  },
+
   async setVerifiedPhoneNumber(userId: string, phoneNumber: string, verifiedAt?: string | null): Promise<User> {
     const availability = await assertPhoneCanBeLinked(userId, phoneNumber);
     if (availability === 'already_verified') {
@@ -294,14 +366,24 @@ export const usersService = {
   ): Promise<User> {
     await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
 
-    if (typeof data.nickname === 'string' && data.nickname.trim().length > 0) {
-      const taken = await usersRepo.isNicknameTaken(data.nickname, id);
+    const updateData: typeof data = { ...data };
+    if (typeof data.nickname === 'string') {
+      const nickname = data.nickname.trim();
+      if (nickname.length === 0) {
+        throw new BadRequestError('Nickname is required', {
+          field: 'nickname',
+          reason: 'empty',
+        });
+      }
+      assertNicknameAllowed(nickname, id);
+      const taken = await usersRepo.isNicknameTaken(nickname, id);
       if (taken) {
         throw new ConflictError('Nickname is already taken', { field: 'nickname' });
       }
+      updateData.nickname = nickname;
     }
 
-    const user = await usersRepo.update(id, data);
+    const user = await usersRepo.update(id, updateData);
 
     if (!user) {
       throw new NotFoundError('User not found');
@@ -477,5 +559,34 @@ export const usersService = {
     await invalidateByUserId(id);
     logger.info({ userId: id }, 'Admin restored pending account deletion');
     return user;
+  },
+
+  async restorePendingDeletionFromIdentity(identity: AuthIdentity): Promise<User> {
+    const existingIdentity = await identitiesRepo.getByProviderSubject(
+      identity.provider,
+      identity.subject
+    );
+
+    if (!existingIdentity) {
+      throw new BadRequestError('No restorable account found for this login');
+    }
+
+    const user = existingIdentity.user;
+    if (!isPendingDeletionAccount(user)) {
+      assertUserAccountActive(user);
+      return user;
+    }
+
+    const restored = await usersRepo.cancelPendingDeletion(user.id);
+    if (!restored) {
+      throw new BadRequestError('Account is not pending deletion or grace period has expired');
+    }
+
+    await invalidateByUserId(restored.id);
+    logger.info(
+      { userId: restored.id, provider: identity.provider },
+      'User restored pending account deletion'
+    );
+    return restored;
   },
 };

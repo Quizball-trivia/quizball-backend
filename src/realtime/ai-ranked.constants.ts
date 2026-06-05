@@ -23,6 +23,7 @@
  */
 
 import { normalizeCountryCode } from '../core/country.js';
+import { getRandom } from '../core/rng.js';
 
 export const RANKED_AI_CORRECTNESS = 0.45;
 
@@ -102,7 +103,7 @@ function randomFrom<T>(values: T[]): T {
   if (values.length === 0) {
     throw new Error('randomFrom called with empty array');
   }
-  return values[Math.floor(Math.random() * values.length)];
+  return values[Math.floor(getRandom() * values.length)];
 }
 
 function encodeSegment(value: string): string {
@@ -122,7 +123,7 @@ export function generateRankedAiUsername(): string {
 export function generateRankedAiUsernameAvoiding(takenLowerNicknames: Set<string>): string {
   const available = AI_NICKNAMES.filter((name) => !takenLowerNicknames.has(name.toLowerCase()));
   if (available.length > 0) return randomFrom(available);
-  const suffix = Math.floor(Math.random() * 9000 + 1000);
+  const suffix = Math.floor(getRandom() * 9000 + 1000);
   return `${randomFrom(AI_NICKNAMES)}_${suffix}`;
 }
 
@@ -241,8 +242,8 @@ const AI_GEO_POOL: Array<{ city: string; country: string; countryCode: string; f
   { city: 'Riyadh',        country: 'Saudi Arabia',   countryCode: 'SA', flag: '\u{1F1F8}\u{1F1E6}', lat: 24.71, lon: 46.67 },
   { city: 'Jakarta',       country: 'Indonesia',      countryCode: 'ID', flag: '\u{1F1EE}\u{1F1E9}', lat: -6.21, lon: 106.85 },
   { city: 'Doha',          country: 'Qatar',          countryCode: 'QA', flag: '\u{1F1F6}\u{1F1E6}', lat: 25.29, lon: 51.53 },
-  { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.71, lon: -74.01 },
-  { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.05, lon: -118.24 },
+  { city: 'New York',      country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 40.7127, lon: -74.0059 },
+  { city: 'Los Angeles',   country: 'USA',            countryCode: 'US', flag: '\u{1F1FA}\u{1F1F8}', lat: 34.0536, lon: -118.2430 },
   { city: 'Toronto',       country: 'Canada',         countryCode: 'CA', flag: '\u{1F1E8}\u{1F1E6}', lat: 43.65, lon: -79.38 },
   { city: 'Tbilisi',       country: 'Georgia',        countryCode: 'GE', flag: '\u{1F1EC}\u{1F1EA}', lat: 41.72, lon: 44.79 },
 ];
@@ -298,7 +299,7 @@ const RANKED_AI_FAVORITE_CLUBS = [
 ];
 
 export function generateRankedAiFavoriteClub(): string {
-  return RANKED_AI_FAVORITE_CLUBS[Math.floor(Math.random() * RANKED_AI_FAVORITE_CLUBS.length)];
+  return RANKED_AI_FAVORITE_CLUBS[Math.floor(getRandom() * RANKED_AI_FAVORITE_CLUBS.length)];
 }
 
 export function rankedAiLobbyKey(lobbyId: string): string {

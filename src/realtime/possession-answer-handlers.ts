@@ -261,7 +261,10 @@ export async function handlePossessionAnswer(
         myTotalPoints: player.totalPoints,
         ...questionLogFields(question),
       },
-      'Possession MCQ answer committed'
+      // pointsEarned + timing inline in the message so the value the FLIGHT shows
+      // (+N) is greppable from the deploy logs and can be compared against the
+      // round_result's possessionPoints/delta to catch bar-vs-flight mismatches.
+      `Possession MCQ answer committed: q${qIndex} user=${userId} correct=${isCorrect} pointsEarned=${pointsEarned} timeMs=${authoritativeTimeMs}`
     );
 
     return {
@@ -317,17 +320,17 @@ export async function handlePossessionAnswer(
     shooterSeat: committed.question.shooterSeat,
   });
 
-  if (committed.question.phaseKind !== 'penalty') {
-    socket.to(`match:${matchId}`).emit('match:opponent_answered', {
-      matchId,
-      qIndex,
-      questionKind: committed.question.kind,
-      opponentTotalPoints: committed.myTotalPoints,
-      pointsEarned: committed.pointsEarned,
-      isCorrect: committed.isCorrect,
-      selectedIndex,
-    });
-  }
+  // Emit live in all phases, penalties included, so the opponent's pick and
+  // score-flight surface the same way as a normal ranked question.
+  socket.to(`match:${matchId}`).emit('match:opponent_answered', {
+    matchId,
+    qIndex,
+    questionKind: committed.question.kind,
+    opponentTotalPoints: committed.myTotalPoints,
+    pointsEarned: committed.pointsEarned,
+    isCorrect: committed.isCorrect,
+    selectedIndex,
+  });
 
   if (committed.answerCount >= committed.expectedCount) {
     logger.info(

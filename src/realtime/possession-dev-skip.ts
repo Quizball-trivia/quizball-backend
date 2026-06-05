@@ -21,7 +21,7 @@ import type { QuizballServer } from './socket-server.js';
 export async function devSkipToPossessionPhase(
   io: QuizballServer,
   matchId: string,
-  target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'second_half'
+  target: 'halftime' | 'last_attack' | 'shot' | 'penalties' | 'penalty_ban' | 'second_half'
 ): Promise<void> {
   // Hold the match-scoped lock so the cache mutation can't interleave with
   // a concurrent resolver, timer, or halftime handler.
@@ -87,6 +87,23 @@ export async function devSkipToPossessionPhase(
         };
         state.currentQuestion = null;
         break;
+
+      case 'penalty_ban':
+        // Full penalty flow: land in the category-ban interlude (reusing the
+        // HALFTIME ban machinery with purpose='penalty'), which finalizes into
+        // the shootout. Mirrors the 'halftime' case but for penalties.
+        state.half = 2;
+        state.normalQuestionsAnsweredInHalf = POSSESSION_QUESTIONS_PER_HALF;
+        state.goals = { seat1: 1, seat2: 1 };
+        state.phase = 'HALFTIME';
+        state.halftime.purpose = 'penalty';
+        state.halftime.uiReadyAt = null;
+        state.halftime.firstBanSeat = null;
+        state.halftime.bans = { seat1: null, seat2: null };
+        state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+        await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
+        state.currentQuestion = null;
+        break;
     }
 
     cache.currentQIndex = nextQIndex;
@@ -99,7 +116,7 @@ export async function devSkipToPossessionPhase(
     });
     await emitMatchState(io, matchId, state);
 
-    if (target === 'halftime') {
+    if (target === 'halftime' || target === 'penalty_ban') {
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
     } else {

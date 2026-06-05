@@ -51,7 +51,8 @@ export const matchesRepo = {
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
       UPDATE matches
-      SET current_q_index = ${qIndex}
+      SET current_q_index = ${qIndex},
+          updated_at = NOW()
       WHERE id = ${matchId} AND current_q_index < ${qIndex}
     `;
   },
@@ -67,10 +68,15 @@ export const matchesRepo = {
       'quizball.q_index': qIndex ?? -1,
     }, async () => {
       const jsonPayload = sql.json(statePayload as Json ?? null);
+      // Bump updated_at explicitly so the stale-match sweeper's "no activity"
+      // signal is correct even if the trg_matches_set_updated_at trigger has not
+      // been applied yet (migration lag). The trigger is the durable source of
+      // truth; this is belt-and-suspenders.
       if (qIndex === undefined) {
         await sql`
           UPDATE matches
-          SET state_payload = ${jsonPayload}
+          SET state_payload = ${jsonPayload},
+              updated_at = NOW()
           WHERE id = ${matchId}
         `;
         return;
@@ -79,7 +85,8 @@ export const matchesRepo = {
       await sql`
         UPDATE matches
         SET state_payload = ${jsonPayload},
-            current_q_index = GREATEST(current_q_index, ${qIndex})
+            current_q_index = GREATEST(current_q_index, ${qIndex}),
+            updated_at = NOW()
         WHERE id = ${matchId}
       `;
     });
@@ -88,7 +95,8 @@ export const matchesRepo = {
   async setMatchCategoryB(matchId: string, categoryBId: string | null): Promise<void> {
     await sql`
       UPDATE matches
-      SET category_b_id = ${categoryBId}
+      SET category_b_id = ${categoryBId},
+          updated_at = NOW()
       WHERE id = ${matchId}
     `;
   },
@@ -202,6 +210,41 @@ export const matchesRepo = {
       LIMIT 1
     `;
     return row ?? null;
+  },
+
+  /**
+   * Matches stuck in 'active' with no state write for `olderThanMs`. Used by the
+   * stale-match sweeper to clean up orphans whose in-process grace/forfeit timer
+   * was lost (e.g. a backend restart mid-grace). Gated on `updated_at` — which is
+   * bumped on every state write — so a genuinely live (but long) match is never
+   * returned, only ones that have gone silent for the whole window.
+   */
+  async listStaleActiveMatches(olderThanMs: number, limit: number): Promise<MatchRow[]> {
+    return sql<MatchRow[]>`
+      SELECT *
+      FROM matches
+      WHERE status = 'active'
+        AND updated_at < NOW() - make_interval(secs => ${olderThanMs / 1000})
+      ORDER BY updated_at ASC
+      LIMIT ${limit}
+    `;
+  },
+
+  /**
+   * True if the BEFORE-UPDATE trigger that maintains matches.updated_at exists.
+   * The stale-match sweeper gates on this: without the trigger, updated_at is
+   * only set at INSERT, so a live match would look stale and could be swept.
+   */
+  async hasUpdatedAtTrigger(): Promise<boolean> {
+    const [row] = await sql<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_matches_set_updated_at'
+          AND tgrelid = 'public.matches'::regclass
+          AND NOT tgisinternal
+      ) AS exists
+    `;
+    return row?.exists ?? false;
   },
 
   async abandonMatch(matchId: string): Promise<boolean> {

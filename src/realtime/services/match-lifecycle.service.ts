@@ -1,5 +1,6 @@
 import type { User } from '../../db/types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { countryPayload } from '../../core/country.js';
 import { logger } from '../../core/logger.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -12,9 +13,10 @@ import { rankedService, parseRankedContext } from '../../modules/ranked/ranked.s
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
-import { trackPartyQuizStarted } from '../../core/analytics/game-events.js';
+import { trackPartyQuizStarted, trackMatchCreated } from '../../core/analytics/game-events.js';
 import { buildInitialCache, setMatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
+import { devSkipToPossessionPhase } from '../possession-dev-skip.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   matchDisconnectKey,
@@ -95,7 +97,15 @@ export async function beginMatchForLobby(
   io: QuizballServer,
   lobbyId: string,
   matchId: string,
-  options?: { countdownSec?: number }
+  options?: {
+    countdownSec?: number;
+    /**
+     * Dev-only: instead of dispatching normal question 0 after the countdown,
+     * skip the match straight to this phase. This GUARANTEES no open-play
+     * question 0 is ever emitted (avoids the quick-match-then-skip race).
+     */
+    initialDevSkipTarget?: 'penalty_ban' | 'penalties' | 'halftime' | 'last_attack' | 'shot' | 'second_half';
+  }
 ): Promise<void> {
   const lobbyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
   type MatchStartMember = Pick<(typeof lobbyMembers)[number], 'user_id' | 'nickname' | 'avatar_url' | 'avatar_customization' | 'favorite_club'> & { country?: string | null };
@@ -119,7 +129,7 @@ export async function beginMatchForLobby(
       ? Math.floor(options?.countdownSec ?? defaultCountdownSec)
       : defaultCountdownSec
   );
-  const countdownMs = countdownSec * 1000;
+  const countdownMs = harnessDelayMs(countdownSec * 1000, 300);
   const variant = variantForCountdown;
 
   let members: MatchStartMember[];
@@ -273,6 +283,9 @@ export async function beginMatchForLobby(
   await Promise.all(
     members.map(async (member) => {
       const opponent = members.find((candidate) => candidate.user_id !== member.user_id) ?? member;
+      // Analytics: match started, per member. AI users are suppressed downstream
+      // by the analytics AI-guard, so firing for all members is safe.
+      trackMatchCreated(member.user_id, matchId, match.mode, match.category_a_id ?? undefined);
       io.to(`user:${member.user_id}`).emit('match:start', {
         matchId,
         mode: match.mode,
@@ -357,6 +370,20 @@ export async function beginMatchForLobby(
         const match = await matchesRepo.getMatch(matchId);
         if (!match || match.status !== 'active') {
           logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
+          return;
+        }
+        // Dev-only: skip straight to the requested phase instead of dispatching
+        // normal question 0. devSkipToPossessionPhase dispatches the appropriate
+        // phase question (or, for halftime/penalty_ban, schedules the ban) —
+        // so a normal open-play question 0 is never emitted. It drives the
+        // POSSESSION state machine only, so guard it to possession variants:
+        // a party-quiz match must fall through to its normal first question.
+        if (options?.initialDevSkipTarget && variant !== 'friendly_party_quiz') {
+          logger.info(
+            { eventName: 'match:first_question_dev_skip', matchId, target: options.initialDevSkipTarget },
+            'Dev-skipping initial question to requested phase (no normal q0 emitted)'
+          );
+          await devSkipToPossessionPhase(io, matchId, options.initialDevSkipTarget);
           return;
         }
         logger.info(

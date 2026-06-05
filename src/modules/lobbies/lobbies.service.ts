@@ -2,13 +2,14 @@ import { lobbiesRepo } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
 import { logger, NotFoundError, pickI18nText } from '../../core/index.js';
+import { getRandom } from '../../core/rng.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import { rankedService } from '../ranked/ranked.service.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(getRandom() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -152,7 +153,7 @@ export const lobbiesService = {
     const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
     const excludeSet = new Set(excludeCategoryIds);
     const filtered = allValid.filter((row) => !excludeSet.has(row.id));
-    const shuffled = filtered.sort(() => Math.random() - 0.5);
+    const shuffled = shuffle(filtered);
     const selected = shuffled.slice(0, count);
 
     return selected.map((row) => ({

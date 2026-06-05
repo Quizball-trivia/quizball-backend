@@ -66,6 +66,7 @@ export interface ListQuestionsFilter {
   status?: string;
   difficulty?: string;
   type?: string;
+  mcqImage?: 'with' | 'without';
   search?: string;
 }
 
@@ -91,6 +92,28 @@ export const questionsRepo = {
     const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
     const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
     const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
+    const normalizedPayload = sql`
+      (
+        CASE
+          WHEN jsonb_typeof(qp.payload) = 'object' THEN qp.payload
+          WHEN jsonb_typeof(qp.payload) = 'string'
+            AND (qp.payload #>> '{}') ~ '^\\s*\\{.*\\}\\s*$'
+          THEN (qp.payload #>> '{}')::jsonb
+          ELSE '{}'::jsonb
+        END
+      )
+    `;
+    const mcqHasImageCondition = sql`
+      q.type = 'mcq_single'
+      AND (${normalizedPayload}) ? 'image'
+      AND jsonb_typeof((${normalizedPayload})->'image') = 'object'
+      AND COALESCE((${normalizedPayload})->'image'->>'url', '') <> ''
+    `;
+    const mcqImageFilter = filter?.mcqImage === 'with'
+      ? sql`AND ${mcqHasImageCondition}`
+      : filter?.mcqImage === 'without'
+        ? sql`AND q.type = 'mcq_single' AND NOT (${mcqHasImageCondition})`
+        : sql``;
     const searchTerm = filter?.search?.trim();
     const searchPattern = searchTerm ? `%${searchTerm}%` : null;
     const searchFilter = searchPattern
@@ -116,6 +139,7 @@ export const questionsRepo = {
       ${statusFilter}
       ${difficultyFilter}
       ${typeFilter}
+      ${mcqImageFilter}
       ${searchFilter}
       ORDER BY q.created_at DESC
       LIMIT ${limit} OFFSET ${offset}

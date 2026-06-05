@@ -13,6 +13,7 @@ const TIMER_BATCH_SIZE = 100;
 export type RealtimeTimerKind =
   | 'draft_ai_ban'
   | 'draft_auto_ban'
+  | 'match_disconnect_forfeit'
   | 'party_question'
   | 'possession_ai_answer'
   | 'possession_halftime'
@@ -21,6 +22,7 @@ export type RealtimeTimerKind =
 export type RealtimeTimerPayload =
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string }
+  | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string }
   | { kind: 'party_question'; matchId: string; qIndex: number }
   | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null }
   | { kind: 'possession_halftime'; matchId: string }
@@ -31,7 +33,7 @@ export type RealtimeTimerHandler = (
   payload: RealtimeTimerPayload
 ) => Promise<void>;
 
-type RealtimeTimerHandlers = Partial<Record<RealtimeTimerKind, RealtimeTimerHandler>>;
+export type RealtimeTimerHandlers = Partial<Record<RealtimeTimerKind, RealtimeTimerHandler>>;
 
 let activeIo: QuizballServer | null = null;
 let activeHandlers: RealtimeTimerHandlers = {};
@@ -59,6 +61,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   if (
     kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'
+    && kind !== 'match_disconnect_forfeit'
     && kind !== 'party_question'
     && kind !== 'possession_ai_answer'
     && kind !== 'possession_halftime'

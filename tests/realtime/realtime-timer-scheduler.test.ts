@@ -118,6 +118,43 @@ describe('realtime timer scheduler', () => {
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
   });
 
+  it('persists a match_disconnect_forfeit timer in Redis and fires it when overdue', async () => {
+    const handled = vi.fn(async () => {});
+    const {
+      __realtimeTimerInternals,
+      scheduleRealtimeTimer,
+      startRealtimeTimerScheduler,
+      stopRealtimeTimerScheduler,
+    } = await import('../../src/realtime/realtime-timer-scheduler.js');
+
+    startRealtimeTimerScheduler({} as QuizballServer, {
+      match_disconnect_forfeit: handled,
+    });
+
+    // The disconnect grace forfeit is written to the Redis sorted set, NOT an
+    // in-process setTimeout — that is what survives a backend restart. Schedule
+    // it 60s out, then jump past it: a poll picks the now-overdue timer up from
+    // Redis (exactly how a restarted process would replay it).
+    await scheduleRealtimeTimer(
+      'match_disconnect_forfeit',
+      'match-9',
+      new Date(Date.now() + 60_000),
+      { kind: 'match_disconnect_forfeit', matchId: 'match-9', disconnectedUserId: 'user-7' }
+    );
+    const member = __realtimeTimerInternals.timerMember('match_disconnect_forfeit', 'match-9');
+    expect(redis?.zsets.get(__realtimeTimerInternals.TIMER_ZSET_KEY)?.get(member)).toBe(Date.now() + 60_000);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await __realtimeTimerInternals.pollDueTimers();
+    await __realtimeTimerInternals.pollDueTimers();
+    stopRealtimeTimerScheduler();
+
+    expect(handled).toHaveBeenCalledWith(
+      expect.anything(),
+      { kind: 'match_disconnect_forfeit', matchId: 'match-9', disconnectedUserId: 'user-7' }
+    );
+  });
+
   it('cancels scheduled Redis timers and payloads', async () => {
     const {
       __realtimeTimerInternals,

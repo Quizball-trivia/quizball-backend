@@ -14,6 +14,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:regression": "vitest run --config vitest.regression.config.ts",
+    "staging:gate": "tsx game-regression/staging/run.mts",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:migrate:new": "supabase migration new",
@@ -33,7 +35,8 @@
     "docker:start": "./scripts/docker-start.sh",
     "docker:stop": "./scripts/docker-stop.sh",
     "docker:logs": "docker compose logs -f api",
-    "api:export": "tsx scripts/export-openapi.ts"
+    "api:export": "tsx scripts/export-openapi.ts",
+    "moderate:nicknames": "tsx scripts/moderate-nicknames.ts"
   },
   "keywords": [],
   "author": "",
@@ -64,6 +67,7 @@
     "postgres": "^3.4.8",
     "posthog-node": "^5.24.11",
     "redis": "^4.6.12",
+    "sharp": "^0.34.5",
     "socket.io": "^4.7.5",
     "standardwebhooks": "^1.0.0",
     "stripe": "^20.3.1",

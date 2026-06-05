@@ -295,7 +295,13 @@ export async function completePossessionMatch(
   }, 'Emitting match:final_results payload');
 
   const redis = getRedisClient();
+  // The AI-match key stores the AI opponent's user id (set when an AI ranked
+  // match is created). Read it before deleting so we can tag analytics with
+  // whether each player faced an AI. AI users have real UUIDs, so this Redis
+  // key is the only reliable AI signal here.
+  let aiOpponentUserId: string | null = null;
   if (redis) {
+    aiOpponentUserId = await redis.get(rankedAiMatchKey(matchId));
     await redis.del(rankedAiMatchKey(matchId));
     await Promise.all(
       finalPlayers.map((player) =>
@@ -316,6 +322,8 @@ export async function completePossessionMatch(
 
   for (const player of finalPlayers) {
     const opponentPlayer = finalPlayers.find((p) => p.user_id !== player.user_id);
+    // Skip the AI's own row — it has no browser and shouldn't count as a player.
+    if (aiOpponentUserId && player.user_id === aiOpponentUserId) continue;
     trackMatchCompleted({
       userId: player.user_id,
       matchId,
@@ -331,6 +339,7 @@ export async function completePossessionMatch(
       winnerDecisionMethod: decision.method,
       totalQuestions: cache?.totalQuestions,
       correctAnswers: player.correct_answers,
+      opponentIsAi: aiOpponentUserId != null && opponentPlayer?.user_id === aiOpponentUserId,
     });
   }
 

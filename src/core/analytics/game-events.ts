@@ -29,6 +29,7 @@ export interface TrackMatchCompletedOptions {
   winnerDecisionMethod?: string | null;
   totalQuestions?: number;
   correctAnswers?: number;
+  opponentIsAi?: boolean;
 }
 
 export function trackMatchCompleted({
@@ -46,6 +47,7 @@ export function trackMatchCompleted({
   winnerDecisionMethod,
   totalQuestions,
   correctAnswers,
+  opponentIsAi,
 }: TrackMatchCompletedOptions): void {
   const accuracy =
     totalQuestions != null && totalQuestions > 0 && correctAnswers != null
@@ -67,6 +69,7 @@ export function trackMatchCompleted({
     total_questions: totalQuestions,
     correct_answers: correctAnswers,
     accuracy,
+    opponent_is_ai: opponentIsAi,
   });
 }
 

@@ -1,4 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { getRandom } from '../../core/rng.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -174,7 +176,7 @@ function getNextActorId(
 }
 
 function getAiBanDelayMs(): number {
-  return Math.floor(Math.random() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
+  return Math.floor(getRandom() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
 }
 
 async function clearPendingAiBanTimer(lobbyId: string): Promise<void> {
@@ -268,11 +270,12 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
-  void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + DRAFT_AUTO_BAN_MS), {
+  const autoBanMs = harnessDelayMs(DRAFT_AUTO_BAN_MS);
+  void scheduleRealtimeTimer('draft_auto_ban', lobbyId, new Date(Date.now() + autoBanMs), {
     kind: 'draft_auto_ban',
     lobbyId,
   }).catch((error) => {
-    logger.error({ error, lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Failed to schedule draft auto-ban timer');
+    logger.error({ error, lobbyId, delayMs: autoBanMs }, 'Failed to schedule draft auto-ban timer');
   });
   logger.debug({ lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Scheduled automatic draft ban fallback');
 }
@@ -304,7 +307,7 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
 
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
-    const autoChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    const autoChoice = candidates[Math.floor(getRandom() * candidates.length)];
     if (!autoChoice) return;
 
     let inserted = false;
@@ -404,7 +407,7 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
-    const aiChoice = candidates[Math.floor(Math.random() * candidates.length)];
+    const aiChoice = candidates[Math.floor(getRandom() * candidates.length)];
     if (!aiChoice) return;
 
     try {

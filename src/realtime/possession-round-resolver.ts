@@ -5,6 +5,7 @@ import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { matchesService } from '../modules/matches/matches.service.js';
 import { trackPenaltyTaken, trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { matchPauseKey } from './match-keys.js';
 
 /** Regular penalty rounds before sudden-death kicks in. Mirrors the
  *  frontend constant in `features/possession/types/possession.types.ts`. */
@@ -16,6 +17,7 @@ import {
   deleteCountdownPlayerKeys,
   getExpectedUserIds,
   getMatchCacheOrRebuild,
+  rebuildCacheFromDB,
   setMatchCache,
   type CachedAnswer,
 } from './match-cache.js';
@@ -80,13 +82,24 @@ export async function resolvePossessionRound(
   }
 
   try {
-    const cache = await getMatchCacheOrRebuild(matchId);
+    let cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: inactive or missing cache'
       );
       return;
+    }
+    if (fromTimeout && (cache.currentQIndex !== qIndex || !cache.currentQuestion)) {
+      const rebuilt = await rebuildCacheFromDB(matchId);
+      if (rebuilt) {
+        cache = rebuilt;
+        await setMatchCache(rebuilt);
+        logger.info(
+          { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
+          'Possession round resolve refreshed cache before timeout resolution'
+        );
+      }
     }
     if (cache.currentQIndex > qIndex) {
       logger.info(
@@ -108,6 +121,23 @@ export async function resolvePossessionRound(
       logger.warn(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: missing current question'
+      );
+      return;
+    }
+
+    const pauseStartedAt = await redis.get(matchPauseKey(matchId));
+    if (pauseStartedAt) {
+      logger.info(
+        {
+          eventName: 'match:round_result',
+          matchId,
+          qIndex,
+          fromTimeout,
+          pauseStartedAt,
+          ...cacheLogFields(cache),
+          ...questionLogFields(question),
+        },
+        'Possession round resolve skipped: match paused'
       );
       return;
     }
@@ -355,6 +385,12 @@ export async function resolvePossessionRound(
         : 0;
       if (previousHolderSeat === 1) seat1Points *= 2;
       else if (previousHolderSeat === 2) seat2Points *= 2;
+      if (seat1UserId && playersPayload[seat1UserId]) {
+        playersPayload[seat1UserId].possessionPointsEarned = seat1Points;
+      }
+      if (seat2UserId && playersPayload[seat2UserId]) {
+        playersPayload[seat2UserId].possessionPointsEarned = seat2Points;
+      }
       // The boost only "fired" if the holder actually earned points to double.
       const boostHadEffect =
         (previousHolderSeat === 1 && seat1BasePoints > 0) ||
@@ -380,8 +416,8 @@ export async function resolvePossessionRound(
           previousHolderSeat: previousHolderSeat,
           previousCandidateSeat,
           previousCandidateCount,
-          seat1: { correct: seat1Correct, timeMs: seat1Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
-          seat2: { correct: seat2Correct, timeMs: seat2Answer?.timeMs ?? Number.MAX_SAFE_INTEGER },
+          seat1: { basePoints: seat1BasePoints },
+          seat2: { basePoints: seat2BasePoints },
           goalScoredBySeat,
         });
         speedStreakBoostedSeat = boostHadEffect ? streak.boostedSeat : null;
@@ -415,6 +451,10 @@ export async function resolvePossessionRound(
             correct: seat1Correct,
             basePoints: seat1BasePoints,
             resolvedPoints: seat1Points,
+            // The exact value the round_result payload carries to the client bar
+            // (set above). Should equal resolvedPoints; logged separately so a
+            // payload/bar divergence is visible without trusting the field above.
+            possessionPointsPayload: seat1UserId ? playersPayload[seat1UserId]?.possessionPointsEarned ?? null : null,
             timeMs: seat1Answer?.timeMs ?? null,
           },
           seat2: {
@@ -422,15 +462,26 @@ export async function resolvePossessionRound(
             correct: seat2Correct,
             basePoints: seat2BasePoints,
             resolvedPoints: seat2Points,
+            possessionPointsPayload: seat2UserId ? playersPayload[seat2UserId]?.possessionPointsEarned ?? null : null,
             timeMs: seat2Answer?.timeMs ?? null,
           },
           possessionDelta,
+          possessionDiffAfter: state.possessionDiff,
           goalScoredBySeat,
           statePhase: state.phase,
           half: state.half,
           ...questionLogFields(question),
         },
-        'Possession normal/last-attack resolution computed'
+        // Key numbers inline in the MESSAGE (not just the JSON) so they survive
+        // Railway's structured-field truncation. seat1/seat2 show base->resolved
+        // points; delta is the bar swing. Lets us diagnose "flight +N vs bar"
+        // mismatches from the deploy-log view directly.
+        `Possession resolution: q${qIndex} ${question.phaseKind} ` +
+          `seat1[${seat1UserId ?? '-'}]=${seat1BasePoints}->${seat1Points} ` +
+          `seat2[${seat2UserId ?? '-'}]=${seat2BasePoints}->${seat2Points} ` +
+          `delta=${possessionDelta} diff=${state.possessionDiff} ` +
+          `holder=${previousHolderSeat ?? 'none'} boost=${speedStreakBoostedSeat ?? 'none'} ` +
+          `goal=${goalScoredBySeat ?? 'none'}`
       );
       if (result.goalScoredBySeat) {
         const scorerUserId = getUserIdByCachedSeat(cache.players, result.goalScoredBySeat);
@@ -551,6 +602,7 @@ export async function resolvePossessionRound(
           userId,
           totalPoints: player.totalPoints,
           pointsEarned: player.pointsEarned,
+          possessionPointsEarned: player.possessionPointsEarned,
           isCorrect: player.isCorrect,
           selectedIndex: player.selectedIndex,
           timeMs: player.timeMs,
@@ -574,7 +626,7 @@ export async function resolvePossessionRound(
     });
 
     if (state.phase === 'HALFTIME') {
-      await ensureHalftimeCategories(state, cache.categoryAId, matchId);
+      await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
     }
 
     const nextIndex = qIndex + 1;

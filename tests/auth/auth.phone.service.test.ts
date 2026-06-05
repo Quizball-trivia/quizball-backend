@@ -5,13 +5,19 @@ import { Webhook } from 'standardwebhooks';
 import '../setup.js';
 import { config } from '../../src/core/config.js';
 import { authController } from '../../src/modules/auth/auth.controller.js';
-import { authService, normalizeGeorgianPhone } from '../../src/modules/auth/auth.service.js';
+import { PendingDeletionSessionError, authService, normalizeGeorgianPhone } from '../../src/modules/auth/auth.service.js';
+import { AuthenticationError } from '../../src/core/errors.js';
 
 const getOrCreateFromIdentityMock = vi.fn();
 const assertPhoneCanBeLinkedMock = vi.fn();
 const getVerifiedByPhoneNumberMock = vi.fn();
+const getRestorableVerifiedByPhoneNumberMock = vi.fn();
 const setVerifiedPhoneNumberMock = vi.fn();
+const restorePendingDeletionFromIdentityMock = vi.fn();
 const smsDeliveryUpsertMock = vi.fn();
+const signUpMock = vi.fn();
+const signInMock = vi.fn();
+const signInWithIdTokenMock = vi.fn();
 const sendPhoneOtpMock = vi.fn();
 const verifyPhoneOtpMock = vi.fn();
 const updateUserPhoneMock = vi.fn();
@@ -22,7 +28,9 @@ vi.mock('../../src/modules/users/index.js', () => ({
     getOrCreateFromIdentity: (...args: unknown[]) => getOrCreateFromIdentityMock(...args),
     assertPhoneCanBeLinked: (...args: unknown[]) => assertPhoneCanBeLinkedMock(...args),
     getVerifiedByPhoneNumber: (...args: unknown[]) => getVerifiedByPhoneNumberMock(...args),
+    getRestorableVerifiedByPhoneNumber: (...args: unknown[]) => getRestorableVerifiedByPhoneNumberMock(...args),
     setVerifiedPhoneNumber: (...args: unknown[]) => setVerifiedPhoneNumberMock(...args),
+    restorePendingDeletionFromIdentity: (...args: unknown[]) => restorePendingDeletionFromIdentityMock(...args),
   },
 }));
 
@@ -34,12 +42,35 @@ vi.mock('../../src/modules/auth/sms-delivery.repo.js', () => ({
 
 vi.mock('../../src/modules/auth/supabase-auth-client.js', () => ({
   getAuthClient: () => ({
+    signUp: (...args: unknown[]) => signUpMock(...args),
+    signIn: (...args: unknown[]) => signInMock(...args),
+    signInWithIdToken: (...args: unknown[]) => signInWithIdTokenMock(...args),
     sendPhoneOtp: (...args: unknown[]) => sendPhoneOtpMock(...args),
     verifyPhoneOtp: (...args: unknown[]) => verifyPhoneOtpMock(...args),
     updateUserPhone: (...args: unknown[]) => updateUserPhoneMock(...args),
     verifyPhoneChange: (...args: unknown[]) => verifyPhoneChangeMock(...args),
   }),
 }));
+
+const MOCK_SESSION = {
+  accessToken: 'access-token',
+  refreshToken: 'refresh-token',
+  expiresIn: 3600,
+  tokenType: 'bearer',
+  provider: 'supabase',
+  user: {
+    email: 'user@example.com',
+    phone: null,
+    phoneConfirmedAt: null,
+    providerSub: 'supabase-user-id',
+  },
+};
+
+async function flushProvisioningRetries<T>(promise: Promise<T>): Promise<T> {
+  await vi.advanceTimersByTimeAsync(150);
+  await vi.advanceTimersByTimeAsync(300);
+  return promise;
+}
 
 describe('Georgian phone auth helpers', () => {
   it('normalizes Georgian mobile formats to E.164', () => {
@@ -248,7 +279,7 @@ describe('authService phone verification', () => {
   });
 
   it('starts OTP only for a verified linked phone number', async () => {
-    getVerifiedByPhoneNumberMock.mockResolvedValue({
+    getRestorableVerifiedByPhoneNumberMock.mockResolvedValue({
       id: 'user-1',
       phone_number: '+995577123456',
       phone_verified_at: '2026-05-29T12:00:00.000Z',
@@ -258,16 +289,16 @@ describe('authService phone verification', () => {
 
     await authService.startGeorgianPhoneOtp('577123456');
 
-    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(getRestorableVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
     expect(sendPhoneOtpMock).toHaveBeenCalledWith('+995577123456');
   });
 
   it('returns generic success without sending OTP for an unlinked phone number', async () => {
-    getVerifiedByPhoneNumberMock.mockResolvedValue(null);
+    getRestorableVerifiedByPhoneNumberMock.mockResolvedValue(null);
 
     await authService.startGeorgianPhoneOtp('577123456');
 
-    expect(getVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
+    expect(getRestorableVerifiedByPhoneNumberMock).toHaveBeenCalledWith('+995577123456');
     expect(sendPhoneOtpMock).not.toHaveBeenCalled();
   });
 
@@ -295,6 +326,180 @@ describe('authService phone verification', () => {
       phoneNumber: '+995577123456',
       phoneVerifiedAt: expect.any(String),
     }));
+  });
+
+  it('preserves the verified session when OTP login hits a pending-deletion account', async () => {
+    const session = {
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresIn: 3600,
+      tokenType: 'bearer',
+      provider: 'supabase',
+      user: {
+        email: null,
+        phone: null,
+        phoneConfirmedAt: null,
+        providerSub: 'supabase-user-id',
+      },
+    };
+    verifyPhoneOtpMock.mockResolvedValue(session);
+    getOrCreateFromIdentityMock.mockRejectedValue(
+      new AuthenticationError('Account is scheduled for deletion', { reason: 'pending_deletion' })
+    );
+
+    await expect(authService.verifyGeorgianPhoneOtp('577123456', '123456')).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'pending_deletion' },
+      session: expect.objectContaining({ refreshToken: 'refresh-token' }),
+    });
+    await expect(authService.verifyGeorgianPhoneOtp('577123456', '123456')).rejects.toBeInstanceOf(
+      PendingDeletionSessionError
+    );
+  });
+
+  it('restores a pending-deletion phone account after a valid OTP when requested', async () => {
+    verifyPhoneOtpMock.mockResolvedValue({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresIn: 3600,
+      tokenType: 'bearer',
+      provider: 'supabase',
+      user: {
+        email: null,
+        phone: null,
+        phoneConfirmedAt: null,
+        providerSub: 'supabase-user-id',
+      },
+    });
+    restorePendingDeletionFromIdentityMock.mockResolvedValue({ id: 'user-1' });
+
+    await authService.verifyGeorgianPhoneOtp('577123456', '123456', true);
+
+    expect(verifyPhoneOtpMock).toHaveBeenCalledWith('+995577123456', '123456');
+    expect(restorePendingDeletionFromIdentityMock).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'supabase',
+      subject: 'supabase-user-id',
+      phoneNumber: '+995577123456',
+      phoneVerifiedAt: expect.any(String),
+    }));
+    expect(getOrCreateFromIdentityMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('authService strict provisioning', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries login provisioning twice, then fails closed as an external service error', async () => {
+    signInMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.login({ email: 'user@example.com', password: 'secret' });
+    const assertion = expect(result).rejects.toMatchObject({
+      statusCode: 502,
+      details: expect.objectContaining({ reason: 'profile_provisioning_failed' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(300);
+    await assertion;
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns the social token session when strict provisioning succeeds on retry', async () => {
+    signInWithIdTokenMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockResolvedValueOnce({ id: 'user-1' });
+
+    const result = authService.socialLoginToken({
+      provider: 'google',
+      id_token: 'google-token',
+    });
+
+    await expect(flushProvisioningRetries(result)).resolves.toEqual(MOCK_SESSION);
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('propagates account-state auth errors without retrying', async () => {
+    signInMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock.mockRejectedValueOnce(
+      new AuthenticationError('Account is no longer active', { reason: 'account_inactive' })
+    );
+
+    await expect(authService.login({ email: 'user@example.com', password: 'secret' })).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'account_inactive' },
+    });
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed for register-with-session provisioning failures', async () => {
+    signUpMock.mockResolvedValue(MOCK_SESSION);
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.register({
+      email: 'user@example.com',
+      password: 'secret',
+      redirect_to: 'https://quizball.io/auth/callback',
+    });
+    const assertion = expect(result).rejects.toMatchObject({
+      statusCode: 502,
+      details: expect.objectContaining({ reason: 'profile_provisioning_failed' }),
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(300);
+    await assertion;
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('authService refresh account check provisioning tolerance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries non-auth provisioning failures, then tolerates them so rotated refresh tokens can be returned', async () => {
+    getOrCreateFromIdentityMock
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'))
+      .mockRejectedValueOnce(new Error('pooler timeout'));
+
+    const result = authService.ensureSessionAccountActive(MOCK_SESSION);
+
+    await expect(flushProvisioningRetries(result)).resolves.toBeUndefined();
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('still propagates terminal account-state auth errors on refresh', async () => {
+    getOrCreateFromIdentityMock.mockRejectedValueOnce(
+      new AuthenticationError('Account is no longer active', { reason: 'account_inactive' })
+    );
+
+    await expect(authService.ensureSessionAccountActive(MOCK_SESSION)).rejects.toMatchObject({
+      statusCode: 401,
+      details: { reason: 'account_inactive' },
+    });
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(1);
   });
 });
 

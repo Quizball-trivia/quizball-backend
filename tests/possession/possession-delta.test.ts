@@ -31,6 +31,14 @@ describe('possessionDiff scoring model', () => {
     expect(state.possessionDiff).toBe(40);
   });
 
+  it('keeps a clean 100-vs-10 round as a 90-point swing', () => {
+    const state = createInitialPossessionState();
+    const result = applyDeltaAndGoalCheck(state, 100, 10);
+    expect(result.delta).toBe(90);
+    expect(result.goalScoredBySeat).toBeNull();
+    expect(state.possessionDiff).toBe(90);
+  });
+
   it('checks threshold on raw nextDiff before clamp', () => {
     const state = createInitialPossessionState();
     state.possessionDiff = 99;

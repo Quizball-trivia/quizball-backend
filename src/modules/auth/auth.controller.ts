@@ -2,13 +2,14 @@ import type { Request, Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { Webhook } from 'standardwebhooks';
 import { getAuthClient } from './supabase-auth-client.js';
-import { authService } from './auth.service.js';
+import { PendingDeletionSessionError, authService } from './auth.service.js';
 import { config } from '../../core/config.js';
 import {
   toAuthResponse,
   type RegisterRequest,
   type LoginRequest,
   type RefreshRequest,
+  type RestorePendingDeletionRequest,
   type ForgotPasswordRequest,
   type ResetPasswordRequest,
   type ResetPasswordHeaders,
@@ -58,9 +59,47 @@ function setAuthCookies(
   }
 }
 
+function setRefreshCookie(
+  res: Response,
+  session: { refreshToken: string | null }
+): void {
+  if (session.refreshToken) {
+    res.cookie('qb_refresh_token', session.refreshToken, {
+      ...COOKIE_OPTIONS,
+      maxAge: config.REFRESH_TOKEN_MAX_AGE_MS ?? REFRESH_TOKEN_MAX_AGE_MS_DEFAULT,
+    });
+  }
+}
+
+function clearAccessCookie(res: Response): void {
+  res.clearCookie('qb_access_token', COOKIE_OPTIONS);
+}
+
 function clearAuthCookies(res: Response): void {
   res.clearCookie('qb_access_token', COOKIE_OPTIONS);
   res.clearCookie('qb_refresh_token', COOKIE_OPTIONS);
+}
+
+function isPendingDeletionError(error: unknown): boolean {
+  if (!(error instanceof AuthenticationError)) {
+    return false;
+  }
+  const details = error.details;
+  return Boolean(
+    details &&
+      typeof details === 'object' &&
+      'reason' in details &&
+      (details as { reason?: unknown }).reason === 'pending_deletion'
+  );
+}
+
+function preservePendingDeletionRefreshCookie(res: Response, error: unknown): boolean {
+  if (!(error instanceof PendingDeletionSessionError)) {
+    return false;
+  }
+  clearAccessCookie(res);
+  setRefreshCookie(res, error.session);
+  return true;
 }
 
 function getAccessTokenFromRequest(req: Request): string {
@@ -190,7 +229,25 @@ export const authController = {
    */
   async login(req: Request, res: Response): Promise<void> {
     const { email, password } = req.validated.body as LoginRequest;
-    const session = await authService.login({ email, password });
+    let session;
+    try {
+      session = await authService.login({ email, password });
+    } catch (error) {
+      preservePendingDeletionRefreshCookie(res, error);
+      throw error;
+    }
+
+    setAuthCookies(res, session);
+    res.json(toAuthResponse(session));
+  },
+
+  /**
+   * POST /api/v1/auth/login/restore
+   * Restore a pending-deletion account after email/password proof.
+   */
+  async restorePendingDeletionLogin(req: Request, res: Response): Promise<void> {
+    const { email, password } = req.validated.body as LoginRequest;
+    const session = await authService.restorePendingDeletionWithLogin({ email, password });
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));
@@ -210,11 +267,66 @@ export const authController = {
         : null;
     const refreshToken = refresh_token ?? cookieToken ?? null;
     if (!refreshToken) {
+      // No usable refresh token — clear any stale auth cookies so the browser
+      // stops sending a bad cookie on every subsequent request.
+      clearAuthCookies(res);
       throw new BadRequestError('Missing refresh token');
     }
 
-    const session = await authClient.refresh(refreshToken);
-    await authService.ensureSessionAccountActive(session);
+    let session;
+    try {
+      session = await authClient.refresh(refreshToken);
+      await authService.ensureSessionAccountActive(session);
+    } catch (error) {
+      // A failed refresh means the supplied refresh token (often the httpOnly
+      // cookie) is invalid/expired/revoked, or the account is no longer active.
+      // Clear the auth cookies before rethrowing so the same bad cookie isn't
+      // replayed forever, which is what drives the refresh-loop error storm.
+      if (isPendingDeletionError(error) && session?.refreshToken) {
+        clearAccessCookie(res);
+        setRefreshCookie(res, session);
+      } else if (
+        error instanceof BadRequestError ||
+        error instanceof AuthenticationError
+      ) {
+        clearAuthCookies(res);
+      }
+      throw error;
+    }
+
+    setAuthCookies(res, session);
+    res.json(toAuthResponse(session));
+  },
+
+  /**
+   * POST /api/v1/auth/restore-pending-deletion
+   * Restore a pending-deletion account after refresh-token proof.
+   */
+  async restorePendingDeletion(req: Request, res: Response): Promise<void> {
+    const { refresh_token } = (req.validated.body ?? {}) as RestorePendingDeletionRequest;
+
+    const cookieToken =
+      typeof req.cookies?.qb_refresh_token === 'string'
+        ? req.cookies.qb_refresh_token.trim()
+        : null;
+    const refreshToken = refresh_token ?? cookieToken ?? null;
+    if (!refreshToken) {
+      clearAuthCookies(res);
+      throw new BadRequestError('Missing refresh token');
+    }
+
+    let session;
+    try {
+      session = await authService.restorePendingDeletionWithRefreshToken(refreshToken);
+    } catch (error) {
+      if (
+        error instanceof BadRequestError ||
+        error instanceof AuthenticationError
+      ) {
+        clearAuthCookies(res);
+      }
+      throw error;
+    }
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));
@@ -267,9 +379,15 @@ export const authController = {
 
   // POST /api/v1/auth/social-login-token — exchange GIS id_token for a Supabase session.
   async socialLoginToken(req: Request, res: Response): Promise<void> {
-    const { provider, id_token, nonce } = req.validated
+    const { provider, id_token, nonce, restore_pending_deletion } = req.validated
       .body as SocialLoginTokenRequest;
-    const session = await authService.socialLoginToken({ provider, id_token, nonce });
+    let session;
+    try {
+      session = await authService.socialLoginToken({ provider, id_token, nonce, restore_pending_deletion });
+    } catch (error) {
+      preservePendingDeletionRefreshCookie(res, error);
+      throw error;
+    }
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));
@@ -291,8 +409,14 @@ export const authController = {
    * Verify Georgian phone OTP and issue a Supabase session.
    */
   async verifyGeorgianPhoneOtp(req: Request, res: Response): Promise<void> {
-    const { phone, token } = req.validated.body as GeorgianPhoneOtpVerifyRequest;
-    const session = await authService.verifyGeorgianPhoneOtp(phone, token);
+    const { phone, token, restore_pending_deletion } = req.validated.body as GeorgianPhoneOtpVerifyRequest;
+    let session;
+    try {
+      session = await authService.verifyGeorgianPhoneOtp(phone, token, restore_pending_deletion === true);
+    } catch (error) {
+      preservePendingDeletionRefreshCookie(res, error);
+      throw error;
+    }
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));

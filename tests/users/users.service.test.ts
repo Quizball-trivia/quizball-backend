@@ -5,6 +5,7 @@ import '../setup.js';
 const getByIdMock = vi.fn();
 const updateMock = vi.fn();
 const getActiveByPhoneNumberMock = vi.fn();
+const isNicknameTakenMock = vi.fn();
 const requestDeletionMock = vi.fn();
 const cancelPendingDeletionMock = vi.fn();
 const createWithIdentityMock = vi.fn();
@@ -35,6 +36,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     getById: (...args: unknown[]) => getByIdMock(...args),
     searchByNickname: (...args: unknown[]) => searchByNicknameRepoMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    isNicknameTaken: (...args: unknown[]) => isNicknameTakenMock(...args),
     getActiveByPhoneNumber: (...args: unknown[]) => getActiveByPhoneNumberMock(...args),
     requestDeletion: (...args: unknown[]) => requestDeletionMock(...args),
     cancelPendingDeletion: (...args: unknown[]) => cancelPendingDeletionMock(...args),
@@ -155,6 +157,7 @@ describe('usersService.getPublicProfile', () => {
     vi.clearAllMocks();
     getByIdMock.mockResolvedValue(MOCK_USER);
     updateMock.mockResolvedValue({ ...MOCK_USER, avatar_customization: { skin: 'skin_male_white' } });
+    isNicknameTakenMock.mockResolvedValue(false);
     listInventoryWithProductsMock.mockResolvedValue([]);
     getProfileMock.mockResolvedValue(MOCK_RANKED_PROFILE);
     getUserRankMock.mockImplementation((_userId: string, country?: string) =>
@@ -331,6 +334,38 @@ describe('usersService.getPublicProfile', () => {
     });
   });
 
+  it('allows keeping an already-equipped paid item while changing another slot', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      avatar_customization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_real',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+    listInventoryWithProductsMock.mockResolvedValue([
+      { product_slug: 'avatar_jersey_real' },
+      { product_slug: 'avatar_jersey_milan' },
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_milan',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_milan',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+  });
+
   it('allows all skin tones without inventory ownership', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
 
@@ -344,6 +379,37 @@ describe('usersService.getPublicProfile', () => {
       avatarCustomization: {
         skin: 'skin_male_dark_alt',
       },
+    });
+  });
+
+  it('rejects prohibited nicknames before checking uniqueness', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.updateProfile('user-target-id', {
+      nickname: `Ni${'gge'}R`,
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Nickname is not allowed',
+      details: {
+        field: 'nickname',
+        reason: 'prohibited_content',
+      },
+    });
+
+    expect(isNicknameTakenMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('trims nickname before uniqueness checks and persistence', async () => {
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      nickname: '  CleanName  ',
+    });
+
+    expect(isNicknameTakenMock).toHaveBeenCalledWith('CleanName', 'user-target-id');
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      nickname: 'CleanName',
     });
   });
 });
@@ -509,10 +575,61 @@ describe('usersService account deletion', () => {
     })).rejects.toMatchObject({
       statusCode: 401,
       message: 'Account is scheduled for deletion',
+      details: { reason: 'pending_deletion' },
     });
 
     expect(setCachedUserMock).not.toHaveBeenCalled();
     expect(updateCachedUserMock).not.toHaveBeenCalled();
+  });
+
+  it('self-restores a pending deletion account from a verified identity', async () => {
+    getByProviderSubjectMock.mockResolvedValue({
+      id: 'identity-id',
+      provider: 'supabase',
+      subject: 'provider-sub',
+      user_id: 'user-target-id',
+      email: 'target@example.com',
+      created_at: '2026-05-07T12:00:00.000Z',
+      user: {
+        ...MOCK_USER,
+        deletion_requested_at: '2026-05-07T12:00:00.000Z',
+        pending_deletion_at: '2026-06-06T12:00:00.000Z',
+      },
+    });
+    cancelPendingDeletionMock.mockResolvedValue(MOCK_USER);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletionFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      email: 'target@example.com',
+      claims: {},
+    })).resolves.toEqual(MOCK_USER);
+
+    expect(cancelPendingDeletionMock).toHaveBeenCalledWith('user-target-id');
+    expect(invalidateByUserIdMock).toHaveBeenCalledWith('user-target-id');
+  });
+
+  it('treats self-restore as success when the matching account is already active', async () => {
+    getByProviderSubjectMock.mockResolvedValue({
+      id: 'identity-id',
+      provider: 'supabase',
+      subject: 'provider-sub',
+      user_id: 'user-target-id',
+      email: 'target@example.com',
+      created_at: '2026-05-07T12:00:00.000Z',
+      user: MOCK_USER,
+    });
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await expect(usersService.restorePendingDeletionFromIdentity({
+      provider: 'supabase',
+      subject: 'provider-sub',
+      claims: {},
+    })).resolves.toEqual(MOCK_USER);
+
+    expect(cancelPendingDeletionMock).not.toHaveBeenCalled();
+    expect(invalidateByUserIdMock).not.toHaveBeenCalled();
   });
 });
 

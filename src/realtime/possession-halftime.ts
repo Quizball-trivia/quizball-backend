@@ -1,8 +1,12 @@
 import { logger } from '../core/logger.js';
+import { getRandom } from '../core/rng.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
+import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { matchPauseKey } from './match-keys.js';
 import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
 import {
   getCachedPlayer,
@@ -18,6 +22,7 @@ import {
   bumpStateVersion,
   toMatchStatePayload,
 } from './possession-state.js';
+import { getRedisClient } from './redis.js';
 
 // ── Constants ──
 
@@ -25,6 +30,7 @@ export const HALFTIME_DURATION_MS = 20000;
 export const HALFTIME_POST_BAN_REVEAL_MS = 2000;
 const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
 const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
+const HALFTIME_AI_BAN_NO_UI_READY_DELAY_MS = 3500;
 
 // ── Types ──
 
@@ -45,8 +51,14 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   }
 
   function getHalftimeAiBanDelayMs(): number {
-    return Math.floor(Math.random() * (HALFTIME_AI_BAN_DELAY_MAX_MS - HALFTIME_AI_BAN_DELAY_MIN_MS + 1))
+    return Math.floor(getRandom() * (HALFTIME_AI_BAN_DELAY_MAX_MS - HALFTIME_AI_BAN_DELAY_MIN_MS + 1))
       + HALFTIME_AI_BAN_DELAY_MIN_MS;
+  }
+
+  async function getPauseStartedAt(matchId: string): Promise<string | null> {
+    const redis = getRedisClient();
+    if (!redis || !redis.isOpen) return null;
+    return redis.get(matchPauseKey(matchId));
   }
 
   function clearHalftimeAiBanTimer(matchId: string): void {
@@ -88,7 +100,8 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   async function ensureHalftimeCategories(
     state: PossessionStatePayload,
     categoryAId: string,
-    matchId: string
+    matchId: string,
+    categoryBId?: string | null
   ): Promise<void> {
     if (state.halftime.categoryOptions.length >= 3) return;
     try {
@@ -97,7 +110,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
       if (!state.halftime.firstBanSeat) {
         state.halftime.firstBanSeat = match?.is_dev
-          ? (Math.random() < 0.5 ? 1 : 2)
+          ? (getRandom() < 0.5 ? 1 : 2)
           : 2;
       }
 
@@ -119,6 +132,11 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         : lobbiesService.selectRandomCategories.bind(lobbiesService);
 
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
+      // Penalty ban: also exclude the second-half category so penalties don't
+      // re-offer a category that was just played.
+      if (state.halftime.purpose === 'penalty' && categoryBId) {
+        excludedIds.add(categoryBId);
+      }
       const primary = await selectExcluding(3, Array.from(excludedIds));
       let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
 
@@ -156,7 +174,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   ): string | null {
     const candidates = categoryIds.filter((categoryId) => !excludedCategoryIds.has(categoryId));
     if (candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
+    return candidates[Math.floor(getRandom() * candidates.length)] ?? null;
   }
 
   function resolveHalftimeResult(
@@ -207,33 +225,122 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     const lock = await acquireLock(lockKey, 5000);
     if (!lock.acquired || !lock.token) return;
 
+    let keepHalftimeTimers = false;
     try {
       const cache = await getMatchCacheOrRebuild(matchId);
       if (!cache || cache.status !== 'active') return;
       const state = cache.statePayload;
       if (state.phase !== 'HALFTIME') return;
+      const pauseStartedAt = await getPauseStartedAt(matchId);
+      if (pauseStartedAt) {
+        logger.info(
+          {
+            eventName: 'match:halftime_finalize',
+            matchId,
+            pauseStartedAt,
+            half: state.half,
+            purpose: state.halftime.purpose,
+          },
+          'Possession halftime finalize skipped: match paused'
+        );
+        return;
+      }
 
+      const isPenaltyBan = state.halftime.purpose === 'penalty';
+      const hadSeat1Ban = Boolean(state.halftime.bans.seat1);
+      const hadSeat2Ban = Boolean(state.halftime.bans.seat2);
+      const uiReadyAt = state.halftime.uiReadyAt;
+      const deadlineAt = state.halftime.deadlineAt;
+      const uiReadyForDeadline = Boolean(deadlineAt && uiReadyAt === deadlineAt);
+      const needsReadyDefer = !uiReadyForDeadline && !hadSeat1Ban && !hadSeat2Ban;
+      const aiUserId = needsReadyDefer ? await deps.resolveAiUserId(matchId) : null;
+      if (needsReadyDefer && aiUserId) {
+        const rebasedDeadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+        state.halftime.deadlineAt = rebasedDeadlineAt;
+        state.halftime.uiReadyAt = rebasedDeadlineAt;
+        bumpStateVersion(state);
+        await setMatchCache(cache);
+        fireAndForget('setMatchStatePayload(finalizeHalftime:deferUntilReady)', async () => {
+          await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+        });
+        await emitMatchState(io, matchId, state);
+        logger.info(
+          {
+            eventName: 'match:halftime_finalize',
+            matchId,
+            half: state.half,
+            purpose: state.halftime.purpose,
+            deadlineAt,
+            rebasedDeadlineAt,
+            aiUserId,
+          },
+          'Possession halftime finalize deferred until ban window is ready'
+        );
+        scheduleHalftimeTimeout(io, matchId);
+        schedulePossessionAiHalftimeBan(io, matchId);
+        keepHalftimeTimers = true;
+        return;
+      }
+      if (needsReadyDefer && !aiUserId) {
+        logger.info(
+          {
+            eventName: 'match:halftime_finalize',
+            matchId,
+            half: state.half,
+            purpose: state.halftime.purpose,
+            deadlineAt,
+          },
+          'Possession halftime auto-resolving missing bans because match has no AI halftime actor'
+        );
+      }
       const halftimeResult = resolveHalftimeResult(state);
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
       state.halftime.uiReadyAt = null;
-
-      const halfTwoCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryAId;
-      cache.categoryBId = halfTwoCategoryId;
-      fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
-        await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
-      });
-
-      state.half = 2;
-      state.phase = 'NORMAL_PLAY';
-      state.possessionDiff = 0;
-      state.kickOffSeat = nextSeat(state.kickOffSeat);
-      state.lastAttack.attackerSeat = null;
       state.halftime.firstBanSeat = null;
-      state.currentQuestion = null;
-      state.normalQuestionsAnsweredInHalf = 0;
-      bumpStateVersion(state);
+
+      const chosenCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryBId ?? cache.categoryAId;
+
+      if (isPenaltyBan) {
+        // Penalty ban → enter the shootout with the chosen category. Keep the
+        // recorded second-half category (cache/DB categoryBId) untouched; the
+        // penalty category lives only in state.penaltyCategoryId.
+        state.penaltyCategoryId = chosenCategoryId;
+        state.phase = 'PENALTY_SHOOTOUT';
+        state.penalty.round = 1;
+        state.penalty.shooterSeat = 1;
+        state.penalty.suddenDeath = false;
+        state.penalty.kicksTaken = { seat1: 0, seat2: 0 };
+        state.halftime.purpose = 'second_half';
+        state.currentQuestion = null;
+        bumpStateVersion(state);
+
+        // Phase-entered analytics moved here: the round resolver no longer sees a
+        // direct →PENALTY_SHOOTOUT transition (it now goes via this ban interlude).
+        try {
+          for (const player of cache.players) {
+            trackPossessionPhaseEntered({ userId: player.userId, matchId, phase: 'penalty' });
+          }
+        } catch (err) {
+          logger.warn({ err, matchId }, 'possession_phase_entered (penalty) analytics failed');
+        }
+      } else {
+        const halfTwoCategoryId = chosenCategoryId;
+        cache.categoryBId = halfTwoCategoryId;
+        fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
+          await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
+        });
+
+        state.half = 2;
+        state.phase = 'NORMAL_PLAY';
+        state.possessionDiff = 0;
+        state.kickOffSeat = nextSeat(state.kickOffSeat);
+        state.lastAttack.attackerSeat = null;
+        state.currentQuestion = null;
+        state.normalQuestionsAnsweredInHalf = 0;
+        bumpStateVersion(state);
+      }
 
       cache.currentQuestion = null;
       cache.answers = {};
@@ -242,16 +349,35 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
       });
       await emitMatchState(io, matchId, state);
+      logger.info(
+        {
+          eventName: 'match:halftime_finalize',
+          matchId,
+          half: state.half,
+          purpose: isPenaltyBan ? 'penalty' : 'second_half',
+          uiReady: Boolean(uiReadyAt && uiReadyAt === deadlineAt),
+          autoFilledSeat1Ban: !hadSeat1Ban && Boolean(halftimeResult.seat1Ban),
+          autoFilledSeat2Ban: !hadSeat2Ban && Boolean(halftimeResult.seat2Ban),
+          seat1Ban: halftimeResult.seat1Ban,
+          seat2Ban: halftimeResult.seat2Ban,
+          chosenCategoryId,
+        },
+        'Possession halftime finalized'
+      );
 
       await deps.sendQuestion(io, matchId, cache.currentQIndex, { cache });
     } finally {
-      clearHalftimeTimer(matchId);
+      if (!keepHalftimeTimers) {
+        clearHalftimeTimer(matchId);
+      }
       await releaseLock(lockKey, lock.token);
     }
   }
 
   function scheduleFinalizeHalftime(_io: QuizballServer, matchId: string, delayMs: number): void {
     clearHalftimeTimer(matchId);
+    // Collapse the post-ban reveal wait in the harness (prod untouched).
+    delayMs = harnessDelayMs(delayMs);
     void scheduleRealtimeTimer('possession_halftime', matchId, new Date(Date.now() + delayMs), {
       kind: 'possession_halftime',
       matchId,
@@ -294,6 +420,20 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         if (!cache || cache.status !== 'active') return;
         const state = cache.statePayload;
         if (state.phase !== 'HALFTIME') return;
+        const pauseStartedAt = await getPauseStartedAt(matchId);
+        if (pauseStartedAt) {
+          logger.info(
+            {
+              eventName: 'match:halftime_ai_ban',
+              matchId,
+              pauseStartedAt,
+              half: state.half,
+              purpose: state.halftime.purpose,
+            },
+            'Possession halftime AI ban skipped: match paused'
+          );
+          return;
+        }
 
         const aiUserId = await deps.resolveAiUserId(matchId);
         if (!aiUserId) return;
@@ -322,6 +462,19 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
         });
         await emitMatchState(io, matchId, state);
+        logger.info(
+          {
+            eventName: 'match:halftime_ai_ban',
+            matchId,
+            aiUserId,
+            aiSeat: aiPlayer.seat,
+            categoryId: aiCategoryId,
+            half: state.half,
+            purpose: state.halftime.purpose,
+            uiReady: Boolean(state.halftime.uiReadyAt && state.halftime.uiReadyAt === state.halftime.deadlineAt),
+          },
+          'Possession halftime AI ban applied'
+        );
 
         if (state.halftime.bans.seat1 && state.halftime.bans.seat2) {
           scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
@@ -341,10 +494,23 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         state?.halftime.deadlineAt
         && state.halftime.uiReadyAt === state.halftime.deadlineAt
       );
-      if (isInitialBan && !uiReadyForDeadline) {
-        return;
-      }
-      const delayMs = getHalftimeAiBanDelayMs();
+      // Harness collapses the AI-ban think time so matches don't sit ~3.5s at
+      // each halftime (prod untouched unless REGRESSION_FAST_TIMERS).
+      const delayMs = harnessDelayMs(
+        isInitialBan && !uiReadyForDeadline
+          ? HALFTIME_AI_BAN_NO_UI_READY_DELAY_MS
+          : getHalftimeAiBanDelayMs(),
+      );
+      logger.info(
+        {
+          eventName: 'match:halftime_ai_ban',
+          matchId,
+          delayMs,
+          isInitialBan,
+          uiReadyForDeadline,
+        },
+        'Possession halftime AI ban scheduled'
+      );
 
       const timer = setTimeout(() => {
         runBan()
@@ -387,6 +553,16 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       if (!player) return;
 
       if (state.halftime.uiReadyAt === state.halftime.deadlineAt) {
+        logger.info(
+          {
+            eventName: 'match:halftime_ui_ready',
+            matchId,
+            userId,
+            half: state.half,
+            deadlineAt: state.halftime.deadlineAt,
+          },
+          'Possession halftime UI ready already recorded'
+        );
         schedulePossessionAiHalftimeBan(io, matchId);
         return;
       }
@@ -400,6 +576,16 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
       });
       await emitMatchState(io, matchId, state);
+      logger.info(
+        {
+          eventName: 'match:halftime_ui_ready',
+          matchId,
+          userId,
+          half: state.half,
+          deadlineAt: newDeadlineAt,
+        },
+        'Possession halftime UI ready recorded'
+      );
 
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);

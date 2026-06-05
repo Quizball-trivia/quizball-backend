@@ -61,11 +61,30 @@ export const mcqOptionSchema = z.object({
 
 export type McqOption = z.infer<typeof mcqOptionSchema>;
 
+export const mcqImageSchema = z.object({
+  url: z.string().url(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  aspect_ratio: z.string().optional(),
+  source_url: z.string().url().nullable().optional(),
+  storage_status: z.enum(['stored', 'external_fallback']).optional(),
+  storage_error: z.string().nullable().optional(),
+  storage_attempted_at: z.string().datetime().nullable().optional(),
+  title: z.string().nullable().optional(),
+  author: z.string().nullable().optional(),
+  license: z.string().nullable().optional(),
+  license_url: z.string().url().nullable().optional(),
+  provider: z.string().nullable().optional(),
+});
+
+export type McqImage = z.infer<typeof mcqImageSchema>;
+
 /**
  * MCQ Payload base schema - multiple choice with single correct answer
  */
 const mcqPayloadBaseSchema = z.object({
   type: z.literal('mcq_single'),
+  image: mcqImageSchema.optional(),
   options: z.array(mcqOptionSchema).length(4),
 });
 
@@ -406,6 +425,7 @@ export const listQuestionsQuerySchema = z.object({
   status: statusEnum.optional(),
   difficulty: difficultyEnum.optional(),
   type: questionTypeEnum.optional(),
+  mcq_image: z.enum(['with', 'without']).optional(),
   search: z.string().optional(),
   page: z
     .string()
@@ -784,3 +804,24 @@ export const checkDuplicatesResponseSchema = z.object({
 });
 
 export type CheckDuplicatesResponse = z.infer<typeof checkDuplicatesResponseSchema>;
+
+// =============================================================================
+// Staging Sync Schemas
+// =============================================================================
+
+export const syncQuestionsToStagingSchema = z.object({
+  question_ids: z.array(z.string().uuid()).min(1).max(500),
+});
+
+export type SyncQuestionsToStagingRequest = z.infer<typeof syncQuestionsToStagingSchema>;
+
+export const syncQuestionsToStagingResponseSchema = z.object({
+  requested: z.number().int().nonnegative(),
+  source_found: z.number().int().nonnegative(),
+  already_present: z.number().int().nonnegative(),
+  inserted_questions: z.number().int().nonnegative(),
+  inserted_payloads: z.number().int().nonnegative(),
+  missing_questions: z.array(z.string().uuid()),
+});
+
+export type SyncQuestionsToStagingResponse = z.infer<typeof syncQuestionsToStagingResponseSchema>;

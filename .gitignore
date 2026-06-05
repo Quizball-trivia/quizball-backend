@@ -31,4 +31,18 @@ coverage/
 supabase/.temp/
 
 # Secrets/scripts
-scripts/
+scripts/*
+!scripts/generate-image-question-preview.ts
+!scripts/moderate-nicknames.ts
+
+# Local agent instructions (not shared)
+CLAUDE.md
+game-regression/.env.local
+dump.rdb
+
+# Game-regression fuzzer failure artifacts (local dumps)
+game-regression/artifacts/
+
+# Staging harness — local secrets + report bundles (never commit)
+game-regression/staging/.env.staging
+game-regression/staging/reports/

@@ -39,16 +39,12 @@ const { bootMatch, playMatch, bootFriendlyLobbyMatch, playLobbyMatch, teardownRu
 const { checkInvariants, formatViolation } = await import('./invariants.mjs');
 const { checkPartyInvariants } = await import('./party-invariants.mjs');
 const { checkPostMatchState, formatPostMatchViolation } = await import('./post-match.mjs');
-const { reviewTrace, formatLlmFinding } = await import('./llm-reviewer.mjs');
 const { sql } = await import('../../src/db/index.js');
 
 const COUNT = Number(process.env.FUZZ_COUNT ?? 50);
 const STOP_ON_FAIL = (process.env.FUZZ_STOP_ON_FAIL ?? '1') === '1';
 const PLAY_MAX_MS = Number(process.env.FUZZ_PLAY_MAX_MS ?? 90_000);
 const ARTIFACT_DIR = resolve(process.env.FUZZ_ARTIFACT_DIR ?? 'game-regression/artifacts');
-// LLM judge: 0 = off (default, fast), N = review every Nth match (1 = every match).
-// On a coded-invariant FAILURE the judge always runs to explain it.
-const LLM_EVERY = Number(process.env.FUZZ_LLM_EVERY ?? 0);
 // Which match types to fuzz: 'ranked' (default), 'possession' (friendly h-v-h),
 // 'party' (friendly_party_quiz), or 'mix' (rotate through all three).
 const MODE = (process.env.FUZZ_MODE ?? 'ranked') as 'ranked' | 'possession' | 'party' | 'mix';
@@ -101,9 +97,12 @@ let passed = 0;
 let failed = 0;
 let bootFailures = 0;
 const failures: Array<{ index: number; path: string; summary: string[] }> = [];
-const llmFlaggedMatches: Array<{ index: number; ok: boolean; findings: string[] }> = [];
 
-console.log(`[fuzz] running ${COUNT} matches | stopOnFail=${STOP_ON_FAIL} | llmEvery=${LLM_EVERY} | artifacts=${ARTIFACT_DIR}`);
+if (process.env.FUZZ_LLM_EVERY) {
+  console.log('[fuzz] FUZZ_LLM_EVERY is ignored: the LLM judge was removed; coded trace invariants are the gate.');
+}
+
+console.log(`[fuzz] running ${COUNT} matches | stopOnFail=${STOP_ON_FAIL} | artifacts=${ARTIFACT_DIR}`);
 
 for (let i = 1; i <= COUNT; i++) {
   let outcome: MatchOutcome = {
@@ -157,23 +156,6 @@ for (let i = 1; i <= COUNT; i++) {
 
     outcome.ok = outcome.completed && inv.ok && post.ok;
 
-    // LLM judge: on every Nth match (FUZZ_LLM_EVERY) and ALWAYS on a failure (to
-    // explain it). The judge is advisory — it logs findings but does NOT change
-    // pass/fail (the coded invariants are the gate). It catches "looks wrong but
-    // passed the rules" cases the invariants don't encode.
-    const judgeThis = (LLM_EVERY > 0 && i % LLM_EVERY === 0) || !outcome.ok;
-    if (judgeThis) {
-      const variant = (run.trace.byEvent('match:start')[0]?.payload as { variant?: string } | undefined)?.variant;
-      const review = await reviewTrace(run.trace, { variant, note: outcome.ok ? undefined : 'This match FAILED a coded invariant; explain what went wrong.' });
-      if (review.findings.length > 0) {
-        llmFlaggedMatches.push({ index: i, ok: outcome.ok, findings: review.findings.map(formatLlmFinding) });
-        console.log(`[fuzz] #${i} 🔎 LLM flagged ${review.findings.length} (match invariants ${outcome.ok ? 'PASSED' : 'FAILED'}):`);
-        for (const f of review.findings) console.log(`        ${formatLlmFinding(f)}`);
-      } else if (LLM_EVERY > 0) {
-        console.log(`[fuzz] #${i} 🔎 LLM: clean`);
-      }
-    }
-
     if (outcome.ok) {
       passed++;
       if (i % 25 === 0) console.log(`[fuzz] #${i} ok (passed=${passed})`);
@@ -205,15 +187,6 @@ for (let i = 1; i <= COUNT; i++) {
 }
 
 console.log(`\n[fuzz] DONE: passed=${passed} failed=${failed} bootFailures=${bootFailures} (of ${COUNT})`);
-if (llmFlaggedMatches.length > 0) {
-  console.log(`\n[fuzz] LLM JUDGE flagged ${llmFlaggedMatches.length} match(es) (advisory — review these):`);
-  for (const m of llmFlaggedMatches) {
-    console.log(`  #${m.index} (invariants ${m.ok ? 'PASSED' : 'FAILED'}):`);
-    for (const f of m.findings) console.log(`     ${f}`);
-  }
-} else if (LLM_EVERY > 0) {
-  console.log('[fuzz] LLM JUDGE: no findings on any reviewed match.');
-}
 if (failures.length > 0) {
   console.log('[fuzz] failures:');
   for (const f of failures) console.log(`  #${f.index}: ${f.summary[0]} -> ${f.path}`);

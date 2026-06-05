@@ -45,7 +45,7 @@ interface ScenarioResult {
   detail: string;
   violations: string[];
   variant?: 'possession' | 'party';
-  /** the recorded event timeline, for the report bundle + the Gemini judge. */
+  /** the recorded event timeline, for the report bundle and manual trace review. */
   events?: Array<{ seq: number; t: number; dir: string; event: string; target?: string; payload: unknown }>;
   /** match-window bounds (epoch ms) so logs can be correlated. */
   startedAt?: number;
@@ -164,7 +164,7 @@ function verdict(name: string, trace: EventTrace, isParty: boolean): ScenarioRes
   // Scope to THIS scenario's match: a late forfeit result from a leftover match
   // (self-heal) can land in the trace. Take the matchId from match:start and keep
   // only events for that match (+ untargeted lifecycle events), so the invariants
-  // and the judge see exactly one clean match.
+  // and invariants see exactly one clean match.
   const startMatchId = (trace.byEvent('match:start')[0]?.payload as { matchId?: string } | undefined)?.matchId;
   const scoped = startMatchId
     ? filteredTrace(trace, (e) => !e.target?.startsWith('match:') || e.target === `match:${startMatchId}`)
@@ -356,8 +356,8 @@ async function main(): Promise<void> {
   const failed = results.filter((r) => !r.ok);
   console.log(`\n[staging] DONE (invariants): ${results.length - failed.length}/${results.length} clean`);
 
-  // Write the report bundle (traces + verdicts + match windows) for the Gemini
-  // judge step + log correlation. One file per run, under staging/reports/.
+  // Write the report bundle (traces + verdicts + match windows) for trace review
+  // + log correlation. One file per run, under staging/reports/.
   const { mkdir, writeFile } = await import('node:fs/promises');
   const { resolve } = await import('node:path');
   const dir = resolve('game-regression/staging/reports');
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
     scenarios: results,
   }, null, 2));
   console.log(`[staging] report bundle: ${bundlePath}`);
-  console.log(`[staging] next: judge it →  npm run staging:judge ${bundlePath}`);
+  console.log('[staging] next: inspect the report bundle trace for any invariant failure.');
 
   // Best-effort: delete this run's fresh test users so they don't accumulate.
   if ((process.env.STAGING_KEEP_USERS ?? '0') !== '1') {

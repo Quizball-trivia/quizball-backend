@@ -16,7 +16,6 @@
     "test:watch": "vitest",
     "test:regression": "vitest run --config vitest.regression.config.ts",
     "staging:gate": "tsx game-regression/staging/run.mts",
-    "staging:judge": "tsx game-regression/staging/judge.mts",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:migrate:new": "supabase migration new",

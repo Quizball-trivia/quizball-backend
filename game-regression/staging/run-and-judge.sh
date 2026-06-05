@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command staging gate + Gemini judgment.
+# One-command staging gate.
 #
 #   ./game-regression/staging/run-and-judge.sh                 # all scenarios
 #   STAGING_SCENARIOS="ranked_ai_smoke,reconnect_smoke" ./...   # a subset
@@ -9,11 +9,10 @@
 #   STAGING_URL                          (default https://api-staging.quizball.io)
 #   STAGING_SUPABASE_URL
 #   STAGING_SUPABASE_SERVICE_ROLE_KEY
-#   OPENROUTER_API_KEY                   (for the Gemini judge)
-# Optional: STAGING_SCENARIOS, LLM_JUDGE_MODEL, STAGING_TEST_EMAIL_A/_B
+# Optional: STAGING_SCENARIOS, STAGING_TEST_EMAIL_A/_B
 #
-# Flow: run real staging matches -> write a report bundle -> Gemini judges each
-# scenario against the rulebook -> prints a clear PASS/FAIL verdict you can read.
+# Flow: run real staging matches -> write a report bundle -> coded invariants
+# decide PASS/FAIL. Read the bundle trace directly for any failure.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # -> backend-node
 
@@ -47,10 +46,5 @@ if [ ! -f "$BUNDLE" ]; then
 fi
 
 echo ""
-echo "▶ Judging with Gemini…"
-npm run -s staging:judge "$BUNDLE"
-JUDGE_EXIT=$?
-
-echo ""
 echo "Report bundle: $BUNDLE"
-exit "$JUDGE_EXIT"
+exit "$GATE_EXIT"

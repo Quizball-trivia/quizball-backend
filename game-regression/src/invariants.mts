@@ -27,6 +27,22 @@ export interface InvariantResult {
 
 type Invariant = (trace: EventTrace) => Violation[];
 
+function seatByUserId(trace: EventTrace): Map<string, 1 | 2> {
+  const seats = new Map<string, 1 | 2>();
+  for (const evt of trace.byEvent('match:start')) {
+    const payload = evt.payload as {
+      participants?: Array<{ userId?: string; seat?: number }>;
+    };
+    for (const participant of payload.participants ?? []) {
+      if (!participant.userId) continue;
+      if (participant.seat !== 1 && participant.seat !== 2) continue;
+      seats.set(participant.userId, participant.seat);
+    }
+    if (seats.size > 0) break;
+  }
+  return seats;
+}
+
 // ── Individual rules ──
 
 /** The match must reach a terminal state (final_results emitted). */
@@ -53,22 +69,41 @@ const terminalStateReached: Invariant = (trace) => {
  */
 const scoreMatchesBars: Invariant = (trace) => {
   const out: Violation[] = [];
+  const seats = seatByUserId(trace);
   for (const evt of trace.byEvent('match:round_result')) {
     const payload = evt.payload as {
       qIndex?: number;
+      phaseKind?: string;
+      deltas?: { speedStreakBoostedSeat?: 1 | 2 | null };
       players?: Record<string, { pointsEarned?: number; possessionPointsEarned?: number }>;
     };
     for (const [userId, p] of Object.entries(payload.players ?? {})) {
       const score = p.pointsEarned;
       const bars = p.possessionPointsEarned;
       if (typeof score !== 'number' || typeof bars !== 'number') continue;
-      const reconciles = bars === score || bars === score * 2;
+      const seat = seats.get(userId) ?? null;
+      const boostedSeat = payload.deltas?.speedStreakBoostedSeat ?? null;
+      const boostIsValidForPlayer =
+        payload.phaseKind === 'normal' &&
+        score > 0 &&
+        bars === score * 2 &&
+        boostedSeat !== null &&
+        seat === boostedSeat;
+      const reconciles = bars === score || boostIsValidForPlayer;
       if (!reconciles) {
         out.push({
           invariant: 'scoreMatchesBars',
-          message: `Round ${payload.qIndex}: bar points (${bars}) do not reconcile with score (${score}) — expected ${score} or ${score * 2} (2× streak).`,
+          message: `Round ${payload.qIndex}: bar points (${bars}) do not reconcile with score (${score}) and boost seat (${boostedSeat ?? 'none'}).`,
           seq: evt.seq,
-          detail: { qIndex: payload.qIndex, userId, pointsEarned: score, possessionPointsEarned: bars },
+          detail: {
+            qIndex: payload.qIndex,
+            userId,
+            seat,
+            phaseKind: payload.phaseKind,
+            speedStreakBoostedSeat: boostedSeat,
+            pointsEarned: score,
+            possessionPointsEarned: bars,
+          },
         });
       }
     }

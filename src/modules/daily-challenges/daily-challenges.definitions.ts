@@ -41,7 +41,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     challengeType: 'countdown',
     title: {
       en: 'Countdown Challenge',
-      ka: 'უკუთვლის გამოწვევა',
+      ka: 'უკუთვლა',
     },
     description: {
       en: 'Beat the clock and type as many valid answers as you can each round.',

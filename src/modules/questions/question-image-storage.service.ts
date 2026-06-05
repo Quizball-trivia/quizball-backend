@@ -63,6 +63,27 @@ function validateHttpUrl(url: string): void {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  if (!(error instanceof ExternalServiceError) || !isObject(error.details)) {
+    return false;
+  }
+
+  return error.details.phase === 'download' && error.details.retryable === true;
+}
+
+function canUseExternalImageFallback(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function getPrimaryStorageTarget(): QuestionImageStorageTarget {
   if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) {
     throw new ExternalServiceError('Supabase storage is not configured');
@@ -131,7 +152,11 @@ async function downloadImage(url: string): Promise<Buffer> {
     });
 
     if (!response.ok) {
-      throw new ExternalServiceError(`Image download failed: ${response.status}`);
+      throw new ExternalServiceError(`Image download failed: ${response.status}`, {
+        phase: 'download',
+        status: response.status,
+        retryable: response.status === 429 || response.status >= 500,
+      });
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -153,9 +178,15 @@ async function downloadImage(url: string): Promise<Buffer> {
   } catch (error) {
     if (error instanceof BadRequestError || error instanceof ExternalServiceError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new ExternalServiceError('Question image download timed out');
+      throw new ExternalServiceError('Question image download timed out', {
+        phase: 'download',
+        retryable: true,
+      });
     }
-    throw new ExternalServiceError(`Question image download failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new ExternalServiceError(`Question image download failed: ${error instanceof Error ? error.message : String(error)}`, {
+      phase: 'download',
+      retryable: true,
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -223,6 +254,8 @@ async function ingestImageUrl(
   const height = image.height || DEFAULT_QUESTION_IMAGE_HEIGHT;
   const sourceCandidates = [...new Set([image.source_url, image.url].filter((value): value is string => Boolean(value)))];
   let lastError: unknown = null;
+  let fallbackSourceUrl: string | null = null;
+  let fallbackError: string | null = null;
 
   for (const sourceUrl of sourceCandidates) {
     try {
@@ -239,10 +272,17 @@ async function ingestImageUrl(
         ...image,
         ...stored,
         source_url: image.source_url ?? image.url,
+        storage_status: 'stored',
+        storage_error: null,
+        storage_attempted_at: new Date().toISOString(),
         provider: image.provider ?? 'bulk_upload',
       };
     } catch (error) {
       lastError = error;
+      if (isRetryableDownloadError(error) && canUseExternalImageFallback(sourceUrl)) {
+        fallbackSourceUrl ??= sourceUrl;
+        fallbackError = error instanceof Error ? error.message : String(error);
+      }
       logger.warn(
         {
           sourceUrl,
@@ -253,6 +293,31 @@ async function ingestImageUrl(
         'Question image ingest source failed'
       );
     }
+  }
+
+  if (fallbackSourceUrl) {
+    logger.warn(
+      {
+        sourceUrl: fallbackSourceUrl,
+        categorySlug: options.categorySlug,
+        target: options.target.label,
+        error: fallbackError,
+      },
+      'Question image ingest fell back to original URL'
+    );
+
+    return {
+      ...image,
+      url: fallbackSourceUrl,
+      width,
+      height,
+      aspect_ratio: image.aspect_ratio ?? aspectRatio(width, height),
+      source_url: image.source_url ?? image.url,
+      storage_status: 'external_fallback',
+      storage_error: fallbackError?.slice(0, 500) ?? 'Question image download failed',
+      storage_attempted_at: new Date().toISOString(),
+      provider: image.provider ?? 'bulk_upload',
+    };
   }
 
   if (lastError instanceof BadRequestError || lastError instanceof ExternalServiceError) throw lastError;

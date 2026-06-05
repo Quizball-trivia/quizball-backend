@@ -16,18 +16,21 @@ import type { EventTrace, TraceEvent } from './adapter.mjs';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 60_000;
 
-// Judge model. A stronger reasoning model (e.g. google/gemini-2.5-pro) is far more
-// reliable at spotting structural bugs, but costs more OpenRouter credit; the flash
-// default is cheap but inconsistent (sampling mitigates this — see reviewTrace).
-// Override with LLM_JUDGE_MODEL when you want to spend on a stronger judge.
-// The LLM judge is a BEST-EFFORT second opinion — the coded invariants are the
-// real, deterministic referee; the judge never gates a run on its own.
+// Judge model. We default to a strong reasoning (Pro) model: it is far more
+// reliable at understanding the rulebook and spotting STRUCTURAL bugs (vs flash,
+// which is cheap but mis-reads nuanced rules like the penalty/possession logic).
+// Override with LLM_JUDGE_MODEL for a different/cheaper judge. The LLM judge is a
+// BEST-EFFORT second opinion — the coded invariants are the real, deterministic
+// referee; the judge never gates a run on its own.
 function judgeModel(): string {
-  return process.env.LLM_JUDGE_MODEL || config.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+  return process.env.LLM_JUDGE_MODEL || config.OPENROUTER_MODEL || 'google/gemini-3.1-pro-preview';
 }
 // Cap output so a strong model's default (64k) doesn't trip OpenRouter's
-// per-request credit ceiling (a 402). The JSON verdict is small.
-const JUDGE_MAX_TOKENS = Number(process.env.LLM_JUDGE_MAX_TOKENS ?? 1500);
+// per-request credit ceiling (a 402). The JSON verdict itself is small, but a
+// Pro/thinking model (gemini 3.x pro) spends tokens on internal REASONING before
+// emitting the JSON — too low a cap truncates the answer to an empty reply. 8000
+// leaves room to reason AND return the verdict; flash judges barely use it.
+const JUDGE_MAX_TOKENS = Number(process.env.LLM_JUDGE_MAX_TOKENS ?? 8000);
 
 export interface LlmFinding {
   severity: 'high' | 'medium' | 'low';
@@ -67,6 +70,13 @@ First UNDERSTAND THE RULES below, picture the CORRECT match, then flag only DEVI
   showing possessionDiff=0 right after a goal (even when the prior state was also low/0) is CORRECT. The
   threshold is >= 100 (exactly 100 DOES score). Do NOT flag "diff never visibly reached 100" or
   "goal at exactly 100 vs >100" — that is the intended atomic behaviour.
+- BOT PLAYS PERFECTLY (CRITICAL — DO NOT FLAG "possessionDiff stuck at 0"): this is an AUTOMATED test
+  bot that answers MAXIMALLY every round, so each round's delta is the full ±100. That means it CROSSES
+  the threshold and scores+resets EVERY SINGLE ROUND, so possessionDiff is legitimately 0 in EVERY
+  post-round state. A possessionDiff that is 0 in every state while goals climb one-per-round is the
+  EXPECTED, CORRECT result of perfect play — it does NOT mean "the accumulation mechanic is bypassed"
+  or "diff never moves". With a partial-scoring human the diff WOULD accumulate; the bot just never
+  leaves a remainder. Do NOT flag "possessionDiff never accumulates / stays 0 / instant goal per round".
 - HALFTIME RESET (IMPORTANT — DO NOT FLAG): possessionDiff is INTENTIONALLY reset to 0 at the start
   of the 2nd half (beginSecondHalf), along with the speed-streak and kickoff. Possession does NOT
   carry across the half boundary. A possessionDiff going from any value to 0 at the HALFTIME->2nd-half
@@ -101,6 +111,21 @@ First UNDERSTAND THE RULES below, picture the CORRECT match, then flag only DEVI
   penalties. Penalty phaseRound repeating per shot-pair is normal. Only flag a penalty goal that is
   impossible given the shooter/keeper rule (e.g. a goal credited to the keeper, or to a shooter who
   answered wrong while the keeper answered correct).
+- PENALTY SCORE LIVES IN penaltyGoals, NOT goals (CRITICAL — read the right field): during
+  PENALTY_SHOOTOUT the open-play 'goals' field is FROZEN at the regulation score (e.g. 3-3) — penalties
+  do NOT change it. The shootout's live score is the SEPARATE 'penaltyGoals' field (and 'kicks'/attempts
+  show each shot as goal/miss). To judge whether penalties are "incrementing", look ONLY at
+  penaltyGoals/kicks in the state line — NEVER conclude "penalty goals not incrementing" from the
+  frozen goals=3-3. Each penalty round_result also prints "penalty=goal(seatN)" / "penalty=saved".
+- PENALTY TERMINATION & SUDDEN DEATH: best-of-5 per side. The shootout ENDS (-> COMPLETED) as soon as
+  one side's lead is unbeatable (the other can't catch up in their remaining kicks), or after 5 kicks
+  each if one leads. If tied 5-5 it enters SUDDEN DEATH (suddenDeath=true): one pair at a time, ends
+  when one scores and the other misses in the same pair. A shootout that is STILL TIED after few kicks
+  (e.g. 2-2 after 3 and 2 kicks) is CORRECTLY still going — that is NOT a stall. Because this bot
+  answers perfectly, BOTH sides tend to score every shot, so a bot-vs-bot shootout can run MANY rounds
+  (5-5 then long sudden death) before resolving — a long-but-PROGRESSING shootout (kicks/penaltyGoals
+  advancing each round) is EXPECTED, not a bug. ONLY flag a TRUE stall: penaltyGoals AND kicks NOT
+  advancing across rounds, or a met win-condition that did NOT transition to COMPLETED.
 - WIN DECISION (in order): more GOALS wins (method 'goals'); if goals tie, more PENALTY goals wins
   (method 'penalty_goals'); only if still tied, higher total POINTS decides (method 'total_points').
   So the FINAL winner may legitimately have FEWER total points than the loser if they had more goals.
@@ -158,9 +183,23 @@ function lineFor(e: TraceEvent): string | null {
     case 'match:round_result': {
       const players = p.players as Record<string, { pointsEarned?: number; possessionPointsEarned?: number }> | undefined;
       const scores = players ? Object.entries(players).map(([u, v]) => `${u.slice(0, 4)}:+${v.pointsEarned ?? 0}/bars+${v.possessionPointsEarned ?? 0}`).join(' ') : '';
-      return `${e.seq}: round_result${q} ${scores}`;
+      // Surface the penalty outcome so the judge can see WHO scored a PENALTY goal
+      // (separate from open-play goals). Without this it can't tell a shootout is
+      // progressing and wrongly flags "penalty goals not incrementing".
+      const d = p.deltas as { penaltyOutcome?: string; goalScoredBySeat?: number } | undefined;
+      const pen = d?.penaltyOutcome ? ` penalty=${d.penaltyOutcome}${d.goalScoredBySeat ? `(seat${d.goalScoredBySeat})` : ''}` : '';
+      return `${e.seq}: round_result${q} ${scores}${pen}`;
     }
-    case 'match:state': return `${e.seq}: state phase=${p.phase ?? '?'} half=${p.half ?? '?'} possDiff=${p.possessionDiff ?? '?'} goals=${JSON.stringify(p.goals ?? {})}`;
+    case 'match:state': {
+      // In a shootout, the open-play `goals` field is FROZEN (it's regulation
+      // score); the live score is `penaltyGoals`. Show both + sudden-death so the
+      // judge tracks the shootout's actual progress, not the frozen goals.
+      const base = `${e.seq}: state phase=${p.phase ?? '?'} half=${p.half ?? '?'} possDiff=${p.possessionDiff ?? '?'} goals=${JSON.stringify(p.goals ?? {})}`;
+      if (p.phase === 'PENALTY_SHOOTOUT') {
+        return `${base} penaltyGoals=${JSON.stringify(p.penaltyGoals ?? {})} kicks=${JSON.stringify(p.penaltyAttempts ?? {})} suddenDeath=${p.penaltySuddenDeath ?? false}`;
+      }
+      return base;
+    }
     case 'match:party_state': {
       const players = p.players as Array<{ userId: string; totalPoints: number; rank: number }> | undefined;
       const board = players ? players.map((pl) => `${pl.userId.slice(0, 4)}#${pl.rank}=${pl.totalPoints}`).join(' ') : '';

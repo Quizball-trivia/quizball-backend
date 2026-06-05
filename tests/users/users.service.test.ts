@@ -334,6 +334,38 @@ describe('usersService.getPublicProfile', () => {
     });
   });
 
+  it('allows keeping an already-equipped paid item while changing another slot', async () => {
+    getByIdMock.mockResolvedValue({
+      ...MOCK_USER,
+      avatar_customization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_real',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+    listInventoryWithProductsMock.mockResolvedValue([
+      { product_slug: 'avatar_jersey_real' },
+      { product_slug: 'avatar_jersey_milan' },
+    ]);
+    const { usersService } = await import('../../src/modules/users/users.service.js');
+
+    await usersService.updateProfile('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_milan',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+
+    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
+      avatarCustomization: {
+        skin: 'skin_male_white',
+        jersey: 'jersey_milan',
+        hair: 'hair_ronaldo_goat',
+      },
+    });
+  });
+
   it('allows all skin tones without inventory ownership', async () => {
     const { usersService } = await import('../../src/modules/users/users.service.js');
 

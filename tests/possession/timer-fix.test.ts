@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { __possessionInternals } from '../../src/realtime/possession-match-flow.js';
 import {
+  getNextQuestionDelayMs,
   shouldResolveExpiredQuestionOnResume,
   shouldResolveQuestionTimeoutNow,
 } from '../../src/realtime/possession-timing.js';
+import {
+  FRONTEND_RESULT_HOLD_MS,
+  FRONTEND_REVEAL_MS,
+  FRONTEND_TRANSITION_DELAY_MS,
+} from '../../src/realtime/possession-state.js';
 
 const { buildPlayableQuestionTiming, computeAuthoritativeTimeMs } = __possessionInternals;
 
@@ -87,6 +93,12 @@ describe('possession authoritative timer fix', () => {
     expect(timing.deadlineAt.toISOString()).toBe('2026-03-24T12:00:15.500Z');
 
     vi.useRealTimers();
+  });
+
+  it('does not shortcut penalty follow-up dispatch before the result hold, transition, and reveal', () => {
+    expect(getNextQuestionDelayMs({ phase: 'PENALTY_SHOOTOUT' })).toBe(
+      FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_REVEAL_MS
+    );
   });
 
   it('resolves instead of replaying when a question expired before disconnect pause', () => {

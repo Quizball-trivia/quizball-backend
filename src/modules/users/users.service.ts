@@ -119,9 +119,20 @@ async function assertAvatarCustomizationAllowed(
   const ownedSlugs = new Set(inventory.map((item) => item.product_slug));
   const missingSlugs = requiredSlugs.filter((slug) => !ownedSlugs.has(slug));
 
-  if (missingSlugs.length > 0) {
+  if (missingSlugs.length === 0) {
+    return;
+  }
+
+  const currentUser = await usersRepo.getById(userId);
+  const currentCustomization = parseStoredAvatarCustomization(currentUser?.avatar_customization);
+  const alreadyEquippedSlugs = new Set(
+    currentCustomization ? getRequiredAvatarProductSlugs(currentCustomization) : []
+  );
+  const newlyMissingSlugs = missingSlugs.filter((slug) => !alreadyEquippedSlugs.has(slug));
+
+  if (newlyMissingSlugs.length > 0) {
     throw new BadRequestError('Avatar customization includes unowned items', {
-      missingProductSlugs: missingSlugs,
+      missingProductSlugs: newlyMissingSlugs,
     });
   }
 }

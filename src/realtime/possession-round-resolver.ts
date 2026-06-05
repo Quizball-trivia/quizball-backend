@@ -451,6 +451,10 @@ export async function resolvePossessionRound(
             correct: seat1Correct,
             basePoints: seat1BasePoints,
             resolvedPoints: seat1Points,
+            // The exact value the round_result payload carries to the client bar
+            // (set above). Should equal resolvedPoints; logged separately so a
+            // payload/bar divergence is visible without trusting the field above.
+            possessionPointsPayload: seat1UserId ? playersPayload[seat1UserId]?.possessionPointsEarned ?? null : null,
             timeMs: seat1Answer?.timeMs ?? null,
           },
           seat2: {
@@ -458,15 +462,26 @@ export async function resolvePossessionRound(
             correct: seat2Correct,
             basePoints: seat2BasePoints,
             resolvedPoints: seat2Points,
+            possessionPointsPayload: seat2UserId ? playersPayload[seat2UserId]?.possessionPointsEarned ?? null : null,
             timeMs: seat2Answer?.timeMs ?? null,
           },
           possessionDelta,
+          possessionDiffAfter: state.possessionDiff,
           goalScoredBySeat,
           statePhase: state.phase,
           half: state.half,
           ...questionLogFields(question),
         },
-        'Possession normal/last-attack resolution computed'
+        // Key numbers inline in the MESSAGE (not just the JSON) so they survive
+        // Railway's structured-field truncation. seat1/seat2 show base->resolved
+        // points; delta is the bar swing. Lets us diagnose "flight +N vs bar"
+        // mismatches from the deploy-log view directly.
+        `Possession resolution: q${qIndex} ${question.phaseKind} ` +
+          `seat1[${seat1UserId ?? '-'}]=${seat1BasePoints}->${seat1Points} ` +
+          `seat2[${seat2UserId ?? '-'}]=${seat2BasePoints}->${seat2Points} ` +
+          `delta=${possessionDelta} diff=${state.possessionDiff} ` +
+          `holder=${previousHolderSeat ?? 'none'} boost=${speedStreakBoostedSeat ?? 'none'} ` +
+          `goal=${goalScoredBySeat ?? 'none'}`
       );
       if (result.goalScoredBySeat) {
         const scorerUserId = getUserIdByCachedSeat(cache.players, result.goalScoredBySeat);

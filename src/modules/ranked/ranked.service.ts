@@ -23,7 +23,14 @@ const RANKED_BASE_LOSS_DELTA = -25;
 const RANKED_FORFEIT_EXTRA_LOSS_DELTA = -10;
 // How much correctness affects each placement perf score.
 // 0% correct → -(SWING/2), 50% → 0, 100% → +(SWING/2)
-const PLACEMENT_CORRECTNESS_SWING = 1400;
+// Lowered from 1400 so answer accuracy is a SECONDARY nudge, not the dominant
+// factor — aligning placement with Elo-style games (LoL/CS/chess) where the
+// match result is the main driver.
+const PLACEMENT_CORRECTNESS_SWING = 700;
+// How much winning/losing a placement game shifts that game's perf score.
+// Raised so win/loss vs. opponent strength is the PRIMARY seeding signal:
+// a player who loses all placements seeds clearly below one who wins them.
+const PLACEMENT_WIN_LOSS_SWING = 550;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -354,7 +361,7 @@ export const rankedService = {
         const correctnessRate = totalQs > 0 ? player.correct_answers / totalQs : 0.5;
         const correctnessModifier = Math.round((correctnessRate - 0.5) * PLACEMENT_CORRECTNESS_SWING);
 
-        placementPerfScore = Math.max(0, opponentRp + (isWin ? 300 : -300) + correctnessModifier);
+        placementPerfScore = Math.max(0, opponentRp + (isWin ? PLACEMENT_WIN_LOSS_SWING : -PLACEMENT_WIN_LOSS_SWING) + correctnessModifier);
         placementPerfSum = profile.placement_perf_sum + placementPerfScore;
         placementPointsForSum = profile.placement_points_for_sum + player.total_points;
         placementPointsAgainstSum = profile.placement_points_against_sum + (opponent?.total_points ?? 0);

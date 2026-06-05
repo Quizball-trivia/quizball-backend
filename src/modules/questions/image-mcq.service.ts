@@ -9,6 +9,7 @@ import { categoriesRepo } from '../categories/categories.repo.js';
 import { questionsService } from './questions.service.js';
 import { toQuestionResponse, type QuestionResponse } from './questions.schemas.js';
 import { translationService } from './translation.service.js';
+import { uploadQuestionImageBuffer } from './question-image-storage.service.js';
 import type {
   GeneratedImageMcqCard,
   ImageMcqGeneratePreviewRequest,
@@ -21,9 +22,6 @@ const COMMONS_API_URL = 'https://commons.wikimedia.org/w/api.php';
 const USER_AGENT = 'QuizballImageMcqGenerator/1.0';
 const ALLOWED_LICENSES = ['cc0', 'public domain', 'cc by', 'cc by-sa'];
 const DOWNLOAD_DELAY_MS = 900;
-const CACHE_CONTROL = 'public, max-age=31536000, immutable';
-const BUCKET = 'imgs';
-const IMAGE_PREFIX = 'question-images';
 const REQUIRED_QUESTIONS_PER_IMAGE = 6;
 const REQUIRED_DIFFICULTY_COUNT = 2;
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
@@ -107,14 +105,6 @@ function aspectRatio(width: number, height: number): string {
   const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
   const divisor = gcd(width, height);
   return `${width / divisor}:${height / divisor}`;
-}
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || 'image';
 }
 
 function shuffled<T>(items: T[]): T[] {
@@ -477,34 +467,14 @@ async function generateQuestionsForImage(image: NormalizedImage, questionsPerIma
 }
 
 async function uploadImage(card: GeneratedImageMcqCard): Promise<string> {
-  if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new ExternalServiceError('Supabase storage is not configured');
-  }
-
   const base64 = card.image.data_url.replace(/^data:image\/png;base64,/, '');
   const body = Buffer.from(base64, 'base64');
-  const hash = createHash('sha256').update(body).digest('hex').slice(0, 24);
-  const objectPath = `${IMAGE_PREFIX}/${slugify(card.category_slug)}/${hash}.png`;
-  const uploadUrl = `${config.SUPABASE_URL.replace(/\/$/, '')}/storage/v1/object/${BUCKET}/${objectPath}`;
-
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': 'image/png',
-      'cache-control': CACHE_CONTROL,
-      'x-upsert': 'true',
-    },
-    body: new Uint8Array(body),
+  const stored = await uploadQuestionImageBuffer(body, {
+    categorySlug: card.category_slug,
+    width: card.image.width,
+    height: card.image.height,
   });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    logger.error({ status: response.status, detail: detail.slice(0, 200) }, 'Question image upload failed');
-    throw new ExternalServiceError(`Question image upload failed: ${response.status}`);
-  }
-
-  return `${config.SUPABASE_URL.replace(/\/$/, '')}/storage/v1/object/public/${BUCKET}/${objectPath}`;
+  return stored.url;
 }
 
 async function loadCategories(request: ImageMcqGeneratePreviewRequest): Promise<Category[]> {

@@ -117,11 +117,21 @@ export type MatchQuestionKind =
   | 'putInOrder'
   | 'clues';
 
+/** Image attached to an image-MCQ. Minimal, normalized shape for the client
+ *  (width/height let it reserve space and avoid layout shift). */
+export interface QuestionImageDTO {
+  url: string;
+  width: number;
+  height: number;
+  aspectRatio?: string;
+}
+
 export interface MultipleChoiceQuestionDTO {
   kind: 'multipleChoice';
   id: string;
   prompt: Record<string, string>;
   options: Array<Record<string, string>>;
+  image?: QuestionImageDTO;
   categoryId?: string;
   categoryName?: Record<string, string>;
   difficulty?: string;

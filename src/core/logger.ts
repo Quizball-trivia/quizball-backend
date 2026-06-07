@@ -43,9 +43,9 @@ const baseOptions: LoggerOptions = {
 };
 
 /**
- * Pino logger with request_id injection via mixin and New Relic integration.
+ * Pino logger with request_id injection via mixin.
  * - In local/dev: Uses pino-pretty for human-readable console output
- * - In production: Uses structured JSON logs forwarded to New Relic
+ * - In production: Uses structured JSON logs (forwarded to Loki)
  */
 let loggerInstance: pino.Logger;
 

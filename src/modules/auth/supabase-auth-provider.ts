@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { createHash } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { AuthenticationError, ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
@@ -6,11 +7,48 @@ import { withSpan } from '../../core/tracing.js';
 import type { AuthIdentity } from '../../core/types.js';
 import type { AuthProvider } from './auth.provider.js';
 
+const INTROSPECTION_CACHE_MAX_TTL_MS = 60_000;
+const INTROSPECTION_CACHE_MAX_ENTRIES = 5000;
+
 function normalizeOptionalText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
+
+function tokenCacheKey(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function decodeJwtExpMs(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payloadSegment = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payloadSegment.padEnd(
+      payloadSegment.length + ((4 - (payloadSegment.length % 4)) % 4),
+      '=',
+    );
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as { exp?: unknown };
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cloneIdentity(identity: AuthIdentity): AuthIdentity {
+  return {
+    ...identity,
+    claims: { ...identity.claims },
+  };
+}
+
+type IntrospectionCacheEntry = {
+  identity: AuthIdentity;
+  expiresAtMs: number;
+};
 
 /**
  * Supabase auth provider.
@@ -22,6 +60,8 @@ export class SupabaseAuthProvider implements AuthProvider {
   private readonly jwks: ReturnType<typeof createRemoteJWKSet> | null;
   private readonly issuer: string | undefined;
   private readonly audience: string | undefined;
+  private readonly introspectionCache = new Map<string, IntrospectionCacheEntry>();
+  private readonly introspectionInFlight = new Map<string, Promise<AuthIdentity>>();
 
   constructor() {
     if (!config.SUPABASE_URL || !config.SUPABASE_ANON_KEY) {
@@ -52,7 +92,7 @@ export class SupabaseAuthProvider implements AuthProvider {
       if (this.jwks) {
         return this.verifyWithJwks(token);
       }
-      return this.verifyWithIntrospection(token);
+      return this.verifyWithCachedIntrospection(token);
     });
   }
 
@@ -86,6 +126,64 @@ export class SupabaseAuthProvider implements AuthProvider {
    * Verify token using introspection (fallback method).
    * Calls Supabase /auth/v1/user endpoint.
    */
+  private async verifyWithCachedIntrospection(token: string): Promise<AuthIdentity> {
+    const cacheKey = tokenCacheKey(token);
+    const cached = this.introspectionCache.get(cacheKey);
+    if (cached && cached.expiresAtMs > Date.now()) {
+      return cloneIdentity(cached.identity);
+    }
+    if (cached) {
+      this.introspectionCache.delete(cacheKey);
+    }
+
+    const existing = this.introspectionInFlight.get(cacheKey);
+    if (existing) {
+      return cloneIdentity(await existing);
+    }
+
+    const verification = this.verifyWithIntrospection(token)
+      .then((identity) => {
+        this.cacheIntrospectionResult(cacheKey, token, identity);
+        return identity;
+      })
+      .finally(() => {
+        this.introspectionInFlight.delete(cacheKey);
+      });
+
+    this.introspectionInFlight.set(cacheKey, verification);
+    return cloneIdentity(await verification);
+  }
+
+  private cacheIntrospectionResult(cacheKey: string, token: string, identity: AuthIdentity): void {
+    const expMs = decodeJwtExpMs(token);
+    if (!expMs) return;
+
+    const ttlMs = Math.min(expMs - Date.now(), INTROSPECTION_CACHE_MAX_TTL_MS);
+    if (ttlMs <= 0) return;
+
+    if (this.introspectionCache.size >= INTROSPECTION_CACHE_MAX_ENTRIES) {
+      this.pruneIntrospectionCache();
+    }
+    this.introspectionCache.set(cacheKey, {
+      identity: cloneIdentity(identity),
+      expiresAtMs: Date.now() + ttlMs,
+    });
+  }
+
+  private pruneIntrospectionCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.introspectionCache) {
+      if (entry.expiresAtMs <= now) {
+        this.introspectionCache.delete(key);
+      }
+    }
+    while (this.introspectionCache.size >= INTROSPECTION_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.introspectionCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.introspectionCache.delete(oldestKey);
+    }
+  }
+
   private async verifyWithIntrospection(token: string): Promise<AuthIdentity> {
     return withSpan('auth.verify_token.introspection', {
       'quizball.auth_provider': 'supabase',

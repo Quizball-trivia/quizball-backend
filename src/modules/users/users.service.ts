@@ -166,7 +166,11 @@ export const usersService = {
    * 3. If exists → cache and return associated User
    * 4. If not → create User + UserIdentity atomically, cache and return User
    */
-  async getOrCreateFromIdentity(identity: AuthIdentity, detectedCountry?: string | null): Promise<User> {
+  async getOrCreateFromIdentity(
+    identity: AuthIdentity,
+    detectedCountry?: string | null,
+    opts?: { onUserCreated?: (user: User) => void },
+  ): Promise<User> {
     // 1. Check cache first
     const cached = await getCachedUser(identity.provider, identity.subject);
     if (cached) {
@@ -269,6 +273,11 @@ export const usersService = {
       { userId: newUser.id, provider: identity.provider, country: detectedCountry },
       'Created new user and identity'
     );
+
+    // Authoritative new-account signal. Gated on the DB insert above, so it fires
+    // exactly once per real account even though this method is called from auth,
+    // middleware, and socket paths (and races on first login are idempotent).
+    opts?.onUserCreated?.(newUser);
 
     try {
       await setCachedUser(identity.provider, identity.subject, newUser);

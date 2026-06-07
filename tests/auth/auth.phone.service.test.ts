@@ -22,6 +22,11 @@ const sendPhoneOtpMock = vi.fn();
 const verifyPhoneOtpMock = vi.fn();
 const updateUserPhoneMock = vi.fn();
 const verifyPhoneChangeMock = vi.fn();
+const trackEventMock = vi.fn();
+
+vi.mock('../../src/core/analytics.js', () => ({
+  trackEvent: (...args: unknown[]) => trackEventMock(...args),
+}));
 
 vi.mock('../../src/modules/users/index.js', () => ({
   usersService: {
@@ -320,12 +325,16 @@ describe('authService phone verification', () => {
     await authService.verifyGeorgianPhoneOtp('577123456', '123456');
 
     expect(verifyPhoneOtpMock).toHaveBeenCalledWith('+995577123456', '123456');
-    expect(getOrCreateFromIdentityMock).toHaveBeenCalledWith(expect.objectContaining({
-      provider: 'supabase',
-      subject: 'supabase-user-id',
-      phoneNumber: '+995577123456',
-      phoneVerifiedAt: expect.any(String),
-    }));
+    expect(getOrCreateFromIdentityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'supabase',
+        subject: 'supabase-user-id',
+        phoneNumber: '+995577123456',
+        phoneVerifiedAt: expect.any(String),
+      }),
+      undefined,
+      expect.objectContaining({ onUserCreated: expect.any(Function) }),
+    );
   });
 
   it('preserves the verified session when OTP login hits a pending-deletion account', async () => {
@@ -466,6 +475,39 @@ describe('authService strict provisioning', () => {
     await assertion;
     expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(3);
   });
+
+  it('emits account_created (not login_completed) for a brand-new social user', async () => {
+    signInWithIdTokenMock.mockResolvedValue({ ...MOCK_SESSION, provider: 'google' });
+    // Simulate a first-time login: the service invokes onUserCreated.
+    getOrCreateFromIdentityMock.mockImplementationOnce(
+      async (_identity: unknown, _country: unknown, opts?: { onUserCreated?: (u: unknown) => void }) => {
+        opts?.onUserCreated?.({ id: 'new-user-1' });
+        return { id: 'new-user-1' };
+      },
+    );
+
+    await authService.socialLoginToken({ provider: 'google', id_token: 'google-token' });
+
+    expect(trackEventMock).toHaveBeenCalledWith('account_created', 'new-user-1', {
+      method: 'google',
+      is_new_user: true,
+    });
+    expect(trackEventMock).not.toHaveBeenCalledWith('login_completed', expect.anything(), expect.anything());
+  });
+
+  it('emits login_completed (not account_created) for a returning social user', async () => {
+    signInWithIdTokenMock.mockResolvedValue({ ...MOCK_SESSION, provider: 'facebook' });
+    // Returning user: onUserCreated is never called.
+    getOrCreateFromIdentityMock.mockResolvedValueOnce({ id: 'existing-user-1' });
+
+    await authService.socialLoginToken({ provider: 'facebook', id_token: 'fb-token' });
+
+    expect(trackEventMock).toHaveBeenCalledWith('login_completed', 'existing-user-1', {
+      method: 'facebook',
+      is_new_user: false,
+    });
+    expect(trackEventMock).not.toHaveBeenCalledWith('account_created', expect.anything(), expect.anything());
+  });
 });
 
 describe('authService refresh account check provisioning tolerance', () => {
@@ -500,6 +542,14 @@ describe('authService refresh account check provisioning tolerance', () => {
       details: { reason: 'account_inactive' },
     });
     expect(getOrCreateFromIdentityMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT emit login_completed on the refresh path (avoids per-refresh spam)', async () => {
+    getOrCreateFromIdentityMock.mockResolvedValueOnce({ id: 'existing-user-1' });
+
+    await authService.ensureSessionAccountActive(MOCK_SESSION);
+
+    expect(trackEventMock).not.toHaveBeenCalledWith('login_completed', expect.anything(), expect.anything());
   });
 });
 

@@ -43,7 +43,6 @@
   "license": "ISC",
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.0.0",
-    "@newrelic/browser-agent": "^1.309.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/auto-instrumentations-node": "^0.65.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.206.0",
@@ -61,7 +60,6 @@
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "jose": "^5.9.0",
-    "newrelic": "^13.12.0",
     "pino": "^9.4.0",
     "pino-http": "^10.3.0",
     "postgres": "^3.4.8",

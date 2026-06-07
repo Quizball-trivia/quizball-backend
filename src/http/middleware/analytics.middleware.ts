@@ -1,6 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
 import { trackEvent } from '../../core/analytics.js';
 
+function isApiRequestTrackingEnabled(): boolean {
+  const value = process.env.POSTHOG_TRACK_API_REQUESTS ?? process.env.POSTHOG_TRACK_DEV;
+  return value?.trim().toLowerCase() === 'true';
+}
+
 /**
  * Middleware to track API requests in PostHog
  */
@@ -14,10 +19,11 @@ export function analyticsMiddleware(
   // Track request after response is sent
   res.on('finish', () => {
     const duration = Date.now() - startTime;
-    const userId = req.user?.id || 'anonymous';
+    const userId = req.user?.id;
 
-    // Only track in production or if explicitly enabled
-    if (process.env.NODE_ENV !== 'production' && !process.env.POSTHOG_TRACK_DEV) {
+    // API request analytics are high-volume. Keep them explicit opt-in and never
+    // create an "anonymous" PostHog person for unauthenticated traffic.
+    if (!isApiRequestTrackingEnabled() || !userId) {
       return;
     }
 

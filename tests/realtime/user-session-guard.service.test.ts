@@ -206,6 +206,36 @@ describe('user-session-guard.service', () => {
     expect(snapshot.waitingLobbyId).toBe('draft-lobby');
   });
 
+  it('blocks ranked queue join while an active draft lobby is being rejoined', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([
+      {
+        id: 'draft-lobby',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'u1',
+        joined_at: new Date().toISOString(),
+      },
+    ]);
+
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => []),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('ACTIVE_MATCH');
+    expect(result.message).toBe('You are already in an active draft');
+    expect(result.snapshot.state).toBe('IN_WAITING_LOBBY');
+    expect(result.snapshot.waitingLobbyId).toBe('draft-lobby');
+    expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
   it('does not clean up a lobby membership created after connect cleanup started', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     const joinedAfterCleanupStarted = new Date(Date.now() + 10_000).toISOString();

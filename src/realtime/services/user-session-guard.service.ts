@@ -584,13 +584,23 @@ export const userSessionGuardService = {
     userId: string
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
     await this.prepareForConnect(io, userId);
-    const snapshot = await this.resolveState(userId);
+    const context = await resolveContext(userId);
+    const snapshot = toSnapshot(context);
     if (snapshot.activeMatchId) {
       return {
         ok: false,
         snapshot,
         reason: 'ACTIVE_MATCH',
         message: 'You are already in an active match',
+      };
+    }
+
+    if (context.activeLobbies.length > 0) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'You are already in an active draft',
       };
     }
 

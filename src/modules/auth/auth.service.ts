@@ -4,6 +4,7 @@ import { AuthenticationError, BadRequestError, ExternalServiceError } from '../.
 import { logger } from '../../core/logger.js';
 import { config } from '../../core/config.js';
 import { withSpan } from '../../core/tracing.js';
+import { identifyUserProfile, trackEvent } from '../../core/analytics.js';
 import { randomBytes } from 'node:crypto';
 import { smsDeliveryRepo, type SmsDeliveryStatus } from './sms-delivery.repo.js';
 import type {
@@ -229,17 +230,64 @@ function getProvisioningIdentity(session: AuthSession): AuthIdentity {
   };
 }
 
-async function getOrCreateProvisionedIdentity(session: AuthSession): Promise<void> {
-  const identity = getProvisioningIdentity(session);
-  await usersService.getOrCreateFromIdentity(identity);
+// Normalize the login method for analytics. `session.provider` carries the real
+// method on the sign-in/sign-up paths (google/facebook/email/phone); fall back to
+// app_metadata.provider, then 'unknown'. Keeps the funnel breakdown clean.
+function resolveAuthMethod(session: AuthSession): string {
+  const raw = (session.provider ?? '').toLowerCase();
+  if (raw && raw !== 'supabase') return raw;
+  const appMeta = (session as { claims?: { app_metadata?: Record<string, unknown> } }).claims
+    ?.app_metadata;
+  const fromMeta = typeof appMeta?.provider === 'string' ? appMeta.provider.toLowerCase() : '';
+  return fromMeta || 'unknown';
 }
 
-async function provisionIdentityWithRetry(session: AuthSession): Promise<void> {
+// `emitLoginAnalytics` is true only on the genuine sign-in/sign-up paths. The
+// refresh path also provisions identity, but must NOT emit login_completed
+// (it would fire on every hourly token refresh). account_created is always safe
+// — it's gated on the actual DB insert, which happens at most once per account.
+async function getOrCreateProvisionedIdentity(
+  session: AuthSession,
+  emitLoginAnalytics: boolean,
+): Promise<void> {
+  const identity = getProvisioningIdentity(session);
+  const method = resolveAuthMethod(session);
+  let created = false;
+
+  const user = await usersService.getOrCreateFromIdentity(identity, undefined, {
+    onUserCreated: (newUser) => {
+      created = true;
+      identifyUserProfile(newUser);
+      // Authoritative new-account signal — once per real account, attributed to
+      // the social/email method. The clean replacement for client signup_completed.
+      trackEvent('account_created', newUser.id, {
+        method,
+        is_new_user: true,
+      });
+    },
+  });
+
+  if (!created && emitLoginAnalytics && user?.id) {
+    identifyUserProfile(user);
+    // Returning user re-authenticating (not a refresh). Kept distinct from
+    // account_created so the signup funnel never counts logins as signups.
+    // Analytics is best-effort and must never break auth.
+    trackEvent('login_completed', user.id, {
+      method,
+      is_new_user: false,
+    });
+  }
+}
+
+async function provisionIdentityWithRetry(
+  session: AuthSession,
+  emitLoginAnalytics = false,
+): Promise<void> {
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= PROVISION_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      await getOrCreateProvisionedIdentity(session);
+      await getOrCreateProvisionedIdentity(session, emitLoginAnalytics);
       logger.info(
         {
           provider: session.provider,
@@ -325,7 +373,7 @@ function isPendingDeletionAuthenticationError(error: unknown): boolean {
 
 async function provisionIdentityOrThrowSession(session: AuthSession): Promise<void> {
   try {
-    await provisionIdentityWithRetry(session);
+    await provisionIdentityWithRetry(session, true);
   } catch (error) {
     if (isPendingDeletionAuthenticationError(error) && session.refreshToken) {
       throw new PendingDeletionSessionError(session);

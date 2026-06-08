@@ -125,6 +125,24 @@ export const usersRepo = {
     identityData: CreateIdentityData
   ): Promise<User> {
     return sql.begin(async (tx) => {
+      await tx.unsafe(
+        `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+        [`user_identity:${identityData.provider}`, identityData.subject]
+      );
+
+      const existingBeforeCreate = await tx.unsafe<{ user_data: User }[]>(
+        `SELECT row_to_json(u.*) as user_data
+         FROM user_identities ui
+         JOIN users u ON u.id = ui.user_id
+         WHERE ui.provider = $1 AND ui.subject = $2
+         LIMIT 1`,
+        [identityData.provider, identityData.subject]
+      );
+
+      if (existingBeforeCreate[0]?.user_data) {
+        return existingBeforeCreate[0].user_data;
+      }
+
       const avatarCustomizationJson = userData.avatarCustomization == null
         ? null
         : JSON.stringify(userData.avatarCustomization);
@@ -145,13 +163,39 @@ export const usersRepo = {
       );
       const user = result[0];
 
-      await tx.unsafe(
+      const identityResult = await tx.unsafe<{ user_id: string }[]>(
         `INSERT INTO user_identities (id, user_id, provider, subject, email)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+         VALUES (gen_random_uuid(), $1, $2, $3, $4)
+         ON CONFLICT (provider, subject) DO NOTHING
+         RETURNING user_id`,
         [user.id, identityData.provider, identityData.subject, identityData.email ?? null]
       );
 
-      return user;
+      if (identityResult.length > 0) {
+        return user;
+      }
+
+      // Defensive fallback for mixed deploys or any writer that does not take the
+      // advisory lock. Under the locked path above, this branch should not run.
+      await tx.unsafe(
+        `DELETE FROM users WHERE id = $1`,
+        [user.id]
+      );
+
+      const existing = await tx.unsafe<{ user_data: User }[]>(
+        `SELECT row_to_json(u.*) as user_data
+         FROM user_identities ui
+         JOIN users u ON u.id = ui.user_id
+         WHERE ui.provider = $1 AND ui.subject = $2
+         LIMIT 1`,
+        [identityData.provider, identityData.subject]
+      );
+
+      if (!existing[0]?.user_data) {
+        throw new Error('Identity conflict occurred but existing user could not be loaded');
+      }
+
+      return existing[0].user_data;
     });
   },
 

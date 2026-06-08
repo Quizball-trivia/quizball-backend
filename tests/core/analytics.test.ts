@@ -47,6 +47,7 @@ const ANON_WEB_ID = 'anon-session-abc123'; // NOT a user UUID — must skip the 
 
 let trackEvent: typeof import('../../src/core/analytics.js').trackEvent;
 let identifyUser: typeof import('../../src/core/analytics.js').identifyUser;
+let identifyUserProfile: typeof import('../../src/core/analytics.js').identifyUserProfile;
 let registerAiUserId: typeof import('../../src/core/analytics.js').registerAiUserId;
 let shutdownPostHog: typeof import('../../src/core/analytics.js').shutdownPostHog;
 
@@ -65,6 +66,7 @@ beforeEach(async () => {
   const mod = await import('../../src/core/analytics.js');
   trackEvent = mod.trackEvent;
   identifyUser = mod.identifyUser;
+  identifyUserProfile = mod.identifyUserProfile;
   registerAiUserId = mod.registerAiUserId;
   shutdownPostHog = mod.shutdownPostHog;
 });
@@ -96,6 +98,27 @@ describe('analytics AI-user suppression', () => {
     await flush();
     expect(identifyMock).toHaveBeenCalledTimes(1);
     expect(identifyMock.mock.calls[0][0].distinctId).toBe(REAL_USER);
+  });
+
+  it('identifies user profiles with PostHog display properties', async () => {
+    identifyUserProfile({
+      id: REAL_USER,
+      email: 'real@example.com',
+      nickname: null,
+      created_at: '2026-06-07T00:00:00.000Z',
+    });
+    await flush();
+
+    expect(identifyMock).toHaveBeenCalledWith({
+      distinctId: REAL_USER,
+      properties: expect.objectContaining({
+        $email: 'real@example.com',
+        $name: 'real@example.com',
+        email: 'real@example.com',
+        name: 'real@example.com',
+        created_at: '2026-06-07T00:00:00.000Z',
+      }),
+    });
   });
 
   it('treats non-user-UUID distinct ids (anon web sessions) as non-AI without a DB lookup', async () => {

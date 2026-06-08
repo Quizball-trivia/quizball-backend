@@ -14,6 +14,7 @@ let usersRepo: typeof import('../../src/modules/users/users.repo.js').usersRepo;
 let dbAvailable = false;
 
 const testUserIds: string[] = [];
+const testIdentitySubjects: string[] = [];
 const POOL_SAMPLE = ['beaborjgali', 'leaborjgali', 'gioooo'] as const;
 
 async function insertUser(opts: {
@@ -66,8 +67,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (!dbAvailable || testUserIds.length === 0) return;
-  await sql`DELETE FROM users WHERE id = ANY(${testUserIds}::uuid[])`;
+  if (!dbAvailable) return;
+  if (testIdentitySubjects.length > 0) {
+    await sql`DELETE FROM user_identities WHERE subject = ANY(${testIdentitySubjects}::text[])`;
+  }
+  if (testUserIds.length > 0) {
+    await sql`DELETE FROM users WHERE id = ANY(${testUserIds}::uuid[])`;
+  }
 });
 
 describe('usersRepo.findTakenLowerNicknames', () => {
@@ -125,5 +131,42 @@ describe('usersRepo.findTakenLowerNicknames', () => {
 
     const taken = await usersRepo.findTakenLowerNicknames(pool);
     expect(taken.has(seedOnlyNickname.toLowerCase())).toBe(false);
+  });
+});
+
+describe('usersRepo.createWithIdentity', () => {
+  it('is idempotent when first-login provisioning races on the same identity', async ({ skip }) => {
+    if (!dbAvailable) skip();
+
+    const subject = `repo-race-${Date.now()}`;
+    const emailPrefix = `${subject}@example`;
+    testIdentitySubjects.push(subject);
+
+    const users = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        usersRepo.createWithIdentity(
+          { email: `${emailPrefix}-${index}.com` },
+          { provider: 'supabase', subject, email: `${emailPrefix}.com` },
+        ),
+      ),
+    );
+    const userIds = [...new Set(users.map((user) => user.id))];
+    testUserIds.push(...userIds);
+
+    expect(userIds).toHaveLength(1);
+
+    const identities = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM user_identities
+      WHERE provider = 'supabase' AND subject = ${subject}
+    `;
+    expect(identities).toEqual([{ user_id: userIds[0] }]);
+
+    const [{ count }] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM users
+      WHERE email LIKE ${`${emailPrefix}-%`}
+        AND id <> ${userIds[0]}
+    `;
+    expect(count).toBe(0);
   });
 });

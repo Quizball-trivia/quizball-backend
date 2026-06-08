@@ -18,13 +18,15 @@ import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
+import { trackRankedQueueJoined } from '../../core/analytics/game-events.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
   RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
 } from '../lua/ranked-matchmaking.scripts.js';
+import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 
-const SEARCH_DURATION_MS = 7000;
+const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
 // Keep lock alive across worst-case tick I/O so parallel ticks cannot overlap.
@@ -155,10 +157,20 @@ async function hasTicketForRankedQueue(io: QuizballServer, userId: string, sourc
 
   if (wallet.tickets >= 1) {
     logger.info({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
+    rankedDebug('ticket_preflight_passed', {
+      user: rankedDebugUser(userId),
+      source,
+      tickets: wallet.tickets,
+    });
     return true;
   }
 
   logger.warn({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight blocked queue start');
+  rankedDebug('ticket_preflight_blocked', {
+    user: rankedDebugUser(userId),
+    source,
+    tickets: wallet.tickets,
+  });
   emitInsufficientTickets(io, userId, source, wallet.tickets);
   await userSessionGuardService.emitState(io, userId);
   return false;
@@ -189,7 +201,16 @@ async function startHumanRankedMatch(
     'quizball.user_a_id': userAId,
     'quizball.user_b_id': userBId,
   }, async (span) => {
-    if (userAId === userBId) return;
+    if (userAId === userBId) {
+      rankedDebug('human_pair_skipped_same_user', {
+        user: rankedDebugUser(userAId),
+      });
+      return;
+    }
+    rankedDebug('human_pair_candidate', {
+      userA: rankedDebugUser(userAId),
+      userB: rankedDebugUser(userBId),
+    });
 
     const redis = getRedisClient();
     if (redis) {
@@ -202,6 +223,12 @@ async function startHumanRankedMatch(
           { userAId, userBId, userACancelled: Boolean(userACancelled), userBCancelled: Boolean(userBCancelled) },
           'Ranked human match creation skipped because a player cancelled search'
         );
+        rankedDebug('human_pair_skipped_cancelled', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          userACancelled: Boolean(userACancelled),
+          userBCancelled: Boolean(userBCancelled),
+        });
         span.setAttribute('quizball.skipped_cancelled', true);
         return;
       }
@@ -223,6 +250,10 @@ async function startHumanRankedMatch(
       const missingUserIds = [userA ? null : userAId, userB ? null : userBId]
         .filter((userId): userId is string => Boolean(userId));
       logger.warn({ userAId, userBId, missingUserIds }, 'Ranked pairing skipped: user missing');
+      rankedDebug('human_pair_skipped_missing_user', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+      });
       await Promise.all(
         missingUserIds.map((userId) => handleStaleRankedQueueUser(io, userId, 'ranked_human_pair_user_lookup'))
       );
@@ -246,6 +277,11 @@ async function startHumanRankedMatch(
         },
         'Ranked human match creation skipped: insufficient tickets after pairing'
       );
+      rankedDebug('human_pair_skipped_insufficient_tickets', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+        insufficientCount: insufficientUserIds.length,
+      });
       for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
         io.to(`user:${userId}`).emit('ranked:queue_left');
       }
@@ -258,6 +294,10 @@ async function startHumanRankedMatch(
     }
     if (await isCancelled()) {
       logger.info({ userAId, userBId }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
+      rankedDebug('human_pair_skipped_cancelled_before_lobby', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+      });
       span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
       return;
     }
@@ -276,6 +316,12 @@ async function startHumanRankedMatch(
         },
         'Ranked human match creation skipped because a player already has session state'
       );
+      rankedDebug('human_pair_skipped_session_state', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+        userAState: sessionBlockA?.state ?? 'clear',
+        userBState: sessionBlockB?.state ?? 'clear',
+      });
       span.setAttribute('quizball.skipped_session_state', true);
       return;
     }
@@ -336,6 +382,11 @@ async function startHumanRankedMatch(
     });
 
     logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
+    rankedDebug('human_match_found', {
+      userA: rankedDebugUser(userAId),
+      userB: rankedDebugUser(userBId),
+      lobby: lobby.id.slice(0, 8),
+    });
     appMetrics.rankedHumanMatches.add(1);
 
     setTimeout(() => {
@@ -363,6 +414,9 @@ async function startAiFallbackWithCountry(
     const redis = getRedisClient();
     if (redis && await redis.get(cancelKey(userId))) {
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
+      rankedDebug('fallback_skipped_cancelled', {
+        user: rankedDebugUser(userId),
+      });
       return;
     }
     const sessionBlock = await getRankedMatchmakingSessionBlock(userId);
@@ -371,6 +425,10 @@ async function startAiFallbackWithCountry(
         { userId, session: sessionBlock },
         'Ranked matchmaking fallback skipped because user already has session state'
       );
+      rankedDebug('fallback_skipped_session_state', {
+        user: rankedDebugUser(userId),
+        state: sessionBlock.state,
+      });
       return;
     }
     if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
@@ -381,6 +439,9 @@ async function startAiFallbackWithCountry(
       ...(playerCountryCode ? { playerCountryCode } : {}),
     });
     logger.info({ userId }, 'Ranked matchmaking fallback to AI');
+    rankedDebug('fallback_to_ai', {
+      user: rankedDebugUser(userId),
+    });
     appMetrics.rankedAiFallbacks.add(1);
   });
 }
@@ -453,6 +514,12 @@ async function processPairs(io: QuizballServer): Promise<void> {
       const userBCountryCode = hasCountryCodes ? result[5] || null : null;
       if (!userAId || !userBId) break;
       pairCount += 1;
+      rankedDebug('pair_claimed_two_users', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+        searchA: searchIdA.slice(0, 8),
+        searchB: searchIdB.slice(0, 8),
+      });
       try {
         await startHumanRankedMatch(io, userAId, userBId, {
           userA: userACountryCode,
@@ -556,6 +623,11 @@ export const rankedMatchmakingService = {
       'quizball.user_id': userId,
     }, async (span) => {
       logger.info({ userId }, 'Ranked queue join requested');
+      rankedDebug('queue_join_start', {
+        user: rankedDebugUser(userId),
+        socket: socket.id,
+        connected: socket.connected,
+      });
       appMetrics.rankedQueueJoins.add(1);
       if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
         span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
@@ -564,6 +636,9 @@ export const rankedMatchmakingService = {
 
       if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
+        rankedDebug('queue_join_ai_only', {
+          user: rankedDebugUser(userId),
+        });
         span.setAttribute('quizball.queue_mode', 'ai_only');
         const redis = getRedisClient();
         if (redis) {
@@ -578,6 +653,9 @@ export const rankedMatchmakingService = {
       const redis = getRedisClient();
       if (!redis) {
         logger.warn({ userId }, 'Redis unavailable for ranked queue join, falling back to AI');
+        rankedDebug('queue_join_redis_unavailable', {
+          user: rankedDebugUser(userId),
+        });
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
         await startRankedAiForUser(io, userId, {
           ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
@@ -617,6 +695,14 @@ export const rankedMatchmakingService = {
               },
               'Ranked queue join blocked by session state'
             );
+            rankedDebug('queue_join_blocked_session_state', {
+              user: rankedDebugUser(userId),
+              reason: prepared.reason ?? 'ACTIVE_MATCH',
+              state: prepared.snapshot.state,
+              queueSearch: prepared.snapshot.queueSearchId ? prepared.snapshot.queueSearchId.slice(0, 8) : 'none',
+              waitingLobby: prepared.snapshot.waitingLobbyId ? prepared.snapshot.waitingLobbyId.slice(0, 8) : 'none',
+              activeMatch: prepared.snapshot.activeMatchId ? prepared.snapshot.activeMatchId.slice(0, 8) : 'none',
+            });
             span.setAttribute('quizball.queue_block_reason', prepared.reason ?? 'ACTIVE_MATCH');
             userSessionGuardService.emitBlocked(socket, {
               reason: prepared.reason ?? 'ACTIVE_MATCH',
@@ -672,7 +758,12 @@ export const rankedMatchmakingService = {
                 },
                 'Ranked queue join resumed existing queue'
               );
-              socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+              rankedDebug('queue_join_resumed_existing', {
+                user: rankedDebugUser(userId),
+                search: existingSearchId.slice(0, 8),
+                remainingMs,
+              });
+              io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
               const snapshot = await userSessionGuardService.emitState(io, userId);
               logger.info(
                 {
@@ -694,6 +785,11 @@ export const rankedMatchmakingService = {
               },
               'Ranked queue join found stale user-map search id'
             );
+            rankedDebug('queue_join_stale_user_map', {
+              user: rankedDebugUser(userId),
+              search: existingSearchId.slice(0, 8),
+              status: existing.status ?? 'none',
+            });
             await redis.hDel(USER_MAP_KEY, userId);
           }
 
@@ -726,10 +822,17 @@ export const rankedMatchmakingService = {
             return;
           }
 
-          socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+          io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
           const queueSize = await redis.zCard(QUEUE_KEY);
           span.setAttribute('quizball.queue_size', queueSize);
           logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
+          trackRankedQueueJoined(userId, 0);
+          rankedDebug('queue_enqueued', {
+            user: rankedDebugUser(userId),
+            search: newSearchId.slice(0, 8),
+            queueSize,
+            durationMs: SEARCH_DURATION_MS,
+          });
           const snapshot = await userSessionGuardService.emitState(io, userId);
           logger.info(
             {
@@ -750,6 +853,9 @@ export const rankedMatchmakingService = {
       );
       if (!completed) {
         logger.warn({ userId }, 'Ranked queue join transition lock not acquired');
+        rankedDebug('queue_join_lock_not_acquired', {
+          user: rankedDebugUser(userId),
+        });
         span.setAttribute('quizball.transition_lock_acquired', false);
         return;
       }
@@ -782,8 +888,15 @@ export const rankedMatchmakingService = {
           span.setAttribute('quizball.queue_search_found', result.length > 0);
           if (result.length > 0) {
             logger.info({ userId, searchId: result[0] }, 'User left ranked queue');
+            rankedDebug('queue_leave_removed_search', {
+              user: rankedDebugUser(userId),
+              search: result[0].slice(0, 8),
+            });
           } else {
             logger.info({ userId }, 'Ranked queue leave requested but no active search found');
+            rankedDebug('queue_leave_no_active_search', {
+              user: rankedDebugUser(userId),
+            });
           }
 
           socket.emit('ranked:queue_left');
@@ -846,6 +959,16 @@ export const rankedMatchmakingService = {
           span.setAttribute('quizball.queue_search_found', result.length > 0);
           if (result.length > 0) {
             logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
+            rankedDebug('disconnect_removed_queue_search', {
+              user: rankedDebugUser(userId),
+              socket: socket.id,
+              search: result[0].slice(0, 8),
+            });
+          } else {
+            rankedDebug('disconnect_no_active_queue_search', {
+              user: rankedDebugUser(userId),
+              socket: socket.id,
+            });
           }
         },
         {

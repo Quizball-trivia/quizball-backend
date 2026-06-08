@@ -35,6 +35,13 @@ const configSchema = z.object({
     .default("false")
     .transform((val) => val === "true" || val === "1"),
 
+  // When false, objectives stop progressing and stop awarding coins/XP after
+  // matches (paired with hiding the Objectives UI behind the frontend flag).
+  OBJECTIVES_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),

@@ -210,21 +210,19 @@ export function trackError(
 }
 
 // WebSocket Events
-export function trackSocketConnected(userId: string): void {
-  trackEvent('socket_connected', userId, {
-    connection_time: new Date().toISOString(),
-  });
+// No-op in PostHog: socket connect/disconnect is high-volume (~23K/mo, the single
+// biggest backend event source) and already captured in Railway's logs, so we
+// don't pay PostHog ingest for it. Kept as stubs so call sites stay intact.
+export function trackSocketConnected(_userId: string): void {
+  // intentionally not sent to PostHog — see note above
 }
 
 export function trackSocketDisconnected(
-  userId: string,
-  reason: string,
-  durationMs: number
+  _userId: string,
+  _reason: string,
+  _durationMs: number
 ): void {
-  trackEvent('socket_disconnected', userId, {
-    reason,
-    session_duration_ms: durationMs,
-  });
+  // intentionally not sent to PostHog — see note above
 }
 
 // Possession-match round-level events

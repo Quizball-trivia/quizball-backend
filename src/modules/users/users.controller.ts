@@ -2,7 +2,6 @@ import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
-import { identifyUserProfile } from '../../core/analytics.js';
 import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
 
 const COOKIE_OPTIONS = {
@@ -34,7 +33,6 @@ export const usersController = {
     // Reload from the database so response fields like progression are not stale
     // when req.user came from the auth middleware cache earlier in the request lifecycle.
     const user = await usersService.getById(req.user!.id);
-    identifyUserProfile(user);
     res.json(toUserResponse(user));
   },
 

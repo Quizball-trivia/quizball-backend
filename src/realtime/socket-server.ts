@@ -34,6 +34,7 @@ import {
   runDraftAutoBan,
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
+import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -337,6 +338,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
     socket.on('disconnect', (reason) => {
       logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      rankedDebug('socket_disconnected', {
+        user: rankedDebugUser(user.id),
+        socket: socket.id,
+        reason,
+      });
       // Calculate actual session duration from connection time
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
@@ -352,6 +358,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
       'Socket connected'
     );
+    rankedDebug('socket_connected', {
+      user: rankedDebugUser(user.id),
+      socket: socket.id,
+      transport: socket.conn.transport.name,
+    });
     void trackUserOnline(user.id);
     void emitOnlineCount(io, socket);
     scheduleOnlineCountBroadcast(io);

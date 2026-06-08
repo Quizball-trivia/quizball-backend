@@ -114,21 +114,29 @@ describe('Store Routes', () => {
 
   it('POST /dev/grant-self grants wallet funds in local dev', async () => {
     (storeService.applyDevSelfGrant as Mock).mockResolvedValue({
-      wallet: { coins: 1000, tickets: 10 },
+      wallet: {
+        coins: 1000,
+        tickets: 3,
+        ticketPurchaseCooldown: {
+          canBuy: true,
+          nextAvailableAt: null,
+          remainingSeconds: 0,
+        },
+      },
     });
 
     const response = await request(app)
       .post('/api/v1/store/dev/grant-self')
       .send({
         coinsDelta: 1000,
-        ticketsDelta: 10,
+        ticketsDelta: 3,
       });
 
     expect(response.status).toBe(200);
-    expect(response.body.wallet).toEqual({ coins: 1000, tickets: 10 });
+    expect(response.body.wallet).toMatchObject({ coins: 1000, tickets: 3 });
     expect(storeService.applyDevSelfGrant).toHaveBeenCalledWith('test-user-id', {
       coinsDelta: 1000,
-      ticketsDelta: 10,
+      ticketsDelta: 3,
     });
   });
 });

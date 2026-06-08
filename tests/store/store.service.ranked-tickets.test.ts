@@ -32,7 +32,7 @@ vi.mock('../../src/modules/store/stripe.js', () => ({
 }));
 
 vi.mock('../../src/modules/store/ticket-refill.service.js', () => ({
-  MAX_TICKETS: 10,
+  MAX_TICKETS: 3,
   resolveHydratedTicketState: vi.fn(),
   ticketRefillService: {
     hydrateTicketsInTx: (...args: unknown[]) => hydrateTicketsInTxMock(...args),
@@ -78,12 +78,8 @@ describe('storeService.consumeRankedTickets', () => {
 
     const result = await storeService.consumeRankedTickets(['u-b', 'u-a']);
 
-    expect(result).toEqual({
-      wallets: {
-        'u-a': { coins: 0, tickets: 2 },
-        'u-b': { coins: 0, tickets: 4 },
-      },
-    });
+    expect(result?.wallets['u-a']).toMatchObject({ coins: 0, tickets: 2 });
+    expect(result?.wallets['u-b']).toMatchObject({ coins: 0, tickets: 4 });
     expect(consumeRankedTicketInTxMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -98,7 +94,7 @@ describe('storeService.refundRankedTickets', () => {
     const { storeService } = await import('../../src/modules/store/store.service.js');
     hydrateTicketsInTxMock.mockImplementation(async (_tx: unknown, userId: string) => ({
       coins: 0,
-      tickets: userId === 'u-capped' ? 10 : 8,
+      tickets: userId === 'u-capped' ? 3 : 2,
       tickets_refill_started_at: userId === 'u-capped' ? '2026-05-30T00:00:00.000Z' : null,
     }));
     setTicketsStateInTxMock.mockImplementation(async (
@@ -115,22 +111,18 @@ describe('storeService.refundRankedTickets', () => {
 
     const result = await storeService.refundRankedTickets(['u-capped', 'u-spent']);
 
-    expect(result).toEqual({
-      wallets: {
-        'u-capped': { coins: 0, tickets: 10 },
-        'u-spent': { coins: 0, tickets: 9 },
-      },
-    });
+    expect(result.wallets['u-capped']).toMatchObject({ coins: 0, tickets: 3 });
+    expect(result.wallets['u-spent']).toMatchObject({ coins: 0, tickets: 3 });
     expect(setTicketsStateInTxMock).toHaveBeenCalledWith(
       { tx: true },
       'u-capped',
-      10,
+      3,
       null
     );
     expect(setTicketsStateInTxMock).toHaveBeenCalledWith(
       { tx: true },
       'u-spent',
-      9,
+      3,
       null
     );
   });

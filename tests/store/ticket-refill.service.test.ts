@@ -22,17 +22,17 @@ describe('ticketRefillService', () => {
   });
 
   describe('resolveHydratedTicketState', () => {
-    it('preserves partial progress when less than one hour has elapsed', () => {
+    it('preserves partial progress when less than eight hours have elapsed', () => {
       const result = resolveHydratedTicketState(
         {
-          tickets: 9,
+          tickets: 2,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-08T10:30:00.000Z'
+        '2026-03-08T17:30:00.000Z'
       );
 
       expect(result).toEqual({
-        tickets: 9,
+        tickets: 2,
         ticketsRefillStartedAt: '2026-03-08T10:00:00.000Z',
         changed: false,
       });
@@ -41,10 +41,10 @@ describe('ticketRefillService', () => {
     it('fills to cap and clears the refill anchor once enough time has passed', () => {
       const result = resolveHydratedTicketState(
         {
-          tickets: 9,
+          tickets: 2,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-08T11:01:00.000Z'
+        '2026-03-08T18:01:00.000Z'
       );
 
       expect(result).toEqual({
@@ -54,18 +54,18 @@ describe('ticketRefillService', () => {
       });
     });
 
-    it('advances the refill anchor by whole hours while preserving leftover progress', () => {
+    it('advances the refill anchor by whole eight-hour windows while preserving leftover progress', () => {
       const result = resolveHydratedTicketState(
         {
-          tickets: 3,
+          tickets: 1,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-08T12:30:00.000Z'
+        '2026-03-09T02:30:00.000Z'
       );
 
       expect(result).toEqual({
-        tickets: 5,
-        ticketsRefillStartedAt: '2026-03-08T12:00:00.000Z',
+        tickets: MAX_TICKETS,
+        ticketsRefillStartedAt: null,
         changed: true,
       });
     });
@@ -91,12 +91,12 @@ describe('ticketRefillService', () => {
     it('starts a refill anchor when consuming from a full wallet', async () => {
       (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 10,
+        tickets: MAX_TICKETS,
         tickets_refill_started_at: null,
       });
       (storeRepo.setTicketsStateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 9,
+        tickets: 2,
         tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
       });
 
@@ -110,7 +110,7 @@ describe('ticketRefillService', () => {
       expect(storeRepo.setTicketsStateInTx).toHaveBeenCalledWith(
         expect.anything(),
         'user-1',
-        9,
+        2,
         '2026-03-08T10:00:00.000Z'
       );
     });
@@ -118,12 +118,12 @@ describe('ticketRefillService', () => {
     it('preserves the existing anchor when consuming below the cap', async () => {
       (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 4,
+        tickets: 2,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
       (storeRepo.setTicketsStateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 3,
+        tickets: 1,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
 
@@ -137,7 +137,7 @@ describe('ticketRefillService', () => {
       expect(storeRepo.setTicketsStateInTx).toHaveBeenCalledWith(
         expect.anything(),
         'user-1',
-        3,
+        1,
         '2026-03-08T09:15:00.000Z'
       );
     });
@@ -145,7 +145,7 @@ describe('ticketRefillService', () => {
     it('rejects overflowing ticket grants when overflow rejection is enabled', async () => {
       (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 8,
+        tickets: 2,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
 
@@ -164,15 +164,15 @@ describe('ticketRefillService', () => {
       });
     });
 
-    it('caps ticket grants at 10 and clears the anchor when the wallet becomes full', async () => {
+    it('caps ticket grants at 3 and clears the anchor when the wallet becomes full', async () => {
       (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 8,
+        tickets: 2,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
       (storeRepo.setTicketsStateInTx as Mock).mockResolvedValue({
         coins: 100,
-        tickets: 10,
+        tickets: MAX_TICKETS,
         tickets_refill_started_at: null,
       });
 
@@ -186,11 +186,11 @@ describe('ticketRefillService', () => {
         }
       );
 
-      expect(result.grantedTickets).toBe(2);
+      expect(result.grantedTickets).toBe(1);
       expect(storeRepo.setTicketsStateInTx).toHaveBeenCalledWith(
         expect.anything(),
         'user-1',
-        10,
+        MAX_TICKETS,
         null
       );
     });

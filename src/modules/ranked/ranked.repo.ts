@@ -257,6 +257,113 @@ export const rankedRepo = {
     }
   },
 
+  /**
+   * Admin: set a user's RP + tier to absolute values. Returns the new rp if a
+   * ranked_profiles row exists, or null if the user has no profile yet.
+   * The RP ledger (ranked_rp_changes) is intentionally NOT written — admin
+   * grants are audited separately and are not match-derived RP changes.
+   */
+  async setRankPoints(userId: string, rp: number, tier: RankedTier): Promise<number | null> {
+    const [row] = await sql<{ rp: number }[]>`
+      UPDATE ranked_profiles
+      SET rp = ${rp}, tier = ${tier}, updated_at = NOW()
+      WHERE user_id = ${userId}
+      RETURNING rp
+    `;
+    return row?.rp ?? null;
+  },
+
+  /**
+   * Admin: reset the leaderboard for an event. Archives every existing ranked
+   * profile and RP-change row into the archive tables under a single reset
+   * batch, then zeroes out the live ranked_profiles for real users only
+   * (excludes AI/seed/deleted). Tier becomes 'Academy' (the rp=0 tier) and all
+   * placement progress is cleared so players start fresh. Runs in one
+   * transaction so the archive and reset are atomic.
+   */
+  async resetLeaderboard(actorUserId: string, notes: string | null): Promise<{
+    batchId: string;
+    profilesArchived: number;
+    rpChangesArchived: number;
+    profilesReset: number;
+  }> {
+    return sql.begin(async (tx) => {
+      const batchRows = await tx.unsafe<{ id: string }[]>(
+        `INSERT INTO ranked_reset_batches (triggered_by, notes) VALUES ($1, $2) RETURNING id`,
+        [actorUserId, notes]
+      );
+      const batchId = batchRows[0].id;
+
+      const archivedProfiles = await tx.unsafe(
+        `INSERT INTO ranked_profiles_archive (
+          reset_batch_id, user_id, rp, tier, placement_status,
+          placement_required, placement_played, placement_wins, placement_seed_rp,
+          placement_perf_sum, placement_points_for_sum, placement_points_against_sum,
+          current_win_streak, last_ranked_match_at
+        )
+        SELECT
+          $1, user_id, rp, tier, placement_status,
+          placement_required, placement_played, placement_wins, placement_seed_rp,
+          placement_perf_sum, placement_points_for_sum, placement_points_against_sum,
+          current_win_streak, last_ranked_match_at
+        FROM ranked_profiles`,
+        [batchId]
+      );
+
+      const archivedChanges = await tx.unsafe(
+        `INSERT INTO ranked_rp_changes_archive (
+          reset_batch_id, match_id, user_id, opponent_user_id, opponent_is_ai,
+          old_rp, delta_rp, new_rp, result, is_placement, placement_game_no,
+          placement_anchor_rp, placement_perf_score, calculation_method, source_created_at
+        )
+        SELECT
+          $1, match_id, user_id, opponent_user_id, opponent_is_ai,
+          old_rp, delta_rp, new_rp, result, is_placement, placement_game_no,
+          placement_anchor_rp, placement_perf_score, calculation_method, created_at
+        FROM ranked_rp_changes`,
+        [batchId]
+      );
+
+      const resetProfiles = await tx.unsafe(
+        `UPDATE ranked_profiles rp
+        SET
+          rp = 0,
+          tier = 'Academy',
+          placement_status = 'unplaced',
+          placement_played = 0,
+          placement_wins = 0,
+          placement_seed_rp = NULL,
+          placement_perf_sum = 0,
+          placement_points_for_sum = 0,
+          placement_points_against_sum = 0,
+          current_win_streak = 0,
+          updated_at = NOW()
+        WHERE EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = rp.user_id
+            AND u.is_ai = false
+            AND u.is_seed = false
+            AND u.is_deleted = false
+            AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL
+        )`,
+        []
+      );
+
+      await tx.unsafe(
+        `UPDATE ranked_reset_batches SET completed_at = NOW() WHERE id = $1`,
+        [batchId]
+      );
+
+      return {
+        batchId,
+        profilesArchived: archivedProfiles.count,
+        rpChangesArchived: archivedChanges.count,
+        profilesReset: resetProfiles.count,
+      };
+    });
+  },
+
   async listLeaderboard(limit: number, offset: number, country?: string): Promise<RankedLeaderboardEntry[]> {
     if (country) {
       return sql<RankedLeaderboardEntry[]>`

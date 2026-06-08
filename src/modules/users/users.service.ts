@@ -4,11 +4,21 @@ import { identitiesRepo } from './identities.repo.js';
 import { AuthenticationError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
+import { getRequestId } from '../../core/request-context.js';
 import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
 import { disconnectUserSockets } from '../../realtime/services/auth-realtime.service.js';
 import { rankedRepo } from '../ranked/ranked.repo.js';
+import { tierFromRp } from '../ranked/ranked.service.js';
 import { statsService } from '../stats/stats.service.js';
-import type { PublicProfileData } from './users.schemas.js';
+import type {
+  AdminProgressionResult,
+  AdminSetProgressionBody,
+  AdminUserListItem,
+  AdminUsersListQuery,
+  AdminUsersListResponse,
+  PublicProfileData,
+} from './users.schemas.js';
+import type { Json } from '../../db/types.js';
 import { progressionService } from '../progression/progression.service.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { friendsRepo } from '../friends/friends.repo.js';
@@ -299,6 +309,133 @@ export const usersService = {
     }
 
     return user;
+  },
+
+  /**
+   * Admin: paginated list of real users with progression, ranked and wallet data.
+   */
+  async listUsersForAdmin(query: AdminUsersListQuery): Promise<AdminUsersListResponse> {
+    const { items, total } = await usersRepo.listUsersForAdmin({
+      search: query.search,
+      page: query.page,
+      limit: query.limit,
+      orderBy: query.orderBy,
+      orderDir: query.orderDir,
+    });
+
+    const mapped: AdminUserListItem[] = items.map((row) => {
+      // total_xp is BIGINT — the pg driver returns it as a string. Coerce so the
+      // API contract (number) holds and the CMS can do arithmetic on it.
+      const totalXp = Number(row.total_xp);
+      return {
+        id: row.id,
+        email: row.email,
+        nickname: row.nickname,
+        country: row.country,
+        avatar_url: row.avatar_url,
+        total_xp: totalXp,
+        level: progressionService.getProgression(totalXp).level,
+        rp: row.ranked_rp,
+        tier: row.ranked_tier,
+        placement_status: row.ranked_placement_status,
+        coins: row.coins,
+        tickets: row.tickets,
+        created_at: row.created_at,
+      };
+    });
+
+    return {
+      items: mapped,
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    };
+  },
+
+  /**
+   * Admin: set or grant a user's XP and/or RP. Final values are clamped to >= 0.
+   * XP is a safe single-column write (level recomputes on read); RP also updates
+   * the stored tier via tierFromRp. Every adjustment is recorded in
+   * store_transaction_logs with the acting admin's id for audit.
+   */
+  async adminSetProgression(
+    userId: string,
+    body: AdminSetProgressionBody,
+    options: { actorId: string }
+  ): Promise<AdminProgressionResult> {
+    const user = await usersRepo.getById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    // total_xp is BIGINT — coerce the pg string result to a number for arithmetic.
+    const oldXp = Number(user.total_xp);
+    let newXp = oldXp;
+    if (body.xp) {
+      const target = body.xp.mode === 'set' ? body.xp.value : oldXp + body.xp.value;
+      newXp = Math.max(0, target);
+      const written = await usersRepo.setTotalXp(userId, newXp);
+      if (written === null) {
+        throw new NotFoundError('User not found');
+      }
+      newXp = Number(written);
+    }
+
+    let oldRp: number | null = null;
+    let newRp: number | null = null;
+    let newTier: string | null = null;
+    if (body.rp) {
+      const profile = await rankedRepo.getProfile(userId);
+      if (!profile) {
+        throw new BadRequestError(
+          'User has no ranked profile yet; RP cannot be set until they play a ranked match'
+        );
+      }
+      oldRp = profile.rp;
+      const target = body.rp.mode === 'set' ? body.rp.value : profile.rp + body.rp.value;
+      const clampedRp = Math.max(0, target);
+      const tier = tierFromRp(clampedRp);
+      const written = await rankedRepo.setRankPoints(userId, clampedRp, tier);
+      if (written === null) {
+        throw new BadRequestError('User has no ranked profile yet; RP cannot be set');
+      }
+      newRp = written;
+      newTier = tier;
+    } else {
+      const profile = await rankedRepo.getProfile(userId);
+      oldRp = profile?.rp ?? null;
+      newRp = profile?.rp ?? null;
+      newTier = profile?.tier ?? null;
+    }
+
+    await storeRepo.insertTransactionLog({
+      eventType: 'admin_progression_adjustment',
+      outcome: 'success',
+      userId,
+      actorUserId: options.actorId,
+      reason: body.reason,
+      requestId: getRequestId(),
+      metadata: {
+        xp: body.xp ? { mode: body.xp.mode, value: body.xp.value, oldXp, newXp } : null,
+        rp: body.rp ? { mode: body.rp.mode, value: body.rp.value, oldRp, newRp, newTier } : null,
+      } as unknown as Json,
+    });
+
+    invalidateByUserId(userId);
+
+    logger.info(
+      { userId, actorId: options.actorId, oldXp, newXp, oldRp, newRp, reason: body.reason },
+      'Admin progression adjustment applied'
+    );
+
+    return {
+      userId,
+      total_xp: newXp,
+      level: progressionService.getProgression(newXp).level,
+      rp: newRp,
+      tier: newTier,
+    };
   },
 
   async assertPhoneCanBeLinked(userId: string, phoneNumber: string): Promise<'available' | 'already_verified'> {

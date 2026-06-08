@@ -196,6 +196,25 @@ export function identifyUserProfile(user: AnalyticsUserProfile): void {
   });
 }
 
+// ── Session-restore identify dedup ───────────────────────────────────────────
+// identifyUserProfile fires on signup/fresh-login only, so already-authenticated
+// users (session restore, no fresh sign-in) never get email/nickname attached
+// and show up as bare-UUID persons in PostHog. maybeIdentifyUserProfile closes
+// that gap from a "user is active" signal (GET /users/me) WITHOUT spamming: it
+// identifies each user at most once per UTC day. In-memory only — a redeploy
+// resets it, which just re-identifies each active user once (idempotent, cheap).
+// The marker is set ONLY after identify is dispatched, so a no-op client run
+// (PostHog disabled) doesn't burn the day's slot.
+const identifiedToday = new Map<string, string>(); // userId -> 'YYYY-MM-DD'
+
+export function maybeIdentifyUserProfile(user: AnalyticsUserProfile): void {
+  if (!getPostHogClient()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (identifiedToday.get(user.id) === today) return;
+  identifyUserProfile(user);
+  identifiedToday.set(user.id, today);
+}
+
 // Alias user (link anonymous ID to identified user)
 export function aliasUser(alias: string, distinctId: string): void {
   const client = getPostHogClient();

@@ -3,6 +3,7 @@ import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
 import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
+import { maybeIdentifyUserProfile } from '../../core/analytics.js';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -33,6 +34,10 @@ export const usersController = {
     // Reload from the database so response fields like progression are not stale
     // when req.user came from the auth middleware cache earlier in the request lifecycle.
     const user = await usersService.getById(req.user!.id);
+    // Backfill PostHog identity for already-authenticated sessions that never hit
+    // a fresh sign-in identify (session restore). Deduped to once per user per day
+    // and fire-and-forget — must never affect the /me response.
+    maybeIdentifyUserProfile(user);
     res.json(toUserResponse(user));
   },
 

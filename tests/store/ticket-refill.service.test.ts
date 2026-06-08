@@ -3,6 +3,8 @@ import '../setup.js';
 
 vi.mock('../../src/modules/store/store.repo.js', () => ({
   storeRepo: {
+    getWalletInTx: vi.fn(),
+    compareAndSetTicketsStateInTx: vi.fn(),
     getWalletForUpdateInTx: vi.fn(),
     setTicketsStateInTx: vi.fn(),
   },
@@ -88,13 +90,63 @@ describe('ticketRefillService', () => {
   });
 
   describe('transaction helpers', () => {
-    it('starts a refill anchor when consuming from a full wallet', async () => {
-      (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
+    it('hydrates tickets with CAS and retries once after a race', async () => {
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
+        coins: 100,
+        tickets: 2,
+        tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
+      });
+      (storeRepo.compareAndSetTicketsStateInTx as Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          coins: 100,
+          tickets: MAX_TICKETS,
+          tickets_refill_started_at: null,
+        });
+
+      const result = await ticketRefillService.hydrateTicketsInTx(
+        {} as never,
+        'user-1',
+        { now: '2026-03-08T18:01:00.000Z' }
+      );
+
+      expect(result).toMatchObject({
         coins: 100,
         tickets: 10,
         tickets_refill_started_at: null,
       });
-      (storeRepo.setTicketsStateInTx as Mock).mockResolvedValue({
+      expect(storeRepo.getWalletInTx).toHaveBeenCalledTimes(2);
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(2);
+    });
+
+    it('throws a conflict when hydration CAS misses repeatedly', async () => {
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
+        coins: 100,
+        tickets: 2,
+        tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
+      });
+      (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue(null);
+
+      await expect(
+        ticketRefillService.hydrateTicketsInTx(
+          {} as never,
+          'user-1',
+          { now: '2026-03-08T18:01:00.000Z' }
+        )
+      ).rejects.toMatchObject<AppError>({
+        code: 'CONFLICT',
+      });
+
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
+    });
+
+    it('starts a refill anchor when consuming from a full wallet', async () => {
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
+        coins: 100,
+        tickets: MAX_TICKETS,
+        tickets_refill_started_at: null,
+      });
+      (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue({
         coins: 100,
         tickets: 9,
         tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
@@ -107,21 +159,25 @@ describe('ticketRefillService', () => {
       );
 
       expect(result.consumed).toBe(true);
-      expect(storeRepo.setTicketsStateInTx).toHaveBeenCalledWith(
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledWith(
         expect.anything(),
-        'user-1',
-        9,
-        '2026-03-08T10:00:00.000Z'
+        {
+          userId: 'user-1',
+          observedTickets: MAX_TICKETS,
+          observedTicketsRefillStartedAt: null,
+          tickets: 9,
+          ticketsRefillStartedAt: '2026-03-08T10:00:00.000Z',
+        }
       );
     });
 
     it('preserves the existing anchor when consuming below the cap', async () => {
-      (storeRepo.getWalletForUpdateInTx as Mock).mockResolvedValue({
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
         coins: 100,
         tickets: 4,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
-      (storeRepo.setTicketsStateInTx as Mock).mockResolvedValue({
+      (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue({
         coins: 100,
         tickets: 3,
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
@@ -134,12 +190,61 @@ describe('ticketRefillService', () => {
       );
 
       expect(result.consumed).toBe(true);
-      expect(storeRepo.setTicketsStateInTx).toHaveBeenCalledWith(
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledWith(
         expect.anything(),
-        'user-1',
-        3,
-        '2026-03-08T09:15:00.000Z'
+        {
+          userId: 'user-1',
+          observedTickets: 4,
+          observedTicketsRefillStartedAt: '2026-03-08T09:15:00.000Z',
+          tickets: 3,
+          ticketsRefillStartedAt: '2026-03-08T09:15:00.000Z',
+        }
       );
+    });
+
+    it('returns unconsumed without CAS when the wallet has no ticket and no hydration change', async () => {
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
+        coins: 100,
+        tickets: 0,
+        tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
+      });
+
+      const result = await ticketRefillService.consumeRankedTicketInTx(
+        {} as never,
+        'user-1',
+        { now: '2026-03-08T10:00:00.000Z' }
+      );
+
+      expect(result).toEqual({
+        consumed: false,
+        wallet: {
+          coins: 100,
+          tickets: 0,
+          tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
+        },
+      });
+      expect(storeRepo.compareAndSetTicketsStateInTx).not.toHaveBeenCalled();
+    });
+
+    it('throws a conflict when consume CAS misses repeatedly', async () => {
+      (storeRepo.getWalletInTx as Mock).mockResolvedValue({
+        coins: 100,
+        tickets: 1,
+        tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
+      });
+      (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue(null);
+
+      await expect(
+        ticketRefillService.consumeRankedTicketInTx(
+          {} as never,
+          'user-1',
+          { now: '2026-03-08T10:00:00.000Z' }
+        )
+      ).rejects.toMatchObject<AppError>({
+        code: 'CONFLICT',
+      });
+
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
     });
 
     it('rejects overflowing ticket grants when overflow rejection is enabled', async () => {

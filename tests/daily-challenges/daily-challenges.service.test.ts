@@ -920,11 +920,11 @@ describe('dailyChallengesService', () => {
     );
   });
 
-  it('completes a challenge once and awards configured coins', async () => {
+  it('completes a non-money-drop challenge once and awards 20 coins per correct answer', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'countdown',
       is_active: true,
-      coin_reward: 80,
+      coin_reward: 999,
       xp_reward: 15,
     });
     getCompletionForUserOnDayMock.mockResolvedValue(null);
@@ -941,14 +941,14 @@ describe('dailyChallengesService', () => {
     });
 
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
-    const result = await dailyChallengesService.completeChallenge('user-1', 'countdown', 500);
+    const result = await dailyChallengesService.completeChallenge('user-1', 'countdown', 4);
 
     expect(runInTransactionMock).toHaveBeenCalled();
     expect(createCompletionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-1',
         challengeType: 'countdown',
-        score: 500,
+        score: 4,
         coinsAwarded: 80,
         xpAwarded: 15,
       })
@@ -974,6 +974,40 @@ describe('dailyChallengesService', () => {
         tickets: 10,
       },
     });
+  });
+
+  it('awards money drop leftover coins capped at 1000', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'moneyDrop',
+      is_active: true,
+      coin_reward: 500,
+      xp_reward: 20,
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    createCompletionMock.mockResolvedValue({
+      id: 'completion-1',
+    });
+    addCoinsMock.mockResolvedValue({
+      coins: 2500,
+      tickets: 10,
+    });
+    grantXpMock.mockResolvedValue({
+      awarded: true,
+      totalXp: 220,
+    });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const result = await dailyChallengesService.completeChallenge('user-1', 'moneyDrop', 1200);
+
+    expect(createCompletionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeType: 'moneyDrop',
+        score: 1200,
+        coinsAwarded: 1000,
+      })
+    );
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 1000);
+    expect(result.coinsAwarded).toBe(1000);
   });
 
   it('returns already completed if completion insert hits the unique constraint', async () => {

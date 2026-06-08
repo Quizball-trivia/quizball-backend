@@ -26,7 +26,7 @@ import {
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 
-const SEARCH_DURATION_MS = 7000;
+const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
 // Keep lock alive across worst-case tick I/O so parallel ticks cannot overlap.

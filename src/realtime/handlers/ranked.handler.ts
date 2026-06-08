@@ -1,6 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
-import { trackRankedQueueJoined } from '../../core/analytics/game-events.js';
 import { rankedQueueJoinSchema } from '../schemas/ranked.schemas.js';
 import { rankedMatchmakingService } from '../services/ranked-matchmaking.service.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
@@ -33,7 +32,6 @@ export function registerRankedHandlers(io: QuizballServer, socket: QuizballSocke
 
     try {
       await rankedMatchmakingService.handleQueueJoin(io, socket, parsed.data);
-      trackRankedQueueJoined(socket.data.user.id, 0);
     } catch (error) {
       logger.error({ error, userId: socket.data.user.id }, 'Error in ranked:queue_join handler');
       rankedDebug('queue_join_handler_error', {

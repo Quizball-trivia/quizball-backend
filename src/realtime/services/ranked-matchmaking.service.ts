@@ -18,6 +18,7 @@ import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
+import { trackRankedQueueJoined } from '../../core/analytics/game-events.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
@@ -762,7 +763,7 @@ export const rankedMatchmakingService = {
                 search: existingSearchId.slice(0, 8),
                 remainingMs,
               });
-              socket.emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+              io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
               const snapshot = await userSessionGuardService.emitState(io, userId);
               logger.info(
                 {
@@ -821,10 +822,11 @@ export const rankedMatchmakingService = {
             return;
           }
 
-          socket.emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+          io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
           const queueSize = await redis.zCard(QUEUE_KEY);
           span.setAttribute('quizball.queue_size', queueSize);
           logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
+          trackRankedQueueJoined(userId, 0);
           rankedDebug('queue_enqueued', {
             user: rankedDebugUser(userId),
             search: newSearchId.slice(0, 8),

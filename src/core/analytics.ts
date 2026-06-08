@@ -170,6 +170,32 @@ export function identifyUser(
   });
 }
 
+export type AnalyticsUserProfile = {
+  id: string;
+  email?: string | null;
+  nickname?: string | null;
+  created_at?: string | null;
+  country?: string | null;
+  favorite_club?: string | null;
+  preferred_language?: string | null;
+};
+
+export function identifyUserProfile(user: AnalyticsUserProfile): void {
+  const displayName = user.nickname ?? user.email ?? user.id;
+
+  identifyUser(user.id, {
+    $email: user.email ?? undefined,
+    $name: displayName,
+    email: user.email ?? undefined,
+    name: displayName,
+    nickname: user.nickname ?? undefined,
+    created_at: user.created_at ?? undefined,
+    country: user.country ?? undefined,
+    favorite_club: user.favorite_club ?? undefined,
+    preferred_language: user.preferred_language ?? undefined,
+  });
+}
+
 // Alias user (link anonymous ID to identified user)
 export function aliasUser(alias: string, distinctId: string): void {
   const client = getPostHogClient();

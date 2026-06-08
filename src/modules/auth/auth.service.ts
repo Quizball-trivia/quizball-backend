@@ -4,7 +4,7 @@ import { AuthenticationError, BadRequestError, ExternalServiceError } from '../.
 import { logger } from '../../core/logger.js';
 import { config } from '../../core/config.js';
 import { withSpan } from '../../core/tracing.js';
-import { trackEvent } from '../../core/analytics.js';
+import { identifyUserProfile, trackEvent } from '../../core/analytics.js';
 import { randomBytes } from 'node:crypto';
 import { smsDeliveryRepo, type SmsDeliveryStatus } from './sms-delivery.repo.js';
 import type {
@@ -257,6 +257,7 @@ async function getOrCreateProvisionedIdentity(
   const user = await usersService.getOrCreateFromIdentity(identity, undefined, {
     onUserCreated: (newUser) => {
       created = true;
+      identifyUserProfile(newUser);
       // Authoritative new-account signal — once per real account, attributed to
       // the social/email method. The clean replacement for client signup_completed.
       trackEvent('account_created', newUser.id, {
@@ -267,6 +268,7 @@ async function getOrCreateProvisionedIdentity(
   });
 
   if (!created && emitLoginAnalytics && user?.id) {
+    identifyUserProfile(user);
     // Returning user re-authenticating (not a refresh). Kept distinct from
     // account_created so the signup funnel never counts logins as signups.
     // Analytics is best-effort and must never break auth.

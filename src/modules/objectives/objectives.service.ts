@@ -1,3 +1,4 @@
+import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
 import type { Json } from '../../db/types.js';
 import {
@@ -417,6 +418,12 @@ export const objectivesService = {
   },
 
   async evaluateForMatchBestEffort(matchId: string): Promise<void> {
+    // Objectives feature kill-switch: when disabled, skip all progress and
+    // reward (coins/XP) granting. Pairs with hiding the Objectives UI on the
+    // frontend so a hidden feature can't keep paying out in the background.
+    if (!config.OBJECTIVES_ENABLED) {
+      return;
+    }
     try {
       await this.evaluateForMatch(matchId);
     } catch (error) {

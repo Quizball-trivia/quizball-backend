@@ -3,6 +3,7 @@ import '../setup.js';
 
 const beginMock = vi.fn();
 const hydrateTicketsInTxMock = vi.fn();
+const hydrateTicketsForUpdateInTxMock = vi.fn();
 const consumeRankedTicketInTxMock = vi.fn();
 const setTicketsStateInTxMock = vi.fn();
 
@@ -36,6 +37,7 @@ vi.mock('../../src/modules/store/ticket-refill.service.js', () => ({
   resolveHydratedTicketState: vi.fn(),
   ticketRefillService: {
     hydrateTicketsInTx: (...args: unknown[]) => hydrateTicketsInTxMock(...args),
+    hydrateTicketsForUpdateInTx: (...args: unknown[]) => hydrateTicketsForUpdateInTxMock(...args),
     consumeRankedTicketInTx: (...args: unknown[]) => consumeRankedTicketInTxMock(...args),
   },
 }));
@@ -44,6 +46,7 @@ describe('storeService.consumeRankedTickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
+    hydrateTicketsForUpdateInTxMock.mockImplementation((...args: unknown[]) => hydrateTicketsInTxMock(...args));
   });
 
   it('does not partially consume tickets when any ranked participant has none', async () => {

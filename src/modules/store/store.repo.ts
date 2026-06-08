@@ -48,6 +48,14 @@ interface LatestTicketPackPurchaseRow {
   purchased_at: string;
 }
 
+interface CompareAndSetTicketsStateInput {
+  userId: string;
+  observedTickets: number;
+  observedTicketsRefillStartedAt: string | null;
+  tickets: number;
+  ticketsRefillStartedAt: string | null;
+}
+
 const baseLogsWhereClause = (
   query: ListStoreTransactionsQuery
 ) => sql`
@@ -239,6 +247,19 @@ export const storeRepo = {
     return row ?? null;
   },
 
+  async getWalletInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
+    const [row] = await tx.unsafe<WalletStateRow[]>(
+      `
+      SELECT coins, tickets, tickets_refill_started_at
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [userId]
+    );
+    return row ?? null;
+  },
+
   async getWalletForUpdateInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
     const [row] = await tx.unsafe<WalletStateRow[]>(
       `
@@ -249,6 +270,33 @@ export const storeRepo = {
       FOR UPDATE
       `,
       [userId]
+    );
+    return row ?? null;
+  },
+
+  async compareAndSetTicketsStateInTx(
+    tx: TransactionSql,
+    input: CompareAndSetTicketsStateInput
+  ): Promise<WalletStateRow | null> {
+    const [row] = await tx.unsafe<WalletStateRow[]>(
+      `
+      UPDATE users
+      SET
+        tickets = $4,
+        tickets_refill_started_at = $5::timestamptz,
+        updated_at = NOW()
+      WHERE id = $1
+        AND tickets = $2
+        AND tickets_refill_started_at IS NOT DISTINCT FROM $3::timestamptz
+      RETURNING coins, tickets, tickets_refill_started_at
+      `,
+      [
+        input.userId,
+        input.observedTickets,
+        input.observedTicketsRefillStartedAt,
+        input.tickets,
+        input.ticketsRefillStartedAt,
+      ]
     );
     return row ?? null;
   },

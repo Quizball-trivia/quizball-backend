@@ -191,6 +191,16 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
   }
 }
 
+function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: number): number {
+  const normalizedScore = Math.max(0, Math.floor(score));
+
+  if (challengeType === 'moneyDrop') {
+    return Math.min(normalizedScore, 1000);
+  }
+
+  return normalizedScore * 20;
+}
+
 function toAvailableCategoryOption(row: DailyChallengeAvailableCategoryRow) {
   return {
     id: row.id,
@@ -358,7 +368,7 @@ function toListItem(
     title: getDefinitionText(definition.title, locale),
     description: getDefinitionText(definition.description, locale),
     iconToken: definition.iconToken,
-    coinReward: config.coin_reward,
+    coinReward: completion?.coins_awarded ?? config.coin_reward,
     xpReward: config.xp_reward,
     showOnHome: config.show_on_home,
     completedToday: completion != null,
@@ -846,6 +856,7 @@ export const dailyChallengesService = {
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
     }
+    const coinsAwarded = getCoinsAwardedForCompletion(challengeType, score);
 
     return dailyChallengesRepo.runInTransaction(async (txRepo) => {
       const existing = await txRepo.getCompletionForUserOnDay(userId, challengeType, day);
@@ -859,7 +870,7 @@ export const dailyChallengesService = {
           challengeType,
           challengeDay: day,
           score,
-          coinsAwarded: config.coin_reward,
+          coinsAwarded,
           xpAwarded: config.xp_reward,
         });
       } catch (error) {
@@ -869,7 +880,7 @@ export const dailyChallengesService = {
         throw error;
       }
 
-      const wallet = await txRepo.addCoins(userId, config.coin_reward);
+      const wallet = await txRepo.addCoins(userId, coinsAwarded);
       await txRepo.grantXp({
         userId,
         sourceType: 'daily_challenge_completion',
@@ -884,7 +895,7 @@ export const dailyChallengesService = {
       return {
         challengeType,
         completedToday: true as const,
-        coinsAwarded: config.coin_reward,
+        coinsAwarded,
         xpAwarded: config.xp_reward,
         wallet: wallet
           ? {

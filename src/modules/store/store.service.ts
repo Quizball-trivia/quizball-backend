@@ -794,7 +794,7 @@ export const storeService = {
       const wallets: Record<string, StoreWalletResponse> = {};
 
       for (const userId of dedupedUserIds) {
-        const wallet = await ticketRefillService.hydrateTicketsInTx(tx, userId);
+        const wallet = await ticketRefillService.hydrateTicketsForUpdateInTx(tx, userId);
         if (!wallet) {
           throw new NotFoundError('User not found');
         }

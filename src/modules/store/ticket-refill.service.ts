@@ -5,6 +5,7 @@ import type { StoreWalletResponse, WalletStateRow } from './store.types.js';
 
 export const MAX_TICKETS = 10;
 export const TICKET_REFILL_INTERVAL_MS = 60 * 60 * 1000;
+const TICKET_CAS_MAX_ATTEMPTS = 3;
 
 export interface HydratedTicketState {
   tickets: number;
@@ -85,8 +86,53 @@ export function resolveHydratedTicketState(
   };
 }
 
+function ticketCasConflict(userId: string, operation: string): AppError {
+  return new AppError(
+    'Ticket state changed during update; retry the request',
+    409,
+    ErrorCode.CONFLICT,
+    { userId, operation, attempts: TICKET_CAS_MAX_ATTEMPTS }
+  );
+}
+
+async function waitBeforeCasRetry(attempt: number): Promise<void> {
+  if (attempt >= TICKET_CAS_MAX_ATTEMPTS - 1) return;
+  await new Promise((resolve) => setTimeout(resolve, attempt + 1));
+}
+
 export const ticketRefillService = {
   async hydrateTicketsInTx(
+    tx: TransactionSql,
+    userId: string,
+    options?: { now?: Date | string }
+  ): Promise<WalletStateRow | null> {
+    for (let attempt = 0; attempt < TICKET_CAS_MAX_ATTEMPTS; attempt += 1) {
+      const wallet = await storeRepo.getWalletInTx(tx, userId);
+      if (!wallet) return null;
+
+      const hydrated = resolveHydratedTicketState(wallet, options?.now);
+      if (!hydrated.changed) {
+        return wallet;
+      }
+
+      const updated = await storeRepo.compareAndSetTicketsStateInTx(tx, {
+        userId,
+        observedTickets: wallet.tickets,
+        observedTicketsRefillStartedAt: wallet.tickets_refill_started_at,
+        tickets: hydrated.tickets,
+        ticketsRefillStartedAt: hydrated.ticketsRefillStartedAt,
+      });
+      if (updated) {
+        return updated;
+      }
+
+      await waitBeforeCasRetry(attempt);
+    }
+
+    throw ticketCasConflict(userId, 'hydrate');
+  },
+
+  async hydrateTicketsForUpdateInTx(
     tx: TransactionSql,
     userId: string,
     options?: { now?: Date | string }
@@ -125,25 +171,54 @@ export const ticketRefillService = {
     options?: { now?: Date | string }
   ): Promise<{ consumed: boolean; wallet: WalletStateRow | null }> {
     const nowIso = toIsoString(options?.now ?? new Date());
-    const wallet = await this.hydrateTicketsInTx(tx, userId, { now: nowIso });
-    if (!wallet) {
-      return { consumed: false, wallet: null };
-    }
-    if (wallet.tickets < 1) {
-      return { consumed: false, wallet };
+
+    for (let attempt = 0; attempt < TICKET_CAS_MAX_ATTEMPTS; attempt += 1) {
+      const wallet = await storeRepo.getWalletInTx(tx, userId);
+      if (!wallet) {
+        return { consumed: false, wallet: null };
+      }
+
+      const hydrated = resolveHydratedTicketState(wallet, nowIso);
+      if (hydrated.tickets < 1) {
+        if (!hydrated.changed) {
+          return { consumed: false, wallet };
+        }
+
+        const updated = await storeRepo.compareAndSetTicketsStateInTx(tx, {
+          userId,
+          observedTickets: wallet.tickets,
+          observedTicketsRefillStartedAt: wallet.tickets_refill_started_at,
+          tickets: hydrated.tickets,
+          ticketsRefillStartedAt: hydrated.ticketsRefillStartedAt,
+        });
+        if (updated) {
+          return { consumed: false, wallet: updated };
+        }
+
+        await waitBeforeCasRetry(attempt);
+        continue;
+      }
+
+      const nextTickets = hydrated.tickets - 1;
+      const nextAnchor = nextTickets < MAX_TICKETS
+        ? hydrated.ticketsRefillStartedAt ?? nowIso
+        : null;
+
+      const updated = await storeRepo.compareAndSetTicketsStateInTx(tx, {
+        userId,
+        observedTickets: wallet.tickets,
+        observedTicketsRefillStartedAt: wallet.tickets_refill_started_at,
+        tickets: nextTickets,
+        ticketsRefillStartedAt: nextAnchor,
+      });
+      if (updated) {
+        return { consumed: true, wallet: updated };
+      }
+
+      await waitBeforeCasRetry(attempt);
     }
 
-    const nextTickets = wallet.tickets - 1;
-    const nextAnchor = nextTickets < MAX_TICKETS
-      ? wallet.tickets_refill_started_at ?? nowIso
-      : null;
-
-    const updated = await storeRepo.setTicketsStateInTx(tx, userId, nextTickets, nextAnchor);
-    if (!updated) {
-      throw new NotFoundError('User not found');
-    }
-
-    return { consumed: true, wallet: updated };
+    throw ticketCasConflict(userId, 'consume');
   },
 
   async clampTicketGrantInTx(
@@ -156,7 +231,7 @@ export const ticketRefillService = {
     }
   ): Promise<{ wallet: WalletStateRow; grantedTickets: number }> {
     const requested = Math.max(0, Math.trunc(requestedAmount));
-    const wallet = await this.hydrateTicketsInTx(tx, userId, { now: options?.now });
+    const wallet = await this.hydrateTicketsForUpdateInTx(tx, userId, { now: options?.now });
     if (!wallet) {
       throw new NotFoundError('User not found');
     }

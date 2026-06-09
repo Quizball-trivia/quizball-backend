@@ -17,6 +17,7 @@ export interface MatchRow {
   started_at: string;
   ended_at: string | null;
   winner_user_id: string | null;
+  updated_at: string;
   is_dev: boolean;
 }
 

@@ -100,6 +100,44 @@ async function getRankedDraftAbortSignals(
   );
 }
 
+const TICKET_REFUND_MAX_ATTEMPTS = 3;
+const TICKET_REFUND_RETRY_BASE_DELAY_MS = 500;
+
+async function refundRankedTicketsWithRetry(
+  ticketUserIds: string[],
+  context: { lobbyId: string; matchId?: string; reason: string }
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= TICKET_REFUND_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const refund = await storeService.refundRankedTickets(ticketUserIds);
+      logger.info(
+        { ...context, ticketUserIds, attempt, wallets: refund.wallets },
+        'Refunded ranked tickets'
+      );
+      return true;
+    } catch (refundError) {
+      const isLastAttempt = attempt === TICKET_REFUND_MAX_ATTEMPTS;
+      const errorFields = {
+        ...context,
+        ticketUserIds,
+        attempt,
+        maxAttempts: TICKET_REFUND_MAX_ATTEMPTS,
+        error: refundError instanceof Error ? refundError.message : refundError,
+      };
+      if (isLastAttempt) {
+        logger.error(
+          { ...errorFields, eventName: 'ranked_ticket_refund_failed' },
+          'Ranked ticket refund failed after retries — needs manual reconciliation'
+        );
+        return false;
+      }
+      logger.warn(errorFields, 'Ranked ticket refund attempt failed; retrying');
+      await new Promise((resolve) => setTimeout(resolve, TICKET_REFUND_RETRY_BASE_DELAY_MS * attempt));
+    }
+  }
+  return false;
+}
+
 async function abortRankedDraftBeforeMatchCreation(
   io: QuizballServer,
   lobby: { id: string; mode: 'friendly' | 'ranked' },
@@ -181,22 +219,10 @@ async function startMatchFromDraft(
     const postTicketBlockingSignals = postTicketAbortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (postTicketBlockingSignals.length > 0) {
       if (consumedRankedTicketUserIds.length > 0) {
-        try {
-          const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
-          logger.info(
-            { lobbyId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
-            'Refunded ranked tickets after draft abort before match creation'
-          );
-        } catch (refundError) {
-          logger.error(
-            {
-              lobbyId,
-              ticketUserIds: consumedRankedTicketUserIds,
-              error: refundError instanceof Error ? refundError.message : refundError,
-            },
-            'Failed to refund ranked tickets after draft abort before match creation'
-          );
-        }
+        await refundRankedTicketsWithRetry(consumedRankedTicketUserIds, {
+          lobbyId,
+          reason: 'draft_abort_before_match_creation',
+        });
       }
       await abortRankedDraftBeforeMatchCreation(
         io,
@@ -224,22 +250,10 @@ async function startMatchFromDraft(
     });
   } catch (error) {
     if (consumedRankedTicketUserIds.length > 0) {
-      try {
-        const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
-        logger.info(
-          { lobbyId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
-          'Refunded ranked tickets after match creation failure'
-        );
-      } catch (refundError) {
-        logger.error(
-          {
-            lobbyId,
-            ticketUserIds: consumedRankedTicketUserIds,
-            error: refundError instanceof Error ? refundError.message : refundError,
-          },
-          'Failed to refund ranked tickets after match creation failure'
-        );
-      }
+      await refundRankedTicketsWithRetry(consumedRankedTicketUserIds, {
+        lobbyId,
+        reason: 'match_creation_failure',
+      });
     }
     logger.warn(
       { lobbyId, error: error instanceof Error ? error.message : error },
@@ -315,26 +329,22 @@ async function startMatchFromDraft(
       try {
         await matchesService.abandonMatch(matchId);
       } catch (error) {
-        logger.error({ error, lobbyId, matchId }, 'Failed to abandon newly-created pre-match ranked match');
+        // Do NOT refund or tear down surrounding state while the match row is
+        // still active — that would orphan a live match with its artifacts
+        // removed (and double-credit tickets if it later completes). Leave
+        // everything in place for the stale-match sweeper / terminal resolver.
+        logger.error(
+          { error, lobbyId, matchId },
+          'Failed to abandon newly-created pre-match ranked match; skipping refund and cleanup'
+        );
+        return matchId;
       }
       if (consumedRankedTicketUserIds.length > 0) {
-        try {
-          const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
-          logger.info(
-            { lobbyId, matchId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
-            'Refunded ranked tickets after pre-match ranked match abandon'
-          );
-        } catch (refundError) {
-          logger.error(
-            {
-              lobbyId,
-              matchId,
-              ticketUserIds: consumedRankedTicketUserIds,
-              error: refundError instanceof Error ? refundError.message : refundError,
-            },
-            'Failed to refund ranked tickets after pre-match ranked match abandon'
-          );
-        }
+        await refundRankedTicketsWithRetry(consumedRankedTicketUserIds, {
+          lobbyId,
+          matchId,
+          reason: 'pre_match_ranked_abandon',
+        });
       }
       await redis.del([
         rankedAiMatchKey(matchId),

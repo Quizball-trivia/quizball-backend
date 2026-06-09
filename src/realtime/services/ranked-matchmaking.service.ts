@@ -245,8 +245,8 @@ async function startHumanRankedMatch(
       });
       return;
     }
-    await setPairingInFlight([userAId, userBId]);
     try {
+      await setPairingInFlight([userAId, userBId]);
       rankedDebug('human_pair_candidate', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),

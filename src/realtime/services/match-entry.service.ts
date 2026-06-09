@@ -47,9 +47,13 @@ export async function markMatchEnteredForUserSockets(
   userId: string,
   source: string
 ): Promise<void> {
-  const sockets = await io.in(`user:${userId}`).fetchSockets();
-  if (sockets.length === 0) return;
-  await markMatchEntered(matchId, userId, source);
+  try {
+    const sockets = await io.in(`user:${userId}`).fetchSockets();
+    if (sockets.length === 0) return;
+    await markMatchEntered(matchId, userId, source);
+  } catch (error) {
+    logger.warn({ error, matchId, userId, source }, 'Failed to inspect user sockets for match-entered marker');
+  }
 }
 
 export async function hasMatchEnteredMarker(

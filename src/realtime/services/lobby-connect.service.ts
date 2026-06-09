@@ -109,12 +109,17 @@ export async function rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket
 }
 
 export async function handleLobbyDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-  const lobbyId = socket.data.lobbyId;
   const userId = socket.data.user.id;
+  let lobbyId = socket.data.lobbyId;
 
   if (!lobbyId) {
-    logger.info({ userId }, 'Lobby disconnect: no waiting lobby attached');
-    return;
+    const openLobby = await lobbiesRepo.findOpenLobbyForUser(userId);
+    lobbyId = openLobby?.id;
+    if (!lobbyId) {
+      logger.info({ userId }, 'Lobby disconnect: no lobby attached');
+      return;
+    }
+    logger.info({ userId, lobbyId, status: openLobby?.status ?? null }, 'Lobby disconnect: resolved lobby from DB');
   }
 
   const lobby = await lobbiesRepo.getById(lobbyId);

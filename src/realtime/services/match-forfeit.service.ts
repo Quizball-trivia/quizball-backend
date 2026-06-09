@@ -7,7 +7,7 @@ import type { MatchRow } from '../../modules/matches/matches.types.js';
 import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
-import { cancelMatchQuestionTimer, QUESTION_TIME_MS } from '../match-flow.js';
+import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { cancelPossessionHalftimeTimer } from '../possession-match-flow.js';
 import { deleteMatchCache, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
@@ -22,7 +22,7 @@ import {
 } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { buildStandings } from '../match-utils.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import type { MatchForfeitPendingPayload } from '../socket.types.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { getParticipantSnapshot } from './match-participants.helpers.js';
@@ -112,8 +112,9 @@ export interface FinalizeMatchAsForfeitResult {
 export async function finalizeMatchAsForfeit(
   params: FinalizeMatchAsForfeitParams
 ): Promise<FinalizeMatchAsForfeitResult> {
-  const lockKey = `lock:match:${params.matchId}:forfeit`;
-  const lock = await acquireLock(lockKey, 15_000);
+  const lockKey = `lock:match:${params.matchId}:complete`;
+  const lockTtlMs = 15_000;
+  const lock = await acquireLock(lockKey, lockTtlMs);
   if (!lock.acquired || !lock.token) {
     return {
       matchId: params.matchId,
@@ -122,9 +123,13 @@ export async function finalizeMatchAsForfeit(
       completed: false,
     };
   }
+  // Renew the lock across the full finalization (settlement, XP, objectives,
+  // avg-times, Redis, emits) so a slow >TTL run can't expire it and let a second
+  // worker re-finalize.
+  const heartbeat = startLockHeartbeat(lockKey, lock.token, lockTtlMs);
 
   try {
-    const activeMatch = params.activeMatch ?? await matchesRepo.getMatch(params.matchId);
+    const activeMatch = await matchesRepo.getMatch(params.matchId);
     if (!activeMatch || activeMatch.status !== 'active') {
       return {
         matchId: params.matchId,
@@ -158,21 +163,6 @@ export async function finalizeMatchAsForfeit(
             penaltyGoals: player.penaltyGoals,
           })
         )
-      );
-    }
-
-    if (winnerId && variant !== 'friendly_party_quiz') {
-      const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
-      const fullCorrectAnswers = activeMatch.total_questions;
-      const winnerPlayer = roster.find((player) => player.user_id === winnerId);
-      const currentPoints = winnerPlayer?.total_points ?? 0;
-      const currentCorrect = winnerPlayer?.correct_answers ?? 0;
-
-      await matchPlayersRepo.setPlayerForfeitWinTotals(
-        params.matchId,
-        winnerId,
-        Math.max(currentPoints, fullPoints),
-        Math.max(currentCorrect, fullCorrectAnswers)
       );
     }
 
@@ -246,6 +236,7 @@ export async function finalizeMatchAsForfeit(
       completed: true,
     };
   } finally {
+    heartbeat.stop();
     await releaseLock(lockKey, lock.token);
   }
 }

@@ -105,6 +105,27 @@ export async function releaseLock(key: string, token: string): Promise<boolean> 
   });
 }
 
+export interface LockHeartbeat {
+  /** Stop renewing the lock (call in the same finally that releases it). */
+  stop: () => void;
+}
+
+/**
+ * Keep a held lock alive across a long critical section by periodically
+ * extending its TTL. Renews every ttlMs/3 so the lock cannot expire mid-flight
+ * (which would let a second worker acquire it and duplicate the work). The
+ * heartbeat is token-checked via extendLock, so it is a harmless no-op once the
+ * lock is released or stolen. unref()'d so it never keeps the process alive.
+ */
+export function startLockHeartbeat(key: string, token: string, ttlMs: number): LockHeartbeat {
+  const intervalMs = Math.max(1, Math.floor(ttlMs / 3));
+  const interval = setInterval(() => {
+    void extendLock(key, token, ttlMs);
+  }, intervalMs);
+  if (typeof interval.unref === 'function') interval.unref();
+  return { stop: () => clearInterval(interval) };
+}
+
 /** Renew an existing lock's TTL, but only if the token still matches. */
 export async function extendLock(key: string, token: string, ttlMs: number): Promise<boolean> {
   const client = getRedisClient();

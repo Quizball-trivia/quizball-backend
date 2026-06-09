@@ -6,15 +6,28 @@ import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import { beginMatchForLobby, matchRealtimeService } from './match-realtime.service.js';
+import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
 import { trackDraftCompleted } from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
-import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import {
+  matchDisconnectKey,
+  matchGraceKey,
+  matchPauseKey,
+  matchPresenceKey,
+  matchReconnectCountKey,
+  matchResumeCountdownKey,
+} from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
+import {
+  buildFinalResultsPayload,
+  emitFinalResultsToMatchParticipants,
+} from './match-final-results.service.js';
+import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
@@ -33,6 +46,11 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+
+interface DraftDisconnectPresenceOptions {
+  ignoreSocketId?: string;
+  disconnectedConnectedAt?: number;
+}
 
 function draftDisconnectKey(lobbyId: string, userId: string): string {
   return `draft:disconnect:${lobbyId}:${userId}`;
@@ -150,24 +168,46 @@ async function startMatchFromDraft(
     logger.warn({ err, lobbyId, matchId }, 'draft_completed analytics failed');
   }
 
-  await beginMatchForLobby(io, lobbyId, matchId);
-
   const redis = getRedisClient();
   if (redis) {
     const absentFlags = await Promise.all(
       members.map((member) => redis.exists(draftAbsentAfterGraceKey(lobbyId, member.user_id)))
     );
-    for (let index = 0; index < members.length; index++) {
-      if (!absentFlags[index]) continue;
-      const member = members[index];
+    const absentMembers = members.filter((_, index) => absentFlags[index] === 1);
+    if (absentMembers.length > 0) {
+      const forfeitingMember = absentMembers[0];
       logger.info(
-        { lobbyId, matchId, userId: member.user_id },
-        'Pausing newly-created match for player absent after draft grace'
+        { lobbyId, matchId, userId: forfeitingMember.user_id, absentUserIds: absentMembers.map((member) => member.user_id) },
+        'Finalizing newly-created match as forfeit for player absent after draft grace'
       );
-      await matchRealtimeService.pauseMatchForDisconnectedPlayer(io, matchId, member.user_id);
-      await redis.del(draftAbsentAfterGraceKey(lobbyId, member.user_id));
+      const finalized = await finalizeMatchAsForfeit({
+        matchId,
+        forfeitingUserId: forfeitingMember.user_id,
+        activeMatch: result.match,
+        cleanupRedisKeys: [
+          rankedAiMatchKey(matchId),
+          matchPauseKey(matchId),
+          matchGraceKey(matchId),
+          matchResumeCountdownKey(matchId),
+          ...members.flatMap((member) => [
+            matchDisconnectKey(matchId, member.user_id),
+            matchPresenceKey(matchId, member.user_id),
+            matchReconnectCountKey(matchId, member.user_id),
+          ]),
+        ],
+      });
+      if (finalized.completed) {
+        const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
+        if (finalPayload) {
+          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+        }
+      }
+      await redis.del(absentMembers.map((member) => draftAbsentAfterGraceKey(lobbyId, member.user_id)));
+      return matchId;
     }
   }
+
+  await beginMatchForLobby(io, lobbyId, matchId);
 
   return matchId;
 }
@@ -614,14 +654,22 @@ export const draftRealtimeService = {
   async pauseDraftForDisconnectedPlayer(
     io: QuizballServer,
     lobbyId: string,
-    userId: string
+    userId: string,
+    options: DraftDisconnectPresenceOptions = {}
   ): Promise<void> {
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby || lobby.status !== 'active') return;
 
     const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-    const stillPresent = sockets.some((socket) => socket.data.user.id === userId);
-    if (stillPresent) return;
+    const sameUserSockets = sockets.filter((socket) =>
+      socket.id !== options.ignoreSocketId &&
+      socket.data.user.id === userId
+    );
+    const replacementSocketPresent = sameUserSockets.some((socket) => {
+      if (typeof options.disconnectedConnectedAt !== 'number') return true;
+      const connectedAt = socket.data.connectedAt;
+      return typeof connectedAt !== 'number' || connectedAt >= options.disconnectedConnectedAt;
+    });
 
     const members = await lobbiesRepo.listMembersWithUser(lobbyId);
     if (!members.some((member) => member.user_id === userId)) return;
@@ -664,6 +712,14 @@ export const draftRealtimeService = {
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
       'draft_grace_expiry_scheduled'
     );
+
+    if (replacementSocketPresent) {
+      logger.info(
+        { lobbyId, userId, socketCount: sockets.length, sameUserSocketCount: sameUserSockets.length },
+        'Draft auto-resuming after fast socket replacement'
+      );
+      await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
+    }
   },
 
   async resumeDraftForReconnectedPlayer(

@@ -107,9 +107,11 @@ vi.mock('../../src/realtime/services/draft-realtime.service.js', () => ({
 
 function createSocket(userId: string, lobbyId: string | undefined = 'lobby-1') {
   return {
+    id: `socket-${userId}`,
     data: {
       user: { id: userId },
       lobbyId,
+      connectedAt: 1000,
     },
     leave: vi.fn(),
   };
@@ -221,6 +223,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     const { io } = createIo();
     const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
     const socket = createSocket('u1');
+    socket.id = 'socket-1';
+    socket.data.connectedAt = 1234;
     socket.data.lobbyId = undefined;
     const activeLobby = {
       id: 'lobby-1',
@@ -234,7 +238,10 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(pauseDraftForDisconnectedPlayerMock).toHaveBeenCalledWith(io, 'lobby-1', 'u1');
+    expect(pauseDraftForDisconnectedPlayerMock).toHaveBeenCalledWith(io, 'lobby-1', 'u1', {
+      ignoreSocketId: 'socket-1',
+      disconnectedConnectedAt: 1234,
+    });
     expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
   });
 });

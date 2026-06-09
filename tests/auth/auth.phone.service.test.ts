@@ -23,9 +23,11 @@ const verifyPhoneOtpMock = vi.fn();
 const updateUserPhoneMock = vi.fn();
 const verifyPhoneChangeMock = vi.fn();
 const trackEventMock = vi.fn();
+const identifyUserProfileMock = vi.fn();
 
 vi.mock('../../src/core/analytics.js', () => ({
   trackEvent: (...args: unknown[]) => trackEventMock(...args),
+  identifyUserProfile: (...args: unknown[]) => identifyUserProfileMock(...args),
 }));
 
 vi.mock('../../src/modules/users/index.js', () => ({

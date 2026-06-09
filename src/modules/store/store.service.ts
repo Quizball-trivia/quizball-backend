@@ -96,13 +96,23 @@ function buildTicketPurchaseCooldown(
 
 function buildWalletResponse(
   wallet: Pick<StoreWalletResponse, 'coins' | 'tickets'>,
-  ticketPurchaseCooldown: TicketPurchaseCooldown = buildTicketPurchaseCooldown(null)
+  ticketPurchaseCooldown: TicketPurchaseCooldown
 ): StoreWalletResponse {
   return {
     coins: wallet.coins,
     tickets: wallet.tickets,
     ticketPurchaseCooldown,
   };
+}
+
+// Loads the real ticket-purchase cooldown for a user so wallet responses never
+// default to "purchasable" regardless of purchase history.
+async function loadTicketPurchaseCooldownInTx(
+  tx: TransactionSql,
+  userId: string
+): Promise<TicketPurchaseCooldown> {
+  const latest = await storeRepo.getLatestCompletedTicketPackPurchaseInTx(tx, userId);
+  return buildTicketPurchaseCooldown(latest?.purchased_at);
 }
 
 function assertCanBuyTicketPack(cooldown: TicketPurchaseCooldown, userId: string): void {
@@ -356,7 +366,7 @@ async function applyWalletAdjustmentInTx(
   }
 
   return {
-    wallet: buildWalletResponse(updated),
+    wallet: buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId)),
     appliedTicketsDelta,
   };
 }
@@ -821,7 +831,7 @@ export const storeService = {
         if (!wallet) {
           throw new NotFoundError('User not found');
         }
-        hydratedWallets[userId] = buildWalletResponse(wallet);
+        hydratedWallets[userId] = buildWalletResponse(wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       const insufficientUserIds = dedupedUserIds.filter((userId) => (hydratedWallets[userId]?.tickets ?? 0) < 1);
@@ -854,7 +864,7 @@ export const storeService = {
             }
           );
         }
-        wallets[userId] = buildWalletResponse(result.wallet);
+        wallets[userId] = buildWalletResponse(result.wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(
@@ -892,7 +902,7 @@ export const storeService = {
           throw new NotFoundError('User not found');
         }
 
-        wallets[userId] = buildWalletResponse(updated);
+        wallets[userId] = buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(

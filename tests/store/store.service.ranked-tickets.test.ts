@@ -6,6 +6,7 @@ const hydrateTicketsInTxMock = vi.fn();
 const hydrateTicketsForUpdateInTxMock = vi.fn();
 const consumeRankedTicketInTxMock = vi.fn();
 const setTicketsStateInTxMock = vi.fn();
+const getLatestCompletedTicketPackPurchaseInTxMock = vi.fn();
 
 vi.mock('../../src/db/index.js', () => ({
   sql: {
@@ -25,6 +26,8 @@ vi.mock('../../src/core/logger.js', () => ({
 vi.mock('../../src/modules/store/store.repo.js', () => ({
   storeRepo: {
     setTicketsStateInTx: (...args: unknown[]) => setTicketsStateInTxMock(...args),
+    getLatestCompletedTicketPackPurchaseInTx: (...args: unknown[]) =>
+      getLatestCompletedTicketPackPurchaseInTxMock(...args),
   },
 }));
 
@@ -45,6 +48,7 @@ vi.mock('../../src/modules/store/ticket-refill.service.js', () => ({
 describe('storeService.consumeRankedTickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getLatestCompletedTicketPackPurchaseInTxMock.mockResolvedValue(null);
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
     hydrateTicketsForUpdateInTxMock.mockImplementation((...args: unknown[]) => hydrateTicketsInTxMock(...args));
   });
@@ -90,6 +94,7 @@ describe('storeService.consumeRankedTickets', () => {
 describe('storeService.refundRankedTickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getLatestCompletedTicketPackPurchaseInTxMock.mockResolvedValue(null);
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
   });
 

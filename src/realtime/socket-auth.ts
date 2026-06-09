@@ -71,18 +71,28 @@ export async function socketAuthMiddleware(
       const authProvider = getAuthProvider();
       const identity = await authProvider.verifyToken(token);
       const cached = await getCachedUser(identity.provider, identity.subject);
-      const detectedCountry = await detectCountryFromHeaders(socket.handshake.headers, socket.handshake.address);
+      // Only hit the (potentially 3s, external ip-api.com) geo lookup when we
+      // don't already know the user's country. On every socket RECONNECT for a
+      // known user this used to fire unconditionally — under a reconnect storm
+      // (e.g. token-refresh churn) that floods outbound geo fetches and holds
+      // the auth path open, amplifying DB/pool pressure. The CF header path is
+      // still instant; this just skips the network fallback when redundant.
+      const detectedCountry = cached?.country
+        ? null
+        : await detectCountryFromHeaders(socket.handshake.headers, socket.handshake.address);
       const user = await usersService.getOrCreateFromIdentity(
         identity,
-        cached?.country ? null : detectedCountry,
+        detectedCountry,
       );
-      await rememberCurrentCountry(user.id, detectedCountry);
+      if (detectedCountry) {
+        await rememberCurrentCountry(user.id, detectedCountry);
+      }
 
       span.setAttribute('quizball.user_id', user.id);
       const data: SocketAuthData = {
         user,
         identity,
-        currentCountry: detectedCountry ?? user.country ?? null,
+        currentCountry: detectedCountry ?? cached?.country ?? user.country ?? null,
       };
       socket.data = { ...(socket.data ?? {}), ...data };
 

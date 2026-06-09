@@ -560,6 +560,11 @@ export async function pauseMatchForDisconnectedPlayer(
       connectedSocket.id !== options.ignoreSocketId &&
       connectedSocket.data.user.id === userId
   );
+  const replacementSocketPresent = sameUserSockets.some((connectedSocket) => {
+    if (typeof options.disconnectedConnectedAt !== 'number') return true;
+    const connectedAt = connectedSocket.data.connectedAt;
+    return typeof connectedAt === 'number' && connectedAt >= options.disconnectedConnectedAt;
+  });
   const nowMs = Date.now();
   const stableLiveSocket = sameUserSockets.some((connectedSocket) => {
     if (typeof options.disconnectedConnectedAt === 'number') {
@@ -666,7 +671,7 @@ export async function pauseMatchForDisconnectedPlayer(
       'Party quiz opponent disconnected emitted'
     );
   }
-  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
+  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && replacementSocketPresent) {
     await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
   }
 
@@ -756,7 +761,7 @@ export async function pauseMatchForDisconnectedPlayer(
       acquired === 'OK' ? 'Party quiz shared grace window started' : 'Party quiz shared grace window already active'
     );
   }
-  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && sameUserSockets.length > 0) {
+  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && replacementSocketPresent) {
     logger.info(
       { matchId, userId, socketCount: sameUserSockets.length },
       'Auto-resuming match after fast socket replacement'

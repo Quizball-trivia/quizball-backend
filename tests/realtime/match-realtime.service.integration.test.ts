@@ -554,6 +554,51 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('S15 reload race: an older same-user socket does not auto-resume a paused match', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const emit = vi.fn();
+      const staleSocket = {
+        id: 'stale-socket',
+        data: {
+          user: { id: 'u1', role: 'user' },
+          matchId: 'm1',
+          connectedAt: Date.now() - 30_000,
+        },
+      };
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn((room: string) => ({
+          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [staleSocket] : [])),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+      const disconnectingSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
+      disconnectingSocket.id = 'current-socket';
+      disconnectingSocket.data.connectedAt = Date.now() - 5_000;
+
+      fakeRedis.isOpen = true;
+
+      await matchRealtimeService.handleMatchDisconnect(io, disconnectingSocket);
+
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:resume_countdown:m1')).toBe(false);
+      expect(emit).toHaveBeenCalledWith(
+        'match:opponent_disconnected',
+        expect.objectContaining({
+          matchId: 'm1',
+          opponentId: 'u1',
+          graceMs: 60_000,
+        })
+      );
+      expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15 party reload race: same-user sockets do not auto-resume party quiz disconnects', async () => {
     vi.useFakeTimers();
     try {

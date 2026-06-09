@@ -296,6 +296,17 @@ describe('fuzzyMatchesAnswer', () => {
   it('accepts a one-letter typo for who-am-I style multi-word answers', () => {
     expect(fuzzyMatchesAnswer('capelo', ['Fabio Capello'])).toBe(true);
   });
+
+  it('accepts a short surname that is a whole word in the answer', () => {
+    expect(fuzzyMatchesAnswer('ake', ['Nathan Ake'])).toBe(true);
+    expect(fuzzyMatchesAnswer('Aké', ['Nathan Ake'])).toBe(true);
+    expect(fuzzyMatchesAnswer('son', ['Heung-min Son'])).toBe(true);
+  });
+
+  it('does not fuzzy-match short inputs that are not whole words', () => {
+    expect(fuzzyMatchesAnswer('joe', ['Jose Mourinho'])).toBe(false);
+    expect(fuzzyMatchesAnswer('ake', ['Nathaniel'])).toBe(false);
+  });
 });
 
 describe('calculatePutInOrderScore', () => {

@@ -112,7 +112,7 @@ function matchNormalizedAcceptedAnswer(
 ): AcceptedAnswerMatch | null {
   if (!normalizedAccepted) return null;
   if (normalizedInput === normalizedAccepted) return { kind: 'exact', distance: 0 };
-  if (normalizedInput.length >= 4 && containsWholeWord(normalizedAccepted, normalizedInput)) {
+  if (containsWholeWord(normalizedAccepted, normalizedInput)) {
     return { kind: 'wholeWord', distance: 0 };
   }
   if (hasTokenAliasMatch(normalizedInput, normalizedAccepted)) {

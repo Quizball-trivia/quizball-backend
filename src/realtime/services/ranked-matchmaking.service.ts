@@ -25,6 +25,16 @@ import {
   RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
+import {
+  RANKED_MM_QUEUE_KEY,
+  RANKED_MM_SEARCH_KEY_PREFIX,
+  RANKED_MM_TIMEOUTS_KEY,
+  RANKED_MM_USER_MAP_KEY,
+  rankedCancelKey,
+  rankedJoinDebounceKey,
+  rankedPairingInFlightKey,
+  rankedSearchKey,
+} from '../ranked-matchmaking-keys.js';
 
 const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
@@ -35,28 +45,33 @@ const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
 const FOUND_MODAL_MS = 1200;
 
-const QUEUE_KEY = 'ranked:mm:queue';
-const TIMEOUTS_KEY = 'ranked:mm:timeouts';
-const USER_MAP_KEY = 'ranked:mm:user';
-const SEARCH_KEY_PREFIX = 'ranked:mm:search:';
-const CANCEL_KEY_PREFIX = 'ranked:mm:cancel:';
 const CANCEL_KEY_TTL_SEC = 30;
+const JOIN_DEBOUNCE_TTL_SEC = 2;
+const PAIRING_IN_FLIGHT_TTL_SEC = 30;
 const TICK_LOCK_KEY = 'ranked:mm:tick-lock';
 
 let loopTimer: NodeJS.Timeout | null = null;
 let loopIo: QuizballServer | null = null;
 
-function searchKey(searchId: string): string {
-  return `${SEARCH_KEY_PREFIX}${searchId}`;
-}
-
-function cancelKey(userId: string): string {
-  return `${CANCEL_KEY_PREFIX}${userId}`;
-}
-
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+async function setPairingInFlight(userIds: string[]): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  await Promise.all(
+    userIds.map((userId) =>
+      redis.set(rankedPairingInFlightKey(userId), '1', { EX: PAIRING_IN_FLIGHT_TTL_SEC })
+    )
+  );
+}
+
+async function clearPairingInFlight(userIds: string[]): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  await redis.del(userIds.map((userId) => rankedPairingInFlightKey(userId)));
 }
 
 function isMissingUserWalletError(error: unknown): error is NotFoundError {
@@ -69,8 +84,8 @@ async function bestEffortCancelRankedQueueSearch(userId: string, source: string)
 
   try {
     await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-      keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-      arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
+      keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+      arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
     });
   } catch (error) {
     logger.warn({ err: error, userId, source }, 'Ranked stale queue cleanup failed');
@@ -92,20 +107,43 @@ async function getRankedMatchmakingSessionBlock(userId: string): Promise<{
   waitingLobbyId: string | null;
   queueSearchId: string | null;
   state: string;
+} | null>;
+async function getRankedMatchmakingSessionBlock(
+  userId: string,
+  options: { ignorePairingInFlight?: boolean }
+): Promise<{
+  activeMatchId: string | null;
+  waitingLobbyId: string | null;
+  queueSearchId: string | null;
+  state: string;
+} | null>;
+async function getRankedMatchmakingSessionBlock(
+  userId: string,
+  options: { ignorePairingInFlight?: boolean } = {}
+): Promise<{
+  activeMatchId: string | null;
+  waitingLobbyId: string | null;
+  queueSearchId: string | null;
+  state: string;
 } | null> {
   const snapshot = await userSessionGuardService.resolveState(userId);
+  const redis = getRedisClient();
+  const pairingInFlight = !options.ignorePairingInFlight && redis
+    ? (await redis.exists(rankedPairingInFlightKey(userId))) === 1
+    : false;
   const blocked = Boolean(
     snapshot.activeMatchId ||
     snapshot.waitingLobbyId ||
     snapshot.queueSearchId ||
-    snapshot.state === 'CORRUPT_MULTI_STATE'
+    snapshot.state === 'CORRUPT_MULTI_STATE' ||
+    pairingInFlight
   );
   if (!blocked) return null;
   return {
     activeMatchId: snapshot.activeMatchId,
     waitingLobbyId: snapshot.waitingLobbyId,
     queueSearchId: snapshot.queueSearchId,
-    state: snapshot.state,
+    state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
   };
 }
 
@@ -207,41 +245,43 @@ async function startHumanRankedMatch(
       });
       return;
     }
-    rankedDebug('human_pair_candidate', {
-      userA: rankedDebugUser(userAId),
-      userB: rankedDebugUser(userBId),
-    });
+    try {
+      await setPairingInFlight([userAId, userBId]);
+      rankedDebug('human_pair_candidate', {
+        userA: rankedDebugUser(userAId),
+        userB: rankedDebugUser(userBId),
+      });
 
-    const redis = getRedisClient();
-    if (redis) {
-      const [userACancelled, userBCancelled] = await Promise.all([
-        redis.get(cancelKey(userAId)),
-        redis.get(cancelKey(userBId)),
-      ]);
-      if (userACancelled || userBCancelled) {
-        logger.info(
-          { userAId, userBId, userACancelled: Boolean(userACancelled), userBCancelled: Boolean(userBCancelled) },
-          'Ranked human match creation skipped because a player cancelled search'
-        );
-        rankedDebug('human_pair_skipped_cancelled', {
-          userA: rankedDebugUser(userAId),
-          userB: rankedDebugUser(userBId),
-          userACancelled: Boolean(userACancelled),
-          userBCancelled: Boolean(userBCancelled),
-        });
-        span.setAttribute('quizball.skipped_cancelled', true);
-        return;
+      const redis = getRedisClient();
+      if (redis) {
+        const [userACancelled, userBCancelled] = await Promise.all([
+          redis.get(rankedCancelKey(userAId)),
+          redis.get(rankedCancelKey(userBId)),
+        ]);
+        if (userACancelled || userBCancelled) {
+          logger.info(
+            { userAId, userBId, userACancelled: Boolean(userACancelled), userBCancelled: Boolean(userBCancelled) },
+            'Ranked human match creation skipped because a player cancelled search'
+          );
+          rankedDebug('human_pair_skipped_cancelled', {
+            userA: rankedDebugUser(userAId),
+            userB: rankedDebugUser(userBId),
+            userACancelled: Boolean(userACancelled),
+            userBCancelled: Boolean(userBCancelled),
+          });
+          span.setAttribute('quizball.skipped_cancelled', true);
+          return;
+        }
       }
-    }
-    const isCancelled = async () => {
-      const latestRedis = getRedisClient();
-      if (!latestRedis) return false;
-      const [userACancelled, userBCancelled] = await Promise.all([
-        latestRedis.get(cancelKey(userAId)),
-        latestRedis.get(cancelKey(userBId)),
-      ]);
-      return Boolean(userACancelled || userBCancelled);
-    };
+      const isCancelled = async () => {
+        const latestRedis = getRedisClient();
+        if (!latestRedis) return false;
+        const [userACancelled, userBCancelled] = await Promise.all([
+          latestRedis.get(rankedCancelKey(userAId)),
+          latestRedis.get(rankedCancelKey(userBId)),
+        ]);
+        return Boolean(userACancelled || userBCancelled);
+      };
 
     const usersById = await usersRepo.getByIds([userAId, userBId]);
     const userA = usersById.get(userAId) ?? null;
@@ -303,8 +343,8 @@ async function startHumanRankedMatch(
     }
 
     const [sessionBlockA, sessionBlockB] = await Promise.all([
-      getRankedMatchmakingSessionBlock(userAId),
-      getRankedMatchmakingSessionBlock(userBId),
+      getRankedMatchmakingSessionBlock(userAId, { ignorePairingInFlight: true }),
+      getRankedMatchmakingSessionBlock(userBId, { ignorePairingInFlight: true }),
     ]);
     if (sessionBlockA || sessionBlockB) {
       logger.warn(
@@ -400,6 +440,9 @@ async function startHumanRankedMatch(
         await startDraft(io, lobby.id);
       })();
     }, FOUND_MODAL_MS);
+    } finally {
+      await clearPairingInFlight([userAId, userBId]);
+    }
   });
 }
 
@@ -412,7 +455,7 @@ async function startAiFallbackWithCountry(
     'quizball.user_id': userId,
   }, async () => {
     const redis = getRedisClient();
-    if (redis && await redis.get(cancelKey(userId))) {
+    if (redis && await redis.get(rankedCancelKey(userId))) {
       logger.info({ userId }, 'Ranked matchmaking fallback skipped because user cancelled search');
       rankedDebug('fallback_skipped_cancelled', {
         user: rankedDebugUser(userId),
@@ -455,7 +498,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     }
 
     const now = Date.now();
-    const due = await redis.zRangeByScore(TIMEOUTS_KEY, 0, now, {
+    const due = await redis.zRangeByScore(RANKED_MM_TIMEOUTS_KEY, 0, now, {
       LIMIT: { offset: 0, count: MAX_FALLBACKS_PER_TICK },
     });
     span.setAttribute('quizball.due_search_count', due.length);
@@ -464,7 +507,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     let fallbackFailureCount = 0;
     for (const searchId of due) {
       const resultRaw = await redis.eval(RANKED_MM_CLAIM_FALLBACK_SCRIPT, {
-        keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY, searchKey(searchId)],
+        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY, rankedSearchKey(searchId)],
         arguments: [searchId, String(now), String(now)],
       });
       const result = toStringArray(resultRaw);
@@ -499,8 +542,8 @@ async function processPairs(io: QuizballServer): Promise<void> {
     let pairFailureCount = 0;
     for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
       const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
-        keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-        arguments: [SEARCH_KEY_PREFIX, String(Date.now())],
+        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+        arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
       });
       const result = toStringArray(resultRaw);
       if (result.length < 4) break;
@@ -642,7 +685,7 @@ export const rankedMatchmakingService = {
         span.setAttribute('quizball.queue_mode', 'ai_only');
         const redis = getRedisClient();
         if (redis) {
-          await redis.del(cancelKey(userId));
+          await redis.del(rankedCancelKey(userId));
         }
         await startRankedAiForUser(io, userId, {
           ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
@@ -659,6 +702,43 @@ export const rankedMatchmakingService = {
         span.setAttribute('quizball.queue_fallback', 'redis_unavailable');
         await startRankedAiForUser(io, userId, {
           ...(socket.data.currentCountry ? { playerCountryCode: socket.data.currentCountry } : {}),
+        });
+        return;
+      }
+
+      const debounceResult = await redis.set(
+        rankedJoinDebounceKey(userId),
+        '1',
+        { NX: true, EX: JOIN_DEBOUNCE_TTL_SEC }
+      );
+      if (debounceResult !== 'OK') {
+        span.setAttribute('quizball.queue_join_debounced', true);
+        const existingSearchId = await redis.hGet(RANKED_MM_USER_MAP_KEY, userId);
+        if (existingSearchId) {
+          const existing = await redis.hGetAll(rankedSearchKey(existingSearchId));
+          if (existing.status === 'queued') {
+            const now = Date.now();
+            const parsedDeadline = Number(existing.deadlineAt);
+            const remainingMs = existing.deadlineAt && Number.isFinite(parsedDeadline) && parsedDeadline > 0
+              ? Math.max(0, parsedDeadline - now)
+              : SEARCH_DURATION_MS;
+            io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
+            await userSessionGuardService.emitState(io, userId);
+            logger.info(
+              { userId, searchId: existingSearchId, remainingMs },
+              'Ranked queue join debounced and resumed existing queue'
+            );
+            rankedDebug('queue_join_debounced_resumed_existing', {
+              user: rankedDebugUser(userId),
+              search: existingSearchId.slice(0, 8),
+              remainingMs,
+            });
+            return;
+          }
+        }
+        logger.info({ userId }, 'Ranked queue join debounced while transition is in progress');
+        rankedDebug('queue_join_debounced', {
+          user: rankedDebugUser(userId),
         });
         return;
       }
@@ -717,16 +797,16 @@ export const rankedMatchmakingService = {
             return;
           }
 
-          await redis.del(cancelKey(userId));
+          await redis.del(rankedCancelKey(userId));
 
           const now = Date.now();
           // Larger fast value (1s) than the per-round default: a too-tight queue
           // deadline can expire before the search hash is consistent, so the
           // fallback claim no-ops and the match never starts.
           const deadlineAt = now + harnessDelayMs(SEARCH_DURATION_MS, 1000);
-          const existingSearchId = await redis.hGet(USER_MAP_KEY, userId);
+          const existingSearchId = await redis.hGet(RANKED_MM_USER_MAP_KEY, userId);
           if (existingSearchId) {
-            const existing = await redis.hGetAll(searchKey(existingSearchId));
+            const existing = await redis.hGetAll(rankedSearchKey(existingSearchId));
             if (existing.status === 'queued') {
               // Validate and parse deadlineAt defensively
               const parsedDeadline = Number(existing.deadlineAt);
@@ -790,7 +870,7 @@ export const rankedMatchmakingService = {
               search: existingSearchId.slice(0, 8),
               status: existing.status ?? 'none',
             });
-            await redis.hDel(USER_MAP_KEY, userId);
+            await redis.hDel(RANKED_MM_USER_MAP_KEY, userId);
           }
 
           const newSearchId = randomUUID();
@@ -806,11 +886,11 @@ export const rankedMatchmakingService = {
 
           const multiResult = await redis
             .multi()
-            .hSet(searchKey(newSearchId), searchFields)
-            .expire(searchKey(newSearchId), SEARCH_KEY_TTL_SEC)
-            .zAdd(QUEUE_KEY, { score: now, value: newSearchId })
-            .zAdd(TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
-            .hSet(USER_MAP_KEY, userId, newSearchId)
+            .hSet(rankedSearchKey(newSearchId), searchFields)
+            .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
+            .zAdd(RANKED_MM_QUEUE_KEY, { score: now, value: newSearchId })
+            .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+            .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
             .exec();
 
           if (!multiResult) {
@@ -823,7 +903,7 @@ export const rankedMatchmakingService = {
           }
 
           io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-          const queueSize = await redis.zCard(QUEUE_KEY);
+          const queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
           span.setAttribute('quizball.queue_size', queueSize);
           logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
           trackRankedQueueJoined(userId, 0);
@@ -879,10 +959,10 @@ export const rankedMatchmakingService = {
         io,
         socket,
         async () => {
-          await redis.set(cancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
+          await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-            keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-            arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
+            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
           });
           const result = toStringArray(resultRaw);
           span.setAttribute('quizball.queue_search_found', result.length > 0);
@@ -952,8 +1032,8 @@ export const rankedMatchmakingService = {
         socket,
         async () => {
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
-            keys: [QUEUE_KEY, TIMEOUTS_KEY, USER_MAP_KEY],
-            arguments: [SEARCH_KEY_PREFIX, userId, String(Date.now())],
+            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
           });
           const result = toStringArray(resultRaw);
           span.setAttribute('quizball.queue_search_found', result.length > 0);

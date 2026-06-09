@@ -41,6 +41,21 @@ export async function markMatchEnteredForRoom(
   );
 }
 
+export async function markMatchEnteredForUserSockets(
+  io: QuizballServer,
+  matchId: string,
+  userId: string,
+  source: string
+): Promise<void> {
+  try {
+    const sockets = await io.in(`user:${userId}`).fetchSockets();
+    if (sockets.length === 0) return;
+    await markMatchEntered(matchId, userId, source);
+  } catch (error) {
+    logger.warn({ error, matchId, userId, source }, 'Failed to inspect user sockets for match-entered marker');
+  }
+}
+
 export async function hasMatchEnteredMarker(
   matchId: string,
   userId: string

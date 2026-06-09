@@ -13,9 +13,14 @@ type FakeRedis = {
   zRangeByScore: ReturnType<typeof vi.fn>;
   eval: ReturnType<typeof vi.fn>;
   hGet: ReturnType<typeof vi.fn>;
+  hGetAll: ReturnType<typeof vi.fn>;
+  hDel: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   set: ReturnType<typeof vi.fn>;
   del: ReturnType<typeof vi.fn>;
+  exists: ReturnType<typeof vi.fn>;
+  zCard: ReturnType<typeof vi.fn>;
+  multi: ReturnType<typeof vi.fn>;
 };
 
 const createLobbyMock = vi.fn();
@@ -165,10 +170,22 @@ describe('ranked-matchmaking.service queue behavior', () => {
       zRangeByScore: vi.fn().mockResolvedValue([]),
       eval: vi.fn().mockResolvedValue([]),
       hGet: vi.fn().mockResolvedValue(null),
+      hGetAll: vi.fn().mockResolvedValue({}),
+      hDel: vi.fn().mockResolvedValue(1),
       get: vi.fn().mockResolvedValue(null),
       set: vi.fn().mockResolvedValue('OK'),
       del: vi.fn().mockResolvedValue(1),
+      exists: vi.fn().mockResolvedValue(0),
+      zCard: vi.fn().mockResolvedValue(1),
+      multi: vi.fn(),
     };
+    const multi = {
+      hSet: vi.fn(() => multi),
+      expire: vi.fn(() => multi),
+      zAdd: vi.fn(() => multi),
+      exec: vi.fn().mockResolvedValue([1]),
+    };
+    redisMock.multi.mockReturnValue(multi);
 
     acquireLockMock.mockResolvedValue({ acquired: true, token: 't1' });
     releaseLockMock.mockResolvedValue(undefined);
@@ -250,6 +267,55 @@ describe('ranked-matchmaking.service queue behavior', () => {
     const service = await loadService();
     service.stop();
     vi.useRealTimers();
+  });
+
+  function createSocketMock(userId: string) {
+    return {
+      id: `socket-${userId}`,
+      connected: true,
+      data: { user: { id: userId, role: 'user' } },
+      emit: vi.fn(),
+    };
+  }
+
+  it('debounces rapid queue joins so only one queued search is created', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    let debounceCalls = 0;
+    redisMock.set.mockImplementation(async (key: string) => {
+      if (key === 'ranked:mm:join_debounce:u1') {
+        debounceCalls += 1;
+        return debounceCalls === 1 ? 'OK' : null;
+      }
+      return 'OK';
+    });
+
+    await service.handleQueueJoin(io, socket as never);
+    await service.handleQueueJoin(io, socket as never);
+    await service.handleQueueJoin(io, socket as never);
+
+    expect(redisMock.multi).toHaveBeenCalledTimes(1);
+    expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:join_debounce:u1', '1', { NX: true, EX: 2 });
+  });
+
+  it('marks users as pairing in-flight during human match handoff', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:pairing:u1', '1', { EX: 30 });
+    expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:pairing:u2', '1', { EX: 30 });
+    expect(redisMock.del).toHaveBeenCalledWith(['ranked:mm:pairing:u1', 'ranked:mm:pairing:u2']);
   });
 
   it('pairs one match when queue effectively has 2 users', async () => {

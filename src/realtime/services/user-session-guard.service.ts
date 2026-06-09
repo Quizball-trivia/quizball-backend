@@ -21,6 +21,7 @@ import {
   matchReconnectCountKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
+import { rankedPairingInFlightKey } from '../ranked-matchmaking-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
@@ -30,6 +31,7 @@ import {
 } from './match-final-results.service.js';
 import { resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
+import { resolveMatchReplayEvidence } from './match-entry.service.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -160,6 +162,12 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
       openLobbies,
     };
   });
+}
+
+async function hasRankedPairingInFlight(userId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+  return (await redis.exists(rankedPairingInFlightKey(userId))) === 1;
 }
 
 async function cleanupStaleOrphanActiveMatch(
@@ -360,17 +368,21 @@ async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Pr
   }
 }
 
-async function emitClosedLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
+async function emitClosedLobbyState(
+  io: QuizballServer,
+  lobbyId: string,
+  mode: 'friendly' | 'ranked' = 'friendly'
+): Promise<void> {
   io.to(`lobby:${lobbyId}`).emit('lobby:state', {
     lobbyId,
-    mode: 'friendly',
+    mode,
     status: 'closed',
     inviteCode: null,
     displayName: 'Lobby closed',
     isPublic: false,
     hostUserId: '',
     settings: {
-      gameMode: 'friendly_possession',
+      gameMode: mode === 'ranked' ? 'ranked_sim' : 'friendly_possession',
       friendlyRandom: true,
       friendlyCategoryAId: null,
       friendlyCategoryBId: null,
@@ -403,7 +415,7 @@ async function removeUserFromLobby(
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
   if (memberCount === 0) {
     await lobbiesRepo.deleteLobby(lobby.id);
-    await emitClosedLobbyState(io, lobby.id);
+    await emitClosedLobbyState(io, lobby.id, lobby.mode);
     logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed and deleted empty lobby');
     return;
   }
@@ -414,6 +426,53 @@ async function removeUserFromLobby(
 
   await emitLobbyState(io, lobby.id);
   logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed user from lobby');
+}
+
+async function closeRankedPreMatchLobby(
+  io: QuizballServer,
+  lobby: LobbyWithJoinedAt,
+  userId: string,
+  reason: string
+): Promise<void> {
+  const members = await lobbiesRepo.listMembersWithUser(lobby.id);
+  await lobbiesRepo.deleteLobby(lobby.id);
+  const redis = getRedisClient();
+  if (redis?.isOpen) {
+    await redis.del(rankedAiLobbyKey(lobby.id));
+  }
+
+  await emitClosedLobbyState(io, lobby.id, lobby.mode);
+
+  const lobbySockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
+  lobbySockets.forEach((socket) => {
+    socket.leave(`lobby:${lobby.id}`);
+    if (socket.data.lobbyId === lobby.id) {
+      socket.data.lobbyId = undefined;
+    }
+  });
+
+  for (const member of members) {
+    io.to(`user:${member.user_id}`).emit('ranked:queue_left');
+    const snapshot = toSnapshot(await resolveContext(member.user_id));
+    io.to(`user:${member.user_id}`).emit('session:state', snapshot);
+  }
+  logger.info(
+    { lobbyId: lobby.id, userId, reason, memberUserIds: members.map((member) => member.user_id) },
+    'Session guard closed ranked pre-match lobby'
+  );
+}
+
+async function hasAnyHumanEnteredMatch(lobbyId: string, matchId: string): Promise<boolean> {
+  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+  const humanUserIds = members
+    .filter((member) => !member.is_ai)
+    .map((member) => member.user_id);
+  if (humanUserIds.length === 0) return false;
+
+  const evidence = await Promise.all(
+    humanUserIds.map((memberUserId) => resolveMatchReplayEvidence(matchId, memberUserId))
+  );
+  return evidence.some((entry) => entry.allowed);
 }
 
 async function cancelRankedQueueSearch(userId: string): Promise<void> {
@@ -506,8 +565,41 @@ async function cleanupOpenLobbies(
 async function cleanupRankedWaitingLobbies(io: QuizballServer, userId: string): Promise<void> {
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
   for (const lobby of openLobbies) {
-    if (lobby.mode !== 'ranked' || lobby.status !== 'waiting') continue;
-    await removeUserFromLobby(io, lobby, userId, 'ranked_queue_leave');
+    if (lobby.mode !== 'ranked') continue;
+    if (lobby.status === 'waiting') {
+      await removeUserFromLobby(io, lobby, userId, 'ranked_queue_leave');
+      continue;
+    }
+
+    if (lobby.status !== 'active') continue;
+    const activeMatchForLobby = await matchesRepo.getActiveMatchForLobby(lobby.id);
+    if (!activeMatchForLobby) {
+      await closeRankedPreMatchLobby(io, lobby, userId, 'ranked_queue_leave_active_lobby_no_match');
+      continue;
+    }
+
+    if (await hasAnyHumanEnteredMatch(lobby.id, activeMatchForLobby.id)) {
+      logger.info(
+        { userId, lobbyId: lobby.id, matchId: activeMatchForLobby.id },
+        'Session guard skipped active ranked lobby cleanup because match has entered evidence'
+      );
+      continue;
+    }
+
+    const players = await matchPlayersRepo.listMatchPlayers(activeMatchForLobby.id);
+    const abandoned = await abandonMatchWithCompleteLock(activeMatchForLobby.id);
+    if (!abandoned.abandoned) {
+      logger.warn(
+        { userId, lobbyId: lobby.id, matchId: activeMatchForLobby.id, reason: abandoned.reason },
+        'Session guard could not abandon pre-match ranked match during queue leave'
+      );
+      continue;
+    }
+    await cleanupRankedMatchRedisKeys(
+      activeMatchForLobby.id,
+      players.map((player) => player.user_id)
+    );
+    await closeRankedPreMatchLobby(io, lobby, userId, 'ranked_queue_leave_active_lobby_no_entered_match');
   }
 }
 
@@ -697,6 +789,15 @@ export const userSessionGuardService = {
     await this.prepareForConnect(io, userId);
     const context = await resolveContext(userId);
     const snapshot = toSnapshot(context);
+    if (await hasRankedPairingInFlight(userId)) {
+      return {
+        ok: false,
+        snapshot,
+        reason: 'ACTIVE_MATCH',
+        message: 'Your ranked match is starting',
+      };
+    }
+
     if (snapshot.activeMatchId) {
       return {
         ok: false,

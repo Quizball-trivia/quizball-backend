@@ -6,7 +6,9 @@ const listMembersWithUserMock = vi.fn();
 const listLobbyCategoryBansMock = vi.fn();
 const insertLobbyCategoryBanMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
+const deleteLobbyMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
+const abandonMatchMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
 const pauseMatchForDisconnectedPlayerMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
@@ -44,6 +46,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     listLobbyCategoryBans: (...args: unknown[]) => listLobbyCategoryBansMock(...args),
     insertLobbyCategoryBan: (...args: unknown[]) => insertLobbyCategoryBanMock(...args),
+    deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
   },
 }));
 
@@ -56,6 +59,7 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/matches/matches.service.js', () => ({
   matchesService: {
     createMatchFromLobby: (...args: unknown[]) => createMatchFromLobbyMock(...args),
+    abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
   },
 }));
 
@@ -88,6 +92,19 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 
 vi.mock('../../src/realtime/services/lobby-draft-start.service.js', () => ({
   abortRankedDraftStartForTickets: (...args: unknown[]) => abortRankedDraftStartForTicketsMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
+  userSessionGuardService: {
+    emitState: vi.fn(async () => ({
+      state: 'IDLE',
+      activeMatchId: null,
+      waitingLobbyId: null,
+      queueSearchId: null,
+      openLobbyIds: [],
+      resolvedAt: new Date().toISOString(),
+    })),
+  },
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -206,7 +223,9 @@ describe('draftRealtimeService', () => {
       },
     });
     abortRankedDraftStartForTicketsMock.mockResolvedValue(undefined);
+    deleteLobbyMock.mockResolvedValue(undefined);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
+    abandonMatchMock.mockResolvedValue(undefined);
     beginMatchForLobbyMock.mockResolvedValue(undefined);
     finalizeMatchAsForfeitMock.mockResolvedValue({
       matchId: 'm1',
@@ -280,6 +299,35 @@ describe('draftRealtimeService', () => {
       categoryBId: null,
     });
     expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+  });
+
+  it('aborts a ranked draft before consuming tickets when a human cancelled before match creation', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    redisClientMock = {
+      get: vi.fn(async (key: string) => (key === 'ranked:mm:cancel:u1' ? '1' : null)),
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
   it('does not complete the ranked draft or create a match when ticket consumption fails', async () => {

@@ -12,9 +12,6 @@ import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
-import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import { matchDisconnectKey, matchPresenceKey } from '../match-keys.js';
-import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
@@ -70,6 +67,14 @@ function isStaleActiveMatch(startedAt: string): boolean {
   return Date.now() - startedAtMs > STALE_ACTIVE_MATCH_MS;
 }
 
+function getStatePayloadString(
+  payload: Record<string, unknown> | null,
+  key: string
+): string | null {
+  const value = payload?.[key];
+  return typeof value === 'string' ? value : null;
+}
+
 async function resolveContext(userId: string): Promise<ResolveContext> {
   return withSpan('session.resolve_context', {
     'quizball.user_id': userId,
@@ -114,10 +119,12 @@ async function cleanupStaleOrphanActiveMatch(
   const ageMs = Number.isNaN(startedAtMs) ? 0 : Date.now() - startedAtMs;
   const staleByAge = isStaleActiveMatch(activeMatch.started_at);
 
+  let matchSocketCount: number | null = null;
   let staleByNoSockets = false;
   if (ageMs >= STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS) {
     const sockets = await io.in(`match:${activeMatch.id}`).fetchSockets();
-    staleByNoSockets = sockets.length === 0;
+    matchSocketCount = sockets.length;
+    staleByNoSockets = matchSocketCount === 0;
   }
 
   if (!staleByAge && !staleByNoSockets) return;
@@ -126,8 +133,9 @@ async function cleanupStaleOrphanActiveMatch(
   // before it has rejoined match:<id>. During a normal page reload the match
   // room can be temporarily empty, so treating "no match sockets" as orphaned
   // here can incorrectly forfeit the reconnecting player's active match.
-  // The bypass is scoped to the staleByNoSockets case only — a truly
-  // age-stale match should still be cleaned up regardless of reconnects.
+  // The bypass is scoped to the staleByNoSockets case only. Age-stale ranked
+  // matches are audited below; age-stale non-ranked matches still use the
+  // existing abandon cleanup.
   if (staleByNoSockets && !staleByAge) {
     try {
       const userSockets = await io.in(`user:${userId}`).fetchSockets();
@@ -151,45 +159,31 @@ async function cleanupStaleOrphanActiveMatch(
   }
 
   if (activeMatch.mode === 'ranked') {
-    const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
-    const finalized = await finalizeMatchAsForfeit({
-      matchId: activeMatch.id,
-      forfeitingUserId: userId,
-      activeMatch,
-      cleanupRedisKeys: [
-        rankedAiMatchKey(activeMatch.id),
-        ...players.flatMap((player) => [
-          matchDisconnectKey(activeMatch.id, player.user_id),
-          matchPresenceKey(activeMatch.id, player.user_id),
-        ]),
-      ],
-    });
-
-    if (finalized.completed) {
-      logger.warn(
-        {
-          userId,
-          matchId: activeMatch.id,
-          lobbyId: activeMatch.lobby_id,
-          startedAt: activeMatch.started_at,
-          staleByAge,
-          staleByNoSockets,
-        },
-        'Session guard finalized stale orphan ranked match as forfeit'
-      );
-      return;
+    let userSocketCount: number | null = null;
+    try {
+      userSocketCount = (await io.in(`user:${userId}`).fetchSockets()).length;
+    } catch (error) {
+      logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for ranked stale match audit');
     }
-
     logger.warn(
       {
         userId,
         matchId: activeMatch.id,
         lobbyId: activeMatch.lobby_id,
         startedAt: activeMatch.started_at,
+        updatedAt: activeMatch.updated_at,
+        phase: getStatePayloadString(activeMatch.state_payload, 'phase'),
+        staleReason: staleByAge && staleByNoSockets
+          ? 'age_and_no_sockets'
+          : staleByAge
+            ? 'age'
+            : 'no_sockets',
         staleByAge,
         staleByNoSockets,
+        matchSocketCount,
+        userSocketCount,
       },
-      'Session guard skipped ranked abandon fallback because forfeit finalization did not complete'
+      'Session guard skipped stale orphan ranked match cleanup audit-only'
     );
     return;
   }

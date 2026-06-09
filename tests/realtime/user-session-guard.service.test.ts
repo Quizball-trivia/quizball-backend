@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
+import { logger } from '../../src/core/logger.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
 const getActiveMatchForUserMock = vi.fn();
@@ -78,18 +79,18 @@ describe('user-session-guard.service', () => {
     });
   });
 
-  it('finalizes stale ranked orphan matches as forfeit instead of abandoning them', async () => {
-    const staleStartedAt = new Date(Date.now() - 91_000).toISOString();
-    getActiveMatchForUserMock
-      .mockResolvedValueOnce({
-        id: 'm1',
-        mode: 'ranked',
-        status: 'active',
-        started_at: staleStartedAt,
-        lobby_id: 'l1',
-      })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(null);
+  it('skips stale ranked orphan match cleanup instead of finalizing it as forfeit', async () => {
+    const staleStartedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+    const activeMatch = {
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      started_at: staleStartedAt,
+      updated_at: staleStartedAt,
+      lobby_id: 'l1',
+      state_payload: { phase: 'PENALTY_SHOOTOUT' },
+    };
+    getActiveMatchForUserMock.mockResolvedValue(activeMatch);
 
     const io = {
       in: vi.fn(() => ({
@@ -101,34 +102,38 @@ describe('user-session-guard.service', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
 
-    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matchId: 'm1',
-        forfeitingUserId: 'u1',
-        activeMatch: expect.objectContaining({ id: 'm1', mode: 'ranked' }),
-      })
-    );
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
     expect(abandonMatchMock).not.toHaveBeenCalled();
-    expect(snapshot.state).toBe('IDLE');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        matchId: 'm1',
+        lobbyId: 'l1',
+        startedAt: staleStartedAt,
+        updatedAt: staleStartedAt,
+        phase: 'PENALTY_SHOOTOUT',
+        staleReason: 'age_and_no_sockets',
+        staleByAge: true,
+        staleByNoSockets: true,
+        matchSocketCount: 0,
+        userSocketCount: 0,
+      }),
+      'Session guard skipped stale orphan ranked match cleanup audit-only'
+    );
+    expect(snapshot.state).toBe('IN_ACTIVE_MATCH');
+    expect(snapshot.activeMatchId).toBe('m1');
   });
 
-  it('does not abandon ranked matches when forfeit finalization does not complete', async () => {
-    const staleStartedAt = new Date(Date.now() - 91_000).toISOString();
-    getActiveMatchForUserMock
-      .mockResolvedValueOnce({
-        id: 'm1',
-        mode: 'ranked',
-        status: 'active',
-        started_at: staleStartedAt,
-        lobby_id: 'l1',
-      })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(null);
-    finalizeMatchAsForfeitMock.mockResolvedValue({
-      matchId: 'm1',
-      winnerId: null,
-      resultVersion: 456,
-      completed: false,
+  it('leaves stale ranked orphan matches active for the background sweeper', async () => {
+    const staleStartedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      started_at: staleStartedAt,
+      updated_at: staleStartedAt,
+      lobby_id: 'l1',
+      state_payload: { phase: 'NORMAL_PLAY' },
     });
 
     const io = {
@@ -141,15 +146,10 @@ describe('user-session-guard.service', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
 
-    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matchId: 'm1',
-        forfeitingUserId: 'u1',
-        activeMatch: expect.objectContaining({ id: 'm1', mode: 'ranked' }),
-      })
-    );
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
     expect(abandonMatchMock).not.toHaveBeenCalled();
-    expect(snapshot.state).toBe('IDLE');
+    expect(snapshot.state).toBe('IN_ACTIVE_MATCH');
+    expect(snapshot.activeMatchId).toBe('m1');
   });
 
   it('does not forfeit an active ranked match while the user is reconnecting', async () => {

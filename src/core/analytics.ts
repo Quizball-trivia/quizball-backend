@@ -201,18 +201,50 @@ export function identifyUserProfile(user: AnalyticsUserProfile): void {
 // users (session restore, no fresh sign-in) never get email/nickname attached
 // and show up as bare-UUID persons in PostHog. maybeIdentifyUserProfile closes
 // that gap from a "user is active" signal (GET /users/me) WITHOUT spamming: it
-// identifies each user at most once per UTC day. In-memory only — a redeploy
-// resets it, which just re-identifies each active user once (idempotent, cheap).
-// The marker is set ONLY after identify is dispatched, so a no-op client run
-// (PostHog disabled) doesn't burn the day's slot.
-const identifiedToday = new Map<string, string>(); // userId -> 'YYYY-MM-DD'
+// identifies each user at most once per UTC day.
+//
+// The dedup marker lives in Redis (`identify:{userId}:{utcDate}`, SET NX EX) so
+// it survives redeploys and is shared across instances — otherwise an in-memory
+// marker resets on every deploy / differs per instance, re-identifying each
+// active user many times (the identify-event spam). Falls back to an in-memory
+// Map if Redis is unavailable, so identify never breaks. The marker is claimed
+// only when we actually dispatch identify, so a no-op run never burns the slot.
+const IDENTIFY_DEDUP_TTL_SEC = 26 * 60 * 60; // > 24h so a day is always covered
+const identifiedTodayFallback = new Map<string, string>(); // userId -> 'YYYY-MM-DD'
 
-export function maybeIdentifyUserProfile(user: AnalyticsUserProfile): void {
+function identifyDedupKey(userId: string, utcDate: string): string {
+  return `identify:${userId}:${utcDate}`;
+}
+
+export async function maybeIdentifyUserProfile(user: AnalyticsUserProfile): Promise<void> {
   if (!getPostHogClient()) return;
   const today = new Date().toISOString().slice(0, 10);
-  if (identifiedToday.get(user.id) === today) return;
+
+  let claimed = false;
+  try {
+    // Lazy import to avoid a static core -> realtime dependency.
+    const { getRedisClient } = await import('../realtime/redis.js');
+    const redis = getRedisClient();
+    if (redis && redis.isOpen) {
+      const result = await redis.set(identifyDedupKey(user.id, today), '1', {
+        NX: true,
+        EX: IDENTIFY_DEDUP_TTL_SEC,
+      });
+      // NX returns 'OK' only when we won the claim; null means already identified.
+      if (result !== 'OK') return;
+      claimed = true;
+    }
+  } catch (error) {
+    logger.warn({ error, userId: user.id }, 'Identify dedup: Redis unavailable, using in-memory fallback');
+  }
+
+  if (!claimed) {
+    // Redis missing/unavailable — fall back to per-process daily dedup.
+    if (identifiedTodayFallback.get(user.id) === today) return;
+    identifiedTodayFallback.set(user.id, today);
+  }
+
   identifyUserProfile(user);
-  identifiedToday.set(user.id, today);
 }
 
 // Alias user (link anonymous ID to identified user)

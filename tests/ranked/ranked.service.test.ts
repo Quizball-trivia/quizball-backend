@@ -480,11 +480,11 @@ describe('rankedService', () => {
 
   it('finalizes placement on game 3 and applies seeded RP with dominance adjustment clamp', async () => {
     // Human wins game 3 with 8/12 correct, anchor 2000
-    // correctnessModifier = round((8/12 - 0.5) * 1400) = 233
-    // perfScore = 2000 + 300 + 233 = 2533
-    // perfSum = 3000 + 2533 = 5533, base = 1844.33
+    // correctnessModifier = round((8/12 - 0.5) * 700) = 117
+    // perfScore = 2000 + 550 + 117 = 2667
+    // perfSum = 3000 + 2667 = 5667, base = 1889
     // dominanceAdj = clamp(round((8400-100)/50), -150, 150) = 150 (clamped)
-    // seedRp = roundToNearest25(1844.33 + 150) = 2000
+    // seedRp = roundToNearest25(1889 + 150) = 2050
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
     );
@@ -518,8 +518,8 @@ describe('rankedService', () => {
     expect(userOutcome?.isPlacement).toBe(true);
     expect(userOutcome?.placementStatus).toBe('placed');
     expect(userOutcome?.placementPlayed).toBe(3);
-    expect(userOutcome?.newRp).toBe(2000);
-    expect(userOutcome?.deltaRp).toBe(800);
+    expect(userOutcome?.newRp).toBe(2050);
+    expect(userOutcome?.deltaRp).toBe(850);
     expect(userOutcome?.newTier).toBe('Key Player');
   });
 

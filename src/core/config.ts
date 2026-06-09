@@ -68,6 +68,11 @@ const configSchema = z.object({
   // Refresh token cookie max age in milliseconds (default: 7 days)
   REFRESH_TOKEN_MAX_AGE_MS: z.coerce.number().positive().optional(),
 
+  // Load-testing rate-limit bypass. When set (NON-PROD ONLY), a request whose
+  // `x-chaos-bypass` header matches this secret skips the API rate limiter so
+  // the chaos harness can drive real RPS. Hard-disabled when NODE_ENV==='prod'.
+  CHAOS_BYPASS_TOKEN: z.string().optional(),
+
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),
   DOCS_USERNAME: z.string().optional(),

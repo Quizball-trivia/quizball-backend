@@ -37,8 +37,11 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
-function getUtcDay(now = new Date()): string {
-  return now.toISOString().slice(0, 10);
+const GEORGIA_UTC_OFFSET_HOURS = 4;
+
+function getDailyChallengeDay(now = new Date()): string {
+  const georgiaTime = new Date(now.getTime() + GEORGIA_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+  return georgiaTime.toISOString().slice(0, 10);
 }
 
 const dailyChallengeSettingsSchemas = {
@@ -428,7 +431,7 @@ async function getContentAvailabilityDetails<TType extends QuestionPayloadType>(
 
 export const dailyChallengesService = {
   async listActiveChallenges(userId: string, locale?: string) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const [configs, completions] = await Promise.all([
       dailyChallengesRepo.listConfigs(true),
       dailyChallengesRepo.listCompletionsForUserOnDay(userId, day),
@@ -510,7 +513,7 @@ export const dailyChallengesService = {
   },
 
   async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
@@ -851,7 +854,7 @@ export const dailyChallengesService = {
     challengeType: DailyChallengeType,
     score: number
   ) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
@@ -914,7 +917,7 @@ export const dailyChallengesService = {
   },
 
   async resetChallengeForToday(userId: string, challengeType: DailyChallengeType) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     await dailyChallengesRepo.deleteCompletionForUserOnDay(userId, challengeType, day);
 
     return {

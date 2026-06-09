@@ -976,6 +976,69 @@ describe('dailyChallengesService', () => {
     });
   });
 
+  it('uses Georgia midnight as the daily completion boundary', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'countdown',
+      is_active: true,
+      coin_reward: 20,
+      xp_reward: 15,
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    createCompletionMock.mockResolvedValue({
+      id: 'completion-1',
+    });
+    addCoinsMock.mockResolvedValue({
+      coins: 1080,
+      tickets: 10,
+    });
+    grantXpMock.mockResolvedValue({
+      awarded: true,
+      totalXp: 215,
+    });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-06-08T19:59:00.000Z'));
+      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
+      expect(createCompletionMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          challengeDay: '2026-06-08',
+        })
+      );
+      expect(grantXpMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sourceKey: 'countdown:2026-06-08',
+          metadata: expect.objectContaining({
+            challengeDay: '2026-06-08',
+          }),
+        })
+      );
+
+      createCompletionMock.mockClear();
+      grantXpMock.mockClear();
+
+      vi.setSystemTime(new Date('2026-06-08T20:00:00.000Z'));
+      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
+      expect(createCompletionMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          challengeDay: '2026-06-09',
+        })
+      );
+      expect(grantXpMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sourceKey: 'countdown:2026-06-09',
+          metadata: expect.objectContaining({
+            challengeDay: '2026-06-09',
+          }),
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('awards money drop leftover coins capped at 1000', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'moneyDrop',

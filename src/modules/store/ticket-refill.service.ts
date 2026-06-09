@@ -3,8 +3,8 @@ import { AppError, ErrorCode, NotFoundError } from '../../core/errors.js';
 import { storeRepo } from './store.repo.js';
 import type { StoreWalletResponse, WalletStateRow } from './store.types.js';
 
-export const MAX_TICKETS = 10;
-export const TICKET_REFILL_INTERVAL_MS = 60 * 60 * 1000;
+export const MAX_TICKETS = 3;
+export const TICKET_REFILL_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const TICKET_CAS_MAX_ATTEMPTS = 3;
 
 export interface HydratedTicketState {
@@ -21,6 +21,11 @@ export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'ti
   return {
     coins: wallet.coins,
     tickets: wallet.tickets,
+    ticketPurchaseCooldown: {
+      canBuy: true,
+      nextAvailableAt: null,
+      remainingSeconds: 0,
+    },
   };
 }
 

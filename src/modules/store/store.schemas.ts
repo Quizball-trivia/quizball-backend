@@ -71,6 +71,11 @@ export const storeProductsResponseSchema = z.object({
 export const storeWalletResponseSchema = z.object({
   coins: z.number().int().nonnegative(),
   tickets: z.number().int().nonnegative(),
+  ticketPurchaseCooldown: z.object({
+    canBuy: z.boolean(),
+    nextAvailableAt: z.string().datetime().nullable(),
+    remainingSeconds: z.number().int().nonnegative(),
+  }),
 });
 
 export const storeInventoryItemSchema = z.object({

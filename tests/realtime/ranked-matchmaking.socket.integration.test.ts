@@ -41,6 +41,10 @@ class FakeRedis {
     return removed;
   }
 
+  async exists(key: string): Promise<number> {
+    return this.kv.has(key) || this.hashes.has(key) || this.zsets.has(key) ? 1 : 0;
+  }
+
   async expire(_key: string, _seconds: number): Promise<number> {
     return 1;
   }

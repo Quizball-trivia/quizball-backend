@@ -54,6 +54,10 @@ import {
   getParticipantSnapshot,
   resolveMatchCategoryName,
 } from './match-participants.helpers.js';
+import {
+  markMatchEnteredForSocket,
+  markMatchEnteredForUserSockets,
+} from './match-entry.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MATCH_START_COUNTDOWN_SEC = 5;
@@ -305,6 +309,7 @@ export async function beginMatchForLobby(
         participants,
         ...(categoryName ? { categoryName } : {}),
       });
+      await markMatchEnteredForUserSockets(io, matchId, member.user_id, 'match_start');
     })
   );
 
@@ -470,6 +475,7 @@ export async function rejoinActiveMatchOnConnect(
     participants: participantPayloads,
     ...(categoryName ? { categoryName } : {}),
   });
+  await markMatchEnteredForSocket(socket, match.id, 'match_start_rejoin');
 
   if (redis) {
     await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });

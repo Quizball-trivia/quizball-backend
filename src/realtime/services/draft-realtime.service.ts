@@ -12,6 +12,7 @@ import { startDraft } from './lobby-realtime.service.js';
 import { trackDraftCompleted } from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { rankedCancelKey } from '../ranked-matchmaking-keys.js';
 import {
   matchDisconnectKey,
   matchGraceKey,
@@ -28,6 +29,11 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
+import {
+  detachAllSocketsFromLobby,
+  emitClosedLobbyStateForMode,
+} from './lobby-lifecycle.helpers.js';
+import { userSessionGuardService } from './user-session-guard.service.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
@@ -72,6 +78,57 @@ function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
   return `draft:absent_after_grace:${lobbyId}:${userId}`;
 }
 
+async function getRankedDraftAbortSignals(
+  lobbyId: string,
+  humanUserIds: string[]
+): Promise<Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen || humanUserIds.length === 0) return [];
+
+  return Promise.all(
+    humanUserIds.map(async (userId) => {
+      const [cancelled, absentAfterGrace] = await Promise.all([
+        redis.get(rankedCancelKey(userId)),
+        redis.exists(draftAbsentAfterGraceKey(lobbyId, userId)),
+      ]);
+      return {
+        userId,
+        cancelled: Boolean(cancelled),
+        absentAfterGrace: absentAfterGrace === 1,
+      };
+    })
+  );
+}
+
+async function abortRankedDraftBeforeMatchCreation(
+  io: QuizballServer,
+  lobby: { id: string; mode: 'friendly' | 'ranked' },
+  humanUserIds: string[],
+  reason: string,
+  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>
+): Promise<void> {
+  await lobbiesRepo.deleteLobby(lobby.id);
+  const redis = getRedisClient();
+  if (redis?.isOpen) {
+    await redis.del([
+      rankedAiLobbyKey(lobby.id),
+      ...humanUserIds.map((userId) => draftAbsentAfterGraceKey(lobby.id, userId)),
+    ]);
+  }
+  await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
+  await detachAllSocketsFromLobby(io, lobby.id);
+  for (const userId of humanUserIds) {
+    io.to(`user:${userId}`).emit('ranked:queue_left');
+    await userSessionGuardService.emitState(io, userId).catch((error) => {
+      logger.warn({ error, userId, lobbyId: lobby.id }, 'Failed to emit state after ranked draft abort');
+    });
+  }
+  logger.warn(
+    { lobbyId: lobby.id, humanUserIds, reason, signals },
+    'Ranked draft aborted before match creation'
+  );
+}
+
 async function startMatchFromDraft(
   io: QuizballServer,
   lobbyId: string,
@@ -90,6 +147,18 @@ async function startMatchFromDraft(
     const ticketUserIds = members
       .filter((member) => member.user_id !== aiUserId)
       .map((member) => member.user_id);
+    const abortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
+    const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
+    if (blockingSignals.length > 0) {
+      await abortRankedDraftBeforeMatchCreation(
+        io,
+        lobby,
+        ticketUserIds,
+        'cancelled_or_absent_before_ticket_consumption',
+        abortSignals
+      );
+      return null;
+    }
 
     if (ticketUserIds.length > 0) {
       const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
@@ -106,6 +175,37 @@ async function startMatchFromDraft(
         'Ranked match creation consumed tickets'
       );
       consumedRankedTicketUserIds = ticketUserIds;
+    }
+
+    const postTicketAbortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
+    const postTicketBlockingSignals = postTicketAbortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
+    if (postTicketBlockingSignals.length > 0) {
+      if (consumedRankedTicketUserIds.length > 0) {
+        try {
+          const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
+          logger.info(
+            { lobbyId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
+            'Refunded ranked tickets after draft abort before match creation'
+          );
+        } catch (refundError) {
+          logger.error(
+            {
+              lobbyId,
+              ticketUserIds: consumedRankedTicketUserIds,
+              error: refundError instanceof Error ? refundError.message : refundError,
+            },
+            'Failed to refund ranked tickets after draft abort before match creation'
+          );
+        }
+      }
+      await abortRankedDraftBeforeMatchCreation(
+        io,
+        lobby,
+        ticketUserIds,
+        'cancelled_or_absent_after_ticket_consumption',
+        postTicketAbortSignals
+      );
+      return null;
     }
   }
 
@@ -175,34 +275,72 @@ async function startMatchFromDraft(
     );
     const absentMembers = members.filter((_, index) => absentFlags[index] === 1);
     if (absentMembers.length > 0) {
-      const forfeitingMember = absentMembers[0];
-      logger.info(
-        { lobbyId, matchId, userId: forfeitingMember.user_id, absentUserIds: absentMembers.map((member) => member.user_id) },
-        'Finalizing newly-created match as forfeit for player absent after draft grace'
+      if (lobby.mode !== 'ranked') {
+        const forfeitingMember = absentMembers[0];
+        if (!forfeitingMember) return matchId;
+        logger.info(
+          { lobbyId, matchId, userId: forfeitingMember.user_id, absentUserIds: absentMembers.map((member) => member.user_id) },
+          'Finalizing newly-created match as forfeit for player absent after draft grace'
+        );
+        const finalized = await finalizeMatchAsForfeit({
+          matchId,
+          forfeitingUserId: forfeitingMember.user_id,
+          activeMatch: result.match,
+          cleanupRedisKeys: [
+            rankedAiMatchKey(matchId),
+            matchPauseKey(matchId),
+            matchGraceKey(matchId),
+            matchResumeCountdownKey(matchId),
+            ...members.flatMap((member) => [
+              matchDisconnectKey(matchId, member.user_id),
+              matchPresenceKey(matchId, member.user_id),
+              matchReconnectCountKey(matchId, member.user_id),
+            ]),
+          ],
+        });
+        if (finalized.completed) {
+          const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
+          if (finalPayload) {
+            await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+          }
+        }
+        await redis.del(absentMembers.map((member) => draftAbsentAfterGraceKey(lobbyId, member.user_id)));
+        return matchId;
+      }
+
+      logger.warn(
+        { lobbyId, matchId, absentUserIds: absentMembers.map((member) => member.user_id) },
+        'Abandoning newly-created ranked match because player became absent before playable state'
       );
-      const finalized = await finalizeMatchAsForfeit({
-        matchId,
-        forfeitingUserId: forfeitingMember.user_id,
-        activeMatch: result.match,
-        cleanupRedisKeys: [
-          rankedAiMatchKey(matchId),
-          matchPauseKey(matchId),
-          matchGraceKey(matchId),
-          matchResumeCountdownKey(matchId),
-          ...members.flatMap((member) => [
-            matchDisconnectKey(matchId, member.user_id),
-            matchPresenceKey(matchId, member.user_id),
-            matchReconnectCountKey(matchId, member.user_id),
-          ]),
-        ],
-      });
-      if (finalized.completed) {
-        const finalPayload = await buildFinalResultsPayload(matchId, finalized.resultVersion);
-        if (finalPayload) {
-          await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+      try {
+        await matchesService.abandonMatch(matchId);
+      } catch (error) {
+        logger.error({ error, lobbyId, matchId }, 'Failed to abandon newly-created pre-match ranked match');
+      }
+      if (consumedRankedTicketUserIds.length > 0) {
+        try {
+          const refund = await storeService.refundRankedTickets(consumedRankedTicketUserIds);
+          logger.info(
+            { lobbyId, matchId, ticketUserIds: consumedRankedTicketUserIds, wallets: refund.wallets },
+            'Refunded ranked tickets after pre-match ranked match abandon'
+          );
+        } catch (refundError) {
+          logger.error(
+            {
+              lobbyId,
+              matchId,
+              ticketUserIds: consumedRankedTicketUserIds,
+              error: refundError instanceof Error ? refundError.message : refundError,
+            },
+            'Failed to refund ranked tickets after pre-match ranked match abandon'
+          );
         }
       }
-      await redis.del(absentMembers.map((member) => draftAbsentAfterGraceKey(lobbyId, member.user_id)));
+      await redis.del([
+        rankedAiMatchKey(matchId),
+        rankedAiLobbyKey(lobbyId),
+        ...absentMembers.map((member) => draftAbsentAfterGraceKey(lobbyId, member.user_id)),
+      ]);
       return matchId;
     }
   }

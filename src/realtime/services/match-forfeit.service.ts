@@ -22,7 +22,7 @@ import {
 } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { buildStandings } from '../match-utils.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import type { MatchForfeitPendingPayload } from '../socket.types.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { getParticipantSnapshot } from './match-participants.helpers.js';
@@ -113,7 +113,8 @@ export async function finalizeMatchAsForfeit(
   params: FinalizeMatchAsForfeitParams
 ): Promise<FinalizeMatchAsForfeitResult> {
   const lockKey = `lock:match:${params.matchId}:complete`;
-  const lock = await acquireLock(lockKey, 15_000);
+  const lockTtlMs = 15_000;
+  const lock = await acquireLock(lockKey, lockTtlMs);
   if (!lock.acquired || !lock.token) {
     return {
       matchId: params.matchId,
@@ -122,6 +123,10 @@ export async function finalizeMatchAsForfeit(
       completed: false,
     };
   }
+  // Renew the lock across the full finalization (settlement, XP, objectives,
+  // avg-times, Redis, emits) so a slow >TTL run can't expire it and let a second
+  // worker re-finalize.
+  const heartbeat = startLockHeartbeat(lockKey, lock.token, lockTtlMs);
 
   try {
     const activeMatch = await matchesRepo.getMatch(params.matchId);
@@ -231,6 +236,7 @@ export async function finalizeMatchAsForfeit(
       completed: true,
     };
   } finally {
+    heartbeat.stop();
     await releaseLock(lockKey, lock.token);
   }
 }

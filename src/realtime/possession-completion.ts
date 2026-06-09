@@ -20,7 +20,7 @@ import {
   type MatchCache,
 } from './match-cache.js';
 import { lastMatchKey } from './match-keys.js';
-import { acquireLock, releaseLock } from './locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from './locks.js';
 import { clearAiMaps, clearHalftimeTimer, fireAndForget } from './possession-match-flow.js';
 import {
   getUserIdBySeat,
@@ -196,10 +196,15 @@ export async function completePossessionMatch(
   options: CompletePossessionMatchOptions = {}
 ): Promise<CompletePossessionMatchResult> {
   const lockKey = `lock:match:${matchId}:complete`;
-  const lock = await acquireLock(lockKey, 15_000);
+  const lockTtlMs = 15_000;
+  const lock = await acquireLock(lockKey, lockTtlMs);
   if (!lock.acquired || !lock.token) {
     return { matchId, winnerId: null, resultVersion: Date.now(), completed: false, reason: 'lock_not_acquired' };
   }
+  // Keep the lock alive for the full critical section (settlement, XP, objectives,
+  // avg-times, emits) so a slow >TTL run can't expire it and let a second resolver
+  // duplicate completion.
+  const heartbeat = startLockHeartbeat(lockKey, lock.token, lockTtlMs);
 
   try {
     const [cache, match] = await Promise.all([
@@ -480,6 +485,7 @@ export async function completePossessionMatch(
       decisionBasis: decision.basis ?? 'natural',
     };
   } finally {
+    heartbeat.stop();
     await releaseLock(lockKey, lock.token);
   }
 }

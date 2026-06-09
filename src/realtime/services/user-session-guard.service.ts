@@ -13,9 +13,23 @@ import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.script
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import { matchDisconnectKey, matchPresenceKey } from '../match-keys.js';
+import {
+  matchDisconnectKey,
+  matchGraceKey,
+  matchPauseKey,
+  matchPresenceKey,
+  matchReconnectCountKey,
+  matchResumeCountdownKey,
+} from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
+import { completePossessionMatchFromProgress } from '../possession-completion.js';
+import {
+  buildFinalResultsPayload,
+  emitFinalResultsToMatchParticipants,
+} from './match-final-results.service.js';
+import { resolveMatchPresence } from './match-presence.service.js';
+import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 const SESSION_LOCK_TTL_MS = 4000;
 const LOBBY_LOCK_TTL_MS = 4000;
@@ -25,7 +39,7 @@ const RANKED_QUEUE_KEY = 'ranked:mm:queue';
 const RANKED_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 const RANKED_USER_MAP_KEY = 'ranked:mm:user';
 const RANKED_SEARCH_KEY_PREFIX = 'ranked:mm:search:';
-const STALE_ACTIVE_MATCH_MS = 5 * 60 * 1000;
+const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 const STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS = 90 * 1000;
 
 type ResolveContext = {
@@ -64,10 +78,56 @@ function toSnapshot(context: ResolveContext): SessionStatePayload {
   };
 }
 
-function isStaleActiveMatch(startedAt: string): boolean {
-  const startedAtMs = Date.parse(startedAt);
-  if (Number.isNaN(startedAtMs)) return false;
-  return Date.now() - startedAtMs > STALE_ACTIVE_MATCH_MS;
+function isStaleActiveMatch(activityAt: string | null | undefined): boolean {
+  const activityAtMs = Date.parse(activityAt ?? '');
+  if (Number.isNaN(activityAtMs)) return false;
+  return Date.now() - activityAtMs > STALE_ACTIVE_MATCH_MS;
+}
+
+function rankedMatchCleanupKeys(matchId: string, userIds: string[]): string[] {
+  return [
+    matchPauseKey(matchId),
+    matchGraceKey(matchId),
+    matchResumeCountdownKey(matchId),
+    rankedAiMatchKey(matchId),
+    ...userIds.flatMap((playerUserId) => [
+      matchDisconnectKey(matchId, playerUserId),
+      matchPresenceKey(matchId, playerUserId),
+      matchReconnectCountKey(matchId, playerUserId),
+    ]),
+  ];
+}
+
+async function cleanupRankedMatchRedisKeys(matchId: string, userIds: string[]): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  await redis.del(rankedMatchCleanupKeys(matchId, userIds));
+}
+
+function getStatePayloadString(
+  payload: Record<string, unknown> | null,
+  key: string
+): string | null {
+  const value = payload?.[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function getStatePayloadRecord(
+  payload: Record<string, unknown> | null,
+  key: string
+): Record<string, unknown> | null {
+  const value = payload?.[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function hasLiveHalftimeDeadline(payload: Record<string, unknown> | null): boolean {
+  if (getStatePayloadString(payload, 'phase') !== 'HALFTIME') return false;
+  const halftime = getStatePayloadRecord(payload, 'halftime');
+  const deadlineAt = typeof halftime?.deadlineAt === 'string' ? halftime.deadlineAt : null;
+  const deadlineMs = Date.parse(deadlineAt ?? '');
+  return Number.isFinite(deadlineMs) && deadlineMs > Date.now();
 }
 
 async function resolveContext(userId: string): Promise<ResolveContext> {
@@ -110,14 +170,34 @@ async function cleanupStaleOrphanActiveMatch(
   const activeMatch = context.activeMatch;
   if (!activeMatch) return;
 
-  const startedAtMs = Date.parse(activeMatch.started_at);
-  const ageMs = Number.isNaN(startedAtMs) ? 0 : Date.now() - startedAtMs;
-  const staleByAge = isStaleActiveMatch(activeMatch.started_at);
+  const activityAt = activeMatch.updated_at ?? activeMatch.started_at;
+  const activityAtMs = Date.parse(activityAt);
+  const ageMs = Number.isNaN(activityAtMs) ? 0 : Date.now() - activityAtMs;
+  const staleByAge = isStaleActiveMatch(activityAt);
 
+  let matchSocketCount: number | null = null;
   let staleByNoSockets = false;
   if (ageMs >= STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS) {
     const sockets = await io.in(`match:${activeMatch.id}`).fetchSockets();
-    staleByNoSockets = sockets.length === 0;
+    matchSocketCount = sockets.length;
+    staleByNoSockets = matchSocketCount === 0;
+  }
+
+  if (hasLiveHalftimeDeadline(activeMatch.state_payload)) {
+    logger.info(
+      {
+        userId,
+        matchId: activeMatch.id,
+        lobbyId: activeMatch.lobby_id,
+        startedAt: activeMatch.started_at,
+        updatedAt: activeMatch.updated_at,
+        phase: getStatePayloadString(activeMatch.state_payload, 'phase'),
+        staleByAge,
+        staleByNoSockets,
+      },
+      'Session guard skipped stale orphan cleanup during live halftime interlude'
+    );
+    return;
   }
 
   if (!staleByAge && !staleByNoSockets) return;
@@ -151,33 +231,19 @@ async function cleanupStaleOrphanActiveMatch(
   }
 
   if (activeMatch.mode === 'ranked') {
-    const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
-    const finalized = await finalizeMatchAsForfeit({
-      matchId: activeMatch.id,
-      forfeitingUserId: userId,
-      activeMatch,
-      cleanupRedisKeys: [
-        rankedAiMatchKey(activeMatch.id),
-        ...players.flatMap((player) => [
-          matchDisconnectKey(activeMatch.id, player.user_id),
-          matchPresenceKey(activeMatch.id, player.user_id),
-        ]),
-      ],
-    });
-
-    if (finalized.completed) {
-      logger.warn(
-        {
-          userId,
-          matchId: activeMatch.id,
-          lobbyId: activeMatch.lobby_id,
-          startedAt: activeMatch.started_at,
-          staleByAge,
-          staleByNoSockets,
-        },
-        'Session guard finalized stale orphan ranked match as forfeit'
+    if (!staleByAge) {
+      logger.info(
+        { userId, matchId: activeMatch.id, staleByAge, staleByNoSockets, matchSocketCount },
+        'Session guard skipped ranked orphan cleanup before updated_at stale threshold'
       );
       return;
+    }
+
+    let userSocketCount: number | null = null;
+    try {
+      userSocketCount = (await io.in(`user:${userId}`).fetchSockets()).length;
+    } catch (error) {
+      logger.warn({ error, userId, matchId: activeMatch.id }, 'Failed to inspect user sockets for ranked stale match audit');
     }
 
     logger.warn(
@@ -186,11 +252,56 @@ async function cleanupStaleOrphanActiveMatch(
         matchId: activeMatch.id,
         lobbyId: activeMatch.lobby_id,
         startedAt: activeMatch.started_at,
+        updatedAt: activeMatch.updated_at,
+        phase: getStatePayloadString(activeMatch.state_payload, 'phase'),
+        staleReason: staleByAge && staleByNoSockets
+          ? 'age_and_no_sockets'
+          : staleByAge
+            ? 'age'
+            : 'no_sockets',
         staleByAge,
         staleByNoSockets,
+        matchSocketCount,
+        userSocketCount,
       },
-      'Session guard skipped ranked abandon fallback because forfeit finalization did not complete'
+      'Session guard stale orphan ranked match cleanup audit'
     );
+
+    const progressResult = await completePossessionMatchFromProgress(io, activeMatch.id, 'session_guard_orphan');
+    if (progressResult.completed) return;
+    if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') return;
+
+    const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+    const userIds = players.map((player) => player.user_id);
+    const presence = await resolveMatchPresence(io, activeMatch.id, players, {
+      connectingUserId: userId,
+      staleCleanup: true,
+    });
+
+    if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
+      const forfeitingUserId = presence.absentPlayers[0]?.user_id;
+      if (!forfeitingUserId) return;
+      const finalized = await finalizeMatchAsForfeit({
+        matchId: activeMatch.id,
+        forfeitingUserId,
+        activeMatch,
+        cleanupRedisKeys: rankedMatchCleanupKeys(activeMatch.id, userIds),
+      });
+      if (!finalized.completed) return;
+      const finalPayload = await buildFinalResultsPayload(activeMatch.id, finalized.resultVersion);
+      if (finalPayload) {
+        await emitFinalResultsToMatchParticipants(io, activeMatch.id, finalPayload);
+      }
+      return;
+    }
+
+    const abandoned = await abandonMatchWithCompleteLock(activeMatch.id);
+    if (abandoned.abandoned) {
+      await cleanupRankedMatchRedisKeys(activeMatch.id, userIds);
+      for (const player of players) {
+        trackMatchAbandoned(player.user_id, activeMatch.id, activeMatch.mode, 'session_guard_stale_ranked_orphan');
+      }
+    }
     return;
   }
 
@@ -375,7 +486,7 @@ async function cleanupOpenLobbies(
       continue;
     }
 
-    if (isStaleActiveMatch(activeMatchForLobby.started_at)) {
+    if (isStaleActiveMatch(activeMatchForLobby.updated_at ?? activeMatchForLobby.started_at)) {
       logger.warn(
         {
           userId,

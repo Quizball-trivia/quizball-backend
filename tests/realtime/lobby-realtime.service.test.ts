@@ -6,12 +6,16 @@ const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getByIdMock = vi.fn();
 const findOpenLobbyForUserMock = vi.fn();
+const listOpenLobbiesForUserMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
+const listLobbyCategoryBansMock = vi.fn();
 const clearLobbyCategoryBansMock = vi.fn();
 const clearLobbyCategoriesMock = vi.fn();
 const insertLobbyCategoriesMock = vi.fn();
 const setLobbyStatusMock = vi.fn();
 const deleteLobbyMock = vi.fn();
+const buildLobbyStateMock = vi.fn();
+const getLobbyCategoriesMock = vi.fn();
 const selectRandomCategoriesMock = vi.fn();
 const selectRandomRankedCategoriesMock = vi.fn();
 const cleanupLobbyMock = vi.fn();
@@ -22,6 +26,8 @@ const redisSetMock = vi.fn();
 const redisDelMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const pauseDraftForDisconnectedPlayerMock = vi.fn();
+const resumeDraftForReconnectedPlayerMock = vi.fn();
+const resumeActiveDraftTimersMock = vi.fn();
 
 let redisClientMock: {
   get: typeof redisGetMock;
@@ -47,7 +53,9 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
     findOpenLobbyForUser: (...args: unknown[]) => findOpenLobbyForUserMock(...args),
+    listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
+    listLobbyCategoryBans: (...args: unknown[]) => listLobbyCategoryBansMock(...args),
     clearLobbyCategoryBans: (...args: unknown[]) => clearLobbyCategoryBansMock(...args),
     clearLobbyCategories: (...args: unknown[]) => clearLobbyCategoriesMock(...args),
     insertLobbyCategories: (...args: unknown[]) => insertLobbyCategoriesMock(...args),
@@ -58,6 +66,8 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
 
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
+    buildLobbyState: (...args: unknown[]) => buildLobbyStateMock(...args),
+    getLobbyCategories: (...args: unknown[]) => getLobbyCategoriesMock(...args),
     selectRandomCategories: (...args: unknown[]) => selectRandomCategoriesMock(...args),
     selectRandomRankedCategories: (...args: unknown[]) => selectRandomRankedCategoriesMock(...args),
   },
@@ -100,8 +110,10 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 }));
 
 vi.mock('../../src/realtime/services/draft-realtime.service.js', () => ({
+  resumeActiveDraftTimers: (...args: unknown[]) => resumeActiveDraftTimersMock(...args),
   draftRealtimeService: {
     pauseDraftForDisconnectedPlayer: (...args: unknown[]) => pauseDraftForDisconnectedPlayerMock(...args),
+    resumeDraftForReconnectedPlayer: (...args: unknown[]) => resumeDraftForReconnectedPlayerMock(...args),
   },
 }));
 
@@ -114,6 +126,8 @@ function createSocket(userId: string, lobbyId: string | undefined = 'lobby-1') {
       connectedAt: 1000,
     },
     leave: vi.fn(),
+    join: vi.fn(),
+    emit: vi.fn(),
   };
 }
 
@@ -155,11 +169,21 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     clearLobbyCategoryBansMock.mockResolvedValue(undefined);
     clearLobbyCategoriesMock.mockResolvedValue(undefined);
     findOpenLobbyForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+    listLobbyCategoryBansMock.mockResolvedValue([]);
+    buildLobbyStateMock.mockResolvedValue({ lobbyId: 'lobby-1', status: 'active', members: [] });
+    getLobbyCategoriesMock.mockResolvedValue([
+      { id: 'cat-1', name: 'One' },
+      { id: 'cat-2', name: 'Two' },
+      { id: 'cat-3', name: 'Three' },
+    ]);
     insertLobbyCategoriesMock.mockResolvedValue(undefined);
     setLobbyStatusMock.mockResolvedValue(undefined);
     cleanupLobbyMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
     emitStateMock.mockResolvedValue(undefined);
+    resumeDraftForReconnectedPlayerMock.mockResolvedValue(undefined);
+    resumeActiveDraftTimersMock.mockResolvedValue(undefined);
     redisGetMock.mockResolvedValue(null);
     redisSetMock.mockResolvedValue('OK');
     redisDelMock.mockResolvedValue(1);
@@ -243,5 +267,58 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       disconnectedConnectedAt: 1234,
     });
     expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('hydrates an active draft on socket connect without resuming disconnect grace', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1', undefined);
+    const activeLobby = {
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    };
+    listOpenLobbiesForUserMock.mockResolvedValue([activeLobby]);
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'u2' },
+    ]);
+
+    await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never);
+
+    expect(socket.emit).toHaveBeenCalledWith('lobby:state', expect.objectContaining({ lobbyId: 'lobby-1' }));
+    expect(socket.emit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
+      lobbyId: 'lobby-1',
+      turnUserId: 'u1',
+    }));
+    expect(resumeDraftForReconnectedPlayerMock).not.toHaveBeenCalled();
+    expect(resumeActiveDraftTimersMock).not.toHaveBeenCalled();
+  });
+
+  it('resumes draft grace only on explicit draft rejoin', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1', undefined);
+    const activeLobby = {
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    };
+    listOpenLobbiesForUserMock.mockResolvedValue([activeLobby]);
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'u2' },
+    ]);
+
+    await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never, {
+      resume: true,
+      lobbyId: 'lobby-1',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(resumeDraftForReconnectedPlayerMock).toHaveBeenCalledWith(io, 'lobby-1', 'u1');
+    expect(resumeActiveDraftTimersMock).toHaveBeenCalledWith(io, 'lobby-1');
   });
 });

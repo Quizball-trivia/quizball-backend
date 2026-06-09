@@ -24,6 +24,11 @@ import { startDraft } from './lobby-draft-start.service.js';
 
 const LOBBY_DISCONNECT_GRACE_MS = 15000;
 
+interface ActiveDraftRejoinOptions {
+  resume?: boolean;
+  lobbyId?: string;
+}
+
 export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
   const userId = socket.data.user.id;
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
@@ -56,10 +61,17 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
   logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
 }
 
-export async function rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+export async function rejoinActiveDraftLobbyOnConnect(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  options: ActiveDraftRejoinOptions = {}
+): Promise<void> {
   const userId = socket.data.user.id;
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
-  const activeLobbies = openLobbies.filter((lobby) => lobby.status === 'active');
+  const activeLobbies = openLobbies.filter((lobby) =>
+    lobby.status === 'active' &&
+    (!options.lobbyId || lobby.id === options.lobbyId)
+  );
   if (activeLobbies.length === 0) return;
 
   const newestLobby = activeLobbies[0];
@@ -92,18 +104,20 @@ export async function rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket
       });
     }
 
-    void import('./draft-realtime.service.js')
-      .then(async ({ draftRealtimeService, resumeActiveDraftTimers }) => {
-        await draftRealtimeService.resumeDraftForReconnectedPlayer(io, newestLobby.id, userId);
-        await resumeActiveDraftTimers(io, newestLobby.id);
-      })
-      .catch((error) => {
-        logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
-      });
+    if (options.resume) {
+      void import('./draft-realtime.service.js')
+        .then(async ({ draftRealtimeService, resumeActiveDraftTimers }) => {
+          await draftRealtimeService.resumeDraftForReconnectedPlayer(io, newestLobby.id, userId);
+          await resumeActiveDraftTimers(io, newestLobby.id);
+        })
+        .catch((error) => {
+          logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
+        });
+    }
   }
 
   logger.info(
-    { userId, lobbyId: newestLobby.id, categoryCount: categories.length, banCount: bans.length },
+    { userId, lobbyId: newestLobby.id, categoryCount: categories.length, banCount: bans.length, resumed: Boolean(options.resume) },
     'Socket rejoined active draft lobby'
   );
 }

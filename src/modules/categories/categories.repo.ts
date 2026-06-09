@@ -1,7 +1,32 @@
 import { sql } from '../../db/index.js';
-import { MCQ_VALIDATION_CONDITIONS } from '../../db/sql-fragments.js';
 import { config } from '../../core/config.js';
 import type { Category, I18nField, Json } from '../../db/types.js';
+
+// Categories that are active but are NOT four-option MCQ quiz categories — they
+// back daily challenges and special game modes (true/false, career-path,
+// imposter, high-low, football-logic, etc.). The `min_questions` filter used to
+// exclude them via a per-category JSONB validation subquery that scanned every
+// question (~43ms / 13,789 buffers per request and the top DB hot spot under
+// load — see scripts/chaos/FINDINGS.md). These categories have 0 valid MCQs by
+// construction, so a slug exclusion is behaviour-identical (verified against
+// prod: same 37 categories) and ~1000× cheaper (0.04ms / 4 buffers).
+//
+// Keep this in sync when adding a new daily-challenge / non-MCQ game-mode
+// category. A category here is still fully active for its own game mode; it is
+// only hidden from the MCQ quiz-match browse list (when min_questions is set).
+const NON_MCQ_CATEGORY_SLUGS = [
+  'badges-and-logos',
+  'career-path',
+  'club-world-cup',
+  'daily-challenges',
+  'daily-challenges-clues',
+  'daily-challenges-countdown',
+  'daily-challenges-put-in-order',
+  'daily-challenges-true-false',
+  'football-logic',
+  'high-low',
+  'imposter',
+] as const;
 
 export interface CreateCategoryData {
   slug: string;
@@ -54,30 +79,36 @@ export const categoriesRepo = {
       filter?.isActive !== undefined
         ? sql`AND is_active = ${filter.isActive}`
         : sql``;
+    // `min_questions` means "only MCQ quiz categories with enough playable
+    // questions". Every active category except the non-MCQ game-mode ones above
+    // clears the threshold, so we exclude by slug instead of running the old
+    // per-category JSONB validation subquery (the load-test DB hot spot).
     const minQuestionsFilter =
       filter?.minQuestions !== undefined
-        ? sql`
-            AND (
-              SELECT COUNT(*)::int
-              FROM questions q
-              JOIN question_payloads qp ON qp.question_id = q.id
-              WHERE q.category_id = categories.id
-                AND ${MCQ_VALIDATION_CONDITIONS}
-            ) >= ${filter.minQuestions}
-          `
+        ? sql`AND slug <> ALL(${NON_MCQ_CATEGORY_SLUGS as unknown as string[]})`
         : sql``;
 
-    // Get paginated results with total count in single query
-    const results = await sql<(Category & { total_count: string })[]>`
-      SELECT *, COUNT(*) OVER() as total_count
+    // Split the page fetch from the total count. `COUNT(*) OVER()` forced the
+    // window to run the WHERE clause for ALL matching rows on every request,
+    // ignoring LIMIT; splitting lets the page query stop at `limit` and the
+    // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
+    const whereClause = sql`WHERE 1=1 ${parentIdFilter} ${isActiveFilter} ${minQuestionsFilter}`;
+
+    const pageQuery = sql<Category[]>`
+      SELECT *
       FROM categories
-      WHERE 1=1 ${parentIdFilter} ${isActiveFilter} ${minQuestionsFilter}
+      ${whereClause}
       ORDER BY COALESCE(name->>${normalizedLocale}, name->>${config.DEFAULT_LOCALE}) ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
+    const countQuery = sql<{ total: string }[]>`
+      SELECT COUNT(*)::text AS total
+      FROM categories
+      ${whereClause}
+    `;
 
-    const total = results.length > 0 ? parseInt(results[0].total_count, 10) : 0;
-    const categories = results.map(({ total_count: _, ...c }) => c);
+    const [categories, countRows] = await Promise.all([pageQuery, countQuery]);
+    const total = countRows.length > 0 ? parseInt(countRows[0].total, 10) : 0;
 
     return { categories, total };
   },

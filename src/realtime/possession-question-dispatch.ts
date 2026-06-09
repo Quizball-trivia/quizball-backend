@@ -61,6 +61,10 @@ import {
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { createReadyGateRegistry } from './ready-gate.js';
 import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
+import {
+  markMatchEnteredForRoom,
+  markMatchEnteredForSocket,
+} from './services/match-entry.service.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
@@ -219,6 +223,7 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
         shooterSeat: cache.currentQuestion.shooterSeat,
         attackerSeat: cache.currentQuestion.attackerSeat,
       });
+      await markMatchEnteredForSocket(socket, matchId, 'possession_cached_question');
       logger.info(
         {
           eventName: 'match:question',
@@ -623,6 +628,7 @@ export async function sendPossessionMatchQuestion(
       shooterSeat,
       attackerSeat,
     });
+    await markMatchEnteredForRoom(io, matchId, 'possession_question');
 
     appMetrics.questionGenerationDuration.record(Date.now() - startedAt, {
       mode: cache.mode,
@@ -748,6 +754,7 @@ export async function resumePossessionMatchQuestion(
     shooterSeat: currentQuestion.shooterSeat,
     attackerSeat: currentQuestion.attackerSeat,
   });
+  await markMatchEnteredForRoom(io, matchId, 'possession_resumed_question');
 
   scheduleQuestionTimeout(io, matchId, qIndex, deadlineAt);
   logger.info(

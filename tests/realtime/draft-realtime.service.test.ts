@@ -9,6 +9,9 @@ const getLobbyCategoriesMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
 const pauseMatchForDisconnectedPlayerMock = vi.fn();
+const finalizeMatchAsForfeitMock = vi.fn();
+const buildFinalResultsPayloadMock = vi.fn();
+const emitFinalResultsToMatchParticipantsMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const consumeRankedTicketsMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
@@ -70,6 +73,15 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
+  finalizeMatchAsForfeit: (...args: unknown[]) => finalizeMatchAsForfeitMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
+  buildFinalResultsPayload: (...args: unknown[]) => buildFinalResultsPayloadMock(...args),
+  emitFinalResultsToMatchParticipants: (...args: unknown[]) => emitFinalResultsToMatchParticipantsMock(...args),
+}));
+
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startDraft: vi.fn(),
 }));
@@ -100,6 +112,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (importOriginal)
 
 vi.mock('../../src/realtime/ai-ranked.constants.js', () => ({
   rankedAiLobbyKey: (lobbyId: string) => `ranked:ai:lobby:${lobbyId}`,
+  rankedAiMatchKey: (matchId: string) => `ranked:ai:match:${matchId}`,
 }));
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
@@ -195,6 +208,14 @@ describe('draftRealtimeService', () => {
     abortRankedDraftStartForTicketsMock.mockResolvedValue(undefined);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
     beginMatchForLobbyMock.mockResolvedValue(undefined);
+    finalizeMatchAsForfeitMock.mockResolvedValue({
+      matchId: 'm1',
+      winnerId: 'u2',
+      resultVersion: 123,
+      completed: true,
+    });
+    buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
+    emitFinalResultsToMatchParticipantsMock.mockResolvedValue(undefined);
   });
 
   it('does not complete the draft after only one ban', async () => {
@@ -472,6 +493,60 @@ describe('draftRealtimeService', () => {
     });
   });
 
+  it('pauses draft when only an older same-user socket remains in the lobby room', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+    };
+    fetchSockets.mockResolvedValue([
+      { id: 'old-socket', data: { user: { id: 'u1' }, connectedAt: 1000 } },
+      { id: 'opponent-socket', data: { user: { id: 'u2' }, connectedAt: 1500 } },
+    ]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+      ignoreSocketId: 'active-socket',
+      disconnectedConnectedAt: 2000,
+    });
+
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(emit).toHaveBeenCalledWith('draft:opponent_disconnected', {
+      lobbyId: 'l1',
+      opponentId: 'u1',
+      graceMs: 60_000,
+    });
+  });
+
+  it('arms draft grace then resumes when a newer same-user replacement socket is already in the lobby room', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
+    wireStatefulRedis();
+    fetchSockets.mockResolvedValue([
+      { id: 'replacement-socket', data: { user: { id: 'u1' }, connectedAt: 2500 } },
+    ]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+      ignoreSocketId: 'active-socket',
+      disconnectedConnectedAt: 2000,
+    });
+
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+      'draft_grace_expiry',
+      'l1',
+      expect.any(Date),
+      { kind: 'draft_grace_expiry', lobbyId: 'l1', disconnectedUserId: 'u1' }
+    );
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:disconnect:l1:u1', 'draft:absent_after_grace:l1:u1']);
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:pause:l1', 'draft:grace:l1']);
+    expect(cancelRealtimeTimerMock).toHaveBeenCalledWith('draft_grace_expiry', 'l1');
+    expect(emit).toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
+  });
+
   it('clears draft pause and resumes timers when the disconnected player reconnects', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io, emit } = createIoMock();
@@ -586,13 +661,26 @@ describe('draftRealtimeService', () => {
 
       await runDraftGraceExpiry(io, 'l1', 'u2');
 
-      // Auto-ban applied for the absent actor (u2), draft completes, match created.
+      // Auto-ban applied for the absent actor (u2), draft completes, and the
+      // newly-created match is forfeited immediately instead of starting live play.
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u2', expect.any(String));
       expect(emit).toHaveBeenCalledWith('draft:complete', expect.anything());
       expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+      expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+      expect(pauseMatchForDisconnectedPlayerMock).not.toHaveBeenCalled();
+      expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(expect.objectContaining({
+        matchId: 'm1',
+        forfeitingUserId: 'u2',
+      }));
+      expect(emitFinalResultsToMatchParticipantsMock).toHaveBeenCalledWith(
+        io,
+        'm1',
+        { matchId: 'm1', resultVersion: 123 }
+      );
       // Pending markers cleared only after success; processing lock released.
       expect(keys.has('draft:grace:l1')).toBe(false);
       expect(keys.has('draft:grace:lock:l1')).toBe(false);
+      expect(keys.has('draft:absent_after_grace:l1:u2')).toBe(false);
     } finally {
       randomSpy.mockRestore();
     }

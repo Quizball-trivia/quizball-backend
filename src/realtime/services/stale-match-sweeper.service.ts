@@ -1,12 +1,12 @@
 import type { QuizballServer } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
-import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
-import { usersRepo } from '../../modules/users/users.repo.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { deleteMatchCache } from '../match-cache.js';
+import { completePossessionMatchFromProgress } from '../possession-completion.js';
 import { getRedisClient } from '../redis.js';
 import {
   matchDisconnectKey,
@@ -22,6 +22,8 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
+import { resolveMatchPresence } from './match-presence.service.js';
+import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 // How long a match may sit in 'active' with no state write before it is
 // considered orphaned. Must be comfortably larger than every legitimate idle
@@ -75,21 +77,6 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
   }
 
   const userIds = roster.map((player) => player.user_id);
-  const usersById = await usersRepo.getByIds(userIds);
-  const redis = getRedisClient();
-
-  // A player counts as "present" if they are AI (server-driven, always around)
-  // or still have a live presence key. Everyone else is treated as absent.
-  const presence = await Promise.all(
-    roster.map(async (player) => {
-      const user = usersById.get(player.user_id);
-      if (user?.is_ai) return true;
-      if (!redis || !redis.isOpen) return false;
-      return (await redis.exists(matchPresenceKey(match.id, player.user_id))) === 1;
-    })
-  );
-  const absentPlayers = roster.filter((_, index) => !presence[index]);
-  const presentPlayers = roster.filter((_, index) => presence[index]);
 
   // Party quiz has bespoke dropout-continuation rules and N players; the 1v1
   // forfeit helper (which only excludes a single user from standings) would
@@ -97,8 +84,8 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
   // rather than fabricate a winner.
   const variant = resolveMatchVariant(match.state_payload, match.mode);
   if (variant === 'friendly_party_quiz') {
-    await matchesService.abandonMatch(match.id);
-    await deleteMatchCache(match.id);
+    const abandoned = await abandonMatchWithCompleteLock(match.id);
+    if (!abandoned.abandoned && abandoned.reason === 'lock_not_acquired') return;
     await cleanupMatchRedisKeys(match.id, userIds);
     logger.info(
       { matchId: match.id, mode: match.mode, rosterSize: roster.length },
@@ -107,14 +94,42 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
     return;
   }
 
-  if (absentPlayers.length === 0 || presentPlayers.length === 0) {
-    // Nobody clearly absent, or nobody present to credit — abandon cleanly.
-    await matchesService.abandonMatch(match.id);
-    await deleteMatchCache(match.id);
+  const progressResult = await completePossessionMatchFromProgress(io, match.id, 'stale_match_sweeper');
+  if (progressResult.completed) {
     await cleanupMatchRedisKeys(match.id, userIds);
     logger.info(
-      { matchId: match.id, mode: match.mode, rosterSize: roster.length },
-      'Stale sweeper abandoned orphaned match (no present counterpart)'
+      {
+        matchId: match.id,
+        mode: match.mode,
+        winnerId: progressResult.winnerId,
+        decisionBasis: progressResult.decisionBasis,
+      },
+      'Stale sweeper completed orphaned match from existing progress'
+    );
+    return;
+  }
+  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
+    return;
+  }
+
+  const presence = await resolveMatchPresence(io, match.id, roster, { staleCleanup: true });
+  const absentPlayers = presence.absentPlayers;
+  const presentPlayers = presence.presentPlayers;
+
+  if (absentPlayers.length !== 1 || presentPlayers.length === 0) {
+    // No exactly-one absent loser with a clear present counterpart — void it.
+    const abandoned = await abandonMatchWithCompleteLock(match.id);
+    if (!abandoned.abandoned && abandoned.reason === 'lock_not_acquired') return;
+    await cleanupMatchRedisKeys(match.id, userIds);
+    logger.info(
+      {
+        matchId: match.id,
+        mode: match.mode,
+        rosterSize: roster.length,
+        absentUserIds: absentPlayers.map((player) => player.user_id),
+        presentUserIds: presentPlayers.map((player) => player.user_id),
+      },
+      'Stale sweeper abandoned orphaned match (no clear absent loser)'
     );
     return;
   }

@@ -300,6 +300,17 @@ export const objectivesService = {
     const dailyDefinitions = getDefinitionsForPeriod(dailyPeriod);
     const weeklyDefinitions = getDefinitionsForPeriod(weeklyPeriod);
 
+    // Objectives kill-switch: when disabled, never touch the DB. Return the
+    // definitions as "not started" (empty rows) so the (hidden) UI stays valid
+    // without running 4 reads + a write transaction per call for a feature we
+    // are not using. Pairs with the existing award-path gate.
+    if (!config.OBJECTIVES_ENABLED) {
+      return {
+        daily: buildPeriodResponse(dailyPeriod, [], dailyDefinitions),
+        weekly: buildPeriodResponse(weeklyPeriod, [], weeklyDefinitions),
+      };
+    }
+
     let [dailyRows, weeklyRows] = await Promise.all([
       objectivesRepo.listForUserPeriod(userId, dailyPeriod),
       objectivesRepo.listForUserPeriod(userId, weeklyPeriod),

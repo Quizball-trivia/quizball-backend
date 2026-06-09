@@ -7,7 +7,7 @@ import type { MatchRow } from '../../modules/matches/matches.types.js';
 import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
-import { cancelMatchQuestionTimer, QUESTION_TIME_MS } from '../match-flow.js';
+import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { cancelPossessionHalftimeTimer } from '../possession-match-flow.js';
 import { deleteMatchCache, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
@@ -112,7 +112,7 @@ export interface FinalizeMatchAsForfeitResult {
 export async function finalizeMatchAsForfeit(
   params: FinalizeMatchAsForfeitParams
 ): Promise<FinalizeMatchAsForfeitResult> {
-  const lockKey = `lock:match:${params.matchId}:forfeit`;
+  const lockKey = `lock:match:${params.matchId}:complete`;
   const lock = await acquireLock(lockKey, 15_000);
   if (!lock.acquired || !lock.token) {
     return {
@@ -124,7 +124,7 @@ export async function finalizeMatchAsForfeit(
   }
 
   try {
-    const activeMatch = params.activeMatch ?? await matchesRepo.getMatch(params.matchId);
+    const activeMatch = await matchesRepo.getMatch(params.matchId);
     if (!activeMatch || activeMatch.status !== 'active') {
       return {
         matchId: params.matchId,
@@ -158,21 +158,6 @@ export async function finalizeMatchAsForfeit(
             penaltyGoals: player.penaltyGoals,
           })
         )
-      );
-    }
-
-    if (winnerId && variant !== 'friendly_party_quiz') {
-      const fullPoints = Math.floor((QUESTION_TIME_MS / 1000) * 10 * activeMatch.total_questions);
-      const fullCorrectAnswers = activeMatch.total_questions;
-      const winnerPlayer = roster.find((player) => player.user_id === winnerId);
-      const currentPoints = winnerPlayer?.total_points ?? 0;
-      const currentCorrect = winnerPlayer?.correct_answers ?? 0;
-
-      await matchPlayersRepo.setPlayerForfeitWinTotals(
-        params.matchId,
-        winnerId,
-        Math.max(currentPoints, fullPoints),
-        Math.max(currentCorrect, fullCorrectAnswers)
       );
     }
 

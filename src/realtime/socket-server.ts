@@ -32,6 +32,7 @@ import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.j
 import { resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import {
   runDraftAutoBan,
+  runDraftGraceExpiry,
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
@@ -245,6 +246,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     draft_auto_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_auto_ban') return;
       await runDraftAutoBan(server, payload.lobbyId);
+    },
+    draft_grace_expiry: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'draft_grace_expiry') return;
+      await runDraftGraceExpiry(server, payload.lobbyId, payload.disconnectedUserId);
     },
     party_question: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'party_question') return;

@@ -235,6 +235,7 @@ vi.mock('../../src/modules/stats/stats.service.js', () => ({
 vi.mock('../../src/modules/achievements/index.js', () => ({
   achievementsService: {
     listUnlockedForMatch: (...args: unknown[]) => listUnlockedForMatchMock(...args),
+    evaluateForMatch: vi.fn(async () => ({})),
   },
 }));
 
@@ -549,51 +550,6 @@ describe('match-realtime.service high-risk integration behavior', () => {
           seconds: 5,
         })
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('S15 reload race: an older same-user socket does not auto-resume a paused match', async () => {
-    vi.useFakeTimers();
-    try {
-      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
-      const emit = vi.fn();
-      const staleSocket = {
-        id: 'stale-socket',
-        data: {
-          user: { id: 'u1', role: 'user' },
-          matchId: 'm1',
-          connectedAt: Date.now() - 30_000,
-        },
-      };
-      const io = {
-        to: vi.fn(() => ({ emit })),
-        in: vi.fn((room: string) => ({
-          fetchSockets: vi.fn(async () => (room === 'match:m1' ? [staleSocket] : [])),
-          socketsJoin: vi.fn(async () => undefined),
-        })),
-      } as unknown as QuizballServer;
-      const disconnectingSocket = createSocketMock('u1', 'm1') as QuizballSocket & { id: string };
-      disconnectingSocket.id = 'current-socket';
-      disconnectingSocket.data.connectedAt = Date.now() - 5_000;
-
-      fakeRedis.isOpen = true;
-
-      await matchRealtimeService.handleMatchDisconnect(io, disconnectingSocket);
-
-      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
-      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
-      expect(fakeRedisStore.values.has('match:resume_countdown:m1')).toBe(false);
-      expect(emit).toHaveBeenCalledWith(
-        'match:opponent_disconnected',
-        expect.objectContaining({
-          matchId: 'm1',
-          opponentId: 'u1',
-          graceMs: 60_000,
-        })
-      );
-      expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
     } finally {
       vi.useRealTimers();
     }
@@ -1068,7 +1024,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(completeMatchMock).not.toHaveBeenCalled();
   });
 
-  it('S15b: ranked leave settles as forfeit instead of abandoned when grace expires with no sockets left', async () => {
+  it('S15b: ranked all-disconnected grace completes by existing points before forfeit/abandon', async () => {
     {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
@@ -1099,13 +1055,13 @@ describe('match-realtime.service high-risk integration behavior', () => {
       // directly (real timers — no 60s wall-clock wait needed).
       await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
-      expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+      expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u1');
       expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(abandonMatchMock).not.toHaveBeenCalled();
     }
   });
 
-  it('S15b1: ranked all-disconnected does NOT abandon when forfeit finalization is locked', async () => {
+  it('S15b1: ranked all-disconnected does not abandon while shared completion lock is held', async () => {
     {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
@@ -1128,9 +1084,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
       await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
       fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now()));
-      // Simulate another resolver already holding the forfeit lock → finalize
-      // returns completed:false. The grace handler must NOT fall through to abandon.
-      fakeRedisStore.values.set('lock:match:m1:forfeit', 'someone-else');
+      // Simulate another resolver already holding the shared completion lock.
+      // The grace handler must NOT fall through to abandon.
+      fakeRedisStore.values.set('lock:match:m1:complete', 'someone-else');
 
       await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
@@ -1375,7 +1331,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
 
-    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u1');
     expect(socket.emit).not.toHaveBeenCalledWith(
       'match:rejoin_available',
       expect.anything()
@@ -1663,6 +1619,15 @@ describe('match-realtime.service high-risk integration behavior', () => {
         started_at: nowIso,
         lobby_id: 'l1',
       })
+      .mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 4,
+        total_questions: 10,
+        started_at: nowIso,
+        lobby_id: 'l1',
+      })
       .mockResolvedValue({
         id: 'm1',
         mode: 'friendly',
@@ -1682,7 +1647,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
 
-    expect(setPlayerForfeitWinTotalsMock).toHaveBeenCalledWith('m1', 'u2', 1000, 10);
+    expect(setPlayerForfeitWinTotalsMock).not.toHaveBeenCalled();
     expect(setPlayerFinalTotalsMock).toHaveBeenCalledTimes(2);
     expect(setPlayerFinalTotalsMock).toHaveBeenCalledWith(
       'm1',

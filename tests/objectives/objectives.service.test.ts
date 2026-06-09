@@ -8,6 +8,22 @@ const listForUserPeriodMock = vi.fn();
 const getMatchFactsMock = vi.fn();
 const getRankedWinStreakForPeriodMock = vi.fn();
 
+// These tests cover the ENABLED behavior, so force the flag on regardless of
+// the local .env (which sets OBJECTIVES_ENABLED=false).
+const objectivesEnabledMock = { value: true };
+vi.mock('../../src/core/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/config.js')>();
+  return {
+    ...actual,
+    config: new Proxy(actual.config, {
+      get(target, prop) {
+        if (prop === 'OBJECTIVES_ENABLED') return objectivesEnabledMock.value;
+        return target[prop as keyof typeof target];
+      },
+    }),
+  };
+});
+
 vi.mock('../../src/modules/objectives/objectives.repo.js', () => ({
   objectivesRepo: {
     runInTransaction: (...args: unknown[]) => runInTransactionMock(...args),
@@ -42,6 +58,20 @@ function makeRow(overrides: Partial<ObjectiveProgressRow>): ObjectiveProgressRow
 describe('objectivesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    objectivesEnabledMock.value = true;
+  });
+
+  it('returns empty objectives WITHOUT touching the DB when the flag is disabled', async () => {
+    objectivesEnabledMock.value = false;
+    const { objectivesService } = await import('../../src/modules/objectives/index.js');
+
+    const result = await objectivesService.listForUser('user-1');
+
+    // No DB reads, no write transaction — kill-switch short-circuits.
+    expect(listForUserPeriodMock).not.toHaveBeenCalled();
+    expect(runInTransactionMock).not.toHaveBeenCalled();
+    expect(result).toHaveProperty('daily');
+    expect(result).toHaveProperty('weekly');
   });
 
   it('lists current daily and weekly objectives after ensuring missing progress rows', async () => {

@@ -13,6 +13,9 @@ const abandonMatchServiceMock = vi.fn();
 const resolveMatchVariantMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const getByIdsMock = vi.fn();
+const completePossessionMatchFromProgressMock = vi.fn();
+const resolveMatchPresenceMock = vi.fn();
+const abandonMatchWithCompleteLockMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
 const buildFinalResultsPayloadMock = vi.fn();
 const emitFinalResultsMock = vi.fn();
@@ -46,6 +49,18 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: { getByIds: (...a: unknown[]) => getByIdsMock(...a) },
+}));
+
+vi.mock('../../src/realtime/possession-completion.js', () => ({
+  completePossessionMatchFromProgress: (...a: unknown[]) => completePossessionMatchFromProgressMock(...a),
+}));
+
+vi.mock('../../src/realtime/services/match-presence.service.js', () => ({
+  resolveMatchPresence: (...a: unknown[]) => resolveMatchPresenceMock(...a),
+}));
+
+vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
+  abandonMatchWithCompleteLock: (...a: unknown[]) => abandonMatchWithCompleteLockMock(...a),
 }));
 
 vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
@@ -125,8 +140,24 @@ beforeEach(() => {
   redisDelMock.mockResolvedValue(1);
   abandonMatchRepoMock.mockResolvedValue(true);
   abandonMatchServiceMock.mockResolvedValue(undefined);
+  abandonMatchWithCompleteLockMock.mockResolvedValue({ abandoned: true });
   resolveMatchVariantMock.mockReturnValue('ranked_sim');
   deleteMatchCacheMock.mockResolvedValue(undefined);
+  completePossessionMatchFromProgressMock.mockResolvedValue({
+    matchId: 'match-1',
+    winnerId: null,
+    resultVersion: 1,
+    completed: false,
+    reason: 'undecidable',
+  });
+  resolveMatchPresenceMock.mockResolvedValue({
+    presentPlayers: [],
+    absentPlayers: [],
+    roomSocketUserIds: [],
+    presenceKeyUserIds: [],
+    disconnectKeyUserIds: [],
+    matchSocketCount: 0,
+  });
   finalizeMatchAsForfeitMock.mockResolvedValue({ matchId: 'match-1', winnerId: 'ai-1', resultVersion: 1, completed: true });
   buildFinalResultsPayloadMock.mockResolvedValue({ some: 'payload' });
   emitFinalResultsMock.mockResolvedValue(undefined);
@@ -138,7 +169,7 @@ describe('stale-match-sweeper', () => {
     await runSweep(io);
     expect(getMatchMock).not.toHaveBeenCalled();
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
-    expect(abandonMatchServiceMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
   it('no-ops entirely when the updated_at trigger is missing (never queries for stale matches)', async () => {
@@ -147,7 +178,28 @@ describe('stale-match-sweeper', () => {
     // Must not even query — updated_at is untrustworthy without the trigger.
     expect(listStaleActiveMatchesMock).not.toHaveBeenCalled();
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
-    expect(abandonMatchServiceMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+  });
+
+  it('completes stale matches from existing progress before presence/forfeit checks', async () => {
+    const stale = match();
+    listStaleActiveMatchesMock.mockResolvedValue([stale]);
+    getMatchMock.mockResolvedValue(stale);
+    listMatchPlayersMock.mockResolvedValue([player('u1', 1), player('u2', 2)]);
+    completePossessionMatchFromProgressMock.mockResolvedValue({
+      matchId: 'match-1',
+      winnerId: 'u1',
+      resultVersion: 1,
+      completed: true,
+      decisionBasis: 'goals',
+    });
+
+    await runSweep(io);
+
+    expect(completePossessionMatchFromProgressMock).toHaveBeenCalledWith(io, 'match-1', 'stale_match_sweeper');
+    expect(resolveMatchPresenceMock).not.toHaveBeenCalled();
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
   it('forfeits the absent human when an AI counterpart is present', async () => {
@@ -155,13 +207,14 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
-    getByIdsMock.mockResolvedValue(
-      new Map([
-        ['human-1', { id: 'human-1', is_ai: false }],
-        ['ai-1', { id: 'ai-1', is_ai: true }],
-      ])
-    );
-    redisExistsMock.mockResolvedValue(0); // human has no presence → absent
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [player('ai-1', 2)],
+      absentPlayers: [player('human-1', 1)],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 0,
+    });
 
     await runSweep(io);
 
@@ -170,7 +223,7 @@ describe('stale-match-sweeper', () => {
       expect.objectContaining({ matchId: 'match-1', forfeitingUserId: 'human-1' })
     );
     expect(emitFinalResultsMock).toHaveBeenCalledTimes(1);
-    expect(abandonMatchServiceMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
   it('abandons the match when no player is present (both humans gone)', async () => {
@@ -178,18 +231,18 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('human-2', 2)]);
-    getByIdsMock.mockResolvedValue(
-      new Map([
-        ['human-1', { id: 'human-1', is_ai: false }],
-        ['human-2', { id: 'human-2', is_ai: false }],
-      ])
-    );
-    redisExistsMock.mockResolvedValue(0); // neither present
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [],
+      absentPlayers: [player('human-1', 1), player('human-2', 2)],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 0,
+    });
 
     await runSweep(io);
 
-    expect(abandonMatchServiceMock).toHaveBeenCalledWith('match-1');
-    expect(deleteMatchCacheMock).toHaveBeenCalledWith('match-1');
+    expect(abandonMatchWithCompleteLockMock).toHaveBeenCalledWith('match-1');
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
   });
 
@@ -215,7 +268,7 @@ describe('stale-match-sweeper', () => {
 
     expect(listMatchPlayersMock).not.toHaveBeenCalled();
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
-    expect(abandonMatchServiceMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
   it('skips when the per-match lock cannot be acquired (another worker owns it)', async () => {
@@ -237,20 +290,10 @@ describe('stale-match-sweeper', () => {
     listMatchPlayersMock.mockResolvedValue([
       player('u1', 1), player('u2', 2), player('u3', 3), player('u4', 4),
     ]);
-    getByIdsMock.mockResolvedValue(
-      new Map([
-        ['u1', { id: 'u1', is_ai: false }],
-        ['u2', { id: 'u2', is_ai: false }],
-        ['u3', { id: 'u3', is_ai: false }],
-        ['u4', { id: 'u4', is_ai: false }],
-      ])
-    );
-    redisExistsMock.mockResolvedValue(1); // some present — would otherwise forfeit
-
     await runSweep(io);
 
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
-    expect(abandonMatchServiceMock).toHaveBeenCalledWith('match-1');
+    expect(abandonMatchWithCompleteLockMock).toHaveBeenCalledWith('match-1');
   });
 
   it('abandons (does not forfeit) when every player is still present', async () => {
@@ -258,18 +301,19 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('u1', 1), player('u2', 2)]);
-    getByIdsMock.mockResolvedValue(
-      new Map([
-        ['u1', { id: 'u1', is_ai: false }],
-        ['u2', { id: 'u2', is_ai: false }],
-      ])
-    );
-    redisExistsMock.mockResolvedValue(1); // both present → no clear absentee
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [player('u1', 1), player('u2', 2)],
+      absentPlayers: [],
+      roomSocketUserIds: ['u1', 'u2'],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 2,
+    });
 
     await runSweep(io);
 
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
-    expect(abandonMatchServiceMock).toHaveBeenCalledWith('match-1');
+    expect(abandonMatchWithCompleteLockMock).toHaveBeenCalledWith('match-1');
   });
 
   it('leaves the match untouched when forfeit finalization is locked (completed=false)', async () => {
@@ -277,20 +321,21 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
-    getByIdsMock.mockResolvedValue(
-      new Map([
-        ['human-1', { id: 'human-1', is_ai: false }],
-        ['ai-1', { id: 'ai-1', is_ai: true }],
-      ])
-    );
-    redisExistsMock.mockResolvedValue(0); // human absent → forfeit attempted
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [player('ai-1', 2)],
+      absentPlayers: [player('human-1', 1)],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 0,
+    });
     finalizeMatchAsForfeitMock.mockResolvedValue({ matchId: 'match-1', winnerId: null, resultVersion: 1, completed: false });
 
     await runSweep(io);
 
     expect(finalizeMatchAsForfeitMock).toHaveBeenCalledTimes(1);
     // Lock contention / already resolved → do not abandon, do not emit results.
-    expect(abandonMatchServiceMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
     expect(emitFinalResultsMock).not.toHaveBeenCalled();
   });
 });

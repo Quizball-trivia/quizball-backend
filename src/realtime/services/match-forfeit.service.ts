@@ -30,6 +30,7 @@ import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
+import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
@@ -368,6 +369,22 @@ export async function emitPendingForfeitIfAny(socket: QuizballSocket): Promise<v
   if (!raw) return;
   const payload = parseForfeitPendingPayload(raw);
   if (!payload) {
+    await redis.del(matchForfeitPendingUserKey(userId));
+    return;
+  }
+  const evidence = await resolveMatchReplayEvidence(payload.matchId, userId);
+  if (!evidence.allowed) {
+    logger.warn(
+      {
+        userId,
+        matchId: payload.matchId,
+        reason: payload.reason,
+        isParticipant: evidence.isParticipant,
+        hasEnteredMarker: evidence.hasEnteredMarker,
+        hasRecordedActivity: evidence.hasRecordedActivity,
+      },
+      'Suppressing pending forfeit replay for user without entered-match evidence'
+    );
     await redis.del(matchForfeitPendingUserKey(userId));
     return;
   }

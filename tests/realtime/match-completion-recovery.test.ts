@@ -8,6 +8,7 @@ const getMatchMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const listAnswersForQuestionMock = vi.fn();
+const listAnswersForMatchMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
 const getMatchOutcomeMock = vi.fn();
 const settleCompletedRankedMatchMock = vi.fn();
@@ -71,7 +72,7 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
 vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   matchAnswersRepo: {
     listAnswersForQuestion: (...args: unknown[]) => listAnswersForQuestionMock(...args),
-    listAnswersForMatch: vi.fn().mockResolvedValue([]),
+    listAnswersForMatch: (...args: unknown[]) => listAnswersForMatchMock(...args),
   },
 }));
 
@@ -195,6 +196,14 @@ function createSocketMock(userId: string): QuizballSocket {
   } as unknown as QuizballSocket;
 }
 
+function seedLastMatch(userId: string, matchId: string, resultVersion = 1000): void {
+  fakeRedisStore.values.set(`user:last_match:${userId}`, JSON.stringify({ matchId, resultVersion }));
+}
+
+function seedEnteredMarker(matchId: string, userId: string): void {
+  fakeRedisStore.values.set(`match:entered:${matchId}:${userId}`, 'test');
+}
+
 const COMPLETED_RANKED_MATCH = {
   id: 'm1',
   mode: 'ranked',
@@ -213,6 +222,12 @@ const COMPLETED_FRIENDLY_MATCH = {
   id: 'm2',
   mode: 'friendly',
   state_payload: { variant: 'friendly_possession', winnerDecisionMethod: 'goals' },
+};
+
+const ABANDONED_RANKED_MATCH = {
+  ...COMPLETED_RANKED_MATCH,
+  status: 'abandoned',
+  ended_at: null,
 };
 
 const PLAYERS = [
@@ -237,8 +252,111 @@ describe('match completion recovery on replay', () => {
     listUnlockedForMatchMock.mockResolvedValue({});
     listMatchPlayersMock.mockResolvedValue(PLAYERS);
     listAnswersForQuestionMock.mockResolvedValue([]);
+    listAnswersForMatchMock.mockResolvedValue([]);
     getActiveMatchForUserMock.mockResolvedValue(null);
     awardCompletedMatchXpMock.mockResolvedValue(undefined);
+  });
+
+  describe('final-results replay guard', () => {
+    it('suppresses a phantom replay when the user never entered or answered the match', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
+      getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
+      seedLastMatch('u1', 'm1');
+
+      await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
+
+      expect(socket.emit).not.toHaveBeenCalledWith('match:final_results', expect.anything());
+      expect(fakeRedisStore.values.has('user:last_match:u1')).toBe(false);
+      expect(getMatchOutcomeMock).not.toHaveBeenCalled();
+      expect(settleCompletedRankedMatchMock).not.toHaveBeenCalled();
+      expect(awardCompletedMatchXpMock).not.toHaveBeenCalled();
+    });
+
+    it('allows replay when the user has an entered-match marker', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
+      getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
+
+      await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
+
+      expect(socket.emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
+        matchId: 'm1',
+      }));
+    });
+
+    it('allows legacy replay when the user has recorded answers but no entered marker', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
+      getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
+      listAnswersForMatchMock.mockResolvedValue([
+        { match_id: 'm1', user_id: 'u1', q_index: 0, is_correct: true },
+      ]);
+      seedLastMatch('u1', 'm1');
+
+      await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
+
+      expect(socket.emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
+        matchId: 'm1',
+      }));
+    });
+
+    it('keeps abandoned replay behavior unchanged', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      getMatchMock.mockResolvedValue(ABANDONED_RANKED_MATCH);
+      seedLastMatch('u1', 'm1');
+
+      await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
+
+      expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({
+        code: 'MATCH_ABANDONED',
+      }));
+      expect(fakeRedisStore.values.has('user:last_match:u1')).toBe(false);
+    });
+
+    it('suppresses pending forfeit replay when the user never entered or answered the match', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      fakeRedisStore.values.set('user:match_forfeit_pending:u1', JSON.stringify({
+        matchId: 'm1',
+        reason: 'reconnect_limit',
+        message: 'Finalizing...',
+      }));
+
+      await matchRealtimeService.emitPendingForfeitIfAny(socket);
+
+      expect(socket.emit).not.toHaveBeenCalledWith('match:forfeit_pending', expect.anything());
+      expect(fakeRedisStore.values.has('user:match_forfeit_pending:u1')).toBe(false);
+    });
+
+    it('emits pending forfeit replay when the user has entered the match', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      fakeRedisStore.values.set('user:match_forfeit_pending:u1', JSON.stringify({
+        matchId: 'm1',
+        reason: 'reconnect_limit',
+        message: 'Finalizing...',
+      }));
+      seedEnteredMarker('m1', 'u1');
+
+      await matchRealtimeService.emitPendingForfeitIfAny(socket);
+
+      expect(socket.emit).toHaveBeenCalledWith('match:forfeit_pending', expect.objectContaining({
+        matchId: 'm1',
+      }));
+    });
   });
 
   describe('ranked settlement recovery', () => {
@@ -254,7 +372,8 @@ describe('match completion recovery on replay', () => {
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(RANKED_OUTCOME);
       settleCompletedRankedMatchMock.mockResolvedValue(RANKED_OUTCOME);
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm1', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -272,7 +391,8 @@ describe('match completion recovery on replay', () => {
 
       getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
       getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm1', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -290,7 +410,8 @@ describe('match completion recovery on replay', () => {
       getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
       getMatchOutcomeMock.mockResolvedValue(null);
       settleCompletedRankedMatchMock.mockRejectedValue(new Error('DB down'));
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm1', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -308,7 +429,8 @@ describe('match completion recovery on replay', () => {
 
       getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
       getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm1', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -320,7 +442,8 @@ describe('match completion recovery on replay', () => {
       const socket = createSocketMock('u1');
 
       getMatchMock.mockResolvedValue(COMPLETED_FRIENDLY_MATCH);
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm2', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm2');
+      seedEnteredMarker('m2', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -335,7 +458,8 @@ describe('match completion recovery on replay', () => {
 
       getMatchMock.mockResolvedValue(COMPLETED_FRIENDLY_MATCH);
       awardCompletedMatchXpMock.mockRejectedValue(new Error('DB down'));
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm2', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm2');
+      seedEnteredMarker('m2', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
@@ -350,7 +474,8 @@ describe('match completion recovery on replay', () => {
       const socket = createSocketMock('u1');
 
       getMatchMock.mockResolvedValue(COMPLETED_FRIENDLY_MATCH);
-      fakeRedisStore.values.set('user:last_match:u1', JSON.stringify({ matchId: 'm2', resultVersion: 1000 }));
+      seedLastMatch('u1', 'm2');
+      seedEnteredMarker('m2', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 

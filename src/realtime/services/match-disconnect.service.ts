@@ -920,7 +920,24 @@ export async function resolveExpiredGraceWindow(
       .filter((_, index) => disconnectedExists[index])
       .map((player) => player.user_id);
 
-    if (disconnected.length === 0) return;
+    if (disconnected.length === 0) {
+      // Everyone reconnected before the grace expired. The finally below
+      // still clears the pause key, but the pause path cancelled the durable
+      // question timer — if the resume flow lost the race (e.g. under
+      // reconnect flapping), nothing would ever resolve the current round.
+      // Re-arm (or immediately resolve an expired) question timer so the
+      // match can never silently freeze here.
+      if (variant !== 'friendly_party_quiz') {
+        await redis.del(matchGraceKey(matchId));
+        await redis.del(matchPauseKey(matchId));
+        const ensured = await ensurePossessionActiveTimers(io, matchId);
+        logger.info(
+          { matchId, ensured, disconnectedUserIds: disconnected },
+          'Grace expired with all players reconnected; ensured possession timers'
+        );
+      }
+      return;
+    }
 
     if (variant === 'friendly_party_quiz') {
       const state = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);

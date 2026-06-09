@@ -5,6 +5,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
 const resumePossessionMatchQuestionMock = vi.fn();
+const ensurePossessionActiveTimersMock = vi.fn();
 const resumePartyQuizQuestionMock = vi.fn();
 const emitPossessionStateToSocketMock = vi.fn();
 const emitPartyQuizStateToSocketMock = vi.fn();
@@ -268,6 +269,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) =>
     ...actual,
     emitPossessionStateToSocket: (...args: unknown[]) => emitPossessionStateToSocketMock(...args),
     resumePossessionMatchQuestion: (...args: unknown[]) => resumePossessionMatchQuestionMock(...args),
+    ensurePossessionActiveTimers: (...args: unknown[]) => ensurePossessionActiveTimersMock(...args),
   };
 });
 
@@ -1145,6 +1147,45 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(abandonMatchMock).not.toHaveBeenCalled();
     }
+  });
+
+  it('S15b2: grace expiry with everyone reconnected re-arms possession timers instead of silently unpausing', async () => {
+    const io = createIoMock();
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 4,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 100, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 80, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    // A disconnect paused the match (cancelling the durable question timer)
+    // and armed the grace window. Both players reconnected before expiry, so
+    // their disconnect keys are gone — but the resume flow lost the race
+    // (e.g. reconnect flapping), leaving the pause key set and NO timer armed.
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // The match must come back to life: pause cleared AND timers re-ensured
+    // (which re-arms a live deadline or immediately resolves an expired one).
+    expect(ensurePossessionActiveTimersMock).toHaveBeenCalledWith(io, 'm1');
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(false);
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
   });
 
   it('S15b1: ranked all-disconnected does not abandon while shared completion lock is held', async () => {

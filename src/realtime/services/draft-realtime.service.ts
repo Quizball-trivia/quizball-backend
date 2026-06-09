@@ -20,8 +20,18 @@ const AI_BAN_DELAY_MAX_MS = 1800;
 const DRAFT_AUTO_BAN_MS = 16000;
 const AI_LOBBY_KEY_TTL_SEC = 7200;
 const DRAFT_DISCONNECT_GRACE_MS = 60000;
-const DRAFT_DISCONNECT_TTL_SEC = 75;
-const DRAFT_GRACE_TTL_SEC = 65;
+// Disconnect/pause state TTL. Gates the grace-recovery "who is disconnected"
+// check, so it must persist until the durable grace timer actually runs — which
+// can be delayed by a redeploy / scheduler lag. Sized to match the grace marker.
+const DRAFT_DISCONNECT_TTL_SEC = 600;
+// Pending-recovery marker TTL. Must comfortably outlive the grace window (60s)
+// PLUS any realistic delayed delivery of the durable timer (redeploy / scheduler
+// lag), so a late firing still finds the marker and recovers instead of no-opping.
+const DRAFT_GRACE_TTL_SEC = 600;
+// Short-lived mutual-exclusion lock between duplicate/concurrent grace firings.
+// Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
+// single recovery pass.
+const DRAFT_GRACE_LOCK_TTL_SEC = 30;
 
 function draftDisconnectKey(lobbyId: string, userId: string): string {
   return `draft:disconnect:${lobbyId}:${userId}`;
@@ -33,6 +43,10 @@ function draftPauseKey(lobbyId: string): string {
 
 function draftGraceKey(lobbyId: string): string {
   return `draft:grace:${lobbyId}`;
+}
+
+function draftGraceLockKey(lobbyId: string): string {
+  return `draft:grace:lock:${lobbyId}`;
 }
 
 function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
@@ -345,6 +359,116 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
   }
 }
 
+/**
+ * Durable draft disconnect-grace expiry handler. Fired by the Redis-backed
+ * realtime timer scheduler (kind `draft_grace_expiry`), so it survives
+ * redeploys / instance hops — unlike the old in-memory setTimeout.
+ *
+ * Recovery is driven by the durable timer + DB/Redis state, NOT by a short-lived
+ * grace key. Concretely:
+ *  - The pending-recovery marker (`draftGraceKey`) has a generous TTL
+ *    (`DRAFT_GRACE_TTL_SEC`) that comfortably outlives the grace window plus any
+ *    realistic delayed delivery (redeploy / scheduler lag), so a late-delivered
+ *    timer still finds it and recovers instead of no-opping.
+ *  - Mutual exclusion between duplicate/concurrent firings is a SHORT-lived
+ *    processing lock (NX, auto-expiring) — so a crashed handler releases the lock
+ *    and a retry can re-run, rather than the dedup token being consumed forever.
+ *  - The grace marker is only cleared AFTER recovery work succeeds. On failure we
+ *    leave it in place and rethrow, so the scheduler reschedules the timer and the
+ *    recovery is retried (the scheduler only deletes the payload on success).
+ *  - noop if the player already reconnected (grace key cleared + timer cancelled
+ *    by resumeDraftForReconnectedPlayer), or the lobby/draft is already completed.
+ *  - No duplicate ban / completion: downstream runDraftAutoBan /
+ *    completeDraftIfReady re-read state and re-check ban counts + lobby status.
+ *    (Duplicate *match* rows under a rare concurrent completion are not fully
+ *    excluded at the DB level yet — see the matches.lobby_id uniqueness follow-up.)
+ */
+export async function runDraftGraceExpiry(
+  io: QuizballServer,
+  lobbyId: string,
+  disconnectedUserId: string
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  // Is recovery still pending? Read (don't consume) — the durable marker is the
+  // source of truth and must survive until the work actually completes.
+  const gracePending = (await redis.exists(draftGraceKey(lobbyId))) === 1;
+  if (!gracePending) {
+    // Reconnect cleared it, or a prior firing already recovered this draft.
+    logger.info({ lobbyId, disconnectedUserId }, 'draft_grace_expiry_noop');
+    return;
+  }
+
+  // Short-lived processing lock for mutual exclusion across duplicate/concurrent
+  // firings. Auto-expires, so a crashed handler doesn't wedge recovery forever.
+  const lockAcquired = await redis.set(
+    draftGraceLockKey(lobbyId),
+    String(Date.now()),
+    { NX: true, EX: DRAFT_GRACE_LOCK_TTL_SEC }
+  );
+  if (lockAcquired !== 'OK') {
+    logger.info({ lobbyId, disconnectedUserId }, 'draft_grace_expiry_noop');
+    return;
+  }
+
+  try {
+    const activeLobby = await lobbiesRepo.getById(lobbyId);
+    if (!activeLobby || activeLobby.status !== 'active') {
+      // Draft already completed/gone — clear pending state, nothing to recover.
+      await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
+      logger.info({ lobbyId, disconnectedUserId }, 'draft_grace_expiry_noop');
+      return;
+    }
+
+    const activeMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const disconnectedExists = await Promise.all(
+      activeMembers.map((member) => redis.exists(draftDisconnectKey(lobbyId, member.user_id)))
+    );
+    const disconnectedUserIds = activeMembers
+      .filter((_, index) => disconnectedExists[index] === 1)
+      .map((member) => member.user_id);
+    if (disconnectedUserIds.length === 0) {
+      // Everyone reconnected between the pending check and now — resume cleanly.
+      await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
+      logger.info({ lobbyId, disconnectedUserId }, 'draft_grace_expiry_noop');
+      return;
+    }
+
+    await Promise.all(
+      disconnectedUserIds.map((absentUserId) =>
+        redis.set(draftAbsentAfterGraceKey(lobbyId, absentUserId), '1', { EX: DRAFT_DISCONNECT_TTL_SEC })
+      )
+    );
+
+    const currentActorId = await getCurrentDraftActorId(lobbyId);
+    logger.info(
+      { lobbyId, disconnectedUserIds, currentActorId },
+      'draft_grace_expiry_fired'
+    );
+
+    await redis.del(draftPauseKey(lobbyId));
+    await Promise.all(disconnectedUserIds.map((absentUserId) => redis.del(draftDisconnectKey(lobbyId, absentUserId))));
+
+    if (currentActorId && disconnectedUserIds.includes(currentActorId)) {
+      await runDraftAutoBan(io, lobbyId);
+    } else {
+      await resumeActiveDraftTimers(io, lobbyId);
+    }
+
+    // Recovery succeeded — only now consume the pending marker.
+    await redis.del(draftGraceKey(lobbyId));
+    logger.info({ lobbyId, disconnectedUserIds, currentActorId }, 'draft_grace_expiry_recovered');
+  } catch (error) {
+    // Leave draftGraceKey in place and rethrow so the scheduler reschedules and
+    // retries — a transient DB/Redis blip must not permanently lose recovery.
+    logger.error({ error, lobbyId, disconnectedUserId }, 'Draft disconnect grace expiry failed; will retry');
+    throw error;
+  } finally {
+    await redis.del(draftGraceLockKey(lobbyId)).catch(() => {});
+  }
+}
+
 async function getCurrentDraftActorId(lobbyId: string): Promise<string | null> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') return null;
@@ -526,47 +650,21 @@ export const draftRealtimeService = {
     const acquired = await redis.set(draftGraceKey(lobbyId), String(Date.now()), { NX: true, EX: DRAFT_GRACE_TTL_SEC });
     if (acquired !== 'OK') return;
 
-    setTimeout(async () => {
-      try {
-        const graceStillActive = (await redis.exists(draftGraceKey(lobbyId))) === 1;
-        if (!graceStillActive) return;
-
-        const activeLobby = await lobbiesRepo.getById(lobbyId);
-        if (!activeLobby || activeLobby.status !== 'active') return;
-
-        const activeMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-        const disconnectedExists = await Promise.all(
-          activeMembers.map((member) => redis.exists(draftDisconnectKey(lobbyId, member.user_id)))
-        );
-        const disconnectedUserIds = activeMembers
-          .filter((_, index) => disconnectedExists[index] === 1)
-          .map((member) => member.user_id);
-        if (disconnectedUserIds.length === 0) return;
-
-        await Promise.all(
-          disconnectedUserIds.map((disconnectedUserId) =>
-            redis.set(draftAbsentAfterGraceKey(lobbyId, disconnectedUserId), '1', { EX: DRAFT_DISCONNECT_TTL_SEC })
-          )
-        );
-
-        const currentActorId = await getCurrentDraftActorId(lobbyId);
-        logger.info(
-          { lobbyId, disconnectedUserIds, currentActorId },
-          'Draft disconnect grace expired'
-        );
-
-        await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
-        await Promise.all(disconnectedUserIds.map((disconnectedUserId) => redis.del(draftDisconnectKey(lobbyId, disconnectedUserId))));
-
-        if (currentActorId && disconnectedUserIds.includes(currentActorId)) {
-          await runDraftAutoBan(io, lobbyId);
-        } else {
-          await resumeActiveDraftTimers(io, lobbyId);
-        }
-      } catch (error) {
-        logger.warn({ error, lobbyId, userId }, 'Draft disconnect grace expiry failed');
-      }
-    }, DRAFT_DISCONNECT_GRACE_MS);
+    // Recovery is driven by a durable Redis-backed timer (not an in-memory
+    // setTimeout) so the grace window survives redeploys / instance hops. Keyed
+    // by lobbyId, so a repeat disconnect just overwrites the same deadline.
+    await scheduleRealtimeTimer(
+      'draft_grace_expiry',
+      lobbyId,
+      new Date(Date.now() + harnessDelayMs(DRAFT_DISCONNECT_GRACE_MS)),
+      { kind: 'draft_grace_expiry', lobbyId, disconnectedUserId: userId }
+    ).catch((error) => {
+      logger.error({ error, lobbyId, userId }, 'Failed to schedule draft grace expiry timer');
+    });
+    logger.info(
+      { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
+      'draft_grace_expiry_scheduled'
+    );
   },
 
   async resumeDraftForReconnectedPlayer(
@@ -586,6 +684,9 @@ export const draftRealtimeService = {
     const memberIds = members.map((member) => member.user_id);
     if (!(await anyDraftDisconnectExists(lobbyId, memberIds))) {
       await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
+      // Cancel the pending durable grace-expiry timer; clearing the grace key
+      // already makes a stray firing a noop, but cancelling avoids the wasted poll.
+      await cancelRealtimeTimer('draft_grace_expiry', lobbyId);
       io.to(`lobby:${lobbyId}`).emit('draft:resume', { lobbyId });
       await resumeActiveDraftTimers(io, lobbyId, { restartTimers: true });
       logger.info({ lobbyId, userId }, 'Draft resumed after player reconnected');

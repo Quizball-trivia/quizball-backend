@@ -18,12 +18,18 @@ const redisSetMock = vi.fn();
 const redisExistsMock = vi.fn();
 const redisDelMock = vi.fn();
 const redisGetDelMock = vi.fn();
+const redisEvalMock = vi.fn();
 let redisClientMock: {
   get: typeof redisGetMock;
   set: typeof redisSetMock;
   exists: typeof redisExistsMock;
   del: typeof redisDelMock;
   getDel: typeof redisGetDelMock;
+  eval?: typeof redisEvalMock;
+  isOpen?: boolean;
+  zRem?: ReturnType<typeof vi.fn>;
+  zAdd?: ReturnType<typeof vi.fn>;
+  zScore?: ReturnType<typeof vi.fn>;
 } | null = null;
 
 const scheduleRealtimeTimerMock = vi.fn();
@@ -137,6 +143,7 @@ describe('draftRealtimeService', () => {
     redisExistsMock.mockResolvedValue(0);
     redisDelMock.mockResolvedValue(1);
     redisGetDelMock.mockResolvedValue(null);
+    redisEvalMock.mockResolvedValue(1);
     // Delegate to the real scheduler by default so existing timer-driven tests
     // still fire; individual grace tests just read the spy's call args.
     scheduleRealtimeTimerMock.mockImplementation((...args: unknown[]) => realScheduleRealtimeTimer(...args));
@@ -512,12 +519,39 @@ describe('draftRealtimeService', () => {
       keys.delete(key);
       return had ? '1' : null;
     });
+    // Token-checked lock: acquireLock does SET key token NX PX; releaseLock runs
+    // a Lua eval that deletes only if the stored token matches. Model both so the
+    // grace processing lock exercises the real locks.ts path (client.isOpen true).
+    const lockTokens = new Map<string, string>();
+    redisSetMock.mockImplementation(async (key: string, val: unknown, opts?: { NX?: boolean }) => {
+      if (opts?.NX && keys.has(key)) return null;
+      keys.add(key);
+      if (typeof val === 'string') lockTokens.set(key, val);
+      return 'OK';
+    });
+    redisEvalMock.mockImplementation(async (_script: string, opts: { keys: string[]; arguments: string[] }) => {
+      const [key] = opts.keys;
+      const [token] = opts.arguments;
+      if (lockTokens.get(key) === token) {
+        keys.delete(key);
+        lockTokens.delete(key);
+        return 1;
+      }
+      return 0;
+    });
     redisClientMock = {
       get: redisGetMock,
       set: redisSetMock,
       exists: redisExistsMock,
       del: redisDelMock,
       getDel: redisGetDelMock,
+      eval: redisEvalMock,
+      isOpen: true,
+      // No-op sorted-set ops so the real cancelRealtimeTimer (delegated) doesn't
+      // throw now that isOpen is true.
+      zRem: vi.fn(async () => 0),
+      zAdd: vi.fn(async () => 0),
+      zScore: vi.fn(async () => null),
     };
     return keys;
   }

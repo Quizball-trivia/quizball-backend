@@ -13,6 +13,7 @@ import { trackDraftCompleted } from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { getRedisClient } from '../redis.js';
+import { acquireLock, releaseLock } from '../locks.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
@@ -401,13 +402,11 @@ export async function runDraftGraceExpiry(
   }
 
   // Short-lived processing lock for mutual exclusion across duplicate/concurrent
-  // firings. Auto-expires, so a crashed handler doesn't wedge recovery forever.
-  const lockAcquired = await redis.set(
-    draftGraceLockKey(lobbyId),
-    String(Date.now()),
-    { NX: true, EX: DRAFT_GRACE_LOCK_TTL_SEC }
-  );
-  if (lockAcquired !== 'OK') {
+  // firings. Token-checked (acquireLock/releaseLock) so that if this handler
+  // outlives the lock TTL and another worker re-acquires, our release can't
+  // delete the new owner's lock. Auto-expires so a crash doesn't wedge recovery.
+  const lock = await acquireLock(draftGraceLockKey(lobbyId), DRAFT_GRACE_LOCK_TTL_SEC * 1000);
+  if (!lock.acquired || !lock.token) {
     logger.info({ lobbyId, disconnectedUserId }, 'draft_grace_expiry_noop');
     return;
   }
@@ -465,7 +464,7 @@ export async function runDraftGraceExpiry(
     logger.error({ error, lobbyId, disconnectedUserId }, 'Draft disconnect grace expiry failed; will retry');
     throw error;
   } finally {
-    await redis.del(draftGraceLockKey(lobbyId)).catch(() => {});
+    await releaseLock(draftGraceLockKey(lobbyId), lock.token).catch(() => {});
   }
 }
 

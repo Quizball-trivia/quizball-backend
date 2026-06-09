@@ -52,39 +52,34 @@ const manualAdjustmentLogMetadataSchema = z.object({
   inventoryApplied: z.array(manualInventoryGrantSchema),
 });
 
-const TICKET_PURCHASE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// Players can buy up to TICKET_PURCHASE_MAX_PER_WINDOW ticket packs per rolling
+// 24h window. A slot frees up 24h after the OLDEST purchase still inside the
+// window rolls off.
+const TICKET_PURCHASE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TICKET_PURCHASE_MAX_PER_WINDOW = 3;
 
 type TicketPurchaseCooldown = StoreWalletResponse['ticketPurchaseCooldown'];
 
 function buildTicketPurchaseCooldown(
-  latestPurchasedAt: string | null | undefined,
+  windowCount: number,
+  oldestPurchasedAt: string | null | undefined,
   now = new Date()
 ): TicketPurchaseCooldown {
-  if (!latestPurchasedAt) {
-    return {
-      canBuy: true,
-      nextAvailableAt: null,
-      remainingSeconds: 0,
-    };
+  // Under the per-window cap → can buy now.
+  if (windowCount < TICKET_PURCHASE_MAX_PER_WINDOW || !oldestPurchasedAt) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
   }
 
-  const latestMs = Date.parse(latestPurchasedAt);
-  if (!Number.isFinite(latestMs)) {
-    return {
-      canBuy: true,
-      nextAvailableAt: null,
-      remainingSeconds: 0,
-    };
+  const oldestMs = Date.parse(oldestPurchasedAt);
+  if (!Number.isFinite(oldestMs)) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
   }
 
-  const nextAvailableMs = latestMs + TICKET_PURCHASE_COOLDOWN_MS;
+  // At the cap: the next slot opens when the oldest purchase exits the window.
+  const nextAvailableMs = oldestMs + TICKET_PURCHASE_WINDOW_MS;
   const remainingMs = nextAvailableMs - now.getTime();
   if (remainingMs <= 0) {
-    return {
-      canBuy: true,
-      nextAvailableAt: null,
-      remainingSeconds: 0,
-    };
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
   }
 
   return {
@@ -106,19 +101,21 @@ function buildWalletResponse(
 }
 
 // Loads the real ticket-purchase cooldown for a user so wallet responses never
-// default to "purchasable" regardless of purchase history.
+// default to "purchasable" regardless of purchase history. Enforces the rolling
+// per-24h cap (up to TICKET_PURCHASE_MAX_PER_WINDOW packs).
 async function loadTicketPurchaseCooldownInTx(
   tx: TransactionSql,
   userId: string
 ): Promise<TicketPurchaseCooldown> {
-  const latest = await storeRepo.getLatestCompletedTicketPackPurchaseInTx(tx, userId);
-  return buildTicketPurchaseCooldown(latest?.purchased_at);
+  const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+  const window = await storeRepo.getTicketPackPurchaseWindowInTx(tx, userId, sinceIso);
+  return buildTicketPurchaseCooldown(window.count, window.oldest_purchased_at);
 }
 
 function assertCanBuyTicketPack(cooldown: TicketPurchaseCooldown, userId: string): void {
   if (cooldown.canBuy) return;
   throw new AppError(
-    'Ticket purchase is available once every 24 hours',
+    'Ticket purchase limit reached (up to 3 per 24 hours)',
     400,
     ErrorCode.TICKET_PURCHASE_COOLDOWN,
     {
@@ -548,9 +545,8 @@ export const storeService = {
             if (!walletForLock) {
               throw new NotFoundError('User not found');
             }
-            const latestTicketPurchase = await storeRepo.getLatestCompletedTicketPackPurchaseInTx(tx, userId);
             assertCanBuyTicketPack(
-              buildTicketPurchaseCooldown(latestTicketPurchase?.purchased_at),
+              await loadTicketPurchaseCooldownInTx(tx, userId),
               userId
             );
 
@@ -572,7 +568,7 @@ export const storeService = {
             });
             walletAfter = buildWalletResponse(
               updatedWallet.wallet,
-              buildTicketPurchaseCooldown(new Date().toISOString())
+              await loadTicketPurchaseCooldownInTx(tx, userId)
             );
             ticketsDelta = updatedWallet.appliedTicketsDelta;
             break;
@@ -804,13 +800,14 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const [wallet, latestTicketPurchase] = await Promise.all([
+    const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+    const [wallet, purchaseWindow] = await Promise.all([
       ticketRefillService.hydrateTickets(userId),
-      storeRepo.getLatestCompletedTicketPackPurchase(userId),
+      storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
     ]);
     return buildWalletResponse(
       wallet,
-      buildTicketPurchaseCooldown(latestTicketPurchase?.purchased_at)
+      buildTicketPurchaseCooldown(purchaseWindow.count, purchaseWindow.oldest_purchased_at)
     );
   },
 

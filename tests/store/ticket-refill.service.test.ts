@@ -24,13 +24,13 @@ describe('ticketRefillService', () => {
   });
 
   describe('resolveHydratedTicketState', () => {
-    it('preserves partial progress when less than eight hours have elapsed', () => {
+    it('preserves partial progress when less than four hours have elapsed', () => {
       const result = resolveHydratedTicketState(
         {
           tickets: 2,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-08T17:30:00.000Z'
+        '2026-03-08T13:30:00.000Z' // 3.5h < 4h refill window
       );
 
       expect(result).toEqual({
@@ -46,7 +46,7 @@ describe('ticketRefillService', () => {
           tickets: 2,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-08T18:01:00.000Z'
+        '2026-03-08T14:01:00.000Z' // 4h+ → +1 ticket reaches MAX (3)
       );
 
       expect(result).toEqual({
@@ -56,13 +56,13 @@ describe('ticketRefillService', () => {
       });
     });
 
-    it('advances the refill anchor by whole eight-hour windows while preserving leftover progress', () => {
+    it('advances the refill anchor by whole four-hour windows while preserving leftover progress', () => {
       const result = resolveHydratedTicketState(
         {
           tickets: 1,
           tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
         },
-        '2026-03-09T02:30:00.000Z'
+        '2026-03-08T18:30:00.000Z' // 8.5h → +2 tickets reaches MAX (3)
       );
 
       expect(result).toEqual({

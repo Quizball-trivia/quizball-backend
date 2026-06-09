@@ -44,6 +44,10 @@ interface ListStoreTransactionResult {
   total: number;
 }
 
+interface LatestTicketPackPurchaseRow {
+  purchased_at: string;
+}
+
 interface CompareAndSetTicketsStateInput {
   userId: string;
   observedTickets: number;
@@ -370,6 +374,40 @@ export const storeRepo = {
       RETURNING coins, tickets, tickets_refill_started_at
       `,
       [wallet.coins, wallet.tickets, wallet.ticketsRefillStartedAt, userId]
+    );
+    return row ?? null;
+  },
+
+  async getLatestCompletedTicketPackPurchase(userId: string): Promise<LatestTicketPackPurchaseRow | null> {
+    const [row] = await sql<LatestTicketPackPurchaseRow[]>`
+      SELECT COALESCE(sp.fulfilled_at, sp.created_at)::text AS purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = ${userId}
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+      ORDER BY COALESCE(sp.fulfilled_at, sp.created_at) DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  async getLatestCompletedTicketPackPurchaseInTx(
+    tx: TransactionSql,
+    userId: string
+  ): Promise<LatestTicketPackPurchaseRow | null> {
+    const [row] = await tx.unsafe<LatestTicketPackPurchaseRow[]>(
+      `
+      SELECT COALESCE(sp.fulfilled_at, sp.created_at)::text AS purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = $1
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+      ORDER BY COALESCE(sp.fulfilled_at, sp.created_at) DESC
+      LIMIT 1
+      `,
+      [userId]
     );
     return row ?? null;
   },

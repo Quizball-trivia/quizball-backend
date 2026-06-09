@@ -36,9 +36,98 @@ import type {
 } from './store.types.js';
 
 const manualAdjustmentLogMetadataSchema = z.object({
-  walletAfter: storeWalletResponseSchema,
+  walletAfter: storeWalletResponseSchema.or(
+    z.object({
+      coins: z.number().int().nonnegative(),
+      tickets: z.number().int().nonnegative(),
+    }).transform((wallet) => ({
+      ...wallet,
+      ticketPurchaseCooldown: {
+        canBuy: true,
+        nextAvailableAt: null,
+        remainingSeconds: 0,
+      },
+    }))
+  ),
   inventoryApplied: z.array(manualInventoryGrantSchema),
 });
+
+const TICKET_PURCHASE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+type TicketPurchaseCooldown = StoreWalletResponse['ticketPurchaseCooldown'];
+
+function buildTicketPurchaseCooldown(
+  latestPurchasedAt: string | null | undefined,
+  now = new Date()
+): TicketPurchaseCooldown {
+  if (!latestPurchasedAt) {
+    return {
+      canBuy: true,
+      nextAvailableAt: null,
+      remainingSeconds: 0,
+    };
+  }
+
+  const latestMs = Date.parse(latestPurchasedAt);
+  if (!Number.isFinite(latestMs)) {
+    return {
+      canBuy: true,
+      nextAvailableAt: null,
+      remainingSeconds: 0,
+    };
+  }
+
+  const nextAvailableMs = latestMs + TICKET_PURCHASE_COOLDOWN_MS;
+  const remainingMs = nextAvailableMs - now.getTime();
+  if (remainingMs <= 0) {
+    return {
+      canBuy: true,
+      nextAvailableAt: null,
+      remainingSeconds: 0,
+    };
+  }
+
+  return {
+    canBuy: false,
+    nextAvailableAt: new Date(nextAvailableMs).toISOString(),
+    remainingSeconds: Math.ceil(remainingMs / 1000),
+  };
+}
+
+function buildWalletResponse(
+  wallet: Pick<StoreWalletResponse, 'coins' | 'tickets'>,
+  ticketPurchaseCooldown: TicketPurchaseCooldown
+): StoreWalletResponse {
+  return {
+    coins: wallet.coins,
+    tickets: wallet.tickets,
+    ticketPurchaseCooldown,
+  };
+}
+
+// Loads the real ticket-purchase cooldown for a user so wallet responses never
+// default to "purchasable" regardless of purchase history.
+async function loadTicketPurchaseCooldownInTx(
+  tx: TransactionSql,
+  userId: string
+): Promise<TicketPurchaseCooldown> {
+  const latest = await storeRepo.getLatestCompletedTicketPackPurchaseInTx(tx, userId);
+  return buildTicketPurchaseCooldown(latest?.purchased_at);
+}
+
+function assertCanBuyTicketPack(cooldown: TicketPurchaseCooldown, userId: string): void {
+  if (cooldown.canBuy) return;
+  throw new AppError(
+    'Ticket purchase is available once every 24 hours',
+    400,
+    ErrorCode.TICKET_PURCHASE_COOLDOWN,
+    {
+      userId,
+      nextAvailableAt: cooldown.nextAvailableAt,
+      remainingSeconds: cooldown.remainingSeconds,
+    }
+  );
+}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -277,10 +366,7 @@ async function applyWalletAdjustmentInTx(
   }
 
   return {
-    wallet: {
-      coins: updated.coins,
-      tickets: updated.tickets,
-    },
+    wallet: buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId)),
     appliedTicketsDelta,
   };
 }
@@ -452,19 +538,22 @@ export const storeService = {
           });
         }
 
-        const purchase = await storeRepo.createCompletedPurchaseInTx(tx, {
-          userId,
-          productId: product.id,
-          amountCents: coinsCost,
-          currency: 'coins',
-        });
-
         let walletAfter: StoreWalletResponse;
         let ticketsDelta = 0;
         let inventoryDelta: Record<string, number> = {};
 
         switch (product.type) {
           case 'ticket_pack': {
+            const walletForLock = await storeRepo.getWalletForUpdateInTx(tx, userId);
+            if (!walletForLock) {
+              throw new NotFoundError('User not found');
+            }
+            const latestTicketPurchase = await storeRepo.getLatestCompletedTicketPackPurchaseInTx(tx, userId);
+            assertCanBuyTicketPack(
+              buildTicketPurchaseCooldown(latestTicketPurchase?.purchased_at),
+              userId
+            );
+
             const parsed = ticketPackMetadataSchema.safeParse(product.metadata);
             if (!parsed.success) {
               throw new AppError(
@@ -481,7 +570,10 @@ export const storeService = {
               rejectTicketOverflow: true,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
             });
-            walletAfter = updatedWallet.wallet;
+            walletAfter = buildWalletResponse(
+              updatedWallet.wallet,
+              buildTicketPurchaseCooldown(new Date().toISOString())
+            );
             ticketsDelta = updatedWallet.appliedTicketsDelta;
             break;
           }
@@ -505,6 +597,13 @@ export const storeService = {
               { productId: product.id, productType: product.type }
             );
         }
+
+        const purchase = await storeRepo.createCompletedPurchaseInTx(tx, {
+          userId,
+          productId: product.id,
+          amountCents: coinsCost,
+          currency: 'coins',
+        });
 
         await storeRepo.insertTransactionLogInTx(tx, {
           eventType: 'fulfillment_succeeded',
@@ -705,11 +804,14 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const wallet = await ticketRefillService.hydrateTickets(userId);
-    return {
-      coins: wallet.coins,
-      tickets: wallet.tickets,
-    };
+    const [wallet, latestTicketPurchase] = await Promise.all([
+      ticketRefillService.hydrateTickets(userId),
+      storeRepo.getLatestCompletedTicketPackPurchase(userId),
+    ]);
+    return buildWalletResponse(
+      wallet,
+      buildTicketPurchaseCooldown(latestTicketPurchase?.purchased_at)
+    );
   },
 
   async consumeRankedTickets(
@@ -729,10 +831,7 @@ export const storeService = {
         if (!wallet) {
           throw new NotFoundError('User not found');
         }
-        hydratedWallets[userId] = {
-          coins: wallet.coins,
-          tickets: wallet.tickets,
-        };
+        hydratedWallets[userId] = buildWalletResponse(wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       const insufficientUserIds = dedupedUserIds.filter((userId) => (hydratedWallets[userId]?.tickets ?? 0) < 1);
@@ -765,10 +864,7 @@ export const storeService = {
             }
           );
         }
-        wallets[userId] = {
-          coins: result.wallet.coins,
-          tickets: result.wallet.tickets,
-        };
+        wallets[userId] = buildWalletResponse(result.wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(
@@ -806,10 +902,7 @@ export const storeService = {
           throw new NotFoundError('User not found');
         }
 
-        wallets[userId] = {
-          coins: updated.coins,
-          tickets: updated.tickets,
-        };
+        wallets[userId] = buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(

@@ -654,8 +654,8 @@ describe('ranked matchmaking socket integration (in-process)', () => {
       userBMatch,
     ]);
 
-    expect(aSearch.durationMs).toBe(7000);
-    expect(bSearch.durationMs).toBe(7000);
+    expect(aSearch.durationMs).toBe(10000);
+    expect(bSearch.durationMs).toBe(10000);
     expect(aMatch.opponent.id).toBe('u2');
     expect(bMatch.opponent.id).toBe('u1');
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import type { QuizballServer } from '../../src/realtime/socket-server.js';
 const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getByIdMock = vi.fn();
+const findOpenLobbyForUserMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const clearLobbyCategoryBansMock = vi.fn();
 const clearLobbyCategoriesMock = vi.fn();
@@ -20,6 +21,7 @@ const redisGetMock = vi.fn();
 const redisSetMock = vi.fn();
 const redisDelMock = vi.fn();
 const getUserByIdMock = vi.fn();
+const pauseDraftForDisconnectedPlayerMock = vi.fn();
 
 let redisClientMock: {
   get: typeof redisGetMock;
@@ -44,6 +46,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
+    findOpenLobbyForUser: (...args: unknown[]) => findOpenLobbyForUserMock(...args),
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     clearLobbyCategoryBans: (...args: unknown[]) => clearLobbyCategoryBansMock(...args),
     clearLobbyCategories: (...args: unknown[]) => clearLobbyCategoriesMock(...args),
@@ -96,11 +99,17 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
   },
 }));
 
-function createSocket(userId: string) {
+vi.mock('../../src/realtime/services/draft-realtime.service.js', () => ({
+  draftRealtimeService: {
+    pauseDraftForDisconnectedPlayer: (...args: unknown[]) => pauseDraftForDisconnectedPlayerMock(...args),
+  },
+}));
+
+function createSocket(userId: string, lobbyId: string | undefined = 'lobby-1') {
   return {
     data: {
       user: { id: userId },
-      lobbyId: 'lobby-1',
+      lobbyId,
     },
     leave: vi.fn(),
   };
@@ -143,6 +152,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     ]);
     clearLobbyCategoryBansMock.mockResolvedValue(undefined);
     clearLobbyCategoriesMock.mockResolvedValue(undefined);
+    findOpenLobbyForUserMock.mockResolvedValue(null);
     insertLobbyCategoriesMock.mockResolvedValue(undefined);
     setLobbyStatusMock.mockResolvedValue(undefined);
     cleanupLobbyMock.mockResolvedValue(undefined);
@@ -205,5 +215,26 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+  });
+
+  it('pauses an active draft on disconnect even when the socket lost its lobby id', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1');
+    socket.data.lobbyId = undefined;
+    const activeLobby = {
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    };
+    findOpenLobbyForUserMock.mockResolvedValue(activeLobby);
+    getByIdMock.mockResolvedValue(activeLobby);
+
+    await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(pauseDraftForDisconnectedPlayerMock).toHaveBeenCalledWith(io, 'lobby-1', 'u1');
+    expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
   });
 });

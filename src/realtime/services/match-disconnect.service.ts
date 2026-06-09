@@ -221,6 +221,7 @@ export async function handleMatchLeave(
 
       const pauseResult = await pauseMatchForDisconnectedPlayer(io, activeMatch.id, userId, {
         ignoreSocketId: socket.id,
+        disconnectedConnectedAt: socket.data.connectedAt,
       });
 
       socket.leave(`match:${activeMatch.id}`);
@@ -377,6 +378,7 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
   const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
     await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
       ignoreSocketId: socket.id,
+      disconnectedConnectedAt: socket.data.connectedAt,
       autoResumeReplacementSocket: true,
     });
   }, {
@@ -528,6 +530,7 @@ export async function pauseMatchForDisconnectedPlayer(
   userId: string,
   options: {
     ignoreSocketId?: string;
+    disconnectedConnectedAt?: number;
     autoResumeReplacementSocket?: boolean;
   } = {}
 ): Promise<{ graceMs: number; remainingReconnects: number; finalized: boolean }> {
@@ -559,6 +562,12 @@ export async function pauseMatchForDisconnectedPlayer(
   );
   const nowMs = Date.now();
   const stableLiveSocket = sameUserSockets.some((connectedSocket) => {
+    if (typeof options.disconnectedConnectedAt === 'number') {
+      const connectedAt = connectedSocket.data.connectedAt;
+      if (typeof connectedAt === 'number' && connectedAt < options.disconnectedConnectedAt) {
+        return false;
+      }
+    }
     const connectedAt = connectedSocket.data.connectedAt;
     return typeof connectedAt !== 'number' || nowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
   });

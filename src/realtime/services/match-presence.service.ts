@@ -108,15 +108,21 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
   const playerStates = roster.map((player): MatchPresencePlayerState<Player> => {
     const reasons: MatchPresenceReason[] = [];
     const user = usersById.get(player.user_id);
+    const explicitlyDisconnected = disconnectKeyUserIds.has(player.user_id);
+
     if (user?.is_ai) reasons.push('ai');
     if (roomPresence.userIds.has(player.user_id)) reasons.push('room_socket');
     if (options.connectingUserId === player.user_id) reasons.push('connecting_user');
-    if (presenceKeyUserIds.has(player.user_id)) reasons.push('presence_key');
+    // A leftover presence heartbeat must not override an explicit disconnect
+    // marker — otherwise the disconnect-grace flow classifies the disconnected
+    // side as "present" and resolves toward abandon/no-op instead of forfeit.
+    // A live room socket / connecting user still wins over a stale disconnect key.
+    if (presenceKeyUserIds.has(player.user_id) && !explicitlyDisconnected) reasons.push('presence_key');
 
     const present = reasons.length > 0;
-    if (disconnectKeyUserIds.has(player.user_id)) reasons.push('disconnect_key');
+    if (explicitlyDisconnected) reasons.push('disconnect_key');
     if (!present && options.staleCleanup) reasons.push('stale_missing_signal');
-    const absent = !present && (disconnectKeyUserIds.has(player.user_id) || Boolean(options.staleCleanup));
+    const absent = !present && (explicitlyDisconnected || Boolean(options.staleCleanup));
 
     return {
       player,

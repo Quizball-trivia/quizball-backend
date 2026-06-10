@@ -252,36 +252,52 @@ async function startHumanRankedMatch(
         userB: rankedDebugUser(userBId),
       });
 
-      const redis = getRedisClient();
-      if (redis) {
+      const getCancelFlags = async (): Promise<[boolean, boolean]> => {
+        const latestRedis = getRedisClient();
+        if (!latestRedis) return [false, false];
         const [userACancelled, userBCancelled] = await Promise.all([
-          redis.get(rankedCancelKey(userAId)),
-          redis.get(rankedCancelKey(userBId)),
+          latestRedis.get(rankedCancelKey(userAId)),
+          latestRedis.get(rankedCancelKey(userBId)),
         ]);
+        return [Boolean(userACancelled), Boolean(userBCancelled)];
+      };
+      const isCancelled = async () => {
+        const [a, b] = await getCancelFlags();
+        return a || b;
+      };
+      // The pair has already been claimed out of the Redis queue by
+      // processPairs. If we bail because one side cancelled, the OTHER side
+      // must be told the search ended (ranked:queue_left + fresh session
+      // state) — otherwise their client keeps showing "searching" forever.
+      const releaseUncancelledUsers = async (userACancelled: boolean, userBCancelled: boolean) => {
+        const survivors = [
+          userACancelled ? null : userAId,
+          userBCancelled ? null : userBId,
+        ].filter((id): id is string => Boolean(id));
+        for (const survivorId of survivors) {
+          io.to(`user:${survivorId}`).emit('ranked:queue_left');
+        }
+        await Promise.all(survivors.map((id) => userSessionGuardService.emitState(io, id)));
+      };
+
+      {
+        const [userACancelled, userBCancelled] = await getCancelFlags();
         if (userACancelled || userBCancelled) {
           logger.info(
-            { userAId, userBId, userACancelled: Boolean(userACancelled), userBCancelled: Boolean(userBCancelled) },
+            { userAId, userBId, userACancelled, userBCancelled },
             'Ranked human match creation skipped because a player cancelled search'
           );
           rankedDebug('human_pair_skipped_cancelled', {
             userA: rankedDebugUser(userAId),
             userB: rankedDebugUser(userBId),
-            userACancelled: Boolean(userACancelled),
-            userBCancelled: Boolean(userBCancelled),
+            userACancelled,
+            userBCancelled,
           });
+          await releaseUncancelledUsers(userACancelled, userBCancelled);
           span.setAttribute('quizball.skipped_cancelled', true);
           return;
         }
       }
-      const isCancelled = async () => {
-        const latestRedis = getRedisClient();
-        if (!latestRedis) return false;
-        const [userACancelled, userBCancelled] = await Promise.all([
-          latestRedis.get(rankedCancelKey(userAId)),
-          latestRedis.get(rankedCancelKey(userBId)),
-        ]);
-        return Boolean(userACancelled || userBCancelled);
-      };
 
     const usersById = await usersRepo.getByIds([userAId, userBId]);
     const userA = usersById.get(userAId) ?? null;
@@ -332,14 +348,18 @@ async function startHumanRankedMatch(
       span.setAttribute('quizball.skipped_insufficient_tickets', true);
       return;
     }
-    if (await isCancelled()) {
-      logger.info({ userAId, userBId }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
-      rankedDebug('human_pair_skipped_cancelled_before_lobby', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-      });
-      span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
-      return;
+    {
+      const [userACancelled, userBCancelled] = await getCancelFlags();
+      if (userACancelled || userBCancelled) {
+        logger.info({ userAId, userBId, userACancelled, userBCancelled }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
+        rankedDebug('human_pair_skipped_cancelled_before_lobby', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+        });
+        await releaseUncancelledUsers(userACancelled, userBCancelled);
+        span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
+        return;
+      }
     }
 
     const [sessionBlockA, sessionBlockB] = await Promise.all([
@@ -1066,6 +1086,12 @@ export const rankedMatchmakingService = {
         io,
         socket,
         async () => {
+          // Mirror handleQueueLeave: set the cancel marker BEFORE the removal
+          // script. If processPairs already claimed this user's search, the
+          // script finds nothing to remove — the marker is then the only way
+          // startHumanRankedMatch can learn the user is gone and avoid
+          // creating a lobby for a socketless player.
+          await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
             keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
             arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],

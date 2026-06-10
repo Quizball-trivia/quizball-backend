@@ -245,6 +245,11 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
   it('pauses an active draft on disconnect even when the socket lost its lobby id', async () => {
     const { io } = createIo();
+    // The user's draft connection is gone — only the opponent/AI remain in the
+    // lobby room — so the DB fallback must treat this as a real draft disconnect.
+    (io.in as ReturnType<typeof vi.fn>).mockReturnValue({
+      fetchSockets: vi.fn().mockResolvedValue([createSocket('u2'), createSocket('ai-1')]),
+    });
     const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
     const socket = createSocket('u1');
     socket.id = 'socket-1';
@@ -267,6 +272,27 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       disconnectedConnectedAt: 1234,
     });
     expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('skips the draft pause when an unbound socket disconnects but the user still has a live socket in the draft room', async () => {
+    const { io } = createIo(); // default mock: u1 still has a socket in lobby:lobby-1
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1');
+    socket.id = 'socket-1'; // unrelated tab — never bound to the lobby
+    socket.data.lobbyId = undefined;
+    const activeLobby = {
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    };
+    findOpenLobbyForUserMock.mockResolvedValue(activeLobby);
+    getByIdMock.mockResolvedValue(activeLobby);
+
+    await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(pauseDraftForDisconnectedPlayerMock).not.toHaveBeenCalled();
   });
 
   it('hydrates an active draft on socket connect without resuming disconnect grace', async () => {

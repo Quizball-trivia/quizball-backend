@@ -289,7 +289,11 @@ async function startMatchFromDraft(
     );
     const absentMembers = members.filter((_, index) => absentFlags[index] === 1);
     if (absentMembers.length > 0) {
-      if (lobby.mode !== 'ranked') {
+      // Single-absent non-ranked: forfeit the absent player. If BOTH players
+      // are absent there is no legitimate winner — fall through to the abandon
+      // path below (shared with ranked) instead of crediting absentMembers[0]'s
+      // opponent with a win they weren't present for.
+      if (lobby.mode !== 'ranked' && absentMembers.length === 1) {
         const forfeitingMember = absentMembers[0];
         if (!forfeitingMember) return matchId;
         logger.info(
@@ -323,8 +327,8 @@ async function startMatchFromDraft(
       }
 
       logger.warn(
-        { lobbyId, matchId, absentUserIds: absentMembers.map((member) => member.user_id) },
-        'Abandoning newly-created ranked match because player became absent before playable state'
+        { lobbyId, matchId, mode: lobby.mode, absentUserIds: absentMembers.map((member) => member.user_id) },
+        'Abandoning newly-created match because player(s) became absent before playable state'
       );
       try {
         await matchesService.abandonMatch(matchId);
@@ -634,8 +638,12 @@ export async function runDraftGraceExpiry(
       'draft_grace_expiry_fired'
     );
 
+    // The pause key must go BEFORE recovery (runDraftAutoBan and
+    // resumeActiveDraftTimers both no-op while it exists), but the disconnect
+    // keys are the retry evidence: if recovery throws, the rescheduled timer
+    // must still see disconnectedUserIds.length > 0 — so they are only
+    // deleted after recovery succeeds.
     await redis.del(draftPauseKey(lobbyId));
-    await Promise.all(disconnectedUserIds.map((absentUserId) => redis.del(draftDisconnectKey(lobbyId, absentUserId))));
 
     if (currentActorId && disconnectedUserIds.includes(currentActorId)) {
       await runDraftAutoBan(io, lobbyId);
@@ -643,7 +651,8 @@ export async function runDraftGraceExpiry(
       await resumeActiveDraftTimers(io, lobbyId);
     }
 
-    // Recovery succeeded — only now consume the pending marker.
+    // Recovery succeeded — only now consume the evidence + pending marker.
+    await Promise.all(disconnectedUserIds.map((absentUserId) => redis.del(draftDisconnectKey(lobbyId, absentUserId))));
     await redis.del(draftGraceKey(lobbyId));
     logger.info({ lobbyId, disconnectedUserIds, currentActorId }, 'draft_grace_expiry_recovered');
   } catch (error) {
@@ -854,7 +863,20 @@ export const draftRealtimeService = {
       new Date(Date.now() + harnessDelayMs(DRAFT_DISCONNECT_GRACE_MS)),
       { kind: 'draft_grace_expiry', lobbyId, disconnectedUserId: userId }
     ).catch((error) => {
-      logger.error({ error, lobbyId, userId }, 'Failed to schedule draft grace expiry timer');
+      // draftDisconnectKey/draftPauseKey/draftGraceKey are already written; if
+      // the durable timer fails to schedule, nothing would ever fire and the
+      // draft would stay paused until key TTLs expire. Fall back to an
+      // in-memory timer: runDraftGraceExpiry is lock-guarded + idempotent, so
+      // a duplicate firing (if the durable timer actually landed) is harmless.
+      // The fallback doesn't survive a process restart, but that's strictly
+      // better than no timer at all.
+      logger.error({ error, lobbyId, userId }, 'Failed to schedule draft grace expiry timer; arming in-memory fallback');
+      const fallback = setTimeout(() => {
+        runDraftGraceExpiry(io, lobbyId, userId).catch((fallbackError) => {
+          logger.error({ error: fallbackError, lobbyId, userId }, 'In-memory draft grace expiry fallback failed');
+        });
+      }, harnessDelayMs(DRAFT_DISCONNECT_GRACE_MS));
+      fallback.unref?.();
     });
     logger.info(
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },

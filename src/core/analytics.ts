@@ -241,6 +241,11 @@ export async function maybeIdentifyUserProfile(user: AnalyticsUserProfile): Prom
   if (!claimed) {
     // Redis missing/unavailable — fall back to per-process daily dedup.
     if (identifiedTodayFallback.get(user.id) === today) return;
+    // Prune entries from previous days so a prolonged Redis outage doesn't
+    // turn this map into an unbounded leak (it only ever needs today's users).
+    for (const [userId, date] of identifiedTodayFallback) {
+      if (date !== today) identifiedTodayFallback.delete(userId);
+    }
     identifiedTodayFallback.set(user.id, today);
   }
 

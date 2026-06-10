@@ -5,11 +5,11 @@ import {
   answerCount,
   buildAnswerPayload,
   countdownAddFound,
+  commitCachedAnswer,
   countdownGetFound,
   getCachedPlayer,
   getExpectedUserIds,
   getMatchCacheOrRebuild,
-  setMatchCache,
   type CachedAnswer,
   type MatchCache,
 } from './match-cache.js';
@@ -244,7 +244,9 @@ export async function handlePossessionAnswer(
     const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
 
-    await setMatchCache(cache);
+    // Hot path: one small overlay HSET instead of re-serializing the whole
+    // cache blob per answer (see commitCachedAnswer / db-optimize.md #7).
+    await commitCachedAnswer(cache, answer);
     logger.info(
       {
         eventName: 'match:answer',
@@ -640,7 +642,7 @@ export async function handlePossessionPutInOrderAnswer(
     );
     const pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
 
-    cache.answers[userId] = {
+    const answer: CachedAnswer = {
       userId,
       questionKind: question.kind,
       selectedIndex: null,
@@ -654,10 +656,11 @@ export async function handlePossessionPutInOrderAnswer(
       submittedOrderIds: orderedItemIds,
       foundCount,
     };
+    cache.answers[userId] = answer;
 
     const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
-    await setMatchCache(cache);
+    await commitCachedAnswer(cache, answer);
     logger.info(
       {
         eventName: 'match:put_in_order_answer',
@@ -895,7 +898,7 @@ export async function handlePossessionCluesAnswer(
     const expectedCount = getExpectedUserIds(cache).length;
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 
-    cache.answers[userId] = {
+    const answer: CachedAnswer = {
       userId,
       questionKind: question.kind,
       selectedIndex: null,
@@ -908,9 +911,10 @@ export async function handlePossessionCluesAnswer(
       answeredAt: new Date().toISOString(),
       clueIndex,
     };
+    cache.answers[userId] = answer;
 
     const currentAnswerCount = answerCount(cache);
-    await setMatchCache(cache);
+    await commitCachedAnswer(cache, answer);
     logger.info(
       {
         eventName: 'match:clues_answer',

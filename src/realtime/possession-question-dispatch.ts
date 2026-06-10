@@ -585,8 +585,12 @@ export async function sendPossessionMatchQuestion(
     bumpStateVersion(state);
 
     await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(sendQuestion)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
+    // Routine question dispatch only advances the q-index heartbeat; the full
+    // state_payload checkpoint happens at recovery-relevant boundaries (see
+    // the resolver's checkpoint policy + rebuildCacheFromDB taking the max of
+    // the column and the embedded state qIndex). db-optimize.md #7.
+    fireAndForget('touchMatchRound(sendQuestion)', async () => {
+      await matchesRepo.touchMatchRound(matchId, qIndex);
     });
     try {
       await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);

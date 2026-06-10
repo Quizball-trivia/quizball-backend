@@ -649,9 +649,29 @@ export async function resolvePossessionRound(
     bumpStateVersion(state);
 
     await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(resolve)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
-    });
+    // Checkpoint policy (db-optimize.md #7): the full state_payload JSONB is
+    // only persisted at recovery-relevant boundaries — phase/half changes
+    // (halftime, last attack, penalties, completion), any goal, and every
+    // non-NORMAL_PLAY round (each penalty kick matters). Routine no-goal
+    // normal rounds only touch current_q_index + updated_at, since the live
+    // state is authoritative in Redis (RDB-persisted) and the durable
+    // per-answer facts already flow to match_answers/match_players. Worst
+    // case on a Redis loss mid-half: display-state rewind within the half;
+    // settlement is unaffected (1B decides from match_players).
+    const stateCheckpoint =
+      preResolutionPhase !== state.phase ||
+      preResolutionHalf !== state.half ||
+      state.phase !== 'NORMAL_PLAY' ||
+      goalScoredBySeat !== null;
+    if (stateCheckpoint) {
+      fireAndForget('setMatchStatePayload(resolve)', async () => {
+        await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
+      });
+    } else {
+      fireAndForget('touchMatchRound(resolve)', async () => {
+        await matchesRepo.touchMatchRound(matchId, nextIndex);
+      });
+    }
     // The round result is committed — from here on the round's own timers are
     // obsolete regardless of which exit (halftime/completed/next question) we
     // take below.

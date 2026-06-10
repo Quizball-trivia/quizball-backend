@@ -11,7 +11,7 @@ import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.typ
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
-import type { MatchCache } from '../match-cache.js';
+import { getMatchCache, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   cancelMatchQuestionTimer,
@@ -30,6 +30,7 @@ import {
   cancelPossessionHalftimeTimer,
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
+  fireAndForget,
   resumePossessionMatchQuestion,
 } from '../possession-match-flow.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
@@ -756,6 +757,16 @@ export async function pauseMatchForDisconnectedPlayer(
   cancelMatchQuestionTimer(matchId, match.current_q_index);
   if (variant !== 'friendly_party_quiz') {
     cancelPossessionHalftimeTimer(matchId);
+    // Pause checkpoint (db-optimize.md #7): routine rounds no longer persist
+    // the full state per round, so flush the live Redis state to Postgres at
+    // pause time — the resume/grace/rebuild paths read the DB row and must
+    // see the current question index and phase state here.
+    fireAndForget('setMatchStatePayload(pauseCheckpoint)', async () => {
+      const liveCache = await getMatchCache(matchId);
+      if (liveCache && liveCache.status === 'active') {
+        await matchesRepo.setMatchStatePayload(matchId, liveCache.statePayload, liveCache.currentQIndex);
+      }
+    });
   }
 
   const pauseRecipients = partyState

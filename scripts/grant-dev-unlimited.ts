@@ -21,7 +21,10 @@ loadEnv({ path: '.env.local' });
 loadEnv();
 
 const DEV_COINS = 1_000_000;
-const DEV_TICKETS = 100_000;
+// The users table has a CHECK (tickets <= 3) constraint, so the grant tops
+// tickets to the max rather than a huge number. Combined with the in-app
+// purchase-cooldown bypass (re-buy any time), 3 is effectively unlimited.
+const DEV_TICKETS = 3;
 
 const databaseUrl = process.env.DATABASE_URL;
 const shouldApply = process.argv.includes('--apply');

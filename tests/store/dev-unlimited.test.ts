@@ -87,13 +87,15 @@ describe('storeService.purchaseWithCoins — dev unlimited bypass', () => {
       unlimited: true,
     });
 
-    // Tickets exceed MAX_TICKETS (3 + 3 = 6) and coins floor at 0 instead of going negative.
-    expect(result.wallet.tickets).toBe(6);
+    // Tickets clamp to MAX_TICKETS (the DB CHECK cap) rather than overflowing,
+    // and coins floor at 0 instead of going negative. The purchase still
+    // succeeds — no cooldown / cap / coin rejection.
+    expect(result.wallet.tickets).toBe(3);
     expect(result.wallet.coins).toBe(0);
     expect(setWalletStateInTxMock).toHaveBeenCalledWith(
       { tx: true },
       'user-dev',
-      expect.objectContaining({ coins: 0, tickets: 6 })
+      expect.objectContaining({ coins: 0, tickets: 3 })
     );
   });
 

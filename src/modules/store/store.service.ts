@@ -329,8 +329,12 @@ async function applyWalletAdjustmentInTx(
 
   if (adjustments.ticketsDelta > 0) {
     if (adjustments.unlimited) {
-      appliedTicketsDelta = adjustments.ticketsDelta;
-      nextTickets = currentTickets + appliedTicketsDelta;
+      // The DB enforces `tickets <= MAX_TICKETS` as a hard CHECK constraint, so
+      // we never write above it. Unlimited accounts simply never get rejected
+      // for "full" — the skipped purchase cooldown lets them re-buy freely, so
+      // a balance clamped to MAX_TICKETS is effectively unlimited in play.
+      nextTickets = Math.min(MAX_TICKETS, currentTickets + adjustments.ticketsDelta);
+      appliedTicketsDelta = nextTickets - currentTickets;
       nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
     } else {
       const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);

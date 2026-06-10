@@ -1,6 +1,6 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import { matchPauseKey } from '../match-keys.js';
 import type {
@@ -38,6 +38,23 @@ async function rejectIfMatchPaused(socket: QuizballSocket, matchId: string): Pro
   return false;
 }
 
+/**
+ * Gate for per-socket-event dispatch: the match must be active.
+ *
+ * Reads from the Redis match cache (rebuilding from Postgres only on a cache
+ * miss) instead of `matchesRepo.getMatch`. These handlers fire on EVERY
+ * answer/guess/ready event — at the prod baseline that one `SELECT * FROM
+ * matches WHERE id=$1` was ~486k calls ≈ half of all Postgres read volume
+ * (db-optimize.md #2). `status`, `mode` and `statePayload` (incl. the
+ * party-quiz variant, preserved by sanitizePossessionState's candidate
+ * spread) are authoritative in the cache for live matches.
+ */
+async function getActiveMatchCache(matchId: string): Promise<MatchCache | null> {
+  const cache = await getMatchCacheOrRebuild(matchId);
+  if (!cache || cache.status !== 'active') return null;
+  return cache;
+}
+
 export async function handleHalftimeBan(
   io: QuizballServer,
   socket: QuizballSocket,
@@ -45,8 +62,8 @@ export async function handleHalftimeBan(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const match = await matchesRepo.getMatch(payload.matchId);
-  if (!match || match.status !== 'active') {
+  const cache = await getActiveMatchCache(payload.matchId);
+  if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
       message: 'No active match found for halftime category ban.',
@@ -54,7 +71,7 @@ export async function handleHalftimeBan(
     return;
   }
 
-  if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
     socket.emit('error', {
       code: 'MATCH_NOT_ALLOWED',
       message: 'Party quiz does not support halftime bans.',
@@ -74,8 +91,8 @@ export async function handleAnswer(
 
   if (await rejectIfMatchPaused(socket, matchId)) return;
 
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active') {
+  const cache = await getActiveMatchCache(matchId);
+  if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
       message: 'No active match found',
@@ -83,8 +100,10 @@ export async function handleAnswer(
     return;
   }
 
-  if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
-    await handlePartyQuizAnswer(io, socket, payload, match);
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
+    // Party quiz needs the full match row (state merge under lock); it loads
+    // it itself — only the rarer party path pays the Postgres read now.
+    await handlePartyQuizAnswer(io, socket, payload);
     return;
   }
 
@@ -97,8 +116,8 @@ export async function handleCountdownGuess(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const match = await matchesRepo.getMatch(payload.matchId);
-  if (!match || match.status !== 'active') {
+  const cache = await getActiveMatchCache(payload.matchId);
+  if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
       message: 'No active match found',
@@ -106,7 +125,7 @@ export async function handleCountdownGuess(
     return;
   }
 
-  if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
     socket.emit('error', {
       code: 'MATCH_NOT_ALLOWED',
       message: 'Countdown guesses are not available in party quiz mode.',
@@ -124,8 +143,8 @@ export async function handlePutInOrderAnswer(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const match = await matchesRepo.getMatch(payload.matchId);
-  if (!match || match.status !== 'active') {
+  const cache = await getActiveMatchCache(payload.matchId);
+  if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
       message: 'No active match found',
@@ -133,7 +152,7 @@ export async function handlePutInOrderAnswer(
     return;
   }
 
-  if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
     socket.emit('error', {
       code: 'MATCH_NOT_ALLOWED',
       message: 'Ordering answers are not available in party quiz mode.',
@@ -151,8 +170,8 @@ export async function handleCluesAnswer(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const match = await matchesRepo.getMatch(payload.matchId);
-  if (!match || match.status !== 'active') {
+  const cache = await getActiveMatchCache(payload.matchId);
+  if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
       message: 'No active match found',
@@ -160,7 +179,7 @@ export async function handleCluesAnswer(
     return;
   }
 
-  if (resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz') {
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
     socket.emit('error', {
       code: 'MATCH_NOT_ALLOWED',
       message: 'Clue answers are not available in party quiz mode.',
@@ -178,10 +197,10 @@ export async function handleReadyForNextQuestion(
   const userId = socket.data.user?.id;
   if (!userId) return;
 
-  const match = await matchesRepo.getMatch(payload.matchId);
-  if (!match || match.status !== 'active') return;
+  const cache = await getActiveMatchCache(payload.matchId);
+  if (!cache) return;
 
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const variant = resolveMatchVariant(cache.statePayload, cache.mode);
   if (variant === 'friendly_party_quiz') {
     handlePartyQuizReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
     return;

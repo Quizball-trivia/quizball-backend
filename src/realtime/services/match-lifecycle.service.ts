@@ -441,20 +441,24 @@ export async function rejoinActiveMatchOnConnect(
     const remainingReconnects = toRemainingReconnects(await getDisconnectCount(match.id, userId));
     appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
     await emitRejoinAvailable(socket, match, userId, graceMs, remainingReconnects);
-    if (variant === 'friendly_party_quiz') {
-      logger.info(
-        {
-          eventName: 'match:rejoin_available',
-          matchId: match.id,
-          userId,
-          variant,
-          graceMs,
-          remainingReconnects,
-          source: 'connect_paused_disconnected',
-        },
-        'Party quiz rejoin available emitted on connect'
-      );
-    }
+    // Logged for every variant: prod incidents showed clients reconnecting
+    // without ever answering this offer with match:rejoin, and the possession
+    // path was previously invisible in logs (only party-quiz logged).
+    logger.info(
+      {
+        eventName: 'match:rejoin_available',
+        matchId: match.id,
+        userId,
+        variant,
+        socketId: socket.id,
+        graceMs,
+        remainingReconnects,
+        source: 'connect_paused_disconnected',
+      },
+      variant === 'friendly_party_quiz'
+        ? 'Party quiz rejoin available emitted on connect'
+        : 'Match rejoin available emitted on connect'
+    );
     return;
   }
 

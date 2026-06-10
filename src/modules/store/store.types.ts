@@ -150,6 +150,8 @@ export interface StoreWalletResponse {
     canBuy: boolean;
     nextAvailableAt: string | null;
     remainingSeconds: number;
+    /** Tickets still purchasable inside the rolling 24h window (cap 5). */
+    ticketsRemainingInWindow: number;
   };
 }
 

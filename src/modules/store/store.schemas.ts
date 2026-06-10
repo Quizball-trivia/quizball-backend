@@ -75,6 +75,7 @@ export const storeWalletResponseSchema = z.object({
     canBuy: z.boolean(),
     nextAvailableAt: z.string().datetime().nullable(),
     remainingSeconds: z.number().int().nonnegative(),
+    ticketsRemainingInWindow: z.number().int().nonnegative(),
   }),
 });
 

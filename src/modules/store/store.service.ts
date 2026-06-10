@@ -9,6 +9,7 @@ import { storeRepo } from './store.repo.js';
 import { stripe } from './stripe.js';
 import {
   MAX_TICKETS,
+  TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
   resolveHydratedTicketState,
   ticketRefillService,
 } from './ticket-refill.service.js';
@@ -46,46 +47,53 @@ const manualAdjustmentLogMetadataSchema = z.object({
         canBuy: true,
         nextAvailableAt: null,
         remainingSeconds: 0,
+        ticketsRemainingInWindow: TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
       },
     }))
   ),
   inventoryApplied: z.array(manualInventoryGrantSchema),
 });
 
-// Players can buy up to TICKET_PURCHASE_MAX_PER_WINDOW ticket packs per rolling
-// 24h window. A slot frees up 24h after the OLDEST purchase still inside the
-// window rolls off.
+// Players can buy up to TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW *tickets* per
+// rolling 24h window (quantity-based: the 5-pack uses the whole allowance, a
+// 1-pack plus a 3-pack leaves room for one more single). Capacity frees up 24h
+// after the OLDEST purchase still inside the window rolls off.
 const TICKET_PURCHASE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const TICKET_PURCHASE_MAX_PER_WINDOW = 3;
 
 type TicketPurchaseCooldown = StoreWalletResponse['ticketPurchaseCooldown'];
 
 function buildTicketPurchaseCooldown(
-  windowCount: number,
+  windowTicketCount: number,
   oldestPurchasedAt: string | null | undefined,
   now = new Date()
 ): TicketPurchaseCooldown {
-  // Under the per-window cap → can buy now.
-  if (windowCount < TICKET_PURCHASE_MAX_PER_WINDOW || !oldestPurchasedAt) {
-    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+  const ticketsRemainingInWindow = Math.max(
+    0,
+    TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW - Math.max(0, windowTicketCount)
+  );
+
+  // Under the per-window ticket cap → at least a single ticket is buyable now.
+  if (ticketsRemainingInWindow > 0 || !oldestPurchasedAt) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
   }
 
   const oldestMs = Date.parse(oldestPurchasedAt);
   if (!Number.isFinite(oldestMs)) {
-    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
   }
 
-  // At the cap: the next slot opens when the oldest purchase exits the window.
+  // At the cap: capacity frees when the oldest purchase exits the window.
   const nextAvailableMs = oldestMs + TICKET_PURCHASE_WINDOW_MS;
   const remainingMs = nextAvailableMs - now.getTime();
   if (remainingMs <= 0) {
-    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
   }
 
   return {
     canBuy: false,
     nextAvailableAt: new Date(nextAvailableMs).toISOString(),
     remainingSeconds: Math.ceil(remainingMs / 1000),
+    ticketsRemainingInWindow,
   };
 }
 
@@ -109,17 +117,23 @@ async function loadTicketPurchaseCooldownInTx(
 ): Promise<TicketPurchaseCooldown> {
   const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
   const window = await storeRepo.getTicketPackPurchaseWindowInTx(tx, userId, sinceIso);
-  return buildTicketPurchaseCooldown(window.count, window.oldest_purchased_at);
+  return buildTicketPurchaseCooldown(window.ticketCount, window.oldest_purchased_at);
 }
 
-function assertCanBuyTicketPack(cooldown: TicketPurchaseCooldown, userId: string): void {
-  if (cooldown.canBuy) return;
+function assertCanBuyTicketPack(
+  cooldown: TicketPurchaseCooldown,
+  userId: string,
+  packTickets: number
+): void {
+  if (cooldown.canBuy && packTickets <= cooldown.ticketsRemainingInWindow) return;
   throw new AppError(
-    'Ticket purchase limit reached (up to 3 per 24 hours)',
+    `Ticket purchase limit reached (up to ${TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW} tickets per 24 hours)`,
     400,
     ErrorCode.TICKET_PURCHASE_COOLDOWN,
     {
       userId,
+      requestedTickets: packTickets,
+      ticketsRemainingInWindow: cooldown.ticketsRemainingInWindow,
       nextAvailableAt: cooldown.nextAvailableAt,
       remainingSeconds: cooldown.remainingSeconds,
     }
@@ -561,12 +575,6 @@ export const storeService = {
             if (!walletForLock) {
               throw new NotFoundError('User not found');
             }
-            if (!unlimited) {
-              assertCanBuyTicketPack(
-                await loadTicketPurchaseCooldownInTx(tx, userId),
-                userId
-              );
-            }
 
             const parsed = ticketPackMetadataSchema.safeParse(product.metadata);
             if (!parsed.success) {
@@ -575,6 +583,14 @@ export const storeService = {
                 500,
                 ErrorCode.INTERNAL_ERROR,
                 { productId: product.id, slug: product.slug }
+              );
+            }
+
+            if (!unlimited) {
+              assertCanBuyTicketPack(
+                await loadTicketPurchaseCooldownInTx(tx, userId),
+                userId,
+                parsed.data.tickets
               );
             }
 
@@ -831,8 +847,13 @@ export const storeService = {
     // Dev-allowlist accounts always report purchasable so the UI never shows
     // them blocked by the cooldown (the purchase path skips it too).
     const cooldown = options.unlimited
-      ? { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 }
-      : buildTicketPurchaseCooldown(purchaseWindow.count, purchaseWindow.oldest_purchased_at);
+      ? {
+        canBuy: true,
+        nextAvailableAt: null,
+        remainingSeconds: 0,
+        ticketsRemainingInWindow: TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
+      }
+      : buildTicketPurchaseCooldown(purchaseWindow.ticketCount, purchaseWindow.oldest_purchased_at);
     return buildWalletResponse(wallet, cooldown);
   },
 

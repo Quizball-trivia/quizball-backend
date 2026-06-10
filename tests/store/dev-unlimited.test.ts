@@ -59,15 +59,15 @@ describe('storeService.purchaseWithCoins — dev unlimited bypass', () => {
     vi.clearAllMocks();
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
     getProductBySlugInTxMock.mockResolvedValue(TICKET_PACK);
-    // Already at the cap, no coins, and 3 purchases inside the window — every
-    // limit a normal account would hit is tripped here.
+    // Already at the cap, no coins, and the full 5-ticket window consumed —
+    // every limit a normal account would hit is tripped here.
     getWalletForUpdateInTxMock.mockResolvedValue({
       coins: 0,
-      tickets: 3,
+      tickets: 5,
       tickets_refill_started_at: null,
     });
     getTicketPackPurchaseWindowInTxMock.mockResolvedValue({
-      count: 3,
+      ticketCount: 5,
       oldest_purchased_at: '2026-06-10T00:00:00.000Z',
     });
     setWalletStateInTxMock.mockImplementation(async (_tx, _userId, state) => ({
@@ -87,13 +87,13 @@ describe('storeService.purchaseWithCoins — dev unlimited bypass', () => {
       unlimited: true,
     });
 
-    // Tickets exceed MAX_TICKETS (3 + 3 = 6) and coins floor at 0 instead of going negative.
-    expect(result.wallet.tickets).toBe(6);
+    // Tickets exceed MAX_TICKETS (5 + 3 = 8) and coins floor at 0 instead of going negative.
+    expect(result.wallet.tickets).toBe(8);
     expect(result.wallet.coins).toBe(0);
     expect(setWalletStateInTxMock).toHaveBeenCalledWith(
       { tx: true },
       'user-dev',
-      expect.objectContaining({ coins: 0, tickets: 6 })
+      expect.objectContaining({ coins: 0, tickets: 8 })
     );
   });
 

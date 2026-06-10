@@ -16,6 +16,10 @@ import type {
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
+
+// Coin participation rewards granted once per settled ranked match.
+const RANKED_WIN_COINS = 500;
+const RANKED_LOSS_COINS = 200;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
 const RANKED_BASE_WIN_DELTA = 25;
@@ -92,6 +96,10 @@ function tierFromRp(rp: number): RankedTier {
 
 function needsPlacement(profile: RankedProfileRow): boolean {
   return profile.placement_status !== 'placed' || profile.placement_played < profile.placement_required;
+}
+
+function coinsForRankedResult(result: 'win' | 'loss'): number {
+  return result === 'win' ? RANKED_WIN_COINS : RANKED_LOSS_COINS;
 }
 
 function computeRankedDelta(playerRp: number, opponentRp: number, isWin: boolean, isForfeitLoss = false): number {
@@ -171,6 +179,7 @@ export const rankedService = {
           placementPerfScore: null,
           calculationMethod: 'ranked_formula',
         },
+        coinsAwarded: 0, // tier normalization only — no reward
       }]);
       profile.tier = normalizedTier;
     }
@@ -245,6 +254,7 @@ export const rankedService = {
           oldRp: row.old_rp,
           newRp: row.new_rp,
           deltaRp: row.delta_rp,
+          coinsAwarded: row.coins_awarded,
           oldTier: tierFromRp(row.old_rp),
           newTier: tierFromRp(row.new_rp),
           placementStatus: profile.placement_status,
@@ -308,6 +318,7 @@ export const rankedService = {
         placementPerfScore: number | null;
         calculationMethod: 'placement_seed' | 'ranked_formula';
       };
+      coinsAwarded: number;
       outcome: RankedUserOutcome;
     }> = [];
 
@@ -449,11 +460,13 @@ export const rankedService = {
           placementPerfScore,
           calculationMethod,
         },
+        coinsAwarded: coinsForRankedResult(result),
         outcome: {
           userId: player.user_id,
           oldRp,
           newRp,
           deltaRp,
+          coinsAwarded: coinsForRankedResult(result),
           oldTier,
           newTier,
           placementStatus,
@@ -472,6 +485,7 @@ export const rankedService = {
     await rankedRepo.applySettlement(settlementEntries.map((entry) => ({
       profile: entry.profile,
       change: entry.change,
+      coinsAwarded: entry.coinsAwarded,
     })));
     logger.info({
       matchId,
@@ -516,6 +530,7 @@ export const rankedService = {
         oldRp: change.old_rp,
         newRp: change.new_rp,
         deltaRp: change.delta_rp,
+        coinsAwarded: change.coins_awarded,
         oldTier: tierFromRp(change.old_rp),
         newTier: tierFromRp(change.new_rp),
         placementStatus: profile.placement_status,

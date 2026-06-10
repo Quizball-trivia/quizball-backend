@@ -49,6 +49,7 @@ export interface RankedRpChangeRow {
   placement_anchor_rp: number | null;
   placement_perf_score: number | null;
   calculation_method: 'placement_seed' | 'ranked_formula';
+  coins_awarded: number;
   created_at: string;
 }
 
@@ -73,6 +74,8 @@ export interface RankedUserOutcome {
   oldRp: number;
   newRp: number;
   deltaRp: number;
+  /** Coin participation reward granted with the settlement (win/loss). */
+  coinsAwarded: number;
   oldTier: RankedTier;
   newTier: RankedTier;
   placementStatus: PlacementStatus;

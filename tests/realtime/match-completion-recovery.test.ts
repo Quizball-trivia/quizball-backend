@@ -238,8 +238,8 @@ const PLAYERS = [
 const RANKED_OUTCOME = {
   isPlacement: false,
   byUserId: {
-    u1: { userId: 'u1', oldRp: 100, newRp: 77, deltaRp: -23, oldTier: 'Academy', newTier: 'Academy', placementStatus: 'placed' as const, placementPlayed: 3, placementRequired: 3, isPlacement: false },
-    u2: { userId: 'u2', oldRp: 100, newRp: 125, deltaRp: 25, oldTier: 'Academy', newTier: 'Academy', placementStatus: 'placed' as const, placementPlayed: 3, placementRequired: 3, isPlacement: false },
+    u1: { userId: 'u1', oldRp: 100, newRp: 77, deltaRp: -23, coinsAwarded: 200, oldTier: 'Academy', newTier: 'Academy', placementStatus: 'placed' as const, placementPlayed: 3, placementRequired: 3, isPlacement: false },
+    u2: { userId: 'u2', oldRp: 100, newRp: 125, deltaRp: 25, coinsAwarded: 500, oldTier: 'Academy', newTier: 'Academy', placementStatus: 'placed' as const, placementPlayed: 3, placementRequired: 3, isPlacement: false },
   },
 };
 

@@ -920,7 +920,40 @@ describe('dailyChallengesService', () => {
     );
   });
 
-  it('completes a non-money-drop challenge once and awards 20 coins per correct answer', async () => {
+  it.each([
+    ['trueFalse', 3, 600],
+    ['countdown', 3, 150],
+    ['imposter', 3, 1500],
+    ['careerPath', 3, 750],
+    ['highLow', 3, 300],
+    ['clues', 3, 60],
+    ['putInOrder', 3, 60],
+    ['footballLogic', 3, 60],
+    ['moneyDrop', 900, 900],
+    ['moneyDrop', 1200, 1000], // leftover budget capped at 1000
+  ] as const)(
+    'pays the per-game multiplier: %s with score %d awards %d coins',
+    async (challengeType, score, expectedCoins) => {
+      getConfigMock.mockResolvedValue({
+        challenge_type: challengeType,
+        is_active: true,
+        coin_reward: 999,
+        xp_reward: 15,
+      });
+      getCompletionForUserOnDayMock.mockResolvedValue(null);
+      createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+      addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+      grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+
+      const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+      const result = await dailyChallengesService.completeChallenge('user-1', challengeType, score);
+
+      expect(addCoinsMock).toHaveBeenCalledWith('user-1', expectedCoins);
+      expect(result.coinsAwarded).toBe(expectedCoins);
+    }
+  );
+
+  it('completes a non-money-drop challenge once and awards the per-game coin multiplier', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'countdown',
       is_active: true,
@@ -949,11 +982,11 @@ describe('dailyChallengesService', () => {
         userId: 'user-1',
         challengeType: 'countdown',
         score: 4,
-        coinsAwarded: 80,
+        coinsAwarded: 200,
         xpAwarded: 15,
       })
     );
-    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 80);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 200);
     expect(grantXpMock).toHaveBeenCalledWith({
       userId: 'user-1',
       sourceType: 'daily_challenge_completion',
@@ -967,7 +1000,7 @@ describe('dailyChallengesService', () => {
     expect(result).toEqual({
       challengeType: 'countdown',
       completedToday: true,
-      coinsAwarded: 80,
+      coinsAwarded: 200,
       xpAwarded: 15,
       wallet: {
         coins: 1080,

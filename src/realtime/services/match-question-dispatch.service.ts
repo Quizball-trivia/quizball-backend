@@ -1,4 +1,5 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import { logger } from '../../core/logger.js';
 import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
@@ -49,10 +50,34 @@ async function rejectIfMatchPaused(socket: QuizballSocket, matchId: string): Pro
  * party-quiz variant, preserved by sanitizePossessionState's candidate
  * spread) are authoritative in the cache for live matches.
  */
-async function getActiveMatchCache(matchId: string): Promise<MatchCache | null> {
+async function getActiveMatchCache(socket: QuizballSocket, matchId: string): Promise<MatchCache | null> {
   const cache = await getMatchCacheOrRebuild(matchId);
   if (!cache || cache.status !== 'active') return null;
+  healSocketMatchBinding(socket, cache);
   return cache;
+}
+
+/**
+ * Self-healing socket->match binding. handleMatchDisconnect keys the
+ * pause/grace flow off `socket.data.matchId`; if a playing socket ever loses
+ * (or never received) that binding — observed once on staging where a
+ * mid-match disconnect produced neither a pause nor a skip — a later
+ * disconnect silently bypasses the pause and the match runs without the
+ * player. Any socket that sends a match event for a match it participates in
+ * gets the binding repaired here, so a socket that played even one round can
+ * never hit that hole. Deliberately NOT a disconnect-time DB fallback: a
+ * missing matchId on a non-playing socket (e.g. a second homepage tab) is the
+ * signal that protects multi-tab users from wrong pauses.
+ */
+function healSocketMatchBinding(socket: QuizballSocket, cache: MatchCache): void {
+  if (socket.data.matchId === cache.matchId) return;
+  const userId = socket.data.user.id;
+  if (!cache.players.some((player) => player.userId === userId)) return;
+  logger.warn(
+    { matchId: cache.matchId, userId, socketId: socket.id, previousMatchId: socket.data.matchId ?? null },
+    'Healed missing socket match binding on match event'
+  );
+  socket.data.matchId = cache.matchId;
 }
 
 export async function handleHalftimeBan(
@@ -62,7 +87,7 @@ export async function handleHalftimeBan(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const cache = await getActiveMatchCache(payload.matchId);
+  const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
@@ -91,7 +116,7 @@ export async function handleAnswer(
 
   if (await rejectIfMatchPaused(socket, matchId)) return;
 
-  const cache = await getActiveMatchCache(matchId);
+  const cache = await getActiveMatchCache(socket, matchId);
   if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
@@ -116,7 +141,7 @@ export async function handleCountdownGuess(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const cache = await getActiveMatchCache(payload.matchId);
+  const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
@@ -143,7 +168,7 @@ export async function handlePutInOrderAnswer(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const cache = await getActiveMatchCache(payload.matchId);
+  const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
@@ -170,7 +195,7 @@ export async function handleCluesAnswer(
 ): Promise<void> {
   if (await rejectIfMatchPaused(socket, payload.matchId)) return;
 
-  const cache = await getActiveMatchCache(payload.matchId);
+  const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
     socket.emit('error', {
       code: 'MATCH_NOT_ACTIVE',
@@ -197,7 +222,7 @@ export async function handleReadyForNextQuestion(
   const userId = socket.data.user?.id;
   if (!userId) return;
 
-  const cache = await getActiveMatchCache(payload.matchId);
+  const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) return;
 
   const variant = resolveMatchVariant(cache.statePayload, cache.mode);

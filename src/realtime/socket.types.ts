@@ -386,6 +386,8 @@ export interface RankedUserOutcomePayload {
   oldRp: number;
   newRp: number;
   deltaRp: number;
+  /** Coin participation reward granted with the ranked settlement (win/loss). */
+  coinsAwarded?: number;
   oldTier: string;
   newTier: string;
   placementStatus: 'unplaced' | 'in_progress' | 'placed';
@@ -732,6 +734,7 @@ export interface ClientToServerEvents {
   'lobby:start': (data?: { lobbyId?: string }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
+  'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:countdown_guess': (data: { matchId: string; qIndex: number; guess: string }) => void;

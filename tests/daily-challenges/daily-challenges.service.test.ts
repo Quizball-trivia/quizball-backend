@@ -920,7 +920,40 @@ describe('dailyChallengesService', () => {
     );
   });
 
-  it('completes a non-money-drop challenge once and awards 20 coins per correct answer', async () => {
+  it.each([
+    ['trueFalse', 3, 600],
+    ['countdown', 3, 150],
+    ['imposter', 3, 1500],
+    ['careerPath', 3, 750],
+    ['highLow', 3, 300],
+    ['clues', 3, 60],
+    ['putInOrder', 3, 60],
+    ['footballLogic', 3, 60],
+    ['moneyDrop', 900, 900],
+    ['moneyDrop', 1200, 1000], // leftover budget capped at 1000
+  ] as const)(
+    'pays the per-game multiplier: %s with score %d awards %d coins',
+    async (challengeType, score, expectedCoins) => {
+      getConfigMock.mockResolvedValue({
+        challenge_type: challengeType,
+        is_active: true,
+        coin_reward: 999,
+        xp_reward: 15,
+      });
+      getCompletionForUserOnDayMock.mockResolvedValue(null);
+      createCompletionMock.mockResolvedValue({ id: 'completion-1' });
+      addCoinsMock.mockResolvedValue({ coins: 1, tickets: 1 });
+      grantXpMock.mockResolvedValue({ awarded: true, totalXp: 215 });
+
+      const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+      const result = await dailyChallengesService.completeChallenge('user-1', challengeType, score);
+
+      expect(addCoinsMock).toHaveBeenCalledWith('user-1', expectedCoins);
+      expect(result.coinsAwarded).toBe(expectedCoins);
+    }
+  );
+
+  it('completes a non-money-drop challenge once and awards the per-game coin multiplier', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'countdown',
       is_active: true,
@@ -949,11 +982,11 @@ describe('dailyChallengesService', () => {
         userId: 'user-1',
         challengeType: 'countdown',
         score: 4,
-        coinsAwarded: 80,
+        coinsAwarded: 200,
         xpAwarded: 15,
       })
     );
-    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 80);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 200);
     expect(grantXpMock).toHaveBeenCalledWith({
       userId: 'user-1',
       sourceType: 'daily_challenge_completion',
@@ -967,13 +1000,76 @@ describe('dailyChallengesService', () => {
     expect(result).toEqual({
       challengeType: 'countdown',
       completedToday: true,
-      coinsAwarded: 80,
+      coinsAwarded: 200,
       xpAwarded: 15,
       wallet: {
         coins: 1080,
         tickets: 10,
       },
     });
+  });
+
+  it('uses Georgia midnight as the daily completion boundary', async () => {
+    getConfigMock.mockResolvedValue({
+      challenge_type: 'countdown',
+      is_active: true,
+      coin_reward: 20,
+      xp_reward: 15,
+    });
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    createCompletionMock.mockResolvedValue({
+      id: 'completion-1',
+    });
+    addCoinsMock.mockResolvedValue({
+      coins: 1080,
+      tickets: 10,
+    });
+    grantXpMock.mockResolvedValue({
+      awarded: true,
+      totalXp: 215,
+    });
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-06-08T19:59:00.000Z'));
+      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
+      expect(createCompletionMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          challengeDay: '2026-06-08',
+        })
+      );
+      expect(grantXpMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sourceKey: 'countdown:2026-06-08',
+          metadata: expect.objectContaining({
+            challengeDay: '2026-06-08',
+          }),
+        })
+      );
+
+      createCompletionMock.mockClear();
+      grantXpMock.mockClear();
+
+      vi.setSystemTime(new Date('2026-06-08T20:00:00.000Z'));
+      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
+      expect(createCompletionMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          challengeDay: '2026-06-09',
+        })
+      );
+      expect(grantXpMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sourceKey: 'countdown:2026-06-09',
+          metadata: expect.objectContaining({
+            challengeDay: '2026-06-09',
+          }),
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('awards money drop leftover coins capped at 1000', async () => {

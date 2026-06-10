@@ -1,6 +1,6 @@
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
-import { MCQ_VALIDATION_CONDITIONS, RANKED_ELIGIBILITY_HAVING } from '../../db/sql-fragments.js';
+import { RANKED_ELIGIBILITY_HAVING_COUNTS } from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -307,13 +307,16 @@ export const lobbiesRepo = {
   async listAllValidCategories(
     minQuestions: number
   ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+    // Counts-only (no payloads join / JSONB validation) — see
+    // RANKED_ELIGIBILITY_HAVING_COUNTS in sql-fragments.ts for the rationale
+    // and staging identity verification (846ms -> ~7ms).
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
-        AND ${MCQ_VALIDATION_CONDITIONS}
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
       HAVING COUNT(*) >= ${minQuestions}
     `;
@@ -329,12 +332,11 @@ export const lobbiesRepo = {
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id, c.name, c.icon, c.image_url
-      ${RANKED_ELIGIBILITY_HAVING}
+      ${RANKED_ELIGIBILITY_HAVING_COUNTS}
     `;
   },
 
@@ -346,9 +348,9 @@ export const lobbiesRepo = {
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
-        AND ${MCQ_VALIDATION_CONDITIONS}
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()
@@ -369,10 +371,10 @@ export const lobbiesRepo = {
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.is_active = true
         ${exclusionClause}
-        AND ${MCQ_VALIDATION_CONDITIONS}
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
       HAVING COUNT(*) >= ${minQuestions}
       ORDER BY RANDOM()
@@ -390,10 +392,10 @@ export const lobbiesRepo = {
       SELECT c.id
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
-        AND ${MCQ_VALIDATION_CONDITIONS}
+        AND q.status = 'published'
+        AND q.type = 'mcq_single'
       GROUP BY c.id
       HAVING COUNT(*) >= ${minQuestions}
     `;
@@ -408,13 +410,12 @@ export const lobbiesRepo = {
       SELECT c.id
       FROM categories c
       JOIN questions q ON q.category_id = c.id
-      JOIN question_payloads qp ON qp.question_id = q.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id
-      ${RANKED_ELIGIBILITY_HAVING}
+      ${RANKED_ELIGIBILITY_HAVING_COUNTS}
     `;
 
     return rows.map((row) => row.id);

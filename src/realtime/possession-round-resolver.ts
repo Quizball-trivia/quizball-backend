@@ -81,9 +81,20 @@ export async function resolvePossessionRound(
     return;
   }
 
+  // Only cancel the durable question/AI timers when this round has genuinely
+  // concluded (resolved, or the match/round is past it). No-op returns —
+  // paused, waiting for more answers, transient cache misses — MUST leave the
+  // timers armed: they are the only fallback that resolves a round with a
+  // missing answer. Cancelling them on a no-op is what froze penalty
+  // shootouts under disconnect flapping.
+  let roundConcluded = false;
+
   try {
     let cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
+      // A genuinely terminal match no longer needs round timers; a missing
+      // cache is transient — keep timers armed so the resolve can retry.
+      roundConcluded = Boolean(cache && cache.status !== 'active');
       logger.warn(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: inactive or missing cache'
@@ -102,6 +113,8 @@ export async function resolvePossessionRound(
       }
     }
     if (cache.currentQIndex > qIndex) {
+      // This round is already behind us — its timers are stale; clear them.
+      roundConcluded = true;
       logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: qIndex already advanced'
@@ -636,9 +649,33 @@ export async function resolvePossessionRound(
     bumpStateVersion(state);
 
     await setMatchCache(cache);
-    fireAndForget('setMatchStatePayload(resolve)', async () => {
-      await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
-    });
+    // Checkpoint policy (db-optimize.md #7): the full state_payload JSONB is
+    // only persisted at recovery-relevant boundaries — phase/half changes
+    // (halftime, last attack, penalties, completion), any goal, and every
+    // non-NORMAL_PLAY round (each penalty kick matters). Routine no-goal
+    // normal rounds only touch current_q_index + updated_at, since the live
+    // state is authoritative in Redis (RDB-persisted) and the durable
+    // per-answer facts already flow to match_answers/match_players. Worst
+    // case on a Redis loss mid-half: display-state rewind within the half;
+    // settlement is unaffected (1B decides from match_players).
+    const stateCheckpoint =
+      preResolutionPhase !== state.phase ||
+      preResolutionHalf !== state.half ||
+      state.phase !== 'NORMAL_PLAY' ||
+      goalScoredBySeat !== null;
+    if (stateCheckpoint) {
+      fireAndForget('setMatchStatePayload(resolve)', async () => {
+        await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
+      });
+    } else {
+      fireAndForget('touchMatchRound(resolve)', async () => {
+        await matchesRepo.touchMatchRound(matchId, nextIndex);
+      });
+    }
+    // The round result is committed — from here on the round's own timers are
+    // obsolete regardless of which exit (halftime/completed/next question) we
+    // take below.
+    roundConcluded = true;
     await emitMatchState(io, matchId, state);
     logger.info(
       {
@@ -703,7 +740,14 @@ export async function resolvePossessionRound(
     });
   } finally {
     await releaseLock(lockKey, lock.token);
-    clearQuestionTimer(matchId, qIndex);
-    clearAiAnswerTimer(matchId, qIndex);
+    if (roundConcluded) {
+      clearQuestionTimer(matchId, qIndex);
+      clearAiAnswerTimer(matchId, qIndex);
+    } else {
+      logger.info(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
+        'Possession round resolve left timers armed: round not concluded'
+      );
+    }
   }
 }

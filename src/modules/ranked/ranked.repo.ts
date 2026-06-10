@@ -43,10 +43,22 @@ interface RankedRpChangeInsertInput {
 interface RankedSettlementEntry {
   profile: RankedProfileUpdateInput;
   change: RankedRpChangeInsertInput;
+  /** Coin reward granted with the settlement (win/loss participation reward). */
+  coinsAwarded: number;
 }
 
 export const rankedRepo = {
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
+    // SELECT-first: the profile already exists for all but a user's very
+    // first ranked touch, and the INSERT .. ON CONFLICT DO NOTHING attempt on
+    // every call was pure write-path churn at scale (db-optimize.md #6:
+    // ~88k redundant upserts against ~3k rows). The insert below remains the
+    // race-safe creation path for first-time users.
+    const [preexisting] = await sql<RankedProfileRow[]>`
+      SELECT * FROM ranked_profiles WHERE user_id = ${userId}
+    `;
+    if (preexisting) return preexisting;
+
     const [row] = await sql<RankedProfileRow[]>`
       INSERT INTO ranked_profiles (
         user_id,
@@ -151,29 +163,42 @@ export const rankedRepo = {
                 placement_game_no,
                 placement_anchor_rp,
                 placement_perf_score,
-                calculation_method
+                calculation_method,
+                coins_awarded
               )
               VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25
               )
               ON CONFLICT (match_id, user_id) DO NOTHING
               RETURNING 1
+            ),
+            profile_updated AS (
+              UPDATE ranked_profiles
+              SET
+                rp = $14,
+                tier = $15,
+                placement_status = $16,
+                placement_played = $17,
+                placement_wins = $18,
+                placement_seed_rp = $19,
+                placement_perf_sum = $20,
+                placement_points_for_sum = $21,
+                placement_points_against_sum = $22,
+                current_win_streak = $23,
+                last_ranked_match_at = NOW(),
+                updated_at = NOW()
+              WHERE user_id = $24
+                AND EXISTS (SELECT 1 FROM inserted)
+              RETURNING 1
             )
-            UPDATE ranked_profiles
+            -- Coin participation reward (win/loss). Gated on the rp-change
+            -- insert so the idempotent re-settlement path never double-pays.
+            UPDATE users
             SET
-              rp = $14,
-              tier = $15,
-              placement_status = $16,
-              placement_played = $17,
-              placement_wins = $18,
-              placement_seed_rp = $19,
-              placement_perf_sum = $20,
-              placement_points_for_sum = $21,
-              placement_points_against_sum = $22,
-              current_win_streak = $23,
-              last_ranked_match_at = NOW(),
+              coins = coins + $25,
               updated_at = NOW()
-            WHERE user_id = $24
+            WHERE id = $24
+              AND $25 > 0
               AND EXISTS (SELECT 1 FROM inserted)
             `,
             [
@@ -201,6 +226,7 @@ export const rankedRepo = {
               entry.profile.placementPointsAgainstSum,
               entry.profile.currentWinStreak,
               entry.profile.userId,
+              entry.coinsAwarded,
             ]
           );
         }

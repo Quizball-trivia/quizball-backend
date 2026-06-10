@@ -129,9 +129,16 @@ export const questionsRepo = {
         )`
       : sql``;
 
-    // Get paginated results with payload and total count in single query
-    const results = await sql<(QuestionWithPayload & { total_count: string })[]>`
-      SELECT q.*, qp.payload, COUNT(*) OVER() as total_count
+    // Split the page fetch from the total count. A single `COUNT(*) OVER()`
+    // query forces Postgres to read + window over the entire filtered set on
+    // every request (full scan + payload join), ignoring LIMIT — ~283ms here.
+    // The page query alone uses the created_at index and stops at `limit`
+    // (~3.5ms); the count runs separately and only joins payloads when a filter
+    // actually references them. (chaos load test, 2026-06-09; see scripts/chaos)
+    const filtersTouchPayload = Boolean(filter?.mcqImage || searchPattern);
+
+    const pageQuery = sql<QuestionWithPayload[]>`
+      SELECT q.*, qp.payload
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
       WHERE 1=1
@@ -145,8 +152,24 @@ export const questionsRepo = {
       LIMIT ${limit} OFFSET ${offset}
     `;
 
-    const total = results.length > 0 ? parseInt(results[0].total_count, 10) : 0;
-    const questions = results.map(({ total_count: _, ...q }) => q);
+    const payloadJoin = filtersTouchPayload
+      ? sql`LEFT JOIN question_payloads qp ON qp.question_id = q.id`
+      : sql``;
+    const countQuery = sql<{ total: string }[]>`
+      SELECT COUNT(*)::text AS total
+      FROM questions q
+      ${payloadJoin}
+      WHERE 1=1
+      ${categoryFilter}
+      ${statusFilter}
+      ${difficultyFilter}
+      ${typeFilter}
+      ${mcqImageFilter}
+      ${searchFilter}
+    `;
+
+    const [questions, countRows] = await Promise.all([pageQuery, countQuery]);
+    const total = countRows.length > 0 ? parseInt(countRows[0].total, 10) : 0;
 
     return { questions, total };
   },

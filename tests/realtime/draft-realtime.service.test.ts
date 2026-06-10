@@ -6,9 +6,14 @@ const listMembersWithUserMock = vi.fn();
 const listLobbyCategoryBansMock = vi.fn();
 const insertLobbyCategoryBanMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
+const deleteLobbyMock = vi.fn();
 const createMatchFromLobbyMock = vi.fn();
+const abandonMatchMock = vi.fn();
 const beginMatchForLobbyMock = vi.fn();
 const pauseMatchForDisconnectedPlayerMock = vi.fn();
+const finalizeMatchAsForfeitMock = vi.fn();
+const buildFinalResultsPayloadMock = vi.fn();
+const emitFinalResultsToMatchParticipantsMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const consumeRankedTicketsMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
@@ -17,12 +22,23 @@ const redisGetMock = vi.fn();
 const redisSetMock = vi.fn();
 const redisExistsMock = vi.fn();
 const redisDelMock = vi.fn();
+const redisGetDelMock = vi.fn();
+const redisEvalMock = vi.fn();
 let redisClientMock: {
   get: typeof redisGetMock;
   set: typeof redisSetMock;
   exists: typeof redisExistsMock;
   del: typeof redisDelMock;
+  getDel: typeof redisGetDelMock;
+  eval?: typeof redisEvalMock;
+  isOpen?: boolean;
+  zRem?: ReturnType<typeof vi.fn>;
+  zAdd?: ReturnType<typeof vi.fn>;
+  zScore?: ReturnType<typeof vi.fn>;
 } | null = null;
+
+const scheduleRealtimeTimerMock = vi.fn();
+const cancelRealtimeTimerMock = vi.fn();
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
@@ -30,6 +46,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     listLobbyCategoryBans: (...args: unknown[]) => listLobbyCategoryBansMock(...args),
     insertLobbyCategoryBan: (...args: unknown[]) => insertLobbyCategoryBanMock(...args),
+    deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
   },
 }));
 
@@ -42,6 +59,7 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/matches/matches.service.js', () => ({
   matchesService: {
     createMatchFromLobby: (...args: unknown[]) => createMatchFromLobbyMock(...args),
+    abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
   },
 }));
 
@@ -59,6 +77,15 @@ vi.mock('../../src/realtime/services/match-realtime.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
+  finalizeMatchAsForfeit: (...args: unknown[]) => finalizeMatchAsForfeitMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
+  buildFinalResultsPayload: (...args: unknown[]) => buildFinalResultsPayloadMock(...args),
+  emitFinalResultsToMatchParticipants: (...args: unknown[]) => emitFinalResultsToMatchParticipantsMock(...args),
+}));
+
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startDraft: vi.fn(),
 }));
@@ -67,12 +94,42 @@ vi.mock('../../src/realtime/services/lobby-draft-start.service.js', () => ({
   abortRankedDraftStartForTickets: (...args: unknown[]) => abortRankedDraftStartForTicketsMock(...args),
 }));
 
+vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
+  userSessionGuardService: {
+    emitState: vi.fn(async () => ({
+      state: 'IDLE',
+      activeMatchId: null,
+      waitingLobbyId: null,
+      queueSearchId: null,
+      openLobbyIds: [],
+      resolvedAt: new Date().toISOString(),
+    })),
+  },
+}));
+
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => redisClientMock,
 }));
 
+// Keep the real scheduler (other tests start/stop it with fake timers). Spy on
+// the two scheduling entrypoints the grace path uses, but delegate to the real
+// implementation by default so the existing AI-/auto-ban timer tests still fire.
+let realScheduleRealtimeTimer: (...args: unknown[]) => unknown = async () => {};
+let realCancelRealtimeTimer: (...args: unknown[]) => unknown = async () => {};
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/realtime-timer-scheduler.js')>();
+  realScheduleRealtimeTimer = actual.scheduleRealtimeTimer as (...a: unknown[]) => unknown;
+  realCancelRealtimeTimer = actual.cancelRealtimeTimer as (...a: unknown[]) => unknown;
+  return {
+    ...actual,
+    scheduleRealtimeTimer: (...args: unknown[]) => scheduleRealtimeTimerMock(...args),
+    cancelRealtimeTimer: (...args: unknown[]) => cancelRealtimeTimerMock(...args),
+  };
+});
+
 vi.mock('../../src/realtime/ai-ranked.constants.js', () => ({
   rankedAiLobbyKey: (lobbyId: string) => `ranked:ai:lobby:${lobbyId}`,
+  rankedAiMatchKey: (matchId: string) => `ranked:ai:match:${matchId}`,
 }));
 
 vi.mock('../../src/modules/users/users.repo.js', () => ({
@@ -115,6 +172,12 @@ describe('draftRealtimeService', () => {
     redisSetMock.mockResolvedValue('OK');
     redisExistsMock.mockResolvedValue(0);
     redisDelMock.mockResolvedValue(1);
+    redisGetDelMock.mockResolvedValue(null);
+    redisEvalMock.mockResolvedValue(1);
+    // Delegate to the real scheduler by default so existing timer-driven tests
+    // still fire; individual grace tests just read the spy's call args.
+    scheduleRealtimeTimerMock.mockImplementation((...args: unknown[]) => realScheduleRealtimeTimer(...args));
+    cancelRealtimeTimerMock.mockImplementation((...args: unknown[]) => realCancelRealtimeTimer(...args));
     pauseMatchForDisconnectedPlayerMock.mockResolvedValue({ finalized: false, graceMs: 60_000, remainingReconnects: 2 });
 
     const bans: Array<{ user_id: string; category_id: string }> = [];
@@ -160,8 +223,18 @@ describe('draftRealtimeService', () => {
       },
     });
     abortRankedDraftStartForTicketsMock.mockResolvedValue(undefined);
+    deleteLobbyMock.mockResolvedValue(undefined);
     createMatchFromLobbyMock.mockResolvedValue({ match: { id: 'm1' } });
+    abandonMatchMock.mockResolvedValue(undefined);
     beginMatchForLobbyMock.mockResolvedValue(undefined);
+    finalizeMatchAsForfeitMock.mockResolvedValue({
+      matchId: 'm1',
+      winnerId: 'u2',
+      resultVersion: 123,
+      completed: true,
+    });
+    buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
+    emitFinalResultsToMatchParticipantsMock.mockResolvedValue(undefined);
   });
 
   it('does not complete the draft after only one ban', async () => {
@@ -226,6 +299,35 @@ describe('draftRealtimeService', () => {
       categoryBId: null,
     });
     expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
+  });
+
+  it('aborts a ranked draft before consuming tickets when a human cancelled before match creation', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    redisClientMock = {
+      get: vi.fn(async (key: string) => (key === 'ranked:mm:cancel:u1' ? '1' : null)),
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
   it('does not complete the ranked draft or create a match when ticket consumption fails', async () => {
@@ -424,18 +526,73 @@ describe('draftRealtimeService', () => {
       set: redisSetMock,
       exists: redisExistsMock,
       del: redisDelMock,
+      getDel: redisGetDelMock,
     };
     fetchSockets.mockResolvedValue([]);
 
     await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1');
 
-    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 75 });
-    expect(redisSetMock).toHaveBeenCalledWith('draft:pause:l1', expect.any(String), { EX: 75 });
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(redisSetMock).toHaveBeenCalledWith('draft:pause:l1', expect.any(String), { EX: 600 });
     expect(emit).toHaveBeenCalledWith('draft:opponent_disconnected', {
       lobbyId: 'l1',
       opponentId: 'u1',
       graceMs: 60_000,
     });
+  });
+
+  it('pauses draft when only an older same-user socket remains in the lobby room', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+    };
+    fetchSockets.mockResolvedValue([
+      { id: 'old-socket', data: { user: { id: 'u1' }, connectedAt: 1000 } },
+      { id: 'opponent-socket', data: { user: { id: 'u2' }, connectedAt: 1500 } },
+    ]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+      ignoreSocketId: 'active-socket',
+      disconnectedConnectedAt: 2000,
+    });
+
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(emit).toHaveBeenCalledWith('draft:opponent_disconnected', {
+      lobbyId: 'l1',
+      opponentId: 'u1',
+      graceMs: 60_000,
+    });
+  });
+
+  it('arms draft grace then resumes when a newer same-user replacement socket is already in the lobby room', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
+    wireStatefulRedis();
+    fetchSockets.mockResolvedValue([
+      { id: 'replacement-socket', data: { user: { id: 'u1' }, connectedAt: 2500 } },
+    ]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+      ignoreSocketId: 'active-socket',
+      disconnectedConnectedAt: 2000,
+    });
+
+    expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+      'draft_grace_expiry',
+      'l1',
+      expect.any(Date),
+      { kind: 'draft_grace_expiry', lobbyId: 'l1', disconnectedUserId: 'u1' }
+    );
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:disconnect:l1:u1', 'draft:absent_after_grace:l1:u1']);
+    expect(redisDelMock).toHaveBeenCalledWith(['draft:pause:l1', 'draft:grace:l1']);
+    expect(cancelRealtimeTimerMock).toHaveBeenCalledWith('draft_grace_expiry', 'l1');
+    expect(emit).toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
   });
 
   it('clears draft pause and resumes timers when the disconnected player reconnects', async () => {
@@ -446,6 +603,7 @@ describe('draftRealtimeService', () => {
       set: redisSetMock,
       exists: redisExistsMock,
       del: redisDelMock,
+      getDel: redisGetDelMock,
     };
     const existingKeys = new Set(['draft:disconnect:l1:u1']);
     redisExistsMock.mockImplementation(async (key: string) => (existingKeys.has(key) ? 1 : 0));
@@ -461,5 +619,197 @@ describe('draftRealtimeService', () => {
     expect(redisDelMock).toHaveBeenCalledWith(['draft:disconnect:l1:u1', 'draft:absent_after_grace:l1:u1']);
     expect(redisDelMock).toHaveBeenCalledWith(['draft:pause:l1', 'draft:grace:l1']);
     expect(emit).toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
+  });
+
+  // ── Fix B: durable draft disconnect-grace timer ──────────────────────────
+
+  // Wire redisClientMock to a stateful in-memory key set with the semantics the
+  // grace handler relies on: exists(), del(), and set() with NX (lock) / GETDEL.
+  function wireStatefulRedis(initialKeys: string[] = []) {
+    const keys = new Set(initialKeys);
+    redisExistsMock.mockImplementation(async (key: string) => (keys.has(key) ? 1 : 0));
+    redisDelMock.mockImplementation(async (k: string | string[]) => {
+      for (const key of Array.isArray(k) ? k : [k]) keys.delete(key);
+      return 1;
+    });
+    redisSetMock.mockImplementation(async (key: string, _val: unknown, opts?: { NX?: boolean }) => {
+      if (opts?.NX && keys.has(key)) return null; // NX fails when key already present
+      keys.add(key);
+      return 'OK';
+    });
+    redisGetDelMock.mockImplementation(async (key: string) => {
+      const had = keys.has(key);
+      keys.delete(key);
+      return had ? '1' : null;
+    });
+    // Token-checked lock: acquireLock does SET key token NX PX; releaseLock runs
+    // a Lua eval that deletes only if the stored token matches. Model both so the
+    // grace processing lock exercises the real locks.ts path (client.isOpen true).
+    const lockTokens = new Map<string, string>();
+    redisSetMock.mockImplementation(async (key: string, val: unknown, opts?: { NX?: boolean }) => {
+      if (opts?.NX && keys.has(key)) return null;
+      keys.add(key);
+      if (typeof val === 'string') lockTokens.set(key, val);
+      return 'OK';
+    });
+    redisEvalMock.mockImplementation(async (_script: string, opts: { keys: string[]; arguments: string[] }) => {
+      const [key] = opts.keys;
+      const [token] = opts.arguments;
+      if (lockTokens.get(key) === token) {
+        keys.delete(key);
+        lockTokens.delete(key);
+        return 1;
+      }
+      return 0;
+    });
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      eval: redisEvalMock,
+      isOpen: true,
+      // No-op sorted-set ops so the real cancelRealtimeTimer (delegated) doesn't
+      // throw now that isOpen is true.
+      zRem: vi.fn(async () => 0),
+      zAdd: vi.fn(async () => 0),
+      zScore: vi.fn(async () => null),
+    };
+    return keys;
+  }
+
+  it('schedules a durable grace-expiry timer (not setTimeout) when a draft player disconnects', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, fetchSockets } = createIoMock();
+    wireStatefulRedis();
+    fetchSockets.mockResolvedValue([]);
+
+    await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1');
+
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledTimes(1);
+    const [kind, key, dueAt, payload] = scheduleRealtimeTimerMock.mock.calls[0];
+    expect(kind).toBe('draft_grace_expiry');
+    expect(key).toBe('l1');
+    expect(dueAt).toBeInstanceOf(Date);
+    expect(payload).toEqual({ kind: 'draft_grace_expiry', lobbyId: 'l1', disconnectedUserId: 'u1' });
+  });
+
+  it('recovers a frozen draft on grace expiry by auto-banning for the absent actor', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'friendly', status: 'active', host_user_id: 'u1' });
+      // u1 already banned (seed the shared stateful bans array); u2 is the
+      // disconnected actor whose turn it is.
+      await insertLobbyCategoryBanMock('l1', 'u1', 'cat-a');
+      // Pending recovery: grace marker + u2's disconnect marker present.
+      const keys = wireStatefulRedis(['draft:grace:l1', 'draft:disconnect:l1:u2']);
+
+      await runDraftGraceExpiry(io, 'l1', 'u2');
+
+      // Auto-ban applied for the absent actor (u2), draft completes, and the
+      // newly-created match is forfeited immediately instead of starting live play.
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u2', expect.any(String));
+      expect(emit).toHaveBeenCalledWith('draft:complete', expect.anything());
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+      expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+      expect(pauseMatchForDisconnectedPlayerMock).not.toHaveBeenCalled();
+      expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(expect.objectContaining({
+        matchId: 'm1',
+        forfeitingUserId: 'u2',
+      }));
+      expect(emitFinalResultsToMatchParticipantsMock).toHaveBeenCalledWith(
+        io,
+        'm1',
+        { matchId: 'm1', resultVersion: 123 }
+      );
+      // Pending markers cleared only after success; processing lock released.
+      expect(keys.has('draft:grace:l1')).toBe(false);
+      expect(keys.has('draft:grace:lock:l1')).toBe(false);
+      expect(keys.has('draft:absent_after_grace:l1:u2')).toBe(false);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('is a noop on grace expiry if the player already reconnected (grace marker gone)', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    // Reconnect already cleared the grace marker → exists() returns 0.
+    wireStatefulRedis([]);
+
+    await runDraftGraceExpiry(io, 'l1', 'u1');
+
+    expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    // Never even took the processing lock.
+    expect(redisSetMock).not.toHaveBeenCalled();
+  });
+
+  it('handles a duplicate grace-expiry firing exactly once (no duplicate ban/match)', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'friendly', status: 'active', host_user_id: 'u1' });
+      await insertLobbyCategoryBanMock('l1', 'u1', 'cat-a');
+      insertLobbyCategoryBanMock.mockClear(); // ignore the seed ban below
+
+      wireStatefulRedis(['draft:grace:l1', 'draft:disconnect:l1:u2']);
+
+      // Fire the same expiry twice (e.g. two instances both polled it). The first
+      // consumes the grace marker on success; the second finds it gone → noop.
+      await runDraftGraceExpiry(io, 'l1', 'u2');
+      await runDraftGraceExpiry(io, 'l1', 'u2');
+
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(1);
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('is a noop on grace expiry if the lobby/draft is already completed', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    // Grace pending, but the lobby is no longer active (draft already finished).
+    getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'friendly', status: 'completed', host_user_id: 'u1' });
+    const keys = wireStatefulRedis(['draft:grace:l1', 'draft:pause:l1']);
+
+    await runDraftGraceExpiry(io, 'l1', 'u1');
+
+    expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+    // Stale pause + grace markers cleaned up.
+    expect(keys.has('draft:pause:l1')).toBe(false);
+    expect(keys.has('draft:grace:l1')).toBe(false);
+  });
+
+  it('rethrows on transient failure and leaves the grace marker for retry', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    const keys = wireStatefulRedis(['draft:grace:l1', 'draft:disconnect:l1:u2']);
+    // Transient DB blip during recovery.
+    getLobbyByIdMock.mockRejectedValueOnce(new Error('db blip'));
+
+    await expect(runDraftGraceExpiry(io, 'l1', 'u2')).rejects.toThrow('db blip');
+
+    // Grace marker NOT consumed → the rescheduled timer can retry.
+    expect(keys.has('draft:grace:l1')).toBe(true);
+    // Processing lock released so the retry can re-acquire it.
+    expect(keys.has('draft:grace:lock:l1')).toBe(false);
+  });
+
+  it('cancels the durable grace timer when a disconnected player reconnects before expiry', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    wireStatefulRedis(['draft:disconnect:l1:u1']);
+
+    await draftRealtimeService.resumeDraftForReconnectedPlayer(io, 'l1', 'u1');
+
+    expect(cancelRealtimeTimerMock).toHaveBeenCalledWith('draft_grace_expiry', 'l1');
   });
 });

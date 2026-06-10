@@ -14,6 +14,15 @@ export const sql = postgres(config.DATABASE_URL ?? '', {
   // left pointing at the old instance is dropped and re-established quickly,
   // instead of lingering and causing requests to hang on a dead connection.
   max_lifetime: 60 * 2, // 2 minutes
+  // NOTE on `fetch_types` (db-optimize.md #3): do NOT disable it. It was tried
+  // (2026-06-10) to kill the per-connection pg_catalog.pg_type introspection
+  // query, but postgres.js needs the fetched OID map to serialize ARRAY
+  // parameters — with fetch_types:false EVERY array-sending pattern breaks
+  // ("malformed array literal"), including sql.array() with explicit ::uuid[]
+  // casts and sql.unsafe positional arrays (empirically verified against the
+  // staging DB). Array params are used on hot paths (question picker, lobby
+  // categories, nickname checks), so the introspection query (~1ms per new
+  // connection) is the cost of keeping them.
   // NOTE: these are delivered as Postgres *startup parameters*, which Supabase's
   // TRANSACTION-mode pooler (Supavisor, prod port 6543) does NOT forward — so
   // they are effectively a NO-OP on prod (verified: sessions still report 2min/0).

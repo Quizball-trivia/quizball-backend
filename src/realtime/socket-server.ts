@@ -32,6 +32,7 @@ import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.j
 import { resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import {
   runDraftAutoBan,
+  runDraftGraceExpiry,
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
@@ -246,6 +247,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       if (payload.kind !== 'draft_auto_ban') return;
       await runDraftAutoBan(server, payload.lobbyId);
     },
+    draft_grace_expiry: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'draft_grace_expiry') return;
+      await runDraftGraceExpiry(server, payload.lobbyId, payload.disconnectedUserId);
+    },
     party_question: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'party_question') return;
       await resolvePartyQuizRound(server, payload.matchId, payload.qIndex, true);
@@ -337,7 +342,20 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerDevHandlers(io, socket);
 
     socket.on('disconnect', (reason) => {
-      logger.info({ userId: user.id, socketId: socket.id, reason }, 'Socket disconnected');
+      // matchId/lobbyId included so a silent handleMatchDisconnect early-return
+      // (socket missing its matchId while a match is live) is diagnosable from
+      // logs — observed once on staging (reconnect_smoke 2026-06-10) where a
+      // mid-match disconnect produced no pause and no skip.
+      logger.info(
+        {
+          userId: user.id,
+          socketId: socket.id,
+          reason,
+          matchId: socket.data.matchId ?? null,
+          lobbyId: socket.data.lobbyId ?? null,
+        },
+        'Socket disconnected'
+      );
       rankedDebug('socket_disconnected', {
         user: rankedDebugUser(user.id),
         socket: socket.id,

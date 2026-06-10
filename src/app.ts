@@ -100,6 +100,19 @@ export function createApp(): Express {
 
   // Rate Limiting (disabled in development)
   if (process.env.NODE_ENV !== 'development') {
+    // Load-test bypass: skip the limiter only when a NON-PROD env secret is set
+    // and the request presents the matching header. Prod can never bypass — the
+    // token is ignored when NODE_ENV==='prod', so a leaked header is inert there.
+    const chaosBypassToken =
+      config.NODE_ENV !== 'prod' ? config.CHAOS_BYPASS_TOKEN : undefined;
+    const skipForChaos = (req: express.Request): boolean =>
+      Boolean(chaosBypassToken) && req.get('x-chaos-bypass') === chaosBypassToken;
+    if (chaosBypassToken) {
+      logger.warn(
+        'CHAOS_BYPASS_TOKEN is set — rate limiting can be bypassed via x-chaos-bypass header (non-prod only).'
+      );
+    }
+
     // General API Rate Limiting
     const apiLimiter = rateLimit({
       windowMs: 60 * 1000, // 1 minute
@@ -108,6 +121,7 @@ export function createApp(): Express {
       legacyHeaders: false,
       // Skip validation - we intentionally trust Railway's proxy
       validate: false,
+      skip: skipForChaos,
       message: {
         code: 'RATE_LIMIT_EXCEEDED',
         message: 'Too many requests, please try again later',
@@ -125,6 +139,7 @@ export function createApp(): Express {
       legacyHeaders: false,
       // Skip validation - we intentionally trust Railway's proxy
       validate: false,
+      skip: skipForChaos,
       message: {
         code: 'RATE_LIMIT_EXCEEDED',
         message: 'Too many auth requests, please try again later',

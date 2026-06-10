@@ -38,6 +38,10 @@ import {
   sanitizePartyQuizState,
 } from './party-quiz-state.js';
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
+import {
+  markMatchEnteredForRoom,
+  markMatchEnteredForSocket,
+} from './services/match-entry.service.js';
 import type { MatchAnswerPayload } from './schemas/match.schemas.js';
 import type {
   MatchAnswerAckPayload,
@@ -185,6 +189,7 @@ export async function emitPartyQuizStateToSocket(
     shooterSeat: null,
     attackerSeat: null,
   });
+  await markMatchEnteredForSocket(socket, matchId, 'party_quiz_socket_question');
   logger.info(
     {
       eventName: 'match:question',
@@ -669,6 +674,7 @@ export async function sendPartyQuizQuestion(
       shooterSeat: null,
       attackerSeat: null,
     });
+    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     logger.info(
       {
         eventName: 'match:question',
@@ -759,6 +765,7 @@ export async function resumePartyQuizQuestion(
     shooterSeat: null,
     attackerSeat: null,
   });
+  await markMatchEnteredForRoom(io, matchId, 'party_quiz_resumed_question');
   logger.info(
     {
       eventName: 'match:question',

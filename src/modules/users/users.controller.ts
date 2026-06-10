@@ -4,6 +4,7 @@ import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
 import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
 import { maybeIdentifyUserProfile } from '../../core/analytics.js';
+import { logger } from '../../core/logger.js';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -35,9 +36,11 @@ export const usersController = {
     // when req.user came from the auth middleware cache earlier in the request lifecycle.
     const user = await usersService.getById(req.user!.id);
     // Backfill PostHog identity for already-authenticated sessions that never hit
-    // a fresh sign-in identify (session restore). Deduped to once per user per day
-    // and fire-and-forget — must never affect the /me response.
-    maybeIdentifyUserProfile(user);
+    // a fresh sign-in identify (session restore). Deduped (Redis) to once per user
+    // per day and fire-and-forget — must never affect or delay the /me response.
+    void maybeIdentifyUserProfile(user).catch((error) => {
+      logger.warn({ error, userId: user.id }, 'maybeIdentifyUserProfile failed');
+    });
     res.json(toUserResponse(user));
   },
 

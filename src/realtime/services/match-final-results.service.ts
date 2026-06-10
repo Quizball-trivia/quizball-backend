@@ -15,6 +15,7 @@ import {
 import { buildStandings } from '../match-utils.js';
 import type { AchievementUnlockPayload, MatchFinalResultsPayload } from '../socket.types.js';
 import type { MatchFinalResultsAckPayload } from '../schemas/match.schemas.js';
+import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { buildParticipantPayloads } from './match-participants.helpers.js';
 
 type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
@@ -254,6 +255,26 @@ export async function emitLastMatchResultIfAny(
       code: 'MATCH_ABANDONED',
       message: 'Match was abandoned due to disconnects.',
     });
+    await redis.del(lastMatchKey(userId));
+    return;
+  }
+
+  const evidence = await resolveMatchReplayEvidence(replay.matchId, userId);
+  if (!evidence.allowed) {
+    logger.warn(
+      {
+        userId,
+        matchId: replay.matchId,
+        status: lastMatch.status,
+        winnerDecisionMethod: (
+          lastMatch.state_payload as { winnerDecisionMethod?: string } | null
+        )?.winnerDecisionMethod ?? null,
+        isParticipant: evidence.isParticipant,
+        hasEnteredMarker: evidence.hasEnteredMarker,
+        hasRecordedActivity: evidence.hasRecordedActivity,
+      },
+      'Suppressing final results replay for user without entered-match evidence'
+    );
     await redis.del(lastMatchKey(userId));
     return;
   }

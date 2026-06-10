@@ -9,6 +9,7 @@ import { handlePossessionCluesAnswer } from '../../src/realtime/possession-answe
 
 const getMatchCacheOrRebuildMock = vi.hoisted(() => vi.fn());
 const setMatchCacheMock = vi.hoisted(() => vi.fn());
+const commitCachedAnswerMock = vi.hoisted(() => vi.fn());
 const insertMatchAnswerIfMissingMock = vi.hoisted(() => vi.fn());
 const updatePlayerTotalsMock = vi.hoisted(() => vi.fn());
 const resolvePossessionRoundMock = vi.hoisted(() => vi.fn());
@@ -85,6 +86,9 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
   getExpectedUserIds: (cache: MatchCache) => cache.players.map((player) => player.userId),
   getMatchCacheOrRebuild: (...args: unknown[]) => getMatchCacheOrRebuildMock(...args),
   setMatchCache: (...args: unknown[]) => setMatchCacheMock(...args),
+  // Final-answer commits now write the small per-question overlay instead of
+  // the full blob; tests assert against this mock where commit is expected.
+  commitCachedAnswer: (...args: unknown[]) => commitCachedAnswerMock(...args),
 }));
 
 function makeCache(overrides: Partial<MatchCache> = {}): MatchCache {

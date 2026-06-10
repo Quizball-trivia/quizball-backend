@@ -37,8 +37,11 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
-function getUtcDay(now = new Date()): string {
-  return now.toISOString().slice(0, 10);
+const GEORGIA_UTC_OFFSET_HOURS = 4;
+
+function getDailyChallengeDay(now = new Date()): string {
+  const georgiaTime = new Date(now.getTime() + GEORGIA_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+  return georgiaTime.toISOString().slice(0, 10);
 }
 
 const dailyChallengeSettingsSchemas = {
@@ -191,6 +194,24 @@ function getQuestionTypeForChallenge(challengeType: DailyChallengeType): Questio
   }
 }
 
+/**
+ * Coins paid per score point for each challenge type. Score semantics:
+ * number of correct answers (trueFalse/imposter/careerPath/highLow),
+ * answers found (countdown), or leftover budget (moneyDrop — paid 1:1,
+ * capped at the 1000 starting budget).
+ */
+const COINS_PER_SCORE_POINT: Record<DailyChallengeType, number> = {
+  moneyDrop: 1, // leftover budget paid 1:1 (capped below)
+  trueFalse: 200,
+  countdown: 50,
+  imposter: 500,
+  careerPath: 250,
+  highLow: 100,
+  clues: 20,
+  putInOrder: 20,
+  footballLogic: 20,
+};
+
 function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: number): number {
   const normalizedScore = Math.max(0, Math.floor(score));
 
@@ -198,7 +219,7 @@ function getCoinsAwardedForCompletion(challengeType: DailyChallengeType, score: 
     return Math.min(normalizedScore, 1000);
   }
 
-  return normalizedScore * 20;
+  return normalizedScore * COINS_PER_SCORE_POINT[challengeType];
 }
 
 function toAvailableCategoryOption(row: DailyChallengeAvailableCategoryRow) {
@@ -428,7 +449,7 @@ async function getContentAvailabilityDetails<TType extends QuestionPayloadType>(
 
 export const dailyChallengesService = {
   async listActiveChallenges(userId: string, locale?: string) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const [configs, completions] = await Promise.all([
       dailyChallengesRepo.listConfigs(true),
       dailyChallengesRepo.listCompletionsForUserOnDay(userId, day),
@@ -510,7 +531,7 @@ export const dailyChallengesService = {
   },
 
   async getChallengeSession(userId: string, challengeType: DailyChallengeType, locale?: string) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
@@ -851,7 +872,7 @@ export const dailyChallengesService = {
     challengeType: DailyChallengeType,
     score: number
   ) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     const config = await dailyChallengesRepo.getConfig(challengeType);
     if (!config || !config.is_active) {
       throw new NotFoundError('Daily challenge not available');
@@ -914,7 +935,7 @@ export const dailyChallengesService = {
   },
 
   async resetChallengeForToday(userId: string, challengeType: DailyChallengeType) {
-    const day = getUtcDay();
+    const day = getDailyChallengeDay();
     await dailyChallengesRepo.deleteCompletionForUserOnDay(userId, challengeType, day);
 
     return {

@@ -17,7 +17,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     challengeType: 'trueFalse',
     title: {
       en: 'True or False',
-      ka: 'მართალია თუ მცდარი',
+      ka: 'მართალი თუ მცდარი',
     },
     description: {
       en: 'Read each fact and decide whether it is true or false.',
@@ -63,13 +63,15 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
   },
   imposter: {
     challengeType: 'imposter',
+    // Display name rebranded to "Pick'em" — the internal challengeType key
+    // stays `imposter` for API/DB compatibility.
     title: {
-      en: 'Imposter',
-      ka: 'იმპოსტერი',
+      en: "Pick'em",
+      ka: "Pick'em",
     },
     description: {
-      en: 'Spot the imposters and submit the exact set of correct answers.',
-      ka: 'იპოვე ვინ არის ზედმეტი მოცემული ვარიანტებიდან და აირციე სწორი სია.',
+      en: 'Pick the exact set of correct answers.',
+      ka: 'აირჩიე ზუსტად სწორი პასუხების სია.',
     },
     iconToken: 'users',
   },

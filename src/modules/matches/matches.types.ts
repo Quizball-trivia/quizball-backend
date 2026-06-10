@@ -15,6 +15,7 @@ export interface MatchRow {
   state_payload: Record<string, unknown> | null;
   ranked_context: RankedLobbyContext | null;
   started_at: string;
+  updated_at: string;
   ended_at: string | null;
   winner_user_id: string | null;
   is_dev: boolean;

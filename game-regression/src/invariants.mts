@@ -239,8 +239,19 @@ const oneQuestionPerQIndex: Invariant = (trace) => {
       // paused) and does NOT. The resume re-dispatch can be at/just-before this
       // event in sequence, so accept any match:resume AFTER the previous dispatch
       // and at-or-before this one (not strictly between).
+      //
+      // A mid-match match:start is also a valid boundary: on a fast reconnect
+      // the pause is intentionally skipped (stableLiveSocket reload path), so
+      // there is no match:resume — rejoinActiveMatchOnConnect replays
+      // match:start + match:state + the CURRENT question to the returning
+      // client. Over the network (staging harness) that per-socket replay is
+      // indistinguishable from a room emit, so without this boundary every
+      // socket blip false-positives this invariant.
       const resumedSincePrev = trace.events.some(
-        (e) => e.event === 'match:resume' && e.seq > prevSeq && e.seq <= evt.seq,
+        (e) =>
+          (e.event === 'match:resume' || e.event === 'match:start') &&
+          e.seq > prevSeq &&
+          e.seq <= evt.seq,
       );
       if (!resumedSincePrev) {
         out.push({

@@ -7,8 +7,17 @@ const listOpenLobbiesForUserMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
+const completePossessionMatchFromProgressMock = vi.fn();
+const resolveMatchPresenceMock = vi.fn();
+const buildFinalResultsPayloadMock = vi.fn();
+const emitFinalResultsMock = vi.fn();
+const abandonMatchWithCompleteLockMock = vi.fn();
 const getActiveMatchForLobbyMock = vi.fn();
 const removeMemberMock = vi.fn();
+const deleteLobbyMock = vi.fn();
+const countMembersMock = vi.fn();
+const listMembersWithUserMock = vi.fn();
+const resolveMatchReplayEvidenceMock = vi.fn();
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -28,9 +37,9 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
     getById: vi.fn(),
     removeMember: (...args: unknown[]) => removeMemberMock(...args),
-    countMembers: vi.fn(),
-    deleteLobby: vi.fn(),
-    listMembersWithUser: vi.fn(),
+    countMembers: (...args: unknown[]) => countMembersMock(...args),
+    deleteLobby: (...args: unknown[]) => deleteLobbyMock(...args),
+    listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     setHostUser: vi.fn(),
   },
 }));
@@ -59,6 +68,27 @@ vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
   finalizeMatchAsForfeit: (...args: unknown[]) => finalizeMatchAsForfeitMock(...args),
 }));
 
+vi.mock('../../src/realtime/possession-completion.js', () => ({
+  completePossessionMatchFromProgress: (...args: unknown[]) => completePossessionMatchFromProgressMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-presence.service.js', () => ({
+  resolveMatchPresence: (...args: unknown[]) => resolveMatchPresenceMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
+  buildFinalResultsPayload: (...args: unknown[]) => buildFinalResultsPayloadMock(...args),
+  emitFinalResultsToMatchParticipants: (...args: unknown[]) => emitFinalResultsMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
+  abandonMatchWithCompleteLock: (...args: unknown[]) => abandonMatchWithCompleteLockMock(...args),
+}));
+
+vi.mock('../../src/realtime/services/match-entry.service.js', () => ({
+  resolveMatchReplayEvidence: (...args: unknown[]) => resolveMatchReplayEvidenceMock(...args),
+}));
+
 describe('user-session-guard.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -70,65 +100,64 @@ describe('user-session-guard.service', () => {
     abandonMatchMock.mockResolvedValue(false);
     getActiveMatchForLobbyMock.mockResolvedValue(null);
     removeMemberMock.mockResolvedValue(undefined);
+    deleteLobbyMock.mockResolvedValue(undefined);
+    countMembersMock.mockResolvedValue(0);
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1', is_ai: false },
+      { user_id: 'u2', is_ai: false },
+    ]);
+    resolveMatchReplayEvidenceMock.mockResolvedValue({
+      isParticipant: true,
+      hasEnteredMarker: false,
+      hasRecordedActivity: false,
+      allowed: false,
+    });
     finalizeMatchAsForfeitMock.mockResolvedValue({
       matchId: 'm1',
       winnerId: 'u2',
       resultVersion: 123,
       completed: true,
     });
-  });
-
-  it('finalizes stale ranked orphan matches as forfeit instead of abandoning them', async () => {
-    const staleStartedAt = new Date(Date.now() - 91_000).toISOString();
-    getActiveMatchForUserMock
-      .mockResolvedValueOnce({
-        id: 'm1',
-        mode: 'ranked',
-        status: 'active',
-        started_at: staleStartedAt,
-        lobby_id: 'l1',
-      })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(null);
-
-    const io = {
-      in: vi.fn(() => ({
-        fetchSockets: vi.fn(async () => []),
-      })),
-      to: vi.fn(() => ({ emit: vi.fn() })),
-    } as unknown as QuizballServer;
-
-    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
-    const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
-
-    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matchId: 'm1',
-        forfeitingUserId: 'u1',
-        activeMatch: expect.objectContaining({ id: 'm1', mode: 'ranked' }),
-      })
-    );
-    expect(abandonMatchMock).not.toHaveBeenCalled();
-    expect(snapshot.state).toBe('IDLE');
-  });
-
-  it('does not abandon ranked matches when forfeit finalization does not complete', async () => {
-    const staleStartedAt = new Date(Date.now() - 91_000).toISOString();
-    getActiveMatchForUserMock
-      .mockResolvedValueOnce({
-        id: 'm1',
-        mode: 'ranked',
-        status: 'active',
-        started_at: staleStartedAt,
-        lobby_id: 'l1',
-      })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(null);
-    finalizeMatchAsForfeitMock.mockResolvedValue({
+    completePossessionMatchFromProgressMock.mockResolvedValue({
       matchId: 'm1',
       winnerId: null,
-      resultVersion: 456,
+      resultVersion: 123,
       completed: false,
+      reason: 'undecidable',
+    });
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [],
+      absentPlayers: [],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 0,
+    });
+    buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
+    emitFinalResultsMock.mockResolvedValue(undefined);
+    abandonMatchWithCompleteLockMock.mockResolvedValue({ abandoned: true });
+  });
+
+  it('completes stale ranked orphan matches from progress before any forfeit', async () => {
+    const staleStartedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+    getActiveMatchForUserMock
+      .mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        started_at: staleStartedAt,
+        updated_at: staleStartedAt,
+        lobby_id: 'l1',
+        state_payload: { variant: 'ranked_sim', phase: 'NORMAL_PLAY' },
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(null);
+    completePossessionMatchFromProgressMock.mockResolvedValue({
+      matchId: 'm1',
+      winnerId: 'u1',
+      resultVersion: 123,
+      completed: true,
+      decisionBasis: 'goals',
     });
 
     const io = {
@@ -141,14 +170,64 @@ describe('user-session-guard.service', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
 
+    expect(completePossessionMatchFromProgressMock).toHaveBeenCalledWith(io, 'm1', 'session_guard_orphan');
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+    expect(snapshot.state).toBe('IDLE');
+  });
+
+  it('forfeits the absent opponent, not the connecting user, when progress is undecidable', async () => {
+    const staleStartedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+    getActiveMatchForUserMock
+      .mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        started_at: staleStartedAt,
+        updated_at: staleStartedAt,
+        lobby_id: 'l1',
+        state_payload: { variant: 'ranked_sim', phase: 'NORMAL_PLAY' },
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(null);
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [{ user_id: 'u1' }],
+      absentPlayers: [{ user_id: 'u2' }],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: ['u2'],
+      matchSocketCount: 0,
+    });
+
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => []),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
+
+    expect(resolveMatchPresenceMock).toHaveBeenCalledWith(
+      io,
+      'm1',
+      expect.any(Array),
+      expect.objectContaining({ connectingUserId: 'u1', staleCleanup: true })
+    );
     expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
       expect.objectContaining({
         matchId: 'm1',
-        forfeitingUserId: 'u1',
+        forfeitingUserId: 'u2',
         activeMatch: expect.objectContaining({ id: 'm1', mode: 'ranked' }),
       })
     );
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ forfeitingUserId: 'u1' })
+    );
     expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
     expect(snapshot.state).toBe('IDLE');
   });
 
@@ -234,6 +313,76 @@ describe('user-session-guard.service', () => {
     expect(result.snapshot.state).toBe('IN_WAITING_LOBBY');
     expect(result.snapshot.waitingLobbyId).toBe('draft-lobby');
     expect(removeMemberMock).not.toHaveBeenCalled();
+  });
+
+  it('closes an active ranked pre-match lobby on queue leave when no match row exists', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const activeLobby = {
+      id: 'draft-lobby',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+      joined_at: new Date().toISOString(),
+    };
+    listOpenLobbiesForUserMock
+      .mockResolvedValueOnce([activeLobby])
+      .mockResolvedValue([]);
+    getActiveMatchForLobbyMock.mockResolvedValue(null);
+    const lobbySocket = {
+      leave: vi.fn(),
+      data: { lobbyId: 'draft-lobby', user: { id: 'u1' } },
+    };
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => [lobbySocket]),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshot = await userSessionGuardService.cleanupRankedQueueArtifacts(io, 'u1');
+
+    expect(deleteLobbyMock).toHaveBeenCalledWith('draft-lobby');
+    expect(lobbySocket.leave).toHaveBeenCalledWith('lobby:draft-lobby');
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+    expect(snapshot.state).toBe('IDLE');
+  });
+
+  it('does not close an active ranked lobby when its match has entered evidence', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const activeLobby = {
+      id: 'draft-lobby',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+      joined_at: new Date().toISOString(),
+    };
+    listOpenLobbiesForUserMock.mockResolvedValue([activeLobby]);
+    getActiveMatchForLobbyMock.mockResolvedValue({
+      id: 'm-started',
+      mode: 'ranked',
+      status: 'active',
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    resolveMatchReplayEvidenceMock.mockResolvedValue({
+      isParticipant: true,
+      hasEnteredMarker: true,
+      hasRecordedActivity: false,
+      allowed: true,
+    });
+    const io = {
+      in: vi.fn(() => ({
+        fetchSockets: vi.fn(async () => []),
+      })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    await userSessionGuardService.cleanupRankedQueueArtifacts(io, 'u1');
+
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).not.toHaveBeenCalled();
   });
 
   it('does not clean up a lobby membership created after connect cleanup started', async () => {

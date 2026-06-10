@@ -41,6 +41,10 @@ class FakeRedis {
     return removed;
   }
 
+  async exists(key: string): Promise<number> {
+    return this.kv.has(key) || this.hashes.has(key) || this.zsets.has(key) ? 1 : 0;
+  }
+
   async expire(_key: string, _seconds: number): Promise<number> {
     return 1;
   }
@@ -654,8 +658,8 @@ describe('ranked matchmaking socket integration (in-process)', () => {
       userBMatch,
     ]);
 
-    expect(aSearch.durationMs).toBe(7000);
-    expect(bSearch.durationMs).toBe(7000);
+    expect(aSearch.durationMs).toBe(10000);
+    expect(bSearch.durationMs).toBe(10000);
     expect(aMatch.opponent.id).toBe('u2');
     expect(bMatch.opponent.id).toBe('u1');
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();

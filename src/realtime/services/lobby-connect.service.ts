@@ -24,6 +24,11 @@ import { startDraft } from './lobby-draft-start.service.js';
 
 const LOBBY_DISCONNECT_GRACE_MS = 15000;
 
+interface ActiveDraftRejoinOptions {
+  resume?: boolean;
+  lobbyId?: string;
+}
+
 export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
   const userId = socket.data.user.id;
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
@@ -56,10 +61,17 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
   logger.info({ userId, lobbyId: newestLobby.id }, 'Socket rejoined waiting lobby');
 }
 
-export async function rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+export async function rejoinActiveDraftLobbyOnConnect(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  options: ActiveDraftRejoinOptions = {}
+): Promise<void> {
   const userId = socket.data.user.id;
   const openLobbies = await lobbiesRepo.listOpenLobbiesForUser(userId);
-  const activeLobbies = openLobbies.filter((lobby) => lobby.status === 'active');
+  const activeLobbies = openLobbies.filter((lobby) =>
+    lobby.status === 'active' &&
+    (!options.lobbyId || lobby.id === options.lobbyId)
+  );
   if (activeLobbies.length === 0) return;
 
   const newestLobby = activeLobbies[0];
@@ -92,29 +104,38 @@ export async function rejoinActiveDraftLobbyOnConnect(io: QuizballServer, socket
       });
     }
 
-    void import('./draft-realtime.service.js')
-      .then(async ({ draftRealtimeService, resumeActiveDraftTimers }) => {
-        await draftRealtimeService.resumeDraftForReconnectedPlayer(io, newestLobby.id, userId);
-        await resumeActiveDraftTimers(io, newestLobby.id);
-      })
-      .catch((error) => {
-        logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
-      });
+    if (options.resume) {
+      void import('./draft-realtime.service.js')
+        .then(async ({ draftRealtimeService, resumeActiveDraftTimers }) => {
+          await draftRealtimeService.resumeDraftForReconnectedPlayer(io, newestLobby.id, userId);
+          await resumeActiveDraftTimers(io, newestLobby.id);
+        })
+        .catch((error) => {
+          logger.warn({ error, lobbyId: newestLobby.id }, 'Failed to resume active draft timers on reconnect');
+        });
+    }
   }
 
   logger.info(
-    { userId, lobbyId: newestLobby.id, categoryCount: categories.length, banCount: bans.length },
+    { userId, lobbyId: newestLobby.id, categoryCount: categories.length, banCount: bans.length, resumed: Boolean(options.resume) },
     'Socket rejoined active draft lobby'
   );
 }
 
 export async function handleLobbyDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-  const lobbyId = socket.data.lobbyId;
   const userId = socket.data.user.id;
+  let lobbyId = socket.data.lobbyId;
+  let resolvedFromDb = false;
 
   if (!lobbyId) {
-    logger.info({ userId }, 'Lobby disconnect: no waiting lobby attached');
-    return;
+    const openLobby = await lobbiesRepo.findOpenLobbyForUser(userId);
+    lobbyId = openLobby?.id;
+    if (!lobbyId) {
+      logger.info({ userId }, 'Lobby disconnect: no lobby attached');
+      return;
+    }
+    resolvedFromDb = true;
+    logger.info({ userId, lobbyId, status: openLobby?.status ?? null }, 'Lobby disconnect: resolved lobby from DB');
   }
 
   const lobby = await lobbiesRepo.getById(lobbyId);
@@ -123,8 +144,29 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
   }
 
   if (lobby.status === 'active') {
+    // DB-fallback guard: this socket was never bound to the lobby
+    // (socket.data.lobbyId was unset), so it may be an unrelated tab
+    // (homepage etc.). If the user still has a live socket in the draft
+    // room, this disconnect is irrelevant — do NOT pause/clear timers and
+    // emit draft:opponent_disconnected for a draft that's still connected.
+    if (resolvedFromDb) {
+      const lobbySockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+      const hasLiveLobbySocket = lobbySockets.some(
+        (s) => s.id !== socket.id && s.data.user.id === userId
+      );
+      if (hasLiveLobbySocket) {
+        logger.info(
+          { userId, lobbyId },
+          'Lobby disconnect: skipping draft pause — user still has a live socket in the draft room'
+        );
+        return;
+      }
+    }
     void import('./draft-realtime.service.js')
-      .then(({ draftRealtimeService }) => draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId))
+      .then(({ draftRealtimeService }) => draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId, {
+        ignoreSocketId: socket.id,
+        disconnectedConnectedAt: socket.data.connectedAt,
+      }))
       .catch((error) => {
         logger.warn({ error, lobbyId, userId }, 'Draft disconnect pause failed');
       });

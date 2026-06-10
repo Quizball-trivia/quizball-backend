@@ -16,6 +16,15 @@ export interface ObjectivesTransactionRepo {
     definition: ObjectiveDefinition;
     period: ObjectivePeriod;
   }): Promise<ObjectiveProgressRow>;
+  ensureProgressBatch(input: {
+    userId: string;
+    entries: Array<{ definition: ObjectiveDefinition; period: ObjectivePeriod }>;
+  }): Promise<ObjectiveProgressRow[]>;
+  insertEventsBatch(input: {
+    userId: string;
+    eventKey: string;
+    entries: Array<{ objectiveId: string; periodStart: Date }>;
+  }): Promise<Set<string>>;
   insertEvent(input: {
     userId: string;
     objectiveId: string;
@@ -64,7 +73,9 @@ export const objectivesRepo = {
   runInTransaction<T>(callback: (txRepo: ObjectivesTransactionRepo) => Promise<T>): Promise<T> {
     return sql.begin((tx) => callback({
       ensureProgress: (input) => objectivesRepo.ensureProgressInTx(tx, input),
+      ensureProgressBatch: (input) => objectivesRepo.ensureProgressBatchInTx(tx, input),
       insertEvent: (input) => objectivesRepo.insertEventInTx(tx, input),
+      insertEventsBatch: (input) => objectivesRepo.insertEventsBatchInTx(tx, input),
       incrementProgress: (input) => objectivesRepo.incrementProgressInTx(tx, input),
       setProgress: (input) => objectivesRepo.setProgressInTx(tx, input),
       getProgressRows: (userId, period) => objectivesRepo.getProgressRowsInTx(tx, userId, period),
@@ -145,6 +156,94 @@ export const objectivesRepo = {
       ]
     );
     return row;
+  },
+
+  /**
+   * Batched ensureProgress: one multi-row INSERT via unnest instead of one
+   * round-trip per definition (db-optimize.md #5 — the per-match objectives
+   * write storm was N players x M definitions individual upserts).
+   * ON CONFLICT keeps the no-op update so every row is RETURNed whether it
+   * was inserted or already existed.
+   */
+  async ensureProgressBatchInTx(
+    tx: TransactionSql,
+    input: {
+      userId: string;
+      entries: Array<{ definition: ObjectiveDefinition; period: ObjectivePeriod }>;
+    }
+  ): Promise<ObjectiveProgressRow[]> {
+    if (input.entries.length === 0) return [];
+    return tx.unsafe<ObjectiveProgressRow[]>(
+      `
+      INSERT INTO user_objective_progress (
+        user_id,
+        objective_id,
+        period_type,
+        period_start,
+        period_end,
+        progress,
+        target,
+        reward_coins,
+        reward_xp,
+        metadata
+      )
+      SELECT $1, t.objective_id, t.period_type, t.period_start, t.period_end, 0, t.target, t.reward_coins, t.reward_xp, '{}'::jsonb
+      FROM unnest(
+        $2::text[],
+        $3::text[],
+        $4::timestamptz[],
+        $5::timestamptz[],
+        $6::int[],
+        $7::int[],
+        $8::int[]
+      ) AS t(objective_id, period_type, period_start, period_end, target, reward_coins, reward_xp)
+      ON CONFLICT (user_id, objective_id, period_start)
+      DO UPDATE SET updated_at = user_objective_progress.updated_at
+      RETURNING *
+      `,
+      [
+        input.userId,
+        input.entries.map((entry) => entry.definition.id),
+        input.entries.map((entry) => entry.definition.periodType),
+        input.entries.map((entry) => toIso(entry.period.start)),
+        input.entries.map((entry) => toIso(entry.period.end)),
+        input.entries.map((entry) => entry.definition.target),
+        input.entries.map((entry) => entry.definition.rewardCoins),
+        input.entries.map((entry) => entry.definition.rewardXp),
+      ]
+    );
+  },
+
+  /**
+   * Batched insertEvent for one shared event key (e.g. match:<id>): single
+   * multi-row INSERT .. ON CONFLICT DO NOTHING. Returns the objective_ids
+   * whose event was NEWLY inserted (i.e. not already counted).
+   */
+  async insertEventsBatchInTx(
+    tx: TransactionSql,
+    input: {
+      userId: string;
+      eventKey: string;
+      entries: Array<{ objectiveId: string; periodStart: Date }>;
+    }
+  ): Promise<Set<string>> {
+    if (input.entries.length === 0) return new Set();
+    const rows = await tx.unsafe<Array<{ objective_id: string }>>(
+      `
+      INSERT INTO user_objective_events (user_id, objective_id, period_start, event_key)
+      SELECT $1, t.objective_id, t.period_start, $4
+      FROM unnest($2::text[], $3::timestamptz[]) AS t(objective_id, period_start)
+      ON CONFLICT (user_id, objective_id, period_start, event_key) DO NOTHING
+      RETURNING objective_id
+      `,
+      [
+        input.userId,
+        input.entries.map((entry) => entry.objectiveId),
+        input.entries.map((entry) => toIso(entry.periodStart)),
+        input.eventKey,
+      ]
+    );
+    return new Set(rows.map((row) => row.objective_id));
   },
 
   async insertEventInTx(

@@ -223,20 +223,6 @@ function getDeltaForFact(definition: ObjectiveDefinition, fact: ObjectiveMatchFa
   }
 }
 
-async function ensureCurrentRows(
-  txRepo: ObjectivesTransactionRepo,
-  userId: string,
-  now = new Date()
-): Promise<void> {
-  for (const definition of ACTIVE_OBJECTIVE_DEFINITIONS) {
-    await txRepo.ensureProgress({
-      userId,
-      definition,
-      period: getPeriodForDefinition(definition, now),
-    });
-  }
-}
-
 async function processDailyCompleteAll(
   txRepo: ObjectivesTransactionRepo,
   userId: string,
@@ -300,6 +286,17 @@ export const objectivesService = {
     const dailyDefinitions = getDefinitionsForPeriod(dailyPeriod);
     const weeklyDefinitions = getDefinitionsForPeriod(weeklyPeriod);
 
+    // Objectives kill-switch: when disabled, never touch the DB. Return the
+    // definitions as "not started" (empty rows) so the (hidden) UI stays valid
+    // without running 4 reads + a write transaction per call for a feature we
+    // are not using. Pairs with the existing award-path gate.
+    if (!config.OBJECTIVES_ENABLED) {
+      return {
+        daily: buildPeriodResponse(dailyPeriod, [], dailyDefinitions),
+        weekly: buildPeriodResponse(weeklyPeriod, [], weeklyDefinitions),
+      };
+    }
+
     let [dailyRows, weeklyRows] = await Promise.all([
       objectivesRepo.listForUserPeriod(userId, dailyPeriod),
       objectivesRepo.listForUserPeriod(userId, weeklyPeriod),
@@ -343,11 +340,36 @@ export const objectivesService = {
 
     await objectivesRepo.runInTransaction(async (txRepo) => {
       for (const fact of facts) {
-        await ensureCurrentRows(txRepo, fact.userId, now);
+        // One multi-row upsert covers ensureCurrentRows AND the per-definition
+        // ensureProgress below (db-optimize.md #5: this loop used to issue
+        // ~2 x M individual INSERT .. ON CONFLICT per player per match).
+        const ensuredRows = await txRepo.ensureProgressBatch({
+          userId: fact.userId,
+          entries: ACTIVE_OBJECTIVE_DEFINITIONS.map((definition) => ({
+            definition,
+            period: getPeriodForDefinition(definition, now),
+          })),
+        });
+        const progressByObjectiveId = new Map(ensuredRows.map((row) => [row.objective_id, row]));
+
+        // One multi-row insert for this match's event markers; the returned
+        // set tells which definitions have NOT yet counted this match.
+        const eventKey = `match:${matchId}`;
+        const newlyInsertedEvents = await txRepo.insertEventsBatch({
+          userId: fact.userId,
+          eventKey,
+          entries: definitions
+            .filter((definition) => definition.rule.type !== 'ranked_win_streak')
+            .map((definition) => ({
+              objectiveId: definition.id,
+              periodStart: getPeriodForDefinition(definition, now).start,
+            })),
+        });
 
         for (const definition of definitions) {
           const period = getPeriodForDefinition(definition, now);
-          const progressRow = await txRepo.ensureProgress({ userId: fact.userId, definition, period });
+          const progressRow = progressByObjectiveId.get(definition.id);
+          if (!progressRow) continue;
 
           if (definition.rule.type === 'ranked_win_streak') {
             const streak = await txRepo.getRankedWinStreakForPeriod(fact.userId, period.start, period.end);
@@ -369,14 +391,7 @@ export const objectivesService = {
             continue;
           }
 
-          const eventKey = `match:${matchId}`;
-          const eventInserted = await txRepo.insertEvent({
-            userId: fact.userId,
-            objectiveId: definition.id,
-            periodStart: period.start,
-            eventKey,
-          });
-          if (!eventInserted) continue;
+          if (!newlyInsertedEvents.has(definition.id)) continue;
 
           let row: ObjectiveProgressRow | null = null;
           if (definition.rule.type === 'correct_answers_single_category') {

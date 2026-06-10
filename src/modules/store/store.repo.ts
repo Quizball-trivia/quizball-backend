@@ -44,6 +44,10 @@ interface ListStoreTransactionResult {
   total: number;
 }
 
+interface LatestTicketPackPurchaseRow {
+  purchased_at: string;
+}
+
 interface CompareAndSetTicketsStateInput {
   userId: string;
   observedTickets: number;
@@ -372,6 +376,90 @@ export const storeRepo = {
       [wallet.coins, wallet.tickets, wallet.ticketsRefillStartedAt, userId]
     );
     return row ?? null;
+  },
+
+  async getLatestCompletedTicketPackPurchase(userId: string): Promise<LatestTicketPackPurchaseRow | null> {
+    const [row] = await sql<LatestTicketPackPurchaseRow[]>`
+      SELECT COALESCE(sp.fulfilled_at, sp.created_at)::text AS purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = ${userId}
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+      ORDER BY COALESCE(sp.fulfilled_at, sp.created_at) DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  // Non-tx rolling-window usage (see getTicketPackPurchaseWindowInTx).
+  async getTicketPackPurchaseWindow(
+    userId: string,
+    sinceIso: string
+  ): Promise<{ count: number; oldest_purchased_at: string | null }> {
+    const [row] = await sql<{ count: string; oldest_purchased_at: string | null }[]>`
+      SELECT
+        COUNT(*)::text AS count,
+        MIN(COALESCE(sp.fulfilled_at, sp.created_at))::text AS oldest_purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = ${userId}
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+        AND COALESCE(sp.fulfilled_at, sp.created_at) >= ${sinceIso}::timestamptz
+    `;
+    return {
+      count: row ? Number(row.count) : 0,
+      oldest_purchased_at: row?.oldest_purchased_at ?? null,
+    };
+  },
+
+  async getLatestCompletedTicketPackPurchaseInTx(
+    tx: TransactionSql,
+    userId: string
+  ): Promise<LatestTicketPackPurchaseRow | null> {
+    const [row] = await tx.unsafe<LatestTicketPackPurchaseRow[]>(
+      `
+      SELECT COALESCE(sp.fulfilled_at, sp.created_at)::text AS purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = $1
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+      ORDER BY COALESCE(sp.fulfilled_at, sp.created_at) DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+    return row ?? null;
+  },
+
+  // Rolling-window ticket-pack purchase usage: how many completed ticket-pack
+  // purchases the user made since `sinceIso`, and the OLDEST one in that window
+  // (used to compute when a purchase slot frees up).
+  async getTicketPackPurchaseWindowInTx(
+    tx: TransactionSql,
+    userId: string,
+    sinceIso: string
+  ): Promise<{ count: number; oldest_purchased_at: string | null }> {
+    const [row] = await tx.unsafe<{ count: string; oldest_purchased_at: string | null }[]>(
+      `
+      SELECT
+        COUNT(*)::text AS count,
+        MIN(COALESCE(sp.fulfilled_at, sp.created_at))::text AS oldest_purchased_at
+      FROM store_purchases sp
+      JOIN store_products product ON product.id = sp.product_id
+      WHERE sp.user_id = $1
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+        AND COALESCE(sp.fulfilled_at, sp.created_at) >= $2::timestamptz
+      `,
+      [userId, sinceIso]
+    );
+    return {
+      count: row ? Number(row.count) : 0,
+      oldest_purchased_at: row?.oldest_purchased_at ?? null,
+    };
   },
 
   async upsertInventoryInTx(

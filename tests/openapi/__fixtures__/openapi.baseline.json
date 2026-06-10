@@ -711,11 +711,34 @@
           "tickets": {
             "type": "integer",
             "minimum": 0
+          },
+          "ticketPurchaseCooldown": {
+            "type": "object",
+            "properties": {
+              "canBuy": {
+                "type": "boolean"
+              },
+              "nextAvailableAt": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "remainingSeconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "canBuy",
+              "nextAvailableAt",
+              "remainingSeconds"
+            ]
           }
         },
         "required": [
           "coins",
-          "tickets"
+          "tickets",
+          "ticketPurchaseCooldown"
         ]
       },
       "StoreInventoryResponse": {
@@ -818,11 +841,34 @@
               "tickets": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds"
+                ]
               }
             },
             "required": [
               "coins",
-              "tickets"
+              "tickets",
+              "ticketPurchaseCooldown"
             ]
           }
         },
@@ -846,11 +892,34 @@
               "tickets": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds"
+                ]
               }
             },
             "required": [
               "coins",
-              "tickets"
+              "tickets",
+              "ticketPurchaseCooldown"
             ]
           },
           "inventoryApplied": {
@@ -7624,11 +7693,34 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     }
                   },
@@ -7698,11 +7790,34 @@
                     "tickets": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "ticketPurchaseCooldown": {
+                      "type": "object",
+                      "properties": {
+                        "canBuy": {
+                          "type": "boolean"
+                        },
+                        "nextAvailableAt": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time"
+                        },
+                        "remainingSeconds": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "canBuy",
+                        "nextAvailableAt",
+                        "remainingSeconds"
+                      ]
                     }
                   },
                   "required": [
                     "coins",
-                    "tickets"
+                    "tickets",
+                    "ticketPurchaseCooldown"
                   ]
                 }
               }
@@ -7880,11 +7995,34 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     }
                   },
@@ -8010,11 +8148,34 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     },
                     "inventoryApplied": {

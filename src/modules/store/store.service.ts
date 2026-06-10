@@ -36,9 +36,95 @@ import type {
 } from './store.types.js';
 
 const manualAdjustmentLogMetadataSchema = z.object({
-  walletAfter: storeWalletResponseSchema,
+  walletAfter: storeWalletResponseSchema.or(
+    z.object({
+      coins: z.number().int().nonnegative(),
+      tickets: z.number().int().nonnegative(),
+    }).transform((wallet) => ({
+      ...wallet,
+      ticketPurchaseCooldown: {
+        canBuy: true,
+        nextAvailableAt: null,
+        remainingSeconds: 0,
+      },
+    }))
+  ),
   inventoryApplied: z.array(manualInventoryGrantSchema),
 });
+
+// Players can buy up to TICKET_PURCHASE_MAX_PER_WINDOW ticket packs per rolling
+// 24h window. A slot frees up 24h after the OLDEST purchase still inside the
+// window rolls off.
+const TICKET_PURCHASE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TICKET_PURCHASE_MAX_PER_WINDOW = 3;
+
+type TicketPurchaseCooldown = StoreWalletResponse['ticketPurchaseCooldown'];
+
+function buildTicketPurchaseCooldown(
+  windowCount: number,
+  oldestPurchasedAt: string | null | undefined,
+  now = new Date()
+): TicketPurchaseCooldown {
+  // Under the per-window cap → can buy now.
+  if (windowCount < TICKET_PURCHASE_MAX_PER_WINDOW || !oldestPurchasedAt) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+  }
+
+  const oldestMs = Date.parse(oldestPurchasedAt);
+  if (!Number.isFinite(oldestMs)) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+  }
+
+  // At the cap: the next slot opens when the oldest purchase exits the window.
+  const nextAvailableMs = oldestMs + TICKET_PURCHASE_WINDOW_MS;
+  const remainingMs = nextAvailableMs - now.getTime();
+  if (remainingMs <= 0) {
+    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 };
+  }
+
+  return {
+    canBuy: false,
+    nextAvailableAt: new Date(nextAvailableMs).toISOString(),
+    remainingSeconds: Math.ceil(remainingMs / 1000),
+  };
+}
+
+function buildWalletResponse(
+  wallet: Pick<StoreWalletResponse, 'coins' | 'tickets'>,
+  ticketPurchaseCooldown: TicketPurchaseCooldown
+): StoreWalletResponse {
+  return {
+    coins: wallet.coins,
+    tickets: wallet.tickets,
+    ticketPurchaseCooldown,
+  };
+}
+
+// Loads the real ticket-purchase cooldown for a user so wallet responses never
+// default to "purchasable" regardless of purchase history. Enforces the rolling
+// per-24h cap (up to TICKET_PURCHASE_MAX_PER_WINDOW packs).
+async function loadTicketPurchaseCooldownInTx(
+  tx: TransactionSql,
+  userId: string
+): Promise<TicketPurchaseCooldown> {
+  const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+  const window = await storeRepo.getTicketPackPurchaseWindowInTx(tx, userId, sinceIso);
+  return buildTicketPurchaseCooldown(window.count, window.oldest_purchased_at);
+}
+
+function assertCanBuyTicketPack(cooldown: TicketPurchaseCooldown, userId: string): void {
+  if (cooldown.canBuy) return;
+  throw new AppError(
+    'Ticket purchase limit reached (up to 3 per 24 hours)',
+    400,
+    ErrorCode.TICKET_PURCHASE_COOLDOWN,
+    {
+      userId,
+      nextAvailableAt: cooldown.nextAvailableAt,
+      remainingSeconds: cooldown.remainingSeconds,
+    }
+  );
+}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -277,10 +363,7 @@ async function applyWalletAdjustmentInTx(
   }
 
   return {
-    wallet: {
-      coins: updated.coins,
-      tickets: updated.tickets,
-    },
+    wallet: buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId)),
     appliedTicketsDelta,
   };
 }
@@ -452,19 +535,21 @@ export const storeService = {
           });
         }
 
-        const purchase = await storeRepo.createCompletedPurchaseInTx(tx, {
-          userId,
-          productId: product.id,
-          amountCents: coinsCost,
-          currency: 'coins',
-        });
-
         let walletAfter: StoreWalletResponse;
         let ticketsDelta = 0;
         let inventoryDelta: Record<string, number> = {};
 
         switch (product.type) {
           case 'ticket_pack': {
+            const walletForLock = await storeRepo.getWalletForUpdateInTx(tx, userId);
+            if (!walletForLock) {
+              throw new NotFoundError('User not found');
+            }
+            assertCanBuyTicketPack(
+              await loadTicketPurchaseCooldownInTx(tx, userId),
+              userId
+            );
+
             const parsed = ticketPackMetadataSchema.safeParse(product.metadata);
             if (!parsed.success) {
               throw new AppError(
@@ -481,7 +566,10 @@ export const storeService = {
               rejectTicketOverflow: true,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
             });
-            walletAfter = updatedWallet.wallet;
+            walletAfter = buildWalletResponse(
+              updatedWallet.wallet,
+              await loadTicketPurchaseCooldownInTx(tx, userId)
+            );
             ticketsDelta = updatedWallet.appliedTicketsDelta;
             break;
           }
@@ -505,6 +593,13 @@ export const storeService = {
               { productId: product.id, productType: product.type }
             );
         }
+
+        const purchase = await storeRepo.createCompletedPurchaseInTx(tx, {
+          userId,
+          productId: product.id,
+          amountCents: coinsCost,
+          currency: 'coins',
+        });
 
         await storeRepo.insertTransactionLogInTx(tx, {
           eventType: 'fulfillment_succeeded',
@@ -705,11 +800,15 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const wallet = await ticketRefillService.hydrateTickets(userId);
-    return {
-      coins: wallet.coins,
-      tickets: wallet.tickets,
-    };
+    const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+    const [wallet, purchaseWindow] = await Promise.all([
+      ticketRefillService.hydrateTickets(userId),
+      storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
+    ]);
+    return buildWalletResponse(
+      wallet,
+      buildTicketPurchaseCooldown(purchaseWindow.count, purchaseWindow.oldest_purchased_at)
+    );
   },
 
   async consumeRankedTickets(
@@ -729,10 +828,7 @@ export const storeService = {
         if (!wallet) {
           throw new NotFoundError('User not found');
         }
-        hydratedWallets[userId] = {
-          coins: wallet.coins,
-          tickets: wallet.tickets,
-        };
+        hydratedWallets[userId] = buildWalletResponse(wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       const insufficientUserIds = dedupedUserIds.filter((userId) => (hydratedWallets[userId]?.tickets ?? 0) < 1);
@@ -765,10 +861,7 @@ export const storeService = {
             }
           );
         }
-        wallets[userId] = {
-          coins: result.wallet.coins,
-          tickets: result.wallet.tickets,
-        };
+        wallets[userId] = buildWalletResponse(result.wallet, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(
@@ -806,10 +899,7 @@ export const storeService = {
           throw new NotFoundError('User not found');
         }
 
-        wallets[userId] = {
-          coins: updated.coins,
-          tickets: updated.tickets,
-        };
+        wallets[userId] = buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId));
       }
 
       logger.info(

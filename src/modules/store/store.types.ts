@@ -146,6 +146,11 @@ export interface StoreProductResponse {
 export interface StoreWalletResponse {
   coins: number;
   tickets: number;
+  ticketPurchaseCooldown: {
+    canBuy: boolean;
+    nextAvailableAt: string | null;
+    remainingSeconds: number;
+  };
 }
 
 export interface StoreInventoryItemResponse {

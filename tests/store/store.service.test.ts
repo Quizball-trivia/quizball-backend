@@ -23,6 +23,8 @@ vi.mock('../../src/modules/store/store.repo.js', () => ({
     addTicketsInTx: vi.fn(),
     setTicketsStateInTx: vi.fn(),
     setWalletStateInTx: vi.fn(),
+    getLatestCompletedTicketPackPurchase: vi.fn(),
+    getLatestCompletedTicketPackPurchaseInTx: vi.fn(),
     upsertInventoryInTx: vi.fn(),
     listInventoryWithProducts: vi.fn(),
     insertTransactionLog: vi.fn(),
@@ -129,20 +131,20 @@ describe('storeService', () => {
   it('createCheckoutSession allows ticket packs through Stripe checkout when user has space', async () => {
     (storeRepo.getProductBySlug as Mock).mockResolvedValue({
       id: 'prod-ticket-1',
-      slug: 'ticket_pack_3',
+      slug: 'ticket_pack_1',
       type: 'ticket_pack',
-      name: { en: '3 Arena Tickets' },
+      name: { en: '1 Arena Ticket' },
       description: { en: 'Tickets' },
       price_cents: 199,
       currency: 'usd',
-      metadata: { tickets: 3 },
+      metadata: { tickets: 1 },
       is_active: true,
       sort_order: 1,
       created_at: '2026-01-01T00:00:00.000Z',
     });
     (storeRepo.getWallet as Mock).mockResolvedValue({
       coins: 100,
-      tickets: 6,
+      tickets: 2,
       tickets_refill_started_at: null,
     });
     (storeRepo.createPurchase as Mock).mockResolvedValue({
@@ -156,7 +158,7 @@ describe('storeService', () => {
     });
     (storeRepo.insertTransactionLog as Mock).mockResolvedValue({ id: 'log-1' });
 
-    const result = await storeService.createCheckoutSession('user-1', 'ticket_pack_3');
+    const result = await storeService.createCheckoutSession('user-1', 'ticket_pack_1');
 
     expect(result.url).toContain('checkout.stripe.com');
     expect(storeRepo.createPurchase).toHaveBeenCalledWith(
@@ -170,26 +172,26 @@ describe('storeService', () => {
   it('createCheckoutSession rejects ticket packs that would overflow the ticket cap', async () => {
     (storeRepo.getProductBySlug as Mock).mockResolvedValue({
       id: 'prod-ticket-1',
-      slug: 'ticket_pack_3',
+      slug: 'ticket_pack_1',
       type: 'ticket_pack',
-      name: { en: '3 Arena Tickets' },
+      name: { en: '1 Arena Ticket' },
       description: { en: 'Tickets' },
       price_cents: 199,
       currency: 'usd',
-      metadata: { tickets: 3 },
+      metadata: { tickets: 1 },
       is_active: true,
       sort_order: 1,
       created_at: '2026-01-01T00:00:00.000Z',
     });
     (storeRepo.getWallet as Mock).mockResolvedValue({
       coins: 100,
-      tickets: 9,
+      tickets: 3,
       tickets_refill_started_at: null,
     });
     (storeRepo.insertTransactionLog as Mock).mockResolvedValue({ id: 'log-1' });
 
     await expect(
-      storeService.createCheckoutSession('user-1', 'ticket_pack_3')
+      storeService.createCheckoutSession('user-1', 'ticket_pack_1')
     ).rejects.toMatchObject<AppError>({
       code: 'TICKETS_FULL',
     });
@@ -215,7 +217,7 @@ describe('storeService', () => {
     });
 
     expect(result.applied).toBe(false);
-    expect(result.wallet).toEqual({ coins: 120, tickets: 8 });
+    expect(result.wallet).toMatchObject({ coins: 120, tickets: 8 });
     expect(storeRepo.adjustWalletInTx).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,11 @@ import { logger, NotFoundError, pickI18nText } from '../../core/index.js';
 import { getRandom } from '../../core/rng.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import { rankedService } from '../ranked/ranked.service.js';
+import {
+  RANKED_RECENT_CATEGORY_MODE,
+  userRecentCategoriesRepo,
+} from '../user-recent-categories/user-recent-categories.repo.js';
+import { buildRecentExclusionSet, type RecentCategoryEntry } from './recent-category-filter.js';
 
 /** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
 function shuffle<T>(arr: T[]): T[] {
@@ -173,6 +178,72 @@ export const lobbiesService = {
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
+  },
+
+  /**
+   * Ranked draft candidate selection with recent-category avoidance.
+   *
+   * Excludes categories any of `userIds` recently played (newest-first cap of
+   * RECENT_CATEGORY_LIMIT per user, recorded only for categories actually
+   * used in a ranked match). For bot matches pass only the human user id —
+   * AI users never have recents recorded.
+   *
+   * Guarantees: always returns `count` categories when the pool (minus the
+   * hard `excludeCategoryIds`) has at least `count` — if recents would shrink
+   * the pool below that, the exclusion list is reduced starting from the
+   * OLDEST recently played categories (newest stay excluded as priority).
+   *
+   * Fail-open: if the recents lookup fails, selection proceeds unfiltered —
+   * a draft must never fail because of the recents feature.
+   */
+  async selectRankedCategoriesForDraft(params: {
+    count: number;
+    userIds: string[];
+    /** Hard exclusions (e.g. halftime: first-half category + shown options) — never relaxed here. */
+    excludeCategoryIds?: string[];
+  }): Promise<{ categories: DraftCategory[]; recentFilterApplied: boolean }> {
+    const { count, userIds } = params;
+    const allRanked = await getRankedCategories();
+    const hardExcluded = new Set(params.excludeCategoryIds ?? []);
+    const pool = allRanked.filter((row) => !hardExcluded.has(row.id));
+
+    let recents: RecentCategoryEntry[] = [];
+    if (userIds.length > 0) {
+      try {
+        const rows = await userRecentCategoriesRepo.listRecentCategoriesForUsers(
+          userIds,
+          RANKED_RECENT_CATEGORY_MODE
+        );
+        recents = rows.map((row) => ({
+          categoryId: row.category_id,
+          playedAtMs: new Date(row.played_at).getTime(),
+        }));
+      } catch (error) {
+        logger.warn(
+          { error, userIds },
+          'Recent-category lookup failed; ranked draft selection proceeds unfiltered'
+        );
+      }
+    }
+
+    const exclusion = buildRecentExclusionSet({
+      poolIds: pool.map((row) => row.id),
+      recents,
+      minRemaining: count,
+    });
+
+    const fresh = pool.filter((row) => !exclusion.has(row.id));
+    const selected = shuffle([...fresh]).slice(0, count);
+
+    return {
+      categories: selected.map((row) => ({
+        id: row.id,
+        name: pickI18nText(row.name),
+        icon: row.icon ?? null,
+        imageUrl: row.image_url ?? null,
+      })),
+      recentFilterApplied: exclusion.size > 0,
+    };
   },
 
   async selectRandomRankedCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {

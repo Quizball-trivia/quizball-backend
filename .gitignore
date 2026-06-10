@@ -34,6 +34,8 @@ supabase/.temp/
 scripts/*
 !scripts/generate-image-question-preview.ts
 !scripts/moderate-nicknames.ts
+!scripts/optimize-question-images.ts
+!scripts/bench/
 !scripts/grant-dev-unlimited.ts
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/

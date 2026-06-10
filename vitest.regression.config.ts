@@ -36,6 +36,7 @@ export default defineConfig({
       'tests/regression/question-timeout.test.ts',
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
+      'tests/regression/user-recent-categories.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     // ── Serialize at the FILE level: one match owns the shared DB/Redis at a

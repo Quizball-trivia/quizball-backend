@@ -100,10 +100,29 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       let rankedMembers: Awaited<ReturnType<typeof lobbiesRepo.listMembersWithUser>> | null = null;
       let rankedAiUserId: string | null = null;
 
-      const categories = lobby.mode === 'ranked'
-        ? await lobbiesService.selectRandomRankedCategories(3)
-        : await lobbiesService.selectRandomCategories(3);
+      // Members are needed BEFORE category selection for ranked: the draft
+      // candidates avoid categories the human players recently played (AI
+      // opponents never have recents recorded, so excluding the AI user id
+      // also keeps the lookup minimal for bot matches).
+      let recentFilterApplied = false;
+      let categories;
+      if (lobby.mode === 'ranked') {
+        rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+        rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
+        const humanUserIds = rankedMembers
+          .filter((member) => member.user_id !== rankedAiUserId)
+          .map((member) => member.user_id);
+        const selection = await lobbiesService.selectRankedCategoriesForDraft({
+          count: 3,
+          userIds: humanUserIds,
+        });
+        categories = selection.categories;
+        recentFilterApplied = selection.recentFilterApplied;
+      } else {
+        categories = await lobbiesService.selectRandomCategories(3);
+      }
       span.setAttribute('quizball.category_count', categories.length);
+      span.setAttribute('quizball.recent_filter_applied', recentFilterApplied);
       if (categories.length < 3) {
         logger.warn(
           { lobbyId, categoryCount: categories.length },
@@ -116,11 +135,6 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           message: 'Not enough categories with questions to start the game',
         });
         return;
-      }
-
-      if (lobby.mode === 'ranked') {
-        rankedMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
-        rankedAiUserId = await resolveRankedAiUserIdForDraft(lobbyId, rankedMembers);
       }
 
       await lobbiesRepo.clearLobbyCategoryBans(lobbyId);
@@ -150,6 +164,9 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         lobbyId,
         categories,
         turnUserId,
+        // Info for the client: candidates were chosen with recent-category
+        // filtering (no client-side filtering — display as-is).
+        recentFilterApplied,
       });
 
       // Analytics: per-member draft_started event.
@@ -169,7 +186,13 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
         });
       logger.info(
-        { lobbyId, hostUserId: lobby.host_user_id, turnUserId, categoryCount: categories.length },
+        {
+          lobbyId,
+          hostUserId: lobby.host_user_id,
+          turnUserId,
+          categoryCount: categories.length,
+          recentFilterApplied,
+        },
         'Draft started'
       );
     } finally {

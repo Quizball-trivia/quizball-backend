@@ -4,6 +4,10 @@ import { harnessDelayMs } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import {
+  RANKED_RECENT_CATEGORY_MODE,
+  userRecentCategoriesRepo,
+} from '../modules/user-recent-categories/user-recent-categories.repo.js';
 import type { PossessionStatePayload } from '../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { matchPauseKey } from './match-keys.js';
@@ -137,7 +141,34 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       if (state.halftime.purpose === 'penalty' && categoryBId) {
         excludedIds.add(categoryBId);
       }
-      const primary = await selectExcluding(3, Array.from(excludedIds));
+
+      let primary: DraftCategory[];
+      if (useRankedCategories) {
+        // Ranked: also avoid each human player's recently played categories
+        // (soft — relaxed oldest-first if the pool would drop below 3). AI
+        // users never have recents recorded, so excluding them just skips a
+        // useless lookup.
+        let recentAvoidUserIds: string[] = [];
+        try {
+          const [cache, aiUserId] = await Promise.all([
+            getMatchCacheOrRebuild(matchId),
+            deps.resolveAiUserId(matchId),
+          ]);
+          recentAvoidUserIds = (cache?.players ?? [])
+            .map((player) => player.userId)
+            .filter((userId) => userId !== aiUserId);
+        } catch (error) {
+          logger.warn({ error, matchId }, 'Failed to resolve players for halftime recent-category filter');
+        }
+        const selection = await lobbiesService.selectRankedCategoriesForDraft({
+          count: 3,
+          userIds: recentAvoidUserIds,
+          excludeCategoryIds: Array.from(excludedIds),
+        });
+        primary = selection.categories;
+      } else {
+        primary = await selectExcluding(3, Array.from(excludedIds));
+      }
       let categories = uniqueDraftCategories(primary).filter((category) => !excludedIds.has(category.id));
 
       if (categories.length < 3) {
@@ -331,6 +362,22 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         fireAndForget('setMatchCategoryB(finalizeHalftime)', async () => {
           await matchesRepo.setMatchCategoryB(matchId, halfTwoCategoryId);
         });
+
+        // The ban survivor is now ACTUALLY used for the second half — record
+        // it as recently played for the real (non-AI) players so future
+        // drafts avoid it. Best-effort, off the halftime hot path.
+        if (state.variant === 'ranked_sim') {
+          const playerUserIds = cache.players.map((player) => player.userId);
+          fireAndForget('recordRecentCategory(finalizeHalftime)', async () => {
+            const aiUserId = await deps.resolveAiUserId(matchId);
+            const humanUserIds = playerUserIds.filter((userId) => userId !== aiUserId);
+            await userRecentCategoriesRepo.recordPlayedCategoryForUsers({
+              userIds: humanUserIds,
+              categoryId: halfTwoCategoryId,
+              mode: RANKED_RECENT_CATEGORY_MODE,
+            });
+          });
+        }
 
         state.half = 2;
         state.phase = 'NORMAL_PLAY';

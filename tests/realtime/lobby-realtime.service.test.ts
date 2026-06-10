@@ -18,6 +18,7 @@ const buildLobbyStateMock = vi.fn();
 const getLobbyCategoriesMock = vi.fn();
 const selectRandomCategoriesMock = vi.fn();
 const selectRandomRankedCategoriesMock = vi.fn();
+const selectRankedCategoriesForDraftMock = vi.fn();
 const cleanupLobbyMock = vi.fn();
 const consumeRankedTicketsMock = vi.fn();
 const emitStateMock = vi.fn();
@@ -70,6 +71,7 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
     getLobbyCategories: (...args: unknown[]) => getLobbyCategoriesMock(...args),
     selectRandomCategories: (...args: unknown[]) => selectRandomCategoriesMock(...args),
     selectRandomRankedCategories: (...args: unknown[]) => selectRandomRankedCategoriesMock(...args),
+    selectRankedCategoriesForDraft: (...args: unknown[]) => selectRankedCategoriesForDraftMock(...args),
   },
 }));
 
@@ -166,6 +168,14 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { id: 'ranked-cat-2', name: 'Ranked Two' },
       { id: 'ranked-cat-3', name: 'Ranked Three' },
     ]);
+    selectRankedCategoriesForDraftMock.mockResolvedValue({
+      categories: [
+        { id: 'ranked-cat-1', name: 'Ranked One' },
+        { id: 'ranked-cat-2', name: 'Ranked Two' },
+        { id: 'ranked-cat-3', name: 'Ranked Three' },
+      ],
+      recentFilterApplied: true,
+    });
     clearLobbyCategoryBansMock.mockResolvedValue(undefined);
     clearLobbyCategoriesMock.mockResolvedValue(undefined);
     findOpenLobbyForUserMock.mockResolvedValue(null);
@@ -207,13 +217,18 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
     await startDraft(io, 'lobby-1');
 
-    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
+    // Both humans' recents feed the candidate selection.
+    expect(selectRankedCategoriesForDraftMock).toHaveBeenCalledWith({
+      count: 3,
+      userIds: ['u1', 'u2'],
+    });
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(setLobbyStatusMock).toHaveBeenCalledWith('lobby-1', 'active');
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
       turnUserId: 'u1',
+      recentFilterApplied: true,
     }));
   });
 
@@ -238,7 +253,11 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
 
     await startDraft(io, 'lobby-1');
 
-    expect(selectRandomRankedCategoriesMock).toHaveBeenCalledWith(3);
+    // Bot match: only the human's recents are considered.
+    expect(selectRankedCategoriesForDraftMock).toHaveBeenCalledWith({
+      count: 3,
+      userIds: ['u1'],
+    });
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
   });

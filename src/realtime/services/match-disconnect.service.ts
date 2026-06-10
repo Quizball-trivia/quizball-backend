@@ -1044,38 +1044,75 @@ export async function resolveExpiredGraceWindow(
     );
     const allReachable = reachability.every((entry) => entry.sockets.length > 0);
     if (allReachable) {
+      // A user only counts as recovered once at least one of their sockets has
+      // ACTUALLY joined the match room — "reachable during fetchSockets()" is
+      // not enough (the socket can vanish between fetch and join). data.matchId
+      // is only mutated after a successful join. A failed state emit is logged
+      // but non-fatal: once the socket is in the room, the resume choreography
+      // (match:countdown / match:resume / question redelivery) reaches it.
+      const recoveredUserIds: string[] = [];
       for (const entry of reachability) {
+        let joinedSockets = 0;
         for (const rawSocket of entry.sockets) {
           const socket = rawSocket as QuizballSocket;
           try {
-            socket.data.matchId = matchId;
             await socket.join(`match:${matchId}`);
-            await emitPossessionStateToSocket(socket, matchId);
+            socket.data.matchId = matchId;
+            joinedSockets += 1;
           } catch (error) {
             logger.warn(
               { error, matchId, userId: entry.userId },
               'Failed to rejoin reachable socket during grace-expiry auto-resume'
             );
+            continue;
+          }
+          try {
+            await emitPossessionStateToSocket(socket, matchId);
+          } catch (error) {
+            logger.warn(
+              { error, matchId, userId: entry.userId },
+              'Failed to emit state to rejoined socket during grace-expiry auto-resume'
+            );
           }
         }
-        await redis.set(matchPresenceKey(matchId, entry.userId), '1', { EX: PRESENCE_TTL_SEC });
+        if (joinedSockets > 0) recoveredUserIds.push(entry.userId);
       }
-      logger.info(
+
+      if (recoveredUserIds.length === reachability.length) {
+        // Clear every recovered player's disconnect marker BEFORE the resume
+        // choreography so a single resumePausedMatch call sees no remaining
+        // disconnects and goes straight to the countdown — calling it once per
+        // user would emit a spurious match:opponent_disconnected to players
+        // that are already recovered.
+        for (const userId of recoveredUserIds) {
+          await redis.del(matchDisconnectKey(matchId, userId));
+          await redis.set(matchPresenceKey(matchId, userId), '1', { EX: PRESENCE_TTL_SEC });
+        }
+        logger.info(
+          {
+            matchId,
+            recoveredUserIds,
+            socketCounts: reachability.map((entry) => entry.sockets.length),
+            source: 'disconnect_grace_expired',
+          },
+          'Grace expired but all disconnected players are reachable; auto-resuming match'
+        );
+        const resumeInitiatorUserId = recoveredUserIds[0];
+        if (resumeInitiatorUserId) {
+          await resumePausedMatch(io, matchId, resumeInitiatorUserId);
+        }
+        return;
+      }
+
+      logger.warn(
         {
           matchId,
-          recoveredUserIds: reachability.map((entry) => entry.userId),
-          socketCounts: reachability.map((entry) => entry.sockets.length),
+          recoveredUserIds,
+          expectedUserIds: reachability.map((entry) => entry.userId),
           source: 'disconnect_grace_expired',
         },
-        'Grace expired but all disconnected players are reachable; auto-resuming match'
+        'Grace-expiry auto-resume could not rejoin every reachable player; falling through to terminal resolution'
       );
-      // resumePausedMatch clears each player's disconnect marker; the final
-      // call sees none remaining and runs the resume countdown with the
-      // pause-compensated question deadline.
-      for (const entry of reachability) {
-        await resumePausedMatch(io, matchId, entry.userId);
-      }
-      return;
     }
 
     // Forfeit finalization persists final totals from the cache snapshot;

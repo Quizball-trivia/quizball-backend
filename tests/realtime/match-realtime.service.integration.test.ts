@@ -1323,6 +1323,56 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:countdown',
       expect.objectContaining({ matchId: 'm1', reason: 'resume' })
     );
+
+    // The resume choreography runs ONCE with all markers pre-cleared — no
+    // recovered player may receive a spurious match:opponent_disconnected.
+    for (const room of ['user:u1', 'user:u2']) {
+      const emitFn = roomEmits.get(room);
+      if (emitFn) {
+        expect(emitFn).not.toHaveBeenCalledWith('match:opponent_disconnected', expect.anything());
+      }
+    }
+  });
+
+  it('S15b4a: grace expiry falls through to terminal resolution when a reachable socket fails to rejoin', async () => {
+    // u1's socket is fetched as reachable but vanishes before join(); u2
+    // rejoins fine. Recovery must NOT claim success — the match falls through
+    // to terminal resolution instead of resuming with u1 outside the room.
+    const s1 = createSocketMock('u1');
+    const s2 = createSocketMock('u2');
+    s1.data.connectedAt = Date.now() - 30_000;
+    s2.data.connectedAt = Date.now() - 30_000;
+    (s1.join as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('socket gone');
+    });
+    const { io, roomEmits } = createIoWithUserRooms({ u1: [s1], u2: [s2] });
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 8,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // No resume countdown; the match was resolved terminally instead.
+    expect(roomEmits.get('match:m1') ?? vi.fn()).not.toHaveBeenCalledWith(
+      'match:countdown',
+      expect.objectContaining({ reason: 'resume' })
+    );
+    expect(completeMatchMock).toHaveBeenCalled();
   });
 
   it('S15b5: grace expiry forfeits the truly-gone player when the other is reachable via a user-room socket only', async () => {

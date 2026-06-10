@@ -92,6 +92,29 @@ export const matchesRepo = {
     });
   },
 
+  /**
+   * Cheap per-round heartbeat (db-optimize.md #7): advances current_q_index
+   * and refreshes updated_at WITHOUT rewriting the multi-KB state_payload
+   * JSONB. Used for routine NORMAL_PLAY rounds where the full state is only
+   * checkpointed at recovery-relevant boundaries (phase/half change, goals,
+   * penalties, pause, completion). Keeps the stale-match sweeper's activity
+   * signal and the reconnect/rebuild question index fresh.
+   */
+  async touchMatchRound(matchId: string, qIndex: number): Promise<void> {
+    await withSpan('db.matches.touch_round', {
+      'db.operation.name': 'update',
+      'quizball.match_id': matchId,
+      'quizball.q_index': qIndex,
+    }, async () => {
+      await sql`
+        UPDATE matches
+        SET current_q_index = GREATEST(current_q_index, ${qIndex}),
+            updated_at = NOW()
+        WHERE id = ${matchId}
+      `;
+    });
+  },
+
   async setMatchCategoryB(matchId: string, categoryBId: string | null): Promise<void> {
     await sql`
       UPDATE matches

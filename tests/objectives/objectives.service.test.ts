@@ -203,11 +203,28 @@ describe('objectivesService', () => {
           rewardCoins: number;
           rewardXp: number;
         } }) => getOrCreateRow(definition)),
+        ensureProgressBatch: vi.fn(async ({ entries }: { entries: Array<{ definition: {
+          id: string;
+          periodType: 'daily' | 'weekly';
+          target: number;
+          rewardCoins: number;
+          rewardXp: number;
+        } }> }) => entries.map((entry) => getOrCreateRow(entry.definition))),
         insertEvent: vi.fn(async ({ userId, objectiveId, eventKey }: { userId: string; objectiveId: string; eventKey: string }) => {
           const key = `${userId}:${objectiveId}:${eventKey}`;
           if (events.has(key)) return false;
           events.add(key);
           return true;
+        }),
+        insertEventsBatch: vi.fn(async ({ userId, eventKey, entries }: { userId: string; eventKey: string; entries: Array<{ objectiveId: string }> }) => {
+          const inserted = new Set<string>();
+          for (const entry of entries) {
+            const key = `${userId}:${entry.objectiveId}:${eventKey}`;
+            if (events.has(key)) continue;
+            events.add(key);
+            inserted.add(entry.objectiveId);
+          }
+          return inserted;
         }),
         incrementProgress: vi.fn(async ({ objectiveId, delta }: { objectiveId: string; delta: number }) => {
           const row = existingRows.get(objectiveId)!;

@@ -73,9 +73,12 @@ vi.mock('../../src/realtime/redis.js', () => ({
   }),
 }));
 
+const setMatchStatePayloadMock = vi.fn(async () => undefined);
+const touchMatchRoundMock = vi.fn(async () => undefined);
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
-    setMatchStatePayload: vi.fn(async () => undefined),
+    setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
+    touchMatchRound: (...args: unknown[]) => touchMatchRoundMock(...args),
   },
 }));
 
@@ -278,6 +281,43 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
 
     expect(clearQuestionTimerMock).not.toHaveBeenCalled();
     expect(clearAiAnswerTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('routine no-goal normal round only touches the q-index heartbeat (state checkpoint skipped)', async () => {
+    // db-optimize.md #7 checkpoint policy: a NORMAL_PLAY round with no goal
+    // and no phase/half change must NOT rewrite the full state_payload JSONB.
+    getMatchCacheOrRebuildMock.mockResolvedValue(
+      createCache({
+        answers: {
+          'user-1': createAnswer('user-1'),
+          'user-2': createAnswer('user-2'),
+        },
+      })
+    );
+
+    await resolveRound(false);
+
+    expect(setMatchCacheMock).toHaveBeenCalled();
+    expect(touchMatchRoundMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX + 1);
+    expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+  });
+
+  it('checkpoints the full state when the round crosses a phase boundary (halftime)', async () => {
+    const cache = createCache({
+      answers: {
+        'user-1': createAnswer('user-1'),
+        'user-2': createAnswer('user-2'),
+      },
+    });
+    // Last normal question of the half: resolution flips phase to HALFTIME.
+    cache.statePayload.normalQuestionsAnsweredInHalf = cache.statePayload.normalQuestionsPerHalf - 1;
+    cache.statePayload.normalQuestionsAnsweredTotal = cache.statePayload.normalQuestionsPerHalf - 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+
+    await resolveRound(false);
+
+    expect(setMatchStatePayloadMock).toHaveBeenCalled();
+    expect(touchMatchRoundMock).not.toHaveBeenCalled();
   });
 
   it('timeout resolve with one missing answer backfills and still resolves the round', async () => {

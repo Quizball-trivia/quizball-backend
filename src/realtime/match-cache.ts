@@ -163,6 +163,23 @@ export function matchCacheKey(matchId: string): string {
   return `match:cache:${matchId}`;
 }
 
+/**
+ * Per-question answer OVERLAY hash (perf, db-optimize.md #7 / perf-audit #7).
+ *
+ * Committing an answer used to re-serialize and SET the ENTIRE match cache
+ * blob (state + full question DTO + players) — multiple KB of JSON.stringify
+ * and Redis bandwidth on the hottest path in the game. Instead, answer
+ * commits now write ONE small hash entry here and skip the blob write.
+ *
+ * Contract: the blob remains the source of truth for everything else; reads
+ * merge this overlay on top (answers + the committing player's running
+ * totals). The key is namespaced by qIndex, so advancing the round naturally
+ * orphans the previous overlay (reaped by TTL) with no clear-site changes.
+ */
+export function matchAnswersOverlayKey(matchId: string, qIndex: number): string {
+  return `match:cache:answers:${matchId}:${qIndex}`;
+}
+
 function asSeat(value: number | null | undefined): CachedSeat | null {
   if (value === 1 || value === 2) return value;
   return null;
@@ -391,6 +408,7 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
       }
       cached.clueReveals ??= {};
+      await mergeAnswerOverlay(redis, cached);
       span.setAttribute('quizball.cache_hit', true);
       return cached;
     } catch (error) {
@@ -400,6 +418,77 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
       return null;
     }
   });
+}
+
+interface OverlayPlayerTotals {
+  totalPoints: number;
+  correctAnswers: number;
+}
+
+/**
+ * Merge the per-question answer overlay (see matchAnswersOverlayKey) into a
+ * freshly read cache blob: overlay answers win per user, and the committing
+ * player's running totals (written atomically with the answer) override the
+ * possibly older blob totals.
+ */
+async function mergeAnswerOverlay(
+  redis: NonNullable<ReturnType<typeof getRedisClient>>,
+  cached: MatchCache
+): Promise<void> {
+  try {
+    const overlay = await redis.hGetAll(matchAnswersOverlayKey(cached.matchId, cached.currentQIndex));
+    for (const [field, value] of Object.entries(overlay)) {
+      if (field.startsWith('a:')) {
+        const userId = field.slice(2);
+        cached.answers[userId] = JSON.parse(value) as CachedAnswer;
+      } else if (field.startsWith('t:')) {
+        const userId = field.slice(2);
+        const totals = JSON.parse(value) as OverlayPlayerTotals;
+        const player = cached.players.find((candidate) => candidate.userId === userId);
+        if (player) {
+          player.totalPoints = Math.max(player.totalPoints, totals.totalPoints);
+          player.correctAnswers = Math.max(player.correctAnswers, totals.correctAnswers);
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      { error, matchId: cached.matchId, qIndex: cached.currentQIndex },
+      'Failed to merge answer overlay into match cache'
+    );
+  }
+}
+
+/**
+ * Persist a committed answer WITHOUT rewriting the whole cache blob: one
+ * small HSET into the per-question overlay (answer + the player's running
+ * totals, so reads stay consistent). The caller must have already mutated
+ * the in-memory cache the same way.
+ */
+export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return;
+  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  const player = cache.players.find((candidate) => candidate.userId === answer.userId);
+  const fields: Record<string, string> = {
+    [`a:${answer.userId}`]: JSON.stringify(answer),
+  };
+  if (player) {
+    fields[`t:${answer.userId}`] = JSON.stringify({
+      totalPoints: player.totalPoints,
+      correctAnswers: player.correctAnswers,
+    } satisfies OverlayPlayerTotals);
+  }
+  try {
+    await redis.hSet(key, fields);
+    await redis.expire(key, MATCH_CACHE_TTL_SEC);
+  } catch (error) {
+    logger.error(
+      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId: answer.userId },
+      'Failed to write answer overlay; falling back to full cache write'
+    );
+    await setMatchCache(cache);
+  }
 }
 
 export async function setMatchCache(cache: MatchCache): Promise<void> {
@@ -455,7 +544,14 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       state,
     });
 
-    const currentQuestionIndex = state.currentQuestion?.qIndex ?? match.current_q_index;
+    // Take the freshest of the two q-index signals: routine rounds only touch
+    // the current_q_index column (cheap heartbeat), while the embedded state
+    // is checkpointed at phase boundaries — either may be ahead of the other
+    // depending on where the last write happened. Monotonic max can't rewind.
+    const currentQuestionIndex = Math.max(
+      state.currentQuestion?.qIndex ?? 0,
+      match.current_q_index ?? 0
+    );
     cache.currentQIndex = currentQuestionIndex;
     span.setAttribute('quizball.current_q_index', currentQuestionIndex);
     const rawQuestionPayload = await matchesService.buildMatchQuestionPayload(matchId, currentQuestionIndex);

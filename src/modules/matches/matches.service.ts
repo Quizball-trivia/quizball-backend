@@ -170,6 +170,14 @@ function buildQuestionAssets(row: MatchQuestionWithCategory): {
         ...common,
         prompt: ensureI18nObject(row.prompt),
         options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
+        image: parsed.data.image
+          ? {
+            url: parsed.data.image.url,
+            width: parsed.data.image.width,
+            height: parsed.data.image.height,
+            aspectRatio: parsed.data.image.aspect_ratio,
+          }
+          : undefined,
         explanation: null,
       };
 

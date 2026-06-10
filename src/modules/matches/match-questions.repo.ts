@@ -1,6 +1,9 @@
 import { sql } from '../../db/index.js';
 import { withSpan } from '../../core/tracing.js';
-import { VALID_PAYLOAD_CONDITIONS_RAW as VALID_PAYLOAD_CONDITIONS } from '../../db/sql-fragments.js';
+import {
+  VALID_PAYLOAD_CONDITIONS_RAW as VALID_PAYLOAD_CONDITIONS,
+  MCQ_HAS_IMAGE_CONDITIONS_RAW,
+} from '../../db/sql-fragments.js';
 import type {
   MatchQuestionRow,
   MatchQuestionWithCategory,
@@ -258,6 +261,62 @@ export const matchQuestionsRepo = {
   async getRandomQuestionForMatch(params: RandomQuestionForMatchParams): Promise<RandomQuestionCandidate | null> {
     const rows = await this.getRandomQuestionCandidatesForMatch({ ...params, limit: 1 });
     return rows[0] ?? null;
+  },
+
+  /**
+   * Pick random published image-MCQ candidates for a match from the given
+   * categories. Unlike getRandomQuestionCandidatesForMatch this requires a
+   * non-empty image payload. Still respects active categories and excludes
+   * questions already used in the match.
+   *
+   * NOTE (TEST): the caller currently pins `categoryIds` to a single hardcoded
+   * category. When this becomes the real flow, pass categories that actually
+   * contain image questions.
+   */
+  async getRandomImageMcqCandidatesForMatch(params: {
+    matchId: string;
+    categoryIds: string[];
+    limit?: number;
+  }): Promise<RandomQuestionCandidate[]> {
+    return withSpan('db.matches.getRandomImageMcqCandidatesForMatch', {
+      'db.operation.name': 'select',
+      'quizball.match_id': params.matchId,
+      'quizball.category_count': params.categoryIds.length,
+    }, async (span) => {
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+
+      const rows = await sql.unsafe<RandomQuestionCandidate[]>(
+        `
+        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+        FROM questions q
+        JOIN categories c ON c.id = q.category_id
+        JOIN question_payloads qp ON qp.question_id = q.id
+        WHERE q.category_id = ANY($2::uuid[])
+          AND c.is_active = true
+          AND q.status = 'published'
+          AND q.type = 'mcq_single'
+          AND (${perRowMcqPayloadValidation})
+          AND (${imageOnly})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM match_questions mq
+            WHERE mq.match_id = $1
+              AND mq.question_id = q.id
+          )
+        ORDER BY ${RANDOM_ORDER_SQL}
+        LIMIT $3
+        `,
+        [
+          params.matchId,
+          params.categoryIds,
+          params.limit ?? 1,
+        ],
+      );
+      span.setAttribute('quizball.question_found', rows.length > 0);
+      span.setAttribute('quizball.question_candidate_count', rows.length);
+      return rows;
+    });
   },
 
   async getMatchQuestion(matchId: string, qIndex: number): Promise<MatchQuestionWithCategory | null> {

@@ -128,3 +128,15 @@ export const VALID_PAYLOAD_CONDITIONS_RAW = `
     FROM jsonb_array_elements(${NORMALIZED_MCQ_OPTIONS_RAW}) opt
   ) = 4
 `;
+
+/**
+ * Raw SQL string identifying an image MCQ: the normalized payload carries an
+ * `image` object with a non-empty `url`. Canonical discriminator, mirrors the
+ * `questions.repo.ts` list filter. Assumes `qp` aliases `question_payloads`.
+ * Includes leading AND — callers append directly to a WHERE clause.
+ */
+export const MCQ_HAS_IMAGE_CONDITIONS_RAW = `
+  AND (${NORMALIZED_MCQ_PAYLOAD_RAW}) ? 'image'
+  AND jsonb_typeof((${NORMALIZED_MCQ_PAYLOAD_RAW})->'image') = 'object'
+  AND COALESCE((${NORMALIZED_MCQ_PAYLOAD_RAW})->'image'->>'url', '') <> ''
+`;

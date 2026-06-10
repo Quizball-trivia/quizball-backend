@@ -672,6 +672,41 @@ export const rankedMatchmakingService = {
         connected: socket.connected,
       });
       appMetrics.rankedQueueJoins.add(1);
+
+      // ORDER MATTERS: check whether the user already has session state
+      // (active match / lobby / draft / in-flight pairing) BEFORE the ticket
+      // preflight. A reload mid-draft restores the client into "searching"
+      // and re-emits queue_join, but the ticket was already consumed when the
+      // draft completed — preflighting first emitted a spurious
+      // INSUFFICIENT_TICKETS error (+ ranked:queue_left) on top of a match
+      // that was starting fine (staging 2026-06-10). With a session block we
+      // re-emit authoritative state and let the rejoin flow own the UX.
+      // (A bare queueSearchId is NOT handled here: the debounce/resume logic
+      // below re-emits the search with the correct REMAINING duration.)
+      const earlySessionBlock = await getRankedMatchmakingSessionBlock(userId);
+      if (
+        earlySessionBlock &&
+        (earlySessionBlock.activeMatchId ||
+          earlySessionBlock.waitingLobbyId ||
+          earlySessionBlock.state === 'PAIRING_IN_FLIGHT' ||
+          earlySessionBlock.state === 'CORRUPT_MULTI_STATE')
+      ) {
+        logger.info(
+          { userId, ...earlySessionBlock },
+          'Ranked queue join ignored: user already has session state'
+        );
+        rankedDebug('queue_join_ignored_existing_session', {
+          user: rankedDebugUser(userId),
+          state: earlySessionBlock.state,
+          activeMatch: earlySessionBlock.activeMatchId ? earlySessionBlock.activeMatchId.slice(0, 8) : 'none',
+          waitingLobby: earlySessionBlock.waitingLobbyId ? earlySessionBlock.waitingLobbyId.slice(0, 8) : 'none',
+          queueSearch: earlySessionBlock.queueSearchId ? earlySessionBlock.queueSearchId.slice(0, 8) : 'none',
+        });
+        span.setAttribute('quizball.queue_block_reason', `EXISTING_${earlySessionBlock.state}`);
+        await userSessionGuardService.emitState(io, userId);
+        return;
+      }
+
       if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
         span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
         return;

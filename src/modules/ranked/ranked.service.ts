@@ -18,8 +18,8 @@ const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 
 // Coin participation rewards granted once per settled ranked match.
-const RANKED_WIN_COINS = 500;
-const RANKED_LOSS_COINS = 200;
+const RANKED_WIN_COINS = 300;
+const RANKED_LOSS_COINS = 100;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
 const RANKED_BASE_WIN_DELTA = 25;

@@ -7,6 +7,10 @@ async function loadAllowedRedirectDomains(nodeEnv: 'local' | 'staging' | 'prod',
   process.env.NODE_ENV = nodeEnv;
   process.env.CORS_ORIGINS = corsOrigins;
   process.env.DOCS_ENABLED = 'false';
+  // The config boot guard requires this outside the local env (see
+  // src/core/config.ts); tests/core/config.guard.test.ts covers the guard
+  // itself, here we just need config parsing to succeed.
+  process.env.SUPABASE_SMS_HOOK_SECRET = 'test-sms-hook-secret';
 
   const { ALLOWED_REDIRECT_DOMAINS } = await import('../../src/core/constants.js');
   return ALLOWED_REDIRECT_DOMAINS;

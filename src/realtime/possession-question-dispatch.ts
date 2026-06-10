@@ -460,7 +460,8 @@ async function maybePickQuestionForState(
   const reserved = reservedImageMcqForHalf(state);
   const excludeQuestionIds = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : undefined;
   const pickValidCandidate = async (
-    difficulties?: Array<'easy' | 'medium' | 'hard'>
+    difficulties?: Array<'easy' | 'medium' | 'hard'>,
+    allowImageMcqs?: boolean
   ): Promise<PickedQuestion | null> => {
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
@@ -468,14 +469,25 @@ async function maybePickQuestionForState(
       difficulties,
       questionTypes: [questionType],
       excludeQuestionIds,
+      allowImageMcqs,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
-    return pickFirstValidCandidate(rows, questionType, { matchId, categoryIds, difficulties });
+    return pickFirstValidCandidate(rows, questionType, { matchId, categoryIds, difficulties, allowImageMcqs });
   };
 
   let picked = await pickValidCandidate(preferredDifficulties);
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(['easy', 'medium', 'hard']);
+  }
+  if (!picked && useDifficulty) {
+    // Anti-stall last resort: the drafted category has no PLAIN MCQs left
+    // (e.g. it only contains image questions). An off-slot image beats a
+    // frozen match — but log it loudly, it means the category needs content.
+    logger.warn(
+      { matchId, categoryIds, questionType },
+      'Plain MCQ pool exhausted; retrying with image MCQs allowed (anti-stall)'
+    );
+    picked = await pickValidCandidate(['easy', 'medium', 'hard'], true);
   }
 
   return picked;

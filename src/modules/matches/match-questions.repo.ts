@@ -69,6 +69,14 @@ export interface RandomQuestionForMatchParams {
    * until its slot so the preloaded image is never wasted.
    */
   excludeQuestionIds?: string[];
+  /**
+   * Last-resort escape hatch: include image MCQs in the candidate pool.
+   * By default this picker serves PLAIN questions only — image MCQs are
+   * reserved for the dedicated image slot (Q4 of each half) and are picked
+   * via getRandomImageMcqCandidatesForMatch. Set this ONLY for anti-stall
+   * fallbacks where any valid question beats no question at all.
+   */
+  allowImageMcqs?: boolean;
 }
 
 export const matchQuestionsRepo = {
@@ -228,6 +236,15 @@ export const matchQuestionsRepo = {
         : ['mcq_single'];
       const includesMcq = questionTypes.includes('mcq_single');
       const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+      // This is the PLAIN-question picker: image MCQs must never leak into
+      // normal slots (Q1-3/5/6, penalties, last attack, party quiz) — they are
+      // served exclusively by the dedicated image-slot picker. Without this
+      // filter, the moment a category gains image questions every random MCQ
+      // pick can come back with a picture (observed on staging 2026-06-10).
+      const imageMcqConditions = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+      const excludeImageMcqClause = includesMcq && !params.allowImageMcqs
+        ? `AND (q.type <> 'mcq_single' OR NOT (${imageMcqConditions}))`
+        : '';
 
       const values: Array<string | number | string[]> = [params.matchId, params.categoryIds, questionTypes];
       let difficultyClause = '';
@@ -254,6 +271,7 @@ export const matchQuestionsRepo = {
           AND q.status = 'published'
           AND q.type = ANY($3::text[])
           ${includesMcq ? `AND (q.type <> 'mcq_single' OR (${perRowMcqPayloadValidation}))` : ''}
+          ${excludeImageMcqClause}
           ${difficultyClause}
           ${excludeClause}
           AND NOT EXISTS (

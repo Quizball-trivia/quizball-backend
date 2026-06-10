@@ -26,6 +26,8 @@ const paidJerseyProductSlugs = {
   jersey_france_retro: 'avatar_jersey_france_retro',
   jersey_germany_retro: 'avatar_jersey_germany_retro',
   jersey_netherlands_retro: 'avatar_jersey_netherlands_retro',
+  jersey_georgia_retro: 'avatar_jersey_georgia_retro',
+  jersey_psg_retro: 'avatar_jersey_psg_retro',
 } as const;
 
 const freeHair = ['hair_boy_basic'] as const;

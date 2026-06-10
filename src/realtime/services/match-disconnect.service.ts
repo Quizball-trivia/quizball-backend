@@ -75,7 +75,7 @@ import {
   type MatchParticipantSnapshot,
 } from './match-participants.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { fetchUserRoomSockets, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
@@ -152,20 +152,22 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   source: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
   const { io, match, roster, cacheSnapshot, disconnectedUserIds, source } = params;
-  const progressResult = await completePossessionMatchFromProgress(io, match.id, source);
-  if (progressResult.completed) {
-    await cleanupPossessionTerminalRedisKeys(match.id, roster);
-    logger.info(
-      { matchId: match.id, source, winnerId: progressResult.winnerId, decisionBasis: progressResult.decisionBasis },
-      'Disconnect terminal resolver completed match from existing progress'
-    );
-    return { finalized: true, abandoned: false };
-  }
-  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
-    return { finalized: false, abandoned: false };
-  }
 
-  const presence = await resolveMatchPresence(io, match.id, roster, { disconnectedUserIds });
+  // Forfeit-first: a player who disconnected and never came back must always
+  // lose by forfeit, no matter what the score/progress says. The player who
+  // stayed must never be penalized for the opponent's disconnect (previously a
+  // disconnector ahead on total points was awarded the win via the
+  // progress-based decision, e.g. mid-penalty-shootout). Progress-based
+  // completion only remains as the fallback when presence cannot identify a
+  // single absent player (e.g. both sides gone after a restart).
+  // includeUserRoomSockets: a player whose socket re-authenticated (e.g. after
+  // a token-refresh reconnect) but never re-entered the match room is online,
+  // not absent — they must be credited the forfeit win, not dragged into the
+  // progress fallback.
+  const presence = await resolveMatchPresence(io, match.id, roster, {
+    disconnectedUserIds,
+    includeUserRoomSockets: true,
+  });
   if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
     if (!forfeitingUserId) return { finalized: false, abandoned: false };
@@ -195,6 +197,19 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
       'Disconnect terminal resolver finalized match as forfeit'
     );
     return { finalized: true, abandoned: false };
+  }
+
+  const progressResult = await completePossessionMatchFromProgress(io, match.id, source);
+  if (progressResult.completed) {
+    await cleanupPossessionTerminalRedisKeys(match.id, roster);
+    logger.info(
+      { matchId: match.id, source, winnerId: progressResult.winnerId, decisionBasis: progressResult.decisionBasis },
+      'Disconnect terminal resolver completed match from existing progress'
+    );
+    return { finalized: true, abandoned: false };
+  }
+  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
+    return { finalized: false, abandoned: false };
   }
 
   const abandoned = await abandonPossessionTerminalMatch(io, match, roster, source);
@@ -996,10 +1011,118 @@ export async function resolveExpiredGraceWindow(
       return;
     }
 
+    // ── Auto-resume reachable players before any terminal resolution ──
+    // Mass socket flaps (diagnosed prod pattern: token-refresh reconnect
+    // storms re-authenticate fresh sockets into `user:<id>` rooms, but the
+    // client doesn't always complete the match:rejoin handshake) leave players
+    // with a live socket AND a stale disconnect marker. They are online —
+    // killing the match hands out an undeserved loss while both humans stare
+    // at a frozen question. If EVERY marked-disconnected player is reachable,
+    // pull their sockets back into the match room and resume instead.
+    //
+    // "Reachable" deliberately means a FRESH socket: one that connected AFTER
+    // the disconnect marker was written. A socket that predates the marker is
+    // a zombie or a voluntary match:leave (the user's socket stays alive in
+    // the menus) — those players must NOT be yanked back into the match, and
+    // the terminal forfeit path below keeps owning them. A socket already
+    // attached to a different match is likewise excluded.
+    const reachability = await Promise.all(
+      disconnected.map(async (disconnectedUserId) => {
+        const markerRaw = await redis.get(matchDisconnectKey(matchId, disconnectedUserId));
+        const disconnectedAtMs = Number(markerRaw);
+        const markerTimeMs = Number.isFinite(disconnectedAtMs) ? disconnectedAtMs : Number.POSITIVE_INFINITY;
+        const allSockets = await fetchUserRoomSockets(io, disconnectedUserId);
+        const freshSockets = allSockets.filter((rawSocket) => {
+          const data = (rawSocket as { data?: { connectedAt?: unknown; matchId?: unknown } }).data;
+          const connectedAt = Number(data?.connectedAt);
+          if (!Number.isFinite(connectedAt) || connectedAt <= markerTimeMs) return false;
+          if (typeof data?.matchId === 'string' && data.matchId !== matchId) return false;
+          return true;
+        });
+        return { userId: disconnectedUserId, sockets: freshSockets };
+      })
+    );
+    const allReachable = reachability.every((entry) => entry.sockets.length > 0);
+    if (allReachable) {
+      // A user only counts as recovered once at least one of their sockets has
+      // ACTUALLY joined the match room — "reachable during fetchSockets()" is
+      // not enough (the socket can vanish between fetch and join). data.matchId
+      // is only mutated after a successful join. A failed state emit is logged
+      // but non-fatal: once the socket is in the room, the resume choreography
+      // (match:countdown / match:resume / question redelivery) reaches it.
+      const recoveredUserIds: string[] = [];
+      for (const entry of reachability) {
+        let joinedSockets = 0;
+        for (const rawSocket of entry.sockets) {
+          const socket = rawSocket as QuizballSocket;
+          try {
+            await socket.join(`match:${matchId}`);
+            socket.data.matchId = matchId;
+            joinedSockets += 1;
+          } catch (error) {
+            logger.warn(
+              { error, matchId, userId: entry.userId },
+              'Failed to rejoin reachable socket during grace-expiry auto-resume'
+            );
+            continue;
+          }
+          try {
+            await emitPossessionStateToSocket(socket, matchId);
+          } catch (error) {
+            logger.warn(
+              { error, matchId, userId: entry.userId },
+              'Failed to emit state to rejoined socket during grace-expiry auto-resume'
+            );
+          }
+        }
+        if (joinedSockets > 0) recoveredUserIds.push(entry.userId);
+      }
+
+      if (recoveredUserIds.length === reachability.length) {
+        // Clear every recovered player's disconnect marker BEFORE the resume
+        // choreography so a single resumePausedMatch call sees no remaining
+        // disconnects and goes straight to the countdown — calling it once per
+        // user would emit a spurious match:opponent_disconnected to players
+        // that are already recovered.
+        for (const userId of recoveredUserIds) {
+          await redis.del(matchDisconnectKey(matchId, userId));
+          await redis.set(matchPresenceKey(matchId, userId), '1', { EX: PRESENCE_TTL_SEC });
+        }
+        logger.info(
+          {
+            matchId,
+            recoveredUserIds,
+            socketCounts: reachability.map((entry) => entry.sockets.length),
+            source: 'disconnect_grace_expired',
+          },
+          'Grace expired but all disconnected players are reachable; auto-resuming match'
+        );
+        const resumeInitiatorUserId = recoveredUserIds[0];
+        if (resumeInitiatorUserId) {
+          await resumePausedMatch(io, matchId, resumeInitiatorUserId);
+        }
+        return;
+      }
+
+      logger.warn(
+        {
+          matchId,
+          recoveredUserIds,
+          expectedUserIds: reachability.map((entry) => entry.userId),
+          source: 'disconnect_grace_expired',
+        },
+        'Grace-expiry auto-resume could not rejoin every reachable player; falling through to terminal resolution'
+      );
+    }
+
+    // Forfeit finalization persists final totals from the cache snapshot;
+    // without it the last answers before the disconnect could be lost.
+    const cacheSnapshot = await getMatchCache(matchId);
     await resolvePossessionTerminalAfterDisconnect({
       io,
       match: activeMatch,
       roster,
+      cacheSnapshot,
       disconnectedUserIds: disconnected,
       source: 'disconnect_grace_expired',
     });

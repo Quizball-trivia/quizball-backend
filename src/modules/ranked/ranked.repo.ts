@@ -77,8 +77,8 @@ export const rankedRepo = {
       )
       VALUES (
         ${userId},
-        1200,
-        'Rotation',
+        600,
+        'Reserve',
         'unplaced',
         3,
         0,

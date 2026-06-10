@@ -484,7 +484,8 @@ describe('rankedService', () => {
     // perfScore = 2000 + 550 + 117 = 2667
     // perfSum = 3000 + 2667 = 5667, base = 1889
     // dominanceAdj = clamp(round((8400-100)/50), -150, 150) = 150 (clamped)
-    // seedRp = roundToNearest25(1889 + 150) = 2050
+    // rawSeed = 1889 + 150 = 2039 (legacy 0–2600 scale)
+    // seedRp = roundToNearest25(2039 * 875 / 2600) = roundToNearest25(686.2) = 675
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
     );
@@ -518,9 +519,51 @@ describe('rankedService', () => {
     expect(userOutcome?.isPlacement).toBe(true);
     expect(userOutcome?.placementStatus).toBe('placed');
     expect(userOutcome?.placementPlayed).toBe(3);
-    expect(userOutcome?.newRp).toBe(2050);
-    expect(userOutcome?.deltaRp).toBe(850);
-    expect(userOutcome?.newTier).toBe('Key Player');
+    expect(userOutcome?.newRp).toBe(675);
+    expect(userOutcome?.deltaRp).toBe(-525);
+    expect(userOutcome?.newTier).toBe('Reserve');
+  });
+
+  it('caps a perfect placement run at the top of Reserve (875 RP)', async () => {
+    // Perfect run: 2 prior wins (perf_sum 6000), game 3 win vs max anchor 2700
+    // with 12/12 correct: perfScore = 2700 + 550 + 350 = 3600
+    // perfSum = 6000 + 3600 = 9600, base = 3200
+    // dominanceAdj clamps to +150 → rawSeed = 3350 → legacy clamp 2600
+    // seedRp = roundToNearest25(2600 * 875 / 2600) = 875 → still Reserve tier
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2700 })
+    );
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('human-1', 1, 9000, 12),
+      createPlayer('ai-1', 2, 0, 0),
+    ]);
+    (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: userId === 'ai-1',
+    }));
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
+    (rankedRepo.ensureProfile as Mock).mockResolvedValue(
+      createProfile({
+        user_id: 'human-1',
+        rp: 600,
+        tier: 'Reserve',
+        placement_status: 'in_progress',
+        placement_played: 2,
+        placement_wins: 2,
+        placement_perf_sum: 6000,
+        placement_points_for_sum: 9000,
+        placement_points_against_sum: 0,
+      })
+    );
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+    const userOutcome = outcome?.byUserId['human-1'];
+    expect(userOutcome).toBeDefined();
+    expect(userOutcome?.placementStatus).toBe('placed');
+    expect(userOutcome?.newRp).toBe(875);
+    expect(userOutcome?.deltaRp).toBe(275);
+    expect(userOutcome?.newTier).toBe('Reserve');
   });
 
   it('uses pre-existing rp changes (idempotent read path) without reapplying settlement', async () => {

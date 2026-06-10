@@ -36,6 +36,7 @@ scripts/*
 !scripts/moderate-nicknames.ts
 !scripts/optimize-question-images.ts
 !scripts/bench/
+!scripts/grant-dev-unlimited.ts
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**

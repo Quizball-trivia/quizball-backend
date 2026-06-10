@@ -73,6 +73,8 @@ export interface RankedUserOutcome {
   oldRp: number;
   newRp: number;
   deltaRp: number;
+  /** Coin participation reward granted with the settlement (win/loss). */
+  coinsAwarded: number;
   oldTier: RankedTier;
   newTier: RankedTier;
   placementStatus: PlacementStatus;

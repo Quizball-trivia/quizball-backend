@@ -949,11 +949,11 @@ describe('dailyChallengesService', () => {
         userId: 'user-1',
         challengeType: 'countdown',
         score: 4,
-        coinsAwarded: 80,
+        coinsAwarded: 200,
         xpAwarded: 15,
       })
     );
-    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 80);
+    expect(addCoinsMock).toHaveBeenCalledWith('user-1', 200);
     expect(grantXpMock).toHaveBeenCalledWith({
       userId: 'user-1',
       sourceType: 'daily_challenge_completion',
@@ -967,7 +967,7 @@ describe('dailyChallengesService', () => {
     expect(result).toEqual({
       challengeType: 'countdown',
       completedToday: true,
-      coinsAwarded: 80,
+      coinsAwarded: 200,
       xpAwarded: 15,
       wallet: {
         coins: 1080,

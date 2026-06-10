@@ -300,6 +300,9 @@ async function applyWalletAdjustmentInTx(
     ticketsDelta: number;
     rejectTicketOverflow?: boolean;
     insufficientCoinsMessage?: string;
+    // Dev-allowlist accounts: skip the coin-balance guard and let tickets
+    // exceed MAX_TICKETS so paid flows can be exercised without grinding.
+    unlimited?: boolean;
   }
 ): Promise<{ wallet: StoreWalletResponse; appliedTicketsDelta: number }> {
   const nowIso = new Date().toISOString();
@@ -314,7 +317,7 @@ async function applyWalletAdjustmentInTx(
   const currentAnchor = hydrated.ticketsRefillStartedAt;
   const nextCoins = currentCoins + adjustments.coinsDelta;
 
-  if (nextCoins < 0) {
+  if (nextCoins < 0 && !adjustments.unlimited) {
     throw new BadRequestError(
       adjustments.insufficientCoinsMessage ?? 'Not enough coins for this purchase'
     );
@@ -325,23 +328,29 @@ async function applyWalletAdjustmentInTx(
   let appliedTicketsDelta = 0;
 
   if (adjustments.ticketsDelta > 0) {
-    const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);
-    if (availableSpace === 0 || (adjustments.rejectTicketOverflow && adjustments.ticketsDelta > availableSpace)) {
-      throw new AppError(
-        'Tickets are already full',
-        400,
-        ErrorCode.TICKETS_FULL,
-        {
-          userId,
-          requestedAmount: adjustments.ticketsDelta,
-          availableSpace,
-          maxTickets: MAX_TICKETS,
-        }
-      );
+    if (adjustments.unlimited) {
+      appliedTicketsDelta = adjustments.ticketsDelta;
+      nextTickets = currentTickets + appliedTicketsDelta;
+      nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
+    } else {
+      const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);
+      if (availableSpace === 0 || (adjustments.rejectTicketOverflow && adjustments.ticketsDelta > availableSpace)) {
+        throw new AppError(
+          'Tickets are already full',
+          400,
+          ErrorCode.TICKETS_FULL,
+          {
+            userId,
+            requestedAmount: adjustments.ticketsDelta,
+            availableSpace,
+            maxTickets: MAX_TICKETS,
+          }
+        );
+      }
+      appliedTicketsDelta = Math.min(adjustments.ticketsDelta, availableSpace);
+      nextTickets = currentTickets + appliedTicketsDelta;
+      nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
     }
-    appliedTicketsDelta = Math.min(adjustments.ticketsDelta, availableSpace);
-    nextTickets = currentTickets + appliedTicketsDelta;
-    nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
   } else if (adjustments.ticketsDelta < 0) {
     if (currentTickets + adjustments.ticketsDelta < 0) {
       throw new BadRequestError('Manual adjustment would result in negative ticket balance', {
@@ -354,7 +363,9 @@ async function applyWalletAdjustmentInTx(
   }
 
   const updated = await storeRepo.setWalletStateInTx(tx, userId, {
-    coins: nextCoins,
+    // Unlimited dev accounts never write a negative balance: the coin guard is
+    // skipped above, so floor the persisted value at 0 instead.
+    coins: adjustments.unlimited ? Math.max(0, nextCoins) : nextCoins,
     tickets: nextTickets,
     ticketsRefillStartedAt: nextAnchor,
   });
@@ -510,7 +521,12 @@ export const storeService = {
     }
   },
 
-  async purchaseWithCoins(userId: string, productSlug: string): Promise<{ wallet: StoreWalletResponse }> {
+  async purchaseWithCoins(
+    userId: string,
+    productSlug: string,
+    options: { unlimited?: boolean } = {}
+  ): Promise<{ wallet: StoreWalletResponse }> {
+    const { unlimited = false } = options;
     let productForError: StoreProductRow | null = null;
 
     try {
@@ -545,10 +561,12 @@ export const storeService = {
             if (!walletForLock) {
               throw new NotFoundError('User not found');
             }
-            assertCanBuyTicketPack(
-              await loadTicketPurchaseCooldownInTx(tx, userId),
-              userId
-            );
+            if (!unlimited) {
+              assertCanBuyTicketPack(
+                await loadTicketPurchaseCooldownInTx(tx, userId),
+                userId
+              );
+            }
 
             const parsed = ticketPackMetadataSchema.safeParse(product.metadata);
             if (!parsed.success) {
@@ -565,6 +583,7 @@ export const storeService = {
               ticketsDelta: parsed.data.tickets,
               rejectTicketOverflow: true,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
+              unlimited,
             });
             walletAfter = buildWalletResponse(
               updatedWallet.wallet,
@@ -579,6 +598,7 @@ export const storeService = {
               coinsDelta: -coinsCost,
               ticketsDelta: 0,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
+              unlimited,
             });
             walletAfter = updatedWallet.wallet;
             await storeRepo.upsertInventoryInTx(tx, userId, product.id, 1);
@@ -799,16 +819,21 @@ export const storeService = {
     }
   },
 
-  async getWallet(userId: string): Promise<StoreWalletResponse> {
+  async getWallet(
+    userId: string,
+    options: { unlimited?: boolean } = {}
+  ): Promise<StoreWalletResponse> {
     const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
     const [wallet, purchaseWindow] = await Promise.all([
       ticketRefillService.hydrateTickets(userId),
       storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
     ]);
-    return buildWalletResponse(
-      wallet,
-      buildTicketPurchaseCooldown(purchaseWindow.count, purchaseWindow.oldest_purchased_at)
-    );
+    // Dev-allowlist accounts always report purchasable so the UI never shows
+    // them blocked by the cooldown (the purchase path skips it too).
+    const cooldown = options.unlimited
+      ? { canBuy: true, nextAvailableAt: null, remainingSeconds: 0 }
+      : buildTicketPurchaseCooldown(purchaseWindow.count, purchaseWindow.oldest_purchased_at);
+    return buildWalletResponse(wallet, cooldown);
   },
 
   async consumeRankedTickets(

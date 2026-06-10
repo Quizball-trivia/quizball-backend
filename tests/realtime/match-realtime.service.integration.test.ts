@@ -314,6 +314,23 @@ function createIoWithMatchSockets(matchId: string, userIds: string[]): QuizballS
   } as unknown as QuizballServer;
 }
 
+function createIoWithUserRooms(
+  userSockets: Record<string, QuizballSocket[]>
+): { io: QuizballServer; roomEmits: Map<string, ReturnType<typeof vi.fn>> } {
+  const roomEmits = new Map<string, ReturnType<typeof vi.fn>>();
+  const to = vi.fn((room: string) => {
+    if (!roomEmits.has(room)) roomEmits.set(room, vi.fn());
+    return { emit: roomEmits.get(room)! };
+  });
+  const inFn = vi.fn((room: string) => ({
+    fetchSockets: vi.fn(async () =>
+      room.startsWith('user:') ? userSockets[room.slice('user:'.length)] ?? [] : []
+    ),
+    socketsJoin: vi.fn(async () => undefined),
+  }));
+  return { io: { to, in: inFn } as unknown as QuizballServer, roomEmits };
+}
+
 function createSocketMock(userId: string, matchId?: string): QuizballSocket {
   return {
     data: {
@@ -1257,6 +1274,128 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
     expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
     expect(abandonMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15b4: grace expiry auto-resumes when every disconnected player still has a live user-room socket', async () => {
+    // Token-refresh reconnect storm: both players' sockets flapped (disconnect
+    // markers set), both re-authenticated FRESH sockets (user rooms populated,
+    // connectedAt after the disconnect markers) but neither completed the
+    // match:rejoin handshake. The match must be RESUMED, not executed.
+    const s1 = createSocketMock('u1');
+    const s2 = createSocketMock('u2');
+    s1.data.connectedAt = Date.now() - 30_000;
+    s2.data.connectedAt = Date.now() - 30_000;
+    const { io, roomEmits } = createIoWithUserRooms({ u1: [s1], u2: [s2] });
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 8,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // The match survives: no completion, no forfeit, no abandon.
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(settleCompletedRankedMatchMock).not.toHaveBeenCalled();
+
+    // Both reachable sockets were pulled back into the match room.
+    expect(s1.join).toHaveBeenCalledWith('match:m1');
+    expect(s2.join).toHaveBeenCalledWith('match:m1');
+
+    // Disconnect markers cleared and the resume countdown was started.
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u2')).toBe(false);
+    expect(roomEmits.get('match:m1')).toHaveBeenCalledWith(
+      'match:countdown',
+      expect.objectContaining({ matchId: 'm1', reason: 'resume' })
+    );
+  });
+
+  it('S15b5: grace expiry forfeits the truly-gone player when the other is reachable via a user-room socket only', async () => {
+    // u1 vanished entirely. u2's socket re-authenticated (user room) but never
+    // re-entered the match room and has no presence key — previously u2 looked
+    // absent too and the match fell into the progress fallback (points leader
+    // u1 would win). u2 must be treated as present and win by forfeit.
+    const s2 = createSocketMock('u2');
+    const { io } = createIoWithUserRooms({ u2: [s2] });
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 8,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // u2 (100 pts, trailing) wins by forfeit; u1's points lead is irrelevant.
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15b6: grace expiry does NOT auto-resume for a zombie socket that predates the disconnect marker', async () => {
+    // u1 left the match (match:leave) — their socket is still alive in the
+    // menus, but it CONNECTED BEFORE the disconnect marker was written. That
+    // is not a reconnect; u1 must still forfeit, not get yanked back in.
+    const zombie = createSocketMock('u1');
+    zombie.data.connectedAt = Date.now() - 300_000; // long before the marker
+    const { io } = createIoWithUserRooms({ u1: [zombie], u2: [createSocketMock('u2')] });
+    // u2 reachable via fresh user-room socket so the forfeit path can attribute the win.
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 8,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // No resume: u1 forfeits, u2 wins.
+    expect(zombie.join).not.toHaveBeenCalledWith('match:m1');
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
   });
 
   it('S15d2: reconnect-limit exceeded forfeits the disconnector when the opponent is still present', async () => {

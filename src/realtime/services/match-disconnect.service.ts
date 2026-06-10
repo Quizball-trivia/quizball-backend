@@ -75,7 +75,7 @@ import {
   type MatchParticipantSnapshot,
 } from './match-participants.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { fetchUserRoomSockets, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
@@ -160,7 +160,14 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   // progress-based decision, e.g. mid-penalty-shootout). Progress-based
   // completion only remains as the fallback when presence cannot identify a
   // single absent player (e.g. both sides gone after a restart).
-  const presence = await resolveMatchPresence(io, match.id, roster, { disconnectedUserIds });
+  // includeUserRoomSockets: a player whose socket re-authenticated (e.g. after
+  // a token-refresh reconnect) but never re-entered the match room is online,
+  // not absent — they must be credited the forfeit win, not dragged into the
+  // progress fallback.
+  const presence = await resolveMatchPresence(io, match.id, roster, {
+    disconnectedUserIds,
+    includeUserRoomSockets: true,
+  });
   if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
     if (!forfeitingUserId) return { finalized: false, abandoned: false };
@@ -1001,6 +1008,73 @@ export async function resolveExpiredGraceWindow(
         resumeIfContinuing: true,
         pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : Date.now(),
       });
+      return;
+    }
+
+    // ── Auto-resume reachable players before any terminal resolution ──
+    // Mass socket flaps (diagnosed prod pattern: token-refresh reconnect
+    // storms re-authenticate fresh sockets into `user:<id>` rooms, but the
+    // client doesn't always complete the match:rejoin handshake) leave players
+    // with a live socket AND a stale disconnect marker. They are online —
+    // killing the match hands out an undeserved loss while both humans stare
+    // at a frozen question. If EVERY marked-disconnected player is reachable,
+    // pull their sockets back into the match room and resume instead.
+    //
+    // "Reachable" deliberately means a FRESH socket: one that connected AFTER
+    // the disconnect marker was written. A socket that predates the marker is
+    // a zombie or a voluntary match:leave (the user's socket stays alive in
+    // the menus) — those players must NOT be yanked back into the match, and
+    // the terminal forfeit path below keeps owning them. A socket already
+    // attached to a different match is likewise excluded.
+    const reachability = await Promise.all(
+      disconnected.map(async (disconnectedUserId) => {
+        const markerRaw = await redis.get(matchDisconnectKey(matchId, disconnectedUserId));
+        const disconnectedAtMs = Number(markerRaw);
+        const markerTimeMs = Number.isFinite(disconnectedAtMs) ? disconnectedAtMs : Number.POSITIVE_INFINITY;
+        const allSockets = await fetchUserRoomSockets(io, disconnectedUserId);
+        const freshSockets = allSockets.filter((rawSocket) => {
+          const data = (rawSocket as { data?: { connectedAt?: unknown; matchId?: unknown } }).data;
+          const connectedAt = Number(data?.connectedAt);
+          if (!Number.isFinite(connectedAt) || connectedAt <= markerTimeMs) return false;
+          if (typeof data?.matchId === 'string' && data.matchId !== matchId) return false;
+          return true;
+        });
+        return { userId: disconnectedUserId, sockets: freshSockets };
+      })
+    );
+    const allReachable = reachability.every((entry) => entry.sockets.length > 0);
+    if (allReachable) {
+      for (const entry of reachability) {
+        for (const rawSocket of entry.sockets) {
+          const socket = rawSocket as QuizballSocket;
+          try {
+            socket.data.matchId = matchId;
+            await socket.join(`match:${matchId}`);
+            await emitPossessionStateToSocket(socket, matchId);
+          } catch (error) {
+            logger.warn(
+              { error, matchId, userId: entry.userId },
+              'Failed to rejoin reachable socket during grace-expiry auto-resume'
+            );
+          }
+        }
+        await redis.set(matchPresenceKey(matchId, entry.userId), '1', { EX: PRESENCE_TTL_SEC });
+      }
+      logger.info(
+        {
+          matchId,
+          recoveredUserIds: reachability.map((entry) => entry.userId),
+          socketCounts: reachability.map((entry) => entry.sockets.length),
+          source: 'disconnect_grace_expired',
+        },
+        'Grace expired but all disconnected players are reachable; auto-resuming match'
+      );
+      // resumePausedMatch clears each player's disconnect marker; the final
+      // call sees none remaining and runs the resume countdown with the
+      // pause-compensated question deadline.
+      for (const entry of reachability) {
+        await resumePausedMatch(io, matchId, entry.userId);
+      }
       return;
     }
 

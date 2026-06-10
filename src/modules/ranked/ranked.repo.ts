@@ -47,6 +47,16 @@ interface RankedSettlementEntry {
 
 export const rankedRepo = {
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
+    // SELECT-first: the profile already exists for all but a user's very
+    // first ranked touch, and the INSERT .. ON CONFLICT DO NOTHING attempt on
+    // every call was pure write-path churn at scale (db-optimize.md #6:
+    // ~88k redundant upserts against ~3k rows). The insert below remains the
+    // race-safe creation path for first-time users.
+    const [preexisting] = await sql<RankedProfileRow[]>`
+      SELECT * FROM ranked_profiles WHERE user_id = ${userId}
+    `;
+    if (preexisting) return preexisting;
+
     const [row] = await sql<RankedProfileRow[]>`
       INSERT INTO ranked_profiles (
         user_id,

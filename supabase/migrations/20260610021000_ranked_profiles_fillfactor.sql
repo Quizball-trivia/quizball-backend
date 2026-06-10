@@ -1,0 +1,11 @@
+-- Perf (db-optimize.md #6): ranked_profiles takes very frequent UPDATEs on a
+-- small, hot row set (prod baseline: 849k updates on ~3k rows, mostly
+-- NON-HOT -> index bloat + vacuum pressure). Lowering fillfactor leaves free
+-- space in each heap page so RP/streak updates can go HOT (same-page) instead
+-- of migrating tuples and touching every index.
+--
+-- Applies to newly written pages; existing pages pick it up as they churn
+-- (this table rewrites itself quickly at 849k updates / 3k rows). Deliberately
+-- NOT running VACUUM FULL here — it takes an exclusive lock and the table is
+-- small enough that natural churn converges fast.
+ALTER TABLE ranked_profiles SET (fillfactor = 70);

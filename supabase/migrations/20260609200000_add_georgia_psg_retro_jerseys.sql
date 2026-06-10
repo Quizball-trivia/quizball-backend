@@ -16,7 +16,7 @@ VALUES
   (
     'avatar_jersey_psg_retro',
     'avatar',
-    '{"en":"PSG Retro Jersey"}'::jsonb,
+    '{"en":"PSG Jersey"}'::jsonb,
     '{"en":"Layered avatar jersey"}'::jsonb,
     50000,
     'coins',

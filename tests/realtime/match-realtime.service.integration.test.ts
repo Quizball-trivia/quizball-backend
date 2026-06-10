@@ -1223,6 +1223,73 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('S15b3: grace expiry forfeits the absent player even when they lead on points', async () => {
+    // u1 (200 pts, points leader) disconnected and never came back; u2 (100
+    // pts) stayed connected the whole time. The absent player must ALWAYS
+    // lose by forfeit — the progress-based decision must not hand the
+    // disconnector a win on total points (the mid-penalty-shootout bug).
+    const io = createIoWithMatchSockets('m1', ['u2']);
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 14,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    // Present player u2 wins by forfeit despite trailing on total points.
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15d2: reconnect-limit exceeded forfeits the disconnector when the opponent is still present', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    // u2 still has a live match-room socket; u1 burns their 4th disconnect.
+    const io = createIoWithMatchSockets('m1', ['u2']);
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '3');
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    // u1 leads on points (200 vs 100) but must still lose by forfeit.
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+  });
+
   it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {
     vi.useFakeTimers();
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');

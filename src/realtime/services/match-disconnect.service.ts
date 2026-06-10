@@ -152,19 +152,14 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   source: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
   const { io, match, roster, cacheSnapshot, disconnectedUserIds, source } = params;
-  const progressResult = await completePossessionMatchFromProgress(io, match.id, source);
-  if (progressResult.completed) {
-    await cleanupPossessionTerminalRedisKeys(match.id, roster);
-    logger.info(
-      { matchId: match.id, source, winnerId: progressResult.winnerId, decisionBasis: progressResult.decisionBasis },
-      'Disconnect terminal resolver completed match from existing progress'
-    );
-    return { finalized: true, abandoned: false };
-  }
-  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
-    return { finalized: false, abandoned: false };
-  }
 
+  // Forfeit-first: a player who disconnected and never came back must always
+  // lose by forfeit, no matter what the score/progress says. The player who
+  // stayed must never be penalized for the opponent's disconnect (previously a
+  // disconnector ahead on total points was awarded the win via the
+  // progress-based decision, e.g. mid-penalty-shootout). Progress-based
+  // completion only remains as the fallback when presence cannot identify a
+  // single absent player (e.g. both sides gone after a restart).
   const presence = await resolveMatchPresence(io, match.id, roster, { disconnectedUserIds });
   if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
@@ -195,6 +190,19 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
       'Disconnect terminal resolver finalized match as forfeit'
     );
     return { finalized: true, abandoned: false };
+  }
+
+  const progressResult = await completePossessionMatchFromProgress(io, match.id, source);
+  if (progressResult.completed) {
+    await cleanupPossessionTerminalRedisKeys(match.id, roster);
+    logger.info(
+      { matchId: match.id, source, winnerId: progressResult.winnerId, decisionBasis: progressResult.decisionBasis },
+      'Disconnect terminal resolver completed match from existing progress'
+    );
+    return { finalized: true, abandoned: false };
+  }
+  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
+    return { finalized: false, abandoned: false };
   }
 
   const abandoned = await abandonPossessionTerminalMatch(io, match, roster, source);
@@ -996,10 +1004,14 @@ export async function resolveExpiredGraceWindow(
       return;
     }
 
+    // Forfeit finalization persists final totals from the cache snapshot;
+    // without it the last answers before the disconnect could be lost.
+    const cacheSnapshot = await getMatchCache(matchId);
     await resolvePossessionTerminalAfterDisconnect({
       io,
       match: activeMatch,
       roster,
+      cacheSnapshot,
       disconnectedUserIds: disconnected,
       source: 'disconnect_grace_expired',
     });

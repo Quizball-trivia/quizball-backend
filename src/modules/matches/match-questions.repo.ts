@@ -2,7 +2,9 @@ import { sql } from '../../db/index.js';
 import { withSpan } from '../../core/tracing.js';
 import {
   VALID_PAYLOAD_CONDITIONS_RAW as VALID_PAYLOAD_CONDITIONS,
-  MCQ_HAS_IMAGE_CONDITIONS_RAW,
+  MCQ_HAS_IMAGE_CONDITIONS_NP_RAW,
+  NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW,
+  VALID_PAYLOAD_CONDITIONS_NP_RAW,
 } from '../../db/sql-fragments.js';
 import type {
   MatchQuestionRow,
@@ -235,13 +237,17 @@ export const matchQuestionsRepo = {
         ? params.questionTypes
         : ['mcq_single'];
       const includesMcq = questionTypes.includes('mcq_single');
-      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+      // np.p = the payload normalized ONCE per row (lateral) — referencing the
+      // inline normalization in every condition re-parses the JSONB per
+      // reference and made this hot-path pick ~45ms; the lateral keeps it
+      // single-digit ms (see sql-fragments.ts).
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
       // This is the PLAIN-question picker: image MCQs must never leak into
       // normal slots (Q1-3/5/6, penalties, last attack, party quiz) — they are
       // served exclusively by the dedicated image-slot picker. Without this
       // filter, the moment a category gains image questions every random MCQ
       // pick can come back with a picture (observed on staging 2026-06-10).
-      const imageMcqConditions = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+      const imageMcqConditions = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
       const excludeImageMcqClause = includesMcq && !params.allowImageMcqs
         ? `AND (q.type <> 'mcq_single' OR NOT (${imageMcqConditions}))`
         : '';
@@ -266,6 +272,7 @@ export const matchQuestionsRepo = {
         FROM questions q
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
+        ${includesMcq ? NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW : ''}
         WHERE q.category_id = ANY($2::uuid[])
           AND c.is_active = true
           AND q.status = 'published'
@@ -313,8 +320,8 @@ export const matchQuestionsRepo = {
       'quizball.match_id': params.matchId,
       'quizball.category_count': params.categoryIds.length,
     }, async (span) => {
-      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
-      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
+      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
 
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
@@ -322,6 +329,7 @@ export const matchQuestionsRepo = {
         FROM questions q
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
+        ${NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW}
         WHERE q.category_id = ANY($2::uuid[])
           AND c.is_active = true
           AND q.status = 'published'
@@ -364,8 +372,8 @@ export const matchQuestionsRepo = {
       'quizball.match_id': params.matchId,
       'quizball.question_id': params.questionId,
     }, async (span) => {
-      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
-      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
+      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
 
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
@@ -373,6 +381,7 @@ export const matchQuestionsRepo = {
         FROM questions q
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
+        ${NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW}
         WHERE q.id = $2
           AND c.is_active = true
           AND q.status = 'published'

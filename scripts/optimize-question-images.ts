@@ -74,7 +74,17 @@ async function main(): Promise<void> {
   const includeDrafts = args.includes('--include-drafts');
   const dryRun = args.includes('--dry-run');
   const limitArg = args.find((a) => a.startsWith('--limit='));
-  const limit = limitArg ? Number(limitArg.split('=')[1]) : null;
+  let limit: number | null = null;
+  if (limitArg) {
+    const parsed = Number(limitArg.split('=')[1]);
+    // A typo'd --limit must NOT silently fall through to "process everything"
+    // — this script does bulk writes.
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      console.error(`Invalid --limit value: ${limitArg.split('=')[1]} (expected a positive integer)`);
+      process.exit(1);
+    }
+    limit = parsed;
+  }
 
   let sharp: typeof import('sharp');
   try {

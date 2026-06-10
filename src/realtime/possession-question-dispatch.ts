@@ -461,18 +461,23 @@ async function maybePickQuestionForState(
   const excludeQuestionIds = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : undefined;
   const pickValidCandidate = async (
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
-    allowImageMcqs?: boolean
+    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean }
   ): Promise<PickedQuestion | null> => {
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [questionType],
-      excludeQuestionIds,
-      allowImageMcqs,
+      excludeQuestionIds: opts?.dropReservedExclusion ? undefined : excludeQuestionIds,
+      allowImageMcqs: opts?.allowImageMcqs,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
-    return pickFirstValidCandidate(rows, questionType, { matchId, categoryIds, difficulties, allowImageMcqs });
+    return pickFirstValidCandidate(rows, questionType, {
+      matchId,
+      categoryIds,
+      difficulties,
+      allowImageMcqs: opts?.allowImageMcqs ?? false,
+    });
   };
 
   let picked = await pickValidCandidate(preferredDifficulties);
@@ -483,11 +488,16 @@ async function maybePickQuestionForState(
     // Anti-stall last resort: the drafted category has no PLAIN MCQs left
     // (e.g. it only contains image questions). An off-slot image beats a
     // frozen match — but log it loudly, it means the category needs content.
+    // The reserved-image exclusion is dropped too: if the reservation is the
+    // ONLY remaining valid candidate, keeping it excluded would still stall.
     logger.warn(
       { matchId, categoryIds, questionType },
       'Plain MCQ pool exhausted; retrying with image MCQs allowed (anti-stall)'
     );
-    picked = await pickValidCandidate(['easy', 'medium', 'hard'], true);
+    picked = await pickValidCandidate(['easy', 'medium', 'hard'], {
+      allowImageMcqs: true,
+      dropReservedExclusion: true,
+    });
   }
 
   return picked;

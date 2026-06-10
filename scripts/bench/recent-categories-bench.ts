@@ -173,12 +173,32 @@ async function explain(
 }
 
 async function seed(sql: (typeof import('../../src/db/index.js'))['sql']): Promise<void> {
-  const existing = await sql<{ n: string }[]>`
-    SELECT count(*)::text AS n FROM categories WHERE slug LIKE ${BENCH_NS + '-%'}
+  // Completeness check across ALL seeded tables — a partially interrupted run
+  // (e.g. killed mid-seed) must not be mistaken for a complete dataset, and
+  // re-running on top of a partial namespace would duplicate questions (their
+  // insert has no conflict anchor). Anything partial => demand --cleanup.
+  const [counts] = await sql<Array<{ cats: string; users: string; questions: string }>>`
+    SELECT
+      (SELECT count(*) FROM categories WHERE slug LIKE ${BENCH_NS + '-%'})::text AS cats,
+      (SELECT count(*) FROM users WHERE email LIKE ${BENCH_NS + '+%'})::text AS users,
+      (SELECT count(*) FROM questions q JOIN categories c ON c.id = q.category_id
+        WHERE c.slug LIKE ${BENCH_NS + '-%'})::text AS questions
   `;
-  if (Number(existing[0]?.n ?? 0) >= BENCH_CATEGORY_COUNT) {
+  const cats = Number(counts?.cats ?? 0);
+  const users = Number(counts?.users ?? 0);
+  const questions = Number(counts?.questions ?? 0);
+  const complete = cats >= BENCH_CATEGORY_COUNT
+    && users >= BENCH_USER_COUNT
+    && questions >= BENCH_CATEGORY_COUNT * BENCH_QUESTIONS_PER_CATEGORY;
+  if (complete) {
     console.log('Seed already present — skipping (use --cleanup to reset).');
     return;
+  }
+  if (cats > 0 || users > 0 || questions > 0) {
+    throw new Error(
+      `Partial bench dataset detected (categories=${cats}, users=${users}, questions=${questions}). ` +
+      'Run with --cleanup first, then re-seed.'
+    );
   }
 
   console.log('Seeding categories + featured…');

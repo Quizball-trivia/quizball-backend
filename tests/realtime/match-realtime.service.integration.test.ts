@@ -355,6 +355,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     sendMatchQuestionMock.mockResolvedValue(undefined);
     resumePossessionMatchQuestionMock.mockResolvedValue(false);
     resumePartyQuizQuestionMock.mockResolvedValue(false);
+    ensurePossessionActiveTimersMock.mockResolvedValue(true);
     emitPossessionStateToSocketMock.mockResolvedValue(undefined);
     emitPartyQuizStateToSocketMock.mockResolvedValue(undefined);
     listMembersWithUserMock.mockResolvedValue([

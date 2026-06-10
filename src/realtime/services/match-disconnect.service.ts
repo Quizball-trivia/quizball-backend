@@ -927,6 +927,10 @@ export async function resolveExpiredGraceWindow(
       // reconnect flapping), nothing would ever resolve the current round.
       // Re-arm (or immediately resolve an expired) question timer so the
       // match can never silently freeze here.
+      // Party quiz intentionally skips this: it uses a shared NX pause window
+      // and its own rejoin/resume flow (resumePartyQuizQuestion /
+      // ensurePartyQuizActiveTimer) re-arms timers on reconnect; this fix is
+      // scoped to the possession freeze, where the diagnosed race lives.
       if (variant !== 'friendly_party_quiz') {
         await redis.del(matchGraceKey(matchId));
         await redis.del(matchPauseKey(matchId));

@@ -261,6 +261,25 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
     expect(clearAiAnswerTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
   });
 
+  it('leaves timers armed when resolution throws before the round result is committed', async () => {
+    // An exception mid-resolution must not kill the fallback timer either:
+    // the durable timer retries the resolve (lock-guarded) later.
+    getMatchCacheOrRebuildMock.mockResolvedValue(
+      createCache({
+        answers: {
+          'user-1': createAnswer('user-1'),
+          'user-2': createAnswer('user-2'),
+        },
+      })
+    );
+    setMatchCacheMock.mockRejectedValueOnce(new Error('redis write failed'));
+
+    await expect(resolveRound(false)).rejects.toThrow('redis write failed');
+
+    expect(clearQuestionTimerMock).not.toHaveBeenCalled();
+    expect(clearAiAnswerTimerMock).not.toHaveBeenCalled();
+  });
+
   it('timeout resolve with one missing answer backfills and still resolves the round', async () => {
     // The durable timer firing must conclude a half-answered round (this is
     // the fallback the freeze fix protects).

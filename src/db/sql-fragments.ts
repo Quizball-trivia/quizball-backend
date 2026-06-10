@@ -58,6 +58,28 @@ export const RANKED_ELIGIBILITY_HAVING = sql`
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
 `;
 
+/**
+ * Cheap counts-only version of RANKED_ELIGIBILITY_HAVING — no
+ * question_payloads join and no per-row JSONB validation.
+ *
+ * Rationale (perf, db-optimize.md #4): the JSONB MCQ validation forces
+ * detoasting + parsing every published question payload, turning the
+ * category-eligibility aggregates into ~850ms queries. Verified on staging
+ * (2026-06-10): 0 of 4,121 published mcq_single questions fail the full
+ * validation, and the counts-only rewrite returns the identical category set
+ * (36/36 ranked, 38/38 friendly @ min 5) at ~7ms. Payload validity is
+ * enforced at authoring time, and the per-question picker
+ * (match-questions.repo, VALID_PAYLOAD_CONDITIONS) still validates payloads
+ * per row — an invalid MCQ can never enter a match; at worst a borderline
+ * category is overcounted here.
+ * Assumes `q` aliases `questions` with status/type filtered in WHERE.
+ */
+export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
+  HAVING COUNT(*) FILTER (WHERE q.type = 'mcq_single') >= 4
+    AND COUNT(*) FILTER (WHERE q.type = 'put_in_order') >= 1
+    AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
+`;
+
 // ── Raw string version for use with sql.unsafe() ──
 // Single source of truth: derived from the same logic as MCQ_VALIDATION_CONDITIONS above.
 

@@ -153,10 +153,11 @@ export const rankedRepo = {
                 placement_game_no,
                 placement_anchor_rp,
                 placement_perf_score,
-                calculation_method
+                calculation_method,
+                coins_awarded
               )
               VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $25
               )
               ON CONFLICT (match_id, user_id) DO NOTHING
               RETURNING 1

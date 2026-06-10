@@ -49,6 +49,7 @@ export interface RankedRpChangeRow {
   placement_anchor_rp: number | null;
   placement_perf_score: number | null;
   calculation_method: 'placement_seed' | 'ranked_formula';
+  coins_awarded: number;
   created_at: string;
 }
 

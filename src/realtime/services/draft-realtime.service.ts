@@ -5,6 +5,10 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { storeService } from '../../modules/store/store.service.js';
+import {
+  RANKED_RECENT_CATEGORY_MODE,
+  userRecentCategoriesRepo,
+} from '../../modules/user-recent-categories/user-recent-categories.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
@@ -179,12 +183,14 @@ async function startMatchFromDraft(
   if (members.length !== 2) return null;
 
   let consumedRankedTicketUserIds: string[] = [];
+  let rankedHumanUserIds: string[] = [];
 
   if (lobby.mode === 'ranked') {
     const aiUserId = await resolveRankedAiUserId(lobbyId, members);
     const ticketUserIds = members
       .filter((member) => member.user_id !== aiUserId)
       .map((member) => member.user_id);
+    rankedHumanUserIds = ticketUserIds;
     const abortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
     const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (blockingSignals.length > 0) {
@@ -268,6 +274,25 @@ async function startMatchFromDraft(
     { lobbyId, matchId, mode: lobby.mode, halfOneCategoryId },
     'Match created from draft'
   );
+
+  // Recently played categories: the drafted survivor is now ACTUALLY used by
+  // this match, so record it for the real (non-AI) players — this is what the
+  // next draft's recent-category filter reads. Best-effort: never blocks the
+  // match start.
+  if (lobby.mode === 'ranked' && rankedHumanUserIds.length > 0) {
+    void userRecentCategoriesRepo
+      .recordPlayedCategoryForUsers({
+        userIds: rankedHumanUserIds,
+        categoryId: halfOneCategoryId,
+        mode: RANKED_RECENT_CATEGORY_MODE,
+      })
+      .catch((error) => {
+        logger.warn(
+          { error, lobbyId, matchId, halfOneCategoryId },
+          'Failed to record recently played category (draft)'
+        );
+      });
+  }
 
   // Analytics: per-member draft_completed event. Duration relative to
   // the match created_at timestamp is the closest proxy we have without

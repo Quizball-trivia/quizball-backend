@@ -63,6 +63,12 @@ export interface RandomQuestionForMatchParams {
   categoryIds: string[];
   difficulties?: Array<'easy' | 'medium' | 'hard'>;
   questionTypes?: QuestionType[];
+  /**
+   * Question ids that must NOT be returned even though they are otherwise
+   * eligible — e.g. the half's reserved image MCQ, which must stay unused
+   * until its slot so the preloaded image is never wasted.
+   */
+  excludeQuestionIds?: string[];
 }
 
 export const matchQuestionsRepo = {
@@ -223,6 +229,20 @@ export const matchQuestionsRepo = {
       const includesMcq = questionTypes.includes('mcq_single');
       const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
 
+      const values: Array<string | number | string[]> = [params.matchId, params.categoryIds, questionTypes];
+      let difficultyClause = '';
+      if (params.difficulties?.length) {
+        values.push(params.difficulties);
+        difficultyClause = `AND q.difficulty = ANY($${values.length}::text[])`;
+      }
+      let excludeClause = '';
+      if (params.excludeQuestionIds?.length) {
+        values.push(params.excludeQuestionIds);
+        excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
+      }
+      values.push(params.limit ?? 1);
+      const limitPlaceholder = `$${values.length}`;
+
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
         SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
@@ -234,7 +254,8 @@ export const matchQuestionsRepo = {
           AND q.status = 'published'
           AND q.type = ANY($3::text[])
           ${includesMcq ? `AND (q.type <> 'mcq_single' OR (${perRowMcqPayloadValidation}))` : ''}
-          ${params.difficulties?.length ? 'AND q.difficulty = ANY($4::text[])' : ''}
+          ${difficultyClause}
+          ${excludeClause}
           AND NOT EXISTS (
             SELECT 1
             FROM match_questions mq
@@ -242,15 +263,9 @@ export const matchQuestionsRepo = {
               AND mq.question_id = q.id
           )
         ORDER BY ${RANDOM_ORDER_SQL}
-        LIMIT $${params.difficulties?.length ? 5 : 4}
+        LIMIT ${limitPlaceholder}
         `,
-        [
-          params.matchId,
-          params.categoryIds,
-          questionTypes,
-          ...(params.difficulties?.length ? [params.difficulties] : []),
-          params.limit ?? 1,
-        ],
+        values,
       );
       span.setAttribute('quizball.question_found', rows.length > 0);
       span.setAttribute('quizball.question_candidate_count', rows.length);
@@ -265,13 +280,10 @@ export const matchQuestionsRepo = {
 
   /**
    * Pick random published image-MCQ candidates for a match from the given
-   * categories. Unlike getRandomQuestionCandidatesForMatch this requires a
-   * non-empty image payload. Still respects active categories and excludes
-   * questions already used in the match.
-   *
-   * NOTE (TEST): the caller currently pins `categoryIds` to a single hardcoded
-   * category. When this becomes the real flow, pass categories that actually
-   * contain image questions.
+   * categories (the drafted/banned-survivor categories of the current half).
+   * Unlike getRandomQuestionCandidatesForMatch this requires a non-empty image
+   * payload. Still respects active categories and excludes questions already
+   * used in the match.
    */
   async getRandomImageMcqCandidatesForMatch(params: {
     matchId: string;
@@ -315,6 +327,51 @@ export const matchQuestionsRepo = {
       );
       span.setAttribute('quizball.question_found', rows.length > 0);
       span.setAttribute('quizball.question_candidate_count', rows.length);
+      return rows;
+    });
+  },
+
+  /**
+   * Re-validate a previously reserved image MCQ at dispatch time: returns the
+   * candidate row iff the question is still a published, valid image MCQ in an
+   * active category AND has not already been used in this match. Empty result
+   * → the caller re-picks (random image MCQ, then normal-MCQ fallback).
+   */
+  async getImageMcqCandidateForMatchById(params: {
+    matchId: string;
+    questionId: string;
+  }): Promise<RandomQuestionCandidate[]> {
+    return withSpan('db.matches.getImageMcqCandidateForMatchById', {
+      'db.operation.name': 'select',
+      'quizball.match_id': params.matchId,
+      'quizball.question_id': params.questionId,
+    }, async (span) => {
+      const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS.replace(/^\s*AND\s*/u, '');
+      const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_RAW.replace(/^\s*AND\s*/u, '');
+
+      const rows = await sql.unsafe<RandomQuestionCandidate[]>(
+        `
+        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+        FROM questions q
+        JOIN categories c ON c.id = q.category_id
+        JOIN question_payloads qp ON qp.question_id = q.id
+        WHERE q.id = $2
+          AND c.is_active = true
+          AND q.status = 'published'
+          AND q.type = 'mcq_single'
+          AND (${perRowMcqPayloadValidation})
+          AND (${imageOnly})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM match_questions mq
+            WHERE mq.match_id = $1
+              AND mq.question_id = q.id
+          )
+        LIMIT 1
+        `,
+        [params.matchId, params.questionId],
+      );
+      span.setAttribute('quizball.question_found', rows.length > 0);
       return rows;
     });
   },

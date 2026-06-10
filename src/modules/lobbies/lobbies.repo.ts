@@ -328,9 +328,14 @@ export const lobbiesRepo = {
     icon: string | null;
     image_url: string | null;
   }>> {
+    // Ranked draft pool = FEATURED categories only (featured_categories join
+    // table). Every ranked question — MCQ, put-in-order, clue_chain ("who am
+    // I") and the Q4 image MCQ — is drawn from the drafted categories, so this
+    // single filter guarantees ranked matches only serve featured content.
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
+      JOIN featured_categories fc ON fc.category_id = c.id
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
         AND q.status = 'published'
@@ -409,6 +414,7 @@ export const lobbiesRepo = {
     const rows = await sql<{ id: string }[]>`
       SELECT c.id
       FROM categories c
+      JOIN featured_categories fc ON fc.category_id = c.id
       JOIN questions q ON q.category_id = c.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true

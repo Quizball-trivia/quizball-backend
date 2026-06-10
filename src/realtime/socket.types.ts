@@ -473,6 +473,12 @@ export interface MatchStatePayload {
   };
   penaltySuddenDeath?: boolean;
   stateVersion?: number;
+  /**
+   * Raw image URLs the client should preload (optimized client-side) for
+   * upcoming questions in the current half — e.g. the reserved image-MCQ
+   * picture, sent from the half's first question so it's warm by Q4.
+   */
+  preloadImageUrls?: string[];
 }
 
 export interface MatchPartyPlayerState {

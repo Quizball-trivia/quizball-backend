@@ -317,6 +317,16 @@ export type MatchWinnerDecisionMethod =
   | 'total_points_fallback'
   | 'forfeit';
 
+/**
+ * Image MCQ pre-picked for a half's image slot. `imageUrl` is the raw stored
+ * URL — the client applies its own optimization transform and preloads it as
+ * soon as it appears in match:state, so the picture is warm before the slot.
+ */
+export interface ReservedImageMcq {
+  questionId: string;
+  imageUrl: string;
+}
+
 export interface PossessionStatePayload {
   version: 1;
   variant: 'friendly_possession' | 'ranked_sim';
@@ -373,6 +383,17 @@ export interface PossessionStatePayload {
   };
   /** Category chosen in the penalty ban phase; read only during PENALTY_SHOOTOUT. */
   penaltyCategoryId: string | null;
+  /**
+   * Image MCQ reserved for each half's image slot (Q4). Reserved up-front at
+   * the half's first normal question so the client can preload the image well
+   * before the slot starts. Per half key: undefined = not attempted yet,
+   * null = attempted but the drafted category has no image MCQ available
+   * (slot falls back to a normal MCQ).
+   */
+  imageMcq?: {
+    half1?: ReservedImageMcq | null;
+    half2?: ReservedImageMcq | null;
+  };
   currentQuestion: {
     qIndex: number;
     phaseKind: 'normal' | 'last_attack' | 'penalty';
@@ -427,6 +448,7 @@ export function createInitialPossessionState(
     lastAttack: {
       attackerSeat: null,
     },
+    imageMcq: {},
     halftime: {
       deadlineAt: null,
       uiReadyAt: null,

@@ -278,6 +278,51 @@ describe('ranked-matchmaking.service queue behavior', () => {
     };
   }
 
+  it('ignores a queue join while the user is mid-draft instead of emitting INSUFFICIENT_TICKETS', async () => {
+    // Reload-mid-draft regression (staging 2026-06-10): the client restores
+    // into "searching" and re-emits queue_join, but the ticket was already
+    // consumed at draft completion. The ticket preflight ran FIRST and
+    // emitted a spurious "You need a ticket" error + ranked:queue_left on
+    // top of a match that was starting fine. The session block must win.
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    listOpenLobbiesForUserMock.mockResolvedValue([makeOpenLobby('lobby-draft', 'active')]);
+    getWalletMock.mockResolvedValue({ coins: 0, tickets: 0 });
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(userEmit).not.toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'INSUFFICIENT_TICKETS' })
+    );
+    expect(userEmit).not.toHaveBeenCalledWith('ranked:queue_left');
+    // No wallet preflight, no enqueue — authoritative state re-emitted instead.
+    expect(getWalletMock).not.toHaveBeenCalled();
+    expect(redisMock.multi).not.toHaveBeenCalled();
+    expect(userEmit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ waitingLobbyId: 'lobby-draft' })
+    );
+  });
+
+  it('still rejects an idle user with no tickets via INSUFFICIENT_TICKETS', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    getWalletMock.mockResolvedValue({ coins: 0, tickets: 0 });
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(userEmit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ code: 'INSUFFICIENT_TICKETS' })
+    );
+    expect(redisMock.multi).not.toHaveBeenCalled();
+  });
+
   it('debounces rapid queue joins so only one queued search is created', async () => {
     const service = await loadService();
     const io = createIoMock();

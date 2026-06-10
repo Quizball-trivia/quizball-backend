@@ -17,7 +17,7 @@ export const DAILY_CHALLENGE_DEFINITIONS: Record<DailyChallengeType, DailyChalle
     challengeType: 'trueFalse',
     title: {
       en: 'True or False',
-      ka: 'მართალია თუ მცდარი',
+      ka: 'მართალი თუ მცდარი',
     },
     description: {
       en: 'Read each fact and decide whether it is true or false.',

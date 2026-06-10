@@ -36,7 +36,9 @@
     "docker:stop": "./scripts/docker-stop.sh",
     "docker:logs": "docker compose logs -f api",
     "api:export": "tsx scripts/export-openapi.ts",
-    "moderate:nicknames": "tsx scripts/moderate-nicknames.ts"
+    "moderate:nicknames": "tsx scripts/moderate-nicknames.ts",
+    "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
+    "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply"
   },
   "keywords": [],
   "author": "",

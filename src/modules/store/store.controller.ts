@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { isUnlimitedDevEmail } from '../../core/dev-allowlist.js';
 import { storeService } from './store.service.js';
 import type {
   CreateCheckoutBody,
@@ -22,12 +23,16 @@ export const storeController = {
 
   async purchaseWithCoins(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as PurchaseWithCoinsBody;
-    const result = await storeService.purchaseWithCoins(req.user!.id, body.productSlug);
+    const result = await storeService.purchaseWithCoins(req.user!.id, body.productSlug, {
+      unlimited: isUnlimitedDevEmail(req.user?.email),
+    });
     res.json(result);
   },
 
   async getWallet(req: Request, res: Response): Promise<void> {
-    const wallet = await storeService.getWallet(req.user!.id);
+    const wallet = await storeService.getWallet(req.user!.id, {
+      unlimited: isUnlimitedDevEmail(req.user?.email),
+    });
     res.json(wallet);
   },
 

@@ -5,7 +5,7 @@ VALUES
   (
     'avatar_jersey_georgia_retro',
     'avatar',
-    '{"en":"Georgia Retro Jersey"}'::jsonb,
+    '{"en":"Georgia Jersey"}'::jsonb,
     '{"en":"Layered avatar jersey"}'::jsonb,
     50000,
     'coins',

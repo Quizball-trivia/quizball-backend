@@ -1,6 +1,6 @@
 import { logger } from '../core/logger.js';
 import { getRandom } from '../core/rng.js';
-import { harnessDelayMs } from '../core/harness-timing.js';
+import { harnessDelayMs, isHarnessFastTimers } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
@@ -541,6 +541,19 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         state?.halftime.deadlineAt
         && state.halftime.uiReadyAt === state.halftime.deadlineAt
       );
+      // Don't let the AI ban during the client's halftime score intro. For the
+      // FIRST ban, wait until the client confirms the ban cards are visible
+      // (`match:halftime_ui_ready`, which re-invokes this scheduler) instead of
+      // racing a fixed timer — otherwise the AI's ban can land before the human
+      // ever sees the cards. The regression harness has no client to emit
+      // ui_ready, so it keeps the fixed fallback delay.
+      if (isInitialBan && !uiReadyForDeadline && !isHarnessFastTimers()) {
+        logger.info(
+          { eventName: 'match:halftime_ai_ban', matchId, reason: 'awaiting_ui_ready' },
+          'Possession halftime AI ban deferred until client UI ready'
+        );
+        return;
+      }
       // Harness collapses the AI-ban think time so matches don't sit ~3.5s at
       // each halftime (prod untouched unless REGRESSION_FAST_TIMERS).
       const delayMs = harnessDelayMs(

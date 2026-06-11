@@ -85,7 +85,12 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   }
 
   function getHalftimeTurnSeat(state: PossessionStatePayload): Seat | null {
-    const firstSeat = state.halftime.firstBanSeat ?? 2;
+    // Default to seat 1 (human) when firstBanSeat hasn't been set yet. The
+    // round-resolver entry path schedules the AI ban BEFORE ensureHalftimeCategories
+    // assigns firstBanSeat, so a `?? 2` default made the AI think it was its turn
+    // and ban before the human ever saw the cards. Human-first mirrors the draft
+    // ban flow (human bans, then the AI responds).
+    const firstSeat = state.halftime.firstBanSeat ?? 1;
     const secondSeat = nextSeat(firstSeat);
     const firstKey = seatToBanKey(firstSeat);
     const secondKey = seatToBanKey(secondSeat);
@@ -118,9 +123,10 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const lobbyId = match?.lobby_id ?? null;
 
       if (!state.halftime.firstBanSeat) {
-        state.halftime.firstBanSeat = match?.is_dev
-          ? (getRandom() < 0.5 ? 1 : 2)
-          : 2;
+        // Human (seat 1) bans first — matches the working draft flow where the
+        // AI ban is only scheduled after the human bans, so the player always
+        // sees the cards and takes their turn before the AI acts.
+        state.halftime.firstBanSeat = 1;
       }
 
       if (!Array.isArray(state.halftime.firstHalfShownCategoryIds) || state.halftime.firstHalfShownCategoryIds.length === 0) {

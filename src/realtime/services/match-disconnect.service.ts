@@ -494,27 +494,68 @@ export async function handleMatchRejoin(
   await userSessionGuardService.emitState(io, userId);
 }
 
+const MATCH_DISCONNECT_LOCK_ATTEMPTS = 3;
+const MATCH_DISCONNECT_LOCK_RETRY_DELAY_MS = 1_000;
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-  const matchId = socket.data.matchId;
-  if (!matchId) return;
-
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active') return;
-
   const userId = socket.data.user.id;
+  const boundMatchId = socket.data.matchId;
+
+  // Fallback: a socket can lose (or never gain) its match binding — e.g. a
+  // reconnected socket that re-authenticated but never completed the
+  // match:rejoin handshake (diagnosed prod pattern during token-refresh
+  // flap storms). Its disconnect previously no-oped silently, so the match
+  // never paused and no grace timer was armed. Resolve the user's active
+  // match from the DB instead of dropping the event.
+  const match = boundMatchId
+    ? await matchesRepo.getMatch(boundMatchId)
+    : await matchesRepo.getActiveMatchForUser(userId);
+  if (!match || match.status !== 'active') return;
+  const matchId = match.id;
+  if (!boundMatchId) {
+    logger.info(
+      { userId, matchId, socketId: socket.id },
+      'Match disconnect resolved active match for socket without match binding'
+    );
+  }
+
   const variant = resolveMatchVariant(match.state_payload, match.mode);
-  const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
-    await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
-      ignoreSocketId: socket.id,
-      disconnectedConnectedAt: socket.data.connectedAt,
-      autoResumeReplacementSocket: true,
+  // Bounded retry: the per-user transition lock can be busy at the exact
+  // moment a socket drops (connect hydration, queue ops). Previously a single
+  // failed attempt silently dropped the pause — no grace timer, no opponent
+  // banner — leaving the match to the 15-minute sweeper. Everything inside
+  // pauseMatchForDisconnectedPlayer re-checks state (match still active,
+  // replacement sockets, disconnect-episode dedupe), so a delayed retry is
+  // safe even if the player already reconnected.
+  for (let attempt = 1; attempt <= MATCH_DISCONNECT_LOCK_ATTEMPTS; attempt += 1) {
+    const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+      await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
+        ignoreSocketId: socket.id,
+        disconnectedConnectedAt: socket.data.connectedAt,
+        autoResumeReplacementSocket: true,
+      });
+    }, {
+      operation: 'match:disconnect',
+      ...(variant === 'friendly_party_quiz' ? { waitMs: 5000 } : {}),
     });
-  }, {
-    operation: 'match:disconnect',
-    ...(variant === 'friendly_party_quiz' ? { waitMs: 5000 } : {}),
-  });
-  if (!completed) return;
-  await userSessionGuardService.emitState(io, userId);
+    if (completed) {
+      await userSessionGuardService.emitState(io, userId);
+      return;
+    }
+    if (attempt < MATCH_DISCONNECT_LOCK_ATTEMPTS) {
+      await waitMs(MATCH_DISCONNECT_LOCK_RETRY_DELAY_MS * attempt);
+      const stillActive = await matchesRepo.getMatch(matchId);
+      if (!stillActive || stillActive.status !== 'active') return;
+    }
+  }
+  logger.warn(
+    { userId, matchId, socketId: socket.id, attempts: MATCH_DISCONNECT_LOCK_ATTEMPTS },
+    'Match disconnect pause abandoned after transition-lock retries'
+  );
 }
 
 export async function resumePausedMatch(

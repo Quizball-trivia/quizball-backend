@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8000",
       "description": "Local development"
     }
   ],
@@ -726,12 +726,17 @@
               "remainingSeconds": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "ticketsRemainingInWindow": {
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
               "canBuy",
               "nextAvailableAt",
-              "remainingSeconds"
+              "remainingSeconds",
+              "ticketsRemainingInWindow"
             ]
           }
         },
@@ -856,12 +861,17 @@
                   "remainingSeconds": {
                     "type": "integer",
                     "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 },
                 "required": [
                   "canBuy",
                   "nextAvailableAt",
-                  "remainingSeconds"
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
                 ]
               }
             },
@@ -907,12 +917,17 @@
                   "remainingSeconds": {
                     "type": "integer",
                     "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 },
                 "required": [
                   "canBuy",
                   "nextAvailableAt",
-                  "remainingSeconds"
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
                 ]
               }
             },
@@ -7708,12 +7723,17 @@
                             "remainingSeconds": {
                               "type": "integer",
                               "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
                             }
                           },
                           "required": [
                             "canBuy",
                             "nextAvailableAt",
-                            "remainingSeconds"
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
                           ]
                         }
                       },
@@ -7805,12 +7825,17 @@
                         "remainingSeconds": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketsRemainingInWindow": {
+                          "type": "integer",
+                          "minimum": 0
                         }
                       },
                       "required": [
                         "canBuy",
                         "nextAvailableAt",
-                        "remainingSeconds"
+                        "remainingSeconds",
+                        "ticketsRemainingInWindow"
                       ]
                     }
                   },
@@ -8010,12 +8035,17 @@
                             "remainingSeconds": {
                               "type": "integer",
                               "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
                             }
                           },
                           "required": [
                             "canBuy",
                             "nextAvailableAt",
-                            "remainingSeconds"
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
                           ]
                         }
                       },
@@ -8163,12 +8193,17 @@
                             "remainingSeconds": {
                               "type": "integer",
                               "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
                             }
                           },
                           "required": [
                             "canBuy",
                             "nextAvailableAt",
-                            "remainingSeconds"
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
                           ]
                         }
                       },

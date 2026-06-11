@@ -201,8 +201,17 @@ describe('draftRealtimeService', () => {
     ]);
 
     listLobbyCategoryBansMock.mockImplementation(async () => bans.slice());
-    insertLobbyCategoryBanMock.mockImplementation(async (_lobbyId: string, userId: string, categoryId: string) => {
+    insertLobbyCategoryBanMock.mockImplementation(async (lobbyId: string, userId: string, categoryId: string) => {
+      // Mirror the real repo: idempotent on both unique constraints and always
+      // returns the surviving ban row. If the category is already banned (by
+      // anyone), return THAT row; if this user already banned, return theirs;
+      // otherwise insert and return the new ban.
+      const foreign = bans.find((b) => b.category_id === categoryId);
+      if (foreign) return { lobby_id: lobbyId, user_id: foreign.user_id, category_id: categoryId };
+      const existing = bans.find((b) => b.user_id === userId);
+      if (existing) return { lobby_id: lobbyId, user_id: userId, category_id: existing.category_id };
       bans.push({ user_id: userId, category_id: categoryId });
+      return { lobby_id: lobbyId, user_id: userId, category_id: categoryId };
     });
 
     getUserByIdMock.mockImplementation(async (userId: string) => ({

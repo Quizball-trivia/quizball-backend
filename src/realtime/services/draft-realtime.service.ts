@@ -1221,14 +1221,27 @@ export const draftRealtimeService = {
       return;
     }
 
+    let ban: Awaited<ReturnType<typeof lobbiesRepo.insertLobbyCategoryBan>>;
     try {
-      await lobbiesRepo.insertLobbyCategoryBan(lobbyId, socket.data.user.id, categoryId);
+      ban = await lobbiesRepo.insertLobbyCategoryBan(lobbyId, socket.data.user.id, categoryId);
     } catch (error) {
-      // The ban couldn't be recorded (e.g. the chosen category was already
-      // banned by the opponent — a (lobby_id, category_id) UNIQUE collision).
-      // Tell the client to pick again, and arm the auto-ban watchdog so the
-      // draft still progresses if they don't.
+      // Only thrown on a transient inconsistency now (the conflicting row
+      // vanished mid-write). Tell the client to retry and arm the auto-ban
+      // watchdog so the draft still progresses if they don't.
       logger.warn({ error, lobbyId, userId: socket.data.user.id, categoryId }, 'Failed to insert lobby ban');
+      socket.emit('error', { code: 'BAN_FAILED', message: 'That category is unavailable — pick another.' });
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
+    // insertLobbyCategoryBan is idempotent: a foreign collision (the opponent or
+    // a racing auto-ban already banned this category) returns THEIR ban row, not
+    // this user's. That means this user's pick didn't land — prompt them to pick
+    // another rather than falsely broadcasting it as their ban.
+    if (ban.user_id !== socket.data.user.id) {
+      logger.warn(
+        { lobbyId, userId: socket.data.user.id, categoryId, existingBannerId: ban.user_id },
+        'Draft ban collided with an existing ban for the same category'
+      );
       socket.emit('error', { code: 'BAN_FAILED', message: 'That category is unavailable — pick another.' });
       scheduleDraftAutoBan(io, lobbyId);
       return;

@@ -517,7 +517,6 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     if (bans.length < 2) return null;
 
-    await clearDraftTimers(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const remaining = categories.filter((category) => !bannedIds.has(category.id));
     if (remaining.length !== 1) {
@@ -534,11 +533,56 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
       return null;
     }
 
+    // NOTE: we deliberately do NOT clearDraftTimers() before starting the match.
+    // startMatchFromDraft's terminal paths handle teardown (match creation,
+    // abort, or draft restart). Clearing timers early would, if this handler
+    // crashed mid-flight, leave an active lobby with 2 bans and no scheduled
+    // recovery once the lock expires.
     const halfOneCategoryId = remaining[0].id;
-    return await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+    const matchId = await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+
+    if (matchId) {
+      // Match created → draft is done; safe to drop any leftover timers.
+      await clearDraftTimers(lobbyId);
+    } else {
+      // No match and no terminal transition (e.g. an early bail in
+      // startMatchFromDraft): if the lobby is still active with bans pending,
+      // re-arm the auto-ban watchdog so completion is retried rather than
+      // wedged. Terminal paths (abort/restart) already left the lobby inactive
+      // or re-armed timers, so this is a no-op for them.
+      await rearmDraftCompletionIfStuck(io, lobbyId);
+    }
+    return matchId;
+  } catch (error) {
+    // A throw mid-completion must not leave the lobby wedged: re-arm recovery.
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Draft completion threw; re-arming recovery'
+    );
+    await rearmDraftCompletionIfStuck(io, lobbyId);
+    return null;
   } finally {
     heartbeat.stop();
     await releaseLock(draftCompleteLockKey(lobbyId), lock.token).catch(() => {});
+  }
+}
+
+// Re-arm the auto-ban watchdog when a completion attempt ended without a
+// terminal transition but the lobby is still active and ready (2 bans). This
+// guarantees a stuck draft is always retried instead of wedging when the lock
+// holder bailed early or crashed.
+async function rearmDraftCompletionIfStuck(io: QuizballServer, lobbyId: string): Promise<void> {
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') return;
+    if (await hasPendingRealtimeTimer('draft_auto_ban', lobbyId)) return;
+    scheduleDraftAutoBan(io, lobbyId);
+    logger.info({ lobbyId }, 'Re-armed draft auto-ban after non-terminal completion');
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Failed to re-arm draft completion recovery'
+    );
   }
 }
 
@@ -569,7 +613,14 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
       lobbiesRepo.listLobbyCategoryBans(lobbyId),
       lobbiesRepo.listMembersWithUser(lobbyId),
     ]);
-    if (members.length !== 2 || bans.length >= 2 || categories.length === 0) return;
+    if (members.length !== 2 || categories.length === 0) return;
+    // Recovery path: both bans already exist but the lobby is still active —
+    // a prior completion attempt bailed early or crashed before creating the
+    // match. Retry completion instead of bailing so the draft can't wedge.
+    if (bans.length >= 2) {
+      await completeDraftIfReady(io, lobbyId);
+      return;
+    }
 
     const aiUserId = lobby.mode === 'ranked'
       ? await resolveRankedAiUserId(lobbyId, members)

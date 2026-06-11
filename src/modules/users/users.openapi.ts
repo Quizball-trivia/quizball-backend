@@ -153,7 +153,7 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
     method: 'patch',
     path: '/api/v1/admin/users/{userId}/progression',
     summary: 'Set or grant a user XP and/or RP',
-    description: 'Requires admin role. Records the acting admin id for audit. Each of xp/rp may be a set (absolute) or delta (grant).',
+    description: 'Requires admin role. At least one of `xp` or `rp` must be provided (enforced server-side). Records the acting admin id for audit. Each of xp/rp may be a set (absolute) or delta (grant).',
     tags: ['Admin Users'],
     security: [{ bearerAuth: [] }],
     pathParams: userIdParamSchema,

@@ -742,7 +742,16 @@ export async function pauseMatchForDisconnectedPlayer(
   }
 
   const disconnectedAtMs = Date.now();
-  const disconnectCount = await incrementDisconnectCount(matchId, userId);
+  // Per-episode dedupe: a single logical disconnect can drive this function from
+  // more than one path (the socket `disconnect` handler AND the `match:leave`
+  // path), which previously double-counted and forfeited players after only 2
+  // real disconnects (limit is 3). The matchDisconnectKey marks "user is
+  // currently disconnected" and is cleared on resume — so if it's already set,
+  // this is a duplicate handler for the SAME episode and must not re-increment.
+  const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
+  const disconnectCount = alreadyDisconnected
+    ? await getDisconnectCount(matchId, userId)
+    : await incrementDisconnectCount(matchId, userId);
   const remainingReconnects = toRemainingReconnects(disconnectCount);
   logger.info(
     {
@@ -752,6 +761,7 @@ export async function pauseMatchForDisconnectedPlayer(
       qIndex: match.current_q_index,
       disconnectCount,
       remainingReconnects,
+      alreadyDisconnected,
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       playerCount: players.length,
       activePartyPlayerCount: partyState

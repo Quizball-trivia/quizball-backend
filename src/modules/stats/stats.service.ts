@@ -2,6 +2,8 @@ import { statsRepo } from './stats.repo.js';
 import { BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../users/avatar-customization.js';
+import { tierFromRp } from '../ranked/ranked.service.js';
+import type { RankedTier } from '../ranked/ranked.types.js';
 
 export interface HeadToHeadSummary {
   userAId: string;
@@ -37,6 +39,9 @@ export interface RecentMatchSummary {
     avatarUrl: string | null;
     avatarCustomization: AvatarCustomization | null;
     isAi: boolean;
+    /** Opponent's ranked tier. null when the opponent is AI, unplaced, deleted,
+     *  or has no ranked profile yet. */
+    tier: RankedTier | null;
   };
 }
 
@@ -132,6 +137,12 @@ export const statsService = {
           avatarUrl: row.opponent_avatar_url,
           avatarCustomization: parseStoredAvatarCustomization(row.opponent_avatar_customization),
           isAi: row.opponent_is_ai ?? false,
+          // Only show a tier for placed opponents — unplaced/AI/deleted/no-profile
+          // map to null so the client renders a neutral frame instead of a wrong one.
+          tier:
+            row.opponent_placement_status === 'placed' && row.opponent_rp !== null
+              ? tierFromRp(row.opponent_rp)
+              : null,
         },
       };
     });

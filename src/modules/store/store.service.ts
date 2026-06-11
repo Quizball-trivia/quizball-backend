@@ -110,7 +110,7 @@ function buildWalletResponse(
 
 // Loads the real ticket-purchase cooldown for a user so wallet responses never
 // default to "purchasable" regardless of purchase history. Enforces the rolling
-// per-24h cap (up to TICKET_PURCHASE_MAX_PER_WINDOW packs).
+// per-24h ticket-quantity cap (up to TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW tickets).
 async function loadTicketPurchaseCooldownInTx(
   tx: TransactionSql,
   userId: string

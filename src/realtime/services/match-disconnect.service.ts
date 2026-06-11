@@ -594,62 +594,89 @@ export async function resumePausedMatch(
     reason: 'resume',
   });
 
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const countdownStillActive = (await redis.exists(countdownKey)) === 1;
-        if (!countdownStillActive) return;
+  // Durable: the countdown completion used to be an in-process setTimeout —
+  // a restart in the 5s window stranded the match paused (pause key set, no
+  // timer, nothing to re-dispatch the question) until key TTLs / a rejoin /
+  // the stale sweeper recovered it. The Redis-backed timer survives restarts;
+  // completeResumeCountdown re-checks every condition so a late or duplicate
+  // fire is a no-op.
+  await scheduleRealtimeTimer(
+    'match_resume_countdown',
+    matchId,
+    new Date(countdownEndsAtMs),
+    {
+      kind: 'match_resume_countdown',
+      matchId,
+      pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0 ? pauseStartedAtMs : null,
+    }
+  );
+}
 
-        const activeMatch = await matchesRepo.getMatch(matchId);
-        if (!activeMatch || activeMatch.status !== 'active') {
-          await redis.del([countdownKey, matchPauseKey(matchId)]);
-          return;
-        }
+/**
+ * Complete a resume countdown (fired by the durable realtime timer). Safe to
+ * fire late or twice: bails unless the countdown key is still present, the
+ * match is still active, and nobody is marked disconnected.
+ */
+export async function completeResumeCountdown(
+  io: QuizballServer,
+  matchId: string,
+  pauseStartedAtMs: number | null
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const countdownKey = matchResumeCountdownKey(matchId);
+  try {
+    const countdownStillActive = (await redis.exists(countdownKey)) === 1;
+    if (!countdownStillActive) return;
 
-        const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-        const stillDisconnected = await Promise.all(
-          roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
-        );
-        if (stillDisconnected.some((exists) => exists === 1)) {
-          await redis.del(countdownKey);
-          return;
-        }
+    const activeMatch = await matchesRepo.getMatch(matchId);
+    if (!activeMatch || activeMatch.status !== 'active') {
+      await redis.del([countdownKey, matchPauseKey(matchId)]);
+      return;
+    }
 
-        await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
+    const roster = await matchPlayersRepo.listMatchPlayers(matchId);
+    const stillDisconnected = await Promise.all(
+      roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+    );
+    if (stillDisconnected.some((exists) => exists === 1)) {
+      await redis.del(countdownKey);
+      return;
+    }
 
-        const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
-        const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
-        if (activeQuestion) {
-          const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
-            ? pauseStartedAtMs
-            : Date.now();
-          const resumed = variant === 'friendly_party_quiz'
-            ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
-            : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
-          if (resumed) {
-            io.to(`match:${matchId}`).emit('match:resume', {
-              matchId,
-              nextQIndex: activeMatch.current_q_index,
-            });
-            return;
-          }
-        }
+    await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
 
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
+    if (activeQuestion) {
+      const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+        ? pauseStartedAtMs
+        : Date.now();
+      const resumed = variant === 'friendly_party_quiz'
+        ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
+        : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
+      if (resumed) {
         io.to(`match:${matchId}`).emit('match:resume', {
           matchId,
           nextQIndex: activeMatch.current_q_index,
         });
-
-        if (variant === 'friendly_party_quiz') {
-          await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
-          return;
-        }
-        await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
-      } catch (err) {
-        logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
+        return;
       }
-    })();
-  }, resumeCountdownMs);
+    }
+
+    io.to(`match:${matchId}`).emit('match:resume', {
+      matchId,
+      nextQIndex: activeMatch.current_q_index,
+    });
+
+    if (variant === 'friendly_party_quiz') {
+      await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
+      return;
+    }
+    await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
+  }
 }
 
 export async function pauseMatchForDisconnectedPlayer(

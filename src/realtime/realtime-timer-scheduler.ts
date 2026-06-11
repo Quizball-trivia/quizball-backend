@@ -15,20 +15,24 @@ export type RealtimeTimerKind =
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
   | 'match_disconnect_forfeit'
+  | 'match_resume_countdown'
   | 'party_question'
   | 'possession_ai_answer'
   | 'possession_halftime'
-  | 'possession_question';
+  | 'possession_question'
+  | 'ranked_draft_start';
 
 export type RealtimeTimerPayload =
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string }
+  | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
   | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null }
   | { kind: 'possession_halftime'; matchId: string }
-  | { kind: 'possession_question'; matchId: string; qIndex: number };
+  | { kind: 'possession_question'; matchId: string; qIndex: number }
+  | { kind: 'ranked_draft_start'; lobbyId: string; userAId: string; userBId: string };
 
 export type RealtimeTimerHandler = (
   io: QuizballServer,
@@ -65,10 +69,12 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'
     && kind !== 'match_disconnect_forfeit'
+    && kind !== 'match_resume_countdown'
     && kind !== 'party_question'
     && kind !== 'possession_ai_answer'
     && kind !== 'possession_halftime'
     && kind !== 'possession_question'
+    && kind !== 'ranked_draft_start'
   ) {
     return null;
   }

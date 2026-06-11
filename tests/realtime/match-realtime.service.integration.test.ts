@@ -1591,7 +1591,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(resolveRoundMock).not.toHaveBeenCalled();
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      // The countdown completion is a durable realtime timer now (restart
+      // proof) — fire its handler the way the scheduler would after 5s.
+      const { completeResumeCountdown } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await completeResumeCountdown(io, 'm1', null);
 
       expect(resumePossessionMatchQuestionMock).toHaveBeenCalledWith(
         io,
@@ -1652,7 +1655,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     try {
       await matchRealtimeService.resumePausedMatch(io, 'm1', 'u1');
-      await vi.advanceTimersByTimeAsync(5_000);
+      // The countdown completion is a durable realtime timer now (restart
+      // proof) — fire its handler the way the scheduler would after 5s.
+      const { completeResumeCountdown } = await import('../../src/realtime/services/match-disconnect.service.js');
+      await completeResumeCountdown(io, 'm1', Date.now() - 5_000);
 
       expect(resumePartyQuizQuestionMock).toHaveBeenCalledWith(
         io,

@@ -297,6 +297,11 @@ const progressionAdjustmentSchema = z.object({
   value: z.number().int(),
 });
 
+// NOTE: do NOT chain `.openapi()` here. This module is imported at app boot
+// BEFORE the zod-openapi extension is applied, so `.openapi()` is undefined at
+// runtime and crashes the server on startup (healthcheck fails → rollback).
+// The "at least one of xp/rp" rule is enforced by the `.refine()` below; the
+// OpenAPI doc note lives in the endpoint registration (users.openapi.ts).
 export const adminSetProgressionBodySchema = z
   .object({
     xp: progressionAdjustmentSchema.optional(),
@@ -305,10 +310,6 @@ export const adminSetProgressionBodySchema = z
   })
   .refine((body) => body.xp !== undefined || body.rp !== undefined, {
     message: 'At least one of xp or rp must be provided',
-  })
-  .openapi({
-    description:
-      'Set or grant a user\'s XP and/or RP. At least one of `xp` or `rp` must be provided (enforced server-side).',
   });
 
 export type AdminSetProgressionBody = z.infer<typeof adminSetProgressionBodySchema>;

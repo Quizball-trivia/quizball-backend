@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { rankedService } from './ranked.service.js';
 import { usersRepo } from '../users/users.repo.js';
-import type { RankedProfileResponse } from './ranked.schemas.js';
+import type { LeaderboardResetBody, RankedProfileResponse } from './ranked.schemas.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 
 function computeTrend(wins: number, total: number): { trend: 'up' | 'down' | 'same'; trendValue: number } {
@@ -88,5 +88,18 @@ export const rankedController = {
       total: rankInfo.total,
       ...computeTrend(rankInfo.trendWins, rankInfo.trendTotal),
     });
+  },
+
+  /**
+   * POST /api/v1/admin/leaderboard/reset
+   * Admin: archive current standings, then zero every real user's RP for an event.
+   */
+  async resetLeaderboard(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as LeaderboardResetBody;
+    const result = await rankedService.resetLeaderboard({
+      actorId: req.user!.id,
+      notes: body.notes ?? null,
+    });
+    res.json(result);
   },
 };

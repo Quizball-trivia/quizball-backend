@@ -1,8 +1,11 @@
 import { logger } from '../../core/logger.js';
+import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
+import { storeRepo } from '../store/store.repo.js';
+import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
 import type {
   RankedAiMatchContext,
@@ -165,6 +168,41 @@ function computeRankedAiAnchor(profile: RankedProfileRow): number {
 }
 
 export const rankedService = {
+  /**
+   * Admin: reset the leaderboard for an event. Archives current standings, then
+   * zeroes every real user's RP (tier 'Academy', placement cleared). Records an
+   * audit entry in store_transaction_logs with the acting admin's id.
+   */
+  async resetLeaderboard(options: { actorId: string; notes?: string | null }): Promise<{
+    batchId: string;
+    profilesReset: number;
+    profilesArchived: number;
+    rpChangesArchived: number;
+  }> {
+    const result = await rankedRepo.resetLeaderboard(options.actorId, options.notes ?? null);
+
+    await storeRepo.insertTransactionLog({
+      eventType: 'leaderboard_reset',
+      outcome: 'success',
+      actorUserId: options.actorId,
+      reason: options.notes ?? 'Leaderboard reset for event',
+      requestId: getRequestId(),
+      metadata: {
+        batchId: result.batchId,
+        profilesReset: result.profilesReset,
+        profilesArchived: result.profilesArchived,
+        rpChangesArchived: result.rpChangesArchived,
+      } as unknown as Json,
+    });
+
+    logger.info(
+      { actorId: options.actorId, ...result },
+      'Leaderboard reset applied'
+    );
+
+    return result;
+  },
+
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
     const profile = await rankedRepo.ensureProfile(userId);
     if (profile.tier !== tierFromRp(profile.rp)) {

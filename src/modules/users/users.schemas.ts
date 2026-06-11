@@ -236,3 +236,93 @@ export const userSearchResponseSchema = z.object({
 
 export type UserSearchResult = z.infer<typeof userSearchResultSchema>;
 export type UserSearchResponse = z.infer<typeof userSearchResponseSchema>;
+
+/**
+ * Admin: list-all-users query.
+ * Paginated + searchable by nickname/email. orderBy is whitelisted to columns
+ * the repo knows how to sort by safely.
+ */
+export const adminUsersListQuerySchema = z.object({
+  search: z.string().min(1).max(100).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+  orderBy: z
+    .enum(['created_at', 'total_xp', 'rp', 'nickname'])
+    .optional()
+    .default('created_at'),
+  orderDir: z.enum(['asc', 'desc']).optional().default('desc'),
+});
+
+export type AdminUsersListQuery = z.infer<typeof adminUsersListQuerySchema>;
+
+/**
+ * Admin: a single user row in the admin list, flattened with ranked + wallet data.
+ */
+export const adminUserListItemSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().nullable(),
+  nickname: z.string().nullable(),
+  country: z.string().nullable(),
+  avatar_url: z.string().url().nullable(),
+  total_xp: z.number().int().nonnegative(),
+  level: z.number().int().positive(),
+  rp: z.number().int().nullable(),
+  tier: z.string().nullable(),
+  placement_status: z.enum(['unplaced', 'in_progress', 'placed']).nullable(),
+  coins: z.number().int().nonnegative(),
+  tickets: z.number().int().nonnegative(),
+  created_at: z.string().datetime(),
+});
+
+export type AdminUserListItem = z.infer<typeof adminUserListItemSchema>;
+
+export const adminUsersListResponseSchema = z.object({
+  items: z.array(adminUserListItemSchema),
+  page: z.number().int().positive(),
+  limit: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+});
+
+export type AdminUsersListResponse = z.infer<typeof adminUsersListResponseSchema>;
+
+/**
+ * Admin: set/grant progression (XP and/or RP).
+ * Each field is optional; mode 'set' assigns an absolute value, 'delta' adds
+ * (or subtracts) from the current value. At least one of xp/rp must be present.
+ * Final values are clamped to >= 0 by the service.
+ */
+const progressionAdjustmentSchema = z.object({
+  mode: z.enum(['set', 'delta']),
+  value: z.number().int(),
+});
+
+export const adminSetProgressionBodySchema = z
+  .object({
+    xp: progressionAdjustmentSchema.optional(),
+    rp: progressionAdjustmentSchema.optional(),
+    reason: z.string().min(3).max(200),
+  })
+  .refine((body) => body.xp !== undefined || body.rp !== undefined, {
+    message: 'At least one of xp or rp must be provided',
+  })
+  .openapi({
+    description:
+      'Set or grant a user\'s XP and/or RP. At least one of `xp` or `rp` must be provided (enforced server-side).',
+  });
+
+export type AdminSetProgressionBody = z.infer<typeof adminSetProgressionBodySchema>;
+
+/**
+ * Admin: response after a progression adjustment — the new absolute values plus
+ * recomputed level/tier so the client can refresh its row without a re-fetch.
+ */
+export const adminProgressionResultSchema = z.object({
+  userId: z.string().uuid(),
+  total_xp: z.number().int().nonnegative(),
+  level: z.number().int().positive(),
+  rp: z.number().int().nullable(),
+  tier: z.string().nullable(),
+});
+
+export type AdminProgressionResult = z.infer<typeof adminProgressionResultSchema>;

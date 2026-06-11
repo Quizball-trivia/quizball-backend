@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
-import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
+import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type AdminSetProgressionBody, type AdminUsersListQuery, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
 import { maybeIdentifyUserProfile } from '../../core/analytics.js';
 import { logger } from '../../core/logger.js';
 
@@ -129,6 +129,29 @@ export const usersController = {
     const { userId } = req.validated.params as UserIdParam;
     const user = await usersService.restorePendingDeletion(userId);
     res.json(toUserResponse(user));
+  },
+
+  /**
+   * GET /api/v1/admin/users
+   * Admin: paginated, searchable list of users with progression, RP and wallet.
+   */
+  async listUsers(req: Request, res: Response): Promise<void> {
+    const query = req.validated.query as AdminUsersListQuery;
+    const result = await usersService.listUsersForAdmin(query);
+    res.json(result);
+  },
+
+  /**
+   * PATCH /api/v1/admin/users/:userId/progression
+   * Admin: set or grant a user's XP and/or RP.
+   */
+  async adminSetProgression(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const body = req.validated.body as AdminSetProgressionBody;
+    const result = await usersService.adminSetProgression(userId, body, {
+      actorId: req.user!.id,
+    });
+    res.json(result);
   },
 
   /**

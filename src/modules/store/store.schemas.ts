@@ -156,6 +156,16 @@ export const manualAdjustmentResponseSchema = z.object({
   inventoryApplied: z.array(manualInventoryGrantSchema),
 });
 
+export const resetTicketWindowBodySchema = z.object({
+  userId: z.string().uuid(),
+  reason: z.string().min(3).max(500),
+});
+
+export const resetTicketWindowResponseSchema = z.object({
+  voided: z.number().int().nonnegative(),
+  wallet: storeWalletResponseSchema,
+});
+
 export const listStoreTransactionsQuerySchema = z.object({
   userId: z.string().uuid().optional(),
   purchaseId: z.string().uuid().optional(),
@@ -201,4 +211,5 @@ export type CreateCheckoutBody = z.infer<typeof createCheckoutBodySchema>;
 export type PurchaseWithCoinsBody = z.infer<typeof purchaseWithCoinsBodySchema>;
 export type DevGrantSelfBody = z.infer<typeof devGrantSelfBodySchema>;
 export type ManualAdjustmentBody = z.infer<typeof manualAdjustmentBodySchema>;
+export type ResetTicketWindowBody = z.infer<typeof resetTicketWindowBodySchema>;
 export type ListStoreTransactionsQuery = z.infer<typeof listStoreTransactionsQuerySchema>;

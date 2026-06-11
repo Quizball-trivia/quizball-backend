@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -650,6 +650,33 @@
           "lastRankedMatchAt"
         ]
       },
+      "LeaderboardResetResponse": {
+        "type": "object",
+        "properties": {
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "profilesReset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "profilesArchived": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rpChangesArchived": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "batchId",
+          "profilesReset",
+          "profilesArchived",
+          "rpChangesArchived"
+        ]
+      },
       "StoreProductsResponse": {
         "type": "object",
         "properties": {
@@ -1003,7 +1030,10 @@
               "fulfillment_failed",
               "manual_adjustment_succeeded",
               "manual_adjustment_failed",
-              "objective_reward_succeeded"
+              "objective_reward_succeeded",
+              "admin_progression_adjustment",
+              "leaderboard_reset",
+              "admin_ticket_window_reset"
             ]
           },
           "outcome": {
@@ -1131,7 +1161,10 @@
                     "fulfillment_failed",
                     "manual_adjustment_succeeded",
                     "manual_adjustment_failed",
-                    "objective_reward_succeeded"
+                    "objective_reward_succeeded",
+                    "admin_progression_adjustment",
+                    "leaderboard_reset",
+                    "admin_ticket_window_reset"
                   ]
                 },
                 "outcome": {
@@ -1262,6 +1295,64 @@
           "limit",
           "total",
           "totalPages"
+        ]
+      },
+      "ResetTicketWindowResponse": {
+        "type": "object",
+        "properties": {
+          "voided": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
+                ]
+              }
+            },
+            "required": [
+              "coins",
+              "tickets",
+              "ticketPurchaseCooldown"
+            ]
+          }
+        },
+        "required": [
+          "voided",
+          "wallet"
         ]
       },
       "ProgressionResponse": {
@@ -1678,6 +1769,151 @@
         },
         "required": [
           "achievements"
+        ]
+      },
+      "AdminUsersListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "email": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "nickname": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "country": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "avatar_url": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uri"
+                },
+                "total_xp": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "level": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "exclusiveMinimum": true
+                },
+                "rp": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "tier": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "placement_status": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "unplaced",
+                    "in_progress",
+                    "placed"
+                  ]
+                },
+                "coins": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tickets": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "email",
+                "nickname",
+                "country",
+                "avatar_url",
+                "total_xp",
+                "level",
+                "rp",
+                "tier",
+                "placement_status",
+                "coins",
+                "tickets",
+                "created_at"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "limit",
+          "total",
+          "totalPages"
+        ]
+      },
+      "AdminProgressionResult": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "total_xp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "rp": {
+            "type": "integer",
+            "nullable": true
+          },
+          "tier": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "userId",
+          "total_xp",
+          "level",
+          "rp",
+          "tier"
         ]
       },
       "FriendsResponse": {
@@ -7525,6 +7761,77 @@
         }
       }
     },
+    "/api/v1/admin/leaderboard/reset": {
+      "post": {
+        "summary": "Reset the global leaderboard (ranks & placement)",
+        "description": "Requires admin role. Archives current standings into the reset archive tables, then sets every real user's RP to 0 (tier 'Academy') and clears placement progress so all users re-do placement.",
+        "tags": [
+          "Admin Leaderboard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Leaderboard reset summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaderboardResetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/store/products": {
       "get": {
         "summary": "List active store products",
@@ -8358,7 +8665,10 @@
                 "fulfillment_failed",
                 "manual_adjustment_succeeded",
                 "manual_adjustment_failed",
-                "objective_reward_succeeded"
+                "objective_reward_succeeded",
+                "admin_progression_adjustment",
+                "leaderboard_reset",
+                "admin_ticket_window_reset"
               ]
             },
             "required": false,
@@ -8445,7 +8755,10 @@
                               "fulfillment_failed",
                               "manual_adjustment_succeeded",
                               "manual_adjustment_failed",
-                              "objective_reward_succeeded"
+                              "objective_reward_succeeded",
+                              "admin_progression_adjustment",
+                              "leaderboard_reset",
+                              "admin_ticket_window_reset"
                             ]
                           },
                           "outcome": {
@@ -8593,6 +8906,87 @@
           },
           "403": {
             "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/admin/reset-ticket-window": {
+      "post": {
+        "summary": "Reset a user ticket-purchase window",
+        "description": "Requires admin role. Voids the user's completed ticket-pack purchases inside the rolling 24h window so the per-day purchase cap no longer blocks them.",
+        "tags": [
+          "Store Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "userId",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reset result with refreshed wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetTicketWindowResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -8982,6 +9376,249 @@
           },
           "400": {
             "description": "Account is not restorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "summary": "List users with progression, RP and wallet",
+        "description": "Requires admin role. Paginated and searchable by nickname/email.",
+        "tags": [
+          "Admin Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at",
+                "total_xp",
+                "rp",
+                "nickname"
+              ],
+              "default": "created_at"
+            },
+            "required": false,
+            "name": "orderBy",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            },
+            "required": false,
+            "name": "orderDir",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated users list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUsersListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{userId}/progression": {
+      "patch": {
+        "summary": "Set or grant a user XP and/or RP",
+        "description": "Requires admin role. Records the acting admin id for audit. Each of xp/rp may be a set (absolute) or delta (grant).",
+        "tags": [
+          "Admin Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "xp": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "set",
+                          "delta"
+                        ]
+                      },
+                      "value": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "value"
+                    ]
+                  },
+                  "rp": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "set",
+                          "delta"
+                        ]
+                      },
+                      "value": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "value"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "description": "Set or grant a user's XP and/or RP. At least one of `xp` or `rp` must be provided (enforced server-side)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Progression updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProgressionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid adjustment request",
             "content": {
               "application/json": {
                 "schema": {

@@ -5,6 +5,7 @@ import { config } from '../../core/config.js';
 import { AppError, BadRequestError, ErrorCode, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { getRequestId } from '../../core/request-context.js';
+import { usersRepo } from '../users/users.repo.js';
 import { storeRepo } from './store.repo.js';
 import { stripe } from './stripe.js';
 import {
@@ -314,9 +315,6 @@ async function applyWalletAdjustmentInTx(
     ticketsDelta: number;
     rejectTicketOverflow?: boolean;
     insufficientCoinsMessage?: string;
-    // Dev-allowlist accounts: skip the coin-balance guard and let tickets
-    // exceed MAX_TICKETS so paid flows can be exercised without grinding.
-    unlimited?: boolean;
   }
 ): Promise<{ wallet: StoreWalletResponse; appliedTicketsDelta: number }> {
   const nowIso = new Date().toISOString();
@@ -331,7 +329,7 @@ async function applyWalletAdjustmentInTx(
   const currentAnchor = hydrated.ticketsRefillStartedAt;
   const nextCoins = currentCoins + adjustments.coinsDelta;
 
-  if (nextCoins < 0 && !adjustments.unlimited) {
+  if (nextCoins < 0) {
     throw new BadRequestError(
       adjustments.insufficientCoinsMessage ?? 'Not enough coins for this purchase'
     );
@@ -342,29 +340,23 @@ async function applyWalletAdjustmentInTx(
   let appliedTicketsDelta = 0;
 
   if (adjustments.ticketsDelta > 0) {
-    if (adjustments.unlimited) {
-      appliedTicketsDelta = adjustments.ticketsDelta;
-      nextTickets = currentTickets + appliedTicketsDelta;
-      nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
-    } else {
-      const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);
-      if (availableSpace === 0 || (adjustments.rejectTicketOverflow && adjustments.ticketsDelta > availableSpace)) {
-        throw new AppError(
-          'Tickets are already full',
-          400,
-          ErrorCode.TICKETS_FULL,
-          {
-            userId,
-            requestedAmount: adjustments.ticketsDelta,
-            availableSpace,
-            maxTickets: MAX_TICKETS,
-          }
-        );
-      }
-      appliedTicketsDelta = Math.min(adjustments.ticketsDelta, availableSpace);
-      nextTickets = currentTickets + appliedTicketsDelta;
-      nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
+    const availableSpace = Math.max(0, MAX_TICKETS - currentTickets);
+    if (availableSpace === 0 || (adjustments.rejectTicketOverflow && adjustments.ticketsDelta > availableSpace)) {
+      throw new AppError(
+        'Tickets are already full',
+        400,
+        ErrorCode.TICKETS_FULL,
+        {
+          userId,
+          requestedAmount: adjustments.ticketsDelta,
+          availableSpace,
+          maxTickets: MAX_TICKETS,
+        }
+      );
     }
+    appliedTicketsDelta = Math.min(adjustments.ticketsDelta, availableSpace);
+    nextTickets = currentTickets + appliedTicketsDelta;
+    nextAnchor = nextTickets >= MAX_TICKETS ? null : currentAnchor;
   } else if (adjustments.ticketsDelta < 0) {
     if (currentTickets + adjustments.ticketsDelta < 0) {
       throw new BadRequestError('Manual adjustment would result in negative ticket balance', {
@@ -377,9 +369,7 @@ async function applyWalletAdjustmentInTx(
   }
 
   const updated = await storeRepo.setWalletStateInTx(tx, userId, {
-    // Unlimited dev accounts never write a negative balance: the coin guard is
-    // skipped above, so floor the persisted value at 0 instead.
-    coins: adjustments.unlimited ? Math.max(0, nextCoins) : nextCoins,
+    coins: nextCoins,
     tickets: nextTickets,
     ticketsRefillStartedAt: nextAnchor,
   });
@@ -537,10 +527,8 @@ export const storeService = {
 
   async purchaseWithCoins(
     userId: string,
-    productSlug: string,
-    options: { unlimited?: boolean } = {}
+    productSlug: string
   ): Promise<{ wallet: StoreWalletResponse }> {
-    const { unlimited = false } = options;
     let productForError: StoreProductRow | null = null;
 
     try {
@@ -586,20 +574,17 @@ export const storeService = {
               );
             }
 
-            if (!unlimited) {
-              assertCanBuyTicketPack(
-                await loadTicketPurchaseCooldownInTx(tx, userId),
-                userId,
-                parsed.data.tickets
-              );
-            }
+            assertCanBuyTicketPack(
+              await loadTicketPurchaseCooldownInTx(tx, userId),
+              userId,
+              parsed.data.tickets
+            );
 
             const updatedWallet = await applyWalletAdjustmentInTx(tx, userId, {
               coinsDelta: -coinsCost,
               ticketsDelta: parsed.data.tickets,
               rejectTicketOverflow: true,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
-              unlimited,
             });
             walletAfter = buildWalletResponse(
               updatedWallet.wallet,
@@ -614,7 +599,6 @@ export const storeService = {
               coinsDelta: -coinsCost,
               ticketsDelta: 0,
               insufficientCoinsMessage: 'Not enough coins for this purchase',
-              unlimited,
             });
             walletAfter = updatedWallet.wallet;
             await storeRepo.upsertInventoryInTx(tx, userId, product.id, 1);
@@ -835,25 +819,16 @@ export const storeService = {
     }
   },
 
-  async getWallet(
-    userId: string,
-    options: { unlimited?: boolean } = {}
-  ): Promise<StoreWalletResponse> {
+  async getWallet(userId: string): Promise<StoreWalletResponse> {
     const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
     const [wallet, purchaseWindow] = await Promise.all([
       ticketRefillService.hydrateTickets(userId),
       storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
     ]);
-    // Dev-allowlist accounts always report purchasable so the UI never shows
-    // them blocked by the cooldown (the purchase path skips it too).
-    const cooldown = options.unlimited
-      ? {
-        canBuy: true,
-        nextAvailableAt: null,
-        remainingSeconds: 0,
-        ticketsRemainingInWindow: TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
-      }
-      : buildTicketPurchaseCooldown(purchaseWindow.ticketCount, purchaseWindow.oldest_purchased_at);
+    const cooldown = buildTicketPurchaseCooldown(
+      purchaseWindow.ticketCount,
+      purchaseWindow.oldest_purchased_at
+    );
     return buildWalletResponse(wallet, cooldown);
   },
 
@@ -1109,6 +1084,63 @@ export const storeService = {
 
       throw error;
     }
+  },
+
+  /**
+   * Admin: clear a user's rolling-window ticket-pack purchases (mark them
+   * refunded) so the per-24h purchase cap no longer blocks them — i.e. let a
+   * capped user buy again immediately. Audited in store_transaction_logs.
+   */
+  async resetTicketPurchaseWindow(
+    actorUserId: string,
+    userId: string,
+    reason: string
+  ): Promise<{ voided: number; wallet: StoreWalletResponse }> {
+    const user = await usersRepo.getById(userId);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+
+    const voided = await sql.begin(async (tx) => {
+      const count = await storeRepo.refundRecentTicketPurchasesInTx(tx, userId, sinceIso);
+      await storeRepo.insertTransactionLogInTx(tx, {
+        eventType: 'admin_ticket_window_reset',
+        outcome: 'success',
+        userId,
+        actorUserId,
+        reason,
+        requestId: getRequestId(),
+        metadata: { voidedPurchases: count, sinceIso } as unknown as Json,
+      });
+      return count;
+    });
+
+    // The refund + audit already committed. Fetching the refreshed wallet runs
+    // ticket-refill hydration, which has its own optimistic-concurrency retry
+    // and can still raise CONFLICT under contention. Don't fail the (already
+    // applied) reset over a display read — fall back to a plain wallet read.
+    let wallet: StoreWalletResponse;
+    try {
+      wallet = await this.getWallet(userId);
+    } catch (err) {
+      logger.warn({ err, userId }, 'Ticket-window reset: wallet hydrate failed, using plain read');
+      const sinceIsoForCooldown = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+      const [plainWallet, purchaseWindow] = await Promise.all([
+        storeRepo.getWallet(userId),
+        storeRepo.getTicketPackPurchaseWindow(userId, sinceIsoForCooldown),
+      ]);
+      if (!plainWallet) {
+        throw new NotFoundError('User not found');
+      }
+      wallet = buildWalletResponse(
+        plainWallet,
+        buildTicketPurchaseCooldown(purchaseWindow.ticketCount, purchaseWindow.oldest_purchased_at)
+      );
+    }
+    logger.info({ userId, actorUserId, voided }, 'Admin ticket purchase window reset');
+    return { voided, wallet };
   },
 
   async listTransactions(query: ListStoreTransactionsQuery) {

@@ -1,5 +1,4 @@
 import type { Request, Response } from 'express';
-import { isUnlimitedDevEmail } from '../../core/dev-allowlist.js';
 import { storeService } from './store.service.js';
 import type {
   CreateCheckoutBody,
@@ -7,6 +6,7 @@ import type {
   DevGrantSelfBody,
   ListStoreTransactionsQuery,
   ManualAdjustmentBody,
+  ResetTicketWindowBody,
 } from './store.schemas.js';
 
 export const storeController = {
@@ -23,16 +23,12 @@ export const storeController = {
 
   async purchaseWithCoins(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as PurchaseWithCoinsBody;
-    const result = await storeService.purchaseWithCoins(req.user!.id, body.productSlug, {
-      unlimited: isUnlimitedDevEmail(req.user?.email),
-    });
+    const result = await storeService.purchaseWithCoins(req.user!.id, body.productSlug);
     res.json(result);
   },
 
   async getWallet(req: Request, res: Response): Promise<void> {
-    const wallet = await storeService.getWallet(req.user!.id, {
-      unlimited: isUnlimitedDevEmail(req.user?.email),
-    });
+    const wallet = await storeService.getWallet(req.user!.id);
     res.json(wallet);
   },
 
@@ -56,6 +52,16 @@ export const storeController = {
   async listTransactions(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as ListStoreTransactionsQuery;
     const result = await storeService.listTransactions(query);
+    res.json(result);
+  },
+
+  async resetTicketWindow(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as ResetTicketWindowBody;
+    const result = await storeService.resetTicketPurchaseWindow(
+      req.user!.id,
+      body.userId,
+      body.reason
+    );
     res.json(result);
   },
 };

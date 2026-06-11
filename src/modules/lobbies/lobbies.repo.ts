@@ -456,12 +456,30 @@ export const lobbiesRepo = {
     `;
   },
 
+  // Idempotent on the (lobby_id, user_id) PK: if this user already banned a
+  // category in this lobby, return their existing ban instead of throwing. This
+  // keeps the draft flow alive when a ban is (re)applied due to a timer/click
+  // race. A (lobby_id, category_id) UNIQUE collision (two users picking the same
+  // category) is NOT swallowed — that's a genuine bad pick the caller must retry
+  // with a different category.
   async insertLobbyCategoryBan(lobbyId: string, userId: string, categoryId: string): Promise<LobbyCategoryBanRow> {
     const [row] = await sql<LobbyCategoryBanRow[]>`
       INSERT INTO lobby_category_bans (lobby_id, user_id, category_id)
       VALUES (${lobbyId}, ${userId}, ${categoryId})
+      ON CONFLICT (lobby_id, user_id) DO NOTHING
       RETURNING *
     `;
-    return row;
+    if (row) return row;
+    // PK conflict → this user already has a ban row; return it.
+    const [existing] = await sql<LobbyCategoryBanRow[]>`
+      SELECT * FROM lobby_category_bans
+      WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+      LIMIT 1
+    `;
+    if (existing) return existing;
+    // No PK conflict and no row → the insert hit the (lobby_id, category_id)
+    // UNIQUE constraint (different user already banned this category). Surface
+    // it so the caller can pick another category.
+    throw new Error(`lobby_category_bans: category ${categoryId} already banned in lobby ${lobbyId}`);
   },
 };

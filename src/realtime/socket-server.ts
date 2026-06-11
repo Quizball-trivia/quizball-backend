@@ -46,9 +46,16 @@ const ONLINE_COUNT_DEBOUNCE_MS = 250;
 const ONLINE_COUNT_REFRESH_MS = 10000;
 const POST_CONNECT_RETRY_MS = 150;
 const POST_CONNECT_MAX_ATTEMPTS = 10;
+// pingTimeout sizing: the previous 3s timeout declared a socket dead after any
+// ~5s network hiccup — mobile radio wake-ups, wifi roaming and GC pauses
+// routinely take 3-8s, so production saw constant false disconnects (mass
+// socket-drop bursts pausing 7+ matches at once, diagnosed 2026-06-10).
+// 10s absorbs those; worst-case disconnect detection becomes
+// pingInterval + pingTimeout = 12.5s, which the 60s grace flow comfortably
+// covers. Intentional exits stay instant (the client emits match:leave).
 export const SOCKET_HEARTBEAT_CONFIG = {
-  pingInterval: 2000,
-  pingTimeout: 3000,
+  pingInterval: 2500,
+  pingTimeout: 10000,
 } as const;
 
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
@@ -286,9 +293,9 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       origin: (config.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
       credentials: true,
     },
-    // Gameplay needs near-immediate disconnect feedback: if a player stops
-    // answering heartbeats for ~3s, the opponent should see the 60s grace
-    // overlay within ~5s worst case.
+    // Balance: disconnect feedback within ~12.5s worst case (opponent then
+    // sees the 60s grace overlay) vs. NOT killing sockets on routine mobile
+    // network hiccups — see SOCKET_HEARTBEAT_CONFIG for the sizing rationale.
     pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
     pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
   });

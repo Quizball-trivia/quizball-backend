@@ -112,7 +112,7 @@ export const statsRepo = {
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp.avatar_customization
         END AS opponent_avatar_customization,
-        false AS opponent_is_ai,
+        COALESCE(opp.is_ai, false) AS opponent_is_ai,
         CASE
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp_ranked.rp

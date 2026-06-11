@@ -140,7 +140,9 @@ export const statsService = {
           // Only show a tier for placed opponents — unplaced/AI/deleted/no-profile
           // map to null so the client renders a neutral frame instead of a wrong one.
           tier:
-            row.opponent_placement_status === 'placed' && row.opponent_rp !== null
+            !row.opponent_is_ai
+            && row.opponent_placement_status === 'placed'
+            && row.opponent_rp !== null
               ? tierFromRp(row.opponent_rp)
               : null,
         },

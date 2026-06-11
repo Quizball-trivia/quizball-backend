@@ -619,6 +619,68 @@ describe('draftRealtimeService', () => {
     });
   });
 
+  it('resumes the draft via presence re-check when an older live socket survives a ghost disconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { io, emit, fetchSockets } = createIoMock();
+      wireStatefulRedis();
+      // The dying socket is a short-lived ghost (connectedAt 2000); the user's
+      // healthy MAIN socket (connectedAt 1000) stays in the lobby room.
+      fetchSockets.mockResolvedValue([
+        { id: 'old-main-socket', data: { user: { id: 'u1' }, connectedAt: 1000 } },
+      ]);
+
+      await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+        ignoreSocketId: 'ghost-socket',
+        disconnectedConnectedAt: 2000,
+      });
+
+      // S15 guard intact: older socket cannot instantly prove presence,
+      // so the pause + grace still arm and there is no immediate resume.
+      expect(redisSetMock).toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+      expect(emit).not.toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
+
+      // A zombie cannot outlive the ping timeout. The older socket is still
+      // alive at the re-check → the disconnect was a ghost → resume.
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      expect(emit).toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
+      expect(redisDelMock).toHaveBeenCalledWith(['draft:pause:l1', 'draft:grace:l1']);
+      expect(cancelRealtimeTimerMock).toHaveBeenCalledWith('draft_grace_expiry', 'l1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the draft paused when the older socket turns out to be a zombie (gone at re-check)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { io, emit, fetchSockets } = createIoMock();
+      wireStatefulRedis();
+      // Present at pause time, but dead (ping-timed-out) by the re-check.
+      fetchSockets
+        .mockResolvedValueOnce([
+          { id: 'zombie-socket', data: { user: { id: 'u1' }, connectedAt: 1000 } },
+        ])
+        .mockResolvedValue([]);
+
+      await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, 'l1', 'u1', {
+        ignoreSocketId: 'active-socket',
+        disconnectedConnectedAt: 2000,
+      });
+
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      // No live socket at re-check → no resume; grace continues to expiry.
+      expect(emit).not.toHaveBeenCalledWith('draft:resume', { lobbyId: 'l1' });
+      expect(cancelRealtimeTimerMock).not.toHaveBeenCalledWith('draft_grace_expiry', 'l1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('arms draft grace then resumes when a newer same-user replacement socket is already in the lobby room', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io, emit, fetchSockets } = createIoMock();

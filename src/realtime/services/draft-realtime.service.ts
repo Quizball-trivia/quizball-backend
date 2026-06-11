@@ -26,7 +26,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import {
   buildFinalResultsPayload,
@@ -56,6 +56,14 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+// Mutual-exclusion lock around draft completion → match creation. Completion is
+// reachable from several concurrent paths (human ban handler, scheduled AI ban,
+// auto-ban watchdog, reconnect/resume) and possibly from two instances during a
+// deploy overlap. Without the lock, concurrent startMatchFromDraft calls race
+// each other's ranked-ticket CAS consume (3 attempts, ~1ms backoff) until it
+// throws 409 CONFLICT and the match is never created. Heartbeat-extended so a
+// slow match creation can't outlive the TTL and let a duplicate in.
+const DRAFT_COMPLETE_LOCK_TTL_MS = 30_000;
 
 interface DraftDisconnectPresenceOptions {
   ignoreSocketId?: string;
@@ -76,6 +84,10 @@ function draftGraceKey(lobbyId: string): string {
 
 function draftGraceLockKey(lobbyId: string): string {
   return `draft:grace:lock:${lobbyId}`;
+}
+
+function draftCompleteLockKey(lobbyId: string): string {
+  return `draft:complete:lock:${lobbyId}`;
 }
 
 function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
@@ -470,35 +482,108 @@ function getFirstDraftActorId(
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby || lobby.status !== 'active') {
+  // Cheap pre-check before taking the lock so we don't serialize every ban
+  // event on the not-ready path (the common case mid-draft).
+  const preLobby = await lobbiesRepo.getById(lobbyId);
+  if (!preLobby || preLobby.status !== 'active') {
     await clearDraftTimers(lobbyId);
     return null;
   }
+  if ((await lobbiesRepo.listLobbyCategoryBans(lobbyId)).length < 2) return null;
 
-  const categories = await lobbiesService.getLobbyCategories(lobbyId);
-  const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-  if (bans.length < 2) return null;
-
-  await clearDraftTimers(lobbyId);
-  const bannedIds = new Set(bans.map((ban) => ban.category_id));
-  const remaining = categories.filter((category) => !bannedIds.has(category.id));
-  if (remaining.length !== 1) {
-    logger.warn(
-      {
-        lobbyId,
-        totalCategories: categories.length,
-        bannedCount: bans.length,
-        remainingCount: remaining.length,
-        bannedCategoryIds: Array.from(bannedIds),
-      },
-      'Insufficient categories remaining after bans in draft'
-    );
+  // Exactly-once guard: several paths (ban handler, AI ban callback, auto-ban
+  // watchdog, reconnect resume) can all observe "2 bans, ready to complete" at
+  // the same moment. Only one may proceed to startMatchFromDraft — concurrent
+  // ticket consumption for the same wallets exhausts the CAS retries (409
+  // CONFLICT) and aborts the match. Losers skip: the winner either creates the
+  // match (lobby leaves 'active', later attempts no-op) or fails through
+  // startMatchFromDraft's own recovery (draft restart / abort), which re-arms
+  // timers that will call back in here.
+  const lock = await acquireLock(draftCompleteLockKey(lobbyId), DRAFT_COMPLETE_LOCK_TTL_MS);
+  if (!lock.acquired || !lock.token) {
+    logger.info({ lobbyId }, 'Draft completion already in progress; skipping duplicate attempt');
     return null;
   }
+  const heartbeat = startLockHeartbeat(draftCompleteLockKey(lobbyId), lock.token, DRAFT_COMPLETE_LOCK_TTL_MS);
 
-  const halfOneCategoryId = remaining[0].id;
-  return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') {
+      await clearDraftTimers(lobbyId);
+      return null;
+    }
+
+    const categories = await lobbiesService.getLobbyCategories(lobbyId);
+    const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (bans.length < 2) return null;
+
+    const bannedIds = new Set(bans.map((ban) => ban.category_id));
+    const remaining = categories.filter((category) => !bannedIds.has(category.id));
+    if (remaining.length !== 1) {
+      logger.warn(
+        {
+          lobbyId,
+          totalCategories: categories.length,
+          bannedCount: bans.length,
+          remainingCount: remaining.length,
+          bannedCategoryIds: Array.from(bannedIds),
+        },
+        'Insufficient categories remaining after bans in draft'
+      );
+      return null;
+    }
+
+    // NOTE: we deliberately do NOT clearDraftTimers() before starting the match.
+    // startMatchFromDraft's terminal paths handle teardown (match creation,
+    // abort, or draft restart). Clearing timers early would, if this handler
+    // crashed mid-flight, leave an active lobby with 2 bans and no scheduled
+    // recovery once the lock expires.
+    const halfOneCategoryId = remaining[0].id;
+    const matchId = await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+
+    if (matchId) {
+      // Match created → draft is done; safe to drop any leftover timers.
+      await clearDraftTimers(lobbyId);
+    } else {
+      // No match and no terminal transition (e.g. an early bail in
+      // startMatchFromDraft): if the lobby is still active with bans pending,
+      // re-arm the auto-ban watchdog so completion is retried rather than
+      // wedged. Terminal paths (abort/restart) already left the lobby inactive
+      // or re-armed timers, so this is a no-op for them.
+      await rearmDraftCompletionIfStuck(io, lobbyId);
+    }
+    return matchId;
+  } catch (error) {
+    // A throw mid-completion must not leave the lobby wedged: re-arm recovery.
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Draft completion threw; re-arming recovery'
+    );
+    await rearmDraftCompletionIfStuck(io, lobbyId);
+    return null;
+  } finally {
+    heartbeat.stop();
+    await releaseLock(draftCompleteLockKey(lobbyId), lock.token).catch(() => {});
+  }
+}
+
+// Re-arm the auto-ban watchdog when a completion attempt ended without a
+// terminal transition but the lobby is still active and ready (2 bans). This
+// guarantees a stuck draft is always retried instead of wedging when the lock
+// holder bailed early or crashed.
+async function rearmDraftCompletionIfStuck(io: QuizballServer, lobbyId: string): Promise<void> {
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') return;
+    if (await hasPendingRealtimeTimer('draft_auto_ban', lobbyId)) return;
+    scheduleDraftAutoBan(io, lobbyId);
+    logger.info({ lobbyId }, 'Re-armed draft auto-ban after non-terminal completion');
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Failed to re-arm draft completion recovery'
+    );
+  }
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
@@ -528,7 +613,14 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
       lobbiesRepo.listLobbyCategoryBans(lobbyId),
       lobbiesRepo.listMembersWithUser(lobbyId),
     ]);
-    if (members.length !== 2 || bans.length >= 2 || categories.length === 0) return;
+    if (members.length !== 2 || categories.length === 0) return;
+    // Recovery path: both bans already exist but the lobby is still active —
+    // a prior completion attempt bailed early or crashed before creating the
+    // match. Retry completion instead of bailing so the draft can't wedge.
+    if (bans.length >= 2) {
+      await completeDraftIfReady(io, lobbyId);
+      return;
+    }
 
     const aiUserId = lobby.mode === 'ranked'
       ? await resolveRankedAiUserId(lobbyId, members)

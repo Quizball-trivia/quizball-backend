@@ -11,7 +11,10 @@ export const MAX_TICKETS = 5;
 export const TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW = 5;
 // One ticket refills every 4 hours, up to MAX_TICKETS.
 export const TICKET_REFILL_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const TICKET_CAS_MAX_ATTEMPTS = 3;
+// CAS attempts before giving up. Each attempt re-reads fresh wallet state, so a
+// higher ceiling lets transient contention (refill hydration / presence
+// touching the same row) converge instead of throwing 409 and aborting a match.
+const TICKET_CAS_MAX_ATTEMPTS = 6;
 
 export interface HydratedTicketState {
   tickets: number;
@@ -107,9 +110,14 @@ function ticketCasConflict(userId: string, operation: string): AppError {
   );
 }
 
+// Backoff between CAS retries. Long enough for a short concurrent wallet
+// writer (e.g. a GET-wallet refill hydration) to commit and get out of the
+// way; only paid on actual contention.
+const TICKET_CAS_RETRY_BASE_MS = 25;
+
 async function waitBeforeCasRetry(attempt: number): Promise<void> {
   if (attempt >= TICKET_CAS_MAX_ATTEMPTS - 1) return;
-  await new Promise((resolve) => setTimeout(resolve, attempt + 1));
+  await new Promise((resolve) => setTimeout(resolve, TICKET_CAS_RETRY_BASE_MS * (attempt + 1)));
 }
 
 export const ticketRefillService = {

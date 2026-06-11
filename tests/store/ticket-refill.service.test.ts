@@ -126,6 +126,7 @@ describe('ticketRefillService', () => {
         tickets_refill_started_at: '2026-03-08T10:00:00.000Z',
       });
       (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue(null);
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
 
       await expect(
         ticketRefillService.hydrateTicketsInTx(
@@ -137,7 +138,15 @@ describe('ticketRefillService', () => {
         code: 'CONFLICT',
       });
 
-      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
+      // Matches TICKET_CAS_MAX_ATTEMPTS (raised to 6 so transient wallet
+      // contention converges instead of aborting a ranked match).
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(6);
+      // Pin the backoff curve: 5 sleeps between 6 attempts (last attempt no
+      // sleep), spaced 25ms × (attempt+1). Guards against a regression back to
+      // near-zero spacing that would defeat the contention-drain.
+      const backoffDelays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+      expect(backoffDelays).toEqual([25, 50, 75, 100, 125]);
+      setTimeoutSpy.mockRestore();
     });
 
     it('starts a refill anchor when consuming from a full wallet', async () => {
@@ -233,6 +242,7 @@ describe('ticketRefillService', () => {
         tickets_refill_started_at: '2026-03-08T09:15:00.000Z',
       });
       (storeRepo.compareAndSetTicketsStateInTx as Mock).mockResolvedValue(null);
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
 
       await expect(
         ticketRefillService.consumeRankedTicketInTx(
@@ -244,7 +254,14 @@ describe('ticketRefillService', () => {
         code: 'CONFLICT',
       });
 
-      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
+      // Matches TICKET_CAS_MAX_ATTEMPTS (raised to 6 so transient wallet
+      // contention converges instead of aborting a ranked match).
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(6);
+      // Pin the backoff curve (25ms × attempt) so a regression to near-zero
+      // spacing can't slip through while the retry count still passes.
+      const backoffDelays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+      expect(backoffDelays).toEqual([25, 50, 75, 100, 125]);
+      setTimeoutSpy.mockRestore();
     });
 
     it('rejects overflowing ticket grants when overflow rejection is enabled', async () => {

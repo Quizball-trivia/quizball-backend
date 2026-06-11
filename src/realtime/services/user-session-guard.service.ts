@@ -12,7 +12,6 @@ import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
-import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import {
   matchDisconnectKey,
   matchGraceKey,
@@ -24,12 +23,7 @@ import {
 import { rankedPairingInFlightKey } from '../ranked-matchmaking-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { isUserDroppedFromPartyMatch } from '../party-quiz-state.js';
-import { completePossessionMatchFromProgress } from '../possession-completion.js';
-import {
-  buildFinalResultsPayload,
-  emitFinalResultsToMatchParticipants,
-} from './match-final-results.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
 
@@ -275,37 +269,19 @@ async function cleanupStaleOrphanActiveMatch(
       'Session guard stale orphan ranked match cleanup audit'
     );
 
-    const progressResult = await completePossessionMatchFromProgress(io, activeMatch.id, 'session_guard_orphan');
-    if (progressResult.completed) return;
-    if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') return;
-
+    // FORFEIT-FIRST (shared resolver, consistent with the live disconnect
+    // path #72 and the stale sweeper): the absent player loses by forfeit
+    // when a present counterpart exists; progress completion is only the
+    // fallback when presence cannot isolate a single absent loser.
     const players = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
-    const userIds = players.map((player) => player.user_id);
-    const presence = await resolveMatchPresence(io, activeMatch.id, players, {
+    const resolution = await resolveOrphanPossessionMatchTerminal({
+      io,
+      match: activeMatch,
+      roster: players,
+      source: 'session_guard_orphan',
       connectingUserId: userId,
-      staleCleanup: true,
     });
-
-    if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
-      const forfeitingUserId = presence.absentPlayers[0]?.user_id;
-      if (!forfeitingUserId) return;
-      const finalized = await finalizeMatchAsForfeit({
-        matchId: activeMatch.id,
-        forfeitingUserId,
-        activeMatch,
-        cleanupRedisKeys: rankedMatchCleanupKeys(activeMatch.id, userIds),
-      });
-      if (!finalized.completed) return;
-      const finalPayload = await buildFinalResultsPayload(activeMatch.id, finalized.resultVersion);
-      if (finalPayload) {
-        await emitFinalResultsToMatchParticipants(io, activeMatch.id, finalPayload);
-      }
-      return;
-    }
-
-    const abandoned = await abandonMatchWithCompleteLock(activeMatch.id);
-    if (abandoned.abandoned) {
-      await cleanupRankedMatchRedisKeys(activeMatch.id, userIds);
+    if (resolution.outcome === 'abandoned') {
       for (const player of players) {
         trackMatchAbandoned(player.user_id, activeMatch.id, activeMatch.mode, 'session_guard_stale_ranked_orphan');
       }

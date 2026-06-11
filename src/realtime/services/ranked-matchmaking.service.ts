@@ -458,7 +458,21 @@ async function startHumanRankedMatch(
         const latest = await lobbiesRepo.getById(lobby.id);
         if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
         await startDraft(io, lobby.id);
-      })();
+      })().catch((error) => {
+        // Without this catch, a throw here (e.g. a DB statement timeout inside
+        // startDraft) is an unhandled rejection — which crashed the prod
+        // process on 2026-06-11. Mirror the recovery contract of the
+        // ranked-AI path: log, and tell both players to restart matchmaking
+        // instead of leaving them on a dead "match found" screen.
+        logger.error({ error, lobbyId: lobby.id, userAId, userBId }, 'Failed to start ranked human draft');
+        for (const userId of [userAId, userBId]) {
+          io.to(`user:${userId}`).emit('error', {
+            code: 'MATCH_PREPARATION_FAILED',
+            message: 'Match preparation got stuck. Please restart ranked matchmaking.',
+            meta: { lobbyId: lobby.id, source: 'ranked_human_draft_start' },
+          });
+        }
+      });
     }, FOUND_MODAL_MS);
     } finally {
       await clearPairingInFlight([userAId, userBId]);

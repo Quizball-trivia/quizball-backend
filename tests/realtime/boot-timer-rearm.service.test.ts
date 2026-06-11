@@ -29,11 +29,15 @@ vi.mock('../../src/realtime/party-quiz-match-flow.js', () => ({
   ensurePartyQuizActiveTimer: (...a: unknown[]) => ensurePartyQuizActiveTimerMock(...a),
 }));
 
+let redisAvailable = true;
 vi.mock('../../src/realtime/redis.js', () => ({
-  getRedisClient: () => ({
-    isOpen: true,
-    exists: (...a: unknown[]) => redisExistsMock(...a),
-  }),
+  getRedisClient: () =>
+    redisAvailable
+      ? {
+          isOpen: true,
+          exists: (...a: unknown[]) => redisExistsMock(...a),
+        }
+      : null,
 }));
 
 import { rearmActiveMatchTimersOnBoot } from '../../src/realtime/services/boot-timer-rearm.service.js';
@@ -46,6 +50,7 @@ function match(id: string, variant = 'ranked_sim') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  redisAvailable = true;
   redisExistsMock.mockResolvedValue(0);
   resolveMatchVariantMock.mockImplementation(
     (statePayload: { variant?: string }) => statePayload?.variant ?? 'ranked_sim'
@@ -109,6 +114,20 @@ describe('boot timer re-arm', () => {
 
     expect(summary).toEqual({ scanned: 0, rearmed: 0, skippedPaused: 0, failed: 0 });
     expect(ensurePossessionActiveTimersMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when Redis is unavailable for the pause-state check', async () => {
+    // Without the pause check we could re-arm timers for a paused match and
+    // fight the disconnect-grace flow that owns it — skip instead.
+    redisAvailable = false;
+    listStaleActiveMatchesMock.mockResolvedValue([match('m1')]);
+
+    const summary = await rearmActiveMatchTimersOnBoot(io);
+
+    expect(ensurePossessionActiveTimersMock).not.toHaveBeenCalled();
+    expect(ensurePartyQuizActiveTimerMock).not.toHaveBeenCalled();
+    expect(summary.failed).toBe(1);
+    expect(summary.rearmed).toBe(0);
   });
 
   it('survives a failing scan query', async () => {

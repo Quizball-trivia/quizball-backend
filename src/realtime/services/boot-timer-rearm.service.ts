@@ -61,7 +61,19 @@ export async function rearmActiveMatchTimersOnBoot(io: QuizballServer): Promise<
   const redis = getRedisClient();
   for (const match of active) {
     try {
-      if (redis?.isOpen && (await redis.exists(matchPauseKey(match.id))) === 1) {
+      // Fail closed: without a pause-state check we could re-arm timers for a
+      // paused match, fighting the disconnect-grace flow that owns it. If
+      // Redis is down the ensure paths couldn't schedule durable timers
+      // anyway — skip and let the next boot / sweeper pass retry.
+      if (!redis?.isOpen) {
+        summary.failed += 1;
+        logger.warn(
+          { matchId: match.id },
+          'Boot timer re-arm skipped: Redis unavailable for pause-state check'
+        );
+        continue;
+      }
+      if ((await redis.exists(matchPauseKey(match.id))) === 1) {
         // Disconnect-grace flow owns paused matches via durable timers.
         summary.skippedPaused += 1;
         continue;

@@ -29,8 +29,8 @@ export function registerRankedOpenApi(registry: OpenAPIRegistry): void {
   registerEndpoint(registry, {
     method: 'post',
     path: '/api/v1/admin/leaderboard/reset',
-    summary: 'Reset the leaderboard for an event',
-    description: "Requires admin role. Archives current standings into the reset archive tables, then sets every real user's RP to 0 (tier 'Academy') and clears placement progress.",
+    summary: 'Reset the global leaderboard (ranks & placement)',
+    description: "Requires admin role. Archives current standings into the reset archive tables, then sets every real user's RP to 0 (tier 'Academy') and clears placement progress so all users re-do placement.",
     tags: ['Admin Leaderboard'],
     security: [{ bearerAuth: [] }],
     body: leaderboardResetBodySchema,

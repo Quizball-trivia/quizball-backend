@@ -422,7 +422,7 @@ export const usersService = {
       } as unknown as Json,
     });
 
-    invalidateByUserId(userId);
+    await invalidateByUserId(userId);
 
     logger.info(
       { userId, actorId: options.actorId, oldXp, newXp, oldRp, newRp, reason: body.reason },

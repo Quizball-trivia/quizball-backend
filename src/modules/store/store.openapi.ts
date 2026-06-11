@@ -11,6 +11,8 @@ import {
   listStoreTransactionsResponseSchema,
   manualAdjustmentBodySchema,
   manualAdjustmentResponseSchema,
+  resetTicketWindowBodySchema,
+  resetTicketWindowResponseSchema,
   purchaseWithCoinsBodySchema,
   purchaseWithCoinsResponseSchema,
   storeInventoryResponseSchema,
@@ -136,6 +138,25 @@ export function registerStoreOpenApi(registry: OpenAPIRegistry): void {
       200: { description: 'Paginated store transaction logs', schema: listStoreTransactionsResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Insufficient permissions', schema: errorResponseSchema },
+    },
+  });
+
+  const resetTicketWindowResponseOpenApi = resetTicketWindowResponseSchema.openapi('ResetTicketWindowResponse');
+  registry.register('ResetTicketWindowResponse', resetTicketWindowResponseOpenApi);
+
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/store/admin/reset-ticket-window',
+    summary: 'Reset a user ticket-purchase window',
+    description: "Requires admin role. Voids the user's completed ticket-pack purchases inside the rolling 24h window so the per-day purchase cap no longer blocks them.",
+    tags: ['Store Admin'],
+    security: [{ bearerAuth: [] }],
+    body: resetTicketWindowBodySchema,
+    responses: {
+      200: { description: 'Reset result with refreshed wallet', schema: resetTicketWindowResponseOpenApi },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Insufficient permissions', schema: errorResponseSchema },
+      404: { description: 'User not found', schema: errorResponseSchema },
     },
   });
 }

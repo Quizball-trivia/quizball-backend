@@ -1032,7 +1032,8 @@
               "manual_adjustment_failed",
               "objective_reward_succeeded",
               "admin_progression_adjustment",
-              "leaderboard_reset"
+              "leaderboard_reset",
+              "admin_ticket_window_reset"
             ]
           },
           "outcome": {
@@ -1162,7 +1163,8 @@
                     "manual_adjustment_failed",
                     "objective_reward_succeeded",
                     "admin_progression_adjustment",
-                    "leaderboard_reset"
+                    "leaderboard_reset",
+                    "admin_ticket_window_reset"
                   ]
                 },
                 "outcome": {
@@ -1293,6 +1295,64 @@
           "limit",
           "total",
           "totalPages"
+        ]
+      },
+      "ResetTicketWindowResponse": {
+        "type": "object",
+        "properties": {
+          "voided": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
+                ]
+              }
+            },
+            "required": [
+              "coins",
+              "tickets",
+              "ticketPurchaseCooldown"
+            ]
+          }
+        },
+        "required": [
+          "voided",
+          "wallet"
         ]
       },
       "ProgressionResponse": {
@@ -8607,7 +8667,8 @@
                 "manual_adjustment_failed",
                 "objective_reward_succeeded",
                 "admin_progression_adjustment",
-                "leaderboard_reset"
+                "leaderboard_reset",
+                "admin_ticket_window_reset"
               ]
             },
             "required": false,
@@ -8696,7 +8757,8 @@
                               "manual_adjustment_failed",
                               "objective_reward_succeeded",
                               "admin_progression_adjustment",
-                              "leaderboard_reset"
+                              "leaderboard_reset",
+                              "admin_ticket_window_reset"
                             ]
                           },
                           "outcome": {
@@ -8844,6 +8906,87 @@
           },
           "403": {
             "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/admin/reset-ticket-window": {
+      "post": {
+        "summary": "Reset a user ticket-purchase window",
+        "description": "Requires admin role. Voids the user's completed ticket-pack purchases inside the rolling 24h window so the per-day purchase cap no longer blocks them.",
+        "tags": [
+          "Store Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "userId",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reset result with refreshed wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetTicketWindowResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
             "content": {
               "application/json": {
                 "schema": {

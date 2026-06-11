@@ -417,6 +417,33 @@ export const storeRepo = {
     };
   },
 
+  /**
+   * Admin: void a user's completed ticket-pack purchases inside the rolling
+   * window (marks them 'refunded', preserving history) so the per-24h purchase
+   * cap no longer counts them and the user can buy again. Returns the number of
+   * purchase rows voided. Same window/filters as getTicketPackPurchaseWindow.
+   */
+  async refundRecentTicketPurchasesInTx(
+    tx: TransactionSql,
+    userId: string,
+    sinceIso: string
+  ): Promise<number> {
+    const result = await tx.unsafe(
+      `
+      UPDATE store_purchases sp
+      SET status = 'refunded'
+      FROM store_products product
+      WHERE product.id = sp.product_id
+        AND sp.user_id = $1
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+        AND COALESCE(sp.fulfilled_at, sp.created_at) >= $2::timestamptz
+      `,
+      [userId, sinceIso]
+    );
+    return result.count;
+  },
+
   async getLatestCompletedTicketPackPurchaseInTx(
     tx: TransactionSql,
     userId: string

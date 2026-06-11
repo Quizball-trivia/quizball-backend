@@ -73,13 +73,6 @@ const configSchema = z.object({
   // the chaos harness can drive real RPS. Hard-disabled when NODE_ENV==='prod'.
   CHAOS_BYPASS_TOKEN: z.string().optional(),
 
-  // Comma-separated email allowlist for the dev team. Accounts on this list
-  // bypass store economy limits (ticket cap, the per-24h ticket-pack purchase
-  // cooldown, and the coin-balance check) so they can exercise paid flows
-  // without grinding currency. Matched case-insensitively. Leave empty to
-  // disable the bypass entirely.
-  DEV_UNLIMITED_EMAILS: z.string().default(""),
-
   // API Docs (Swagger) - Basic Auth protection
   DOCS_ENABLED: z.enum(["true", "false", "1", "0", ""]).optional(),
   DOCS_USERNAME: z.string().optional(),

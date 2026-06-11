@@ -271,4 +271,46 @@ describe('possession halftime finalize', () => {
       vi.useRealTimers();
     }
   });
+
+  it('defaults the first halftime ban turn to the human (seat 1) when firstBanSeat is unset', async () => {
+    const cache = createHalftimeCache();
+    cache.statePayload.halftime.firstBanSeat = undefined;
+    cache.statePayload.halftime.bans = { seat1: null, seat2: null };
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    // Before any ban, with no firstBanSeat assigned yet (the round-resolver
+    // entry path), the turn must be the human's — NOT the AI's. A `?? 2`
+    // default here let the AI ban before the player saw the cards.
+    expect(halftime.getHalftimeTurnSeat(cache.statePayload)).toBe(1);
+  });
+
+  it('does not let the AI ban first when firstBanSeat is unset (ui_ready signalled)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    const deadlineAt = new Date(Date.now() + 20000).toISOString();
+    cache.statePayload.halftime.deadlineAt = deadlineAt;
+    cache.statePayload.halftime.uiReadyAt = deadlineAt; // client confirmed cards visible
+    cache.statePayload.halftime.firstBanSeat = undefined; // not assigned yet
+    cache.statePayload.halftime.bans = { seat1: null, seat2: null };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2'); // AI is seat 2
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      halftime.schedulePossessionAiHalftimeBan(createIo(), 'match-1');
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // Human (seat 1) goes first by default → the AI must NOT have banned.
+      expect(cache.statePayload.halftime.bans.seat2).toBeNull();
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
 });

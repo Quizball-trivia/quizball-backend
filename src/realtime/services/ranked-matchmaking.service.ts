@@ -472,6 +472,14 @@ async function startHumanRankedMatch(
             meta: { lobbyId: lobby.id, source: 'ranked_human_draft_start' },
           });
         }
+        // Re-sync session-guard state so both clients know they're free to
+        // re-queue (the lobby may be left 'waiting'; lobby-connect's recovery
+        // retries the draft on the next reconnect, and queue-join preflights
+        // re-evaluate the session). Best-effort — never throw from a catch.
+        void Promise.allSettled([
+          userSessionGuardService.emitState(io, userAId),
+          userSessionGuardService.emitState(io, userBId),
+        ]);
       });
     }, FOUND_MODAL_MS);
     } finally {

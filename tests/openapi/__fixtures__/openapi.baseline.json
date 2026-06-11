@@ -9600,7 +9600,8 @@
                 },
                 "required": [
                   "reason"
-                ]
+                ],
+                "description": "Set or grant a user's XP and/or RP. At least one of `xp` or `rp` must be provided (enforced server-side)."
               }
             }
           }

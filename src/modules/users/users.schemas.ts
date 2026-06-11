@@ -305,6 +305,10 @@ export const adminSetProgressionBodySchema = z
   })
   .refine((body) => body.xp !== undefined || body.rp !== undefined, {
     message: 'At least one of xp or rp must be provided',
+  })
+  .openapi({
+    description:
+      'Set or grant a user\'s XP and/or RP. At least one of `xp` or `rp` must be provided (enforced server-side).',
   });
 
 export type AdminSetProgressionBody = z.infer<typeof adminSetProgressionBodySchema>;

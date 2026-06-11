@@ -1513,6 +1513,33 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
   });
 
+  it('S15i3: disconnect without a match binding never pauses a party-quiz match', async () => {
+    // Party quiz has no stable-live-socket pause guard — a binding-less
+    // menu/re-auth socket disconnect must not arm pause/grace for a live
+    // N-player match.
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1'); // no matchId bound
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_party_quiz' },
+    });
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+  });
+
   it('S15i1: disconnect without a match binding no-ops for users with no active match', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();

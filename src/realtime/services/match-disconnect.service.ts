@@ -516,14 +516,27 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
     : await matchesRepo.getActiveMatchForUser(userId);
   if (!match || match.status !== 'active') return;
   const matchId = match.id;
+
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
   if (!boundMatchId) {
+    // Fallback is scoped to 1v1 possession variants: their pause flow skips
+    // when the user still has a stable live match socket, so a menu/re-auth
+    // socket disconnect cannot pause a healthy match. Party quiz has no such
+    // guard (its pause flow is variant-gated) — a binding-less disconnect
+    // there would arm pause/grace for a live N-player match, so it keeps the
+    // old behavior (only bound sockets drive party disconnects).
+    if (variant === 'friendly_party_quiz') {
+      logger.info(
+        { userId, matchId, socketId: socket.id, variant },
+        'Match disconnect fallback skipped for party quiz match'
+      );
+      return;
+    }
     logger.info(
       { userId, matchId, socketId: socket.id },
       'Match disconnect resolved active match for socket without match binding'
     );
   }
-
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
   // Bounded retry: the per-user transition lock can be busy at the exact
   // moment a socket drops (connect hydration, queue ops). Previously a single
   // failed attempt silently dropped the pause — no grace timer, no opponent

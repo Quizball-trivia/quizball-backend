@@ -115,4 +115,33 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     if (!result.ok) console.error(result.violations.map(formatViolation).join('\n'));
     expect(result.ok).toBe(true);
   }, 150_000);
+
+  // Bug 2 & 3 regression: a single disconnect episode must increment the
+  // reconnect counter exactly once. One logical disconnect can drive the pause
+  // path from two sources (socket `disconnect` + `match:leave`); before the fix
+  // each bumped the counter, so two real disconnects forfeited a player after
+  // only 2 (limit 3) — and a player who'd reconnected lost while online.
+  it('a single disconnect episode counts the reconnect once (no double-count)', async () => {
+    const { bootMatch, playMatch } = await import('../../game-regression/src/runner.mjs');
+    const { pauseMatchForDisconnectedPlayer, getDisconnectCount } =
+      await import('../../src/realtime/services/match-disconnect.service.js');
+
+    const run = await bootMatch({ startTimeoutMs: 25_000 });
+    expect(run.matchId).toBeTruthy();
+    await playMatch(run, { maxMs: 5_000 });
+
+    // Simulate a real network drop: remove the live match socket so the
+    // stable-socket guard can no longer treat the user as present.
+    run.io.removeSocket(run.botSocket);
+
+    // One logical disconnect drives the pause path from BOTH sources (the socket
+    // `disconnect` handler + the `match:leave` path). Without the episode dedupe
+    // each call re-increments the reconnect counter → count reaches 2 for a
+    // single disconnect, forfeiting players a disconnect early.
+    await pauseMatchForDisconnectedPlayer(run.io as never, run.matchId!, run.botUserId, { ignoreSocketId: 'src-a' });
+    await pauseMatchForDisconnectedPlayer(run.io as never, run.matchId!, run.botUserId, { ignoreSocketId: 'src-b' });
+
+    const count = await getDisconnectCount(run.matchId!, run.botUserId);
+    expect(count, 'one disconnect episode must count exactly once').toBe(1);
+  }, 120_000);
 });

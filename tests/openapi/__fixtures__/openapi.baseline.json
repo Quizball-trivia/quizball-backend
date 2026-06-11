@@ -424,6 +424,23 @@
                     },
                     "isAi": {
                       "type": "boolean"
+                    },
+                    "tier": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "Academy",
+                        "Youth Prospect",
+                        "Reserve",
+                        "Bench",
+                        "Rotation",
+                        "Starting11",
+                        "Key Player",
+                        "Captain",
+                        "World-Class",
+                        "Legend",
+                        "GOAT"
+                      ]
                     }
                   },
                   "required": [
@@ -431,7 +448,8 @@
                     "username",
                     "avatarUrl",
                     "avatarCustomization",
-                    "isAi"
+                    "isAi",
+                    "tier"
                   ]
                 }
               },
@@ -6999,6 +7017,23 @@
                               },
                               "isAi": {
                                 "type": "boolean"
+                              },
+                              "tier": {
+                                "type": "string",
+                                "nullable": true,
+                                "enum": [
+                                  "Academy",
+                                  "Youth Prospect",
+                                  "Reserve",
+                                  "Bench",
+                                  "Rotation",
+                                  "Starting11",
+                                  "Key Player",
+                                  "Captain",
+                                  "World-Class",
+                                  "Legend",
+                                  "GOAT"
+                                ]
                               }
                             },
                             "required": [
@@ -7006,7 +7041,8 @@
                               "username",
                               "avatarUrl",
                               "avatarCustomization",
-                              "isAi"
+                              "isAi",
+                              "tier"
                             ]
                           }
                         },

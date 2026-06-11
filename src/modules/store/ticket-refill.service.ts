@@ -3,10 +3,18 @@ import { AppError, ErrorCode, NotFoundError } from '../../core/errors.js';
 import { storeRepo } from './store.repo.js';
 import type { StoreWalletResponse, WalletStateRow } from './store.types.js';
 
-export const MAX_TICKETS = 3;
+export const MAX_TICKETS = 5;
+// Daily store purchase cap: up to this many TICKETS per rolling 24h window
+// (quantity-based — a 5-pack consumes the whole allowance). Lives here next to
+// MAX_TICKETS so wallet-shaping helpers can use it without importing
+// store.service (which imports this module).
+export const TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW = 5;
 // One ticket refills every 4 hours, up to MAX_TICKETS.
 export const TICKET_REFILL_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const TICKET_CAS_MAX_ATTEMPTS = 3;
+// CAS attempts before giving up. Each attempt re-reads fresh wallet state, so a
+// higher ceiling lets transient contention (refill hydration / presence
+// touching the same row) converge instead of throwing 409 and aborting a match.
+const TICKET_CAS_MAX_ATTEMPTS = 6;
 
 export interface HydratedTicketState {
   tickets: number;
@@ -26,6 +34,7 @@ export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'ti
       canBuy: true,
       nextAvailableAt: null,
       remainingSeconds: 0,
+      ticketsRemainingInWindow: TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW,
     },
   };
 }
@@ -101,9 +110,14 @@ function ticketCasConflict(userId: string, operation: string): AppError {
   );
 }
 
+// Backoff between CAS retries. Long enough for a short concurrent wallet
+// writer (e.g. a GET-wallet refill hydration) to commit and get out of the
+// way; only paid on actual contention.
+const TICKET_CAS_RETRY_BASE_MS = 25;
+
 async function waitBeforeCasRetry(attempt: number): Promise<void> {
   if (attempt >= TICKET_CAS_MAX_ATTEMPTS - 1) return;
-  await new Promise((resolve) => setTimeout(resolve, attempt + 1));
+  await new Promise((resolve) => setTimeout(resolve, TICKET_CAS_RETRY_BASE_MS * (attempt + 1)));
 }
 
 export const ticketRefillService = {

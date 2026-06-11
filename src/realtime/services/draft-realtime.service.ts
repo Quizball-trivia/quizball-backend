@@ -5,6 +5,10 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { storeService } from '../../modules/store/store.service.js';
+import {
+  RANKED_RECENT_CATEGORY_MODE,
+  userRecentCategoriesRepo,
+} from '../../modules/user-recent-categories/user-recent-categories.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
@@ -22,7 +26,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import {
   buildFinalResultsPayload,
@@ -52,6 +56,20 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+// How long after a disconnect to re-check whether the player still has a live
+// socket in the lobby room. Must exceed the socket.io ping timeout so a zombie
+// socket has provably died by the time the re-check runs — anything still
+// connected then is a real presence (the disconnect was a ghost socket).
+const DRAFT_PRESENCE_RECHECK_MS = 12_000;
+const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
+// Mutual-exclusion lock around draft completion → match creation. Completion is
+// reachable from several concurrent paths (human ban handler, scheduled AI ban,
+// auto-ban watchdog, reconnect/resume) and possibly from two instances during a
+// deploy overlap. Without the lock, concurrent startMatchFromDraft calls race
+// each other's ranked-ticket CAS consume (3 attempts, ~1ms backoff) until it
+// throws 409 CONFLICT and the match is never created. Heartbeat-extended so a
+// slow match creation can't outlive the TTL and let a duplicate in.
+const DRAFT_COMPLETE_LOCK_TTL_MS = 30_000;
 
 interface DraftDisconnectPresenceOptions {
   ignoreSocketId?: string;
@@ -72,6 +90,10 @@ function draftGraceKey(lobbyId: string): string {
 
 function draftGraceLockKey(lobbyId: string): string {
   return `draft:grace:lock:${lobbyId}`;
+}
+
+function draftCompleteLockKey(lobbyId: string): string {
+  return `draft:complete:lock:${lobbyId}`;
 }
 
 function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
@@ -179,12 +201,14 @@ async function startMatchFromDraft(
   if (members.length !== 2) return null;
 
   let consumedRankedTicketUserIds: string[] = [];
+  let rankedHumanUserIds: string[] = [];
 
   if (lobby.mode === 'ranked') {
     const aiUserId = await resolveRankedAiUserId(lobbyId, members);
     const ticketUserIds = members
       .filter((member) => member.user_id !== aiUserId)
       .map((member) => member.user_id);
+    rankedHumanUserIds = ticketUserIds;
     const abortSignals = await getRankedDraftAbortSignals(lobbyId, ticketUserIds);
     const blockingSignals = abortSignals.filter((signal) => signal.cancelled || signal.absentAfterGrace);
     if (blockingSignals.length > 0) {
@@ -268,6 +292,25 @@ async function startMatchFromDraft(
     { lobbyId, matchId, mode: lobby.mode, halfOneCategoryId },
     'Match created from draft'
   );
+
+  // Recently played categories: the drafted survivor is now ACTUALLY used by
+  // this match, so record it for the real (non-AI) players — this is what the
+  // next draft's recent-category filter reads. Best-effort: never blocks the
+  // match start.
+  if (lobby.mode === 'ranked' && rankedHumanUserIds.length > 0) {
+    void userRecentCategoriesRepo
+      .recordPlayedCategoryForUsers({
+        userIds: rankedHumanUserIds,
+        categoryId: halfOneCategoryId,
+        mode: RANKED_RECENT_CATEGORY_MODE,
+      })
+      .catch((error) => {
+        logger.warn(
+          { error, lobbyId, matchId, halfOneCategoryId },
+          'Failed to record recently played category (draft)'
+        );
+      });
+  }
 
   // Analytics: per-member draft_completed event. Duration relative to
   // the match created_at timestamp is the closest proxy we have without
@@ -445,35 +488,108 @@ function getFirstDraftActorId(
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby || lobby.status !== 'active') {
+  // Cheap pre-check before taking the lock so we don't serialize every ban
+  // event on the not-ready path (the common case mid-draft).
+  const preLobby = await lobbiesRepo.getById(lobbyId);
+  if (!preLobby || preLobby.status !== 'active') {
     await clearDraftTimers(lobbyId);
     return null;
   }
+  if ((await lobbiesRepo.listLobbyCategoryBans(lobbyId)).length < 2) return null;
 
-  const categories = await lobbiesService.getLobbyCategories(lobbyId);
-  const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-  if (bans.length < 2) return null;
-
-  await clearDraftTimers(lobbyId);
-  const bannedIds = new Set(bans.map((ban) => ban.category_id));
-  const remaining = categories.filter((category) => !bannedIds.has(category.id));
-  if (remaining.length !== 1) {
-    logger.warn(
-      {
-        lobbyId,
-        totalCategories: categories.length,
-        bannedCount: bans.length,
-        remainingCount: remaining.length,
-        bannedCategoryIds: Array.from(bannedIds),
-      },
-      'Insufficient categories remaining after bans in draft'
-    );
+  // Exactly-once guard: several paths (ban handler, AI ban callback, auto-ban
+  // watchdog, reconnect resume) can all observe "2 bans, ready to complete" at
+  // the same moment. Only one may proceed to startMatchFromDraft — concurrent
+  // ticket consumption for the same wallets exhausts the CAS retries (409
+  // CONFLICT) and aborts the match. Losers skip: the winner either creates the
+  // match (lobby leaves 'active', later attempts no-op) or fails through
+  // startMatchFromDraft's own recovery (draft restart / abort), which re-arms
+  // timers that will call back in here.
+  const lock = await acquireLock(draftCompleteLockKey(lobbyId), DRAFT_COMPLETE_LOCK_TTL_MS);
+  if (!lock.acquired || !lock.token) {
+    logger.info({ lobbyId }, 'Draft completion already in progress; skipping duplicate attempt');
     return null;
   }
+  const heartbeat = startLockHeartbeat(draftCompleteLockKey(lobbyId), lock.token, DRAFT_COMPLETE_LOCK_TTL_MS);
 
-  const halfOneCategoryId = remaining[0].id;
-  return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') {
+      await clearDraftTimers(lobbyId);
+      return null;
+    }
+
+    const categories = await lobbiesService.getLobbyCategories(lobbyId);
+    const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (bans.length < 2) return null;
+
+    const bannedIds = new Set(bans.map((ban) => ban.category_id));
+    const remaining = categories.filter((category) => !bannedIds.has(category.id));
+    if (remaining.length !== 1) {
+      logger.warn(
+        {
+          lobbyId,
+          totalCategories: categories.length,
+          bannedCount: bans.length,
+          remainingCount: remaining.length,
+          bannedCategoryIds: Array.from(bannedIds),
+        },
+        'Insufficient categories remaining after bans in draft'
+      );
+      return null;
+    }
+
+    // NOTE: we deliberately do NOT clearDraftTimers() before starting the match.
+    // startMatchFromDraft's terminal paths handle teardown (match creation,
+    // abort, or draft restart). Clearing timers early would, if this handler
+    // crashed mid-flight, leave an active lobby with 2 bans and no scheduled
+    // recovery once the lock expires.
+    const halfOneCategoryId = remaining[0].id;
+    const matchId = await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+
+    if (matchId) {
+      // Match created → draft is done; safe to drop any leftover timers.
+      await clearDraftTimers(lobbyId);
+    } else {
+      // No match and no terminal transition (e.g. an early bail in
+      // startMatchFromDraft): if the lobby is still active with bans pending,
+      // re-arm the auto-ban watchdog so completion is retried rather than
+      // wedged. Terminal paths (abort/restart) already left the lobby inactive
+      // or re-armed timers, so this is a no-op for them.
+      await rearmDraftCompletionIfStuck(io, lobbyId);
+    }
+    return matchId;
+  } catch (error) {
+    // A throw mid-completion must not leave the lobby wedged: re-arm recovery.
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Draft completion threw; re-arming recovery'
+    );
+    await rearmDraftCompletionIfStuck(io, lobbyId);
+    return null;
+  } finally {
+    heartbeat.stop();
+    await releaseLock(draftCompleteLockKey(lobbyId), lock.token).catch(() => {});
+  }
+}
+
+// Re-arm the auto-ban watchdog when a completion attempt ended without a
+// terminal transition but the lobby is still active and ready (2 bans). This
+// guarantees a stuck draft is always retried instead of wedging when the lock
+// holder bailed early or crashed.
+async function rearmDraftCompletionIfStuck(io: QuizballServer, lobbyId: string): Promise<void> {
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') return;
+    if (await hasPendingRealtimeTimer('draft_auto_ban', lobbyId)) return;
+    scheduleDraftAutoBan(io, lobbyId);
+    logger.info({ lobbyId }, 'Re-armed draft auto-ban after non-terminal completion');
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : error, lobbyId },
+      'Failed to re-arm draft completion recovery'
+    );
+  }
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {
@@ -503,7 +619,14 @@ export async function runDraftAutoBan(io: QuizballServer, lobbyId: string): Prom
       lobbiesRepo.listLobbyCategoryBans(lobbyId),
       lobbiesRepo.listMembersWithUser(lobbyId),
     ]);
-    if (members.length !== 2 || bans.length >= 2 || categories.length === 0) return;
+    if (members.length !== 2 || categories.length === 0) return;
+    // Recovery path: both bans already exist but the lobby is still active —
+    // a prior completion attempt bailed early or crashed before creating the
+    // match. Retry completion instead of bailing so the draft can't wedge.
+    if (bans.length >= 2) {
+      await completeDraftIfReady(io, lobbyId);
+      return;
+    }
 
     const aiUserId = lobby.mode === 'ranked'
       ? await resolveRankedAiUserId(lobbyId, members)
@@ -722,18 +845,41 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     if (!hasAiMember) return;
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    // The AI already banned — nothing to do.
+    if (bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    // The AI is expected to ban second. If the FIRST (human) ban hasn't landed
+    // yet — e.g. it failed to insert on a timer/click race — do NOT dead-end
+    // here (that's what left matches stuck on "preparing match"). Fall back to
+    // the generic auto-ban recovery, which force-applies the missing ban and
+    // reschedules the AI in turn so the draft always progresses.
+    if (bans.length !== 1) {
+      logger.warn(
+        { lobbyId, aiUserId, banCount: bans.length },
+        'AI draft ban expected exactly 1 prior ban; recovering via auto-ban'
+      );
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
 
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
     const aiChoice = candidates[Math.floor(getRandom() * candidates.length)];
-    if (!aiChoice) return;
+    if (!aiChoice) {
+      // No category left for the AI to ban — let auto-ban recovery settle it.
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
 
     try {
       await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
     } catch (error) {
-      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
+      // e.g. the picked category collided on the (lobby_id, category_id) UNIQUE
+      // constraint due to a race. Don't dead-end — recover via auto-ban.
+      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban; recovering via auto-ban');
+      scheduleDraftAutoBan(io, lobbyId);
       return;
     }
 
@@ -889,6 +1035,49 @@ export const draftRealtimeService = {
         'Draft auto-resuming after fast socket replacement'
       );
       await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
+    } else if (sameUserSockets.length > 0) {
+      // The user still has OLDER live socket(s) in the lobby room. They can't
+      // instantly prove presence — an in-flight zombie looks identical (the
+      // S15 incident, see #60) — but a genuine zombie cannot outlive the
+      // socket.io ping timeout. Re-check shortly: if a live same-user socket
+      // remains, the "disconnect" was a short-lived ghost socket dying next to
+      // a healthy connection (page-transition duplicate), and the draft should
+      // resume instead of freezing for the full grace and aborting.
+      const timerKey = `${lobbyId}:${userId}`;
+      const existing = draftPresenceRecheckTimers.get(timerKey);
+      if (existing) clearTimeout(existing);
+      const recheck = setTimeout(() => {
+        draftPresenceRecheckTimers.delete(timerKey);
+        void (async () => {
+          const liveSockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+          const stillPresent = liveSockets.some((socket) => socket.data.user.id === userId);
+          if (!stillPresent) {
+            logger.info(
+              { lobbyId, userId },
+              'Draft presence re-check: player has no live sockets; grace continues'
+            );
+            return;
+          }
+          logger.info(
+            { lobbyId, userId },
+            'Draft presence re-check: live socket survived ping timeout; resuming draft'
+          );
+          await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
+        })().catch((error) => {
+          logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
+        });
+      }, harnessDelayMs(DRAFT_PRESENCE_RECHECK_MS));
+      recheck.unref?.();
+      draftPresenceRecheckTimers.set(timerKey, recheck);
+      logger.info(
+        {
+          lobbyId,
+          userId,
+          sameUserSocketCount: sameUserSockets.length,
+          recheckMs: DRAFT_PRESENCE_RECHECK_MS,
+        },
+        'draft_presence_recheck_scheduled'
+      );
     }
   },
 
@@ -979,7 +1168,13 @@ export const draftRealtimeService = {
     try {
       await lobbiesRepo.insertLobbyCategoryBan(lobbyId, socket.data.user.id, categoryId);
     } catch (error) {
-      logger.warn({ error, lobbyId }, 'Failed to insert lobby ban');
+      // The ban couldn't be recorded (e.g. the chosen category was already
+      // banned by the opponent — a (lobby_id, category_id) UNIQUE collision).
+      // Tell the client to pick again, and arm the auto-ban watchdog so the
+      // draft still progresses if they don't.
+      logger.warn({ error, lobbyId, userId: socket.data.user.id, categoryId }, 'Failed to insert lobby ban');
+      socket.emit('error', { code: 'BAN_FAILED', message: 'That category is unavailable — pick another.' });
+      scheduleDraftAutoBan(io, lobbyId);
       return;
     }
     logger.info(

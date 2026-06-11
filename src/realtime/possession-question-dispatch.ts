@@ -5,9 +5,10 @@ import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
+  POSSESSION_QUESTIONS_PER_HALF,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
-import { questionPayloadSchema } from '../modules/questions/questions.schemas.js';
+import { questionPayloadSchema, type QuestionType } from '../modules/questions/questions.schemas.js';
 import {
   countdownGetFound,
   getMatchCacheOrRebuild,
@@ -47,6 +48,7 @@ import {
   getDifficultyForState,
   parsePossessionState,
   phaseKindFromState,
+  reservedImageMcqForHalf,
   TIMEOUT_RESOLVE_BUFFER_MS,
   TIMEOUT_RESOLVE_GRACE_MS,
   toMatchStatePayload,
@@ -70,6 +72,10 @@ import type { QuizballServer, QuizballSocket } from './socket-server.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
 const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
+
+// The 0-based slot within a half whose question is forced to be an image MCQ
+// (the 4th question → slot index 3). See questionTypeForState / NORMAL_HALF_SEQUENCE.
+const IMAGE_MCQ_SLOT_INDEX = 3;
 const GOAL_ROUND_READY_ACK_CEILING_MS =
   FRONTEND_RESULT_HOLD_MS + FRONTEND_TRANSITION_DELAY_MS + FRONTEND_GOAL_CELEBRATION_MS + 2000;
 
@@ -259,90 +265,239 @@ export async function emitPossessionStateToSocket(socket: QuizballSocket, matchI
   );
 }
 
-async function maybePickQuestionForState(
-  matchId: string,
-  state: PossessionStatePayload,
-  categoryIds: string[]
-): Promise<{
+interface PickedQuestion {
   questionId: string;
   categoryId: string;
   correctIndex: number;
   questionKind: MatchQuestionKind;
-} | null> {
+  /** Raw image URL for image MCQs (used for the up-front client preload). */
+  imageUrl: string | null;
+}
+
+/**
+ * Scan a candidate batch and return the first row whose payload is a valid
+ * question of `questionType` (well-formed MCQ with a correct option, or a valid
+ * special question). The single authority for "valid candidate" — both the
+ * normal and image-MCQ selection paths use it so they can't drift.
+ */
+function pickFirstValidCandidate(
+  rows: Array<{ id: string; category_id: string; payload: unknown }>,
+  questionType: QuestionType,
+  logContext: Record<string, unknown>
+): PickedQuestion | null {
+  let invalidCandidateCount = 0;
+  for (const row of rows) {
+    const parsed = questionPayloadSchema.safeParse(row.payload);
+    if (!parsed.success || parsed.data.type !== questionType) {
+      invalidCandidateCount += 1;
+      continue;
+    }
+
+    const correctIndex = parsed.data.type === 'mcq_single'
+      ? parsed.data.options.findIndex((option) => option.is_correct)
+      : 0;
+    if (parsed.data.type === 'mcq_single' && correctIndex < 0) {
+      invalidCandidateCount += 1;
+      continue;
+    }
+
+    const imageUrl = parsed.data.type === 'mcq_single' && parsed.data.image?.url
+      ? parsed.data.image.url
+      : null;
+
+    logger.info(
+      {
+        ...logContext,
+        questionType,
+        candidateCount: rows.length,
+        invalidCandidateCount,
+        questionId: row.id,
+        categoryId: row.category_id,
+        questionKind: questionKindForType(questionType),
+      },
+      'Possession question candidate picked'
+    );
+    return {
+      questionId: row.id,
+      categoryId: row.category_id,
+      correctIndex,
+      questionKind: questionKindForType(questionType),
+      imageUrl,
+    };
+  }
+
+  logger.warn(
+    {
+      ...logContext,
+      questionType,
+      candidateCount: rows.length,
+      invalidCandidateCount,
+    },
+    'Possession question candidate search returned no valid question'
+  );
+  return null;
+}
+
+function isImageMcqSlot(state: PossessionStatePayload): boolean {
+  return (
+    state.phase === 'NORMAL_PLAY' &&
+    state.normalQuestionsAnsweredInHalf % POSSESSION_QUESTIONS_PER_HALF === IMAGE_MCQ_SLOT_INDEX
+  );
+}
+
+/**
+ * Reserve the image MCQ for the current half up-front (at the half's first
+ * normal question) so its image URL rides every match:state of the half and
+ * the client can preload it long before the image slot (Q4) starts.
+ *
+ * Idempotent per half: undefined = not attempted yet; null = attempted but the
+ * drafted categories have no image MCQ (the slot will fall back to a normal
+ * MCQ). Mutates `state` — the caller persists it via the regular cache/state
+ * writes of the dispatch flow.
+ */
+async function ensureImageMcqReservedForHalf(
+  matchId: string,
+  state: PossessionStatePayload,
+  categoryIds: string[]
+): Promise<void> {
+  if (state.phase !== 'NORMAL_PLAY') return;
+  const halfKey = state.half === 1 ? 'half1' : 'half2';
+  const reservations = state.imageMcq ?? (state.imageMcq = {});
+  if (reservations[halfKey] !== undefined) return;
+
+  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+    matchId,
+    categoryIds,
+    limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+  });
+  const picked = pickFirstValidCandidate(rows, 'mcq_single', {
+    matchId,
+    imageMcqReservation: true,
+    half: state.half,
+    categoryIds,
+  });
+
+  reservations[halfKey] = picked?.imageUrl
+    ? { questionId: picked.questionId, imageUrl: picked.imageUrl }
+    : null;
+  logger.info(
+    {
+      matchId,
+      half: state.half,
+      categoryIds,
+      reservedQuestionId: picked?.questionId ?? null,
+      reservedImageUrl: picked?.imageUrl ?? null,
+    },
+    picked?.imageUrl
+      ? 'Image MCQ reserved for half'
+      : 'No image MCQ available to reserve for half'
+  );
+}
+
+/**
+ * For the image-MCQ slot, prefer the question reserved for this half (whose
+ * image the client has been preloading); if it has become invalid/used,
+ * re-pick a random published image MCQ from the drafted categories. Returns
+ * null (→ caller falls back to a normal MCQ) when the pool is
+ * empty/exhausted, so the match never stalls.
+ */
+async function pickImageMcqForState(
+  matchId: string,
+  state: PossessionStatePayload,
+  categoryIds: string[]
+): Promise<PickedQuestion | null> {
+  const reserved = reservedImageMcqForHalf(state);
+  if (reserved) {
+    const reservedRows = await matchQuestionsRepo.getImageMcqCandidateForMatchById({
+      matchId,
+      questionId: reserved.questionId,
+    });
+    const reservedPick = pickFirstValidCandidate(reservedRows, 'mcq_single', {
+      matchId,
+      imageMcqSlot: true,
+      reservedQuestionId: reserved.questionId,
+      categoryIds,
+    });
+    if (reservedPick) return reservedPick;
+    logger.warn(
+      { matchId, reservedQuestionId: reserved.questionId, half: state.half },
+      'Reserved image MCQ no longer valid at dispatch; re-picking'
+    );
+  }
+
+  const rows = await matchQuestionsRepo.getRandomImageMcqCandidatesForMatch({
+    matchId,
+    categoryIds,
+    limit: SPECIAL_QUESTION_CANDIDATE_LIMIT,
+  });
+  return pickFirstValidCandidate(rows, 'mcq_single', {
+    matchId,
+    imageMcqSlot: true,
+    categoryIds,
+  });
+}
+
+async function maybePickQuestionForState(
+  matchId: string,
+  state: PossessionStatePayload,
+  categoryIds: string[]
+): Promise<PickedQuestion | null> {
+  if (isImageMcqSlot(state)) {
+    const imagePicked = await pickImageMcqForState(matchId, state, categoryIds);
+    if (imagePicked) return imagePicked;
+    logger.warn(
+      { matchId, imageMcqSlot: true, categoryIds },
+      'No image MCQ available for Q4 slot; falling back to a normal MCQ'
+    );
+    // fall through to the normal mcq_single path below
+  }
+
   const questionType = questionTypeForState(state);
   const useDifficulty = questionType === 'mcq_single';
   const preferredDifficulties = useDifficulty ? getDifficultyForState(state) : undefined;
+  // Keep the half's reserved image MCQ out of every other slot so the
+  // preloaded image is never consumed early by a normal MCQ pick.
+  const reserved = reservedImageMcqForHalf(state);
+  const excludeQuestionIds = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : undefined;
   const pickValidCandidate = async (
-    difficulties?: Array<'easy' | 'medium' | 'hard'>
-  ): Promise<{
-    questionId: string;
-    categoryId: string;
-    correctIndex: number;
-    questionKind: MatchQuestionKind;
-  } | null> => {
+    difficulties?: Array<'easy' | 'medium' | 'hard'>,
+    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean }
+  ): Promise<PickedQuestion | null> => {
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [questionType],
+      excludeQuestionIds: opts?.dropReservedExclusion ? undefined : excludeQuestionIds,
+      allowImageMcqs: opts?.allowImageMcqs,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
-
-    let invalidCandidateCount = 0;
-    for (const row of rows) {
-      const parsed = questionPayloadSchema.safeParse(row.payload);
-      if (!parsed.success || parsed.data.type !== questionType) {
-        invalidCandidateCount += 1;
-        continue;
-      }
-
-      const correctIndex = parsed.data.type === 'mcq_single'
-        ? parsed.data.options.findIndex((option) => option.is_correct)
-        : 0;
-      if (parsed.data.type === 'mcq_single' && correctIndex < 0) {
-        invalidCandidateCount += 1;
-        continue;
-      }
-
-      logger.info(
-        {
-          matchId,
-          questionType,
-          categoryIds,
-          difficulties,
-          candidateCount: rows.length,
-          invalidCandidateCount,
-          questionId: row.id,
-          categoryId: row.category_id,
-          questionKind: questionKindForType(questionType),
-        },
-        'Possession question candidate picked'
-      );
-      return {
-        questionId: row.id,
-        categoryId: row.category_id,
-        correctIndex,
-        questionKind: questionKindForType(questionType),
-      };
-    }
-
-    logger.warn(
-      {
-        matchId,
-        questionType,
-        categoryIds,
-        difficulties,
-        candidateCount: rows.length,
-        invalidCandidateCount,
-      },
-      'Possession question candidate search returned no valid question'
-    );
-    return null;
+    return pickFirstValidCandidate(rows, questionType, {
+      matchId,
+      categoryIds,
+      difficulties,
+      allowImageMcqs: opts?.allowImageMcqs ?? false,
+    });
   };
 
   let picked = await pickValidCandidate(preferredDifficulties);
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(['easy', 'medium', 'hard']);
+  }
+  if (!picked && useDifficulty) {
+    // Anti-stall last resort: the drafted category has no PLAIN MCQs left
+    // (e.g. it only contains image questions). An off-slot image beats a
+    // frozen match — but log it loudly, it means the category needs content.
+    // The reserved-image exclusion is dropped too: if the reservation is the
+    // ONLY remaining valid candidate, keeping it excluded would still stall.
+    logger.warn(
+      { matchId, categoryIds, questionType },
+      'Plain MCQ pool exhausted; retrying with image MCQs allowed (anti-stall)'
+    );
+    picked = await pickValidCandidate(['easy', 'medium', 'hard'], {
+      allowImageMcqs: true,
+      dropReservedExclusion: true,
+    });
   }
 
   return picked;
@@ -509,6 +664,10 @@ export async function sendPossessionMatchQuestion(
     });
 
     const categoryIds = categoryIdsForCurrentHalf(state, cache);
+    // Reserve the half's image MCQ at the first normal question of the half so
+    // the match:state emitted below carries its image URL — the client preloads
+    // it immediately, well before the image slot (Q4) dispatches.
+    await ensureImageMcqReservedForHalf(matchId, state, categoryIds);
     const picked = await maybePickQuestionForState(matchId, state, categoryIds);
     if (!picked) {
       logger.error(

@@ -81,6 +81,13 @@ export interface DraftState {
   lobbyId: string;
   categories: DraftCategory[];
   turnUserId: string;
+  /**
+   * Info flag: the candidates were selected with recent-category filtering
+   * (recently played categories of the matched players were excluded). The
+   * client just displays the categories — no client-side filtering.
+   * Omitted on reconnect re-emits of an in-progress draft.
+   */
+  recentFilterApplied?: boolean;
 }
 
 export interface DraftOpponentDisconnectedPayload {
@@ -117,11 +124,21 @@ export type MatchQuestionKind =
   | 'putInOrder'
   | 'clues';
 
+/** Image attached to an image-MCQ. Minimal, normalized shape for the client
+ *  (width/height let it reserve space and avoid layout shift). */
+export interface QuestionImageDTO {
+  url: string;
+  width: number;
+  height: number;
+  aspectRatio?: string;
+}
+
 export interface MultipleChoiceQuestionDTO {
   kind: 'multipleChoice';
   id: string;
   prompt: Record<string, string>;
   options: Array<Record<string, string>>;
+  image?: QuestionImageDTO;
   categoryId?: string;
   categoryName?: Record<string, string>;
   difficulty?: string;
@@ -463,6 +480,12 @@ export interface MatchStatePayload {
   };
   penaltySuddenDeath?: boolean;
   stateVersion?: number;
+  /**
+   * Raw image URLs the client should preload (optimized client-side) for
+   * upcoming questions in the current half — e.g. the reserved image-MCQ
+   * picture, sent from the half's first question so it's warm by Q4.
+   */
+  preloadImageUrls?: string[];
 }
 
 export interface MatchPartyPlayerState {

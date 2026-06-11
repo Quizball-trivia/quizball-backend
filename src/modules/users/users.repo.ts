@@ -325,6 +325,129 @@ export const usersRepo = {
   },
 
   /**
+   * Admin: paginated, searchable list of real users joined with ranked + wallet
+   * data. Mirrors the active-user filters used by searchByNickname (excludes AI,
+   * seed, deleted and pending-deletion accounts) so the admin list matches the
+   * set of users that can actually appear on the leaderboard.
+   */
+  async listUsersForAdmin(params: {
+    search?: string;
+    page: number;
+    limit: number;
+    orderBy: 'created_at' | 'total_xp' | 'rp' | 'nickname';
+    orderDir: 'asc' | 'desc';
+  }): Promise<{
+    items: Array<{
+      id: string;
+      email: string | null;
+      nickname: string | null;
+      country: string | null;
+      avatar_url: string | null;
+      total_xp: number;
+      coins: number;
+      tickets: number;
+      created_at: string;
+      ranked_rp: number | null;
+      ranked_tier: string | null;
+      ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
+    }>;
+    total: number;
+  }> {
+    const offset = (params.page - 1) * params.limit;
+
+    // Escape LIKE metacharacters so the search term matches literally.
+    const searchPattern = params.search
+      ? `%${params.search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`
+      : null;
+    const searchFilter = searchPattern
+      ? sql`AND (u.nickname ILIKE ${searchPattern} ESCAPE '\\' OR u.email ILIKE ${searchPattern} ESCAPE '\\')`
+      : sql``;
+
+    const activeFilters = sql`
+      u.is_ai = false
+      AND u.is_seed = false
+      AND u.is_deleted = false
+      AND u.deleted_at IS NULL
+      AND u.pending_deletion_at IS NULL
+    `;
+
+    // Whitelisted ORDER BY — never interpolate the raw column/direction.
+    const direction = params.orderDir === 'asc' ? sql`ASC` : sql`DESC`;
+    const orderClause = (() => {
+      switch (params.orderBy) {
+        case 'total_xp':
+          return sql`u.total_xp ${direction}, u.created_at DESC`;
+        case 'rp':
+          return sql`rp.rp ${direction} NULLS LAST, u.created_at DESC`;
+        case 'nickname':
+          return sql`u.nickname ${direction} NULLS LAST, u.created_at DESC`;
+        case 'created_at':
+        default:
+          return sql`u.created_at ${direction}`;
+      }
+    })();
+
+    const [totalRow] = await sql<{ total: number }[]>`
+      SELECT COUNT(*)::int AS total
+      FROM users u
+      WHERE ${activeFilters}
+      ${searchFilter}
+    `;
+
+    const items = await sql<Array<{
+      id: string;
+      email: string | null;
+      nickname: string | null;
+      country: string | null;
+      avatar_url: string | null;
+      total_xp: number;
+      coins: number;
+      tickets: number;
+      created_at: string;
+      ranked_rp: number | null;
+      ranked_tier: string | null;
+      ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
+    }>>`
+      SELECT
+        u.id,
+        u.email,
+        u.nickname,
+        u.country,
+        u.avatar_url,
+        u.total_xp,
+        u.coins,
+        u.tickets,
+        u.created_at,
+        rp.rp AS ranked_rp,
+        rp.tier AS ranked_tier,
+        rp.placement_status AS ranked_placement_status
+      FROM users u
+      LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
+      WHERE ${activeFilters}
+      ${searchFilter}
+      ORDER BY ${orderClause}
+      LIMIT ${params.limit}
+      OFFSET ${offset}
+    `;
+
+    return { items, total: totalRow?.total ?? 0 };
+  },
+
+  /**
+   * Admin: set a user's total_xp to an absolute value. Level is recomputed on
+   * read from total_xp, so this is a safe single-column write.
+   */
+  async setTotalXp(userId: string, totalXp: number): Promise<number | null> {
+    const [row] = await sql<{ total_xp: number }[]>`
+      UPDATE users
+      SET total_xp = ${totalXp}, updated_at = NOW()
+      WHERE id = ${userId}
+      RETURNING total_xp
+    `;
+    return row?.total_xp ?? null;
+  },
+
+  /**
    * Delete an AI-only user. Refuses to delete non-AI rows as a safety guard.
    * Used during dev quick-match cleanup when the match was never created.
    */

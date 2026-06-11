@@ -28,3 +28,23 @@ export const rankedProfileResponseSchema = z.object({
 });
 
 export type RankedProfileResponse = z.infer<typeof rankedProfileResponseSchema>;
+
+/**
+ * Admin: leaderboard reset request. `confirm` must be true so the destructive
+ * action can't be triggered by an empty/accidental POST.
+ */
+export const leaderboardResetBodySchema = z.object({
+  confirm: z.literal(true),
+  notes: z.string().max(500).optional(),
+});
+
+export type LeaderboardResetBody = z.infer<typeof leaderboardResetBodySchema>;
+
+export const leaderboardResetResponseSchema = z.object({
+  batchId: z.string().uuid(),
+  profilesReset: z.number().int().nonnegative(),
+  profilesArchived: z.number().int().nonnegative(),
+  rpChangesArchived: z.number().int().nonnegative(),
+});
+
+export type LeaderboardResetResponse = z.infer<typeof leaderboardResetResponseSchema>;

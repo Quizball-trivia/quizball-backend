@@ -10,6 +10,8 @@ export {
   devGrantSelfBodySchema,
   devGrantSelfResponseSchema,
   manualAdjustmentBodySchema,
+  resetTicketWindowBodySchema,
+  resetTicketWindowResponseSchema,
   listStoreTransactionsQuerySchema,
   storeProductResponseSchema,
   storeProductsResponseSchema,

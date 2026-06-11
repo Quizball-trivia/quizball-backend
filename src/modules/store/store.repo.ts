@@ -393,13 +393,16 @@ export const storeRepo = {
   },
 
   // Non-tx rolling-window usage (see getTicketPackPurchaseWindowInTx).
+  // Quantity-based: sums the tickets granted by each completed pack purchase
+  // (metadata->>'tickets'; legacy rows without it count as 1) so the daily cap
+  // limits TICKETS bought, not number of purchases.
   async getTicketPackPurchaseWindow(
     userId: string,
     sinceIso: string
-  ): Promise<{ count: number; oldest_purchased_at: string | null }> {
-    const [row] = await sql<{ count: string; oldest_purchased_at: string | null }[]>`
+  ): Promise<{ ticketCount: number; oldest_purchased_at: string | null }> {
+    const [row] = await sql<{ ticket_count: string; oldest_purchased_at: string | null }[]>`
       SELECT
-        COUNT(*)::text AS count,
+        COALESCE(SUM(COALESCE((product.metadata->>'tickets')::int, 1)), 0)::text AS ticket_count,
         MIN(COALESCE(sp.fulfilled_at, sp.created_at))::text AS oldest_purchased_at
       FROM store_purchases sp
       JOIN store_products product ON product.id = sp.product_id
@@ -409,9 +412,36 @@ export const storeRepo = {
         AND COALESCE(sp.fulfilled_at, sp.created_at) >= ${sinceIso}::timestamptz
     `;
     return {
-      count: row ? Number(row.count) : 0,
+      ticketCount: row ? Number(row.ticket_count) : 0,
       oldest_purchased_at: row?.oldest_purchased_at ?? null,
     };
+  },
+
+  /**
+   * Admin: void a user's completed ticket-pack purchases inside the rolling
+   * window (marks them 'refunded', preserving history) so the per-24h purchase
+   * cap no longer counts them and the user can buy again. Returns the number of
+   * purchase rows voided. Same window/filters as getTicketPackPurchaseWindow.
+   */
+  async refundRecentTicketPurchasesInTx(
+    tx: TransactionSql,
+    userId: string,
+    sinceIso: string
+  ): Promise<number> {
+    const result = await tx.unsafe(
+      `
+      UPDATE store_purchases sp
+      SET status = 'refunded'
+      FROM store_products product
+      WHERE product.id = sp.product_id
+        AND sp.user_id = $1
+        AND sp.status = 'completed'
+        AND product.type = 'ticket_pack'
+        AND COALESCE(sp.fulfilled_at, sp.created_at) >= $2::timestamptz
+      `,
+      [userId, sinceIso]
+    );
+    return result.count;
   },
 
   async getLatestCompletedTicketPackPurchaseInTx(
@@ -437,15 +467,16 @@ export const storeRepo = {
   // Rolling-window ticket-pack purchase usage: how many completed ticket-pack
   // purchases the user made since `sinceIso`, and the OLDEST one in that window
   // (used to compute when a purchase slot frees up).
+  // Tx variant of getTicketPackPurchaseWindow (same quantity-based semantics).
   async getTicketPackPurchaseWindowInTx(
     tx: TransactionSql,
     userId: string,
     sinceIso: string
-  ): Promise<{ count: number; oldest_purchased_at: string | null }> {
-    const [row] = await tx.unsafe<{ count: string; oldest_purchased_at: string | null }[]>(
+  ): Promise<{ ticketCount: number; oldest_purchased_at: string | null }> {
+    const [row] = await tx.unsafe<{ ticket_count: string; oldest_purchased_at: string | null }[]>(
       `
       SELECT
-        COUNT(*)::text AS count,
+        COALESCE(SUM(COALESCE((product.metadata->>'tickets')::int, 1)), 0)::text AS ticket_count,
         MIN(COALESCE(sp.fulfilled_at, sp.created_at))::text AS oldest_purchased_at
       FROM store_purchases sp
       JOIN store_products product ON product.id = sp.product_id
@@ -457,7 +488,7 @@ export const storeRepo = {
       [userId, sinceIso]
     );
     return {
-      count: row ? Number(row.count) : 0,
+      ticketCount: row ? Number(row.ticket_count) : 0,
       oldest_purchased_at: row?.oldest_purchased_at ?? null,
     };
   },

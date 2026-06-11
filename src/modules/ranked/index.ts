@@ -1,8 +1,16 @@
-export { rankedService } from './ranked.service.js';
+export { rankedService, tierFromRp } from './ranked.service.js';
 export { rankedRepo } from './ranked.repo.js';
 export { rankedController } from './ranked.controller.js';
-export { rankedProfileResponseSchema } from './ranked.schemas.js';
-export type { RankedProfileResponse } from './ranked.schemas.js';
+export {
+  rankedProfileResponseSchema,
+  leaderboardResetBodySchema,
+  leaderboardResetResponseSchema,
+} from './ranked.schemas.js';
+export type {
+  RankedProfileResponse,
+  LeaderboardResetBody,
+  LeaderboardResetResponse,
+} from './ranked.schemas.js';
 export type {
   PlacementStatus,
   RankedLeaderboardEntry,

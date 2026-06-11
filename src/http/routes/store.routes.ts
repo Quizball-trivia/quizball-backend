@@ -9,6 +9,7 @@ import {
   devGrantSelfBodySchema,
   listStoreTransactionsQuerySchema,
   manualAdjustmentBodySchema,
+  resetTicketWindowBodySchema,
   storeController,
 } from '../../modules/store/index.js';
 
@@ -90,6 +91,18 @@ router.get(
   requireRole('admin'),
   validate({ query: listStoreTransactionsQuerySchema }),
   storeController.listTransactions
+);
+
+/**
+ * POST /api/v1/store/admin/reset-ticket-window
+ * Clear a user's rolling 24h ticket-pack purchases so they can buy again.
+ */
+router.post(
+  '/admin/reset-ticket-window',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: resetTicketWindowBodySchema }),
+  storeController.resetTicketWindow
 );
 
 export const storeRoutes = router;

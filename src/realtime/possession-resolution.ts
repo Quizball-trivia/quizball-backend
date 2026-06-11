@@ -119,6 +119,7 @@ export function beginSecondHalf(state: PossessionStatePayload): void {
   state.kickOffSeat = nextSeat(state.kickOffSeat);
   state.lastAttack.attackerSeat = null;
   state.halftime.deadlineAt = null;
+  state.halftime.readyDeferCount = 0;
   state.halftime.categoryOptions = [];
   state.halftime.firstHalfShownCategoryIds = [];
   state.halftime.firstBanSeat = null;
@@ -156,6 +157,7 @@ export function transitionAfterHalfBoundary(
     state.halftime.purpose = 'penalty';
     state.halftime.deadlineAt = new Date(Date.now() + harnessDelayMs(HALFTIME_DURATION_MS)).toISOString();
     state.halftime.uiReadyAt = null;
+    state.halftime.readyDeferCount = 0;
     state.halftime.categoryOptions = [];
     state.halftime.firstBanSeat = null;
     state.halftime.bans = { seat1: null, seat2: null };

@@ -178,6 +178,15 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
                 ${sql.json(i18n(`Regression Category ${c}`))}, '⚽', null, true)
         RETURNING id
       `;
+      // The ranked draft pool is FEATURED categories only (featured_categories
+      // join in listAllRankedEligibleCategories) — un-featured fixtures would
+      // leave the ranked harness with an empty pool. clearFixtures() already
+      // deletes these rows symmetrically.
+      await sql`
+        INSERT INTO featured_categories (category_id)
+        VALUES (${category.id})
+        ON CONFLICT (category_id) DO NOTHING
+      `;
       result.categoryIds.push(category.id);
       result.questionIdsByCategory[category.id] = [];
 

@@ -15,6 +15,7 @@ import { objectivesRoutes } from './objectives.routes.js';
 import { presenceRoutes } from './presence.routes.js';
 import { adminDailyChallengesRoutes } from './admin-daily-challenges.routes.js';
 import { adminUsersRoutes } from './admin-users.routes.js';
+import { adminLeaderboardRoutes } from './admin-leaderboard.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { translationRoutes } from './translation.routes.js';
 import { opsRoutes } from './ops.routes.js';
@@ -48,6 +49,7 @@ router.use('/api/v1/presence', presenceRoutes);
 router.use('/api/v1/admin/activity', activityRoutes);
 router.use('/api/v1/admin/daily-challenges', adminDailyChallengesRoutes);
 router.use('/api/v1/admin/users', adminUsersRoutes);
+router.use('/api/v1/admin/leaderboard', adminLeaderboardRoutes);
 router.use('/api/v1/admin/translation', translationRoutes);
 router.use('/api/v1/internal/ops', opsRoutes);
 

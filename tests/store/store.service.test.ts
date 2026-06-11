@@ -185,7 +185,7 @@ describe('storeService', () => {
     });
     (storeRepo.getWallet as Mock).mockResolvedValue({
       coins: 100,
-      tickets: 3,
+      tickets: 5,
       tickets_refill_started_at: null,
     });
     (storeRepo.insertTransactionLog as Mock).mockResolvedValue({ id: 'log-1' });

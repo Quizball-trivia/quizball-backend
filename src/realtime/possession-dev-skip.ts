@@ -61,6 +61,7 @@ export async function devSkipToPossessionPhase(
         state.normalQuestionsAnsweredInHalf = 0;
         state.halftime.categoryOptions = [];
         state.halftime.firstBanSeat = null;
+        state.halftime.readyDeferCount = 0;
         state.halftime.bans.seat1 = null;
         state.halftime.bans.seat2 = null;
         state.halftime.deadlineAt = null;
@@ -98,6 +99,7 @@ export async function devSkipToPossessionPhase(
         state.phase = 'HALFTIME';
         state.halftime.purpose = 'penalty';
         state.halftime.uiReadyAt = null;
+        state.halftime.readyDeferCount = 0;
         state.halftime.firstBanSeat = null;
         state.halftime.bans = { seat1: null, seat2: null };
         state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();

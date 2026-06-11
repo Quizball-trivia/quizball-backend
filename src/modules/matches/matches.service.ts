@@ -170,6 +170,14 @@ function buildQuestionAssets(row: MatchQuestionWithCategory): {
         ...common,
         prompt: ensureI18nObject(row.prompt),
         options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
+        image: parsed.data.image
+          ? {
+            url: parsed.data.image.url,
+            width: parsed.data.image.width,
+            height: parsed.data.image.height,
+            aspectRatio: parsed.data.image.aspect_ratio,
+          }
+          : undefined,
         explanation: null,
       };
 
@@ -309,6 +317,16 @@ export type MatchWinnerDecisionMethod =
   | 'total_points_fallback'
   | 'forfeit';
 
+/**
+ * Image MCQ pre-picked for a half's image slot. `imageUrl` is the raw stored
+ * URL — the client applies its own optimization transform and preloads it as
+ * soon as it appears in match:state, so the picture is warm before the slot.
+ */
+export interface ReservedImageMcq {
+  questionId: string;
+  imageUrl: string;
+}
+
 export interface PossessionStatePayload {
   version: 1;
   variant: 'friendly_possession' | 'ranked_sim';
@@ -341,6 +359,12 @@ export interface PossessionStatePayload {
   halftime: {
     deadlineAt: string | null;
     uiReadyAt: string | null;
+    /**
+     * How many times finalizeHalftime has extended the deadline waiting for a
+     * client to signal `match:halftime_ui_ready`. Bounded — once the cap is
+     * reached the ban window force-opens so broken clients can't stall.
+     */
+    readyDeferCount: number;
     categoryOptions: DraftCategory[];
     firstHalfShownCategoryIds: string[];
     firstBanSeat: 1 | 2 | null;
@@ -365,6 +389,17 @@ export interface PossessionStatePayload {
   };
   /** Category chosen in the penalty ban phase; read only during PENALTY_SHOOTOUT. */
   penaltyCategoryId: string | null;
+  /**
+   * Image MCQ reserved for each half's image slot (Q4). Reserved up-front at
+   * the half's first normal question so the client can preload the image well
+   * before the slot starts. Per half key: undefined = not attempted yet,
+   * null = attempted but the drafted category has no image MCQ available
+   * (slot falls back to a normal MCQ).
+   */
+  imageMcq?: {
+    half1?: ReservedImageMcq | null;
+    half2?: ReservedImageMcq | null;
+  };
   currentQuestion: {
     qIndex: number;
     phaseKind: 'normal' | 'last_attack' | 'penalty';
@@ -419,9 +454,11 @@ export function createInitialPossessionState(
     lastAttack: {
       attackerSeat: null,
     },
+    imageMcq: {},
     halftime: {
       deadlineAt: null,
       uiReadyAt: null,
+      readyDeferCount: 0,
       categoryOptions: [],
       firstHalfShownCategoryIds: [],
       firstBanSeat: null,

@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8000",
       "description": "Local development"
     }
   ],
@@ -711,11 +711,39 @@
           "tickets": {
             "type": "integer",
             "minimum": 0
+          },
+          "ticketPurchaseCooldown": {
+            "type": "object",
+            "properties": {
+              "canBuy": {
+                "type": "boolean"
+              },
+              "nextAvailableAt": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "remainingSeconds": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ticketsRemainingInWindow": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "canBuy",
+              "nextAvailableAt",
+              "remainingSeconds",
+              "ticketsRemainingInWindow"
+            ]
           }
         },
         "required": [
           "coins",
-          "tickets"
+          "tickets",
+          "ticketPurchaseCooldown"
         ]
       },
       "StoreInventoryResponse": {
@@ -818,11 +846,39 @@
               "tickets": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
+                ]
               }
             },
             "required": [
               "coins",
-              "tickets"
+              "tickets",
+              "ticketPurchaseCooldown"
             ]
           }
         },
@@ -846,11 +902,39 @@
               "tickets": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "ticketPurchaseCooldown": {
+                "type": "object",
+                "properties": {
+                  "canBuy": {
+                    "type": "boolean"
+                  },
+                  "nextAvailableAt": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "remainingSeconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "ticketsRemainingInWindow": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "canBuy",
+                  "nextAvailableAt",
+                  "remainingSeconds",
+                  "ticketsRemainingInWindow"
+                ]
               }
             },
             "required": [
               "coins",
-              "tickets"
+              "tickets",
+              "ticketPurchaseCooldown"
             ]
           },
           "inventoryApplied": {
@@ -7624,11 +7708,39 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     }
                   },
@@ -7698,11 +7810,39 @@
                     "tickets": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "ticketPurchaseCooldown": {
+                      "type": "object",
+                      "properties": {
+                        "canBuy": {
+                          "type": "boolean"
+                        },
+                        "nextAvailableAt": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time"
+                        },
+                        "remainingSeconds": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ticketsRemainingInWindow": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "canBuy",
+                        "nextAvailableAt",
+                        "remainingSeconds",
+                        "ticketsRemainingInWindow"
+                      ]
                     }
                   },
                   "required": [
                     "coins",
-                    "tickets"
+                    "tickets",
+                    "ticketPurchaseCooldown"
                   ]
                 }
               }
@@ -7880,11 +8020,39 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     }
                   },
@@ -8010,11 +8178,39 @@
                         "tickets": {
                           "type": "integer",
                           "minimum": 0
+                        },
+                        "ticketPurchaseCooldown": {
+                          "type": "object",
+                          "properties": {
+                            "canBuy": {
+                              "type": "boolean"
+                            },
+                            "nextAvailableAt": {
+                              "type": "string",
+                              "nullable": true,
+                              "format": "date-time"
+                            },
+                            "remainingSeconds": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "ticketsRemainingInWindow": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "canBuy",
+                            "nextAvailableAt",
+                            "remainingSeconds",
+                            "ticketsRemainingInWindow"
+                          ]
                         }
                       },
                       "required": [
                         "coins",
-                        "tickets"
+                        "tickets",
+                        "ticketPurchaseCooldown"
                       ]
                     },
                     "inventoryApplied": {

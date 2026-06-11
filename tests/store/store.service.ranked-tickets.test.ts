@@ -39,7 +39,8 @@ vi.mock('../../src/modules/store/stripe.js', () => ({
 }));
 
 vi.mock('../../src/modules/store/ticket-refill.service.js', () => ({
-  MAX_TICKETS: 3,
+  MAX_TICKETS: 5,
+  TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW: 5,
   resolveHydratedTicketState: vi.fn(),
   ticketRefillService: {
     hydrateTicketsInTx: (...args: unknown[]) => hydrateTicketsInTxMock(...args),
@@ -52,7 +53,7 @@ describe('storeService.consumeRankedTickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLatestCompletedTicketPackPurchaseInTxMock.mockResolvedValue(null);
-    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ count: 0, oldest_purchased_at: null });
+    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 0, oldest_purchased_at: null });
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
     hydrateTicketsForUpdateInTxMock.mockImplementation((...args: unknown[]) => hydrateTicketsInTxMock(...args));
   });
@@ -99,7 +100,7 @@ describe('storeService.refundRankedTickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLatestCompletedTicketPackPurchaseInTxMock.mockResolvedValue(null);
-    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ count: 0, oldest_purchased_at: null });
+    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 0, oldest_purchased_at: null });
     beginMock.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work({ tx: true }));
   });
 
@@ -107,7 +108,7 @@ describe('storeService.refundRankedTickets', () => {
     const { storeService } = await import('../../src/modules/store/store.service.js');
     hydrateTicketsInTxMock.mockImplementation(async (_tx: unknown, userId: string) => ({
       coins: 0,
-      tickets: userId === 'u-capped' ? 3 : 2,
+      tickets: userId === 'u-capped' ? 5 : 2,
       tickets_refill_started_at: userId === 'u-capped' ? '2026-05-30T00:00:00.000Z' : null,
     }));
     setTicketsStateInTxMock.mockImplementation(async (
@@ -124,12 +125,12 @@ describe('storeService.refundRankedTickets', () => {
 
     const result = await storeService.refundRankedTickets(['u-capped', 'u-spent']);
 
-    expect(result.wallets['u-capped']).toMatchObject({ coins: 0, tickets: 3 });
+    expect(result.wallets['u-capped']).toMatchObject({ coins: 0, tickets: 5 });
     expect(result.wallets['u-spent']).toMatchObject({ coins: 0, tickets: 3 });
     expect(setTicketsStateInTxMock).toHaveBeenCalledWith(
       { tx: true },
       'u-capped',
-      3,
+      5,
       null
     );
     expect(setTicketsStateInTxMock).toHaveBeenCalledWith(

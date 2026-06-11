@@ -16,6 +16,7 @@ export type MatchPresenceReason =
   | 'room_socket'
   | 'connecting_user'
   | 'presence_key'
+  | 'user_room_socket'
   | 'disconnect_key'
   | 'stale_missing_signal';
 
@@ -41,12 +42,33 @@ type MatchPresenceOptions = {
   connectingUserId?: string | null;
   staleCleanup?: boolean;
   disconnectedUserIds?: Iterable<string>;
+  /**
+   * Also count live sockets in the per-user `user:<id>` room as presence
+   * evidence. Token-refresh reconnects re-authenticate a fresh socket (which
+   * joins the user room) without re-entering the match room — without this
+   * fallback such players look absent and can be forfeited while online.
+   * An explicit disconnect marker still outweighs this signal (same rule as
+   * `presence_key`), so reconnect-limit forfeits keep their semantics.
+   */
+  includeUserRoomSockets?: boolean;
 };
 
 function socketUserId(socket: unknown): string | null {
   const data = (socket as { data?: { user?: { id?: unknown } } } | null)?.data;
   const userId = data?.user?.id;
   return typeof userId === 'string' ? userId : null;
+}
+
+export async function fetchUserRoomSockets(
+  io: QuizballServer,
+  userId: string
+): Promise<unknown[]> {
+  try {
+    return await io.in(`user:${userId}`).fetchSockets();
+  } catch (error) {
+    logger.warn({ error, userId }, 'Failed to inspect user room sockets for presence resolution');
+    return [];
+  }
 }
 
 async function fetchMatchRoomUserIds(
@@ -105,6 +127,30 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     });
   }
 
+  // Optional fallback: a freshly re-authenticated socket joins `user:<id>`
+  // before (or without ever) re-entering `match:<id>`. Only inspected for
+  // users with no other presence evidence and no explicit disconnect marker,
+  // to keep the extra adapter lookups bounded.
+  const userRoomSocketUserIds = new Set<string>();
+  if (options.includeUserRoomSockets) {
+    const candidates = userIds.filter(
+      (userId) =>
+        !roomPresence.userIds.has(userId) &&
+        !presenceKeyUserIds.has(userId) &&
+        !disconnectKeyUserIds.has(userId) &&
+        options.connectingUserId !== userId
+    );
+    const results = await Promise.all(
+      candidates.map(async (userId) => ({
+        userId,
+        sockets: await fetchUserRoomSockets(io, userId),
+      }))
+    );
+    for (const result of results) {
+      if (result.sockets.length > 0) userRoomSocketUserIds.add(result.userId);
+    }
+  }
+
   const playerStates = roster.map((player): MatchPresencePlayerState<Player> => {
     const reasons: MatchPresenceReason[] = [];
     const user = usersById.get(player.user_id);
@@ -118,6 +164,10 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     // side as "present" and resolves toward abandon/no-op instead of forfeit.
     // A live room socket / connecting user still wins over a stale disconnect key.
     if (presenceKeyUserIds.has(player.user_id) && !explicitlyDisconnected) reasons.push('presence_key');
+    // Same precedence rule: a live user-room socket proves the player is
+    // online (e.g. token-refresh reconnect that never rejoined the match),
+    // but never overrides their own explicit disconnect marker.
+    if (userRoomSocketUserIds.has(player.user_id) && !explicitlyDisconnected) reasons.push('user_room_socket');
 
     const present = reasons.length > 0;
     if (explicitlyDisconnected) reasons.push('disconnect_key');

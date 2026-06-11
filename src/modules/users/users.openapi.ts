@@ -7,6 +7,10 @@ import { progressionResponseSchema } from '../progression/progression.schemas.js
 import {
   accountDeletionResponseSchema,
   achievementsResponseSchema,
+  adminProgressionResultSchema,
+  adminSetProgressionBodySchema,
+  adminUsersListQuerySchema,
+  adminUsersListResponseSchema,
   publicProfileResponseSchema,
   updateProfileSchema,
   userIdParamSchema,
@@ -119,6 +123,44 @@ export function registerUsersOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Account deletion cancelled', schema: userResponseOpenApiSchema },
       400: { description: 'Account is not restorable', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Insufficient permissions', schema: errorResponseSchema },
+      404: { description: 'User not found', schema: errorResponseSchema },
+    },
+  });
+
+  const adminUsersListResponseOpenApiSchema = adminUsersListResponseSchema.openapi('AdminUsersListResponse');
+  const adminProgressionResultOpenApiSchema = adminProgressionResultSchema.openapi('AdminProgressionResult');
+  registry.register('AdminUsersListResponse', adminUsersListResponseOpenApiSchema);
+  registry.register('AdminProgressionResult', adminProgressionResultOpenApiSchema);
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/admin/users',
+    summary: 'List users with progression, RP and wallet',
+    description: 'Requires admin role. Paginated and searchable by nickname/email.',
+    tags: ['Admin Users'],
+    security: [{ bearerAuth: [] }],
+    query: adminUsersListQuerySchema,
+    responses: {
+      200: { description: 'Paginated users list', schema: adminUsersListResponseOpenApiSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Insufficient permissions', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'patch',
+    path: '/api/v1/admin/users/{userId}/progression',
+    summary: 'Set or grant a user XP and/or RP',
+    description: 'Requires admin role. At least one of `xp` or `rp` must be provided (enforced server-side). Records the acting admin id for audit. Each of xp/rp may be a set (absolute) or delta (grant).',
+    tags: ['Admin Users'],
+    security: [{ bearerAuth: [] }],
+    pathParams: userIdParamSchema,
+    body: adminSetProgressionBodySchema,
+    responses: {
+      200: { description: 'Progression updated', schema: adminProgressionResultOpenApiSchema },
+      400: { description: 'Invalid adjustment request', schema: errorResponseSchema },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Insufficient permissions', schema: errorResponseSchema },
       404: { description: 'User not found', schema: errorResponseSchema },

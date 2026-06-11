@@ -6,6 +6,7 @@ import type {
   DevGrantSelfBody,
   ListStoreTransactionsQuery,
   ManualAdjustmentBody,
+  ResetTicketWindowBody,
 } from './store.schemas.js';
 
 export const storeController = {
@@ -51,6 +52,16 @@ export const storeController = {
   async listTransactions(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as ListStoreTransactionsQuery;
     const result = await storeService.listTransactions(query);
+    res.json(result);
+  },
+
+  async resetTicketWindow(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as ResetTicketWindowBody;
+    const result = await storeService.resetTicketPurchaseWindow(
+      req.user!.id,
+      body.userId,
+      body.reason
+    );
     res.json(result);
   },
 };

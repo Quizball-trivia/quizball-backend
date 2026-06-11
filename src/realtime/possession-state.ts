@@ -2,6 +2,7 @@ import {
   createInitialPossessionState,
   POSSESSION_QUESTIONS_PER_HALF,
   type PossessionStatePayload,
+  type ReservedImageMcq,
 } from '../modules/matches/matches.service.js';
 import { clamp } from './scoring.js';
 import { harnessDelayMs } from '../core/harness-timing.js';
@@ -65,6 +66,33 @@ function isValidWinnerDecisionMethod(
   value: unknown
 ): value is NonNullable<PossessionStatePayload['winnerDecisionMethod']> {
   return typeof value === 'string' && VALID_WINNER_DECISION_METHODS.has(value as NonNullable<PossessionStatePayload['winnerDecisionMethod']>);
+}
+
+function normalizeReservedImageMcq(value: unknown): ReservedImageMcq | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<ReservedImageMcq>;
+  if (typeof candidate.questionId !== 'string' || candidate.questionId.length === 0) return undefined;
+  if (typeof candidate.imageUrl !== 'string' || candidate.imageUrl.length === 0) return undefined;
+  return { questionId: candidate.questionId, imageUrl: candidate.imageUrl };
+}
+
+function normalizeImageMcqReservations(value: unknown): NonNullable<PossessionStatePayload['imageMcq']> {
+  if (!value || typeof value !== 'object') return {};
+  const candidate = value as { half1?: unknown; half2?: unknown };
+  const normalized: NonNullable<PossessionStatePayload['imageMcq']> = {};
+  const half1 = normalizeReservedImageMcq(candidate.half1);
+  const half2 = normalizeReservedImageMcq(candidate.half2);
+  if (half1 !== undefined) normalized.half1 = half1;
+  if (half2 !== undefined) normalized.half2 = half2;
+  return normalized;
+}
+
+/** The image-MCQ reservation for the half the state is currently in. */
+export function reservedImageMcqForHalf(
+  state: Pick<PossessionStatePayload, 'half' | 'imageMcq'>
+): ReservedImageMcq | null | undefined {
+  return state.half === 1 ? state.imageMcq?.half1 : state.imageMcq?.half2;
 }
 
 function normalizePenaltyAttempts(params: {
@@ -254,6 +282,9 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
       uiReadyAt: typeof candidate.halftime?.uiReadyAt === 'string' ? candidate.halftime.uiReadyAt : null,
+      readyDeferCount: typeof candidate.halftime?.readyDeferCount === 'number'
+        ? Math.max(0, Math.trunc(candidate.halftime.readyDeferCount))
+        : 0,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
         ? candidate.halftime.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
@@ -288,6 +319,7 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     lastAttack: {
       attackerSeat: asSeat(candidate.lastAttack?.attackerSeat),
     },
+    imageMcq: normalizeImageMcqReservations(candidate.imageMcq),
     penalty: {
       round: Math.max(0, Number(candidate.penalty?.round ?? 0)),
       shooterSeat: asSeat(candidate.penalty?.shooterSeat) ?? 1,
@@ -335,6 +367,10 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
   const phaseKind = state.currentQuestion?.phaseKind ?? phaseKindFromState(state);
   const phaseRound = state.currentQuestion?.phaseRound
     ?? (state.phase === 'PENALTY_SHOOTOUT' ? Math.ceil(state.penalty.round / 2) : 0);
+  // Surface the current half's reserved image-MCQ picture so the client can
+  // warm it from the very first match:state of the half — long before the
+  // image slot (Q4) actually dispatches.
+  const reservedImageMcq = reservedImageMcqForHalf(state);
   return {
     matchId,
     phase: state.phase,
@@ -374,6 +410,7 @@ export function toMatchStatePayload(matchId: string, state: PossessionStatePaylo
     },
     penaltySuddenDeath: state.penalty.suddenDeath,
     stateVersion: state.stateVersionCounter,
+    preloadImageUrls: reservedImageMcq?.imageUrl ? [reservedImageMcq.imageUrl] : [],
   };
 }
 

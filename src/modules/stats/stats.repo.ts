@@ -30,6 +30,8 @@ export interface RecentMatchRow {
   opponent_avatar_url: string | null;
   opponent_avatar_customization: Json | null;
   opponent_is_ai: boolean;
+  opponent_rp: number | null;
+  opponent_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
 }
 
 export interface UserModeMatchStatsRow {
@@ -110,7 +112,15 @@ export const statsRepo = {
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp.avatar_customization
         END AS opponent_avatar_customization,
-        false AS opponent_is_ai
+        COALESCE(opp.is_ai, false) AS opponent_is_ai,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
+          ELSE opp_ranked.rp
+        END AS opponent_rp,
+        CASE
+          WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
+          ELSE opp_ranked.placement_status
+        END AS opponent_placement_status
       FROM matches m
       JOIN match_players mp_self
         ON mp_self.match_id = m.id
@@ -127,6 +137,7 @@ export const statsRepo = {
         ON rrc.match_id = m.id
        AND rrc.user_id = mp_self.user_id
       LEFT JOIN users opp ON opp.id = mp_opp.user_id
+      LEFT JOIN ranked_profiles opp_ranked ON opp_ranked.user_id = mp_opp.user_id
       WHERE m.status IN ('completed', 'abandoned')
         AND m.is_dev = false
       ORDER BY COALESCE(m.ended_at, m.started_at) DESC

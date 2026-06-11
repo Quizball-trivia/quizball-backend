@@ -1,8 +1,11 @@
 import { logger } from '../../core/logger.js';
+import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
+import { storeRepo } from '../store/store.repo.js';
+import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
 import type {
   RankedAiMatchContext,
@@ -16,6 +19,25 @@ import type {
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
+
+// ── Placement seed range ─────────────────────────────────────────────────────
+// The best possible placement run lands at the TOP OF RESERVE (875 RP) — every
+// higher tier (Bench → GOAT) must be climbed through regular ranked play.
+//
+// The internal perf-score scale (anchors ~1900, ±550 win/loss swing, ±350
+// correctness, ±150 dominance) is deliberately left untouched: it produces
+// well-differentiated raw scores on the legacy 0–2600 scale. The final seed is
+// then linearly mapped down to 0–875. A naive clamp at 875 instead would have
+// collapsed nearly every player (even 0-3 runs) onto the cap, since raw
+// scores rarely fall below ~850.
+const LEGACY_PLACEMENT_SEED_MAX_RP = 2600;
+const PLACEMENT_SEED_MAX_RP = 875;
+
+/** Map a raw placement seed (legacy 0–2600 scale) onto the 0–875 Reserve-capped range. */
+function scalePlacementSeed(rawSeed: number): number {
+  const scaled = (clamp(rawSeed, 0, LEGACY_PLACEMENT_SEED_MAX_RP) * PLACEMENT_SEED_MAX_RP) / LEGACY_PLACEMENT_SEED_MAX_RP;
+  return clamp(roundToNearest25(scaled), 0, PLACEMENT_SEED_MAX_RP);
+}
 
 // Coin participation rewards granted once per settled ranked match.
 const RANKED_WIN_COINS = 300;
@@ -80,7 +102,7 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
   return null;
 }
 
-function tierFromRp(rp: number): RankedTier {
+export function tierFromRp(rp: number): RankedTier {
   if (rp >= 3200) return 'GOAT';
   if (rp >= 2900) return 'Legend';
   if (rp >= 2600) return 'World-Class';
@@ -146,6 +168,41 @@ function computeRankedAiAnchor(profile: RankedProfileRow): number {
 }
 
 export const rankedService = {
+  /**
+   * Admin: reset the leaderboard for an event. Archives current standings, then
+   * zeroes every real user's RP (tier 'Academy', placement cleared). Records an
+   * audit entry in store_transaction_logs with the acting admin's id.
+   */
+  async resetLeaderboard(options: { actorId: string; notes?: string | null }): Promise<{
+    batchId: string;
+    profilesReset: number;
+    profilesArchived: number;
+    rpChangesArchived: number;
+  }> {
+    const result = await rankedRepo.resetLeaderboard(options.actorId, options.notes ?? null);
+
+    await storeRepo.insertTransactionLog({
+      eventType: 'leaderboard_reset',
+      outcome: 'success',
+      actorUserId: options.actorId,
+      reason: options.notes ?? 'Leaderboard reset for event',
+      requestId: getRequestId(),
+      metadata: {
+        batchId: result.batchId,
+        profilesReset: result.profilesReset,
+        profilesArchived: result.profilesArchived,
+        rpChangesArchived: result.rpChangesArchived,
+      } as unknown as Json,
+    });
+
+    logger.info(
+      { actorId: options.actorId, ...result },
+      'Leaderboard reset applied'
+    );
+
+    return result;
+  },
+
   async ensureProfile(userId: string): Promise<RankedProfileRow> {
     const profile = await rankedRepo.ensureProfile(userId);
     if (profile.tier !== tierFromRp(profile.rp)) {
@@ -384,7 +441,7 @@ export const rankedService = {
             -150,
             150
           );
-          const seedRp = clamp(roundToNearest25(base + dominanceAdj), 0, 2600);
+          const seedRp = scalePlacementSeed(base + dominanceAdj);
           newRp = seedRp;
           deltaRp = newRp - oldRp;
           newTier = tierFromRp(newRp);

@@ -56,6 +56,12 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+// How long after a disconnect to re-check whether the player still has a live
+// socket in the lobby room. Must exceed the socket.io ping timeout so a zombie
+// socket has provably died by the time the re-check runs — anything still
+// connected then is a real presence (the disconnect was a ghost socket).
+const DRAFT_PRESENCE_RECHECK_MS = 12_000;
+const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
 // Mutual-exclusion lock around draft completion → match creation. Completion is
 // reachable from several concurrent paths (human ban handler, scheduled AI ban,
 // auto-ban watchdog, reconnect/resume) and possibly from two instances during a
@@ -1029,6 +1035,49 @@ export const draftRealtimeService = {
         'Draft auto-resuming after fast socket replacement'
       );
       await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
+    } else if (sameUserSockets.length > 0) {
+      // The user still has OLDER live socket(s) in the lobby room. They can't
+      // instantly prove presence — an in-flight zombie looks identical (the
+      // S15 incident, see #60) — but a genuine zombie cannot outlive the
+      // socket.io ping timeout. Re-check shortly: if a live same-user socket
+      // remains, the "disconnect" was a short-lived ghost socket dying next to
+      // a healthy connection (page-transition duplicate), and the draft should
+      // resume instead of freezing for the full grace and aborting.
+      const timerKey = `${lobbyId}:${userId}`;
+      const existing = draftPresenceRecheckTimers.get(timerKey);
+      if (existing) clearTimeout(existing);
+      const recheck = setTimeout(() => {
+        draftPresenceRecheckTimers.delete(timerKey);
+        void (async () => {
+          const liveSockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+          const stillPresent = liveSockets.some((socket) => socket.data.user.id === userId);
+          if (!stillPresent) {
+            logger.info(
+              { lobbyId, userId },
+              'Draft presence re-check: player has no live sockets; grace continues'
+            );
+            return;
+          }
+          logger.info(
+            { lobbyId, userId },
+            'Draft presence re-check: live socket survived ping timeout; resuming draft'
+          );
+          await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
+        })().catch((error) => {
+          logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
+        });
+      }, harnessDelayMs(DRAFT_PRESENCE_RECHECK_MS));
+      recheck.unref?.();
+      draftPresenceRecheckTimers.set(timerKey, recheck);
+      logger.info(
+        {
+          lobbyId,
+          userId,
+          sameUserSocketCount: sameUserSockets.length,
+          recheckMs: DRAFT_PRESENCE_RECHECK_MS,
+        },
+        'draft_presence_recheck_scheduled'
+      );
     }
   },
 

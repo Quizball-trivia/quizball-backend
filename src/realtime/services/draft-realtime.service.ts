@@ -482,6 +482,15 @@ function getFirstDraftActorId(
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
+  // Cheap pre-check before taking the lock so we don't serialize every ban
+  // event on the not-ready path (the common case mid-draft).
+  const preLobby = await lobbiesRepo.getById(lobbyId);
+  if (!preLobby || preLobby.status !== 'active') {
+    await clearDraftTimers(lobbyId);
+    return null;
+  }
+  if ((await lobbiesRepo.listLobbyCategoryBans(lobbyId)).length < 2) return null;
+
   // Exactly-once guard: several paths (ban handler, AI ban callback, auto-ban
   // watchdog, reconnect resume) can all observe "2 bans, ready to complete" at
   // the same moment. Only one may proceed to startMatchFromDraft — concurrent

@@ -11,7 +11,10 @@ export const MAX_TICKETS = 5;
 export const TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW = 5;
 // One ticket refills every 4 hours, up to MAX_TICKETS.
 export const TICKET_REFILL_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const TICKET_CAS_MAX_ATTEMPTS = 3;
+// CAS attempts before giving up. Each attempt re-reads fresh wallet state, so a
+// higher ceiling lets transient contention (refill hydration / presence
+// touching the same row) converge instead of throwing 409 and aborting a match.
+const TICKET_CAS_MAX_ATTEMPTS = 6;
 
 export interface HydratedTicketState {
   tickets: number;

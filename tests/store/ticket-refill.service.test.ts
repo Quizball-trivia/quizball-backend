@@ -137,7 +137,9 @@ describe('ticketRefillService', () => {
         code: 'CONFLICT',
       });
 
-      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
+      // Matches TICKET_CAS_MAX_ATTEMPTS (raised to 6 so transient wallet
+      // contention converges instead of aborting a ranked match).
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(6);
     });
 
     it('starts a refill anchor when consuming from a full wallet', async () => {
@@ -244,7 +246,9 @@ describe('ticketRefillService', () => {
         code: 'CONFLICT',
       });
 
-      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(3);
+      // Matches TICKET_CAS_MAX_ATTEMPTS (raised to 6 so transient wallet
+      // contention converges instead of aborting a ranked match).
+      expect(storeRepo.compareAndSetTicketsStateInTx).toHaveBeenCalledTimes(6);
     });
 
     it('rejects overflowing ticket grants when overflow rejection is enabled', async () => {

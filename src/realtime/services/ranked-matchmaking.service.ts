@@ -451,12 +451,28 @@ async function startHumanRankedMatch(
     // 'waiting' with no draft until a player reconnect happened to heal it.
     // The Redis-backed timer survives restarts; runRankedDraftStart re-checks
     // cancel flags and lobby state so a late/duplicate fire is a no-op.
-    await scheduleRealtimeTimer(
-      'ranked_draft_start',
-      lobby.id,
-      new Date(Date.now() + FOUND_MODAL_MS),
-      { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
-    );
+    // If the Redis enqueue itself throws (scheduleRealtimeTimer only handles
+    // a CLOSED client, not a failing write), fall back to the old in-process
+    // timer — a non-durable draft start beats a stranded waiting lobby.
+    try {
+      await scheduleRealtimeTimer(
+        'ranked_draft_start',
+        lobby.id,
+        new Date(Date.now() + FOUND_MODAL_MS),
+        { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+      );
+    } catch (err) {
+      logger.error(
+        { err, lobbyId: lobby.id, userAId, userBId },
+        'Failed to schedule durable ranked draft start; using local fallback'
+      );
+      const fallback = setTimeout(() => {
+        void runRankedDraftStart(io, lobby.id, userAId, userBId).catch((error) => {
+          logger.error({ error, lobbyId: lobby.id }, 'Local ranked draft-start fallback failed');
+        });
+      }, FOUND_MODAL_MS);
+      fallback.unref?.();
+    }
     } finally {
       await clearPairingInFlight([userAId, userBId]);
     }

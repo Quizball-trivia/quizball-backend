@@ -26,7 +26,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { getRedisClient } from '../redis.js';
-import { acquireLock, releaseLock } from '../locks.js';
+import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { cancelRealtimeTimer, hasPendingRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import {
   buildFinalResultsPayload,
@@ -56,6 +56,14 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+// Mutual-exclusion lock around draft completion → match creation. Completion is
+// reachable from several concurrent paths (human ban handler, scheduled AI ban,
+// auto-ban watchdog, reconnect/resume) and possibly from two instances during a
+// deploy overlap. Without the lock, concurrent startMatchFromDraft calls race
+// each other's ranked-ticket CAS consume (3 attempts, ~1ms backoff) until it
+// throws 409 CONFLICT and the match is never created. Heartbeat-extended so a
+// slow match creation can't outlive the TTL and let a duplicate in.
+const DRAFT_COMPLETE_LOCK_TTL_MS = 30_000;
 
 interface DraftDisconnectPresenceOptions {
   ignoreSocketId?: string;
@@ -76,6 +84,10 @@ function draftGraceKey(lobbyId: string): string {
 
 function draftGraceLockKey(lobbyId: string): string {
   return `draft:grace:lock:${lobbyId}`;
+}
+
+function draftCompleteLockKey(lobbyId: string): string {
+  return `draft:complete:lock:${lobbyId}`;
 }
 
 function draftAbsentAfterGraceKey(lobbyId: string, userId: string): string {
@@ -470,35 +482,55 @@ function getFirstDraftActorId(
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby || lobby.status !== 'active') {
+  // Exactly-once guard: several paths (ban handler, AI ban callback, auto-ban
+  // watchdog, reconnect resume) can all observe "2 bans, ready to complete" at
+  // the same moment. Only one may proceed to startMatchFromDraft — concurrent
+  // ticket consumption for the same wallets exhausts the CAS retries (409
+  // CONFLICT) and aborts the match. Losers skip: the winner either creates the
+  // match (lobby leaves 'active', later attempts no-op) or fails through
+  // startMatchFromDraft's own recovery (draft restart / abort), which re-arms
+  // timers that will call back in here.
+  const lock = await acquireLock(draftCompleteLockKey(lobbyId), DRAFT_COMPLETE_LOCK_TTL_MS);
+  if (!lock.acquired || !lock.token) {
+    logger.info({ lobbyId }, 'Draft completion already in progress; skipping duplicate attempt');
+    return null;
+  }
+  const heartbeat = startLockHeartbeat(draftCompleteLockKey(lobbyId), lock.token, DRAFT_COMPLETE_LOCK_TTL_MS);
+
+  try {
+    const lobby = await lobbiesRepo.getById(lobbyId);
+    if (!lobby || lobby.status !== 'active') {
+      await clearDraftTimers(lobbyId);
+      return null;
+    }
+
+    const categories = await lobbiesService.getLobbyCategories(lobbyId);
+    const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (bans.length < 2) return null;
+
     await clearDraftTimers(lobbyId);
-    return null;
+    const bannedIds = new Set(bans.map((ban) => ban.category_id));
+    const remaining = categories.filter((category) => !bannedIds.has(category.id));
+    if (remaining.length !== 1) {
+      logger.warn(
+        {
+          lobbyId,
+          totalCategories: categories.length,
+          bannedCount: bans.length,
+          remainingCount: remaining.length,
+          bannedCategoryIds: Array.from(bannedIds),
+        },
+        'Insufficient categories remaining after bans in draft'
+      );
+      return null;
+    }
+
+    const halfOneCategoryId = remaining[0].id;
+    return await startMatchFromDraft(io, lobbyId, halfOneCategoryId);
+  } finally {
+    heartbeat.stop();
+    await releaseLock(draftCompleteLockKey(lobbyId), lock.token).catch(() => {});
   }
-
-  const categories = await lobbiesService.getLobbyCategories(lobbyId);
-  const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-  if (bans.length < 2) return null;
-
-  await clearDraftTimers(lobbyId);
-  const bannedIds = new Set(bans.map((ban) => ban.category_id));
-  const remaining = categories.filter((category) => !bannedIds.has(category.id));
-  if (remaining.length !== 1) {
-    logger.warn(
-      {
-        lobbyId,
-        totalCategories: categories.length,
-        bannedCount: bans.length,
-        remainingCount: remaining.length,
-        bannedCategoryIds: Array.from(bannedIds),
-      },
-      'Insufficient categories remaining after bans in draft'
-    );
-    return null;
-  }
-
-  const halfOneCategoryId = remaining[0].id;
-  return startMatchFromDraft(io, lobbyId, halfOneCategoryId);
 }
 
 export function scheduleDraftAutoBan(_io: QuizballServer, lobbyId: string): void {

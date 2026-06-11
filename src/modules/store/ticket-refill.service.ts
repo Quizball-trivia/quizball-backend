@@ -107,9 +107,14 @@ function ticketCasConflict(userId: string, operation: string): AppError {
   );
 }
 
+// Backoff between CAS retries. Long enough for a short concurrent wallet
+// writer (e.g. a GET-wallet refill hydration) to commit and get out of the
+// way; only paid on actual contention.
+const TICKET_CAS_RETRY_BASE_MS = 25;
+
 async function waitBeforeCasRetry(attempt: number): Promise<void> {
   if (attempt >= TICKET_CAS_MAX_ATTEMPTS - 1) return;
-  await new Promise((resolve) => setTimeout(resolve, attempt + 1));
+  await new Promise((resolve) => setTimeout(resolve, TICKET_CAS_RETRY_BASE_MS * (attempt + 1)));
 }
 
 export const ticketRefillService = {

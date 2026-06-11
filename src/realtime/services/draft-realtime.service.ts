@@ -747,18 +747,41 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     if (!hasAiMember) return;
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    if (bans.length !== 1 || bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    // The AI already banned — nothing to do.
+    if (bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    // The AI is expected to ban second. If the FIRST (human) ban hasn't landed
+    // yet — e.g. it failed to insert on a timer/click race — do NOT dead-end
+    // here (that's what left matches stuck on "preparing match"). Fall back to
+    // the generic auto-ban recovery, which force-applies the missing ban and
+    // reschedules the AI in turn so the draft always progresses.
+    if (bans.length !== 1) {
+      logger.warn(
+        { lobbyId, aiUserId, banCount: bans.length },
+        'AI draft ban expected exactly 1 prior ban; recovering via auto-ban'
+      );
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
 
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
     const candidates = categories.filter((category) => !bannedIds.has(category.id));
     const aiChoice = candidates[Math.floor(getRandom() * candidates.length)];
-    if (!aiChoice) return;
+    if (!aiChoice) {
+      // No category left for the AI to ban — let auto-ban recovery settle it.
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
 
     try {
       await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
     } catch (error) {
-      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban');
+      // e.g. the picked category collided on the (lobby_id, category_id) UNIQUE
+      // constraint due to a race. Don't dead-end — recover via auto-ban.
+      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban; recovering via auto-ban');
+      scheduleDraftAutoBan(io, lobbyId);
       return;
     }
 
@@ -1004,7 +1027,13 @@ export const draftRealtimeService = {
     try {
       await lobbiesRepo.insertLobbyCategoryBan(lobbyId, socket.data.user.id, categoryId);
     } catch (error) {
-      logger.warn({ error, lobbyId }, 'Failed to insert lobby ban');
+      // The ban couldn't be recorded (e.g. the chosen category was already
+      // banned by the opponent — a (lobby_id, category_id) UNIQUE collision).
+      // Tell the client to pick again, and arm the auto-ban watchdog so the
+      // draft still progresses if they don't.
+      logger.warn({ error, lobbyId, userId: socket.data.user.id, categoryId }, 'Failed to insert lobby ban');
+      socket.emit('error', { code: 'BAN_FAILED', message: 'That category is unavailable — pick another.' });
+      scheduleDraftAutoBan(io, lobbyId);
       return;
     }
     logger.info(

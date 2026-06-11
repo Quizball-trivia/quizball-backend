@@ -151,14 +151,14 @@ describe('possession halftime finalize', () => {
     expect(releaseLockMock).toHaveBeenCalledWith('lock:match:match-1:halftime', 'lock-token');
   });
 
-  it('keeps the defer path for AI possession matches that have not reached UI-ready', async () => {
+  it('defers AI possession halftime WITHOUT forging ui_ready when no client has signalled', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
     const cache = createHalftimeCache();
     const originalDeadlineAt = cache.statePayload.halftime.deadlineAt;
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
     const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
-    const resolveAiUserId = vi.fn(async () => 'ai-user');
+    const resolveAiUserId = vi.fn(async () => 'user-2');
     const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
     const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
 
@@ -176,7 +176,96 @@ describe('possession halftime finalize', () => {
       expect(sendQuestion).not.toHaveBeenCalled();
       expect(cache.statePayload.phase).toBe('HALFTIME');
       expect(cache.statePayload.halftime.deadlineAt).not.toBe(originalDeadlineAt);
+      // THE fix: the defer must NOT pretend the client is ready — previously
+      // uiReadyAt was forged to equal deadlineAt here, force-opening the ban
+      // window and letting the AI ban before the player saw the cards.
+      expect(cache.statePayload.halftime.uiReadyAt).toBeNull();
+      expect(cache.statePayload.halftime.readyDeferCount).toBe(1);
+      // No bans written during the defer.
+      expect(cache.statePayload.halftime.bans).toEqual({ seat1: null, seat2: null });
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('force-opens the ban window after the defer cap so a silent client cannot stall the match', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    cache.statePayload.halftime.readyDeferCount = 3; // HALFTIME_READY_DEFER_MAX
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      await halftime.finalizeHalftime(createIo(), 'match-1');
+
+      await vi.waitFor(() => {
+        expect(scheduleRealtimeTimerMock).toHaveBeenCalled();
+      });
+      // Cap exhausted → window force-opens (uiReadyAt = deadlineAt) so the AI
+      // can ban and the match keeps moving even if no client ever signals.
+      expect(cache.statePayload.phase).toBe('HALFTIME');
       expect(cache.statePayload.halftime.uiReadyAt).toBe(cache.statePayload.halftime.deadlineAt);
+      expect(sendQuestion).not.toHaveBeenCalled();
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('never schedules the AI first ban before the client signals UI ready', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    cache.statePayload.halftime.deadlineAt = new Date(Date.now() + 20000).toISOString();
+    cache.statePayload.halftime.uiReadyAt = null;
+    cache.statePayload.halftime.firstBanSeat = 2; // AI (seat 2) bans first
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      halftime.schedulePossessionAiHalftimeBan(createIo(), 'match-1');
+      // Advance well past the 3500ms no-ui-ready fallback — nothing may fire.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(setMatchCacheMock).not.toHaveBeenCalled();
+      expect(cache.statePayload.halftime.bans).toEqual({ seat1: null, seat2: null });
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('schedules the AI ban once the client has signalled UI ready', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    const deadlineAt = new Date(Date.now() + 20000).toISOString();
+    cache.statePayload.halftime.deadlineAt = deadlineAt;
+    cache.statePayload.halftime.uiReadyAt = deadlineAt; // client confirmed cards visible
+    cache.statePayload.halftime.firstBanSeat = 2;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      halftime.schedulePossessionAiHalftimeBan(createIo(), 'match-1');
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await vi.waitFor(() => {
+        // AI banned after its think delay (700–1800ms post ui_ready).
+        expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
+      });
+      expect(cache.statePayload.halftime.bans.seat1).toBeNull();
     } finally {
       halftime.clearHalftimeAiBanTimer('match-1');
       vi.useRealTimers();

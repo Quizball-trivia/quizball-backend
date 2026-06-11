@@ -282,6 +282,9 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
     halftime: {
       deadlineAt: candidate.halftime?.deadlineAt ?? null,
       uiReadyAt: typeof candidate.halftime?.uiReadyAt === 'string' ? candidate.halftime.uiReadyAt : null,
+      readyDeferCount: typeof candidate.halftime?.readyDeferCount === 'number'
+        ? Math.max(0, Math.trunc(candidate.halftime.readyDeferCount))
+        : 0,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
         ? candidate.halftime.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;

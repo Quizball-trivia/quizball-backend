@@ -1,6 +1,6 @@
 import { logger } from '../core/logger.js';
 import { getRandom } from '../core/rng.js';
-import { harnessDelayMs } from '../core/harness-timing.js';
+import { harnessDelayMs, isHarnessFastTimers } from '../core/harness-timing.js';
 import { trackPossessionPhaseEntered } from '../core/analytics/game-events.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
@@ -35,6 +35,11 @@ export const HALFTIME_POST_BAN_REVEAL_MS = 2000;
 const HALFTIME_AI_BAN_DELAY_MIN_MS = 700;
 const HALFTIME_AI_BAN_DELAY_MAX_MS = 1800;
 const HALFTIME_AI_BAN_NO_UI_READY_DELAY_MS = 3500;
+// How many times finalizeHalftime extends the deadline waiting for a client
+// `match:halftime_ui_ready` before force-opening the ban window. 3 × 20s on
+// top of the initial 20s ≈ 80s of patience for slow/backgrounded clients,
+// bounded so a client that never signals can't stall the match forever.
+const HALFTIME_READY_DEFER_MAX = 3;
 
 // ── Types ──
 
@@ -285,17 +290,57 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       const uiReadyForDeadline = Boolean(deadlineAt && uiReadyAt === deadlineAt);
       const needsReadyDefer = !uiReadyForDeadline && !hadSeat1Ban && !hadSeat2Ban;
       const aiUserId = needsReadyDefer ? await deps.resolveAiUserId(matchId) : null;
+      if (needsReadyDefer && aiUserId && !isHarnessFastTimers()) {
+        const deferCount = state.halftime.readyDeferCount ?? 0;
+        if (deferCount < HALFTIME_READY_DEFER_MAX) {
+          // No client has confirmed the ban cards are visible yet. Extend the
+          // window WITHOUT forging uiReadyAt — previously this branch set
+          // uiReadyAt = deadlineAt, which force-opened the ban window and let
+          // the AI ban silently before the player ever saw the cards. The AI
+          // ban scheduler stays gated until a real match:halftime_ui_ready
+          // (which rebases the deadline and re-arms the AI) or the defer cap
+          // below force-opens the window.
+          const rebasedDeadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+          state.halftime.deadlineAt = rebasedDeadlineAt;
+          state.halftime.readyDeferCount = deferCount + 1;
+          bumpStateVersion(state);
+          await setMatchCache(cache);
+          fireAndForget('setMatchStatePayload(finalizeHalftime:deferUntilReady)', async () => {
+            await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+          });
+          await emitMatchState(io, matchId, state);
+          logger.info(
+            {
+              eventName: 'match:halftime_finalize',
+              matchId,
+              half: state.half,
+              purpose: state.halftime.purpose,
+              deadlineAt,
+              rebasedDeadlineAt,
+              deferCount: deferCount + 1,
+              maxDefers: HALFTIME_READY_DEFER_MAX,
+            },
+            'Possession halftime finalize deferred until ban window is ready'
+          );
+          scheduleHalftimeTimeout(io, matchId);
+          keepHalftimeTimers = true;
+          return;
+        }
+      }
       if (needsReadyDefer && aiUserId) {
+        // Defer cap exhausted (or harness): no client ever signalled ui_ready.
+        // Force the ban window open so the match still finishes — the AI bans,
+        // and the next deadline auto-resolves the human's missing ban.
         const rebasedDeadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
         state.halftime.deadlineAt = rebasedDeadlineAt;
         state.halftime.uiReadyAt = rebasedDeadlineAt;
         bumpStateVersion(state);
         await setMatchCache(cache);
-        fireAndForget('setMatchStatePayload(finalizeHalftime:deferUntilReady)', async () => {
+        fireAndForget('setMatchStatePayload(finalizeHalftime:forceOpen)', async () => {
           await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
         });
         await emitMatchState(io, matchId, state);
-        logger.info(
+        logger.warn(
           {
             eventName: 'match:halftime_finalize',
             matchId,
@@ -304,8 +349,9 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
             deadlineAt,
             rebasedDeadlineAt,
             aiUserId,
+            deferCount: state.halftime.readyDeferCount ?? 0,
           },
-          'Possession halftime finalize deferred until ban window is ready'
+          'Possession halftime ban window force-opened without client ui_ready'
         );
         scheduleHalftimeTimeout(io, matchId);
         schedulePossessionAiHalftimeBan(io, matchId);
@@ -329,6 +375,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
       state.halftime.uiReadyAt = null;
+      state.halftime.readyDeferCount = 0;
       state.halftime.firstBanSeat = null;
 
       const chosenCategoryId = halftimeResult.remainingCategoryId ?? cache.categoryBId ?? cache.categoryAId;
@@ -541,6 +588,17 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         state?.halftime.deadlineAt
         && state.halftime.uiReadyAt === state.halftime.deadlineAt
       );
+      // Never let the AI take the FIRST ban before a client confirms the ban
+      // cards are visible (`match:halftime_ui_ready` re-invokes this scheduler;
+      // finalizeHalftime's bounded defer force-opens the window if no client
+      // ever signals). The harness has no client, so it keeps the fixed delay.
+      if (isInitialBan && !uiReadyForDeadline && !isHarnessFastTimers()) {
+        logger.info(
+          { eventName: 'match:halftime_ai_ban', matchId, reason: 'awaiting_ui_ready' },
+          'Possession halftime AI ban deferred until client UI ready'
+        );
+        return;
+      }
       // Harness collapses the AI-ban think time so matches don't sit ~3.5s at
       // each halftime (prod untouched unless REGRESSION_FAST_TIMERS).
       const delayMs = harnessDelayMs(

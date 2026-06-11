@@ -359,6 +359,12 @@ export interface PossessionStatePayload {
   halftime: {
     deadlineAt: string | null;
     uiReadyAt: string | null;
+    /**
+     * How many times finalizeHalftime has extended the deadline waiting for a
+     * client to signal `match:halftime_ui_ready`. Bounded — once the cap is
+     * reached the ban window force-opens so broken clients can't stall.
+     */
+    readyDeferCount: number;
     categoryOptions: DraftCategory[];
     firstHalfShownCategoryIds: string[];
     firstBanSeat: 1 | 2 | null;
@@ -452,6 +458,7 @@ export function createInitialPossessionState(
     halftime: {
       deadlineAt: null,
       uiReadyAt: null,
+      readyDeferCount: 0,
       categoryOptions: [],
       firstHalfShownCategoryIds: [],
       firstBanSeat: null,

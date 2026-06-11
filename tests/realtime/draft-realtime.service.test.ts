@@ -271,6 +271,64 @@ describe('draftRealtimeService', () => {
     expect(beginMatchForLobbyMock).toHaveBeenCalledWith(io, 'l1', 'm1');
   });
 
+  it('retries ticket consume inline on transient wallet CAS conflicts and still creates the match', async () => {
+    const { AppError, ErrorCode } = await import('../../src/core/errors.js');
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    const casConflict = () => new AppError(
+      'Ticket state changed during update; retry the request',
+      409,
+      ErrorCode.CONFLICT,
+      { userId: 'u1', operation: 'consume', attempts: 6 }
+    );
+    // Two transient conflicts, then success — the inline retry must absorb
+    // them instead of throwing out to the auto-ban watchdog (~16s stall).
+    consumeRankedTicketsMock
+      .mockRejectedValueOnce(casConflict())
+      .mockRejectedValueOnce(casConflict())
+      .mockResolvedValue({ wallets: { u1: { coins: 0, tickets: 4 }, u2: { coins: 0, tickets: 4 } } });
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(consumeRankedTicketsMock).toHaveBeenCalledTimes(3);
+    expect(emit).toHaveBeenCalledWith('draft:complete', { halfOneCategoryId: 'cat-c' });
+    expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after the inline retry budget and lets recovery re-arm (no match created)', async () => {
+    const { AppError, ErrorCode } = await import('../../src/core/errors.js');
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    consumeRankedTicketsMock.mockRejectedValue(new AppError(
+      'Ticket state changed during update; retry the request',
+      409,
+      ErrorCode.CONFLICT,
+      { userId: 'u1', operation: 'consume', attempts: 6 }
+    ));
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    // initial + 3 retries, then the throw is contained by completion recovery.
+    expect(consumeRankedTicketsMock).toHaveBeenCalledTimes(4);
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+  });
+
   it('consumes ranked tickets only after the ranked draft is complete', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io, emit } = createIoMock();

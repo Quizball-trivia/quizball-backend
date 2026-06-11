@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -189,6 +190,53 @@ async function abortRankedDraftBeforeMatchCreation(
   );
 }
 
+// Inline retry for transient wallet contention during ranked ticket consume.
+// The wallet CAS (6 attempts, ≤375ms) can still lose against sustained outside
+// writers (wallet refill hydration bursts, reconnect-driven refetch storms,
+// long external transactions). Without this, a single CONFLICT throw bubbles
+// out of draft completion and the players sit on "preparing match" until the
+// auto-ban watchdog retries ~16s later — observed on prod as multi-minute
+// retry loops across lobbies. Retrying inline (we hold the per-lobby
+// completion lock, heartbeat-extended) converges in seconds instead.
+const CONSUME_CONFLICT_MAX_RETRIES = 3;
+const CONSUME_CONFLICT_RETRY_BASE_MS = 200;
+
+function isTicketCasConflict(error: unknown): error is AppError {
+  return error instanceof AppError && error.code === ErrorCode.CONFLICT;
+}
+
+async function consumeRankedTicketsWithConflictRetry(
+  lobbyId: string,
+  ticketUserIds: string[]
+): Promise<Awaited<ReturnType<typeof storeService.consumeRankedTickets>>> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await storeService.consumeRankedTickets(ticketUserIds);
+    } catch (error) {
+      if (!isTicketCasConflict(error) || attempt >= CONSUME_CONFLICT_MAX_RETRIES) {
+        throw error;
+      }
+      // Exponential backoff with jitter: ~200/400/800ms (+0–50%) so synchronized
+      // completion retries across lobbies/instances don't re-collide in lockstep.
+      const delayMs = Math.round(
+        CONSUME_CONFLICT_RETRY_BASE_MS * 2 ** attempt * (1 + getRandom() * 0.5)
+      );
+      logger.warn(
+        {
+          lobbyId,
+          ticketUserIds,
+          attempt: attempt + 1,
+          maxRetries: CONSUME_CONFLICT_MAX_RETRIES,
+          delayMs,
+          errorDetails: error.details ?? null,
+        },
+        'Ranked ticket consume hit wallet contention; retrying inline'
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 async function startMatchFromDraft(
   io: QuizballServer,
   lobbyId: string,
@@ -223,7 +271,7 @@ async function startMatchFromDraft(
     }
 
     if (ticketUserIds.length > 0) {
-      const consumedTickets = await storeService.consumeRankedTickets(ticketUserIds);
+      const consumedTickets = await consumeRankedTicketsWithConflictRetry(lobbyId, ticketUserIds);
       if (!consumedTickets) {
         logger.warn(
           { lobbyId, ticketUserIds },
@@ -562,7 +610,15 @@ async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promis
   } catch (error) {
     // A throw mid-completion must not leave the lobby wedged: re-arm recovery.
     logger.warn(
-      { error: error instanceof Error ? error.message : error, lobbyId },
+      {
+        error: error instanceof Error ? error.message : error,
+        // AppError details (e.g. { userId, operation, attempts } from the ticket
+        // CAS) are essential for diagnosing WHO/WHAT conflicted — without them
+        // this log line is just "something threw".
+        errorDetails: error instanceof AppError ? error.details ?? null : null,
+        errorName: error instanceof Error ? error.name : null,
+        lobbyId,
+      },
       'Draft completion threw; re-arming recovery'
     );
     await rearmDraftCompletionIfStuck(io, lobbyId);

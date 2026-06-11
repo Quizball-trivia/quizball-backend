@@ -742,7 +742,20 @@ export async function pauseMatchForDisconnectedPlayer(
   }
 
   const disconnectedAtMs = Date.now();
-  const disconnectCount = await incrementDisconnectCount(matchId, userId);
+  // Do NOT count this as a fresh disconnect when:
+  //  (a) the match:disconnect marker is already set — a duplicate handler for the
+  //      SAME episode (socket `disconnect` + `match:leave`), which previously
+  //      double-counted and forfeited players after only 2 real disconnects; or
+  //  (b) a newer same-user socket is already present (replacementSocketPresent) —
+  //      a STALE disconnect for a socket the user already replaced by reconnecting.
+  //      Counting it would forfeit a player who is back online (the "lost while
+  //      playing" bug). The auto-resume below still runs so the match continues.
+  // The marker is cleared on resume, so a genuinely new disconnect counts again.
+  const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
+  const skipCount = alreadyDisconnected || replacementSocketPresent;
+  const disconnectCount = skipCount
+    ? await getDisconnectCount(matchId, userId)
+    : await incrementDisconnectCount(matchId, userId);
   const remainingReconnects = toRemainingReconnects(disconnectCount);
   logger.info(
     {
@@ -752,6 +765,9 @@ export async function pauseMatchForDisconnectedPlayer(
       qIndex: match.current_q_index,
       disconnectCount,
       remainingReconnects,
+      alreadyDisconnected,
+      replacementSocketPresent,
+      skippedCount: skipCount,
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       playerCount: players.length,
       activePartyPlayerCount: partyState

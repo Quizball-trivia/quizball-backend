@@ -575,6 +575,40 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('does not double-count the reconnect counter for one disconnect episode', async () => {
+    // Regression: a single logical disconnect can drive the pause path more than
+    // once (socket `disconnect` + `match:leave`). Each run used to increment the
+    // reconnect counter, so two real disconnects forfeited a player after only 2
+    // (limit is 3). With the match:disconnect marker as an episode guard, a
+    // duplicate pause for the SAME episode must NOT re-increment.
+    vi.useFakeTimers();
+    try {
+      const { pauseMatchForDisconnectedPlayer } = await import('../../src/realtime/services/match-disconnect.service.js');
+      const emit = vi.fn();
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn(() => ({
+          fetchSockets: vi.fn(async () => []),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+
+      fakeRedis.isOpen = true;
+      const countKey = 'match:reconnect_count:m1:u1';
+
+      // First disconnect → increments to 1, sets the episode marker.
+      await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old' });
+      expect(fakeRedisStore.values.get(countKey)).toBe('1');
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+
+      // Duplicate handler for the SAME episode (marker still present) → no bump.
+      await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old2' });
+      expect(fakeRedisStore.values.get(countKey)).toBe('1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15 reload race: an older same-user socket does not auto-resume a paused match', async () => {
     vi.useFakeTimers();
     try {

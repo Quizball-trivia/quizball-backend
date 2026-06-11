@@ -742,14 +742,18 @@ export async function pauseMatchForDisconnectedPlayer(
   }
 
   const disconnectedAtMs = Date.now();
-  // Per-episode dedupe: a single logical disconnect can drive this function from
-  // more than one path (the socket `disconnect` handler AND the `match:leave`
-  // path), which previously double-counted and forfeited players after only 2
-  // real disconnects (limit is 3). The matchDisconnectKey marks "user is
-  // currently disconnected" and is cleared on resume — so if it's already set,
-  // this is a duplicate handler for the SAME episode and must not re-increment.
+  // Do NOT count this as a fresh disconnect when:
+  //  (a) the match:disconnect marker is already set — a duplicate handler for the
+  //      SAME episode (socket `disconnect` + `match:leave`), which previously
+  //      double-counted and forfeited players after only 2 real disconnects; or
+  //  (b) a newer same-user socket is already present (replacementSocketPresent) —
+  //      a STALE disconnect for a socket the user already replaced by reconnecting.
+  //      Counting it would forfeit a player who is back online (the "lost while
+  //      playing" bug). The auto-resume below still runs so the match continues.
+  // The marker is cleared on resume, so a genuinely new disconnect counts again.
   const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
-  const disconnectCount = alreadyDisconnected
+  const skipCount = alreadyDisconnected || replacementSocketPresent;
+  const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
     : await incrementDisconnectCount(matchId, userId);
   const remainingReconnects = toRemainingReconnects(disconnectCount);
@@ -762,6 +766,8 @@ export async function pauseMatchForDisconnectedPlayer(
       disconnectCount,
       remainingReconnects,
       alreadyDisconnected,
+      replacementSocketPresent,
+      skippedCount: skipCount,
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       playerCount: players.length,
       activePartyPlayerCount: partyState

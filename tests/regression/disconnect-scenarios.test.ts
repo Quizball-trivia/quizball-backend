@@ -144,4 +144,45 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     const count = await getDisconnectCount(run.matchId!, run.botUserId);
     expect(count, 'one disconnect episode must count exactly once').toBe(1);
   }, 120_000);
+
+  // Bug 2 regression: a player who reconnected and is back in the match must NOT
+  // be force-forfeited by a stale/duplicate disconnect handler. After reconnect
+  // the count must not climb past the single original episode, and the match
+  // must not be finalized as a forfeit while the player is present.
+  it('does not forfeit a reconnected player who is back online', async () => {
+    const { bootMatch, playMatch, botDisconnect, botReconnect } =
+      await import('../../game-regression/src/runner.mjs');
+    const { pauseMatchForDisconnectedPlayer, getDisconnectCount } =
+      await import('../../src/realtime/services/match-disconnect.service.js');
+    const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+
+    const run = await bootMatch({ startTimeoutMs: 25_000 });
+    expect(run.matchId).toBeTruthy();
+    await playMatch(run, { maxMs: 6_000 });
+
+    // Capture the OLD socket's connect time, then disconnect + reconnect.
+    const oldConnectedAt = run.botSocket.data.connectedAt as number;
+    await botDisconnect(run);
+    await botReconnect(run);
+    const afterReconnect = await getDisconnectCount(run.matchId!, run.botUserId);
+
+    // A STALE disconnect handler for the OLD (superseded) socket fires after the
+    // user already reconnected — exactly the production path, which passes the
+    // old socket's connectedAt AND autoResumeReplacementSocket. A newer same-user
+    // socket exists, so the user is present: this must NOT count as a new
+    // disconnect or forfeit them.
+    await pauseMatchForDisconnectedPlayer(run.io as never, run.matchId!, run.botUserId, {
+      ignoreSocketId: 'old-stale-socket',
+      disconnectedConnectedAt: oldConnectedAt,
+      autoResumeReplacementSocket: true,
+    });
+    const afterStale = await getDisconnectCount(run.matchId!, run.botUserId);
+
+    expect(afterStale, 'a present (reconnected) player must not accrue more disconnects')
+      .toBe(afterReconnect);
+
+    const match = await matchesRepo.getMatch(run.matchId!);
+    expect(match?.status, 'a reconnected, present player must not be forfeited')
+      .toBe('active');
+  }, 150_000);
 });

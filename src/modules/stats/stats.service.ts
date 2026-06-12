@@ -53,11 +53,25 @@ export interface ModeStatsSummary {
   winRate: number;
 }
 
+/** Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
+ *  `event` = ranked games up to the reset (the current World Cup event season);
+ *  `newSeason` = ranked games after the reset (the fresh post-reset season). */
+export interface RankedSeasonSplit {
+  event: ModeStatsSummary;
+  newSeason: ModeStatsSummary;
+}
+
 export interface UserStatsSummary {
   overall: ModeStatsSummary;
   ranked: ModeStatsSummary;
   friendly: ModeStatsSummary;
+  /** Ranked W/D/L partitioned at the event reset. */
+  rankedSeasons: RankedSeasonSplit;
 }
+
+// World Cup event ends / leaderboard resets at this instant. Ranked games up to
+// here count toward the event season; later games start the new season.
+const EVENT_RESET_ISO = '2026-07-19T23:59:59Z';
 
 function toWinRate(wins: number, gamesPlayed: number): number {
   if (gamesPlayed <= 0) return 0;
@@ -151,7 +165,10 @@ export const statsService = {
   },
 
   async getUserStatsSummary(userId: string): Promise<UserStatsSummary> {
-    const rows = await statsRepo.getUserModeStats(userId);
+    const [rows, split] = await Promise.all([
+      statsRepo.getUserModeStats(userId),
+      statsRepo.getRankedStatsAroundReset(userId, EVENT_RESET_ISO),
+    ]);
 
     const ranked = emptyModeStats();
     const friendly = emptyModeStats();
@@ -170,6 +187,9 @@ export const statsService = {
     const overallLosses = ranked.losses + friendly.losses;
     const overallDraws = ranked.draws + friendly.draws;
 
+    const eventGames = split.event_wins + split.event_losses + split.event_draws;
+    const newSeasonGames = split.new_season_wins + split.new_season_losses + split.new_season_draws;
+
     return {
       overall: {
         gamesPlayed: overallGames,
@@ -180,6 +200,22 @@ export const statsService = {
       },
       ranked,
       friendly,
+      rankedSeasons: {
+        event: {
+          gamesPlayed: eventGames,
+          wins: split.event_wins,
+          losses: split.event_losses,
+          draws: split.event_draws,
+          winRate: toWinRate(split.event_wins, eventGames),
+        },
+        newSeason: {
+          gamesPlayed: newSeasonGames,
+          wins: split.new_season_wins,
+          losses: split.new_season_losses,
+          draws: split.new_season_draws,
+          winRate: toWinRate(split.new_season_wins, newSeasonGames),
+        },
+      },
     };
   },
 

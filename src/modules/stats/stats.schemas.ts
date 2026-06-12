@@ -77,10 +77,16 @@ export const modeStatsSummarySchema = z.object({
   winRate: z.number().nonnegative().max(100),
 });
 
+export const rankedSeasonSplitSchema = z.object({
+  event: modeStatsSummarySchema,
+  newSeason: modeStatsSummarySchema,
+});
+
 export const statsSummaryResponseSchema = z.object({
   overall: modeStatsSummarySchema,
   ranked: modeStatsSummarySchema,
   friendly: modeStatsSummarySchema,
+  rankedSeasons: rankedSeasonSplitSchema,
 });
 
 export type RecentMatchesQuery = z.infer<typeof recentMatchesQuerySchema>;

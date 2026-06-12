@@ -42,6 +42,15 @@ export interface UserModeMatchStatsRow {
   draws: number;
 }
 
+export interface RankedSplitStatsRow {
+  event_wins: number;
+  event_losses: number;
+  event_draws: number;
+  new_season_wins: number;
+  new_season_losses: number;
+  new_season_draws: number;
+}
+
 export const statsRepo = {
   async getHeadToHead(userAId: string, userBId: string): Promise<HeadToHeadRow> {
     const [row] = await sql<HeadToHeadRow[]>`
@@ -151,6 +160,45 @@ export const statsRepo = {
       FROM user_mode_match_stats
       WHERE user_id = ${userId}
     `;
+  },
+
+  /**
+   * Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
+   * The pre-aggregated `user_mode_match_stats` table has no date dimension, so we
+   * count from `matches` directly. Two buckets per the reset cutoff:
+   *   event  — matches that ended on/before the reset (the current event season)
+   *   newSeason — matches that ended after the reset (the fresh post-reset season)
+   * Only ranked, completed, non-dev matches are counted.
+   */
+  async getRankedStatsAroundReset(
+    userId: string,
+    resetIso: string,
+  ): Promise<RankedSplitStatsRow> {
+    const [row] = await sql<RankedSplitStatsRow[]>`
+      SELECT
+        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
+        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS event_losses,
+        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id IS NULL)::int AS event_draws,
+        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id = ${userId})::int AS new_season_wins,
+        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS new_season_losses,
+        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id IS NULL)::int AS new_season_draws
+      FROM match_players mp
+      JOIN matches m ON m.id = mp.match_id
+      WHERE mp.user_id = ${userId}
+        AND m.mode = 'ranked'
+        AND m.status = 'completed'
+        AND m.is_dev = false
+    `;
+    return (
+      row ?? {
+        event_wins: 0,
+        event_losses: 0,
+        event_draws: 0,
+        new_season_wins: 0,
+        new_season_losses: 0,
+        new_season_draws: 0,
+      }
+    );
   },
 
   /**

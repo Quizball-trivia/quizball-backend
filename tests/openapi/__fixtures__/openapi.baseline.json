@@ -578,88 +578,12 @@
               "draws",
               "winRate"
             ]
-          },
-          "rankedSeasons": {
-            "type": "object",
-            "properties": {
-              "regular": {
-                "type": "object",
-                "properties": {
-                  "gamesPlayed": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "wins": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "losses": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "draws": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "winRate": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  }
-                },
-                "required": [
-                  "gamesPlayed",
-                  "wins",
-                  "losses",
-                  "draws",
-                  "winRate"
-                ]
-              },
-              "event": {
-                "type": "object",
-                "properties": {
-                  "gamesPlayed": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "wins": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "losses": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "draws": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "winRate": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  }
-                },
-                "required": [
-                  "gamesPlayed",
-                  "wins",
-                  "losses",
-                  "draws",
-                  "winRate"
-                ]
-              }
-            },
-            "required": [
-              "regular",
-              "event"
-            ]
           }
         },
         "required": [
           "overall",
           "ranked",
-          "friendly",
-          "rankedSeasons"
+          "friendly"
         ]
       },
       "RankedProfileResponse": {
@@ -7503,88 +7427,12 @@
                         "draws",
                         "winRate"
                       ]
-                    },
-                    "rankedSeasons": {
-                      "type": "object",
-                      "properties": {
-                        "regular": {
-                          "type": "object",
-                          "properties": {
-                            "gamesPlayed": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "wins": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "losses": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "draws": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "winRate": {
-                              "type": "number",
-                              "minimum": 0,
-                              "maximum": 100
-                            }
-                          },
-                          "required": [
-                            "gamesPlayed",
-                            "wins",
-                            "losses",
-                            "draws",
-                            "winRate"
-                          ]
-                        },
-                        "event": {
-                          "type": "object",
-                          "properties": {
-                            "gamesPlayed": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "wins": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "losses": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "draws": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "winRate": {
-                              "type": "number",
-                              "minimum": 0,
-                              "maximum": 100
-                            }
-                          },
-                          "required": [
-                            "gamesPlayed",
-                            "wins",
-                            "losses",
-                            "draws",
-                            "winRate"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "regular",
-                        "event"
-                      ]
                     }
                   },
                   "required": [
                     "overall",
                     "ranked",
-                    "friendly",
-                    "rankedSeasons"
+                    "friendly"
                   ]
                 }
               }

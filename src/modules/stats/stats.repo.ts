@@ -42,15 +42,6 @@ export interface UserModeMatchStatsRow {
   draws: number;
 }
 
-export interface RankedSplitStatsRow {
-  regular_wins: number;
-  regular_losses: number;
-  regular_draws: number;
-  event_wins: number;
-  event_losses: number;
-  event_draws: number;
-}
-
 export const statsRepo = {
   async getHeadToHead(userAId: string, userBId: string): Promise<HeadToHeadRow> {
     const [row] = await sql<HeadToHeadRow[]>`
@@ -160,47 +151,6 @@ export const statsRepo = {
       FROM user_mode_match_stats
       WHERE user_id = ${userId}
     `;
-  },
-
-  /**
-   * Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
-   * The pre-aggregated `user_mode_match_stats` table has no date dimension, so we
-   * count from `matches` directly. Two buckets split at the event START:
-   *   regular — matches that ended BEFORE the event started (the normal ranked
-   *             record from before the World Cup event)
-   *   event   — matches that ended on/after the event start (games played during
-   *             the World Cup event window)
-   * Only ranked, completed, non-dev matches are counted.
-   */
-  async getRankedStatsByEventWindow(
-    userId: string,
-    eventStartIso: string,
-  ): Promise<RankedSplitStatsRow> {
-    const [row] = await sql<RankedSplitStatsRow[]>`
-      SELECT
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS regular_wins,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS regular_losses,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS regular_draws,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS event_losses,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS event_draws
-      FROM match_players mp
-      JOIN matches m ON m.id = mp.match_id
-      WHERE mp.user_id = ${userId}
-        AND m.mode = 'ranked'
-        AND m.status = 'completed'
-        AND m.is_dev = false
-    `;
-    return (
-      row ?? {
-        regular_wins: 0,
-        regular_losses: 0,
-        regular_draws: 0,
-        event_wins: 0,
-        event_losses: 0,
-        event_draws: 0,
-      }
-    );
   },
 
   /**

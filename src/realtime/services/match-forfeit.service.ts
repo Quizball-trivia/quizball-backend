@@ -2,11 +2,13 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
 import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { cancelPossessionHalftimeTimer } from '../possession-match-flow.js';
 import { deleteMatchCache, type MatchCache } from '../match-cache.js';
@@ -35,6 +37,15 @@ import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 const FORFEIT_PENDING_TTL_SEC = 60;
+
+// Ranked early-forfeit grace: if a ranked match is forfeited/abandoned before
+// at least this many rounds have been played, it's treated as a no-contest —
+// the match is cancelled, NO RP changes for either player (+0), and both human
+// players get their consumed ranked ticket refunded. At or beyond this many
+// rounds the normal forfeit penalty (-50 / +50) and ticket consumption stand.
+// current_q_index is the 0-based round counter, so "< 2 rounds played" means
+// the index has not yet reached 2.
+const RANKED_EARLY_FORFEIT_MIN_ROUNDS = 2;
 
 export function matchForfeitKey(matchId: string): string {
   return `match:forfeit:${matchId}`;
@@ -108,6 +119,9 @@ export interface FinalizeMatchAsForfeitResult {
   winnerId: string | null;
   resultVersion: number;
   completed: boolean;
+  /** True when a ranked match was cancelled as a no-contest early forfeit
+   *  (no RP change, tickets refunded). */
+  cancelledNoContest?: boolean;
 }
 
 export async function finalizeMatchAsForfeit(
@@ -170,6 +184,57 @@ export async function finalizeMatchAsForfeit(
     const currentPayload = (
       params.cacheSnapshot?.statePayload ?? activeMatch.state_payload ?? {}
     ) as Record<string, unknown>;
+
+    // Ranked early forfeit / disconnect: if too few rounds have been played,
+    // cancel the match as a no-contest — abandon it (no winner, no RP), and
+    // refund both human players' consumed ranked tickets. This prevents a
+    // network drop in the first round or two from costing RP + a ticket.
+    const roundsPlayed = params.cacheSnapshot?.currentQIndex ?? activeMatch.current_q_index;
+    const isRankedEarlyForfeit =
+      activeMatch.mode === 'ranked'
+      && variant !== 'friendly_party_quiz'
+      && roundsPlayed < RANKED_EARLY_FORFEIT_MIN_ROUNDS;
+
+    if (isRankedEarlyForfeit) {
+      await matchesRepo.setMatchStatePayload(params.matchId, {
+        ...currentPayload,
+        winnerDecisionMethod: 'forfeit',
+        cancelledNoContest: true,
+        roundsPlayed,
+      });
+      await matchesService.abandonMatch(params.matchId);
+      await deleteMatchCache(params.matchId);
+
+      // Refund the ranked ticket to every human participant (best-effort).
+      const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
+      const humanUserIds = roster
+        .filter((player) => !rosterUsers.get(player.user_id)?.is_ai)
+        .map((player) => player.user_id);
+      if (humanUserIds.length > 0) {
+        try {
+          await storeService.refundRankedTickets(humanUserIds);
+        } catch (error) {
+          logger.warn(
+            { error, matchId: params.matchId, humanUserIds },
+            'Failed to refund ranked tickets on early-forfeit cancel'
+          );
+        }
+      }
+
+      logger.info(
+        { matchId: params.matchId, roundsPlayed, forfeitingUserId: params.forfeitingUserId, humanUserIds },
+        'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
+      );
+
+      return {
+        matchId: params.matchId,
+        winnerId: null,
+        resultVersion: Date.now(),
+        completed: true,
+        cancelledNoContest: true,
+      };
+    }
+
     await matchesRepo.setMatchStatePayload(params.matchId, {
       ...currentPayload,
       winnerDecisionMethod: 'forfeit',

@@ -1495,7 +1495,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
       id: 'm1',
       mode: 'ranked',
       status: 'active',
-      current_q_index: 0,
+      // >= 2 rounds played → the normal forfeit penalty applies (not a no-contest cancel).
+      current_q_index: 2,
       total_questions: 10,
       started_at: nowIso,
       lobby_id: 'l1',
@@ -1511,6 +1512,33 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
     );
     expect(abandonMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15d3: ranked forfeit before 2 rounds cancels the match as a no-contest (abandon, no winner)', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoWithMatchSockets('m1', ['u2']);
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '3');
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      // Only 1 round played (index 1 < 2) → no-contest cancel, RP unchanged.
+      current_q_index: 1,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    // Cancelled as a no-contest: abandoned, never completed with a winner.
+    expect(abandonMatchMock).toHaveBeenCalledWith('m1');
+    expect(completeMatchMock).not.toHaveBeenCalled();
   });
 
   it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {

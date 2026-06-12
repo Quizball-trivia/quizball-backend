@@ -35,7 +35,6 @@ import { registerFeaturedCategoriesOpenApi } from '../../modules/featured-catego
 import { registerFriendsOpenApi } from '../../modules/friends/friends.openapi.js';
 import { registerLobbiesOpenApi } from '../../modules/lobbies/lobbies.openapi.js';
 import { registerObjectivesOpenApi } from '../../modules/objectives/objectives.openapi.js';
-import { registerPresenceOpenApi } from '../../modules/presence/presence.openapi.js';
 import { registerQuestionsOpenApi } from '../../modules/questions/questions.openapi.js';
 import { registerRankedOpenApi } from '../../modules/ranked/ranked.openapi.js';
 import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
@@ -58,7 +57,6 @@ registerStoreOpenApi(registry);
 registerUsersOpenApi(registry);
 registerFriendsOpenApi(registry);
 registerObjectivesOpenApi(registry);
-registerPresenceOpenApi(registry);
 registerCategoriesOpenApi(registry);
 registerFeaturedCategoriesOpenApi(registry);
 registerQuestionsOpenApi(registry);

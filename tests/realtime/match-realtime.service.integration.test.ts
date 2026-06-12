@@ -72,10 +72,36 @@ const fakeRedis = {
     // assert on the realtime:timers zset.
     return 0;
   },
+  multi() {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain = {
+      set: (key: string, value: string, options?: { EX?: number; PX?: number; NX?: boolean }) => {
+        ops.push(() => fakeRedis.set(key, value, options));
+        return chain;
+      },
+      zAdd: (key: string, entries: Array<{ score: number; value: string }>) => {
+        ops.push(() => fakeRedis.zAdd(key, entries));
+        return chain;
+      },
+      exec: async () => {
+        const results: unknown[] = [];
+        for (const op of ops) results.push(await op());
+        return results;
+      },
+    };
+    return chain;
+  },
   async zRem(_key: string, _member: string): Promise<number> {
     return 0;
   },
   async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
+    if (_script.includes('ZSCORE')) {
+      // Scheduler cleanup script: no zset support in this fake → member is
+      // never scheduled → delete the payload key (keys[1]).
+      const payloadKey = payload.keys[1];
+      if (payloadKey) fakeRedisStore.values.delete(payloadKey);
+      return 1;
+    }
     const key = payload.keys[0];
     const token = payload.arguments[0];
     if (!key || !token) return 0;

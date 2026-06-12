@@ -46,7 +46,35 @@ class FakeRedis {
     return this.zsets.get(key)?.get(member) ?? null;
   }
 
+  multi() {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain = {
+      set: (key: string, value: string, options?: RedisSetOptions) => {
+        ops.push(() => this.set(key, value, options));
+        return chain;
+      },
+      zAdd: (key: string, entries: Array<{ score: number; value: string }>) => {
+        ops.push(() => this.zAdd(key, entries));
+        return chain;
+      },
+      exec: async () => {
+        const results: unknown[] = [];
+        for (const op of ops) results.push(await op());
+        return results;
+      },
+    };
+    return chain;
+  }
+
   async eval(script: string, params: { keys: string[]; arguments: string[] }): Promise<unknown> {
+    if (script.includes('ZSCORE')) {
+      // Atomic "delete payload only if member unscheduled" cleanup.
+      const [zsetKey, payloadKey] = params.keys;
+      const [member] = params.arguments;
+      if (this.zsets.get(zsetKey)?.has(member)) return 0;
+      this.values.delete(payloadKey);
+      return 1;
+    }
     if (script.includes('ZRANGEBYSCORE')) {
       const zset = this.zsets.get(params.keys[0]) ?? new Map<string, number>();
       const now = Number(params.arguments[0]);

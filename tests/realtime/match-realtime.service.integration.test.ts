@@ -4,6 +4,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
+const deferPossessionQuestionTimerForPauseMock = vi.fn();
 const resumePossessionMatchQuestionMock = vi.fn();
 const ensurePossessionActiveTimersMock = vi.fn();
 const resumePartyQuizQuestionMock = vi.fn();
@@ -270,6 +271,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) =>
     emitPossessionStateToSocket: (...args: unknown[]) => emitPossessionStateToSocketMock(...args),
     resumePossessionMatchQuestion: (...args: unknown[]) => resumePossessionMatchQuestionMock(...args),
     ensurePossessionActiveTimers: (...args: unknown[]) => ensurePossessionActiveTimersMock(...args),
+    deferPossessionQuestionTimerForPause: (...args: unknown[]) => deferPossessionQuestionTimerForPauseMock(...args),
   };
 });
 
@@ -530,6 +532,24 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
+  });
+
+  it('S15c: possession pause defers the question timeout backstop instead of cancelling it', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    fakeRedis.isOpen = true;
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    // The paused round must KEEP a durable resolver: the question timer is
+    // pushed back (90s backstop), never deleted. Cancelling it on pause is
+    // what let matches freeze forever when the resume path was lost (prod
+    // clue_chain freeze audit, Jun 2026).
+    expect(deferPossessionQuestionTimerForPauseMock).toHaveBeenCalledWith('m1', 0, 90_000);
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalled();
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
   });
 
   it('S15 reload race: a fresh replacement socket does not suppress pause and gets resume countdown', async () => {

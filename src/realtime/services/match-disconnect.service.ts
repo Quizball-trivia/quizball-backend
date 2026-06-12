@@ -28,6 +28,7 @@ import {
 } from '../match-keys.js';
 import {
   cancelPossessionHalftimeTimer,
+  deferPossessionQuestionTimerForPause,
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
   fireAndForget,
@@ -87,6 +88,15 @@ const DISCONNECT_TTL_SEC = 75;
 const GRACE_TTL_SEC = 65;
 const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
+/**
+ * How far the paused round's question-timeout timer is pushed back instead of
+ * being cancelled. Must comfortably exceed grace (60s) + resume countdown (5s)
+ * so it never fires during a healthy pause/resume cycle; it exists purely as
+ * the last-resort resolver when every other path (resume, grace expiry,
+ * forfeit) was dropped. A successful resume re-bases the timer to the rebased
+ * question deadline; a terminal match makes the fire a no-op that clears it.
+ */
+const PAUSE_QUESTION_BACKSTOP_MS = 90_000;
 
 type PossessionTerminalPlayer = MatchPlayerRow | MatchParticipantSnapshot;
 
@@ -866,7 +876,15 @@ export async function pauseMatchForDisconnectedPlayer(
     await redis.set(matchPauseKey(matchId), String(disconnectedAtMs), { EX: PRESENCE_TTL_SEC });
   }
 
-  cancelMatchQuestionTimer(matchId, match.current_q_index);
+  if (variant === 'friendly_party_quiz') {
+    cancelMatchQuestionTimer(matchId, match.current_q_index);
+  } else {
+    // Defer — never cancel — the possession question timer on pause. A
+    // cancelled timer leaves the round with zero resolvers if the resume never
+    // happens; prod audit (Jun 2026) showed matches freezing exactly this way,
+    // concentrated on the 50s clue_chain window (~4× MCQ death rate).
+    deferPossessionQuestionTimerForPause(matchId, match.current_q_index, PAUSE_QUESTION_BACKSTOP_MS);
+  }
   if (variant !== 'friendly_party_quiz') {
     cancelPossessionHalftimeTimer(matchId);
     // Pause checkpoint (db-optimize.md #7): routine rounds no longer persist

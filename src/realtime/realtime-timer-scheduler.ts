@@ -140,7 +140,14 @@ async function processDueMember(member: string): Promise<void> {
   let handled = false;
   try {
     const payload = await readPayload(member);
-    if (!payload) return;
+    if (!payload) {
+      // The member was already popped from the ZSET; without a payload it can
+      // never be handled. This used to be a fully silent drop — log it so a
+      // lost timer (e.g. payload deleted by a concurrent fire's cleanup while
+      // a re-armed member was still pending) is at least visible in prod.
+      logger.warn({ member }, 'Realtime timer payload missing; dropping due timer');
+      return;
+    }
     await handleTimerPayload(member, payload);
     handled = true;
   } catch (error) {
@@ -150,9 +157,22 @@ async function processDueMember(member: string): Promise<void> {
     await releaseLock(timerLockKey(member), lock.token).catch(() => {});
     const redis = getRedisClient();
     if (handled && redis?.isOpen) {
-      await redis.del(timerPayloadKey(member)).catch((error) => {
-        logger.warn({ error, member }, 'Failed to clear realtime timer payload after processing');
-      });
+      // A handler may have re-armed this same member (e.g. a possession round
+      // resolve that no-oped re-defers its question timeout). In that case the
+      // member is back in the ZSET with a fresh payload — deleting the payload
+      // here would guarantee the re-armed fire gets silently dropped. Only
+      // clean up when the member is genuinely unscheduled.
+      let rearmedScore: number | null = null;
+      try {
+        rearmedScore = await redis.zScore(TIMER_ZSET_KEY, member);
+      } catch {
+        rearmedScore = null;
+      }
+      if (rearmedScore === null) {
+        await redis.del(timerPayloadKey(member)).catch((error) => {
+          logger.warn({ error, member }, 'Failed to clear realtime timer payload after processing');
+        });
+      }
     }
   }
 }

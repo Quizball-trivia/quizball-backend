@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 vi.mock('../../src/modules/stats/stats.repo.js', () => ({
   statsRepo: {
     getUserModeStats: vi.fn(),
+    getRankedStatsByEventWindow: vi.fn(),
     listRecentMatchesForUser: vi.fn(),
   },
 }));
@@ -10,9 +11,20 @@ vi.mock('../../src/modules/stats/stats.repo.js', () => ({
 import { statsRepo } from '../../src/modules/stats/stats.repo.js';
 import { statsService } from '../../src/modules/stats/stats.service.js';
 
+const EMPTY_SPLIT = {
+  regular_wins: 0,
+  regular_losses: 0,
+  regular_draws: 0,
+  event_wins: 0,
+  event_losses: 0,
+  event_draws: 0,
+};
+const EMPTY_MODE = { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 };
+
 describe('statsService.getUserStatsSummary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (statsRepo.getRankedStatsByEventWindow as Mock).mockResolvedValue(EMPTY_SPLIT);
   });
 
   it('returns zero summary when user has no stats rows', async () => {
@@ -21,9 +33,39 @@ describe('statsService.getUserStatsSummary', () => {
     const summary = await statsService.getUserStatsSummary('user-1');
 
     expect(summary).toEqual({
-      overall: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 },
-      ranked: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 },
-      friendly: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 },
+      overall: EMPTY_MODE,
+      ranked: EMPTY_MODE,
+      friendly: EMPTY_MODE,
+      rankedSeasons: { regular: EMPTY_MODE, event: EMPTY_MODE },
+    });
+  });
+
+  it('splits ranked W/D/L at the event start (regular vs event)', async () => {
+    (statsRepo.getUserModeStats as Mock).mockResolvedValue([]);
+    (statsRepo.getRankedStatsByEventWindow as Mock).mockResolvedValue({
+      regular_wins: 5,
+      regular_losses: 3,
+      regular_draws: 2,
+      event_wins: 1,
+      event_losses: 0,
+      event_draws: 0,
+    });
+
+    const summary = await statsService.getUserStatsSummary('user-1');
+
+    expect(summary.rankedSeasons.regular).toEqual({
+      gamesPlayed: 10,
+      wins: 5,
+      losses: 3,
+      draws: 2,
+      winRate: 50,
+    });
+    expect(summary.rankedSeasons.event).toEqual({
+      gamesPlayed: 1,
+      wins: 1,
+      losses: 0,
+      draws: 0,
+      winRate: 100,
     });
   });
 

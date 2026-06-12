@@ -30,33 +30,32 @@ const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 // then linearly mapped down to 0–875. A naive clamp at 875 instead would have
 // collapsed nearly every player (even 0-3 runs) onto the cap, since raw
 // scores rarely fall below ~850.
-const LEGACY_PLACEMENT_SEED_MAX_RP = 2600;
-const PLACEMENT_SEED_MAX_RP = 875;
-
-/** Map a raw placement seed (legacy 0–2600 scale) onto the 0–875 Reserve-capped range. */
-function scalePlacementSeed(rawSeed: number): number {
-  const scaled = (clamp(rawSeed, 0, LEGACY_PLACEMENT_SEED_MAX_RP) * PLACEMENT_SEED_MAX_RP) / LEGACY_PLACEMENT_SEED_MAX_RP;
-  return clamp(roundToNearest25(scaled), 0, PLACEMENT_SEED_MAX_RP);
-}
-
 // Coin participation rewards granted once per settled ranked match.
 const RANKED_WIN_COINS = 300;
 const RANKED_LOSS_COINS = 100;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
-const RANKED_BASE_WIN_DELTA = 25;
-const RANKED_BASE_LOSS_DELTA = -25;
-const RANKED_FORFEIT_EXTRA_LOSS_DELTA = -10;
-// How much correctness affects each placement perf score.
-// 0% correct → -(SWING/2), 50% → 0, 100% → +(SWING/2)
-// Lowered from 1400 so answer accuracy is a SECONDARY nudge, not the dominant
-// factor — aligning placement with Elo-style games (LoL/CS/chess) where the
-// match result is the main driver.
-const PLACEMENT_CORRECTNESS_SWING = 700;
-// How much winning/losing a placement game shifts that game's perf score.
-// Raised so win/loss vs. opponent strength is the PRIMARY seeding signal:
-// a player who loses all placements seeds clearly below one who wins them.
-const PLACEMENT_WIN_LOSS_SWING = 550;
+// ── Season 2026 RP formula ──────────────────────────────────────────────────
+// Transparent, margin-based scoring (replaces the old Elo-style delta). A win
+// is worth a flat base by how it was decided, plus a goal-margin bonus, plus a
+// small bonus for beating a higher-ranked opponent. Losses subtract.
+const SEASON_REGULAR_WIN_RP = 50;
+const SEASON_PENALTY_WIN_RP = 35;
+const SEASON_REGULAR_LOSS_RP = -25;
+const SEASON_PENALTY_LOSS_RP = -15;
+const SEASON_FORFEIT_LOSS_RP = -50; // you quit
+const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a regular win
+const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
+// Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
+function seasonMarginBonus(goalMargin: number): number {
+  if (goalMargin >= 4) return 40;
+  if (goalMargin === 3) return 30;
+  if (goalMargin === 2) return 15;
+  return 0;
+}
+// Hidden starting rank for a brand-new ranked profile (Youth Prospect band).
+// Mirrors the literal used in ranked.repo.ts ensureProfile().
+export const SEASON_INITIAL_RP = 450;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -124,16 +123,37 @@ function coinsForRankedResult(result: 'win' | 'loss'): number {
   return result === 'win' ? RANKED_WIN_COINS : RANKED_LOSS_COINS;
 }
 
-function computeRankedDelta(playerRp: number, opponentRp: number, isWin: boolean, isForfeitLoss = false): number {
-  const rankDiff = opponentRp - playerRp;
-  if (isWin) {
-    return Math.round(RANKED_BASE_WIN_DELTA + clamp(rankDiff / 50, -15, 20));
+/**
+ * Season 2026 RP delta for one player in a settled match.
+ * @param isWin            did this player win
+ * @param decision         how the winner was decided ('penalty_goals' = shootout,
+ *                         'forfeit' = a player quit, else a regular goals result)
+ * @param goalMargin       |myGoals - oppGoals| (only used to bonus a regular win)
+ * @param opponentIsStronger  opponent's current RP was strictly higher than mine
+ */
+function computeSeasonRpDelta(
+  isWin: boolean,
+  decision: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null,
+  goalMargin: number,
+  opponentIsStronger: boolean,
+): number {
+  const isPenalty = decision === 'penalty_goals';
+  const isForfeit = decision === 'forfeit';
+
+  if (!isWin) {
+    if (isForfeit) return SEASON_FORFEIT_LOSS_RP; // -50: this player quit
+    return isPenalty ? SEASON_PENALTY_LOSS_RP : SEASON_REGULAR_LOSS_RP; // -15 / -25
   }
-  const lossDelta = Math.round(RANKED_BASE_LOSS_DELTA + clamp(rankDiff / 50, -25, 10));
-  if (isForfeitLoss) {
-    return lossDelta + RANKED_FORFEIT_EXTRA_LOSS_DELTA;
-  }
-  return lossDelta;
+
+  // Win.
+  if (isForfeit) return SEASON_OPPONENT_FORFEIT_WIN_RP; // +50: opponent quit, treated as a regular win, no margin
+
+  let delta = isPenalty ? SEASON_PENALTY_WIN_RP : SEASON_REGULAR_WIN_RP; // +35 / +50
+  // Margin bonus only applies to a decisive (goals) win — a shootout is by
+  // definition level on goals, so no margin bonus there.
+  if (!isPenalty) delta += seasonMarginBonus(goalMargin);
+  if (opponentIsStronger) delta += SEASON_BEAT_STRONGER_BONUS_RP; // +10
+  return delta;
 }
 
 function computeNextPlacementAnchor(profile: RankedProfileRow): number {
@@ -415,6 +435,16 @@ export const rankedService = {
       let calculationMethod: 'placement_seed' | 'ranked_formula' = 'ranked_formula';
       let formulaDeltaRp: number | null = null;
 
+      // Season 2026: BOTH placement and post-placement games use the same
+      // transparent formula applied to the running RP. Placement no longer
+      // computes a separate perf-based seed — every player starts hidden at
+      // SEASON_INITIAL_RP (450) and the 3 placement games move that rank like
+      // any other game; the rank is simply kept "in_progress" (hidden) until
+      // the 3rd game, then revealed.
+      const goalMargin = Math.abs((player.goals ?? 0) - (opponent?.goals ?? 0));
+      const opponentIsStronger = opponentProfile != null && opponentProfile.rp > oldRp;
+      const seasonDeltaRp = computeSeasonRpDelta(isWin, winnerDecisionMethod, goalMargin, opponentIsStronger);
+
       if (isPlacement) {
         calculationMethod = 'placement_seed';
         placementStatus = 'in_progress';
@@ -423,47 +453,26 @@ export const rankedService = {
         placementGameNo = placementPlayed;
         placementAnchorRp = opponentRp;
 
-        // Correctness modifier: rewards/punishes based on how well you answered
-        // 0% correct → -700, 50% correct → 0 (neutral), 100% correct → +700
-        const totalQs = match.total_questions || 12;
-        const correctnessRate = totalQs > 0 ? player.correct_answers / totalQs : 0.5;
-        const correctnessModifier = Math.round((correctnessRate - 0.5) * PLACEMENT_CORRECTNESS_SWING);
-
-        placementPerfScore = Math.max(0, opponentRp + (isWin ? PLACEMENT_WIN_LOSS_SWING : -PLACEMENT_WIN_LOSS_SWING) + correctnessModifier);
-        placementPerfSum = profile.placement_perf_sum + placementPerfScore;
-        placementPointsForSum = profile.placement_points_for_sum + player.total_points;
-        placementPointsAgainstSum = profile.placement_points_against_sum + (opponent?.total_points ?? 0);
+        // Apply the same formula during placement; just keep the rank hidden
+        // until the player has finished all placement games.
+        formulaDeltaRp = seasonDeltaRp;
+        newRp = Math.max(0, oldRp + seasonDeltaRp);
+        deltaRp = newRp - oldRp;
+        newTier = tierFromRp(newRp);
 
         if (placementPlayed >= DEFAULT_PLACEMENT_MATCHES) {
-          const base = placementPerfSum / DEFAULT_PLACEMENT_MATCHES;
-          const dominanceAdj = clamp(
-            Math.round((placementPointsForSum - placementPointsAgainstSum) / 50),
-            -150,
-            150
-          );
-          const seedRp = scalePlacementSeed(base + dominanceAdj);
-          newRp = seedRp;
-          deltaRp = newRp - oldRp;
-          newTier = tierFromRp(newRp);
           placementStatus = 'placed';
-          placementSeedRp = seedRp;
+          placementSeedRp = newRp; // record where they landed after placement
           placementPerfSum = 0;
           placementPointsForSum = 0;
           placementPointsAgainstSum = 0;
-          currentWinStreak = 0;
-        } else {
-          newRp = oldRp;
-          deltaRp = 0;
-          newTier = oldTier;
         }
+        // Note: placement games 1–2 keep status 'in_progress' (rank hidden) but
+        // DO apply the RP delta above — the running rank is revealed at game 3.
       } else {
-        formulaDeltaRp = computeRankedDelta(
-          oldRp,
-          opponentRp,
-          isWin,
-          !isWin && winnerDecisionMethod === 'forfeit'
-        );
-        newRp = Math.max(0, oldRp + formulaDeltaRp);
+        calculationMethod = 'ranked_formula';
+        formulaDeltaRp = seasonDeltaRp;
+        newRp = Math.max(0, oldRp + seasonDeltaRp);
         deltaRp = newRp - oldRp;
         newTier = tierFromRp(newRp);
       }

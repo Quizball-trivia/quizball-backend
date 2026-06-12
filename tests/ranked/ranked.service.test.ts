@@ -106,7 +106,14 @@ function createCompletedRankedMatch(
   };
 }
 
-function createPlayer(userId: string, seat: number, totalPoints: number, correctAnswers = 0): MatchPlayerRow {
+function createPlayer(
+  userId: string,
+  seat: number,
+  totalPoints: number,
+  correctAnswers = 0,
+  goals = 0,
+  penaltyGoals = 0
+): MatchPlayerRow {
   return {
     match_id: 'm-1',
     user_id: userId,
@@ -114,8 +121,8 @@ function createPlayer(userId: string, seat: number, totalPoints: number, correct
     total_points: totalPoints,
     correct_answers: correctAnswers,
     avg_time_ms: null,
-    goals: 0,
-    penalty_goals: 0,
+    goals,
+    penalty_goals: penaltyGoals,
   };
 }
 
@@ -256,16 +263,20 @@ describe('rankedService', () => {
     expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
   });
 
+  // Season 2026 formula, regular (goals) win/loss with goal margin 0 (both
+  // players' goals default to 0 in createPlayer → no margin bonus):
+  //   win  = +50, +10 more if the opponent was strictly higher-ranked
+  //   loss = -25 (floored at 0 RP)
   it.each([
-    { name: 'equal-rank win', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-1', delta: 25, newRp: 1225 },
+    { name: 'equal-rank win', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-1', delta: 50, newRp: 1250 },
     { name: 'equal-rank loss', playerRp: 1200, opponentRp: 1200, winnerUserId: 'u-2', delta: -25, newRp: 1175 },
-    { name: 'win vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-1', delta: 35, newRp: 1035 },
-    { name: 'loss vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-2', delta: -15, newRp: 985 },
-    { name: 'win vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-1', delta: 15, newRp: 1515 },
-    { name: 'loss vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-2', delta: -35, newRp: 1465 },
-    { name: 'clamp upper win', playerRp: 200, opponentRp: 4000, winnerUserId: 'u-1', delta: 45, newRp: 245 },
-    { name: 'clamp lower win (big gap)', playerRp: 4000, opponentRp: 200, winnerUserId: 'u-1', delta: 10, newRp: 4010 },
-    { name: 'clamp loss at zero RP floor', playerRp: 7, opponentRp: 1200, winnerUserId: 'u-2', delta: -7, newRp: 0 },
+    { name: 'win vs higher rank (+10 stronger)', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-1', delta: 60, newRp: 1060 },
+    { name: 'loss vs higher rank', playerRp: 1000, opponentRp: 1500, winnerUserId: 'u-2', delta: -25, newRp: 975 },
+    { name: 'win vs lower rank (no stronger bonus)', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-1', delta: 50, newRp: 1550 },
+    { name: 'loss vs lower rank', playerRp: 1500, opponentRp: 1000, winnerUserId: 'u-2', delta: -25, newRp: 1475 },
+    { name: 'win vs much-higher rank (+10 stronger)', playerRp: 200, opponentRp: 4000, winnerUserId: 'u-1', delta: 60, newRp: 260 },
+    { name: 'win vs much-lower rank (flat +50)', playerRp: 4000, opponentRp: 200, winnerUserId: 'u-1', delta: 50, newRp: 4050 },
+    { name: 'loss floored at zero RP', playerRp: 7, opponentRp: 1200, winnerUserId: 'u-2', delta: -7, newRp: 0 },
   ])('applies ranked RP formula correctly: $name', async ({ playerRp, opponentRp, winnerUserId, delta, newRp }) => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(createCompletedRankedMatch('m-1', winnerUserId));
     (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
@@ -304,7 +315,7 @@ describe('rankedService', () => {
     expect(userOutcome?.newRp).toBe(newRp);
   });
 
-  it('applies extra RP loss on forfeit', async () => {
+  it('applies a flat -50 forfeit loss', async () => {
     (matchesRepo.getMatch as Mock).mockResolvedValue(
       createCompletedRankedMatch('m-1', 'u-2', undefined, 'forfeit')
     );
@@ -340,8 +351,8 @@ describe('rankedService', () => {
     const outcome = await rankedService.settleCompletedRankedMatch('m-1');
     const userOutcome = outcome?.byUserId['u-1'];
     expect(userOutcome).toBeDefined();
-    expect(userOutcome?.deltaRp).toBe(-35);
-    expect(userOutcome?.newRp).toBe(1165);
+    expect(userOutcome?.deltaRp).toBe(-50);
+    expect(userOutcome?.newRp).toBe(1150);
   });
 
   it('clamps forfeit loss at zero and persists the applied delta', async () => {
@@ -429,8 +440,8 @@ describe('rankedService', () => {
 
     const outcome = await rankedService.settleCompletedRankedMatch('m-1');
 
-    expect(outcome?.byUserId['u-1']?.deltaRp).toBe(-35);
-    expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-35);
+    expect(outcome?.byUserId['u-1']?.deltaRp).toBe(-50);
+    expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-50);
     expect(rankedRepo.applySettlement).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
@@ -443,13 +454,15 @@ describe('rankedService', () => {
     );
   });
 
-  it('keeps RP unchanged during placement game 1 and updates placement counters', async () => {
+  it('applies the season formula during placement game 1 but keeps the rank hidden (in_progress)', async () => {
+    // Season 2026: placement games apply RP like any other game (no perf-seed).
+    // Human wins by 2 goals (3-1) vs a weaker opponent → +50 base + 15 margin = +65.
     (matchesRepo.getMatch as Mock).mockResolvedValue(
-      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
+      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 }, 'goals')
     );
     (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
-      createPlayer('human-1', 1, 900, 6),
-      createPlayer('ai-1', 2, 400, 4),
+      createPlayer('human-1', 1, 900, 6, 3, 0),
+      createPlayer('ai-1', 2, 400, 4, 1, 0),
     ]);
     (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
       id: userId,
@@ -459,8 +472,8 @@ describe('rankedService', () => {
     (rankedRepo.ensureProfile as Mock).mockResolvedValue(
       createProfile({
         user_id: 'human-1',
-        rp: 1200,
-        tier: 'Rotation',
+        rp: 450,
+        tier: 'Youth Prospect',
         placement_status: 'unplaced',
         placement_played: 0,
         placement_wins: 0,
@@ -472,26 +485,21 @@ describe('rankedService', () => {
     const userOutcome = outcome?.byUserId['human-1'];
     expect(userOutcome).toBeDefined();
     expect(userOutcome?.isPlacement).toBe(true);
-    expect(userOutcome?.deltaRp).toBe(0);
-    expect(userOutcome?.newRp).toBe(1200);
-    expect(userOutcome?.placementStatus).toBe('in_progress');
+    expect(userOutcome?.deltaRp).toBe(65); // +50 win + 15 (win by 2)
+    expect(userOutcome?.newRp).toBe(515);
+    expect(userOutcome?.placementStatus).toBe('in_progress'); // still hidden
     expect(userOutcome?.placementPlayed).toBe(1);
   });
 
-  it('finalizes placement on game 3 and applies seeded RP with dominance adjustment clamp', async () => {
-    // Human wins game 3 with 8/12 correct, anchor 2000
-    // correctnessModifier = round((8/12 - 0.5) * 700) = 117
-    // perfScore = 2000 + 550 + 117 = 2667
-    // perfSum = 3000 + 2667 = 5667, base = 1889
-    // dominanceAdj = clamp(round((8400-100)/50), -150, 150) = 150 (clamped)
-    // rawSeed = 1889 + 150 = 2039 (legacy 0–2600 scale)
-    // seedRp = roundToNearest25(2039 * 875 / 2600) = roundToNearest25(686.2) = 675
+  it('finalizes placement on game 3 and reveals the running rank', async () => {
+    // Human is at 580 after 2 placement games; wins game 3 by 1 goal (1-0) vs a
+    // weaker opponent → +50 base + 0 margin = +50 → 630, placement complete.
     (matchesRepo.getMatch as Mock).mockResolvedValue(
-      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 })
+      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2000 }, 'goals')
     );
     (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
-      createPlayer('human-1', 1, 8200, 8),
-      createPlayer('ai-1', 2, 0, 0),
+      createPlayer('human-1', 1, 8200, 8, 1, 0),
+      createPlayer('ai-1', 2, 0, 0, 0, 0),
     ]);
     (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
       id: userId,
@@ -501,14 +509,11 @@ describe('rankedService', () => {
     (rankedRepo.ensureProfile as Mock).mockResolvedValue(
       createProfile({
         user_id: 'human-1',
-        rp: 1200,
-        tier: 'Rotation',
+        rp: 580,
+        tier: 'Youth Prospect',
         placement_status: 'in_progress',
         placement_played: 2,
         placement_wins: 1,
-        placement_perf_sum: 3000,
-        placement_points_for_sum: 200,
-        placement_points_against_sum: 100,
       })
     );
     (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
@@ -519,41 +524,30 @@ describe('rankedService', () => {
     expect(userOutcome?.isPlacement).toBe(true);
     expect(userOutcome?.placementStatus).toBe('placed');
     expect(userOutcome?.placementPlayed).toBe(3);
-    expect(userOutcome?.newRp).toBe(675);
-    expect(userOutcome?.deltaRp).toBe(-525);
+    expect(userOutcome?.deltaRp).toBe(50); // +50 win by 1
+    expect(userOutcome?.newRp).toBe(630); // 580 + 50, revealed → Reserve
     expect(userOutcome?.newTier).toBe('Reserve');
   });
 
-  it('caps a perfect placement run at the top of Reserve (875 RP)', async () => {
-    // Perfect run: 2 prior wins (perf_sum 6000), game 3 win vs max anchor 2700
-    // with 12/12 correct: perfScore = 2700 + 550 + 350 = 3600
-    // perfSum = 6000 + 3600 = 9600, base = 3200
-    // dominanceAdj clamps to +150 → rawSeed = 3350 → legacy clamp 2600
-    // seedRp = roundToNearest25(2600 * 875 / 2600) = 875 → still Reserve tier
+  it('awards the win-by-4+ margin bonus and the beat-stronger bonus together', async () => {
+    // Post-placement: player 600 RP beats a STRONGER opponent (700 RP) 4-0.
+    // +50 base + 40 (win by 4+) + 10 (beat stronger) = +100 → 700.
     (matchesRepo.getMatch as Mock).mockResolvedValue(
-      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2700 })
+      createCompletedRankedMatch('m-1', 'human-1', undefined, 'goals')
     );
     (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
-      createPlayer('human-1', 1, 9000, 12),
-      createPlayer('ai-1', 2, 0, 0),
+      createPlayer('human-1', 1, 9000, 12, 4, 0),
+      createPlayer('human-2', 2, 200, 2, 0, 0),
     ]);
     (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({
       id: userId,
-      is_ai: userId === 'ai-1',
+      is_ai: false,
     }));
     (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
-    (rankedRepo.ensureProfile as Mock).mockResolvedValue(
-      createProfile({
-        user_id: 'human-1',
-        rp: 600,
-        tier: 'Reserve',
-        placement_status: 'in_progress',
-        placement_played: 2,
-        placement_wins: 2,
-        placement_perf_sum: 6000,
-        placement_points_for_sum: 9000,
-        placement_points_against_sum: 0,
-      })
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
+      userId === 'human-1'
+        ? createProfile({ user_id: 'human-1', rp: 600, tier: 'Reserve', placement_status: 'placed', placement_played: 3 })
+        : createProfile({ user_id: 'human-2', rp: 700, tier: 'Reserve', placement_status: 'placed', placement_played: 3 })
     );
     (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
 
@@ -561,9 +555,8 @@ describe('rankedService', () => {
     const userOutcome = outcome?.byUserId['human-1'];
     expect(userOutcome).toBeDefined();
     expect(userOutcome?.placementStatus).toBe('placed');
-    expect(userOutcome?.newRp).toBe(875);
-    expect(userOutcome?.deltaRp).toBe(275);
-    expect(userOutcome?.newTier).toBe('Reserve');
+    expect(userOutcome?.deltaRp).toBe(100); // 50 + 40 + 10
+    expect(userOutcome?.newRp).toBe(700);
   });
 
   it('uses pre-existing rp changes (idempotent read path) without reapplying settlement', async () => {

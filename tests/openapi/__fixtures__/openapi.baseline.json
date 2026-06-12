@@ -578,12 +578,88 @@
               "draws",
               "winRate"
             ]
+          },
+          "rankedSeasons": {
+            "type": "object",
+            "properties": {
+              "regular": {
+                "type": "object",
+                "properties": {
+                  "gamesPlayed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "wins": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "losses": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "draws": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "winRate": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
+                },
+                "required": [
+                  "gamesPlayed",
+                  "wins",
+                  "losses",
+                  "draws",
+                  "winRate"
+                ]
+              },
+              "event": {
+                "type": "object",
+                "properties": {
+                  "gamesPlayed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "wins": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "losses": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "draws": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "winRate": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
+                },
+                "required": [
+                  "gamesPlayed",
+                  "wins",
+                  "losses",
+                  "draws",
+                  "winRate"
+                ]
+              }
+            },
+            "required": [
+              "regular",
+              "event"
+            ]
           }
         },
         "required": [
           "overall",
           "ranked",
-          "friendly"
+          "friendly",
+          "rankedSeasons"
         ]
       },
       "RankedProfileResponse": {
@@ -2801,18 +2877,6 @@
         "required": [
           "daily",
           "weekly"
-        ]
-      },
-      "OnlineCountResponse": {
-        "type": "object",
-        "properties": {
-          "online": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "online"
         ]
       },
       "CategoryResponse": {
@@ -7439,12 +7503,88 @@
                         "draws",
                         "winRate"
                       ]
+                    },
+                    "rankedSeasons": {
+                      "type": "object",
+                      "properties": {
+                        "regular": {
+                          "type": "object",
+                          "properties": {
+                            "gamesPlayed": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "wins": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "losses": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "draws": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "winRate": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 100
+                            }
+                          },
+                          "required": [
+                            "gamesPlayed",
+                            "wins",
+                            "losses",
+                            "draws",
+                            "winRate"
+                          ]
+                        },
+                        "event": {
+                          "type": "object",
+                          "properties": {
+                            "gamesPlayed": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "wins": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "losses": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "draws": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "winRate": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 100
+                            }
+                          },
+                          "required": [
+                            "gamesPlayed",
+                            "wins",
+                            "losses",
+                            "draws",
+                            "winRate"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "regular",
+                        "event"
+                      ]
                     }
                   },
                   "required": [
                     "overall",
                     "ranked",
-                    "friendly"
+                    "friendly",
+                    "rankedSeasons"
                   ]
                 }
               }
@@ -11349,48 +11489,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/presence/ping": {
-      "post": {
-        "summary": "Heartbeat presence ping",
-        "description": "Records the caller (anonymous or logged-in) as currently online and returns the site-wide online count. Public — accepts requests without authentication.",
-        "tags": [
-          "Presence"
-        ],
-        "responses": {
-          "200": {
-            "description": "Online count",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OnlineCountResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/presence/online": {
-      "get": {
-        "summary": "Get site-wide online count",
-        "description": "Returns the current count of visitors online site-wide.",
-        "tags": [
-          "Presence"
-        ],
-        "responses": {
-          "200": {
-            "description": "Online count",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OnlineCountResponse"
                 }
               }
             }

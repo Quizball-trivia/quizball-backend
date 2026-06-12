@@ -78,8 +78,8 @@ export const modeStatsSummarySchema = z.object({
 });
 
 export const rankedSeasonSplitSchema = z.object({
+  regular: modeStatsSummarySchema,
   event: modeStatsSummarySchema,
-  newSeason: modeStatsSummarySchema,
 });
 
 export const statsSummaryResponseSchema = z.object({

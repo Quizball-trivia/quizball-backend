@@ -53,25 +53,25 @@ export interface ModeStatsSummary {
   winRate: number;
 }
 
-/** Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
- *  `event` = ranked games up to the reset (the current World Cup event season);
- *  `newSeason` = ranked games after the reset (the fresh post-reset season). */
+/** Ranked W/D/L split at the World Cup event START.
+ *  `regular` = ranked games before the event began (the normal ranked record);
+ *  `event`   = ranked games played during the event. */
 export interface RankedSeasonSplit {
+  regular: ModeStatsSummary;
   event: ModeStatsSummary;
-  newSeason: ModeStatsSummary;
 }
 
 export interface UserStatsSummary {
   overall: ModeStatsSummary;
   ranked: ModeStatsSummary;
   friendly: ModeStatsSummary;
-  /** Ranked W/D/L partitioned at the event reset. */
+  /** Ranked W/D/L partitioned at the event start (regular vs during-event). */
   rankedSeasons: RankedSeasonSplit;
 }
 
-// World Cup event ends / leaderboard resets at this instant. Ranked games up to
-// here count toward the event season; later games start the new season.
-const EVENT_RESET_ISO = '2026-07-19T23:59:59Z';
+// World Cup event START. Ranked games before this are the regular record; games
+// on/after it count toward the World Cup event.
+const EVENT_START_ISO = '2026-06-11T00:00:00Z';
 
 function toWinRate(wins: number, gamesPlayed: number): number {
   if (gamesPlayed <= 0) return 0;
@@ -167,7 +167,7 @@ export const statsService = {
   async getUserStatsSummary(userId: string): Promise<UserStatsSummary> {
     const [rows, split] = await Promise.all([
       statsRepo.getUserModeStats(userId),
-      statsRepo.getRankedStatsAroundReset(userId, EVENT_RESET_ISO),
+      statsRepo.getRankedStatsByEventWindow(userId, EVENT_START_ISO),
     ]);
 
     const ranked = emptyModeStats();
@@ -187,8 +187,8 @@ export const statsService = {
     const overallLosses = ranked.losses + friendly.losses;
     const overallDraws = ranked.draws + friendly.draws;
 
+    const regularGames = split.regular_wins + split.regular_losses + split.regular_draws;
     const eventGames = split.event_wins + split.event_losses + split.event_draws;
-    const newSeasonGames = split.new_season_wins + split.new_season_losses + split.new_season_draws;
 
     return {
       overall: {
@@ -201,19 +201,19 @@ export const statsService = {
       ranked,
       friendly,
       rankedSeasons: {
+        regular: {
+          gamesPlayed: regularGames,
+          wins: split.regular_wins,
+          losses: split.regular_losses,
+          draws: split.regular_draws,
+          winRate: toWinRate(split.regular_wins, regularGames),
+        },
         event: {
           gamesPlayed: eventGames,
           wins: split.event_wins,
           losses: split.event_losses,
           draws: split.event_draws,
           winRate: toWinRate(split.event_wins, eventGames),
-        },
-        newSeason: {
-          gamesPlayed: newSeasonGames,
-          wins: split.new_season_wins,
-          losses: split.new_season_losses,
-          draws: split.new_season_draws,
-          winRate: toWinRate(split.new_season_wins, newSeasonGames),
         },
       },
     };

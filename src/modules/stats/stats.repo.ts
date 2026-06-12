@@ -43,12 +43,12 @@ export interface UserModeMatchStatsRow {
 }
 
 export interface RankedSplitStatsRow {
+  regular_wins: number;
+  regular_losses: number;
+  regular_draws: number;
   event_wins: number;
   event_losses: number;
   event_draws: number;
-  new_season_wins: number;
-  new_season_losses: number;
-  new_season_draws: number;
 }
 
 export const statsRepo = {
@@ -165,23 +165,25 @@ export const statsRepo = {
   /**
    * Ranked W/D/L split around the World Cup event / leaderboard-reset boundary.
    * The pre-aggregated `user_mode_match_stats` table has no date dimension, so we
-   * count from `matches` directly. Two buckets per the reset cutoff:
-   *   event  — matches that ended on/before the reset (the current event season)
-   *   newSeason — matches that ended after the reset (the fresh post-reset season)
+   * count from `matches` directly. Two buckets split at the event START:
+   *   regular — matches that ended BEFORE the event started (the normal ranked
+   *             record from before the World Cup event)
+   *   event   — matches that ended on/after the event start (games played during
+   *             the World Cup event window)
    * Only ranked, completed, non-dev matches are counted.
    */
-  async getRankedStatsAroundReset(
+  async getRankedStatsByEventWindow(
     userId: string,
-    resetIso: string,
+    eventStartIso: string,
   ): Promise<RankedSplitStatsRow> {
     const [row] = await sql<RankedSplitStatsRow[]>`
       SELECT
-        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
-        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS event_losses,
-        COUNT(*) FILTER (WHERE m.ended_at <= ${resetIso}::timestamptz AND m.winner_user_id IS NULL)::int AS event_draws,
-        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id = ${userId})::int AS new_season_wins,
-        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS new_season_losses,
-        COUNT(*) FILTER (WHERE m.ended_at > ${resetIso}::timestamptz AND m.winner_user_id IS NULL)::int AS new_season_draws
+        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS regular_wins,
+        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS regular_losses,
+        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS regular_draws,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS event_losses,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS event_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
       WHERE mp.user_id = ${userId}
@@ -191,12 +193,12 @@ export const statsRepo = {
     `;
     return (
       row ?? {
+        regular_wins: 0,
+        regular_losses: 0,
+        regular_draws: 0,
         event_wins: 0,
         event_losses: 0,
         event_draws: 0,
-        new_season_wins: 0,
-        new_season_losses: 0,
-        new_season_draws: 0,
       }
     );
   },

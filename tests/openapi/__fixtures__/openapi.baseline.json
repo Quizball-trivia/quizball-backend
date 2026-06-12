@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -582,7 +582,7 @@
           "rankedSeasons": {
             "type": "object",
             "properties": {
-              "event": {
+              "regular": {
                 "type": "object",
                 "properties": {
                   "gamesPlayed": {
@@ -615,7 +615,7 @@
                   "winRate"
                 ]
               },
-              "newSeason": {
+              "event": {
                 "type": "object",
                 "properties": {
                   "gamesPlayed": {
@@ -650,8 +650,8 @@
               }
             },
             "required": [
-              "event",
-              "newSeason"
+              "regular",
+              "event"
             ]
           }
         },
@@ -7507,7 +7507,7 @@
                     "rankedSeasons": {
                       "type": "object",
                       "properties": {
-                        "event": {
+                        "regular": {
                           "type": "object",
                           "properties": {
                             "gamesPlayed": {
@@ -7540,7 +7540,7 @@
                             "winRate"
                           ]
                         },
-                        "newSeason": {
+                        "event": {
                           "type": "object",
                           "properties": {
                             "gamesPlayed": {
@@ -7575,8 +7575,8 @@
                         }
                       },
                       "required": [
-                        "event",
-                        "newSeason"
+                        "regular",
+                        "event"
                       ]
                     }
                   },

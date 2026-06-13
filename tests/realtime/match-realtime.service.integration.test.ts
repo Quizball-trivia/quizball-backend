@@ -131,6 +131,7 @@ const setPlayerForfeitWinTotalsMock = vi.fn();
 const setPlayerFinalTotalsMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const abandonMatchMock = vi.fn();
+const refundRankedTicketsMock = vi.fn();
 
 const buildMatchQuestionPayloadMock = vi.fn();
 const ensureProfileMock = vi.fn();
@@ -247,6 +248,12 @@ vi.mock('../../src/modules/users/users.repo.js', () => {
     },
   };
 });
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    refundRankedTickets: (...args: unknown[]) => refundRankedTicketsMock(...args),
+  },
+}));
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
@@ -507,6 +514,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     setPlayerFinalTotalsMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     abandonMatchMock.mockResolvedValue(undefined);
+    refundRankedTicketsMock.mockResolvedValue({ wallets: {} });
     listAnswersForQuestionMock.mockResolvedValue([
       { user_id: 'u1', selected_index: 1, is_correct: true, points_earned: 100, time_ms: 1000 },
       { user_id: 'u2', selected_index: 2, is_correct: false, points_earned: 0, time_ms: 4000 },
@@ -1827,6 +1835,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     // Cancelled as a no-contest: abandoned, never completed with a winner.
     expect(abandonMatchMock).toHaveBeenCalledWith('m1');
     expect(completeMatchMock).not.toHaveBeenCalled();
+    // TEST-E2: the early-forfeit no-contest refunds both humans' tickets.
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith(expect.arrayContaining(['u1', 'u2']));
   });
 
   it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {

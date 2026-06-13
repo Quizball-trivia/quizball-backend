@@ -10,6 +10,7 @@ import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.types.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getMatchCache, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
@@ -137,7 +138,10 @@ async function emitForfeitFinalResults(
   }
 }
 
-async function abandonPossessionTerminalMatch(
+// Exported for direct unit testing of the no-contest ticket-refund behavior
+// (the full undecidable→abandon path is impractical to drive end-to-end through
+// the cache/lock plumbing in an integration mock).
+export async function abandonPossessionTerminalMatch(
   io: QuizballServer,
   match: MatchRow,
   roster: PossessionTerminalPlayer[],
@@ -148,6 +152,30 @@ async function abandonPossessionTerminalMatch(
 
   cancelPossessionHalftimeTimer(match.id);
   await cleanupPossessionTerminalRedisKeys(match.id, roster);
+
+  // A ranked match that abandons as a no-contest (e.g. both players dropped and
+  // progress is undecidable) must refund every human's consumed ranked ticket —
+  // the same courtesy the single-forfeiter early-forfeit cancel already gives
+  // (match-forfeit.service.ts). Without this a round-1 double-drop silently
+  // costs both players a ticket. Best-effort; party-quiz uses its own flow.
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
+    const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
+    const humanUserIds = roster
+      .filter((player) => !rosterUsers.get(player.user_id)?.is_ai)
+      .map((player) => player.user_id);
+    if (humanUserIds.length > 0) {
+      try {
+        await storeService.refundRankedTickets(humanUserIds);
+      } catch (error) {
+        logger.warn(
+          { error, matchId: match.id, humanUserIds },
+          'Failed to refund ranked tickets on no-contest abandon'
+        );
+      }
+    }
+  }
+
   io.to(`match:${match.id}`).emit('error', {
     code: 'MATCH_ABANDONED',
     message: 'Match abandoned because it could not be resolved from active progress',

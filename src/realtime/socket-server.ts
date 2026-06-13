@@ -18,6 +18,7 @@ import { rankedMatchmakingService } from './services/ranked-matchmaking.service.
 import { warmupRealtimeService } from './services/warmup-realtime.service.js';
 import { userSessionGuardService } from './services/user-session-guard.service.js';
 import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
+import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
 import { acquireLock, releaseLock } from './locks.js';
@@ -324,6 +325,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).
   setAuthRealtimeServer(io);
+  // Lets the notifications service push to a user's room without importing socket-server.
+  setNotificationsRealtimeServer(io);
 
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 

@@ -23,6 +23,7 @@ import { progressionService } from '../progression/progression.service.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { friendsRepo } from '../friends/friends.repo.js';
 import { storeRepo } from '../store/store.repo.js';
+import { notificationsService } from '../notifications/notifications.service.js';
 import { config } from '../../core/config.js';
 import {
   getRequiredAvatarProductSlugs,
@@ -158,6 +159,43 @@ async function assertPhoneCanBeLinked(userId: string, phoneNumber: string): Prom
     });
   }
   return existing.phone_verified_at ? 'already_verified' : 'available';
+}
+
+/**
+ * Build and send the in-app notification for an admin XP/RP grant. Only the
+ * fields that actually changed are mentioned. Best-effort: a notification
+ * failure must not fail the underlying point change (which already committed).
+ */
+async function notifyProgressionChange(
+  userId: string,
+  change: { xpDelta: number; rpDelta: number; reason: string }
+): Promise<void> {
+  const parts: string[] = [];
+  const partsKa: string[] = [];
+  if (change.xpDelta !== 0) {
+    parts.push(`${change.xpDelta > 0 ? '+' : ''}${change.xpDelta} XP`);
+    partsKa.push(`${change.xpDelta > 0 ? '+' : ''}${change.xpDelta} XP`);
+  }
+  if (change.rpDelta !== 0) {
+    parts.push(`${change.rpDelta > 0 ? '+' : ''}${change.rpDelta} RP`);
+    partsKa.push(`${change.rpDelta > 0 ? '+' : ''}${change.rpDelta} RP`);
+  }
+  if (parts.length === 0) return;
+
+  const summary = parts.join(' and ');
+  try {
+    await notificationsService.notify(userId, {
+      type: 'points_adjustment',
+      title: { en: 'Your rewards were updated', ka: 'შენი ჯილდოები განახლდა' },
+      body: {
+        en: `You received ${summary}.`,
+        ka: `მიიღე ${partsKa.join(' და ')}.`,
+      },
+      data: { xpDelta: change.xpDelta, rpDelta: change.rpDelta, reason: change.reason },
+    });
+  } catch (err) {
+    logger.warn({ err, userId }, 'Failed to send progression-change notification');
+  }
 }
 
 /**
@@ -423,6 +461,12 @@ export const usersService = {
     });
 
     await invalidateByUserId(userId);
+
+    if (body.notify) {
+      const xpDelta = body.xp ? newXp - oldXp : 0;
+      const rpDelta = body.rp && oldRp !== null && newRp !== null ? newRp - oldRp : 0;
+      await notifyProgressionChange(userId, { xpDelta, rpDelta, reason: body.reason });
+    }
 
     logger.info(
       { userId, actorId: options.actorId, oldXp, newXp, oldRp, newRp, reason: body.reason },

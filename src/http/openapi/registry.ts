@@ -40,6 +40,7 @@ import { registerRankedOpenApi } from '../../modules/ranked/ranked.openapi.js';
 import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
 import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 import { registerUsersOpenApi } from '../../modules/users/users.openapi.js';
+import { registerNotificationsOpenApi } from '../../modules/notifications/notifications.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -61,6 +62,7 @@ registerCategoriesOpenApi(registry);
 registerFeaturedCategoriesOpenApi(registry);
 registerQuestionsOpenApi(registry);
 registerDailyChallengesOpenApi(registry);
+registerNotificationsOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

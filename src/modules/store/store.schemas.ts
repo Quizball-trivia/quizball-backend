@@ -136,6 +136,9 @@ export const manualAdjustmentBodySchema = z
     inventoryGrants: z.array(manualInventoryGrantSchema).optional(),
     reason: z.string().min(3).max(500),
     idempotencyKey: z.string().min(3).max(200).optional(),
+    // When true, notify the user about coins/tickets they received. Default
+    // false so existing callers (webhooks, fulfilment) stay silent.
+    notify: z.boolean().optional().default(false),
   })
   .superRefine((value, ctx) => {
     const hasCoins = typeof value.coinsDelta === 'number' && value.coinsDelta !== 0;

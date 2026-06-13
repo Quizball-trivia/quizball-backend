@@ -307,6 +307,8 @@ export const adminSetProgressionBodySchema = z
     xp: progressionAdjustmentSchema.optional(),
     rp: progressionAdjustmentSchema.optional(),
     reason: z.string().min(3).max(200),
+    // When true (default), send the user an in-app notification about the change.
+    notify: z.boolean().optional().default(true),
   })
   .refine((body) => body.xp !== undefined || body.rp !== undefined, {
     message: 'At least one of xp or rp must be provided',

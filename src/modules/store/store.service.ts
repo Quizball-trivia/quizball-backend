@@ -7,6 +7,7 @@ import { logger } from '../../core/logger.js';
 import { getRequestId } from '../../core/request-context.js';
 import { usersRepo } from '../users/users.repo.js';
 import { storeRepo } from './store.repo.js';
+import { notificationsService } from '../notifications/notifications.service.js';
 import { stripe } from './stripe.js';
 import {
   MAX_TICKETS,
@@ -381,6 +382,39 @@ async function applyWalletAdjustmentInTx(
     wallet: buildWalletResponse(updated, await loadTicketPurchaseCooldownInTx(tx, userId)),
     appliedTicketsDelta,
   };
+}
+
+/**
+ * Notify a user about coins/tickets they received via an admin adjustment.
+ * Best-effort: the wallet change has already committed; a notification failure
+ * must not surface to the caller.
+ */
+async function notifyWalletChange(
+  userId: string,
+  change: { coinsDelta: number; ticketsDelta: number; reason: string }
+): Promise<void> {
+  const parts: string[] = [];
+  const partsKa: string[] = [];
+  if (change.coinsDelta !== 0) {
+    parts.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} coins`);
+    partsKa.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} მონეტა`);
+  }
+  if (change.ticketsDelta !== 0) {
+    parts.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} tickets`);
+    partsKa.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ბილეთი`);
+  }
+  if (parts.length === 0) return;
+
+  try {
+    await notificationsService.notify(userId, {
+      type: 'points_adjustment',
+      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა' },
+      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.` },
+      data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
+    });
+  } catch (err) {
+    logger.warn({ err, userId }, 'Failed to send wallet-change notification');
+  }
 }
 
 export const storeService = {
@@ -1042,6 +1076,14 @@ export const storeService = {
           inventoryApplied: appliedInventory,
         };
       });
+
+      if (input.notify) {
+        await notifyWalletChange(input.userId, {
+          coinsDelta,
+          ticketsDelta: result.walletAfter ? ticketsDelta : 0,
+          reason: input.reason,
+        });
+      }
 
       return {
         applied: true,

@@ -5795,7 +5795,8 @@
                   "enum": [
                     "points_adjustment",
                     "season_award",
-                    "announcement"
+                    "announcement",
+                    "friend_request"
                   ]
                 },
                 "title": {

@@ -9,6 +9,7 @@ export const notificationTypeSchema = z.enum([
   'points_adjustment',
   'season_award',
   'announcement',
+  'friend_request',
 ]);
 
 export type NotificationType = z.infer<typeof notificationTypeSchema>;

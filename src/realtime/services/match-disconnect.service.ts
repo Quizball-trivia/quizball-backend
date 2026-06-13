@@ -161,9 +161,13 @@ export async function abandonPossessionTerminalMatch(
   const variant = resolveMatchVariant(match.state_payload, match.mode);
   if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
     const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
+    // Only refund players whose row resolved AND is explicitly human. An
+    // unresolved id (deleted/missing user) is excluded, not assumed human, so a
+    // ghost id is never passed to refundRankedTickets.
     const humanUserIds = roster
-      .filter((player) => !rosterUsers.get(player.user_id)?.is_ai)
-      .map((player) => player.user_id);
+      .map((player) => rosterUsers.get(player.user_id))
+      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+      .map((user) => user.id);
     if (humanUserIds.length > 0) {
       try {
         await storeService.refundRankedTickets(humanUserIds);

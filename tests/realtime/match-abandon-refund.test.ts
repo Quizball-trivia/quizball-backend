@@ -86,6 +86,18 @@ describe('abandonPossessionTerminalMatch — no-contest ticket refund', () => {
     expect(refundRankedTicketsMock).toHaveBeenCalledWith(['u1']);
   });
 
+  it('excludes a roster id that did not resolve to a user row (no ghost refund)', async () => {
+    const { abandonPossessionTerminalMatch } = await import('../../src/realtime/services/match-disconnect.service.js');
+    // 'gone' has no row (deleted/missing user) — must NOT be treated as human.
+    getByIdsMock.mockResolvedValue(new Map([['u1', { id: 'u1', is_ai: false }]]));
+    const match = { id: 'm1', mode: 'ranked', state_payload: { variant: 'ranked_sim' } } as never;
+    const roster = [{ user_id: 'u1' }, { user_id: 'gone' }] as never;
+
+    await abandonPossessionTerminalMatch(createIo(), match, roster, 'reconnect_limit');
+
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith(['u1']);
+  });
+
   it('does NOT refund for a friendly (non-ranked) abandon', async () => {
     const { abandonPossessionTerminalMatch } = await import('../../src/realtime/services/match-disconnect.service.js');
     getByIdsMock.mockResolvedValue(new Map([['u1', { id: 'u1', is_ai: false }]]));

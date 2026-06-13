@@ -47,10 +47,13 @@ const SEASON_FORFEIT_LOSS_RP = -50; // you quit
 const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a regular win
 const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
 // Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
-function seasonMarginBonus(goalMargin: number): number {
-  if (goalMargin >= 4) return 40;
-  if (goalMargin === 3) return 30;
-  if (goalMargin === 2) return 15;
+// Signed margin: bonus only when the player was AHEAD (margin > 0). A winner who
+// took the result while behind on goals (e.g. an opponent-forfeit win at 0-2)
+// earns no margin bonus.
+function seasonMarginBonus(signedGoalMargin: number): number {
+  if (signedGoalMargin >= 4) return 40;
+  if (signedGoalMargin === 3) return 30;
+  if (signedGoalMargin === 2) return 15;
   return 0;
 }
 // Hidden starting rank for a brand-new ranked profile (Youth Prospect band).
@@ -128,7 +131,7 @@ function coinsForRankedResult(result: 'win' | 'loss'): number {
  * @param isWin            did this player win
  * @param decision         how the winner was decided ('penalty_goals' = shootout,
  *                         'forfeit' = a player quit, else a regular goals result)
- * @param goalMargin       |myGoals - oppGoals| (only used to bonus a regular win)
+ * @param goalMargin       signed myGoals - oppGoals (bonuses a win only when ahead)
  * @param opponentIsStronger  opponent's current RP was strictly higher than mine
  */
 function computeSeasonRpDelta(
@@ -443,7 +446,7 @@ export const rankedService = {
       // SEASON_INITIAL_RP (450) and the 3 placement games move that rank like
       // any other game; the rank is simply kept "in_progress" (hidden) until
       // the 3rd game, then revealed.
-      const goalMargin = Math.abs((player.goals ?? 0) - (opponent?.goals ?? 0));
+      const goalMargin = (player.goals ?? 0) - (opponent?.goals ?? 0);
       const opponentIsStronger = opponentProfile != null && opponentProfile.rp > oldRp;
       const seasonDeltaRp = computeSeasonRpDelta(isWin, winnerDecisionMethod, goalMargin, opponentIsStronger);
 

@@ -307,14 +307,17 @@ export const lobbiesRepo = {
   async listAllValidCategories(
     minQuestions: number
   ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
-    // Counts-only (no payloads join / JSONB validation) — see
-    // RANKED_ELIGIBILITY_HAVING_COUNTS in sql-fragments.ts for the rationale
-    // and staging identity verification (846ms -> ~7ms).
+    // Friendly/party pool = NON-featured categories only. Featured categories
+    // are reserved exclusively for ranked (listAllRankedEligibleCategories), so
+    // the casual modes draw from everything else. Counts-only (no payloads join /
+    // JSONB validation) — see RANKED_ELIGIBILITY_HAVING_COUNTS in
+    // sql-fragments.ts for the rationale and staging identity verification.
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -354,6 +357,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -377,6 +381,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${exclusionClause}
         AND q.status = 'published'
         AND q.type = 'mcq_single'
@@ -399,6 +404,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
       GROUP BY c.id

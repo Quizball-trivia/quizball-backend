@@ -226,6 +226,7 @@ export const dailyChallengesRepo = {
       WHERE q.status = 'published'
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
       ${limitClause}
     `;
@@ -247,6 +248,7 @@ export const dailyChallengesRepo = {
       WHERE q.status = 'published'
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
     `;
 
@@ -280,6 +282,7 @@ export const dailyChallengesRepo = {
       WHERE q.status = 'published'
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
       GROUP BY c.id, c.slug, c.name
       ${difficultyCoverageClause}
       ORDER BY COUNT(*) DESC, c.slug ASC

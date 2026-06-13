@@ -51,4 +51,43 @@ describe('last attack mechanic', () => {
     expect(state.normalQuestionsAnsweredTotal).toBe(12);
     expect(state.phase).toBe('COMPLETED');
   });
+
+  // A1: a half-2 last attack that ENDS LEVEL must route into the penalty
+  // shootout, not complete as a draw. The boundary transition parks the match
+  // in HALFTIME with purpose='penalty' (finalizeHalftime then exits into
+  // PENALTY_SHOOTOUT). Previously untested — only the goal-diff→COMPLETED path
+  // above was covered.
+  it('routes a level last attack in half 2 into the penalty shootout', () => {
+    const state = createInitialPossessionState();
+    state.phase = 'LAST_ATTACK';
+    state.half = 2;
+    state.goals = { seat1: 1, seat2: 1 };
+    state.normalQuestionsAnsweredInHalf = 6;
+    state.normalQuestionsAnsweredTotal = 12;
+    state.possessionDiff = 0;
+
+    applyLastAttackResolution(state, 50, 50);
+
+    expect(state.goals.seat1).toBe(state.goals.seat2);
+    expect(state.phase).toBe('HALFTIME');
+    expect(state.halftime.purpose).toBe('penalty');
+    expect(state.lastAttack.attackerSeat).toBeNull();
+  });
+
+  it('does NOT enter the penalty shootout when the last attack decides a goal', () => {
+    const state = createInitialPossessionState();
+    state.phase = 'LAST_ATTACK';
+    state.half = 2;
+    state.goals = { seat1: 0, seat2: 0 };
+    state.normalQuestionsAnsweredInHalf = 6;
+    state.normalQuestionsAnsweredTotal = 12;
+    // Poised at +95; a +10 swing crosses the 100 threshold → seat 1 scores.
+    state.possessionDiff = 95;
+
+    applyLastAttackResolution(state, 60, 50);
+
+    expect(state.goals.seat1).toBe(1);
+    expect(state.phase).toBe('COMPLETED');
+    expect(state.halftime.purpose).not.toBe('penalty');
+  });
 });

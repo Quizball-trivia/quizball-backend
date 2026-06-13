@@ -517,16 +517,24 @@ async function maybePickQuestionForState(
     });
   };
 
-  // Try first WITH the seen-history exclusion. If the pool is dry after it (a
-  // tiny category fully seen), retry WITHOUT the exclusion but ordered by
-  // LEAST-recently-seen — show the question they saw longest ago, never a random
-  // recent repeat, and never stall.
-  let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen: recentlySeenIds.length > 0 });
-  if (!picked && recentlySeenIds.length > 0) {
-    picked = await pickValidCandidate(preferredDifficulties, { leastRecent: true });
-  }
+  // Selection ladder — EXHAUST unseen questions (at every difficulty) before
+  // ever allowing a repeat:
+  //   1. preferred difficulty, unseen only
+  //   2. all difficulties, unseen only   ← keeps the exclusion, so a fully-seen
+  //      "hard" slice still finds unseen easy/medium before repeating
+  //   3. only once NO unseen question exists in the category: a repeat ordered
+  //      by LEAST-recently-seen (the question they saw longest ago), never a
+  //      random recent repeat, and never a stall.
+  const excludeSeen = recentlySeenIds.length > 0;
+  let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {
-    picked = await pickValidCandidate(['easy', 'medium', 'hard']);
+    picked = await pickValidCandidate(['easy', 'medium', 'hard'], { excludeSeen });
+  }
+  if (!picked && excludeSeen) {
+    picked = await pickValidCandidate(
+      useDifficulty ? ['easy', 'medium', 'hard'] : preferredDifficulties,
+      { leastRecent: true },
+    );
   }
   if (!picked && useDifficulty) {
     // Anti-stall last resort: the drafted category has no PLAIN MCQs left

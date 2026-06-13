@@ -162,13 +162,19 @@ export const matchQuestionsRepo = {
       'quizball.user_count': userIds.length,
       'quizball.within_days': withinDays,
     }, async (span) => {
+      // Key off mq.shown_at, not matches.started_at + row existence: the
+      // match_questions row is inserted BEFORE setQuestionTiming() writes
+      // shown_at, so a question dispatched-but-never-shown (dispatch failed
+      // pre-emit) must NOT pollute history, and a question shown late in a long
+      // match must still count from when it was actually shown. shown_at IS NOT
+      // NULL == "the user actually saw it".
       const rows = await sql<{ question_id: string }[]>`
         SELECT DISTINCT mq.question_id
         FROM match_players mp
-        JOIN matches m ON m.id = mp.match_id
         JOIN match_questions mq ON mq.match_id = mp.match_id
         WHERE mp.user_id = ANY(${userIds}::uuid[])
-          AND m.started_at > now() - (${withinDays} || ' days')::interval
+          AND mq.shown_at IS NOT NULL
+          AND mq.shown_at > now() - make_interval(days => ${withinDays})
       `;
       span.setAttribute('quizball.seen_question_count', rows.length);
       return rows.map((r) => r.question_id);

@@ -456,12 +456,17 @@ export const lobbiesRepo = {
     `;
   },
 
-  // Idempotent on the (lobby_id, user_id) PK: if this user already banned a
-  // category in this lobby, return their existing ban instead of throwing. This
-  // keeps the draft flow alive when a ban is (re)applied due to a timer/click
-  // race. A (lobby_id, category_id) UNIQUE collision (two users picking the same
-  // category) is NOT swallowed — that's a genuine bad pick the caller must retry
-  // with a different category.
+  // Idempotent against BOTH unique constraints on lobby_category_bans:
+  //   - PK (lobby_id, user_id): the same user (re)bans → return their row.
+  //   - UNIQUE (lobby_id, category_id): the category is already banned (by this
+  //     user OR the opponent / a racing auto-ban) → return the existing row.
+  // Either way the desired post-state — "this category is banned in this lobby"
+  // — already holds, so we return the existing ban instead of throwing. The
+  // returned row's `user_id` lets a caller that cares (the manual ban handler)
+  // still detect a FOREIGN ban (user_id !== the actor) and prompt for another
+  // pick. Throwing on the category collision used to dead-end the auto-ban /
+  // AI-ban / recovery paths and wedge drafts on "preparing match"; making the
+  // write idempotent removes that whole class of race.
   async insertLobbyCategoryBan(lobbyId: string, userId: string, categoryId: string): Promise<LobbyCategoryBanRow> {
     const [row] = await sql<LobbyCategoryBanRow[]>`
       INSERT INTO lobby_category_bans (lobby_id, user_id, category_id)
@@ -478,8 +483,18 @@ export const lobbiesRepo = {
     `;
     if (existing) return existing;
     // No PK conflict and no row → the insert hit the (lobby_id, category_id)
-    // UNIQUE constraint (different user already banned this category). Surface
-    // it so the caller can pick another category.
-    throw new Error(`lobby_category_bans: category ${categoryId} already banned in lobby ${lobbyId}`);
+    // UNIQUE constraint: a different user (or a racing auto-ban) already banned
+    // this category. The category IS banned, which is the desired outcome —
+    // return that existing ban rather than throwing and wedging the draft.
+    const [foreign] = await sql<LobbyCategoryBanRow[]>`
+      SELECT * FROM lobby_category_bans
+      WHERE lobby_id = ${lobbyId} AND category_id = ${categoryId}
+      LIMIT 1
+    `;
+    if (foreign) return foreign;
+    // Neither lookup found a row — a transient state (e.g. the conflicting row
+    // was deleted between INSERT and SELECT). Surface it so the caller's
+    // recovery (auto-ban) can re-evaluate from a fresh read.
+    throw new Error(`lobby_category_bans: failed to record ban for category ${categoryId} in lobby ${lobbyId}`);
   },
 };

@@ -4,6 +4,7 @@ import { getRedisClient } from '../redis.js';
 import type { QuizballServer } from '../socket-server.js';
 import {
   matchDisconnectKey,
+  matchExitPendingKey,
   matchPresenceKey,
 } from '../match-keys.js';
 
@@ -17,6 +18,7 @@ export type MatchPresenceReason =
   | 'connecting_user'
   | 'presence_key'
   | 'user_room_socket'
+  | 'exit_pending'
   | 'disconnect_key'
   | 'stale_missing_signal';
 
@@ -35,6 +37,7 @@ export interface MatchPresenceResolution<Player extends MatchPresencePlayer> {
   roomSocketUserIds: string[];
   presenceKeyUserIds: string[];
   disconnectKeyUserIds: string[];
+  exitPendingUserIds: string[];
   matchSocketCount: number | null;
 }
 
@@ -114,6 +117,7 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
 
   const presenceKeyUserIds = new Set<string>();
   const disconnectKeyUserIds = new Set(disconnectedOptionUserIds);
+  const exitPendingUserIds = new Set<string>();
   if (redis?.isOpen) {
     const presenceResults = await Promise.all(
       userIds.map((userId) => redis.exists(matchPresenceKey(matchId, userId)))
@@ -121,9 +125,13 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     const disconnectResults = await Promise.all(
       userIds.map((userId) => redis.exists(matchDisconnectKey(matchId, userId)))
     );
+    const exitPendingResults = await Promise.all(
+      userIds.map((userId) => redis.exists(matchExitPendingKey(matchId, userId)))
+    );
     userIds.forEach((userId, index) => {
       if (presenceResults[index] === 1) presenceKeyUserIds.add(userId);
       if (disconnectResults[index] === 1) disconnectKeyUserIds.add(userId);
+      if (exitPendingResults[index] === 1) exitPendingUserIds.add(userId);
     });
   }
 
@@ -168,6 +176,11 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     // online (e.g. token-refresh reconnect that never rejoined the match),
     // but never overrides their own explicit disconnect marker.
     if (userRoomSocketUserIds.has(player.user_id) && !explicitlyDisconnected) reasons.push('user_room_socket');
+    // A player who safely left while their opponent was already in disconnect
+    // grace counts as present-by-proxy until that grace resolves. If the
+    // opponent comes back, the resume path clears this marker and gives the
+    // leaver their own grace instead.
+    if (exitPendingUserIds.has(player.user_id) && !explicitlyDisconnected) reasons.push('exit_pending');
 
     const present = reasons.length > 0;
     if (explicitlyDisconnected) reasons.push('disconnect_key');
@@ -190,6 +203,7 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     roomSocketUserIds: [...roomPresence.userIds],
     presenceKeyUserIds: [...presenceKeyUserIds],
     disconnectKeyUserIds: [...disconnectKeyUserIds],
+    exitPendingUserIds: [...exitPendingUserIds],
     matchSocketCount: roomPresence.socketCount,
   };
 }

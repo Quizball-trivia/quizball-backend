@@ -19,6 +19,7 @@ import {
 } from '../match-flow.js';
 import {
   matchDisconnectKey,
+  matchExitPendingKey,
   matchForfeitPendingUserKey,
   matchGraceKey,
   matchPauseKey,
@@ -78,6 +79,10 @@ import {
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { fetchUserRoomSockets, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
+import {
+  findOpponentInDisconnectGrace,
+  markExcusedExitPending,
+} from './match-excused-exit.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
@@ -108,6 +113,7 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
     rankedAiMatchKey(matchId),
     ...roster.flatMap((player) => [
       matchDisconnectKey(matchId, player.user_id),
+      matchExitPendingKey(matchId, player.user_id),
       matchPresenceKey(matchId, player.user_id),
       matchReconnectCountKey(matchId, player.user_id),
     ]),
@@ -345,7 +351,27 @@ export async function handleMatchLeave(
         });
         return;
       }
-      if (resolveMatchVariant(activeMatch.state_payload, activeMatch.mode) === 'friendly_party_quiz') {
+      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+      if (variant !== 'friendly_party_quiz') {
+        const disconnectedOpponentId = await findOpponentInDisconnectGrace(
+          activeMatch.id,
+          userId,
+          participants
+        );
+        if (disconnectedOpponentId) {
+          await markExcusedExitPending({
+            matchId: activeMatch.id,
+            userId,
+            opponentId: disconnectedOpponentId,
+            source: 'match_leave',
+          });
+          socket.leave(`match:${activeMatch.id}`);
+          socket.data.matchId = undefined;
+          return;
+        }
+      }
+
+      if (variant === 'friendly_party_quiz') {
         const partyState = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
         if (isPartyQuizDropped(partyState, userId)) {
           const payload = buildPartyDropoutPayload(activeMatch.id, 'disconnect_timeout');
@@ -445,6 +471,7 @@ export async function handleMatchRejoin(
 
       const redis = getRedisClient();
       if (redis) {
+        await redis.del(matchExitPendingKey(match.id, userId));
         await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
       }
 
@@ -616,6 +643,34 @@ export async function resumePausedMatch(
       graceMs,
       remainingReconnects,
     });
+    return;
+  }
+
+  const exitPendingExists = await Promise.all(
+    roster.map((player) => redis.exists(matchExitPendingKey(matchId, player.user_id)))
+  );
+  const exitPendingUserIds = roster
+    .filter((player, index) => player.user_id !== userId && exitPendingExists[index] === 1)
+    .map((player) => player.user_id);
+  if (exitPendingUserIds.length > 0) {
+    await redis.del(matchGraceKey(matchId));
+    for (const exitPendingUserId of exitPendingUserIds) {
+      await redis.del(matchExitPendingKey(matchId, exitPendingUserId));
+      const pauseResult = await pauseMatchForDisconnectedPlayer(io, matchId, exitPendingUserId);
+      if (!pauseResult.finalized) {
+        await emitRejoinAvailableToUser(
+          io,
+          match,
+          exitPendingUserId,
+          pauseResult.graceMs,
+          pauseResult.remainingReconnects
+        );
+      }
+    }
+    logger.info(
+      { matchId, rejoinedUserId: userId, exitPendingUserIds },
+      'Opponent rejoined during grace; converted excused exits into normal disconnect grace'
+    );
     return;
   }
 

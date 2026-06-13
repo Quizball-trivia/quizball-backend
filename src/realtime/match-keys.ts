@@ -10,6 +10,10 @@ export function matchDisconnectKey(matchId: string, userId: string): string {
   return `match:disconnect:${matchId}:${userId}`;
 }
 
+export function matchExitPendingKey(matchId: string, userId: string): string {
+  return `match:exit_pending:${matchId}:${userId}`;
+}
+
 export function matchPauseKey(matchId: string): string {
   return `match:pause:${matchId}`;
 }

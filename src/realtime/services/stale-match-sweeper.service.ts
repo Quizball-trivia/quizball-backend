@@ -9,6 +9,7 @@ import { deleteMatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import {
   matchDisconnectKey,
+  matchExitPendingKey,
   matchGraceKey,
   matchPauseKey,
   matchPresenceKey,
@@ -45,6 +46,7 @@ async function cleanupMatchRedisKeys(matchId: string, userIds: string[]): Promis
     rankedAiMatchKey(matchId),
     ...userIds.flatMap((userId) => [
       matchDisconnectKey(matchId, userId),
+      matchExitPendingKey(matchId, userId),
       matchPresenceKey(matchId, userId),
       matchReconnectCountKey(matchId, userId),
     ]),

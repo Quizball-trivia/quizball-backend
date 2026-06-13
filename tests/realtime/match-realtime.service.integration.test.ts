@@ -578,6 +578,51 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
   });
 
+  it('S15 safe-leave: match:leave while opponent is in grace does not self-forfeit', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 5_000));
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(fakeRedisStore.values.has('match:exit_pending:m1:u1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+    expect(fakeRedisStore.values.get('match:disconnect:m1:u2')).toBeTruthy();
+    expect(socket.leave).toHaveBeenCalledWith('match:m1');
+    expect(socket.data.matchId).toBeUndefined();
+    expect(socket.emit).not.toHaveBeenCalledWith('match:rejoin_available', expect.anything());
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalled();
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15 safe-leave: match:forfeit while opponent is in grace becomes an excused exit', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 5_000));
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(fakeRedisStore.values.has('match:exit_pending:m1:u1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+    expect(fakeRedisStore.values.get('match:disconnect:m1:u2')).toBeTruthy();
+    expect(socket.leave).toHaveBeenCalledWith('match:m1');
+    expect(socket.data.matchId).toBeUndefined();
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalled();
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
   it('S15 reload race: a fresh replacement socket does not suppress pause and gets resume countdown', async () => {
     vi.useFakeTimers();
     try {
@@ -2003,6 +2048,137 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
     expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
     expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15e safe-leave: opponent rejoin converts an excused exit into normal grace for the leaver', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const socket = createSocketMock('u2');
+    const io = createIoWithUserSocket('u2', socket);
+    const nowIso = new Date().toISOString();
+    const roomEvents: Array<{ room: string; event: string; payload: unknown }> = [];
+    (io.to as unknown as ReturnType<typeof vi.fn>).mockImplementation((room: string) => ({
+      emit: (event: string, payload?: unknown) => {
+        roomEvents.push({ room, event, payload });
+      },
+    }));
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 1_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 5_000));
+    fakeRedisStore.values.set('match:exit_pending:m1:u1', JSON.stringify({ opponentId: 'u2' }));
+
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+      },
+      ranked_context: null,
+    });
+
+    await matchRealtimeService.handleMatchRejoin(io, socket, 'm1');
+
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u2')).toBe(false);
+    expect(fakeRedisStore.values.has('match:exit_pending:m1:u1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+    expect(roomEvents).toContainEqual({
+      room: 'user:u1',
+      event: 'match:rejoin_available',
+      payload: expect.objectContaining({ matchId: 'm1', graceMs: 60_000 }),
+    });
+    expect(roomEvents).toContainEqual({
+      room: 'user:u2',
+      event: 'match:opponent_disconnected',
+      payload: expect.objectContaining({ matchId: 'm1', opponentId: 'u1' }),
+    });
+    expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
+    expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15e safe-leave: grace expiry treats exit_pending as present and forfeits the original disconnector', async () => {
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    const io = createIoMock();
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 65_000));
+    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 65_000));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 65_000));
+    fakeRedisStore.values.set('match:exit_pending:m1:u1', JSON.stringify({ opponentId: 'u2' }));
+    getMatchMock
+      .mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 4,
+        total_questions: 12,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'ranked_sim',
+          winnerDecisionMethod: null,
+        },
+        ranked_context: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 4,
+        total_questions: 12,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'ranked_sim',
+          winnerDecisionMethod: null,
+        },
+        ranked_context: null,
+      })
+      .mockResolvedValue({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'completed',
+        current_q_index: 4,
+        total_questions: 12,
+        started_at: nowIso,
+        ended_at: nowIso,
+        winner_user_id: 'u1',
+        lobby_id: 'l1',
+        state_payload: {
+          variant: 'ranked_sim',
+          winnerDecisionMethod: 'forfeit',
+        },
+        ranked_context: null,
+      });
+
+    await resolveExpiredGraceWindow(io, 'm1', 'u2');
+
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u1');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u2')).toBe(false);
+    expect(fakeRedisStore.values.has('match:exit_pending:m1:u1')).toBe(false);
   });
 
   it('S15f: leave during halftime still enters ranked pause/rejoin flow', async () => {

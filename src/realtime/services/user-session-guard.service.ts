@@ -14,6 +14,7 @@ import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types
 import { withSpan } from '../../core/tracing.js';
 import {
   matchDisconnectKey,
+  matchExitPendingKey,
   matchGraceKey,
   matchPauseKey,
   matchPresenceKey,
@@ -88,6 +89,7 @@ function rankedMatchCleanupKeys(matchId: string, userIds: string[]): string[] {
     rankedAiMatchKey(matchId),
     ...userIds.flatMap((playerUserId) => [
       matchDisconnectKey(matchId, playerUserId),
+      matchExitPendingKey(matchId, playerUserId),
       matchPresenceKey(matchId, playerUserId),
       matchReconnectCountKey(matchId, playerUserId),
     ]),

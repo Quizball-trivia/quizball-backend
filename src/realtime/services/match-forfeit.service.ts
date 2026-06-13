@@ -16,6 +16,7 @@ import { getRedisClient } from '../redis.js';
 import {
   lastMatchKey,
   matchDisconnectKey,
+  matchExitPendingKey,
   matchForfeitPendingUserKey,
   matchGraceKey,
   matchPauseKey,
@@ -34,6 +35,10 @@ import {
 } from './match-final-results.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
+import {
+  findOpponentInDisconnectGrace,
+  markExcusedExitPending,
+} from './match-excused-exit.service.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 const FORFEIT_PENDING_TTL_SEC = 60;
@@ -346,6 +351,25 @@ export async function handleMatchForfeit(
       }
 
       if (variant !== 'friendly_party_quiz') {
+        const disconnectedOpponentId = await findOpponentInDisconnectGrace(
+          activeMatch.id,
+          userId,
+          roster
+        );
+        if (disconnectedOpponentId) {
+          await markExcusedExitPending({
+            matchId: activeMatch.id,
+            userId,
+            opponentId: disconnectedOpponentId,
+            source: 'match_forfeit',
+          });
+          socket.leave(`match:${activeMatch.id}`);
+          socket.data.matchId = undefined;
+          return;
+        }
+      }
+
+      if (variant !== 'friendly_party_quiz') {
         cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
         cancelPossessionHalftimeTimer(activeMatch.id);
       }
@@ -383,6 +407,7 @@ export async function handleMatchForfeit(
         matchGraceKey(activeMatch.id),
         ...roster.flatMap((player) => [
           matchDisconnectKey(activeMatch.id, player.user_id),
+          matchExitPendingKey(activeMatch.id, player.user_id),
           matchPresenceKey(activeMatch.id, player.user_id),
           matchReconnectCountKey(activeMatch.id, player.user_id),
         ]),

@@ -166,8 +166,44 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   cacheSnapshot?: MatchCache | null;
   disconnectedUserIds: string[];
   source: string;
+  // When the forfeiter is already DEFINITIVE (e.g. they exceeded the reconnect
+  // limit), pass their id here. The resolver then forfeits THAT player directly,
+  // skipping the presence-based fork. This is critical: a player who exceeded
+  // the limit must lose even if a racing reconnect makes them look "present"
+  // again, and even when the opponent is an AI (whose synthetic presence can
+  // leave the presence fork unable to isolate a single absent player) — that
+  // race let a winning, limit-breaking player WIN from progress instead of
+  // forfeiting (the ranked-vs-AI reconnect_limit bug).
+  definiteForfeiterUserId?: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
-  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source } = params;
+  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source, definiteForfeiterUserId } = params;
+
+  // Definitive-forfeiter fast path: the caller already knows who must lose
+  // (e.g. reconnect-limit exceeded). Forfeit them directly — do NOT re-derive
+  // absence from presence, which is racy (a just-in-time reconnect clears the
+  // disconnect marker) and unreliable vs an AI opponent. The opponent (human or
+  // AI) is the winner.
+  if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
+    const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
+    const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
+    for (const player of presentForPending) {
+      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+    }
+    const finalized = await finalizeMatchAsForfeit({
+      matchId: match.id,
+      forfeitingUserId: definiteForfeiterUserId,
+      activeMatch: match,
+      cacheSnapshot,
+      cleanupRedisKeys: possessionTerminalCleanupKeys(match.id, roster),
+    });
+    if (!finalized.completed) return { finalized: false, abandoned: false };
+    await emitForfeitFinalResults(io, match.id, finalized.resultVersion);
+    logger.info(
+      { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
+      'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
+    );
+    return { finalized: true, abandoned: false };
+  }
 
   // Forfeit-first: a player who disconnected and never came back must always
   // lose by forfeit, no matter what the score/progress says. The player who
@@ -1026,6 +1062,9 @@ export async function pauseMatchForDisconnectedPlayer(
       cacheSnapshot: cache,
       disconnectedUserIds: [userId],
       source: 'reconnect_limit',
+      // The reconnect limit was exceeded by `userId` — they MUST forfeit, even
+      // if a racing reconnect makes them look present or the opponent is an AI.
+      definiteForfeiterUserId: userId,
     });
     if (resolved.finalized) {
       await redis.del(matchForfeitPendingUserKey(userId));

@@ -487,7 +487,13 @@ async function maybePickQuestionForState(
 
   const pickValidCandidate = async (
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
-    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean; excludeSeen?: boolean }
+    opts?: {
+      allowImageMcqs?: boolean;
+      dropReservedExclusion?: boolean;
+      excludeSeen?: boolean;
+      /** Exhaustion fallback: order the repeat by least-recently-seen. */
+      leastRecent?: boolean;
+    }
   ): Promise<PickedQuestion | null> => {
     const exclude = [
       ...(opts?.dropReservedExclusion ? [] : reservedExclusion),
@@ -500,6 +506,7 @@ async function maybePickQuestionForState(
       questionTypes: [questionType],
       excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
+      leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
     return pickFirstValidCandidate(rows, questionType, {
@@ -510,12 +517,13 @@ async function maybePickQuestionForState(
     });
   };
 
-  // Try first WITH the seen-history exclusion; if the pool is dry after it (thin
-  // category fully seen), retry WITHOUT it so the match never stalls — a repeat
-  // beats no question.
+  // Try first WITH the seen-history exclusion. If the pool is dry after it (a
+  // tiny category fully seen), retry WITHOUT the exclusion but ordered by
+  // LEAST-recently-seen — show the question they saw longest ago, never a random
+  // recent repeat, and never stall.
   let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen: recentlySeenIds.length > 0 });
   if (!picked && recentlySeenIds.length > 0) {
-    picked = await pickValidCandidate(preferredDifficulties);
+    picked = await pickValidCandidate(preferredDifficulties, { leastRecent: true });
   }
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(['easy', 'medium', 'hard']);

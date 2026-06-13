@@ -263,6 +263,14 @@ export const matchQuestionsRepo = {
 
   async getRandomQuestionCandidatesForMatch(params: RandomQuestionForMatchParams & {
     limit?: number;
+    /**
+     * Exhaustion fallback: when the unseen-question pool is empty (a tiny
+     * category fully seen), pass the match's human user ids here to order the
+     * (unavoidable) repeat by LEAST-recently-seen first — show the question they
+     * saw longest ago, not a random recent repeat. Only set on the fallback
+     * path; the normal pick leaves this undefined and stays a plain RANDOM().
+     */
+    leastRecentForUserIds?: string[];
   }): Promise<RandomQuestionCandidate[]> {
     return withSpan('db.matches.getRandomQuestionCandidatesForMatch', {
       'db.operation.name': 'select',
@@ -300,12 +308,33 @@ export const matchQuestionsRepo = {
         values.push(params.excludeQuestionIds);
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
       }
+
+      // Exhaustion fallback: order the unavoidable repeat by least-recently-seen
+      // (oldest first), so a fully-seen tiny category shows the question they saw
+      // longest ago rather than a random recent repeat. A correlated subselect
+      // for MAX(shown_at) by these users; only added when the caller opts in, so
+      // the normal RANDOM() pick keeps zero extra cost.
+      let leastRecentSelect = '';
+      let orderBy = `ORDER BY ${RANDOM_ORDER_SQL}`;
+      if (params.leastRecentForUserIds?.length) {
+        values.push(params.leastRecentForUserIds);
+        const uidParam = `$${values.length}`;
+        leastRecentSelect = `,
+          (SELECT max(mq2.shown_at)
+             FROM match_questions mq2
+             JOIN match_players mp2 ON mp2.match_id = mq2.match_id
+            WHERE mq2.question_id = q.id
+              AND mp2.user_id = ANY(${uidParam}::uuid[])) AS last_seen_at`;
+        // NULLS FIRST: a question never seen by these users still wins outright.
+        orderBy = `ORDER BY last_seen_at ASC NULLS FIRST, ${RANDOM_ORDER_SQL}`;
+      }
+
       values.push(params.limit ?? 1);
       const limitPlaceholder = `$${values.length}`;
 
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
-        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload
+        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload${leastRecentSelect}
         FROM questions q
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
@@ -324,7 +353,7 @@ export const matchQuestionsRepo = {
             WHERE mq.match_id = $1
               AND mq.question_id = q.id
           )
-        ORDER BY ${RANDOM_ORDER_SQL}
+        ${orderBy}
         LIMIT ${limitPlaceholder}
         `,
         values,

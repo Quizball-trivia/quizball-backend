@@ -6,7 +6,6 @@ import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { deleteMatchCache } from '../match-cache.js';
-import { completePossessionMatchFromProgress } from '../possession-completion.js';
 import { getRedisClient } from '../redis.js';
 import {
   matchDisconnectKey,
@@ -17,12 +16,7 @@ import {
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
-import {
-  buildFinalResultsPayload,
-  emitFinalResultsToMatchParticipants,
-} from './match-final-results.service.js';
-import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { resolveOrphanPossessionMatchTerminal } from './match-orphan-resolver.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 // How long a match may sit in 'active' with no state write before it is
@@ -94,84 +88,22 @@ async function resolveStaleMatch(io: QuizballServer, match: MatchRow): Promise<v
     return;
   }
 
-  const progressResult = await completePossessionMatchFromProgress(io, match.id, 'stale_match_sweeper');
-  if (progressResult.completed) {
-    await cleanupMatchRedisKeys(match.id, userIds);
-    logger.info(
-      {
-        matchId: match.id,
-        mode: match.mode,
-        winnerId: progressResult.winnerId,
-        decisionBasis: progressResult.decisionBasis,
-      },
-      'Stale sweeper completed orphaned match from existing progress'
-    );
-    return;
-  }
-  if (progressResult.reason === 'lock_not_acquired' || progressResult.reason === 'not_active') {
-    return;
-  }
-
-  const presence = await resolveMatchPresence(io, match.id, roster, { staleCleanup: true });
-  const absentPlayers = presence.absentPlayers;
-  const presentPlayers = presence.presentPlayers;
-
-  if (absentPlayers.length !== 1 || presentPlayers.length === 0) {
-    // No exactly-one absent loser with a clear present counterpart — void it.
-    const abandoned = await abandonMatchWithCompleteLock(match.id);
-    if (!abandoned.abandoned && abandoned.reason === 'lock_not_acquired') return;
-    await cleanupMatchRedisKeys(match.id, userIds);
-    logger.info(
-      {
-        matchId: match.id,
-        mode: match.mode,
-        rosterSize: roster.length,
-        absentUserIds: absentPlayers.map((player) => player.user_id),
-        presentUserIds: presentPlayers.map((player) => player.user_id),
-      },
-      'Stale sweeper abandoned orphaned match (no clear absent loser)'
-    );
-    return;
-  }
-
-  // One side is absent and a counterpart is still around: forfeit the absent
-  // player so the present side (human or AI) is credited the win.
-  const forfeitingUserId = absentPlayers[0].user_id;
-  const finalized = await finalizeMatchAsForfeit({
-    matchId: match.id,
-    forfeitingUserId,
-    activeMatch: match,
-    cleanupRedisKeys: [
-      matchPauseKey(match.id),
-      matchGraceKey(match.id),
-      matchResumeCountdownKey(match.id),
-      rankedAiMatchKey(match.id),
-      ...userIds.flatMap((userId) => [
-        matchDisconnectKey(match.id, userId),
-        matchPresenceKey(match.id, userId),
-        matchReconnectCountKey(match.id, userId),
-      ]),
-    ],
+  // FORFEIT-FIRST (shared with the session guard and consistent with the live
+  // disconnect path, #72): the absent player loses by forfeit when a present
+  // counterpart exists; progress-based completion is only the fallback when
+  // presence cannot isolate a single absent loser. Previously the sweeper
+  // tried progress completion FIRST, so a disconnector ahead on points could
+  // still win whenever the durable grace timer was lost and the sweeper
+  // resolved the match instead.
+  const resolution = await resolveOrphanPossessionMatchTerminal({
+    io,
+    match,
+    roster,
+    source: 'stale_match_sweeper',
   });
-
-  if (!finalized.completed) {
-    // Couldn't finalize (already resolved or lock contention) — leave it; the
-    // next sweep retries.
-    return;
-  }
-
-  const finalPayload = await buildFinalResultsPayload(match.id, finalized.resultVersion);
-  if (finalPayload) {
-    await emitFinalResultsToMatchParticipants(io, match.id, finalPayload);
-  }
   logger.info(
-    {
-      matchId: match.id,
-      mode: match.mode,
-      forfeitingUserId,
-      winnerId: finalized.winnerId,
-    },
-    'Stale sweeper forfeited orphaned match'
+    { matchId: match.id, mode: match.mode, resolution },
+    'Stale sweeper resolved orphaned match'
   );
 }
 

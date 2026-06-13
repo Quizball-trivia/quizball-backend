@@ -181,11 +181,23 @@ describe('stale-match-sweeper', () => {
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
-  it('completes stale matches from existing progress before presence/forfeit checks', async () => {
+  it('checks presence FIRST and only completes from progress when no single absent loser exists', async () => {
+    // Forfeit-first parity with the live disconnect path (#72): presence must
+    // be consulted before any progress-based decision so a disconnector ahead
+    // on points can never win via the sweeper.
     const stale = match();
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('u1', 1), player('u2', 2)]);
+    // Presence cannot isolate one absent loser (both absent) → progress fallback.
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [],
+      absentPlayers: [player('u1', 1), player('u2', 2)],
+      roomSocketUserIds: [],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 0,
+    });
     completePossessionMatchFromProgressMock.mockResolvedValue({
       matchId: 'match-1',
       winnerId: 'u1',
@@ -196,10 +208,48 @@ describe('stale-match-sweeper', () => {
 
     await runSweep(io);
 
+    expect(resolveMatchPresenceMock).toHaveBeenCalledWith(
+      io,
+      'match-1',
+      expect.anything(),
+      expect.objectContaining({ staleCleanup: true, includeUserRoomSockets: true })
+    );
+    expect(resolveMatchPresenceMock.mock.invocationCallOrder[0]).toBeLessThan(
+      completePossessionMatchFromProgressMock.mock.invocationCallOrder[0]
+    );
     expect(completePossessionMatchFromProgressMock).toHaveBeenCalledWith(io, 'match-1', 'stale_match_sweeper');
-    expect(resolveMatchPresenceMock).not.toHaveBeenCalled();
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+  });
+
+  it('forfeits the absent player WITHOUT consulting progress, even when progress could decide', async () => {
+    const stale = match();
+    listStaleActiveMatchesMock.mockResolvedValue([stale]);
+    getMatchMock.mockResolvedValue(stale);
+    listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('human-2', 2)]);
+    resolveMatchPresenceMock.mockResolvedValue({
+      presentPlayers: [player('human-2', 2)],
+      absentPlayers: [player('human-1', 1)],
+      roomSocketUserIds: ['human-2'],
+      presenceKeyUserIds: [],
+      disconnectKeyUserIds: [],
+      matchSocketCount: 1,
+    });
+    // Progress WOULD pick the absent points-leader — it must never be asked.
+    completePossessionMatchFromProgressMock.mockResolvedValue({
+      matchId: 'match-1',
+      winnerId: 'human-1',
+      resultVersion: 1,
+      completed: true,
+      decisionBasis: 'total_points',
+    });
+
+    await runSweep(io);
+
+    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-1', forfeitingUserId: 'human-1' })
+    );
+    expect(completePossessionMatchFromProgressMock).not.toHaveBeenCalled();
   });
 
   it('forfeits the absent human when an AI counterpart is present', async () => {

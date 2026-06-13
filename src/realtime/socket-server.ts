@@ -29,6 +29,7 @@ import {
   type RealtimeTimerHandlers,
 } from './realtime-timer-scheduler.js';
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
+import { scheduleBootMatchTimerRearm } from './services/boot-timer-rearm.service.js';
 import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
 import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
 import {
@@ -327,6 +328,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   startRealtimeTimerScheduler(io, buildRealtimeTimerHandlers());
 
   startStaleMatchSweeper(io);
+
+  // A deploy can land inside an in-process round-transition window (ready-ack
+  // gates, inter-question delay) — re-arm timers for every active match so no
+  // match silently freezes until the 15-minute sweeper.
+  scheduleBootMatchTimerRearm(io);
 
   rankedMatchmakingService.start(io);
 

@@ -4,6 +4,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 
 const resolveRoundMock = vi.fn();
 const sendMatchQuestionMock = vi.fn();
+const deferPossessionQuestionTimerForPauseMock = vi.fn();
 const resumePossessionMatchQuestionMock = vi.fn();
 const ensurePossessionActiveTimersMock = vi.fn();
 const resumePartyQuizQuestionMock = vi.fn();
@@ -71,10 +72,36 @@ const fakeRedis = {
     // assert on the realtime:timers zset.
     return 0;
   },
+  multi() {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain = {
+      set: (key: string, value: string, options?: { EX?: number; PX?: number; NX?: boolean }) => {
+        ops.push(() => fakeRedis.set(key, value, options));
+        return chain;
+      },
+      zAdd: (key: string, entries: Array<{ score: number; value: string }>) => {
+        ops.push(() => fakeRedis.zAdd(key, entries));
+        return chain;
+      },
+      exec: async () => {
+        const results: unknown[] = [];
+        for (const op of ops) results.push(await op());
+        return results;
+      },
+    };
+    return chain;
+  },
   async zRem(_key: string, _member: string): Promise<number> {
     return 0;
   },
   async eval(_script: string, payload: { keys: string[]; arguments: string[] }): Promise<number> {
+    if (_script.includes('ZSCORE')) {
+      // Scheduler cleanup script: no zset support in this fake → member is
+      // never scheduled → delete the payload key (keys[1]).
+      const payloadKey = payload.keys[1];
+      if (payloadKey) fakeRedisStore.values.delete(payloadKey);
+      return 1;
+    }
     const key = payload.keys[0];
     const token = payload.arguments[0];
     if (!key || !token) return 0;
@@ -270,6 +297,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', async (importOriginal) =>
     emitPossessionStateToSocket: (...args: unknown[]) => emitPossessionStateToSocketMock(...args),
     resumePossessionMatchQuestion: (...args: unknown[]) => resumePossessionMatchQuestionMock(...args),
     ensurePossessionActiveTimers: (...args: unknown[]) => ensurePossessionActiveTimersMock(...args),
+    deferPossessionQuestionTimerForPause: (...args: unknown[]) => deferPossessionQuestionTimerForPauseMock(...args),
   };
 });
 
@@ -530,6 +558,24 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     const toCalls = (io.to as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
+  });
+
+  it('S15c: possession pause defers the question timeout backstop instead of cancelling it', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+    fakeRedis.isOpen = true;
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    // The paused round must KEEP a durable resolver: the question timer is
+    // pushed back (90s backstop), never deleted. Cancelling it on pause is
+    // what let matches freeze forever when the resume path was lost (prod
+    // clue_chain freeze audit, Jun 2026).
+    expect(deferPossessionQuestionTimerForPauseMock).toHaveBeenCalledWith('m1', 0, 90_000);
+    expect(cancelMatchQuestionTimer).not.toHaveBeenCalled();
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
   });
 
   it('S15 reload race: a fresh replacement socket does not suppress pause and gets resume countdown', async () => {

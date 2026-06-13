@@ -30,6 +30,7 @@ export default defineConfig({
       'tests/regression/match-boot.test.ts',
       'tests/regression/clean-match-invariants.test.ts',
       'tests/regression/disconnect-scenarios.test.ts',
+      'tests/regression/clues-freeze-backstop.test.ts',
       'tests/regression/orphan-sweeper-attribution.test.ts',
       'tests/regression/penalty-shootout.test.ts',
       'tests/regression/halftime-uiready-withheld.test.ts',

@@ -102,6 +102,41 @@ export function clearQuestionTimer(matchId: string, qIndex: number): void {
   });
 }
 
+/**
+ * Re-arm (or push back) the durable question-timeout timer for a round that is
+ * NOT concluded yet, instead of leaving it with no resolver at all.
+ *
+ * Two callers:
+ *  - pause-on-disconnect: previously the timer was CANCELLED on pause and only
+ *    a successful resume re-armed it. If the resume never happened the round
+ *    had no auto-resolve left — the match froze silently until the stale
+ *    sweeper (observed in prod as matches dying on 50s clue_chain questions
+ *    at ~4× the MCQ rate; the long window maximizes disconnect exposure).
+ *  - timeout fires that no-op: the scheduler pops the ZSET member BEFORE the
+ *    handler runs, so a no-op return (paused / lock busy / transient cache
+ *    miss) consumes the timer permanently. The resolver re-arms it here.
+ *
+ * scheduleRealtimeTimer overwrites the member's score+payload, so deferring an
+ * already-armed timer just moves it; a later resume rebases it again.
+ */
+export async function deferQuestionTimer(matchId: string, qIndex: number, delayMs: number): Promise<void> {
+  const key = questionTimerKey(matchId, qIndex);
+  const dueAt = new Date(Date.now() + delayMs);
+  try {
+    // Awaited (not fire-and-forget): when called from inside a fired timer's
+    // handler, the re-armed member+payload must be fully persisted before the
+    // scheduler's post-handling cleanup runs, or the cleanup could observe the
+    // member as unscheduled and delete the payload we just wrote.
+    await scheduleRealtimeTimer('possession_question', key, dueAt, {
+      kind: 'possession_question',
+      matchId,
+      qIndex,
+    });
+  } catch (error) {
+    logger.error({ error, matchId, qIndex, delayMs }, 'Failed to defer possession question timer');
+  }
+}
+
 function scheduleQuestionTimeout(
   _io: QuizballServer,
   matchId: string,

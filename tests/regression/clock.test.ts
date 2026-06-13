@@ -23,7 +23,24 @@ class FakeRedis {
     this.zsets.set(k, z); return e.length;
   }
   async zRem(k: string, m: string) { return this.zsets.get(k)?.delete(m) ? 1 : 0; }
+  async zScore(k: string, m: string) { return this.zsets.get(k)?.get(m) ?? null; }
+  multi() {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain = {
+      set: (k: string, v: string, o?: { NX?: boolean }) => { ops.push(() => this.set(k, v, o)); return chain; },
+      zAdd: (k: string, e: Array<{ score: number; value: string }>) => { ops.push(() => this.zAdd(k, e)); return chain; },
+      exec: async () => { const out: unknown[] = []; for (const op of ops) out.push(await op()); return out; },
+    };
+    return chain;
+  }
   async eval(script: string, p: { keys: string[]; arguments: string[] }) {
+    if (script.includes('ZSCORE')) {
+      const [zsetKey, payloadKey] = p.keys;
+      const [member] = p.arguments;
+      if (this.zsets.get(zsetKey)?.has(member)) return 0;
+      this.values.delete(payloadKey);
+      return 1;
+    }
     if (script.includes('ZRANGEBYSCORE')) {
       const z = this.zsets.get(p.keys[0]) ?? new Map<string, number>();
       const now = Number(p.arguments[0]);

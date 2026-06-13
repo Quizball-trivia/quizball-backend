@@ -140,7 +140,14 @@ async function processDueMember(member: string): Promise<void> {
   let handled = false;
   try {
     const payload = await readPayload(member);
-    if (!payload) return;
+    if (!payload) {
+      // The member was already popped from the ZSET; without a payload it can
+      // never be handled. This used to be a fully silent drop — log it so a
+      // lost timer (e.g. payload deleted by a concurrent fire's cleanup while
+      // a re-armed member was still pending) is at least visible in prod.
+      logger.warn({ member }, 'Realtime timer payload missing; dropping due timer');
+      return;
+    }
     await handleTimerPayload(member, payload);
     handled = true;
   } catch (error) {
@@ -150,9 +157,22 @@ async function processDueMember(member: string): Promise<void> {
     await releaseLock(timerLockKey(member), lock.token).catch(() => {});
     const redis = getRedisClient();
     if (handled && redis?.isOpen) {
-      await redis.del(timerPayloadKey(member)).catch((error) => {
+      // A handler may have re-armed this same member (e.g. a possession round
+      // resolve that no-oped re-defers its question timeout, or the halftime
+      // force-open rebasing its own deadline). In that case the member is back
+      // in the ZSET with a fresh payload — deleting the payload here would
+      // guarantee the re-armed fire gets silently dropped. The check and the
+      // delete MUST be one atomic step: a non-atomic zScore→del lets a
+      // concurrent re-arm land in between, leaving an armed member whose
+      // payload we just destroyed (observed with the halftime re-arm).
+      try {
+        await redis.eval(CLEANUP_PAYLOAD_IF_UNSCHEDULED_SCRIPT, {
+          keys: [TIMER_ZSET_KEY, timerPayloadKey(member)],
+          arguments: [member],
+        });
+      } catch (error) {
         logger.warn({ error, member }, 'Failed to clear realtime timer payload after processing');
-      });
+      }
     }
   }
 }
@@ -171,6 +191,16 @@ const POP_DUE_TIMERS_SCRIPT = `
     redis.call("ZREM", KEYS[1], unpack(items))
   end
   return items
+`;
+
+// Post-handling cleanup: delete the payload ONLY IF the member is not
+// scheduled (anymore). Atomic on purpose — see the comment at the call site.
+const CLEANUP_PAYLOAD_IF_UNSCHEDULED_SCRIPT = `
+  if redis.call("ZSCORE", KEYS[1], ARGV[1]) then
+    return 0
+  end
+  redis.call("DEL", KEYS[2])
+  return 1
 `;
 
 async function pollDueTimers(): Promise<void> {
@@ -242,8 +272,17 @@ export async function scheduleRealtimeTimer(
     return;
   }
 
-  await redis.set(timerPayloadKey(member), JSON.stringify(payload), { EX: TIMER_PAYLOAD_TTL_SEC });
-  await redis.zAdd(TIMER_ZSET_KEY, [{ score: dueAt.getTime(), value: member }]);
+  // Payload + ZSET membership must become visible atomically. With two
+  // separate roundtrips, processDueMember's post-handling cleanup (which
+  // checks zScore before deleting the payload) can interleave between the
+  // SET and the ZADD: it observes "member not scheduled", deletes the freshly
+  // written payload, and the ZADD then arms a timer that can never be handled
+  // (payload-missing drop at fire time). Observed with the halftime re-arm.
+  await redis
+    .multi()
+    .set(timerPayloadKey(member), JSON.stringify(payload), { EX: TIMER_PAYLOAD_TTL_SEC })
+    .zAdd(TIMER_ZSET_KEY, [{ score: dueAt.getTime(), value: member }])
+    .exec();
 }
 
 /** True if a timer for this kind+key is still scheduled (Redis or local fallback). */

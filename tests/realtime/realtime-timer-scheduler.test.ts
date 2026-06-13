@@ -42,7 +42,39 @@ class FakeRedis {
     return this.zsets.get(key)?.delete(member) ? 1 : 0;
   }
 
+  async zScore(key: string, member: string): Promise<number | null> {
+    return this.zsets.get(key)?.get(member) ?? null;
+  }
+
+  multi() {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain = {
+      set: (key: string, value: string, options?: RedisSetOptions) => {
+        ops.push(() => this.set(key, value, options));
+        return chain;
+      },
+      zAdd: (key: string, entries: Array<{ score: number; value: string }>) => {
+        ops.push(() => this.zAdd(key, entries));
+        return chain;
+      },
+      exec: async () => {
+        const results: unknown[] = [];
+        for (const op of ops) results.push(await op());
+        return results;
+      },
+    };
+    return chain;
+  }
+
   async eval(script: string, params: { keys: string[]; arguments: string[] }): Promise<unknown> {
+    if (script.includes('ZSCORE')) {
+      // Atomic "delete payload only if member unscheduled" cleanup.
+      const [zsetKey, payloadKey] = params.keys;
+      const [member] = params.arguments;
+      if (this.zsets.get(zsetKey)?.has(member)) return 0;
+      this.values.delete(payloadKey);
+      return 1;
+    }
     if (script.includes('ZRANGEBYSCORE')) {
       const zset = this.zsets.get(params.keys[0]) ?? new Map<string, number>();
       const now = Number(params.arguments[0]);
@@ -116,6 +148,54 @@ describe('realtime timer scheduler', () => {
       { kind: 'possession_question', matchId: 'm1', qIndex: 3 }
     );
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
+  });
+
+  it('keeps the payload when the handler re-arms the same member during processing', async () => {
+    const {
+      __realtimeTimerInternals,
+      scheduleRealtimeTimer,
+      startRealtimeTimerScheduler,
+    } = await import('../../src/realtime/realtime-timer-scheduler.js');
+
+    // Handler that re-arms its own member (the possession round resolver does
+    // this when a timeout fire no-ops: paused / lock busy / transient miss).
+    const handled = vi.fn(async () => {
+      await scheduleRealtimeTimer(
+        'possession_question',
+        'm1:3',
+        new Date(Date.now() + 5000),
+        { kind: 'possession_question', matchId: 'm1', qIndex: 3 }
+      );
+    });
+
+    startRealtimeTimerScheduler({} as QuizballServer, {
+      possession_question: handled,
+    });
+
+    await scheduleRealtimeTimer(
+      'possession_question',
+      'm1:3',
+      new Date(Date.now() + 1000),
+      { kind: 'possession_question', matchId: 'm1', qIndex: 3 }
+    );
+
+    const member = __realtimeTimerInternals.timerMember('possession_question', 'm1:3');
+    await vi.advanceTimersByTimeAsync(1000);
+    await __realtimeTimerInternals.pollDueTimers();
+
+    expect(handled).toHaveBeenCalledTimes(1);
+    // The re-armed member must survive post-processing cleanup: still in the
+    // ZSET with its fresh score AND with its payload intact, so the retry fire
+    // can actually be handled instead of being silently dropped.
+    expect(redis?.zsets.get(__realtimeTimerInternals.TIMER_ZSET_KEY)?.get(member)).toBe(Date.now() + 5000);
+    expect(redis?.values.get(__realtimeTimerInternals.timerPayloadKey(member))).toContain('"qIndex":3');
+
+    // And the retry fire is processed normally once due (handler no longer
+    // re-arms a second time here because vi.fn keeps re-arming — advance and
+    // confirm it fired again).
+    await vi.advanceTimersByTimeAsync(5000);
+    await __realtimeTimerInternals.pollDueTimers();
+    expect(handled).toHaveBeenCalledTimes(2);
   });
 
   it('persists a match_disconnect_forfeit timer in Redis and fires it when overdue', async () => {

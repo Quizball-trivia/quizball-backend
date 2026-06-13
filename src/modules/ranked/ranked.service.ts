@@ -102,7 +102,7 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
 }
 
 export function tierFromRp(rp: number): RankedTier {
-  if (rp >= 3200) return 'GOAT';
+  if (rp >= 5000) return 'GOAT';
   if (rp >= 2900) return 'Legend';
   if (rp >= 2600) return 'World-Class';
   if (rp >= 2200) return 'Captain';

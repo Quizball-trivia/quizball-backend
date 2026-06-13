@@ -12,6 +12,7 @@ export const notificationsController = {
     const result = await notificationsService.listForUser(req.user!.id, {
       limit: query.limit,
       before: query.before,
+      beforeId: query.beforeId,
     });
     res.json(result);
   },

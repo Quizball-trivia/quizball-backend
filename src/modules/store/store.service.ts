@@ -1074,13 +1074,16 @@ export const storeService = {
         return {
           walletAfter,
           inventoryApplied: appliedInventory,
+          appliedTicketsDelta,
         };
       });
 
       if (input.notify) {
+        // Notify with the delta that was actually committed (a ticket grant may
+        // be clamped by MAX_TICKETS), not the requested amount.
         await notifyWalletChange(input.userId, {
           coinsDelta,
-          ticketsDelta: result.walletAfter ? ticketsDelta : 0,
+          ticketsDelta: result.appliedTicketsDelta,
           reason: input.reason,
         });
       }

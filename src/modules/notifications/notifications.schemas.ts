@@ -29,6 +29,10 @@ export type Notification = z.infer<typeof notificationSchema>;
 export const listNotificationsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
   before: z.string().datetime().optional(),
+  // Tiebreaker for the (created_at, id) cursor — pass the id of the last row on
+  // the previous page alongside its created_at to avoid skipping same-timestamp
+  // rows. Optional; omitting it falls back to the timestamp-only filter.
+  beforeId: z.string().uuid().optional(),
 });
 
 export type ListNotificationsQuery = z.infer<typeof listNotificationsQuerySchema>;

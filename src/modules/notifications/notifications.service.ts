@@ -56,7 +56,7 @@ export const notificationsService = {
 
   async listForUser(
     userId: string,
-    options: { limit: number; before?: string }
+    options: { limit: number; before?: string; beforeId?: string }
   ): Promise<ListNotificationsResponse> {
     const [rows, unreadCount] = await Promise.all([
       notificationsRepo.listForUser(userId, options),
@@ -78,7 +78,10 @@ export const notificationsService = {
 
   async markAllRead(userId: string): Promise<number> {
     await notificationsRepo.markAllRead(userId);
-    emitNotificationUnreadCount(userId, 0);
-    return 0;
+    // Re-read rather than assuming 0: a concurrent notify() for the same user
+    // could insert an unread row between the update and this read.
+    const unreadCount = await notificationsRepo.unreadCount(userId);
+    emitNotificationUnreadCount(userId, unreadCount);
+    return unreadCount;
   },
 };

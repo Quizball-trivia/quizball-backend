@@ -40,14 +40,24 @@ export const notificationsRepo = {
 
   async listForUser(
     userId: string,
-    options: { limit: number; before?: string }
+    options: { limit: number; before?: string; beforeId?: string }
   ): Promise<NotificationRow[]> {
+    // Stable composite cursor (created_at, id): without the id tiebreaker, two
+    // rows sharing a created_at could straddle a page boundary and be skipped.
+    // `before` keeps the existing timestamp contract; `beforeId` (optional)
+    // disambiguates ties when paginating from a known row.
     return sql<NotificationRow[]>`
       SELECT *
       FROM notifications
       WHERE user_id = ${userId}
-        ${options.before ? sql`AND created_at < ${options.before}` : sql``}
-      ORDER BY created_at DESC
+        ${
+          options.before
+            ? options.beforeId
+              ? sql`AND (created_at, id) < (${options.before}::timestamptz, ${options.beforeId}::uuid)`
+              : sql`AND created_at < ${options.before}`
+            : sql``
+        }
+      ORDER BY created_at DESC, id DESC
       LIMIT ${options.limit}
     `;
   },

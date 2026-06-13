@@ -15356,6 +15356,15 @@
             "required": false,
             "name": "before",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "beforeId",
+            "in": "query"
           }
         ],
         "responses": {

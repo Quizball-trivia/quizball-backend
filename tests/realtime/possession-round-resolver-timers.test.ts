@@ -82,9 +82,10 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   },
 }));
 
+const insertMatchAnswerIfMissingMock = vi.fn(async () => undefined);
 vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   matchAnswersRepo: {
-    insertMatchAnswerIfMissing: vi.fn(async () => undefined),
+    insertMatchAnswerIfMissing: (...args: unknown[]) => insertMatchAnswerIfMissingMock(...args),
   },
 }));
 
@@ -331,5 +332,110 @@ describe('possession round resolver durable-timer survival (penalty-freeze regre
 
     expect(setMatchCacheMock).toHaveBeenCalled();
     expect(clearQuestionTimerMock).toHaveBeenCalledWith(MATCH_ID, Q_INDEX);
+  });
+});
+
+// G1/G2: the timeout backfill and per-player countdown read must stay isolated
+// per question KIND and per USER. A putInOrder timeout backfill must not carry a
+// countdown's foundAnswerIds (and vice versa), and each player's countdown
+// found-set must come from their OWN per-user key — never bleed into the other
+// seat or into a following put_in_order answer. These shape rules are what keep
+// a mid-match disconnect from corrupting the next round's scoring.
+describe('possession round resolver timeout backfill kind/user isolation', () => {
+  function putInOrderQuestion(): CachedQuestion {
+    return {
+      ...createQuestion(),
+      kind: 'putInOrder',
+      evaluation: {
+        kind: 'putInOrder',
+        direction: 'asc',
+        items: [
+          { id: 'i1', label: { en: 'A' }, sortValue: 1 },
+          { id: 'i2', label: { en: 'B' }, sortValue: 2 },
+        ],
+      } as unknown as CachedQuestion['evaluation'],
+    };
+  }
+
+  function countdownQuestion(): CachedQuestion {
+    return {
+      ...createQuestion(),
+      kind: 'countdown',
+      evaluation: {
+        kind: 'countdown',
+        answerGroups: [
+          { id: 'g1', displays: ['x'], accepted: ['x'] },
+          { id: 'g2', displays: ['y'], accepted: ['y'] },
+          { id: 'g3', displays: ['z'], accepted: ['z'] },
+        ],
+      } as unknown as CachedQuestion['evaluation'],
+    };
+  }
+
+  // The resolver clears cache.answers right before committing, so the resolved
+  // answer SHAPE is observed at the persistence seam (insertMatchAnswerIfMissing).
+  // The first persisted call per user is the backfilled/scored answer; we read
+  // its kind-specific fields (submittedOrderIds / foundAnswerIds) to prove no
+  // cross-kind or cross-seat bleed.
+  type PersistArg = { userId: string; answerPayload?: Record<string, unknown> };
+  function persistedFor(userId: string): Record<string, unknown> | undefined {
+    const call = insertMatchAnswerIfMissingMock.mock.calls.find(
+      (args) => (args[0] as PersistArg).userId === userId
+    );
+    return (call?.[0] as PersistArg | undefined)?.answerPayload;
+  }
+  async function flushFireAndForget(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    releaseLockMock.mockResolvedValue(true);
+    redisGetMock.mockResolvedValue(null);
+    rebuildCacheFromDBMock.mockResolvedValue(null);
+  });
+
+  it('G1: a put_in_order timeout backfill carries submittedOrderIds, not countdown found-ids', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(
+      createCache({ currentQuestion: putInOrderQuestion(), answers: {} })
+    );
+
+    await resolveRound(true);
+    await flushFireAndForget();
+
+    for (const userId of ['user-1', 'user-2']) {
+      const payload = persistedFor(userId);
+      expect(payload, `${userId} persisted`).toBeDefined();
+      // put_in_order backfill records an (empty) submitted order...
+      expect(payload?.submittedOrderIds).toEqual([]);
+      // ...and must NOT borrow the countdown shape (never an array of found ids).
+      expect(payload?.foundAnswerIds == null).toBe(true);
+    }
+  });
+
+  it('G2: each seat resolves from its OWN countdown found-set (no cross-seat leak)', async () => {
+    // Distinct per-user found-sets: seat 1 found 2, seat 2 found 0.
+    const { countdownGetFound } = await import('../../src/realtime/match-cache.js');
+    (countdownGetFound as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_matchId: string, userId: string) => (userId === 'user-1' ? ['g1', 'g2'] : [])
+    );
+    getMatchCacheOrRebuildMock.mockResolvedValue(
+      createCache({ currentQuestion: countdownQuestion(), answers: {} })
+    );
+
+    await resolveRound(true);
+    await flushFireAndForget();
+
+    const p1 = persistedFor('user-1');
+    const p2 = persistedFor('user-2');
+    // The crux: each seat's found-set is its OWN — seat 1's two finds never
+    // bleed into seat 2, and vice versa.
+    expect(p1?.foundAnswerIds).toEqual(['g1', 'g2']);
+    expect(p2?.foundAnswerIds).toEqual([]);
+    // Countdown answers must never carry the put_in_order shape.
+    expect(p1?.submittedOrderIds == null).toBe(true);
+    expect(p2?.submittedOrderIds == null).toBe(true);
   });
 });

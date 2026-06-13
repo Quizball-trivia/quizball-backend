@@ -10,6 +10,7 @@ import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.types.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getMatchCache, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
@@ -137,7 +138,10 @@ async function emitForfeitFinalResults(
   }
 }
 
-async function abandonPossessionTerminalMatch(
+// Exported for direct unit testing of the no-contest ticket-refund behavior
+// (the full undecidable→abandon path is impractical to drive end-to-end through
+// the cache/lock plumbing in an integration mock).
+export async function abandonPossessionTerminalMatch(
   io: QuizballServer,
   match: MatchRow,
   roster: PossessionTerminalPlayer[],
@@ -148,6 +152,34 @@ async function abandonPossessionTerminalMatch(
 
   cancelPossessionHalftimeTimer(match.id);
   await cleanupPossessionTerminalRedisKeys(match.id, roster);
+
+  // A ranked match that abandons as a no-contest (e.g. both players dropped and
+  // progress is undecidable) must refund every human's consumed ranked ticket —
+  // the same courtesy the single-forfeiter early-forfeit cancel already gives
+  // (match-forfeit.service.ts). Without this a round-1 double-drop silently
+  // costs both players a ticket. Best-effort; party-quiz uses its own flow.
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
+    const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
+    // Only refund players whose row resolved AND is explicitly human. An
+    // unresolved id (deleted/missing user) is excluded, not assumed human, so a
+    // ghost id is never passed to refundRankedTickets.
+    const humanUserIds = roster
+      .map((player) => rosterUsers.get(player.user_id))
+      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+      .map((user) => user.id);
+    if (humanUserIds.length > 0) {
+      try {
+        await storeService.refundRankedTickets(humanUserIds);
+      } catch (error) {
+        logger.warn(
+          { error, matchId: match.id, humanUserIds },
+          'Failed to refund ranked tickets on no-contest abandon'
+        );
+      }
+    }
+  }
+
   io.to(`match:${match.id}`).emit('error', {
     code: 'MATCH_ABANDONED',
     message: 'Match abandoned because it could not be resolved from active progress',
@@ -166,8 +198,44 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   cacheSnapshot?: MatchCache | null;
   disconnectedUserIds: string[];
   source: string;
+  // When the forfeiter is already DEFINITIVE (e.g. they exceeded the reconnect
+  // limit), pass their id here. The resolver then forfeits THAT player directly,
+  // skipping the presence-based fork. This is critical: a player who exceeded
+  // the limit must lose even if a racing reconnect makes them look "present"
+  // again, and even when the opponent is an AI (whose synthetic presence can
+  // leave the presence fork unable to isolate a single absent player) — that
+  // race let a winning, limit-breaking player WIN from progress instead of
+  // forfeiting (the ranked-vs-AI reconnect_limit bug).
+  definiteForfeiterUserId?: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
-  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source } = params;
+  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source, definiteForfeiterUserId } = params;
+
+  // Definitive-forfeiter fast path: the caller already knows who must lose
+  // (e.g. reconnect-limit exceeded). Forfeit them directly — do NOT re-derive
+  // absence from presence, which is racy (a just-in-time reconnect clears the
+  // disconnect marker) and unreliable vs an AI opponent. The opponent (human or
+  // AI) is the winner.
+  if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
+    const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
+    const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
+    for (const player of presentForPending) {
+      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+    }
+    const finalized = await finalizeMatchAsForfeit({
+      matchId: match.id,
+      forfeitingUserId: definiteForfeiterUserId,
+      activeMatch: match,
+      cacheSnapshot,
+      cleanupRedisKeys: possessionTerminalCleanupKeys(match.id, roster),
+    });
+    if (!finalized.completed) return { finalized: false, abandoned: false };
+    await emitForfeitFinalResults(io, match.id, finalized.resultVersion);
+    logger.info(
+      { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
+      'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
+    );
+    return { finalized: true, abandoned: false };
+  }
 
   // Forfeit-first: a player who disconnected and never came back must always
   // lose by forfeit, no matter what the score/progress says. The player who
@@ -1026,6 +1094,9 @@ export async function pauseMatchForDisconnectedPlayer(
       cacheSnapshot: cache,
       disconnectedUserIds: [userId],
       source: 'reconnect_limit',
+      // The reconnect limit was exceeded by `userId` — they MUST forfeit, even
+      // if a racing reconnect makes them look present or the opponent is an AI.
+      definiteForfeiterUserId: userId,
     });
     if (resolved.finalized) {
       await redis.del(matchForfeitPendingUserKey(userId));

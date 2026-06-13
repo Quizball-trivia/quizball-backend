@@ -110,6 +110,70 @@ describe('possession mixed-question sequencing', () => {
     expect(result.deadlineAt.toISOString()).toBe(new Date(resumedAtMs + 20_000).toISOString());
   });
 
+  // C1: the resume-timing math is question-kind agnostic when timestamps are
+  // intact — an mcq round resumed after a disconnect preserves its remaining
+  // answer window exactly like countdown/clues do (those two cases are already
+  // covered above; this closes the mcq gap so all live kinds are pinned).
+  it('preserves remaining mcq answer time when resuming after a disconnect', () => {
+    const state = createInitialPossessionState('ranked_sim');
+    const resumedAtMs = Date.UTC(2026, 3, 9, 12, 0, 0);
+    const shownAtMs = resumedAtMs - 8_000;
+    const deadlineAtMs = resumedAtMs + 2_000;
+    const pauseStartedAtMs = resumedAtMs - 1_500;
+
+    const result = __possessionInternals.computeResumedPossessionTiming({
+      shownAtRaw: new Date(shownAtMs).toISOString(),
+      deadlineAtRaw: new Date(deadlineAtMs).toISOString(),
+      pauseStartedAtMs,
+      resumedAtMs,
+      qIndex: 1,
+      state,
+      questionKind: 'multipleChoice',
+    });
+
+    // Already past reveal at pause → playable immediately; 3.5s answer time left
+    // (deadline 2s after resume + the 1.5s the pause ate back).
+    expect(result.playableAt.toISOString()).toBe(new Date(resumedAtMs).toISOString());
+    expect(result.deadlineAt.toISOString()).toBe(new Date(resumedAtMs + 3_500).toISOString());
+  });
+
+  // C2: mixed-type survivorship. If a disconnect leaves the question timestamps
+  // unusable (missing / inverted), resume must fall back to a FRESH window sized
+  // for THAT question's kind — a put_in_order must not inherit an mcq-sized
+  // (10s) clock, and vice versa. This is what stops a disconnect on one slot
+  // from corrupting the next slot's answer time when the half mixes types.
+  it('falls back to a kind-correct fresh window when resume timestamps are unusable', () => {
+    const state = createInitialPossessionState('ranked_sim');
+    const resumedAtMs = Date.UTC(2026, 3, 9, 12, 0, 0);
+    // Inverted window (deadline <= shown) → timestamps unusable → fresh-timing path.
+    const corruptArgs = {
+      shownAtRaw: new Date(resumedAtMs).toISOString(),
+      deadlineAtRaw: new Date(resumedAtMs - 5_000).toISOString(),
+      pauseStartedAtMs: resumedAtMs - 1_000,
+      resumedAtMs,
+      qIndex: 4,
+      state,
+    } as const;
+
+    const order = __possessionInternals.computeResumedPossessionTiming({
+      ...corruptArgs,
+      questionKind: 'putInOrder',
+    });
+    const mcq = __possessionInternals.computeResumedPossessionTiming({
+      ...corruptArgs,
+      questionKind: 'multipleChoice',
+    });
+
+    const orderWindowMs = order.deadlineAt.getTime() - order.playableAt.getTime();
+    const mcqWindowMs = mcq.deadlineAt.getTime() - mcq.playableAt.getTime();
+
+    // put_in_order gets its full 30s; mcq gets its 10s. They do NOT collapse to
+    // the same value — the kind determines the fresh window.
+    expect(orderWindowMs).toBe(30_000);
+    expect(mcqWindowMs).toBe(10_000);
+    expect(orderWindowMs).not.toBe(mcqWindowMs);
+  });
+
   it('does not persist special-round progress as selected_index', () => {
     expect(__possessionInternals.selectedIndexForAnswerPersistence('multipleChoice', 2)).toBe(2);
     expect(__possessionInternals.selectedIndexForAnswerPersistence('countdown', 7)).toBeNull();

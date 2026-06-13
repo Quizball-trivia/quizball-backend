@@ -131,6 +131,7 @@ const setPlayerForfeitWinTotalsMock = vi.fn();
 const setPlayerFinalTotalsMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const abandonMatchMock = vi.fn();
+const refundRankedTicketsMock = vi.fn();
 
 const buildMatchQuestionPayloadMock = vi.fn();
 const ensureProfileMock = vi.fn();
@@ -224,10 +225,14 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
 }));
 
 vi.mock('../../src/modules/users/users.repo.js', () => {
+  // ids starting with 'ai-' resolve as AI users so tests can model a
+  // ranked-vs-AI opponent (whose synthetic presence exposed the reconnect_limit
+  // forfeit bug that human-only mocks never hit).
   const getById = vi.fn(async (id: string) => ({
     id,
     nickname: id,
     avatar_url: null,
+    is_ai: id.startsWith('ai-'),
   }));
   return {
     usersRepo: {
@@ -243,6 +248,12 @@ vi.mock('../../src/modules/users/users.repo.js', () => {
     },
   };
 });
+
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: {
+    refundRankedTickets: (...args: unknown[]) => refundRankedTicketsMock(...args),
+  },
+}));
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
@@ -503,6 +514,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     setPlayerFinalTotalsMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     abandonMatchMock.mockResolvedValue(undefined);
+    refundRankedTicketsMock.mockResolvedValue({ wallets: {} });
     listAnswersForQuestionMock.mockResolvedValue([
       { user_id: 'u1', selected_index: 1, is_correct: true, points_earned: 100, time_ms: 1000 },
       { user_id: 'u2', selected_index: 2, is_correct: false, points_earned: 0, time_ms: 4000 },
@@ -1714,6 +1726,90 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(abandonMatchMock).not.toHaveBeenCalled();
   });
 
+  it('S15d4: reconnect-limit exceeded vs an AI opponent forfeits the human even while they lead (the ranked-vs-AI bug)', async () => {
+    // Reproduces the EXACT staging bug: tazi was matched vs an AI, disconnected
+    // past the limit while leading 2-0, and WON on goals instead of forfeiting.
+    // The AI opponent (ai-bot) has only synthetic presence and no match-room
+    // socket; combined with the human's racing reconnect, the presence fork
+    // could not isolate a single absent player and fell to complete-from-progress
+    // → the leading limit-breaker won. The fix forfeits the known limit-breaker
+    // directly regardless of presence or whether the opponent is an AI.
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+
+    const u1UserRoomSocket = createSocketMock('u1'); // human reconnected: user-room socket only
+    const emit = vi.fn();
+    const io = {
+      to: vi.fn(() => ({ emit })),
+      in: vi.fn((room: string) => ({
+        // No match-room sockets (AI has none; human only has a user-room socket).
+        fetchSockets: vi.fn(async () => (room === 'user:u1' ? [u1UserRoomSocket] : [])),
+        socketsJoin: vi.fn(async () => undefined),
+      })),
+    } as unknown as QuizballServer;
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    // Roster: human u1 (seat1) vs AI ai-bot (seat2).
+    listMatchPlayersMock.mockResolvedValue([
+      { match_id: 'm1', user_id: 'u1', seat: 1, total_points: 280, correct_answers: 4, avg_time_ms: null, goals: 2, penalty_goals: 0 },
+      { match_id: 'm1', user_id: 'ai-bot', seat: 2, total_points: 170, correct_answers: 3, avg_time_ms: null, goals: 0, penalty_goals: 0 },
+    ]);
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '4'); // 4th disconnect = limit exceeded (>3)
+    fakeRedisStore.values.delete('match:disconnect:m1:u1');         // racing reconnect cleared the marker
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 8, // u1 leads 2-0 on goals
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    // u1 exceeded the limit → forfeit; the AI is the winner. Must NOT complete on
+    // goals (which would hand the leading limit-breaker the win).
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'ai-bot');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(completeMatchMock).not.toHaveBeenCalledWith('m1', 'u1');
+  });
+
+  it('S15d5: reconnect-limit exceeded vs a HUMAN opponent still forfeits the limit-breaker (regression)', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoWithMatchSockets('m1', ['u2']); // human opponent present in the match room
+    const socket = createSocketMock('u1', 'm1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    fakeRedisStore.values.set('match:reconnect_count:m1:u1', '4');
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 6,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+
+    await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
+
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'm1',
+      expect.objectContaining({ winnerDecisionMethod: 'forfeit' })
+    );
+    expect(completeMatchMock).not.toHaveBeenCalledWith('m1', 'u1');
+  });
+
   it('S15d3: ranked forfeit before 2 rounds cancels the match as a no-contest (abandon, no winner)', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoWithMatchSockets('m1', ['u2']);
@@ -1739,6 +1835,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     // Cancelled as a no-contest: abandoned, never completed with a winner.
     expect(abandonMatchMock).toHaveBeenCalledWith('m1');
     expect(completeMatchMock).not.toHaveBeenCalled();
+    // TEST-E2: the early-forfeit no-contest refunds both humans' tickets.
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith(expect.arrayContaining(['u1', 'u2']));
   });
 
   it('S15c: rejoin resumes the active possession question instead of force-resolving it', async () => {
@@ -1971,7 +2069,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
       id: 'm1',
       mode: 'ranked',
       status: 'active',
-      current_q_index: 0,
+      // >= 2 rounds so this is a real forfeit (not an early no-contest cancel).
+      current_q_index: 5,
       total_questions: 10,
       started_at: nowIso,
       lobby_id: 'l1',
@@ -1983,7 +2082,12 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     await matchRealtimeService.handleMatchLeave(io, socket, 'm1');
 
-    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u1');
+    // u1 is the leaver who exceeded the limit → u1 FORFEITS, the opponent (u2)
+    // wins. The forfeiter must never be awarded the win — even though u1 leads on
+    // points (200 vs 100), which previously let the progress branch hand u1 the
+    // win (the reconnect_limit / progress bug this fix closes).
+    expect(completeMatchMock).toHaveBeenCalledWith('m1', 'u2');
+    expect(completeMatchMock).not.toHaveBeenCalledWith('m1', 'u1');
     expect(socket.emit).not.toHaveBeenCalledWith(
       'match:rejoin_available',
       expect.anything()

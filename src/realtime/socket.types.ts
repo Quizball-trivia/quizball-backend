@@ -791,9 +791,25 @@ export interface ForceLogoutPayload {
   reason: 'account_deleted' | 'admin_revoked';
 }
 
+export interface NotificationPayload {
+  id: string;
+  type: string;
+  title: Record<string, string>;
+  body: Record<string, string> | null;
+  data: Record<string, unknown>;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationUnreadCountPayload {
+  unreadCount: number;
+}
+
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
   'presence:online_count': (data: PresenceOnlineCountPayload) => void;
+  'notification:new': (data: NotificationPayload) => void;
+  'notification:unread_count': (data: NotificationUnreadCountPayload) => void;
   'session:state': (data: SessionStatePayload) => void;
   'session:blocked': (data: SessionBlockedPayload) => void;
   'auth:force_logout': (data: ForceLogoutPayload) => void;

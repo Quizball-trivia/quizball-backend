@@ -182,6 +182,7 @@ export interface ManualAdjustmentInput {
   inventoryGrants?: ManualInventoryGrant[];
   reason: string;
   idempotencyKey?: string;
+  notify?: boolean;
 }
 
 export interface ManualAdjustmentResult {

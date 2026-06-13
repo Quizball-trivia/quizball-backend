@@ -781,4 +781,46 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(startDraftMock).not.toHaveBeenCalled();
   });
+
+  // ── handleSocketDisconnect: the cancel marker must land even when the
+  //    per-user transition lock is busy — previously NOTHING was written in
+  //    that case and the 10s AI fallback could start a ranked match for an
+  //    offline user. ──
+  it('disconnect cleanup sets the cancel marker BEFORE attempting the transition lock', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+
+    const pending = service.handleSocketDisconnect(io, socket as never);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await pending;
+
+    const cancelSetCall = redisMock.set.mock.calls.find(([key]) =>
+      typeof key === 'string' && key.includes('cancel') && key.includes('u1')
+    );
+    expect(cancelSetCall).toBeTruthy();
+    const cancelSetOrder = redisMock.set.mock.invocationCallOrder[
+      redisMock.set.mock.calls.indexOf(cancelSetCall!)
+    ];
+    const firstLockOrder = acquireLockMock.mock.invocationCallOrder[0];
+    expect(firstLockOrder).toBeGreaterThan(cancelSetOrder);
+  });
+
+  it('disconnect cleanup still sets the cancel marker when the transition lock never frees', async () => {
+    acquireLockMock.mockResolvedValue({ acquired: false });
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+
+    const pending = service.handleSocketDisconnect(io, socket as never);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await pending;
+
+    // Marker written despite the busy lock; the cancel SCRIPT never ran.
+    const cancelSetCall = redisMock.set.mock.calls.find(([key]) =>
+      typeof key === 'string' && key.includes('cancel') && key.includes('u1')
+    );
+    expect(cancelSetCall).toBeTruthy();
+    expect(redisMock.eval).not.toHaveBeenCalled();
+  });
 });

@@ -47,6 +47,12 @@ const MAX_PAIRS_PER_TICK = 100;
 const FOUND_MODAL_MS = 1200;
 
 const CANCEL_KEY_TTL_SEC = 30;
+const DISCONNECT_CLEANUP_LOCK_ATTEMPTS = 3;
+const DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS = 1_000;
+
+function waitForMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 const JOIN_DEBOUNCE_TTL_SEC = 2;
 const PAIRING_IN_FLIGHT_TTL_SEC = 30;
 const TICK_LOCK_KEY = 'ranked:mm:tick-lock';
@@ -1138,21 +1144,31 @@ export const rankedMatchmakingService = {
 	        return;
 	      }
 
-	      const redis = getRedisClient();
-	      if (!redis) {
-	        span.setAttribute('quizball.redis_available', false);
+      const redis = getRedisClient();
+      if (!redis) {
+        span.setAttribute('quizball.redis_available', false);
         return;
       }
 
-      const completed = await userSessionGuardService.runWithUserTransitionLock(
+      // Set the cancel marker BEFORE attempting the transition lock (it is
+      // idempotent and re-set under the lock below). Previously the marker
+      // was only written inside the lock callback — if the lock was busy at
+      // the exact disconnect moment, NOTHING was written and the 10s AI
+      // fallback could start a ranked match for an offline user. With the
+      // marker down first, processPairs / startHumanRankedMatch / the AI
+      // fallback all see the cancellation even if the scripted queue cleanup
+      // below has to retry.
+      await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
+
+      const runCleanup = () => userSessionGuardService.runWithUserTransitionLock(
         io,
         socket,
         async () => {
-          // Mirror handleQueueLeave: set the cancel marker BEFORE the removal
-          // script. If processPairs already claimed this user's search, the
-          // script finds nothing to remove — the marker is then the only way
-          // startHumanRankedMatch can learn the user is gone and avoid
-          // creating a lobby for a socketless player.
+          // Mirror handleQueueLeave: refresh the cancel marker, then run the
+          // removal script. If processPairs already claimed this user's
+          // search, the script finds nothing to remove — the marker is then
+          // the only way startHumanRankedMatch can learn the user is gone and
+          // avoid creating a lobby for a socketless player.
           await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
             keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
@@ -1178,8 +1194,24 @@ export const rankedMatchmakingService = {
           operation: 'ranked:disconnect_cleanup',
         }
       );
+
+      // Bounded retry: a busy transition lock previously dropped the queue
+      // cleanup entirely (no retry), stranding the search entry until its
+      // 60s TTL. The cancel marker above already guards the dangerous race;
+      // the retries make the queue state itself converge.
+      let completed = await runCleanup();
+      for (let attempt = 1; !completed && attempt < DISCONNECT_CLEANUP_LOCK_ATTEMPTS; attempt += 1) {
+        await waitForMs(DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS * attempt);
+        completed = await runCleanup();
+      }
       span.setAttribute('quizball.transition_lock_acquired', completed);
-      if (!completed) return;
+      if (!completed) {
+        logger.warn(
+          { userId, socketId: socket.id, attempts: DISCONNECT_CLEANUP_LOCK_ATTEMPTS },
+          'Ranked disconnect cleanup abandoned after transition-lock retries (cancel marker already set)'
+        );
+        return;
+      }
       const snapshot = await userSessionGuardService.emitState(io, userId);
       logger.info(
         {

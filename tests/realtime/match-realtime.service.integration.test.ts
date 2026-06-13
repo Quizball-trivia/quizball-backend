@@ -1482,6 +1482,115 @@ describe('match-realtime.service high-risk integration behavior', () => {
     );
   });
 
+  it('S15i: disconnect of a socket without a match binding still pauses the user active match (DB fallback)', async () => {
+    // A reconnected socket that re-authenticated but never completed
+    // match:rejoin has no socket.data.matchId. Its disconnect used to no-op
+    // silently — no pause, no grace timer. The DB fallback must find the
+    // user's active match and arm the pause flow.
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1'); // NOTE: no matchId bound
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    const activeMatch = {
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 4,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    };
+    getActiveMatchForUserMock.mockResolvedValue(activeMatch);
+    getMatchMock.mockResolvedValue(activeMatch);
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(getActiveMatchForUserMock).toHaveBeenCalledWith('u1');
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+  });
+
+  it('S15i3: disconnect without a match binding never pauses a party-quiz match', async () => {
+    // Party quiz has no stable-live-socket pause guard — a binding-less
+    // menu/re-auth socket disconnect must not arm pause/grace for a live
+    // N-player match.
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1'); // no matchId bound
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'active',
+      current_q_index: 2,
+      total_questions: 10,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_party_quiz' },
+    });
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+  });
+
+  it('S15i1: disconnect without a match binding no-ops for users with no active match', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+
+    fakeRedis.isOpen = true;
+    getActiveMatchForUserMock.mockResolvedValue(null);
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
+    expect(getMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('S15i2: match disconnect retries a busy transition lock instead of dropping the pause', async () => {
+    vi.useFakeTimers();
+    try {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+      const io = createIoMock();
+      const socket = createSocketMock('u1', 'm1');
+      const nowIso = new Date().toISOString();
+
+      fakeRedis.isOpen = true;
+      getMatchMock.mockResolvedValue({
+        id: 'm1',
+        mode: 'ranked',
+        status: 'active',
+        current_q_index: 4,
+        total_questions: 12,
+        started_at: nowIso,
+        lobby_id: 'l1',
+        state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+      });
+
+      // Lock busy on the first attempt, free on the second.
+      const lockMock = userSessionGuardService.runWithUserTransitionLock as ReturnType<typeof vi.fn>;
+      lockMock.mockResolvedValueOnce(false);
+
+      const pending = matchRealtimeService.handleMatchDisconnect(io, socket);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await pending;
+
+      expect(lockMock).toHaveBeenCalledTimes(2);
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+      expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15d2: reconnect-limit exceeded forfeits the disconnector when the opponent is still present', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     // u2 still has a live match-room socket; u1 burns their 4th disconnect.

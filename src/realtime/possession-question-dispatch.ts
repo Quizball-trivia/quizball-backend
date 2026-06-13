@@ -73,6 +73,11 @@ import type { MatchQuestionKind } from './socket.types.js';
 
 const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
 
+// History-aware selection window: don't re-serve a question a player saw within
+// this many days (best-effort; falls back to a repeat if a thin category would
+// otherwise run dry). See getRecentlySeenQuestionIds.
+const QUESTION_HISTORY_WINDOW_DAYS = 14;
+
 // The 0-based slot within a half whose question is forced to be an image MCQ
 // (the 4th question → slot index 3). See questionTypeForState / NORMAL_HALF_SEQUENCE.
 const IMAGE_MCQ_SLOT_INDEX = 3;
@@ -440,7 +445,8 @@ async function pickImageMcqForState(
 async function maybePickQuestionForState(
   matchId: string,
   state: PossessionStatePayload,
-  categoryIds: string[]
+  categoryIds: string[],
+  humanUserIds: string[] = []
 ): Promise<PickedQuestion | null> {
   if (isImageMcqSlot(state)) {
     const imagePicked = await pickImageMcqForState(matchId, state, categoryIds);
@@ -458,17 +464,41 @@ async function maybePickQuestionForState(
   // Keep the half's reserved image MCQ out of every other slot so the
   // preloaded image is never consumed early by a normal MCQ pick.
   const reserved = reservedImageMcqForHalf(state);
-  const excludeQuestionIds = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : undefined;
+  const reservedExclusion = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : [];
+
+  // History-aware selection: bias the random pick AWAY from questions these
+  // players already saw in the recency window, so heavy players stop re-seeing
+  // the same question while unseen ones sit in the pool. Best-effort — fetched
+  // once per pick (~1-5ms, indexed) and applied as a SOFT exclusion: if it would
+  // empty a (thin) category we drop it and pick normally rather than stall.
+  let recentlySeenIds: string[] = [];
+  if (humanUserIds.length > 0) {
+    try {
+      recentlySeenIds = await matchQuestionsRepo.getRecentlySeenQuestionIds(
+        humanUserIds,
+        QUESTION_HISTORY_WINDOW_DAYS,
+      );
+    } catch (error) {
+      // Never let the freshness optimization break question dispatch.
+      logger.warn({ error, matchId }, 'getRecentlySeenQuestionIds failed; picking without history exclusion');
+      recentlySeenIds = [];
+    }
+  }
+
   const pickValidCandidate = async (
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
-    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean }
+    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean; excludeSeen?: boolean }
   ): Promise<PickedQuestion | null> => {
+    const exclude = [
+      ...(opts?.dropReservedExclusion ? [] : reservedExclusion),
+      ...(opts?.excludeSeen ? recentlySeenIds : []),
+    ];
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [questionType],
-      excludeQuestionIds: opts?.dropReservedExclusion ? undefined : excludeQuestionIds,
+      excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
@@ -480,7 +510,13 @@ async function maybePickQuestionForState(
     });
   };
 
-  let picked = await pickValidCandidate(preferredDifficulties);
+  // Try first WITH the seen-history exclusion; if the pool is dry after it (thin
+  // category fully seen), retry WITHOUT it so the match never stalls — a repeat
+  // beats no question.
+  let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen: recentlySeenIds.length > 0 });
+  if (!picked && recentlySeenIds.length > 0) {
+    picked = await pickValidCandidate(preferredDifficulties);
+  }
   if (!picked && useDifficulty) {
     picked = await pickValidCandidate(['easy', 'medium', 'hard']);
   }
@@ -668,7 +704,14 @@ export async function sendPossessionMatchQuestion(
     // the match:state emitted below carries its image URL — the client preloads
     // it immediately, well before the image slot (Q4) dispatches.
     await ensureImageMcqReservedForHalf(matchId, state, categoryIds);
-    const picked = await maybePickQuestionForState(matchId, state, categoryIds);
+    // Human players only — AI ids are never tracked as PostHog/seen persons and
+    // their "history" is irrelevant. Used to bias the pick away from questions
+    // these players have recently seen.
+    const aiUserId = await resolveAiUserIdForMatch(matchId);
+    const humanUserIds = cache.players
+      .map((p) => p.userId)
+      .filter((id) => id !== aiUserId);
+    const picked = await maybePickQuestionForState(matchId, state, categoryIds, humanUserIds);
     if (!picked) {
       logger.error(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },

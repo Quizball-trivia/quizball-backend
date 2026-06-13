@@ -138,6 +138,43 @@ export const matchQuestionsRepo = {
     });
   },
 
+  /**
+   * Question ids the given users have ALREADY SEEN in matches within the recent
+   * window — used to bias the random picker AWAY from recently-served questions
+   * (history-aware selection), so heavy players stop re-seeing the same question
+   * while unseen ones sit in the pool.
+   *
+   * Performance: indexed path only (match_players(user_id) → matches(pkey) →
+   * match_questions(match_id)). Measured ~1-5ms even for the heaviest player;
+   * runs ONCE per pick, not per candidate. The result feeds the existing
+   * `excludeQuestionIds` array filter — no new joins on the hot pick query.
+   *
+   * Best-effort by contract: callers must treat this as a soft exclusion and
+   * fall back to picking WITHOUT it if a (thin) category would otherwise run dry.
+   */
+  async getRecentlySeenQuestionIds(
+    userIds: string[],
+    withinDays: number,
+  ): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    return withSpan('db.matches.getRecentlySeenQuestionIds', {
+      'db.operation.name': 'select',
+      'quizball.user_count': userIds.length,
+      'quizball.within_days': withinDays,
+    }, async (span) => {
+      const rows = await sql<{ question_id: string }[]>`
+        SELECT DISTINCT mq.question_id
+        FROM match_players mp
+        JOIN matches m ON m.id = mp.match_id
+        JOIN match_questions mq ON mq.match_id = mp.match_id
+        WHERE mp.user_id = ANY(${userIds}::uuid[])
+          AND m.started_at > now() - (${withinDays} || ' days')::interval
+      `;
+      span.setAttribute('quizball.seen_question_count', rows.length);
+      return rows.map((r) => r.question_id);
+    });
+  },
+
   async getRandomQuestionsForCategory(
     categoryId: string,
     limit: number,

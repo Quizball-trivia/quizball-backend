@@ -15,6 +15,7 @@ import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
+import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
@@ -261,10 +262,6 @@ async function startHumanRankedMatch(
         ]);
         return [Boolean(userACancelled), Boolean(userBCancelled)];
       };
-      const isCancelled = async () => {
-        const [a, b] = await getCancelFlags();
-        return a || b;
-      };
       // The pair has already been claimed out of the Redis queue by
       // processPairs. If we bail because one side cancelled, the OTHER side
       // must be told the search ended (ranked:queue_left + fresh session
@@ -449,43 +446,86 @@ async function startHumanRankedMatch(
     });
     appMetrics.rankedHumanMatches.add(1);
 
-    setTimeout(() => {
-      void (async () => {
-        if (await isCancelled()) {
-          logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human draft start skipped because a player cancelled search');
-          return;
-        }
-        const latest = await lobbiesRepo.getById(lobby.id);
-        if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
-        await startDraft(io, lobby.id);
-      })().catch((error) => {
-        // Without this catch, a throw here (e.g. a DB statement timeout inside
-        // startDraft) is an unhandled rejection — which crashed the prod
-        // process on 2026-06-11. Mirror the recovery contract of the
-        // ranked-AI path: log, and tell both players to restart matchmaking
-        // instead of leaving them on a dead "match found" screen.
-        logger.error({ error, lobbyId: lobby.id, userAId, userBId }, 'Failed to start ranked human draft');
-        for (const userId of [userAId, userBId]) {
-          io.to(`user:${userId}`).emit('error', {
-            code: 'MATCH_PREPARATION_FAILED',
-            message: 'Match preparation got stuck. Please restart ranked matchmaking.',
-            meta: { lobbyId: lobby.id, source: 'ranked_human_draft_start' },
-          });
-        }
-        // Re-sync session-guard state so both clients know they're free to
-        // re-queue (the lobby may be left 'waiting'; lobby-connect's recovery
-        // retries the draft on the next reconnect, and queue-join preflights
-        // re-evaluate the session). Best-effort — never throw from a catch.
-        void Promise.allSettled([
-          userSessionGuardService.emitState(io, userAId),
-          userSessionGuardService.emitState(io, userBId),
-        ]);
-      });
-    }, FOUND_MODAL_MS);
+    // Durable: the "match found" modal delay used to be an in-process
+    // setTimeout — a restart in that 1.2s window left a ranked lobby stuck in
+    // 'waiting' with no draft until a player reconnect happened to heal it.
+    // The Redis-backed timer survives restarts; runRankedDraftStart re-checks
+    // cancel flags and lobby state so a late/duplicate fire is a no-op.
+    // If the Redis enqueue itself throws (scheduleRealtimeTimer only handles
+    // a CLOSED client, not a failing write), fall back to the old in-process
+    // timer — a non-durable draft start beats a stranded waiting lobby.
+    try {
+      await scheduleRealtimeTimer(
+        'ranked_draft_start',
+        lobby.id,
+        new Date(Date.now() + FOUND_MODAL_MS),
+        { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+      );
+    } catch (err) {
+      logger.error(
+        { err, lobbyId: lobby.id, userAId, userBId },
+        'Failed to schedule durable ranked draft start; using local fallback'
+      );
+      const fallback = setTimeout(() => {
+        void runRankedDraftStart(io, lobby.id, userAId, userBId).catch((error) => {
+          logger.error({ error, lobbyId: lobby.id }, 'Local ranked draft-start fallback failed');
+        });
+      }, FOUND_MODAL_MS);
+      fallback.unref?.();
+    }
     } finally {
       await clearPairingInFlight([userAId, userBId]);
     }
   });
+}
+
+/**
+ * Start the draft for a freshly paired ranked lobby (fired by the durable
+ * `ranked_draft_start` timer ~1.2s after `ranked:match_found`). Re-checks the
+ * cancel flags and the lobby state so a late or duplicate fire is a no-op —
+ * identical guards to the previous in-process setTimeout, but restart-proof.
+ */
+export async function runRankedDraftStart(
+  io: QuizballServer,
+  lobbyId: string,
+  userAId: string,
+  userBId: string
+): Promise<void> {
+  const redis = getRedisClient();
+  if (redis) {
+    const [userACancelled, userBCancelled] = await Promise.all([
+      redis.get(rankedCancelKey(userAId)),
+      redis.get(rankedCancelKey(userBId)),
+    ]);
+    if (userACancelled || userBCancelled) {
+      logger.info(
+        { lobbyId, userAId, userBId },
+        'Ranked human draft start skipped because a player cancelled search'
+      );
+      return;
+    }
+  }
+  const latest = await lobbiesRepo.getById(lobbyId);
+  if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
+  try {
+    await startDraft(io, lobbyId);
+  } catch (error) {
+    // Keep the crash guard from the previous in-process timer path: a draft
+    // start failure must notify both players and never become an unhandled
+    // rejection from the durable scheduler.
+    logger.error({ error, lobbyId, userAId, userBId }, 'Failed to start ranked human draft');
+    for (const userId of [userAId, userBId]) {
+      io.to(`user:${userId}`).emit('error', {
+        code: 'MATCH_PREPARATION_FAILED',
+        message: 'Match preparation got stuck. Please restart ranked matchmaking.',
+        meta: { lobbyId, source: 'ranked_human_draft_start' },
+      });
+    }
+    await Promise.allSettled([
+      userSessionGuardService.emitState(io, userAId),
+      userSessionGuardService.emitState(io, userBId),
+    ]);
+  }
 }
 
 async function startAiFallbackWithCountry(

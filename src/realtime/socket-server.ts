@@ -29,7 +29,8 @@ import {
   type RealtimeTimerHandlers,
 } from './realtime-timer-scheduler.js';
 import { startStaleMatchSweeper } from './services/stale-match-sweeper.service.js';
-import { resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
+import { completeResumeCountdown, resolveExpiredGraceWindow } from './services/match-disconnect.service.js';
+import { runRankedDraftStart } from './services/ranked-matchmaking.service.js';
 import {
   runDraftAutoBan,
   runDraftGraceExpiry,
@@ -283,6 +284,14 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     match_disconnect_forfeit: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_disconnect_forfeit') return;
       await resolveExpiredGraceWindow(server, payload.matchId, payload.disconnectedUserId);
+    },
+    match_resume_countdown: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'match_resume_countdown') return;
+      await completeResumeCountdown(server, payload.matchId, payload.pauseStartedAtMs);
+    },
+    ranked_draft_start: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'ranked_draft_start') return;
+      await runRankedDraftStart(server, payload.lobbyId, payload.userAId, payload.userBId);
     },
   };
 }

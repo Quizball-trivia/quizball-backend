@@ -28,14 +28,30 @@ export type ListAnnouncementsResponse = z.infer<typeof listAnnouncementsResponse
 
 // ── Admin write schemas ──
 
-export const createAnnouncementBodySchema = z.object({
-  title: i18nFieldSchema,
-  body: i18nFieldSchema,
-  type: announcementTypeSchema.optional().default('update'),
-  isActive: z.boolean().optional().default(true),
-  activeFrom: z.string().datetime().nullable().optional(),
-  activeTo: z.string().datetime().nullable().optional(),
-});
+// Reject a reversed publish window (start after end). Only enforced when both
+// bounds are present non-null; an open-ended window is always valid.
+function windowIsValid(v: {
+  activeFrom?: string | null;
+  activeTo?: string | null;
+}): boolean {
+  if (!v.activeFrom || !v.activeTo) return true;
+  return new Date(v.activeFrom).getTime() <= new Date(v.activeTo).getTime();
+}
+const WINDOW_ERROR = {
+  message: 'activeFrom must be before or equal to activeTo',
+  path: ['activeTo'] as string[],
+};
+
+export const createAnnouncementBodySchema = z
+  .object({
+    title: i18nFieldSchema,
+    body: i18nFieldSchema,
+    type: announcementTypeSchema.optional().default('update'),
+    isActive: z.boolean().optional().default(true),
+    activeFrom: z.string().datetime().nullable().optional(),
+    activeTo: z.string().datetime().nullable().optional(),
+  })
+  .refine(windowIsValid, WINDOW_ERROR);
 
 export type CreateAnnouncementBody = z.infer<typeof createAnnouncementBodySchema>;
 
@@ -52,7 +68,8 @@ export const updateAnnouncementBodySchema = z
   .partial()
   .refine((obj) => Object.keys(obj).length > 0, {
     message: 'At least one field is required',
-  });
+  })
+  .refine(windowIsValid, WINDOW_ERROR);
 
 export type UpdateAnnouncementBody = z.infer<typeof updateAnnouncementBodySchema>;
 

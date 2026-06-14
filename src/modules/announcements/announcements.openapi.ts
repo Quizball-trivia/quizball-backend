@@ -53,6 +53,7 @@ export function registerAnnouncementsOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       201: { description: 'Created announcement', schema: announcement },
       400: { description: 'Invalid input', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Not an admin', schema: errorResponseSchema },
     },
   });
@@ -68,6 +69,7 @@ export function registerAnnouncementsOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Updated announcement', schema: announcement },
       400: { description: 'Invalid input', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Not an admin', schema: errorResponseSchema },
       404: { description: 'Not found', schema: errorResponseSchema },
     },
@@ -82,6 +84,8 @@ export function registerAnnouncementsOpenApi(registry: OpenAPIRegistry): void {
     pathParams: announcementIdParamSchema,
     responses: {
       204: { description: 'Deleted' },
+      400: { description: 'Invalid announcement id', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Not an admin', schema: errorResponseSchema },
       404: { description: 'Not found', schema: errorResponseSchema },
     },

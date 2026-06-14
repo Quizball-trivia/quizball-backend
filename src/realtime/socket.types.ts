@@ -765,6 +765,7 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
+  'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:countdown_guess': (data: { matchId: string; qIndex: number; guess: string }) => void;

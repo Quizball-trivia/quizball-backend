@@ -438,6 +438,146 @@ describe('draftRealtimeService', () => {
     expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
   });
 
+  it('waits for draft:ui_ready before arming the human auto-ban deadline', async () => {
+    const { scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+    redisExistsMock.mockResolvedValue(0);
+
+    try {
+      await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+
+      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+      expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+        'draft_auto_ban',
+        'l1',
+        new Date(145_000),
+        {
+          kind: 'draft_auto_ban',
+          lobbyId: 'l1',
+          requireUiReady: true,
+          forceAtMs: 145_000,
+        }
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('arms the normal human auto-ban deadline after draft:ui_ready', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(200_000);
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+    redisExistsMock.mockImplementation(async (key: string) => (
+      key === 'draft:ui_ready:l1:u1:0' ? 1 : 0
+    ));
+
+    try {
+      await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), {
+        lobbyId: 'l1',
+        turnUserId: 'u1',
+        banCount: 0,
+      });
+
+      expect(redisSetMock).toHaveBeenCalledWith('draft:ui_ready:l1:u1:0', '200000', { EX: 600 });
+      expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+        'draft_auto_ban',
+        'l1',
+        new Date(216_000),
+        {
+          kind: 'draft_auto_ban',
+          lobbyId: 'l1',
+          requireUiReady: undefined,
+          forceAtMs: null,
+        }
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('ignores draft:ui_ready from a player who is not the current draft actor', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+    redisExistsMock.mockResolvedValue(0);
+
+    await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
+      lobbyId: 'l1',
+      turnUserId: 'u1',
+      banCount: 0,
+    });
+
+    expect(redisSetMock).not.toHaveBeenCalledWith(expect.stringContaining('draft:ui_ready'), expect.anything(), expect.anything());
+    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalledWith(
+      'draft_auto_ban',
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('re-arms instead of auto-banning when a UI-ready gated timer fires before its force deadline', async () => {
+    const { runDraftAutoBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(300_000);
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+    redisExistsMock.mockResolvedValue(0);
+
+    try {
+      await runDraftAutoBan(io, 'l1', { requireUiReady: true, forceAtMs: 310_000 });
+
+      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+      expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+        'draft_auto_ban',
+        'l1',
+        new Date(310_000),
+        {
+          kind: 'draft_auto_ban',
+          lobbyId: 'l1',
+          requireUiReady: true,
+          forceAtMs: 310_000,
+        }
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('auto-bans for ranked AI even when redis AI key is missing', async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);

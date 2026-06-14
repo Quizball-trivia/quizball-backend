@@ -103,7 +103,7 @@ const configSchema = z.object({
   // Shared secret the scheduled report agent presents to POST the daily report.
   OPS_REPORT_TOKEN: z.string().optional(),
   // Where player contact/feedback submissions are emailed.
-  FEEDBACK_RECIPIENT_EMAIL: z.string().default("nika@quizball.io"),
+  FEEDBACK_RECIPIENT_EMAIL: z.string().email().default("nika@quizball.io"),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;

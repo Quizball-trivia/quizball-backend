@@ -20,11 +20,10 @@ const attachmentDataUrlSchema = z
 export const submitFeedbackBodySchema = z.object({
   category: feedbackCategorySchema,
   message: z.string().trim().min(1, 'Message is required').max(4000),
-  // Optional so logged-out visitors can submit; if provided we include it as a
-  // reply-to so the team can respond.
-  email: z.string().trim().email().max(254).optional().or(z.literal('')),
-  // The reporter's in-game nickname (or typed name when logged out).
-  nickname: z.string().trim().max(80).optional(),
+  // Required so support can always identify and reply to the reporter (the UI
+  // makes both mandatory).
+  email: z.string().trim().email('A valid email is required').max(254),
+  nickname: z.string().trim().min(1, 'Nickname is required').max(80),
   // Optional free-form context (page/route, app version) the client may attach.
   context: z.string().trim().max(500).optional(),
   // Optional screenshots / short video as base64 data URLs.

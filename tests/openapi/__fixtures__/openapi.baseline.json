@@ -16058,22 +16058,13 @@
                     "maxLength": 4000
                   },
                   "email": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 254,
-                        "format": "email"
-                      },
-                      {
-                        "type": "string",
-                        "enum": [
-                          ""
-                        ]
-                      }
-                    ]
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email"
                   },
                   "nickname": {
                     "type": "string",
+                    "minLength": 1,
                     "maxLength": 80
                   },
                   "context": {
@@ -16092,7 +16083,9 @@
                 },
                 "required": [
                   "category",
-                  "message"
+                  "message",
+                  "email",
+                  "nickname"
                 ]
               }
             }
@@ -16111,6 +16104,16 @@
           },
           "400": {
             "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many submissions (rate limited)",
             "content": {
               "application/json": {
                 "schema": {

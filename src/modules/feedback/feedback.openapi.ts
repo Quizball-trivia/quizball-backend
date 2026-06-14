@@ -17,6 +17,7 @@ export function registerFeedbackOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Feedback received', schema: response },
       400: { description: 'Invalid input', schema: errorResponseSchema },
+      429: { description: 'Too many submissions (rate limited)', schema: errorResponseSchema },
       502: { description: 'Email provider error', schema: errorResponseSchema },
     },
   });

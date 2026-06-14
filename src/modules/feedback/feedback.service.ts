@@ -5,6 +5,7 @@ import { feedbackStorageService } from './feedback-storage.service.js';
 import type { SubmitFeedbackBody } from './feedback.schemas.js';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+const EMAIL_TIMEOUT_MS = 10_000;
 
 const CATEGORY_LABEL: Record<SubmitFeedbackBody['category'], string> = {
   bug: '🐛 Bug report',
@@ -83,9 +84,11 @@ export const feedbackService = {
           html: lines.join('\n'),
           ...(replyTo ? { reply_to: replyTo } : {}),
         }),
+        // Bound the request so a hung provider doesn't tie up the handler.
+        signal: AbortSignal.timeout(EMAIL_TIMEOUT_MS),
       });
     } catch (err) {
-      logger.error({ err }, 'Resend request failed (network) for feedback');
+      logger.error({ err }, 'Resend request failed (network/timeout) for feedback');
       throw new ExternalServiceError('Failed to reach email provider');
     }
 

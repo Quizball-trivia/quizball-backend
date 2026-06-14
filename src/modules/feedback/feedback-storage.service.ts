@@ -10,6 +10,7 @@ const BUCKET = 'imgs';
 const PREFIX = 'feedback';
 const CACHE_CONTROL = 'public, max-age=31536000, immutable';
 const MAX_BYTES = 50 * 1024 * 1024; // 50MB per file (post-decode)
+const UPLOAD_TIMEOUT_MS = 60_000; // generous — large video uploads take time
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': 'png',
@@ -59,8 +60,10 @@ async function uploadOne(dataUrl: string): Promise<string> {
       'x-upsert': 'true',
     },
     body: new Uint8Array(buffer),
+    // Bound the upload so a hung storage backend doesn't tie up the handler.
+    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   }).catch((err) => {
-    logger.error({ err }, 'Feedback attachment upload failed (network)');
+    logger.error({ err }, 'Feedback attachment upload failed (network/timeout)');
     throw new ExternalServiceError('Failed to upload attachment');
   });
 

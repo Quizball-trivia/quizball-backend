@@ -42,6 +42,7 @@ import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 import { registerUsersOpenApi } from '../../modules/users/users.openapi.js';
 import { registerNotificationsOpenApi } from '../../modules/notifications/notifications.openapi.js';
 import { registerAnnouncementsOpenApi } from '../../modules/announcements/announcements.openapi.js';
+import { registerFeedbackOpenApi } from '../../modules/feedback/feedback.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -65,6 +66,7 @@ registerQuestionsOpenApi(registry);
 registerDailyChallengesOpenApi(registry);
 registerNotificationsOpenApi(registry);
 registerAnnouncementsOpenApi(registry);
+registerFeedbackOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

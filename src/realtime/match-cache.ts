@@ -2,7 +2,7 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { ExternalServiceError } from '../core/errors.js';
-import type { Json } from '../db/types.js';
+import type { I18nField, Json } from '../db/types.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
@@ -19,6 +19,7 @@ import { acquireLock, releaseLock } from './locks.js';
 import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
+import { normalizeI18nName } from './match-utils.js';
 import type { GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
@@ -238,13 +239,16 @@ function sanitizePossessionState(
         ? Math.max(0, Math.trunc(candidate.halftime.readyDeferCount))
         : 0,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
-        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null; imageUrl: string | null }>>((acc, category) => {
+        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: I18nField; icon: string | null; imageUrl: string | null }>>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
-          if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          // `name` is normally the full i18n object; tolerate the legacy string
+          // shape persisted by matches drafted before the i18n change.
+          const normalizedName = normalizeI18nName(category.name);
+          if (typeof category.id !== 'string' || normalizedName === null) return acc;
           const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
-            name: category.name,
+            name: normalizedName,
             icon: typeof category.icon === 'string' ? category.icon : null,
             imageUrl:
               typeof category.imageUrl === 'string'

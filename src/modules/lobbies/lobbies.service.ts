@@ -1,7 +1,7 @@
 import { lobbiesRepo } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
-import { logger, NotFoundError, pickI18nText } from '../../core/index.js';
+import { logger, NotFoundError } from '../../core/index.js';
 import { getRandom } from '../../core/rng.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
 import { rankedService } from '../ranked/ranked.service.js';
@@ -148,7 +148,7 @@ export const lobbiesService = {
 
     return selected.map((row) => ({
       id: row.id,
-      name: pickI18nText(row.name),
+      name: row.name,
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
@@ -163,7 +163,7 @@ export const lobbiesService = {
 
     return selected.map((row) => ({
       id: row.id,
-      name: pickI18nText(row.name),
+      name: row.name,
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
@@ -174,7 +174,7 @@ export const lobbiesService = {
     const shuffled = shuffle([...allRanked]);
     return shuffled.slice(0, count).map((row) => ({
       id: row.id,
-      name: pickI18nText(row.name),
+      name: row.name,
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
@@ -238,7 +238,7 @@ export const lobbiesService = {
     return {
       categories: selected.map((row) => ({
         id: row.id,
-        name: pickI18nText(row.name),
+        name: row.name,
         icon: row.icon ?? null,
         imageUrl: row.image_url ?? null,
       })),
@@ -255,7 +255,7 @@ export const lobbiesService = {
 
     return selected.map((row) => ({
       id: row.id,
-      name: pickI18nText(row.name),
+      name: row.name,
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));
@@ -269,7 +269,7 @@ export const lobbiesService = {
     const rows: LobbyCategoryWithDetails[] = await lobbiesRepo.listLobbyCategoriesWithDetails(lobbyId);
     return rows.map((row) => ({
       id: row.category_id,
-      name: pickI18nText(row.name),
+      name: row.name,
       icon: row.icon ?? null,
       imageUrl: row.image_url ?? null,
     }));

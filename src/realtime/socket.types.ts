@@ -1,4 +1,5 @@
 import type { AvatarCustomization } from '../modules/users/avatar-customization.js';
+import type { I18nField } from '../db/types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
@@ -72,7 +73,13 @@ export interface LobbySettings {
 
 export interface DraftCategory {
   id: string;
-  name: string;
+  /**
+   * Full i18n object (e.g. { en, ka }) so the client can localize the category
+   * name to each viewer's language. The draft payload is broadcast to a lobby
+   * room that may contain players with different languages, so the name must not
+   * be collapsed to a single locale server-side.
+   */
+  name: I18nField;
   icon: string | null;
   imageUrl: string | null;
 }

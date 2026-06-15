@@ -5,6 +5,7 @@ import {
   type ReservedImageMcq,
 } from '../modules/matches/matches.service.js';
 import { clamp } from './scoring.js';
+import { normalizeI18nName } from './match-utils.js';
 import { harnessDelayMs } from '../core/harness-timing.js';
 import type { DraftCategory, MatchPhaseKind, MatchQuestionKind, MatchStatePayload } from './socket.types.js';
 
@@ -288,11 +289,14 @@ export function parsePossessionState(raw: unknown): PossessionStatePayload {
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
         ? candidate.halftime.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
-          if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          // `name` is normally the full i18n object; tolerate the legacy string
+          // shape persisted by matches drafted before the i18n change.
+          const normalizedName = normalizeI18nName(category.name);
+          if (typeof category.id !== 'string' || normalizedName === null) return acc;
           const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
-            name: category.name,
+            name: normalizedName,
             icon: typeof category.icon === 'string' ? category.icon : null,
             imageUrl:
               typeof category.imageUrl === 'string'

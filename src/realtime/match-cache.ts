@@ -2,7 +2,7 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { ExternalServiceError } from '../core/errors.js';
-import type { Json } from '../db/types.js';
+import type { I18nField, Json } from '../db/types.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
@@ -19,7 +19,8 @@ import { acquireLock, releaseLock } from './locks.js';
 import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
-import type { GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
+import { normalizeI18nName } from './match-utils.js';
+import type { DraftCategory, GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
 const MATCH_CACHE_REBUILD_LOCK_TTL_MS = 5000;
@@ -238,13 +239,16 @@ function sanitizePossessionState(
         ? Math.max(0, Math.trunc(candidate.halftime.readyDeferCount))
         : 0,
       categoryOptions: Array.isArray(candidate.halftime?.categoryOptions)
-        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: string; icon: string | null; imageUrl: string | null }>>((acc, category) => {
+        ? candidate.halftime?.categoryOptions.reduce<Array<{ id: string; name: I18nField; icon: string | null; imageUrl: string | null }>>((acc, category) => {
           if (!category || typeof category !== 'object') return acc;
-          if (typeof category.id !== 'string' || typeof category.name !== 'string') return acc;
+          // `name` is normally the full i18n object; tolerate the legacy string
+          // shape persisted by matches drafted before the i18n change.
+          const normalizedName = normalizeI18nName(category.name);
+          if (typeof category.id !== 'string' || normalizedName === null) return acc;
           const legacyImageUrl = (category as { image_url?: unknown }).image_url;
           acc.push({
             id: category.id,
-            name: category.name,
+            name: normalizedName,
             icon: typeof category.icon === 'string' ? category.icon : null,
             imageUrl:
               typeof category.imageUrl === 'string'
@@ -407,8 +411,21 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
       // Backfill halftime.uiReadyAt on cache entries written before the field
       // existed — otherwise downstream code sees `undefined` instead of `null`.
       if (cached.statePayload && 'halftime' in cached.statePayload && cached.statePayload.halftime) {
-        const ht = cached.statePayload.halftime as { uiReadyAt?: unknown };
+        const ht = cached.statePayload.halftime as { uiReadyAt?: unknown; categoryOptions?: unknown };
         ht.uiReadyAt = typeof ht.uiReadyAt === 'string' ? ht.uiReadyAt : null;
+        // Normalize category names on blobs cached before the i18n change, which
+        // stored a collapsed string instead of the full { en, ka } object — a
+        // cache hit otherwise returns the un-localizable name to clients until
+        // the entry expires or rebuilds.
+        if (Array.isArray(ht.categoryOptions)) {
+          ht.categoryOptions = ht.categoryOptions.reduce<DraftCategory[]>((acc, category) => {
+            if (!category || typeof category !== 'object') return acc;
+            const normalizedName = normalizeI18nName((category as { name?: unknown }).name);
+            if (typeof (category as { id?: unknown }).id !== 'string' || normalizedName === null) return acc;
+            acc.push({ ...(category as DraftCategory), name: normalizedName });
+            return acc;
+          }, []);
+        }
       }
       cached.clueReveals ??= {};
       await mergeAnswerOverlay(redis, cached);

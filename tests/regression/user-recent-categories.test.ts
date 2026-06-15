@@ -19,7 +19,7 @@ if (isLocal) {
   process.env.CORS_ORIGINS = process.env.CORS_ORIGINS ?? 'http://localhost:3000';
   process.env.PORT = process.env.PORT ?? '8000';
 }
-process.env.LOG_LEVEL = 'silent';
+process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent';
 
 const describeLocal = isLocal ? describe : describe.skip;
 

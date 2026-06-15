@@ -65,3 +65,61 @@ done
 tables=$(psql "$DBCONN" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
 echo "✅ Done: ${n} migrations applied, ${tables} public tables in ${DB}."
 echo "   DB URL: ${DBCONN}"
+
+# ── Seed real question content from STAGING ──────────────────────────────────
+# The harness self-seeds a few synthetic `regression-%` categories at runtime,
+# but several phases (image-MCQ Q4 slot, halftime category-exclusion) need a
+# broad pool of real questions/categories or candidate search returns 0 and
+# matches stall. We additively copy the content tables from the staging DB
+# (read-only on staging, ON CONFLICT DO NOTHING locally). Cross-version safe:
+# uses psql \copy (not pg_dump), so the pg16 client works against staging's pg17.
+# Skipped (with a warning) if .env / staging is unreachable — the synthetic
+# fixtures still let most scenarios run.
+ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env"
+SEED_DIR="$(mktemp -d)"
+STAGING_URL="$(grep -m1 -E '^DATABASE_URL\s*=' "$ENV_FILE" 2>/dev/null | sed -E 's/^DATABASE_URL\s*=\s*"?([^"]+)"?.*/\1/' || true)"
+
+if [ -z "${STAGING_URL:-}" ]; then
+  echo "⚠️  No DATABASE_URL in .env — skipping staging content seed (synthetic fixtures only)."
+elif ! PGCONNECT_TIMEOUT=15 psql "$STAGING_URL" -tAc "SELECT 1" >/dev/null 2>&1; then
+  echo "⚠️  Staging DB unreachable — skipping content seed (synthetic fixtures only)."
+else
+  echo "Seeding real question content from staging (read-only export)…"
+  for t in categories questions question_payloads featured_categories; do
+    PGCONNECT_TIMEOUT=30 psql "$STAGING_URL" -q \
+      -c "\copy (SELECT * FROM public.$t) TO '$SEED_DIR/$t.csv' WITH CSV HEADER" 2>/dev/null
+  done
+
+  # Load FK-safe: categories (null created_by) → questions (only w/ existing
+  # category) → payloads (only w/ existing question) → featured.
+  psql "$DBCONN" -v ON_ERROR_STOP=1 -q <<SQL
+CREATE TEMP TABLE _s_cat (LIKE public.categories INCLUDING DEFAULTS);
+\copy _s_cat FROM '$SEED_DIR/categories.csv' WITH CSV HEADER
+UPDATE _s_cat SET created_by = NULL;
+INSERT INTO public.categories SELECT * FROM _s_cat ON CONFLICT DO NOTHING;
+
+CREATE TEMP TABLE _s_q (LIKE public.questions INCLUDING DEFAULTS);
+\copy _s_q FROM '$SEED_DIR/questions.csv' WITH CSV HEADER
+UPDATE _s_q SET created_by = NULL;
+INSERT INTO public.questions
+  SELECT s.* FROM _s_q s JOIN public.categories c ON c.id = s.category_id
+ON CONFLICT DO NOTHING;
+
+CREATE TEMP TABLE _s_qp (LIKE public.question_payloads INCLUDING DEFAULTS);
+\copy _s_qp FROM '$SEED_DIR/question_payloads.csv' WITH CSV HEADER
+INSERT INTO public.question_payloads
+  SELECT s.* FROM _s_qp s JOIN public.questions q ON q.id = s.question_id
+ON CONFLICT DO NOTHING;
+
+CREATE TEMP TABLE _s_fc (LIKE public.featured_categories INCLUDING DEFAULTS);
+\copy _s_fc FROM '$SEED_DIR/featured_categories.csv' WITH CSV HEADER
+INSERT INTO public.featured_categories
+  SELECT s.* FROM _s_fc s JOIN public.categories c ON c.id = s.category_id
+ON CONFLICT DO NOTHING;
+SQL
+
+  qn=$(psql "$DBCONN" -tAc "SELECT count(*) FROM questions")
+  cn=$(psql "$DBCONN" -tAc "SELECT count(*) FROM categories")
+  echo "✅ Content seeded: ${qn} questions, ${cn} categories."
+fi
+rm -rf "$SEED_DIR"

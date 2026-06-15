@@ -76,8 +76,18 @@ CREATE INDEX IF NOT EXISTS idx_store_transaction_logs_actor_user_id
 CREATE INDEX IF NOT EXISTS idx_ranked_profiles_archive_user_id
   ON public.ranked_profiles_archive (user_id);
 
+-- SECURITY DEFINER (preserved from the original definition in
+-- 20260209000000_add_is_ai_column.sql): the function runs with the owner's
+-- (postgres) privileges so pg_cron can execute it; EXECUTE stays revoked from
+-- PUBLIC/anon/authenticated. CREATE OR REPLACE resets the security type, so it
+-- must be restated here or the function would silently become SECURITY INVOKER.
+-- SET search_path pins schema resolution (public for our qualified tables,
+-- pg_temp for the temp table below) so a DEFINER function can't be hijacked via
+-- a caller-controlled search_path.
 CREATE OR REPLACE FUNCTION cleanup_ai_users() RETURNS integer
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   total_deleted integer := 0;
@@ -161,3 +171,13 @@ $$;
 -- the function executes (including under pg_cron). Batches keep each statement
 -- short regardless; this is the safety net for the cumulative loop.
 ALTER FUNCTION cleanup_ai_users() SET statement_timeout = 0;
+
+-- Re-assert the original execution restriction (from
+-- 20260209000000_add_is_ai_column.sql). This SECURITY DEFINER function
+-- mass-deletes users, so only postgres (the pg_cron runner) may call it.
+-- Verified on prod that PUBLIC/anon/authenticated had regained EXECUTE (the
+-- Supabase default GRANT to PUBLIC re-applies), so we revoke again explicitly.
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM anon;
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION cleanup_ai_users() FROM service_role;

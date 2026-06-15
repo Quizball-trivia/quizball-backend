@@ -40,6 +40,13 @@ import {
 } from '../party-quiz-match-flow.js';
 import { getRedisClient } from '../redis.js';
 import {
+  acknowledgeMatchUiReady,
+  emitMatchUiReadyGateState,
+  openMatchUiReadyGate,
+  type MatchUiReadyDispatchReason,
+} from '../match-ui-ready-gate.js';
+import type { MatchKickoffUiReadyPayload } from '../schemas/match.schemas.js';
+import {
   getDisconnectCount,
   toRemainingReconnects,
 } from './match-disconnect.service.js';
@@ -62,8 +69,113 @@ import {
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MATCH_START_COUNTDOWN_SEC = 5;
 const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
+const MATCH_KICKOFF_UI_READY_CEILING_MS = 10_000;
 const PRESENCE_TTL_SEC = 75;
 const FORFEIT_TTL_SEC = 600;
+
+async function resolveHumanReadyUserIds(
+  matchId: string,
+  lobbyId: string,
+  userIds: string[]
+): Promise<string[]> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.length === 0) return [];
+
+  const redis = getRedisClient();
+  const rankedAiUserId = redis?.isOpen
+    ? (await redis.get(rankedAiLobbyKey(lobbyId))) ?? (await redis.get(rankedAiMatchKey(matchId)))
+    : null;
+
+  try {
+    const usersById = await usersRepo.getByIds(uniqueUserIds);
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId && usersById.get(userId)?.is_ai !== true);
+  } catch (error) {
+    logger.warn({ error, matchId, lobbyId }, 'Failed to resolve AI users for match UI-ready gate');
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId);
+  }
+}
+
+function scheduleFirstQuestionAfterCountdown(
+  io: QuizballServer,
+  matchId: string,
+  variant: ReturnType<typeof resolveMatchVariant>,
+  countdownMs: number,
+  options?: {
+    initialDevSkipTarget?: 'penalty_ban' | 'penalties' | 'halftime' | 'last_attack' | 'shot' | 'second_half';
+  }
+): void {
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const match = await matchesRepo.getMatch(matchId);
+        if (!match || match.status !== 'active') {
+          logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
+          return;
+        }
+        // Dev-only: skip straight to the requested phase instead of dispatching
+        // normal question 0. devSkipToPossessionPhase dispatches the appropriate
+        // phase question (or, for halftime/penalty_ban, schedules the ban) —
+        // so a normal open-play question 0 is never emitted. It drives the
+        // POSSESSION state machine only, so guard it to possession variants:
+        // a party-quiz match must fall through to its normal first question.
+        if (options?.initialDevSkipTarget && variant !== 'friendly_party_quiz') {
+          logger.info(
+            { eventName: 'match:first_question_dev_skip', matchId, target: options.initialDevSkipTarget },
+            'Dev-skipping initial question to requested phase (no normal q0 emitted)'
+          );
+          await devSkipToPossessionPhase(io, matchId, options.initialDevSkipTarget);
+          return;
+        }
+        logger.info(
+          { eventName: 'match:first_question_dispatch', matchId, variant: resolveMatchVariant(match.state_payload, match.mode) },
+          'Dispatching first match question after countdown'
+        );
+        await sendMatchQuestion(io, matchId, 0);
+      } catch (error) {
+        logger.error({ error, matchId }, 'Failed to send first match question after countdown');
+      }
+    })();
+  }, countdownMs);
+}
+
+function startKickoffCountdown(params: {
+  io: QuizballServer;
+  matchId: string;
+  variant: ReturnType<typeof resolveMatchVariant>;
+  countdownSec: number;
+  countdownMs: number;
+  options?: {
+    initialDevSkipTarget?: 'penalty_ban' | 'penalties' | 'halftime' | 'last_attack' | 'shot' | 'second_half';
+  };
+  readyReason: MatchUiReadyDispatchReason;
+  missingUserIds: string[];
+}): void {
+  const { io, matchId, variant, countdownSec, countdownMs, options, readyReason, missingUserIds } = params;
+  const countdownScheduledAtMs = Date.now();
+  const startsAt = new Date(countdownScheduledAtMs + countdownMs).toISOString();
+  io.to(`match:${matchId}`).emit('match:countdown', {
+    matchId,
+    seconds: countdownSec,
+    startsAt,
+    serverNow: new Date(countdownScheduledAtMs).toISOString(),
+    reason: 'kickoff',
+  });
+  logger.info(
+    {
+      eventName: 'match:countdown',
+      matchId,
+      variant,
+      seconds: countdownSec,
+      startsAt,
+      reason: 'kickoff',
+      readyReason,
+      missingUserIds,
+    },
+    'Match start countdown scheduled'
+  );
+
+  scheduleFirstQuestionAfterCountdown(io, matchId, variant, countdownMs, options);
+}
 
 async function emitRejoinAvailable(
   socket: QuizballSocket,
@@ -283,6 +395,30 @@ export async function beginMatchForLobby(
   // Resolve the first-half category name so the client's round-1 intro
   // doesn't flash a placeholder while waiting for match:question.
   const categoryName = await resolveMatchCategoryName(match.category_a_id);
+  const kickoffReadyUserIds = await resolveHumanReadyUserIds(matchId, lobbyId, members.map((member) => member.user_id));
+  const dispatchKickoffCountdown = (params: { reason: MatchUiReadyDispatchReason; missingUserIds: string[] }) => {
+    startKickoffCountdown({
+      io,
+      matchId,
+      variant,
+      countdownSec,
+      countdownMs,
+      options,
+      readyReason: params.reason,
+      missingUserIds: params.missingUserIds,
+    });
+  };
+  if (kickoffReadyUserIds.length > 0) {
+    openMatchUiReadyGate({
+      io,
+      matchId,
+      phase: 'kickoff',
+      waitingUserIds: kickoffReadyUserIds,
+      ceilingMs: harnessDelayMs(MATCH_KICKOFF_UI_READY_CEILING_MS, 0),
+      emitInitial: false,
+      dispatch: dispatchKickoffCountdown,
+    });
+  }
 
   await Promise.all(
     members.map(async (member) => {
@@ -355,52 +491,28 @@ export async function beginMatchForLobby(
     );
   }
 
-  const countdownScheduledAtMs = Date.now();
-  const startsAt = new Date(countdownScheduledAtMs + countdownMs).toISOString();
-  io.to(`match:${matchId}`).emit('match:countdown', {
-    matchId,
-    seconds: countdownSec,
-    startsAt,
-    serverNow: new Date(countdownScheduledAtMs).toISOString(),
-    reason: 'kickoff',
-  });
-  logger.info(
-    { eventName: 'match:countdown', matchId, variant, seconds: countdownSec, startsAt, reason: 'kickoff' },
-    'Match start countdown scheduled'
-  );
+  if (kickoffReadyUserIds.length > 0) {
+    emitMatchUiReadyGateState(io, matchId, 'kickoff');
+    logger.info(
+      { eventName: 'match:waiting_for_ready', matchId, phase: 'kickoff', waitingUserIds: kickoffReadyUserIds },
+      'Match kickoff waiting for client UI ready'
+    );
+  } else {
+    dispatchKickoffCountdown({ reason: 'empty', missingUserIds: [] });
+  }
+}
 
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const match = await matchesRepo.getMatch(matchId);
-        if (!match || match.status !== 'active') {
-          logger.info({ matchId, status: match?.status }, 'Skipping first question — match no longer active');
-          return;
-        }
-        // Dev-only: skip straight to the requested phase instead of dispatching
-        // normal question 0. devSkipToPossessionPhase dispatches the appropriate
-        // phase question (or, for halftime/penalty_ban, schedules the ban) —
-        // so a normal open-play question 0 is never emitted. It drives the
-        // POSSESSION state machine only, so guard it to possession variants:
-        // a party-quiz match must fall through to its normal first question.
-        if (options?.initialDevSkipTarget && variant !== 'friendly_party_quiz') {
-          logger.info(
-            { eventName: 'match:first_question_dev_skip', matchId, target: options.initialDevSkipTarget },
-            'Dev-skipping initial question to requested phase (no normal q0 emitted)'
-          );
-          await devSkipToPossessionPhase(io, matchId, options.initialDevSkipTarget);
-          return;
-        }
-        logger.info(
-          { eventName: 'match:first_question_dispatch', matchId, variant: resolveMatchVariant(match.state_payload, match.mode) },
-          'Dispatching first match question after countdown'
-        );
-        await sendMatchQuestion(io, matchId, 0);
-      } catch (error) {
-        logger.error({ error, matchId }, 'Failed to send first match question after countdown');
-      }
-    })();
-  }, countdownMs);
+export async function handleKickoffUiReady(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload: MatchKickoffUiReadyPayload
+): Promise<void> {
+  const userId = socket.data.user?.id;
+  if (!userId) return;
+  const acknowledged = acknowledgeMatchUiReady(io, userId, payload.matchId, 'kickoff');
+  if (!acknowledged) {
+    logger.debug({ eventName: 'match:kickoff_ui_ready', matchId: payload.matchId, userId }, 'Kickoff UI-ready ack ignored');
+  }
 }
 
 export async function rejoinActiveMatchOnConnect(

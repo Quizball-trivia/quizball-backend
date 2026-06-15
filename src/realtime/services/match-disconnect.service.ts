@@ -54,6 +54,12 @@ import {
   scheduleRealtimeTimer,
 } from '../realtime-timer-scheduler.js';
 import type { MatchRejoinAvailablePayload } from '../socket.types.js';
+import type { MatchResumeUiReadyPayload } from '../schemas/match.schemas.js';
+import {
+  acknowledgeMatchUiReady,
+  openMatchUiReadyGate,
+  type MatchUiReadyDispatchReason,
+} from '../match-ui-ready-gate.js';
 import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
@@ -88,6 +94,7 @@ import {
 const MATCH_DISCONNECT_GRACE_MS = 60000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
+const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;
 const LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
@@ -105,6 +112,21 @@ const FORFEIT_TTL_SEC = 600;
 const PAUSE_QUESTION_BACKSTOP_MS = 90_000;
 
 type PossessionTerminalPlayer = MatchPlayerRow | MatchParticipantSnapshot;
+
+async function resolveHumanReadyUserIds(matchId: string, userIds: string[]): Promise<string[]> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.length === 0) return [];
+
+  const redis = getRedisClient();
+  const rankedAiUserId = redis?.isOpen ? await redis.get(rankedAiMatchKey(matchId)) : null;
+  try {
+    const usersById = await usersRepo.getByIds(uniqueUserIds);
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId && usersById.get(userId)?.is_ai !== true);
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Failed to resolve AI users for resume UI-ready gate');
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId);
+  }
+}
 
 function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTerminalPlayer[]): string[] {
   return [
@@ -606,6 +628,83 @@ function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function startResumeCountdown(params: {
+  io: QuizballServer;
+  matchId: string;
+  notifyUserId?: string | null;
+  pauseStartedAtMs: number;
+  readyReason: MatchUiReadyDispatchReason;
+  missingUserIds: string[];
+}): Promise<void> {
+  const { io, matchId, notifyUserId, pauseStartedAtMs, readyReason, missingUserIds } = params;
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const resumeCountdownMs = harnessDelayMs(MATCH_RESUME_COUNTDOWN_MS);
+  const countdownEndsAtMs = Date.now() + resumeCountdownMs;
+  const countdownKey = matchResumeCountdownKey(matchId);
+  const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
+    NX: true,
+    EX: RESUME_COUNTDOWN_TTL_SEC,
+  });
+
+  if (acquired !== 'OK') {
+    const rawEndsAt = await redis.get(countdownKey);
+    const existingEndsAtMs = Number(rawEndsAt);
+    if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+      const nowMs = Date.now();
+      const payload = {
+        matchId,
+        seconds: Math.max(1, Math.ceil((existingEndsAtMs - nowMs) / 1000)),
+        startsAt: new Date(existingEndsAtMs).toISOString(),
+        serverNow: new Date(nowMs).toISOString(),
+        reason: 'resume' as const,
+      };
+      if (notifyUserId) {
+        io.to(`user:${notifyUserId}`).emit('match:countdown', payload);
+      } else {
+        io.to(`match:${matchId}`).emit('match:countdown', payload);
+      }
+    }
+    return;
+  }
+
+  io.to(`match:${matchId}`).emit('match:countdown', {
+    matchId,
+    seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
+    startsAt: new Date(countdownEndsAtMs).toISOString(),
+    serverNow: new Date().toISOString(),
+    reason: 'resume',
+  });
+  logger.info(
+    {
+      eventName: 'match:countdown',
+      matchId,
+      reason: 'resume',
+      readyReason,
+      missingUserIds,
+    },
+    'Match resume countdown scheduled'
+  );
+
+  // Durable: the countdown completion used to be an in-process setTimeout —
+  // a restart in the 5s window stranded the match paused (pause key set, no
+  // timer, nothing to re-dispatch the question) until key TTLs / a rejoin /
+  // the stale sweeper recovered it. The Redis-backed timer survives restarts;
+  // completeResumeCountdown re-checks every condition so a late or duplicate
+  // fire is a no-op.
+  await scheduleRealtimeTimer(
+    'match_resume_countdown',
+    matchId,
+    new Date(countdownEndsAtMs),
+    {
+      kind: 'match_resume_countdown',
+      matchId,
+      pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0 ? pauseStartedAtMs : null,
+    }
+  );
+}
+
 export async function handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
   const userId = socket.data.user.id;
   const boundMatchId = socket.data.matchId;
@@ -748,55 +847,68 @@ export async function resumePausedMatch(
   // re-checks the grace key, so this is belt-and-suspenders.)
   await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
-  // Harness collapses the resume countdown so reconnect-resume completes fast.
-  const resumeCountdownMs = harnessDelayMs(MATCH_RESUME_COUNTDOWN_MS);
-  const countdownEndsAtMs = Date.now() + resumeCountdownMs;
   const countdownKey = matchResumeCountdownKey(matchId);
-  const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
-    NX: true,
-    EX: RESUME_COUNTDOWN_TTL_SEC,
-  });
-
-  if (acquired !== 'OK') {
-    const rawEndsAt = await redis.get(countdownKey);
-    const existingEndsAtMs = Number(rawEndsAt);
-    if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
-      const nowMs = Date.now();
-      io.to(`user:${userId}`).emit('match:countdown', {
-        matchId,
-        seconds: Math.max(1, Math.ceil((existingEndsAtMs - nowMs) / 1000)),
-        startsAt: new Date(existingEndsAtMs).toISOString(),
-        serverNow: new Date(nowMs).toISOString(),
-        reason: 'resume',
-      });
-    }
+  const rawEndsAt = await redis.get(countdownKey);
+  const existingEndsAtMs = Number(rawEndsAt);
+  if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+    await startResumeCountdown({
+      io,
+      matchId,
+      notifyUserId: userId,
+      pauseStartedAtMs,
+      readyReason: 'all_ready',
+      missingUserIds: [],
+    });
     return;
   }
 
-  io.to(`match:${matchId}`).emit('match:countdown', {
-    matchId,
-    seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
-    startsAt: new Date(countdownEndsAtMs).toISOString(),
-    serverNow: new Date().toISOString(),
-    reason: 'resume',
-  });
-
-  // Durable: the countdown completion used to be an in-process setTimeout —
-  // a restart in the 5s window stranded the match paused (pause key set, no
-  // timer, nothing to re-dispatch the question) until key TTLs / a rejoin /
-  // the stale sweeper recovered it. The Redis-backed timer survives restarts;
-  // completeResumeCountdown re-checks every condition so a late or duplicate
-  // fire is a no-op.
-  await scheduleRealtimeTimer(
-    'match_resume_countdown',
-    matchId,
-    new Date(countdownEndsAtMs),
-    {
-      kind: 'match_resume_countdown',
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const activeRoster = variant === 'friendly_party_quiz'
+    ? getActivePartyPlayers(roster, sanitizePartyQuizState(match.state_payload, match.total_questions).droppedUserIds)
+    : roster;
+  const resumeReadyUserIds = await resolveHumanReadyUserIds(matchId, activeRoster.map((player) => player.user_id));
+  const dispatchResumeCountdown = (params: { reason: MatchUiReadyDispatchReason; missingUserIds: string[] }) => {
+    void startResumeCountdown({
+      io,
       matchId,
-      pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0 ? pauseStartedAtMs : null,
-    }
-  );
+      pauseStartedAtMs,
+      readyReason: params.reason,
+      missingUserIds: params.missingUserIds,
+    }).catch((error) => {
+      logger.warn({ error, matchId }, 'Failed to start resume countdown after UI-ready gate');
+    });
+  };
+
+  if (resumeReadyUserIds.length > 0) {
+    openMatchUiReadyGate({
+      io,
+      matchId,
+      phase: 'resume',
+      waitingUserIds: resumeReadyUserIds,
+      ceilingMs: harnessDelayMs(MATCH_RESUME_UI_READY_CEILING_MS, 0),
+      dispatch: dispatchResumeCountdown,
+    });
+    logger.info(
+      { eventName: 'match:waiting_for_ready', matchId, phase: 'resume', waitingUserIds: resumeReadyUserIds },
+      'Match resume waiting for client UI ready'
+    );
+    return;
+  }
+
+  dispatchResumeCountdown({ reason: 'empty', missingUserIds: [] });
+}
+
+export async function handleResumeUiReady(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload: MatchResumeUiReadyPayload
+): Promise<void> {
+  const userId = socket.data.user?.id;
+  if (!userId) return;
+  const acknowledged = acknowledgeMatchUiReady(io, userId, payload.matchId, 'resume');
+  if (!acknowledged) {
+    logger.debug({ eventName: 'match:resume_ui_ready', matchId: payload.matchId, userId }, 'Resume UI-ready ack ignored');
+  }
 }
 
 /**

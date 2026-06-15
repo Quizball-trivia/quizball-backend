@@ -66,7 +66,7 @@ import {
   markMatchEnteredForUserSockets,
 } from './match-entry.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 60000;
+const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MATCH_START_COUNTDOWN_SEC = 5;
 const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
 const MATCH_KICKOFF_UI_READY_CEILING_MS = 10_000;

@@ -96,4 +96,50 @@ describeLocal('regression: ranked forfeit economy (RP + tickets)', () => {
     expect(mine, 'late forfeit settles an RP change for the leaver').toBeTruthy();
     expect(mine!.delta_rp, 'late forfeit costs the leaver RP').toBeLessThan(0);
   }, 150_000);
+
+  it('OPPONENT forfeits while we lead → winner gets forfeit-win base + goal-margin bonus', async () => {
+    const { bootMatch, playMatch, opponentForfeit } = await import('../../game-regression/src/runner.mjs');
+    const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+    const { matchPlayersRepo } = await import('../../src/modules/matches/match-players.repo.js');
+    const { rankedRepo } = await import('../../src/modules/ranked/ranked.repo.js');
+
+    // Forfeit-win base (+50) and the margin-bonus tiers, mirrored from
+    // ranked.service.ts (the constants aren't exported). Bonus only when ahead.
+    const FORFEIT_WIN_BASE = 50;
+    const marginBonus = (m: number) => (m >= 4 ? 40 : m === 3 ? 30 : m === 2 ? 15 : 0);
+
+    const run = await bootMatch({ startTimeoutMs: 25_000 });
+    expect(run.matchId).toBeTruthy();
+    // Bot answers correctly to build a goal lead, then the opponent forfeits.
+    await playMatch(run, { maxMs: 9_000, answerMode: 'correct' });
+
+    // Read the bot's goal margin at the moment of forfeit (winner's perspective).
+    const roster = await matchPlayersRepo.listMatchPlayers(run.matchId!);
+    const me = roster.find((p) => p.user_id === run.botUserId);
+    const opp = roster.find((p) => p.user_id !== run.botUserId);
+    const margin = (me?.goals ?? 0) - (opp?.goals ?? 0);
+
+    const oppId = await opponentForfeit(run);
+    expect(oppId, 'opponent forfeit resolved').toBeTruthy();
+
+    const match = await matchesRepo.getMatch(run.matchId!);
+    expect(['completed', 'abandoned']).toContain(match?.status);
+
+    // The surviving WINNER (bot) gains RP: forfeit-win base, PLUS the margin
+    // bonus iff it was ahead. (Placement runs can scale the magnitude, so assert
+    // the floor + the exact bonus-inclusion relationship, not a single number.)
+    const rpChanges = await rankedRepo.getRpChangesForMatch(run.matchId!);
+    const mine = rpChanges.find((c) => c.user_id === run.botUserId);
+    expect(mine, 'opponent-forfeit settles an RP change for the winner').toBeTruthy();
+    expect(mine!.delta_rp, 'winner gains RP on an opponent forfeit').toBeGreaterThan(0);
+    if (margin > 0) {
+      const expected = FORFEIT_WIN_BASE + marginBonus(margin);
+      expect(
+        mine!.delta_rp,
+        `winner ahead by ${margin} should get base+margin (${expected})`,
+      ).toBe(expected);
+    } else {
+      expect(mine!.delta_rp, 'no lead → flat forfeit-win base').toBe(FORFEIT_WIN_BASE);
+    }
+  }, 150_000);
 });

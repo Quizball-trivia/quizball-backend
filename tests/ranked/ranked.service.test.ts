@@ -152,9 +152,9 @@ describe('rankedService', () => {
       { rp: 2600, expected: 'World-Class' },
       { rp: 2899, expected: 'World-Class' },
       { rp: 2900, expected: 'Legend' },
-      { rp: 3199, expected: 'Legend' },
-      { rp: 3200, expected: 'GOAT' },
-      { rp: 4000, expected: 'GOAT' },
+      { rp: 4999, expected: 'Legend' },
+      { rp: 5000, expected: 'GOAT' },
+      { rp: 6000, expected: 'GOAT' },
     ];
 
     for (const entry of cases) {

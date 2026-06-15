@@ -28,7 +28,9 @@ import {
   handleMatchRejoin,
   resolveExpiredGraceWindow,
 } from '../../src/realtime/services/match-disconnect.service.js';
-import { handleMatchForfeit } from '../../src/realtime/services/match-forfeit.service.js';
+import { handleMatchForfeit, finalizeMatchAsForfeit } from '../../src/realtime/services/match-forfeit.service.js';
+import { matchPlayersRepo } from '../../src/modules/matches/match-players.repo.js';
+import { matchesRepo } from '../../src/modules/matches/matches.repo.js';
 import { matchRealtimeService } from '../../src/realtime/services/match-realtime.service.js';
 import { devSkipToPossessionPhase } from '../../src/realtime/possession-match-flow.js';
 import {
@@ -383,6 +385,29 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
 /** The bot explicitly forfeits/quits the match. */
 export async function botForfeit(run: RunMatchResult): Promise<void> {
   await handleMatchForfeit(run.io as never, run.botSocket as never, run.matchId);
+}
+
+/**
+ * The OPPONENT (AI) forfeits, leaving the bot as the surviving winner — drives
+ * `finalizeMatchAsForfeit` directly with the opponent's userId (the AI has no
+ * socket to emit from). Used to verify the winner-side economy: forfeit-win base
+ * + goal-margin bonus when the bot was ahead. Returns the opponent's userId.
+ */
+export async function opponentForfeit(run: RunMatchResult): Promise<string | null> {
+  if (!run.matchId) return null;
+  const roster = await matchPlayersRepo.listMatchPlayers(run.matchId);
+  const opponent = roster.find((p) => p.user_id !== run.botUserId);
+  if (!opponent) return null;
+  const activeMatch = await matchesRepo.getMatch(run.matchId);
+  if (!activeMatch) return null;
+  await finalizeMatchAsForfeit({
+    matchId: run.matchId,
+    forfeitingUserId: opponent.user_id,
+    activeMatch: activeMatch as never,
+    cacheSnapshot: null,
+    cleanupRedisKeys: [],
+  });
+  return opponent.user_id;
 }
 
 /**

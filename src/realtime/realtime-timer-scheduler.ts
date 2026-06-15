@@ -24,7 +24,7 @@ export type RealtimeTimerKind =
 
 export type RealtimeTimerPayload =
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
-  | { kind: 'draft_auto_ban'; lobbyId: string }
+  | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }

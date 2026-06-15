@@ -16,6 +16,7 @@
  */
 import {
   beginMatchForLobby,
+  handleKickoffUiReady,
   rejoinActiveMatchOnConnect,
 } from './match-lifecycle.service.js';
 import {
@@ -40,6 +41,7 @@ import {
   handleMatchDisconnect,
   handleMatchLeave,
   handleMatchRejoin,
+  handleResumeUiReady,
   pauseMatchForDisconnectedPlayer,
   resumePausedMatch,
 } from './match-disconnect.service.js';
@@ -48,6 +50,7 @@ export { beginMatchForLobby };
 
 export const matchRealtimeService = {
   rejoinActiveMatchOnConnect,
+  handleKickoffUiReady,
   handleMatchLeave,
   handleMatchForfeit,
   handleMatchRejoin,
@@ -57,6 +60,7 @@ export const matchRealtimeService = {
   handlePlayAgain,
   handleFinalResultsAck,
   resumePausedMatch,
+  handleResumeUiReady,
   handleMatchDisconnect,
   pauseMatchForDisconnectedPlayer,
   handleHalftimeBan,

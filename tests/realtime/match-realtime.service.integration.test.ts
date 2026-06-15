@@ -666,6 +666,19 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
       expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
       expect(emit).toHaveBeenCalledWith(
+        'match:waiting_for_ready',
+        expect.objectContaining({
+          matchId: 'm1',
+          phase: 'resume',
+          readyCount: 0,
+          totalCount: 2,
+        })
+      );
+
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
+
+      expect(emit).toHaveBeenCalledWith(
         'match:countdown',
         expect.objectContaining({
           matchId: 'm1',
@@ -1332,6 +1345,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
     // The match must come back to life: pause cleared AND timers re-ensured
@@ -1401,6 +1415,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
     // Present player u2 wins by forfeit despite trailing on total points.
@@ -1442,6 +1457,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 60_000));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
     // The match survives: no completion, no forfeit, no abandon.
@@ -1453,9 +1469,18 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(s1.join).toHaveBeenCalledWith('match:m1');
     expect(s2.join).toHaveBeenCalledWith('match:m1');
 
-    // Disconnect markers cleared and the resume countdown was started.
+    // Disconnect markers cleared and the recovered clients must acknowledge UI
+    // readiness before the resume countdown starts.
     expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
     expect(fakeRedisStore.values.has('match:disconnect:m1:u2')).toBe(false);
+    expect(roomEmits.get('match:m1')).toHaveBeenCalledWith(
+      'match:waiting_for_ready',
+      expect.objectContaining({ matchId: 'm1', phase: 'resume', readyCount: 0, totalCount: 2 })
+    );
+
+    await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+    await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
+
     expect(roomEmits.get('match:m1')).toHaveBeenCalledWith(
       'match:countdown',
       expect.objectContaining({ matchId: 'm1', reason: 'resume' })
@@ -1889,6 +1914,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(resolveRoundMock).not.toHaveBeenCalled();
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
 
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
+
       // The countdown completion is a durable realtime timer now (restart
       // proof) — fire its handler the way the scheduler would after 5s.
       const { completeResumeCountdown } = await import('../../src/realtime/services/match-disconnect.service.js');
@@ -1953,6 +1981,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
 
     try {
       await matchRealtimeService.resumePausedMatch(io, 'm1', 'u1');
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await matchRealtimeService.handleResumeUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
       // The countdown completion is a durable realtime timer now (restart
       // proof) — fire its handler the way the scheduler would after 5s.
       const { completeResumeCountdown } = await import('../../src/realtime/services/match-disconnect.service.js');
@@ -2691,10 +2721,10 @@ describe('match-realtime.service high-risk integration behavior', () => {
   // S22/S23 removed: covered the now-deleted DB-fallback path. The Redis-path
   // equivalents (scoring/timing) are exercised via tests/realtime/possession-match-flow.test.ts.
 
-  it('S24: beginMatchForLobby emits countdown and delays first question by countdown', async () => {
+  it('S24: beginMatchForLobby waits for kickoff UI-ready before countdown and first question', async () => {
     vi.useFakeTimers();
     try {
-      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { beginMatchForLobby, matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
 
       await beginMatchForLobby(io, 'l1', 'm1');
@@ -2702,7 +2732,14 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
       expect((io.to as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([room]: [string]) => room === 'match:m1')).toBe(true);
 
-      // Countdown is 5s for both ranked and party-quiz variants now.
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
       await vi.advanceTimersByTimeAsync(4999);
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
 
@@ -2717,10 +2754,12 @@ describe('match-realtime.service high-risk integration behavior', () => {
     vi.useFakeTimers();
     devSkipToPossessionPhaseMock.mockClear();
     try {
-      const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { beginMatchForLobby, matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const io = createIoMock();
 
       await beginMatchForLobby(io, 'l1', 'm1', { countdownSec: 0, initialDevSkipTarget: 'penalty_ban' });
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
 
       // Advance past the (0s) countdown — the post-countdown work runs the dev
       // skip, NOT a normal question-0 dispatch.
@@ -2733,7 +2772,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
-  it('S25: beginMatchForLobby falls back to match players when lobby membership is stale', async () => {
+  it('S25: beginMatchForLobby falls back to match players when lobby membership is stale and force-starts after UI-ready timeout', async () => {
     vi.useFakeTimers();
     try {
       const { beginMatchForLobby } = await import('../../src/realtime/services/match-realtime.service.js');
@@ -2750,7 +2789,16 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect(toCalls.some(([room]: [string]) => room === 'user:u1')).toBe(true);
       expect(toCalls.some(([room]: [string]) => room === 'user:u2')).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(10000);
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
       expect(sendMatchQuestionMock).toHaveBeenCalledWith(io, 'm1', 0);
     } finally {
       vi.useRealTimers();

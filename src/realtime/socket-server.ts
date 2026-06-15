@@ -255,7 +255,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     },
     draft_auto_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_auto_ban') return;
-      await runDraftAutoBan(server, payload.lobbyId);
+      await runDraftAutoBan(server, payload.lobbyId, {
+        requireUiReady: payload.requireUiReady,
+        forceAtMs: payload.forceAtMs,
+      });
     },
     draft_grace_expiry: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_grace_expiry') return;

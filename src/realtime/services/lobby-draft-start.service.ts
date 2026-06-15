@@ -179,9 +179,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         logger.warn({ err, lobbyId }, 'draft_started analytics failed');
       }
       void import('./draft-realtime.service.js')
-        .then(({ scheduleDraftAutoBan }) => {
-          scheduleDraftAutoBan(io, lobbyId);
-        })
+        .then(({ scheduleDraftAutoBanForCurrentTurn }) => scheduleDraftAutoBanForCurrentTurn(io, lobbyId))
         .catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
         });

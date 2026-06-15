@@ -223,6 +223,17 @@ export interface MatchCountdownPayload {
   reason?: 'kickoff' | 'resume';
 }
 
+export type MatchUiReadyPhase = 'kickoff' | 'resume';
+
+export interface MatchWaitingForReadyPayload {
+  matchId: string;
+  phase: MatchUiReadyPhase;
+  readyCount: number;
+  totalCount: number;
+  forceStartsAt: string;
+  serverNow?: string;
+}
+
 export interface MatchQuestionPayload {
   matchId: string;
   qIndex: number;
@@ -765,6 +776,7 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
+  'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:countdown_guess': (data: { matchId: string; qIndex: number; guess: string }) => void;
@@ -772,6 +784,8 @@ export interface ClientToServerEvents {
   'match:clues_answer': (data: MatchCluesAnswerPayload) => void;
   'match:halftime_ban': (data: { matchId: string; categoryId: string }) => void;
   'match:halftime_ui_ready': (data: { matchId: string }) => void;
+  'match:kickoff_ui_ready': (data: { matchId: string }) => void;
+  'match:resume_ui_ready': (data: { matchId: string }) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;
@@ -830,6 +844,7 @@ export interface ServerToClientEvents {
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;
   'match:start': (data: MatchStartPayload) => void;
+  'match:waiting_for_ready': (data: MatchWaitingForReadyPayload) => void;
   'match:countdown': (data: MatchCountdownPayload) => void;
   'match:state': (data: MatchStatePayload) => void;
   'match:party_state': (data: MatchPartyStatePayload) => void;

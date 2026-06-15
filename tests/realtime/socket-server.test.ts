@@ -13,7 +13,7 @@ describe('socket heartbeat config', () => {
     // A timeout below that produced constant false disconnects in prod
     // (mass socket-drop bursts pausing 7+ matches at once, 2026-06-10).
     expect(SOCKET_HEARTBEAT_CONFIG.pingTimeout).toBeGreaterThanOrEqual(8000);
-    // Worst-case disconnect detection must stay well inside the 60s grace
+    // Worst-case disconnect detection must stay well inside the disconnect grace
     // window so the opponent overlay + grace flow remain meaningful.
     expect(
       SOCKET_HEARTBEAT_CONFIG.pingInterval + SOCKET_HEARTBEAT_CONFIG.pingTimeout

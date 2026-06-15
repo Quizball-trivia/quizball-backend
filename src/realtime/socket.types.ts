@@ -225,6 +225,11 @@ export interface MatchCountdownPayload {
 
 export type MatchUiReadyPhase = 'kickoff' | 'resume';
 
+export type MatchStagePresencePayload = {
+  matchId: string;
+  stageKey: string;
+};
+
 export interface MatchWaitingForReadyPayload {
   matchId: string;
   phase: MatchUiReadyPhase;
@@ -786,6 +791,8 @@ export interface ClientToServerEvents {
   'match:halftime_ui_ready': (data: { matchId: string }) => void;
   'match:kickoff_ui_ready': (data: { matchId: string }) => void;
   'match:resume_ui_ready': (data: { matchId: string }) => void;
+  'match:presence_heartbeat': (data: MatchStagePresencePayload) => void;
+  'match:stage_ready': (data: MatchStagePresencePayload) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;

@@ -46,6 +46,14 @@ export function matchEnteredKey(matchId: string, userId: string): string {
   return `match:entered:${matchId}:${userId}`;
 }
 
+export function matchStagePresenceKey(matchId: string, stageKey: string, userId: string): string {
+  return `match:stage_presence:${matchId}:${stageKey}:${userId}`;
+}
+
+export function matchStageReadyKey(matchId: string, stageKey: string, userId: string): string {
+  return `match:stage_ready:${matchId}:${stageKey}:${userId}`;
+}
+
 /** Per-player Redis Set storing found answer group IDs during a countdown round. */
 export function countdownPlayerKey(matchId: string, userId: string): string {
   return `match:cdown:${matchId}:${userId}`;

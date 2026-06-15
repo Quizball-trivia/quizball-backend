@@ -38,6 +38,11 @@ import {
   runDraftGraceExpiry,
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
+import {
+  isMatchStagePresenceEnabled,
+  recordMatchStagePresenceHeartbeat,
+  recordMatchStageReady,
+} from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
@@ -373,6 +378,26 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       ack?.({
         sentAt: Number(payload?.sentAt ?? Date.now()),
         serverNow: new Date().toISOString(),
+      });
+    });
+
+    socket.on('match:presence_heartbeat', (payload) => {
+      if (!isMatchStagePresenceEnabled()) return;
+      const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
+      const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
+      if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;
+      void recordMatchStagePresenceHeartbeat({ matchId, stageKey, userId: user.id }).catch((error) => {
+        logger.warn({ error, matchId, stageKey, userId: user.id }, 'Failed to record match stage heartbeat');
+      });
+    });
+
+    socket.on('match:stage_ready', (payload) => {
+      if (!isMatchStagePresenceEnabled()) return;
+      const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
+      const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
+      if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;
+      void recordMatchStageReady({ matchId, stageKey, userId: user.id }).catch((error) => {
+        logger.warn({ error, matchId, stageKey, userId: user.id }, 'Failed to record match stage ready');
       });
     });
 

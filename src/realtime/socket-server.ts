@@ -39,7 +39,6 @@ import {
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
 import {
-  isMatchStagePresenceEnabled,
   recordMatchStagePresenceHeartbeat,
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
@@ -382,7 +381,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     });
 
     socket.on('match:presence_heartbeat', (payload) => {
-      if (!isMatchStagePresenceEnabled()) return;
       const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
       const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
       if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;
@@ -392,7 +390,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     });
 
     socket.on('match:stage_ready', (payload) => {
-      if (!isMatchStagePresenceEnabled()) return;
       const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
       const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
       if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;

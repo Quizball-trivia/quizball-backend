@@ -1,4 +1,3 @@
-import { config } from '../../core/config.js';
 import { logger } from '../../core/logger.js';
 import {
   matchStagePresenceKey,
@@ -25,10 +24,6 @@ export type MatchStageReadyResult = {
   missingUserIds: string[];
   reason: 'all_ready' | 'timeout' | 'redis_unavailable';
 };
-
-export function isMatchStagePresenceEnabled(): boolean {
-  return config.MATCH_STAGE_PRESENCE_ENABLED;
-}
 
 export function normalizeMatchStageKey(stageKey: string | null | undefined): string | null {
   const normalized = stageKey?.trim().replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 64);

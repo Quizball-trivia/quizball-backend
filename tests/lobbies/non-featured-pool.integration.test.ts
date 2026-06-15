@@ -87,28 +87,32 @@ afterAll(async () => {
 });
 
 describe('friendly/party category pool excludes featured (ranked-exclusive)', () => {
-  it.runIf(() => dbAvailable)('listAllValidCategories returns the non-featured category, not the featured one', async () => {
+  it('listAllValidCategories returns the non-featured category, not the featured one', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const rows = await lobbiesRepo.listAllValidCategories(5);
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(plainCategoryId);
     expect(ids).not.toContain(featuredCategoryId);
   });
 
-  it.runIf(() => dbAvailable)('selectRandomActiveCategories never surfaces a featured category', async () => {
+  it('selectRandomActiveCategories never surfaces a featured category', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const rows = await lobbiesRepo.selectRandomActiveCategories(5, 50);
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(plainCategoryId);
     expect(ids).not.toContain(featuredCategoryId);
   });
 
-  it.runIf(() => dbAvailable)('selectRandomActiveCategoriesExcluding stays within the non-featured pool', async () => {
+  it('selectRandomActiveCategoriesExcluding stays within the non-featured pool', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const rows = await lobbiesRepo.selectRandomActiveCategoriesExcluding(5, 50, []);
     const ids = rows.map((r) => r.id);
     expect(ids).toContain(plainCategoryId);
     expect(ids).not.toContain(featuredCategoryId);
   });
 
-  it.runIf(() => dbAvailable)('listValidCategoryIds rejects a featured id even when it has enough questions', async () => {
+  it('listValidCategoryIds rejects a featured id even when it has enough questions', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const validated = await lobbiesRepo.listValidCategoryIds([featuredCategoryId, plainCategoryId], 5);
     expect(validated).toContain(plainCategoryId);
     expect(validated).not.toContain(featuredCategoryId);
@@ -116,7 +120,8 @@ describe('friendly/party category pool excludes featured (ranked-exclusive)', ()
 });
 
 describe('daily-challenge question pool excludes featured (ranked-exclusive)', () => {
-  it.runIf(() => dbAvailable)('listAvailableCategoriesByQuestionType excludes featured categories', async () => {
+  it('listAvailableCategoriesByQuestionType excludes featured categories', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const rows = await dailyChallengesRepo.listAvailableCategoriesByQuestionType('mcq_single', {
       requireDifficultyCoverage: true,
     });
@@ -125,7 +130,8 @@ describe('daily-challenge question pool excludes featured (ranked-exclusive)', (
     expect(ids).not.toContain(featuredCategoryId);
   });
 
-  it.runIf(() => dbAvailable)('listPublishedQuestionsByTypeAndCategories yields nothing for a featured category', async () => {
+  it('listPublishedQuestionsByTypeAndCategories yields nothing for a featured category', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const onlyFeatured = await dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
       'mcq_single',
       [featuredCategoryId]
@@ -139,7 +145,8 @@ describe('daily-challenge question pool excludes featured (ranked-exclusive)', (
     expect(onlyPlain.length).toBeGreaterThan(0);
   });
 
-  it.runIf(() => dbAvailable)('countPublishedQuestionsByTypeAndCategories counts zero for a featured category', async () => {
+  it('countPublishedQuestionsByTypeAndCategories counts zero for a featured category', async ({ skip }) => {
+    if (!dbAvailable) skip();
     const featuredCount = await dailyChallengesRepo.countPublishedQuestionsByTypeAndCategories(
       'mcq_single',
       [featuredCategoryId]

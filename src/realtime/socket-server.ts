@@ -21,6 +21,7 @@ import { setAuthRealtimeServer } from './services/auth-realtime.service.js';
 import { setNotificationsRealtimeServer } from './services/notifications-realtime.service.js';
 import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics/game-events.js';
 import { getRedisClient } from './redis.js';
+import { setUserPingMs } from './user-ping.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { resolvePartyQuizRound } from './party-quiz-match-flow.js';
 import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from './possession-match-flow.js';
@@ -377,6 +378,15 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       ack?.({
         sentAt: Number(payload?.sentAt ?? Date.now()),
         serverNow: new Date().toISOString(),
+      });
+    });
+
+    socket.on('connection:rtt', (payload) => {
+      const rttMs = Number(payload?.rttMs);
+      if (!Number.isFinite(rttMs)) return;
+      // Best-effort: never let a ping report break the socket pipeline.
+      void setUserPingMs(user.id, rttMs).catch((error) => {
+        logger.warn({ error, userId: user.id }, 'Failed to store user RTT');
       });
     });
 

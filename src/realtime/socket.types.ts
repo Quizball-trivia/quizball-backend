@@ -803,6 +803,10 @@ export interface ClientToServerEvents {
     data: { sentAt: number },
     ack?: (result: { sentAt: number; serverNow: string }) => void
   ) => void;
+  // Client reports its own measured RTT so the opponent can be shown this
+  // player's ping (the server doesn't otherwise know it). Stored per-user with
+  // a short TTL; surfaced as opponentInfo.pingMs on the match/showdown payload.
+  'connection:rtt': (data: { rttMs: number }) => void;
   'warmup:tap': (data: WarmupTapPayload) => void;
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;

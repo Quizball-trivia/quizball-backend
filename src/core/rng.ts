@@ -68,3 +68,22 @@ export function withSeed<T>(seed: string | number, fn: () => T): T {
 export function isSeeded(): boolean {
   return rngStorage.getStore() !== undefined;
 }
+
+/**
+ * Deterministic Fisher–Yates shuffle keyed by `seed`. Same seed → same order,
+ * every time and on every server/replica (so both players in a match, and any
+ * cache rebuild after reconnect, see the IDENTICAL order). Unlike getRandom()
+ * this does NOT depend on a withSeed scope — it always derives its own stream
+ * from `seed`, so it is deterministic in production too.
+ *
+ * Returns a new array; the input is not mutated.
+ */
+export function seededShuffle<T>(items: readonly T[], seed: string | number): T[] {
+  const out = items.slice();
+  const next = mulberry32(seedFrom(seed));
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}

@@ -22,7 +22,7 @@ import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 // How long a match may sit in 'active' with no state write before it is
 // considered orphaned. Must be comfortably larger than every legitimate idle
-// window (60s disconnect grace, halftime ban deadline, resume countdown) so a
+// window (match disconnect grace, halftime ban deadline, resume countdown) so a
 // live match is never swept.
 const STALE_AGE_MS = 15 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;

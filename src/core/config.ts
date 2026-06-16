@@ -34,7 +34,6 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-
   // When false, objectives stop progressing and stop awarding coins/XP after
   // matches (paired with hiding the Objectives UI behind the frontend flag).
   OBJECTIVES_ENABLED: z

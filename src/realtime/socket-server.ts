@@ -38,6 +38,10 @@ import {
   runDraftGraceExpiry,
   runRankedAiDraftBan,
 } from './services/draft-realtime.service.js';
+import {
+  recordMatchStagePresenceHeartbeat,
+  recordMatchStageReady,
+} from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
@@ -54,7 +58,7 @@ const POST_CONNECT_MAX_ATTEMPTS = 10;
 // routinely take 3-8s, so production saw constant false disconnects (mass
 // socket-drop bursts pausing 7+ matches at once, diagnosed 2026-06-10).
 // 10s absorbs those; worst-case disconnect detection becomes
-// pingInterval + pingTimeout = 12.5s, which the 60s grace flow comfortably
+// pingInterval + pingTimeout = 12.5s, which the 30s grace flow comfortably
 // covers. Intentional exits stay instant (the client emits match:leave).
 export const SOCKET_HEARTBEAT_CONFIG = {
   pingInterval: 2500,
@@ -308,7 +312,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       credentials: true,
     },
     // Balance: disconnect feedback within ~12.5s worst case (opponent then
-    // sees the 60s grace overlay) vs. NOT killing sockets on routine mobile
+    // sees the grace overlay) vs. NOT killing sockets on routine mobile
     // network hiccups — see SOCKET_HEARTBEAT_CONFIG for the sizing rationale.
     pingInterval: SOCKET_HEARTBEAT_CONFIG.pingInterval,
     pingTimeout: SOCKET_HEARTBEAT_CONFIG.pingTimeout,
@@ -368,6 +372,31 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerMatchHandlers(io, socket);
     registerWarmupHandlers(io, socket);
     registerDevHandlers(io, socket);
+
+    socket.on('connection:ping', (payload, ack) => {
+      ack?.({
+        sentAt: Number(payload?.sentAt ?? Date.now()),
+        serverNow: new Date().toISOString(),
+      });
+    });
+
+    socket.on('match:presence_heartbeat', (payload) => {
+      const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
+      const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
+      if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;
+      void recordMatchStagePresenceHeartbeat({ matchId, stageKey, userId: user.id }).catch((error) => {
+        logger.warn({ error, matchId, stageKey, userId: user.id }, 'Failed to record match stage heartbeat');
+      });
+    });
+
+    socket.on('match:stage_ready', (payload) => {
+      const matchId = typeof payload?.matchId === 'string' ? payload.matchId : '';
+      const stageKey = typeof payload?.stageKey === 'string' ? payload.stageKey : '';
+      if (!matchId || !socket.rooms.has(`match:${matchId}`)) return;
+      void recordMatchStageReady({ matchId, stageKey, userId: user.id }).catch((error) => {
+        logger.warn({ error, matchId, stageKey, userId: user.id }, 'Failed to record match stage ready');
+      });
+    });
 
     socket.on('disconnect', (reason) => {
       // matchId/lobbyId included so a silent handleMatchDisconnect early-return

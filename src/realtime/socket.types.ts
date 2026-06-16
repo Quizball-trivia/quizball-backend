@@ -225,6 +225,11 @@ export interface MatchCountdownPayload {
 
 export type MatchUiReadyPhase = 'kickoff' | 'resume';
 
+export type MatchStagePresencePayload = {
+  matchId: string;
+  stageKey: string;
+};
+
 export interface MatchWaitingForReadyPayload {
   matchId: string;
   phase: MatchUiReadyPhase;
@@ -786,12 +791,18 @@ export interface ClientToServerEvents {
   'match:halftime_ui_ready': (data: { matchId: string }) => void;
   'match:kickoff_ui_ready': (data: { matchId: string }) => void;
   'match:resume_ui_ready': (data: { matchId: string }) => void;
+  'match:presence_heartbeat': (data: MatchStagePresencePayload) => void;
+  'match:stage_ready': (data: MatchStagePresencePayload) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;
   'match:play_again': (data: MatchPlayAgainPayload) => void;
   'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
   'match:ready_for_next_question': (data: { matchId: string; qIndex: number }) => void;
+  'connection:ping': (
+    data: { sentAt: number },
+    ack?: (result: { sentAt: number; serverNow: string }) => void
+  ) => void;
   'warmup:tap': (data: WarmupTapPayload) => void;
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;

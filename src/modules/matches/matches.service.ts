@@ -1,4 +1,4 @@
-import { getRandom } from '../../core/rng.js';
+import { getRandom, seededShuffle } from '../../core/rng.js';
 import { matchesRepo } from './matches.repo.js';
 import { matchAnswersRepo } from './match-answers.repo.js';
 import { matchEventsRepo } from './match-events.repo.js';
@@ -139,7 +139,7 @@ export interface BuiltMatchQuestionPayload {
   attackerSeat: 1 | 2 | null;
 }
 
-function buildQuestionAssets(row: MatchQuestionWithCategory): {
+function buildQuestionAssets(row: MatchQuestionWithCategory, matchId: string): {
   question: GameQuestionDTO;
   evaluation: MatchQuestionEvaluation;
   reveal: MatchRoundReveal;
@@ -159,17 +159,25 @@ function buildQuestionAssets(row: MatchQuestionWithCategory): {
 
   switch (parsed.data.type) {
     case 'mcq_single': {
-      const correctIndex = parsed.data.options.findIndex((option) => option.is_correct);
-      if (correctIndex < 0) {
+      if (!parsed.data.options.some((option) => option.is_correct)) {
         logger.warn({ questionId: row.question_id }, 'MCQ question has no correct option');
         return null;
       }
+
+      // Shuffle the answer options so a given question doesn't always show them
+      // in the same order / with the correct answer in the same slot. The order
+      // is deterministic per (match, question): both players — and any cache
+      // rebuild after reconnect — derive the IDENTICAL order from the same seed,
+      // while it differs across matches. correctIndex is recomputed for the
+      // shuffled order.
+      const shuffledOptions = seededShuffle(parsed.data.options, `${matchId}:${row.q_index}`);
+      const correctIndex = shuffledOptions.findIndex((option) => option.is_correct);
 
       const question: MultipleChoiceQuestionDTO = {
         kind: 'multipleChoice',
         ...common,
         prompt: ensureI18nObject(row.prompt),
-        options: parsed.data.options.map((option) => ensureI18nObject(option.text)),
+        options: shuffledOptions.map((option) => ensureI18nObject(option.text)),
         image: parsed.data.image
           ? {
             url: parsed.data.image.url,
@@ -664,7 +672,7 @@ export const matchesService = {
   async buildGameQuestion(matchId: string, qIndex: number): Promise<GameQuestionDTO | null> {
     const row = await matchQuestionsRepo.getMatchQuestion(matchId, qIndex);
     if (!row) return null;
-    return buildQuestionAssets(row)?.question ?? null;
+    return buildQuestionAssets(row, matchId)?.question ?? null;
   },
 
   async buildMatchQuestionPayload(matchId: string, qIndex: number): Promise<BuiltMatchQuestionPayload | null> {
@@ -677,7 +685,7 @@ export const matchesService = {
       questionId: row.question_id,
     }, 'Building match question payload');
 
-    const assets = buildQuestionAssets(row);
+    const assets = buildQuestionAssets(row, matchId);
     if (!assets) {
       return null;
     }

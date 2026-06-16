@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRandom, withSeed, seedFrom, isSeeded } from '../../src/core/rng.js';
+import { getRandom, withSeed, seedFrom, isSeeded, seededShuffle } from '../../src/core/rng.js';
 
 describe('rng seam', () => {
   it('returns a float in [0, 1) unseeded (prod path = Math.random behaviour)', () => {
@@ -61,5 +61,47 @@ describe('rng seam', () => {
     expect(seedFrom('match-1')).toBe(seedFrom('match-1'));
     expect(seedFrom('match-1')).not.toBe(seedFrom('match-2'));
     expect(seedFrom(42)).toBe(42);
+  });
+});
+
+describe('seededShuffle (MCQ option ordering)', () => {
+  const OPTS = ['a', 'b', 'c', 'd'];
+
+  it('is a permutation — keeps every element, drops none, adds none', () => {
+    const out = seededShuffle(OPTS, 'match-1:0');
+    expect([...out].sort()).toEqual([...OPTS].sort());
+    expect(out).toHaveLength(OPTS.length);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = [...OPTS];
+    seededShuffle(input, 'match-1:0');
+    expect(input).toEqual(OPTS);
+  });
+
+  it('is deterministic for the same seed (both players / cache rebuilds match)', () => {
+    expect(seededShuffle(OPTS, 'match-1:3')).toEqual(seededShuffle(OPTS, 'match-1:3'));
+  });
+
+  it('differs across matches (same question index, different match)', () => {
+    // Across many questions the two matches must not be identical for all of
+    // them (a single seed could coincidentally no-op; the set must differ).
+    const anyDifferent = Array.from({ length: 10 }, (_, q) =>
+      seededShuffle(OPTS, `match-A:${q}`).join() !== seededShuffle(OPTS, `match-B:${q}`).join(),
+    ).some(Boolean);
+    expect(anyDifferent).toBe(true);
+  });
+
+  it('correct option can be located after shuffle via a stable key', () => {
+    const tagged = [
+      { text: 'a', is_correct: false },
+      { text: 'b', is_correct: true },
+      { text: 'c', is_correct: false },
+      { text: 'd', is_correct: false },
+    ];
+    const shuffled = seededShuffle(tagged, 'match-1:5');
+    const idx = shuffled.findIndex((o) => o.is_correct);
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(shuffled[idx].text).toBe('b');
   });
 });

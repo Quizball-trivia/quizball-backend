@@ -50,6 +50,7 @@ export const recentMatchResponseSchema = z.object({
   opponentGoals: z.number().int().nonnegative(),
   opponentPenaltyGoals: z.number().int().nonnegative(),
   winnerDecisionMethod: winnerDecisionMethodSchema.nullable(),
+  cancelledNoContest: z.boolean().default(false),
   rpDelta: z.number().int().nullable(),
   opponent: z.object({
     id: z.string().uuid().nullable(),

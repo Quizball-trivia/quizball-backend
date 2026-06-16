@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8000",
       "description": "Local development"
     }
   ],
@@ -336,6 +336,10 @@
                     "total_points_fallback",
                     "forfeit"
                   ]
+                },
+                "cancelledNoContest": {
+                  "type": "boolean",
+                  "default": false
                 },
                 "rpDelta": {
                   "type": "integer",
@@ -7462,6 +7466,10 @@
                               "total_points_fallback",
                               "forfeit"
                             ]
+                          },
+                          "cancelledNoContest": {
+                            "type": "boolean",
+                            "default": false
                           },
                           "rpDelta": {
                             "type": "integer",

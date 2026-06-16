@@ -1012,7 +1012,7 @@ export async function resumePausedMatch(
       matchId,
       phase: 'resume',
       waitingUserIds: resumeReadyUserIds,
-      ceilingMs: harnessDelayMs(MATCH_RESUME_UI_READY_CEILING_MS, 0),
+      ceilingMs: harnessDelayMs(MATCH_RESUME_UI_READY_CEILING_MS),
       dispatch: dispatchResumeCountdown,
     });
     logger.info(

@@ -26,6 +26,7 @@ import {
 import {
   handleMatchDisconnect,
   handleMatchRejoin,
+  handleResumeUiReady,
   resolveExpiredGraceWindow,
 } from '../../src/realtime/services/match-disconnect.service.js';
 import { handleMatchForfeit, finalizeMatchAsForfeit } from '../../src/realtime/services/match-forfeit.service.js';
@@ -370,6 +371,7 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   if (run.matchId) {
     await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+    await handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
     // Rejoin schedules a resume countdown (collapsed under fast-timers) that emits
     // match:resume + re-dispatches the question. Wait for it so play can continue.
     // THROW if it never fires — "resume never happened" was a real bug, so this

@@ -115,6 +115,27 @@ const PAUSE_QUESTION_BACKSTOP_MS = 90_000;
 
 type PossessionTerminalPlayer = MatchPlayerRow | MatchParticipantSnapshot;
 
+export async function getRemainingDisconnectGraceMs(matchId: string): Promise<number> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return MATCH_DISCONNECT_GRACE_MS;
+
+  try {
+    const graceKey = matchGraceKey(matchId);
+    const rawStartedAt = await redis.get(graceKey);
+    const startedAtMs = Number(rawStartedAt);
+    if (Number.isFinite(startedAtMs) && startedAtMs > 0) {
+      const remainingMs = MATCH_DISCONNECT_GRACE_MS - (Date.now() - startedAtMs);
+      return Math.max(0, Math.min(MATCH_DISCONNECT_GRACE_MS, remainingMs));
+    }
+
+    const ttl = await redis.ttl(graceKey);
+    return ttl > 0 ? Math.min(ttl * 1000, MATCH_DISCONNECT_GRACE_MS) : MATCH_DISCONNECT_GRACE_MS;
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Failed to compute remaining disconnect grace');
+    return MATCH_DISCONNECT_GRACE_MS;
+  }
+}
+
 async function resolveHumanReadyUserIds(matchId: string, userIds: string[]): Promise<string[]> {
   const uniqueUserIds = [...new Set(userIds)];
   if (uniqueUserIds.length === 0) return [];
@@ -798,13 +819,16 @@ export async function resumePausedMatch(
   const disconnectedBeforeResume = roster
     .filter((_, index) => disconnectedExists[index])
     .map((player) => player.user_id);
+  const userWasDisconnected = disconnectedBeforeResume.includes(userId);
 
   const otherDisconnected = disconnectedBeforeResume.filter((disconnectedUserId) => disconnectedUserId !== userId);
   if (otherDisconnected.length > 0) {
+    if (userWasDisconnected) {
+      await redis.del(matchDisconnectKey(matchId, userId));
+    }
     const disconnectedOpponentId = otherDisconnected[0];
     if (!disconnectedOpponentId) return;
-    const ttl = await redis.ttl(matchGraceKey(matchId));
-    const graceMs = ttl > 0 ? ttl * 1000 : MATCH_DISCONNECT_GRACE_MS;
+    const graceMs = await getRemainingDisconnectGraceMs(matchId);
     const remainingReconnects = toRemainingReconnects(
       await getDisconnectCount(matchId, disconnectedOpponentId)
     );
@@ -817,7 +841,7 @@ export async function resumePausedMatch(
     return;
   }
 
-  const reconnectingDisconnectedUserIds = disconnectedBeforeResume.includes(userId) ? [userId] : [];
+  const reconnectingDisconnectedUserIds = userWasDisconnected ? [userId] : [];
 
   const exitPendingExists = await Promise.all(
     roster.map((player) => redis.exists(matchExitPendingKey(matchId, player.user_id)))
@@ -866,8 +890,7 @@ export async function resumePausedMatch(
       if (missingRecoveringUsers.length > 0) {
         const missingRecoveringUserId = missingRecoveringUsers[0];
         if (!missingRecoveringUserId) return;
-        const ttl = await redis.ttl(matchGraceKey(matchId));
-        const graceMs = ttl > 0 ? ttl * 1000 : MATCH_DISCONNECT_GRACE_MS;
+        const graceMs = await getRemainingDisconnectGraceMs(matchId);
         const remainingReconnects = toRemainingReconnects(
           await getDisconnectCount(matchId, missingRecoveringUserId)
         );
@@ -884,6 +907,28 @@ export async function resumePausedMatch(
         logger.info(
           { matchId, missingRecoveringUsers, readyReason: params.reason },
           'Match resume UI-ready gate timed out before reconnecting player restored match UI'
+        );
+        return;
+      }
+
+      const liveDisconnectedExists = await Promise.all(
+        activeRoster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+      );
+      const blockingDisconnectedUserIds = activeRoster
+        .filter((_, index) => liveDisconnectedExists[index] === 1)
+        .map((player) => player.user_id)
+        .filter(
+          (liveDisconnectedUserId) =>
+            !reconnectingDisconnectedUserIds.includes(liveDisconnectedUserId) ||
+            params.missingUserIds.includes(liveDisconnectedUserId)
+        );
+      if (blockingDisconnectedUserIds.length > 0) {
+        for (const recoveredUserId of reconnectingDisconnectedUserIds) {
+          await redis.del(matchDisconnectKey(matchId, recoveredUserId));
+        }
+        logger.info(
+          { matchId, blockingDisconnectedUserIds, readyReason: params.reason },
+          'Match resume UI-ready gate kept grace active because disconnect markers remain'
         );
         return;
       }

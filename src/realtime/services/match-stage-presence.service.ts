@@ -97,30 +97,35 @@ export async function waitForMatchStageReady(params: {
   const deadlineMs = Date.now() + Math.max(0, params.ceilingMs);
   const pollMs = Math.max(20, params.pollMs ?? DEFAULT_READY_POLL_MS);
 
-  while (Date.now() <= deadlineMs) {
-    const readyResults = await Promise.all(
-      userIds.map((userId) => redis.exists(matchStageReadyKey(params.matchId, stageKey, userId)))
-    );
-    const readyUserIds = userIds.filter((_, index) => readyResults[index] === 1);
-    if (readyUserIds.length === userIds.length) {
-      return { readyUserIds, missingUserIds: [], reason: 'all_ready' };
+  try {
+    while (Date.now() <= deadlineMs) {
+      const readyResults = await Promise.all(
+        userIds.map((userId) => redis.exists(matchStageReadyKey(params.matchId, stageKey, userId)))
+      );
+      const readyUserIds = userIds.filter((_, index) => readyResults[index] === 1);
+      if (readyUserIds.length === userIds.length) {
+        return { readyUserIds, missingUserIds: [], reason: 'all_ready' };
+      }
+
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(pollMs, remainingMs));
     }
 
-    const remainingMs = deadlineMs - Date.now();
-    if (remainingMs <= 0) break;
-    await sleep(Math.min(pollMs, remainingMs));
-  }
-
-  const finalReadyResults = await Promise.all(
-    userIds.map((userId) => redis.exists(matchStageReadyKey(params.matchId, stageKey, userId)))
-  );
-  const readyUserIds = userIds.filter((_, index) => finalReadyResults[index] === 1);
-  const missingUserIds = userIds.filter((userId) => !readyUserIds.includes(userId));
-  if (missingUserIds.length > 0) {
-    logger.info(
-      { matchId: params.matchId, stageKey, missingUserIds },
-      'Match stage ready wait reached ceiling'
+    const finalReadyResults = await Promise.all(
+      userIds.map((userId) => redis.exists(matchStageReadyKey(params.matchId, stageKey, userId)))
     );
+    const readyUserIds = userIds.filter((_, index) => finalReadyResults[index] === 1);
+    const missingUserIds = userIds.filter((userId) => !readyUserIds.includes(userId));
+    if (missingUserIds.length > 0) {
+      logger.info(
+        { matchId: params.matchId, stageKey, missingUserIds },
+        'Match stage ready wait reached ceiling'
+      );
+    }
+    return { readyUserIds, missingUserIds, reason: missingUserIds.length === 0 ? 'all_ready' : 'timeout' };
+  } catch (error) {
+    logger.warn({ error, matchId: params.matchId, stageKey }, 'Redis error during stage ready polling');
+    return { readyUserIds: [], missingUserIds: userIds, reason: 'redis_unavailable' };
   }
-  return { readyUserIds, missingUserIds, reason: missingUserIds.length === 0 ? 'all_ready' : 'timeout' };
 }

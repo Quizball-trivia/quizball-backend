@@ -73,4 +73,20 @@ describe('match-stage-presence.service', () => {
 
     await expect(hasMatchStagePresence({ matchId: 'm1', userId: 'u1', stageKey: 'resume' })).resolves.toBe(false);
   });
+
+  it('returns redis_unavailable if Redis fails while polling stage readiness', async () => {
+    const { waitForMatchStageReady } = await import('../../src/realtime/services/match-stage-presence.service.js');
+    fakeRedis.exists.mockRejectedValueOnce(new Error('redis failover'));
+
+    await expect(waitForMatchStageReady({
+      matchId: 'm1',
+      userIds: ['u1', 'u2'],
+      stageKey: 'resume',
+      ceilingMs: 0,
+    })).resolves.toEqual({
+      readyUserIds: [],
+      missingUserIds: ['u1', 'u2'],
+      reason: 'redis_unavailable',
+    });
+  });
 });

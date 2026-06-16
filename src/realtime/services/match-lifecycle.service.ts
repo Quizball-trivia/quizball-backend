@@ -20,7 +20,6 @@ import { devSkipToPossessionPhase } from '../possession-dev-skip.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
   matchDisconnectKey,
-  matchGraceKey,
   matchPauseKey,
   matchPresenceKey,
 } from '../match-keys.js';
@@ -47,6 +46,7 @@ import {
 } from '../match-ui-ready-gate.js';
 import type { MatchKickoffUiReadyPayload } from '../schemas/match.schemas.js';
 import {
+  getRemainingDisconnectGraceMs,
   getDisconnectCount,
   toRemainingReconnects,
 } from './match-disconnect.service.js';
@@ -66,7 +66,6 @@ import {
   markMatchEnteredForUserSockets,
 } from './match-entry.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MATCH_START_COUNTDOWN_SEC = 5;
 const PARTY_QUIZ_MATCH_START_COUNTDOWN_SEC = 5;
 const MATCH_KICKOFF_UI_READY_CEILING_MS = 10_000;
@@ -548,8 +547,7 @@ export async function rejoinActiveMatchOnConnect(
   }
 
   if (redis && isPaused && wasDisconnected) {
-    const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
-    const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
+    const graceMs = await getRemainingDisconnectGraceMs(match.id);
     const remainingReconnects = toRemainingReconnects(await getDisconnectCount(match.id, userId));
     appMetrics.socketReconnects.add(1, { match_mode: match.mode, variant });
     await emitRejoinAvailable(socket, match, userId, graceMs, remainingReconnects);
@@ -609,8 +607,7 @@ export async function rejoinActiveMatchOnConnect(
       .map((participant) => participant.user_id);
     const disconnectedUserId = disconnectedPlayers[0];
     if (disconnectedUserId) {
-      const graceTtlSec = await redis.ttl(matchGraceKey(match.id));
-      const graceMs = graceTtlSec > 0 ? graceTtlSec * 1000 : MATCH_DISCONNECT_GRACE_MS;
+      const graceMs = await getRemainingDisconnectGraceMs(match.id);
       const remainingReconnects = toRemainingReconnects(
         await getDisconnectCount(match.id, disconnectedUserId)
       );

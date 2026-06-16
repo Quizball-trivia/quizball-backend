@@ -87,14 +87,10 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     ).toBeGreaterThan(0);
   }, 150_000);
 
-  // QUARANTINED — documents a REAL engine bug, see game-regression/BUGS_FOUND.md #2
-  // (🔴 reconnect/resume DOUBLE-DRIVES the round loop: ~2/3 of runs either replay
-  // rounds q3-q5 twice or wedge the match in status='active'). This assertion —
-  // "reconnect completes cleanly with all invariants" — fails ~2/3 of the time, so
-  // it must NOT gate CI as a coin-flip. Skipped until the engine resume path is made
-  // idempotent w.r.t. the in-flight round driver. Re-enable (remove .skip) as the
-  // fix's acceptance test — it should then be reliably green.
-  it.skip('disconnect → reconnect → resume → match still completes cleanly [BLOCKED by #2]', async () => {
+  // Acceptance guard for the full resume path: after the reconnect UI-ready ack,
+  // the current round must resume once and the match must still reach final
+  // results without duplicate dispatches or an active-match wedge.
+  it('disconnect → reconnect → resume → match still completes cleanly', async () => {
     const { bootMatch, playMatch, botDisconnect, botReconnect } =
       await import('../../game-regression/src/runner.mjs');
     const { checkInvariants, formatViolation } = await import('../../game-regression/src/invariants.mjs');

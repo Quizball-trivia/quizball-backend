@@ -25,6 +25,11 @@ export type MatchStageReadyResult = {
   reason: 'all_ready' | 'timeout' | 'redis_unavailable';
 };
 
+interface MatchStagePresenceValue {
+  socketId: string | null;
+  recordedAt: number;
+}
+
 export function normalizeMatchStageKey(stageKey: string | null | undefined): string | null {
   const normalized = stageKey?.trim().replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 64);
   return normalized && normalized.length > 0 ? normalized : null;
@@ -38,12 +43,17 @@ export async function recordMatchStagePresenceHeartbeat(params: {
   matchId: string;
   userId: string;
   stageKey: string;
+  socketId?: string;
 }): Promise<boolean> {
   const stageKey = normalizeMatchStageKey(params.stageKey);
   if (!stageKey) return false;
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
-  await redis.set(matchStagePresenceKey(params.matchId, stageKey, params.userId), String(Date.now()), {
+  const value: MatchStagePresenceValue = {
+    socketId: params.socketId ?? null,
+    recordedAt: Date.now(),
+  };
+  await redis.set(matchStagePresenceKey(params.matchId, stageKey, params.userId), JSON.stringify(value), {
     EX: STAGE_PRESENCE_TTL_SEC,
   });
   return true;
@@ -74,6 +84,31 @@ export async function hasMatchStagePresence(params: {
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
   return (await redis.exists(matchStagePresenceKey(params.matchId, stageKey, params.userId))) === 1;
+}
+
+export async function hasMatchStagePresenceFromSocketIds(params: {
+  matchId: string;
+  userId: string;
+  stageKey: string;
+  socketIds: string[];
+}): Promise<boolean> {
+  const stageKey = normalizeMatchStageKey(params.stageKey);
+  if (!stageKey || params.socketIds.length === 0) return false;
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+
+  const raw = await redis.get(matchStagePresenceKey(params.matchId, stageKey, params.userId));
+  if (!raw) return false;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<MatchStagePresenceValue>;
+    return typeof parsed.socketId === 'string' && params.socketIds.includes(parsed.socketId);
+  } catch {
+    // Legacy timestamp-only values do prove a user recently had a mounted
+    // match UI, but they do not prove the current replacement socket is that
+    // UI. Do not use them for the disconnect skip guard.
+    return false;
+  }
 }
 
 export async function waitForMatchStageReady(params: {

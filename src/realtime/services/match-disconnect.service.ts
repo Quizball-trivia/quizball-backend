@@ -34,6 +34,7 @@ import {
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
   fireAndForget,
+  resumePossessionHalftimeAfterPause,
   resumePossessionMatchQuestion,
 } from '../possession-match-flow.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
@@ -1073,6 +1074,25 @@ export async function completeResumeCountdown(
     await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    if (variant !== 'friendly_party_quiz'
+      && (activeMatch.state_payload as PossessionStatePayload | null | undefined)?.phase === 'HALFTIME') {
+      const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+        ? pauseStartedAtMs
+        : Date.now();
+      const resumedHalftime = await resumePossessionHalftimeAfterPause(
+        io,
+        matchId,
+        effectivePauseStartedAtMs
+      );
+      if (resumedHalftime) {
+        io.to(`match:${matchId}`).emit('match:resume', {
+          matchId,
+          nextQIndex: activeMatch.current_q_index,
+        });
+        return;
+      }
+    }
+
     const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
     if (activeQuestion) {
       const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0

@@ -272,6 +272,47 @@ describe('possession halftime finalize', () => {
     }
   });
 
+  it('rebases a visible halftime ban deadline after disconnect pause resume', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:12.000Z'));
+    const cache = createHalftimeCache();
+    const originalDeadlineAt = '2026-06-03T12:00:20.000Z';
+    cache.statePayload.halftime.deadlineAt = originalDeadlineAt;
+    cache.statePayload.halftime.uiReadyAt = originalDeadlineAt;
+    cache.statePayload.halftime.firstBanSeat = 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      const resumed = await halftime.resumePossessionHalftimeAfterPause(
+        createIo(),
+        'match-1',
+        new Date('2026-06-03T12:00:05.000Z').getTime()
+      );
+
+      expect(resumed).toBe(true);
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+      expect(cache.statePayload.halftime.deadlineAt).toBe('2026-06-03T12:00:27.000Z');
+      expect(cache.statePayload.halftime.uiReadyAt).toBe('2026-06-03T12:00:27.000Z');
+      expect(setMatchCacheMock).toHaveBeenCalledWith(cache);
+      expect(setMatchStatePayloadMock).toHaveBeenCalledWith('match-1', cache.statePayload, cache.currentQIndex);
+      await vi.waitFor(() => {
+        expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+          'possession_halftime',
+          'match-1',
+          new Date('2026-06-03T12:00:27.000Z'),
+          { kind: 'possession_halftime', matchId: 'match-1' }
+        );
+      });
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
   it('defaults the first halftime ban turn to the human (seat 1) when firstBanSeat is unset', async () => {
     const cache = createHalftimeCache();
     cache.statePayload.halftime.firstBanSeat = undefined;

@@ -376,7 +376,89 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           'Possession halftime auto-resolving missing bans because match has no AI halftime actor'
         );
       }
+      const timeoutTurnSeat = getHalftimeTurnSeat(state);
+      if (timeoutTurnSeat) {
+        const aiUserIdForTimeout = await deps.resolveAiUserId(matchId);
+        const aiPlayer = aiUserIdForTimeout ? getCachedPlayer(cache, aiUserIdForTimeout) : null;
+        const timeoutTurnKey = seatToBanKey(timeoutTurnSeat);
+        if (aiPlayer && aiPlayer.seat !== timeoutTurnSeat && !state.halftime.bans[timeoutTurnKey]) {
+          const otherSeatKey = seatToBanKey(nextSeat(timeoutTurnSeat));
+          const otherBan = state.halftime.bans[otherSeatKey];
+          const excluded = new Set<string>();
+          if (otherBan) excluded.add(otherBan);
+          const categoryIds = state.halftime.categoryOptions.map((category) => category.id);
+          const autoBanCategoryId = pickRandomCategoryId(categoryIds, excluded);
+          if (autoBanCategoryId) {
+            state.halftime.bans[timeoutTurnKey] = autoBanCategoryId;
+            state.halftime.deadlineAt = null;
+            state.halftime.uiReadyAt = null;
+            state.halftime.readyDeferCount = 0;
+            bumpStateVersion(state);
+
+            await setMatchCache(cache);
+            fireAndForget('setMatchStatePayload(finalizeHalftime:autoFillHumanBan)', async () => {
+              await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+            });
+            await emitMatchState(io, matchId, state);
+            logger.info(
+              {
+                eventName: 'match:halftime_finalize',
+                matchId,
+                half: state.half,
+                purpose: state.halftime.purpose,
+                autoFilledSeat: timeoutTurnSeat,
+                categoryId: autoBanCategoryId,
+                aiUserId: aiUserIdForTimeout,
+              },
+              'Possession halftime auto-filled player ban; scheduling AI response'
+            );
+
+            schedulePossessionAiHalftimeBan(io, matchId);
+            keepHalftimeTimers = true;
+            return;
+          }
+        }
+      }
+
       const halftimeResult = resolveHalftimeResult(state);
+      const autoFilledSeat1Ban = !hadSeat1Ban && Boolean(halftimeResult.seat1Ban);
+      const autoFilledSeat2Ban = !hadSeat2Ban && Boolean(halftimeResult.seat2Ban);
+
+      if (autoFilledSeat1Ban || autoFilledSeat2Ban) {
+        state.halftime.bans.seat1 = halftimeResult.seat1Ban;
+        state.halftime.bans.seat2 = halftimeResult.seat2Ban;
+        state.halftime.deadlineAt = null;
+        state.halftime.uiReadyAt = null;
+        state.halftime.readyDeferCount = 0;
+        state.halftime.firstBanSeat = null;
+        bumpStateVersion(state);
+
+        await setMatchCache(cache);
+        fireAndForget('setMatchStatePayload(finalizeHalftime:autoFillReveal)', async () => {
+          await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+        });
+        await emitMatchState(io, matchId, state);
+        logger.info(
+          {
+            eventName: 'match:halftime_finalize',
+            matchId,
+            half: state.half,
+            purpose: state.halftime.purpose,
+            autoFilledSeat1Ban,
+            autoFilledSeat2Ban,
+            seat1Ban: halftimeResult.seat1Ban,
+            seat2Ban: halftimeResult.seat2Ban,
+            chosenCategoryId: halftimeResult.remainingCategoryId,
+            revealMs: HALFTIME_POST_BAN_REVEAL_MS,
+          },
+          'Possession halftime auto-filled missing bans; revealing before finalize'
+        );
+
+        scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
+        keepHalftimeTimers = true;
+        return;
+      }
+
       state.halftime.bans.seat1 = halftimeResult.seat1Ban;
       state.halftime.bans.seat2 = halftimeResult.seat2Ban;
       state.halftime.deadlineAt = null;
@@ -456,8 +538,8 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           half: state.half,
           purpose: isPenaltyBan ? 'penalty' : 'second_half',
           uiReady: Boolean(uiReadyAt && uiReadyAt === deadlineAt),
-          autoFilledSeat1Ban: !hadSeat1Ban && Boolean(halftimeResult.seat1Ban),
-          autoFilledSeat2Ban: !hadSeat2Ban && Boolean(halftimeResult.seat2Ban),
+          autoFilledSeat1Ban,
+          autoFilledSeat2Ban,
           seat1Ban: halftimeResult.seat1Ban,
           seat2Ban: halftimeResult.seat2Ban,
           chosenCategoryId,

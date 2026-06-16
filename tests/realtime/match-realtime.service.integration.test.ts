@@ -639,6 +639,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     vi.useFakeTimers();
     try {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { recordMatchStagePresenceHeartbeat } =
+        await import('../../src/realtime/services/match-stage-presence.service.js');
       const emit = vi.fn();
       const replacementSocket = {
         id: 'new-socket',
@@ -660,6 +662,12 @@ describe('match-realtime.service high-risk integration behavior', () => {
       oldSocket.data.connectedAt = Date.now() - 30_000;
 
       fakeRedis.isOpen = true;
+      await recordMatchStagePresenceHeartbeat({
+        matchId: 'm1',
+        userId: 'u1',
+        stageKey: 'question',
+        socketId: 'new-socket',
+      });
 
       await matchRealtimeService.handleMatchDisconnect(io, oldSocket);
 
@@ -701,6 +709,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     vi.useFakeTimers();
     try {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { recordMatchStagePresenceHeartbeat } =
+        await import('../../src/realtime/services/match-stage-presence.service.js');
       const emit = vi.fn();
       const io = {
         to: vi.fn(() => ({ emit })),
@@ -745,6 +755,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     vi.useFakeTimers();
     try {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { recordMatchStagePresenceHeartbeat } =
+        await import('../../src/realtime/services/match-stage-presence.service.js');
       const emit = vi.fn();
       const io = {
         to: vi.fn(() => ({ emit })),
@@ -900,6 +912,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
     vi.useFakeTimers();
     try {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const { recordMatchStagePresenceHeartbeat } =
+        await import('../../src/realtime/services/match-stage-presence.service.js');
       const emit = vi.fn();
       const replacementSocket = {
         id: 'new-socket',
@@ -921,6 +935,12 @@ describe('match-realtime.service high-risk integration behavior', () => {
       oldSocket.data.connectedAt = Date.now() - 30_000;
 
       fakeRedis.isOpen = true;
+      await recordMatchStagePresenceHeartbeat({
+        matchId: 'm1',
+        userId: 'u1',
+        stageKey: 'party_quiz',
+        socketId: 'new-socket',
+      });
       getMatchMock.mockResolvedValue({
         id: 'm1',
         mode: 'friendly',
@@ -2152,6 +2172,92 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(opponentDisconnectedPayload?.graceMs).toBeLessThanOrEqual(30_000);
     expect(resumePossessionMatchQuestionMock).not.toHaveBeenCalled();
     expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it('S15c3: bare replacement match socket without stage presence still pauses', async () => {
+    const { pauseMatchForDisconnectedPlayer } =
+      await import('../../src/realtime/services/match-disconnect.service.js');
+    const io = createIoWithMatchSockets('m1', ['u1']);
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+        phase: 'NORMAL_PLAY',
+        currentQuestion: {
+          qIndex: 3,
+          phaseKind: 'normal',
+          phaseRound: 3,
+          shooterSeat: null,
+          attackerSeat: null,
+        },
+      },
+      ranked_context: null,
+    });
+
+    await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', {
+      ignoreSocketId: 'old-socket',
+      disconnectedConnectedAt: Date.now() - 60_000,
+      autoResumeReplacementSocket: true,
+    });
+
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(true);
+    expect(deferPossessionQuestionTimerForPauseMock).toHaveBeenCalled();
+  });
+
+  it('S15c4: socket-scoped match UI presence can suppress a stale disconnect', async () => {
+    const { pauseMatchForDisconnectedPlayer } =
+      await import('../../src/realtime/services/match-disconnect.service.js');
+    const { recordMatchStagePresenceHeartbeat } =
+      await import('../../src/realtime/services/match-stage-presence.service.js');
+    const io = createIoWithMatchSockets('m1', ['u1']);
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    await recordMatchStagePresenceHeartbeat({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketId: 'socket-u1',
+    });
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 3,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: {
+        variant: 'ranked_sim',
+        phase: 'NORMAL_PLAY',
+        currentQuestion: {
+          qIndex: 3,
+          phaseKind: 'normal',
+          phaseRound: 3,
+          shooterSeat: null,
+          attackerSeat: null,
+        },
+      },
+      ranked_context: null,
+    });
+
+    await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', {
+      ignoreSocketId: 'old-socket',
+      disconnectedConnectedAt: Date.now() - 60_000,
+      autoResumeReplacementSocket: true,
+    });
+
+    expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+    expect(deferPossessionQuestionTimerForPauseMock).not.toHaveBeenCalled();
   });
 
   it('S15d: fourth disconnect forfeits immediately without emitting rejoin_available', async () => {

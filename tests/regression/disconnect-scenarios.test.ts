@@ -155,6 +155,8 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     const { pauseMatchForDisconnectedPlayer, getDisconnectCount } =
       await import('../../src/realtime/services/match-disconnect.service.js');
     const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+    const { recordMatchStagePresenceHeartbeat } =
+      await import('../../src/realtime/services/match-stage-presence.service.js');
 
     const run = await bootMatch({ startTimeoutMs: 25_000 });
     expect(run.matchId).toBeTruthy();
@@ -164,6 +166,13 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     const oldConnectedAt = run.botSocket.data.connectedAt as number;
     await botDisconnect(run);
     await botReconnect(run);
+    run.botSocket.data.connectedAt = Date.now() - 6000;
+    await recordMatchStagePresenceHeartbeat({
+      matchId: run.matchId!,
+      userId: run.botUserId,
+      stageKey: 'question',
+      socketId: run.botSocket.id,
+    });
     const afterReconnect = await getDisconnectCount(run.matchId!, run.botUserId);
 
     // A STALE disconnect handler for the OLD (superseded) socket fires after the

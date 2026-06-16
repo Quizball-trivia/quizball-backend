@@ -9,6 +9,7 @@ const fakeRedis = {
     redisValues.set(key, value);
     return 'OK';
   }),
+  get: vi.fn(async (key: string) => redisValues.get(key) ?? null),
   exists: vi.fn(async (key: string) => (redisValues.has(key) ? 1 : 0)),
 };
 
@@ -72,6 +73,33 @@ describe('match-stage-presence.service', () => {
     await recordMatchStagePresenceHeartbeat({ matchId: 'm1', userId: 'u1', stageKey: 'kickoff' });
 
     await expect(hasMatchStagePresence({ matchId: 'm1', userId: 'u1', stageKey: 'resume' })).resolves.toBe(false);
+  });
+
+  it('only trusts socket-scoped heartbeat values for replacement socket checks', async () => {
+    const {
+      hasMatchStagePresenceFromSocketIds,
+      recordMatchStagePresenceHeartbeat,
+    } = await import('../../src/realtime/services/match-stage-presence.service.js');
+
+    await recordMatchStagePresenceHeartbeat({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketId: 'match-socket-1',
+    });
+
+    await expect(hasMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketIds: ['match-socket-1'],
+    })).resolves.toBe(true);
+    await expect(hasMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketIds: ['menu-socket-1'],
+    })).resolves.toBe(false);
   });
 
   it('returns redis_unavailable if Redis fails while polling stage readiness', async () => {

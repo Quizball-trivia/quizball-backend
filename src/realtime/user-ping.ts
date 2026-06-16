@@ -28,7 +28,11 @@ export async function setUserPingMs(userId: string, rttMs: number): Promise<void
   const clamped = Math.round(Math.max(MIN_RTT_MS, Math.min(MAX_RTT_MS, rttMs)));
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
-  await redis.set(userPingKey(userId), String(clamped), { EX: USER_PING_TTL_SEC });
+  try {
+    await redis.set(userPingKey(userId), String(clamped), { EX: USER_PING_TTL_SEC });
+  } catch {
+    // Best-effort: ping telemetry should never break socket/event handling.
+  }
 }
 
 export async function getUserPingMs(userId: string): Promise<number | null> {

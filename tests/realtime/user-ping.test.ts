@@ -5,6 +5,7 @@ const store = new Map<string, string>();
 const lastSet: { key?: string; value?: string; ttl?: number } = {};
 let redisAvailable = true;
 let getThrows = false;
+let setThrows = false;
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () =>
@@ -12,6 +13,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
       ? {
           isOpen: true,
           set: (key: string, value: string, opts?: { EX?: number }) => {
+            if (setThrows) return Promise.reject(new Error('redis write down'));
             store.set(key, value);
             lastSet.key = key;
             lastSet.value = value;
@@ -31,6 +33,7 @@ beforeEach(() => {
   delete lastSet.key; delete lastSet.value; delete lastSet.ttl;
   redisAvailable = true;
   getThrows = false;
+  setThrows = false;
 });
 
 describe('user-ping store', () => {
@@ -73,5 +76,11 @@ describe('user-ping store', () => {
     await setUserPingMs('user-1', 60);
     getThrows = true;
     await expect(getUserPingMs('user-1')).resolves.toBeNull();
+  });
+
+  it('ignores Redis write rejections', async () => {
+    setThrows = true;
+    await expect(setUserPingMs('user-1', 50)).resolves.toBeUndefined();
+    expect(await getUserPingMs('user-1')).toBeNull();
   });
 });

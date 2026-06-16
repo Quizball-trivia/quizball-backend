@@ -95,6 +95,7 @@ const {
   scheduleHalftimeTimeout,
   schedulePossessionAiHalftimeBan,
   handlePossessionHalftimeUiReady: handlePossessionHalftimeUiReadyInternal,
+  resumePossessionHalftimeAfterPause,
 } = possessionHalftime;
 
 export {
@@ -110,6 +111,7 @@ export {
   scheduleHalftimeTimeout,
   schedulePossessionAiAnswer,
   schedulePossessionAiHalftimeBan,
+  resumePossessionHalftimeAfterPause,
 };
 
 

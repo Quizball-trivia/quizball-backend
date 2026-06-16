@@ -705,6 +705,67 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     }
   }
 
+  async function resumePossessionHalftimeAfterPause(
+    io: QuizballServer,
+    matchId: string,
+    pauseStartedAtMs: number
+  ): Promise<boolean> {
+    const lockKey = `lock:match:${matchId}:halftime_resume`;
+    const lock = await acquireLock(lockKey, 3000);
+    if (!lock.acquired || !lock.token) return false;
+
+    try {
+      const cache = await getMatchCacheOrRebuild(matchId);
+      if (!cache || cache.status !== 'active') return false;
+      const state = cache.statePayload;
+      if (state.phase !== 'HALFTIME') return false;
+
+      const previousDeadlineAt = state.halftime.deadlineAt;
+      const previousDeadlineMs = previousDeadlineAt ? new Date(previousDeadlineAt).getTime() : Number.NaN;
+      const pausedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+        ? pauseStartedAtMs
+        : Date.now();
+      const remainingAtPauseMs = Number.isFinite(previousDeadlineMs)
+        ? Math.max(0, previousDeadlineMs - pausedAtMs)
+        : HALFTIME_DURATION_MS;
+      const rebasedDeadlineAt = new Date(Date.now() + remainingAtPauseMs).toISOString();
+      const uiReadyWasForDeadline = Boolean(
+        previousDeadlineAt && state.halftime.uiReadyAt === previousDeadlineAt
+      );
+
+      state.halftime.deadlineAt = rebasedDeadlineAt;
+      if (uiReadyWasForDeadline) {
+        state.halftime.uiReadyAt = rebasedDeadlineAt;
+      }
+      bumpStateVersion(state);
+      await setMatchCache(cache);
+      fireAndForget('setMatchStatePayload(halftimeResume)', async () => {
+        await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+      });
+      await emitMatchState(io, matchId, state);
+      scheduleHalftimeTimeout(io, matchId);
+      if (uiReadyWasForDeadline) {
+        schedulePossessionAiHalftimeBan(io, matchId);
+      }
+      logger.info(
+        {
+          eventName: 'match:halftime_resume',
+          matchId,
+          half: state.half,
+          purpose: state.halftime.purpose,
+          previousDeadlineAt,
+          rebasedDeadlineAt,
+          remainingAtPauseMs,
+          uiReadyWasForDeadline,
+        },
+        'Possession halftime deadline rebased after pause'
+      );
+      return true;
+    } finally {
+      await releaseLock(lockKey, lock.token);
+    }
+  }
+
   return {
     clearHalftimeTimer,
     clearHalftimeAiBanTimer,
@@ -718,5 +779,6 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     scheduleHalftimeTimeout,
     schedulePossessionAiHalftimeBan,
     handlePossessionHalftimeUiReady,
+    resumePossessionHalftimeAfterPause,
   };
 }

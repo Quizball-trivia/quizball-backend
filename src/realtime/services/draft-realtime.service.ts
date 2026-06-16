@@ -919,6 +919,39 @@ export async function runDraftGraceExpiry(
       'draft_grace_expiry_fired'
     );
 
+    if (activeLobby.mode === 'ranked') {
+      const aiUserId = await resolveRankedAiUserId(lobbyId, activeMembers);
+      const humanUserIds = activeMembers
+        .filter((member) => member.user_id !== aiUserId)
+        .map((member) => member.user_id);
+      const absentHumanUserIds = humanUserIds.filter((userId) => disconnectedUserIds.includes(userId));
+
+      if (absentHumanUserIds.length > 0) {
+        const abortSignals = await getRankedDraftAbortSignals(lobbyId, humanUserIds);
+        await abortRankedDraftBeforeMatchCreation(
+          io,
+          activeLobby,
+          humanUserIds,
+          'draft_grace_expired_before_ticket_consumption',
+          abortSignals
+        );
+        await clearDraftTimers(lobbyId);
+        await cancelRealtimeTimer('draft_grace_expiry', lobbyId).catch((error) => {
+          logger.warn({ error, lobbyId }, 'Failed to cancel draft grace timer after ranked draft abort');
+        });
+        await redis.del([
+          draftPauseKey(lobbyId),
+          draftGraceKey(lobbyId),
+          ...disconnectedUserIds.map((absentUserId) => draftDisconnectKey(lobbyId, absentUserId)),
+        ]);
+        logger.info(
+          { lobbyId, disconnectedUserIds, absentHumanUserIds },
+          'draft_grace_expiry_aborted_ranked_draft'
+        );
+        return;
+      }
+    }
+
     // The pause key must go BEFORE recovery (runDraftAutoBan and
     // resumeActiveDraftTimers both no-op while it exists), but the disconnect
     // keys are the retry evidence: if recovery throws, the rescheduled timer

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const store = new Map<string, string>();
 const lastSet: { key?: string; value?: string; ttl?: number } = {};
 let redisAvailable = true;
+let getThrows = false;
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () =>
@@ -17,7 +18,8 @@ vi.mock('../../src/realtime/redis.js', () => ({
             lastSet.ttl = opts?.EX;
             return Promise.resolve('OK');
           },
-          get: (key: string) => Promise.resolve(store.get(key) ?? null),
+          get: (key: string) =>
+            getThrows ? Promise.reject(new Error('redis down')) : Promise.resolve(store.get(key) ?? null),
         }
       : null,
 }));
@@ -28,6 +30,7 @@ beforeEach(() => {
   store.clear();
   delete lastSet.key; delete lastSet.value; delete lastSet.ttl;
   redisAvailable = true;
+  getThrows = false;
 });
 
 describe('user-ping store', () => {
@@ -64,5 +67,11 @@ describe('user-ping store', () => {
     redisAvailable = false;
     await expect(setUserPingMs('user-1', 50)).resolves.toBeUndefined();
     expect(await getUserPingMs('user-1')).toBeNull();
+  });
+
+  it('degrades to null (no throw) when a Redis read rejects', async () => {
+    await setUserPingMs('user-1', 60);
+    getThrows = true;
+    await expect(getUserPingMs('user-1')).resolves.toBeNull();
   });
 });

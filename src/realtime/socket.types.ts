@@ -123,6 +123,9 @@ export interface OpponentInfo {
   recentForm?: Array<'W' | 'L' | 'D'>;
   lat?: number;
   lon?: number;
+  /** Opponent's last reported connection RTT (ms), for the showdown ping pill.
+   *  null/undefined when no recent reading is available. */
+  pingMs?: number | null;
 }
 
 export type MatchQuestionKind =

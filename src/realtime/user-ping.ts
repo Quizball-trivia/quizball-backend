@@ -35,7 +35,14 @@ export async function getUserPingMs(userId: string): Promise<number | null> {
   if (!userId) return null;
   const redis = getRedisClient();
   if (!redis?.isOpen) return null;
-  const raw = await redis.get(userPingKey(userId));
+  // Best-effort: a failed read must degrade to null, never throw — this runs
+  // while assembling the opponent payload and must not break it.
+  let raw: string | null;
+  try {
+    raw = await redis.get(userPingKey(userId));
+  } catch {
+    return null;
+  }
   if (raw === null) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;

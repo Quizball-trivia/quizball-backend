@@ -9,6 +9,7 @@ import { rankedService } from '../../modules/ranked/ranked.service.js';
 import type { RankedLobbyContext } from '../../modules/lobbies/lobbies.types.js';
 import { getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers, getCurrentCountryForUser } from '../session-country.js';
+import { getUserPingMs } from '../user-ping.js';
 
 export type MatchParticipantSnapshot = {
   user_id: string;
@@ -43,6 +44,7 @@ export async function getOpponentInfo(matchId: string, userId: string): Promise<
   favoriteClub: string | null;
   country?: string;
   countryCode?: string;
+  pingMs?: number | null;
 }> {
   const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const opponent = players.find((player) => player.user_id !== userId);
@@ -58,12 +60,16 @@ export async function getOpponentInfo(matchId: string, userId: string): Promise<
 
   const opponentUser = await usersRepo.getById(opponent.user_id);
   const currentCountry = await getCurrentCountryForUser(opponent.user_id);
+  // Opponent's last-reported connection RTT (null if they haven't reported one
+  // recently). Lets the client show the opponent's ping on the showdown screen.
+  const pingMs = await getUserPingMs(opponent.user_id);
   return {
     id: opponent.user_id,
     username: opponentUser?.nickname ?? 'Player',
     avatarUrl: opponentUser?.avatar_url ?? null,
     avatarCustomization: parseStoredAvatarCustomization(opponentUser?.avatar_customization),
     favoriteClub: opponentUser?.favorite_club ?? null,
+    pingMs,
     ...countryPayload(currentCountry ?? opponentUser?.country),
   };
 }

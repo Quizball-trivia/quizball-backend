@@ -1053,6 +1053,32 @@ describe('draftRealtimeService', () => {
     }
   });
 
+  it('aborts a ranked draft immediately on grace expiry when the absent actor is human', async () => {
+    const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'ai-1' },
+    ]);
+    wireStatefulRedis(['draft:grace:l1', 'draft:pause:l1', 'draft:disconnect:l1:u1']);
+
+    await runDraftGraceExpiry(io, 'l1', 'u1');
+
+    expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('draft:banned', expect.anything());
+    expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+    expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+  });
+
   it('is a noop on grace expiry if the player already reconnected (grace marker gone)', async () => {
     const { runDraftGraceExpiry } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io } = createIoMock();

@@ -26,6 +26,8 @@ function emitGateState(io: QuizballServer, gate: MatchUiReadyGate): void {
     phase: gate.phase,
     readyCount: gate.readyUserIds.size,
     totalCount: gate.waitingUserIds.size,
+    readyUserIds: [...gate.readyUserIds],
+    waitingUserIds: [...gate.waitingUserIds],
     forceStartsAt: new Date(gate.forceStartsAtMs).toISOString(),
     serverNow: new Date().toISOString(),
   });

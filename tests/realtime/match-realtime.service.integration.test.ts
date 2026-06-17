@@ -681,6 +681,8 @@ describe('match-realtime.service high-risk integration behavior', () => {
           phase: 'resume',
           readyCount: 0,
           totalCount: 2,
+          readyUserIds: [],
+          waitingUserIds: ['u1', 'u2'],
         })
       );
 

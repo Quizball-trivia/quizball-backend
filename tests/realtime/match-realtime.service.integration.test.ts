@@ -824,6 +824,37 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
+  it('does not count a disconnect pause for a player with an excused exit pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pauseMatchForDisconnectedPlayer } = await import('../../src/realtime/services/match-disconnect.service.js');
+      const emit = vi.fn();
+      const io = {
+        to: vi.fn(() => ({ emit })),
+        in: vi.fn(() => ({
+          fetchSockets: vi.fn(async () => []),
+          socketsJoin: vi.fn(async () => undefined),
+        })),
+      } as unknown as QuizballServer;
+
+      fakeRedis.isOpen = true;
+      fakeRedisStore.values.set('match:exit_pending:m1:u1', JSON.stringify({ opponentId: 'u2' }));
+
+      const result = await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old' });
+
+      expect(result).toEqual({
+        graceMs: 30_000,
+        remainingReconnects: 3,
+        finalized: false,
+      });
+      expect(fakeRedisStore.values.has('match:reconnect_count:m1:u1')).toBe(false);
+      expect(fakeRedisStore.values.has('match:disconnect:m1:u1')).toBe(false);
+      expect(emit).not.toHaveBeenCalledWith('match:opponent_disconnected', expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('S15 reload race: an older same-user socket does not auto-resume a paused match', async () => {
     vi.useFakeTimers();
     try {

@@ -238,6 +238,8 @@ export interface MatchWaitingForReadyPayload {
   phase: MatchUiReadyPhase;
   readyCount: number;
   totalCount: number;
+  readyUserIds?: string[];
+  waitingUserIds?: string[];
   forceStartsAt: string;
   serverNow?: string;
 }

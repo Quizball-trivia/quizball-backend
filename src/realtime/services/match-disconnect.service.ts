@@ -6,10 +6,11 @@ import { appMetrics } from '../../core/metrics.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchQuestionsRepo } from '../../modules/matches/match-questions.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
-import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { resolveMatchVariant, type PossessionStatePayload } from '../../modules/matches/matches.service.js';
 import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.types.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { getMatchCache, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
@@ -19,6 +20,7 @@ import {
 } from '../match-flow.js';
 import {
   matchDisconnectKey,
+  matchExitPendingKey,
   matchForfeitPendingUserKey,
   matchGraceKey,
   matchPauseKey,
@@ -28,9 +30,11 @@ import {
 } from '../match-keys.js';
 import {
   cancelPossessionHalftimeTimer,
+  deferPossessionQuestionTimerForPause,
   emitPossessionStateToSocket,
   ensurePossessionActiveTimers,
   fireAndForget,
+  resumePossessionHalftimeAfterPause,
   resumePossessionMatchQuestion,
 } from '../possession-match-flow.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
@@ -51,6 +55,12 @@ import {
   scheduleRealtimeTimer,
 } from '../realtime-timer-scheduler.js';
 import type { MatchRejoinAvailablePayload } from '../socket.types.js';
+import type { MatchResumeUiReadyPayload } from '../schemas/match.schemas.js';
+import {
+  acknowledgeMatchUiReady,
+  openMatchUiReadyGate,
+  type MatchUiReadyDispatchReason,
+} from '../match-ui-ready-gate.js';
 import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
@@ -75,20 +85,119 @@ import {
   type MatchParticipantSnapshot,
 } from './match-participants.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { fetchUserRoomSockets, resolveMatchPresence } from './match-presence.service.js';
+import { resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
+import {
+  findOpponentInDisconnectGrace,
+  markExcusedExitPending,
+} from './match-excused-exit.service.js';
+import {
+  hasMatchStagePresenceFromSocketIds,
+  type MatchStageKey,
+} from './match-stage-presence.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 60000;
+const MATCH_DISCONNECT_GRACE_MS = 30000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
+const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;
 const LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
-const GRACE_TTL_SEC = 65;
+// Redis TTL on the grace key; must stay above the grace window (30s) so the key
+// outlives the durable grace-expiry timer with a small margin.
+const GRACE_TTL_SEC = 35;
 const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
+/**
+ * How far the paused round's question-timeout timer is pushed back instead of
+ * being cancelled. Must comfortably exceed grace (30s) + resume countdown (5s)
+ * so it never fires during a healthy pause/resume cycle; it exists purely as
+ * the last-resort resolver when every other path (resume, grace expiry,
+ * forfeit) was dropped. A successful resume re-bases the timer to the rebased
+ * question deadline; a terminal match makes the fire a no-op that clears it.
+ */
+const PAUSE_QUESTION_BACKSTOP_MS = 90_000;
 
 type PossessionTerminalPlayer = MatchPlayerRow | MatchParticipantSnapshot;
+
+export async function getRemainingDisconnectGraceMs(matchId: string): Promise<number> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return MATCH_DISCONNECT_GRACE_MS;
+
+  try {
+    const graceKey = matchGraceKey(matchId);
+    const rawStartedAt = await redis.get(graceKey);
+    const startedAtMs = Number(rawStartedAt);
+    if (Number.isFinite(startedAtMs) && startedAtMs > 0) {
+      const remainingMs = MATCH_DISCONNECT_GRACE_MS - (Date.now() - startedAtMs);
+      return Math.max(0, Math.min(MATCH_DISCONNECT_GRACE_MS, remainingMs));
+    }
+
+    const ttl = await redis.ttl(graceKey);
+    return ttl > 0 ? Math.min(ttl * 1000, MATCH_DISCONNECT_GRACE_MS) : MATCH_DISCONNECT_GRACE_MS;
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Failed to compute remaining disconnect grace');
+    return MATCH_DISCONNECT_GRACE_MS;
+  }
+}
+
+async function resolveHumanReadyUserIds(matchId: string, userIds: string[]): Promise<string[]> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.length === 0) return [];
+
+  const redis = getRedisClient();
+  const rankedAiUserId = redis?.isOpen ? await redis.get(rankedAiMatchKey(matchId)) : null;
+  try {
+    const usersById = await usersRepo.getByIds(uniqueUserIds);
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId && usersById.get(userId)?.is_ai !== true);
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Failed to resolve AI users for resume UI-ready gate');
+    return uniqueUserIds.filter((userId) => userId !== rankedAiUserId);
+  }
+}
+
+function getPausePresenceStageKeys(
+  match: MatchRow,
+  variant: ReturnType<typeof resolveMatchVariant>
+): MatchStageKey[] {
+  const state = match.state_payload ?? {};
+
+  if (variant === 'friendly_party_quiz') {
+    const currentQuestion = (state as { currentQuestion?: unknown }).currentQuestion;
+    return currentQuestion ? ['party_quiz'] : ['kickoff', 'party_quiz'];
+  }
+
+  const possessionState = state as Partial<PossessionStatePayload>;
+  if (possessionState.phase === 'HALFTIME') return ['category_ban'];
+  if (
+    possessionState.phase === 'PENALTY_SHOOTOUT' ||
+    possessionState.currentQuestion?.phaseKind === 'penalty'
+  ) {
+    return ['penalties'];
+  }
+  if (possessionState.currentQuestion) return ['question'];
+  return ['kickoff', 'question'];
+}
+
+async function hasReplacementMatchUiSocket(params: {
+  match: MatchRow;
+  variant: ReturnType<typeof resolveMatchVariant>;
+  userId: string;
+  socketIds: string[];
+}): Promise<boolean> {
+  const stageKeys = getPausePresenceStageKeys(params.match, params.variant);
+  const presenceResults = await Promise.all(
+    stageKeys.map((stageKey) =>
+      hasMatchStagePresenceFromSocketIds({
+        matchId: params.match.id,
+        userId: params.userId,
+        stageKey,
+        socketIds: params.socketIds,
+      })
+    )
+  );
+  return presenceResults.some(Boolean);
+}
 
 function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTerminalPlayer[]): string[] {
   return [
@@ -98,6 +207,7 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
     rankedAiMatchKey(matchId),
     ...roster.flatMap((player) => [
       matchDisconnectKey(matchId, player.user_id),
+      matchExitPendingKey(matchId, player.user_id),
       matchPresenceKey(matchId, player.user_id),
       matchReconnectCountKey(matchId, player.user_id),
     ]),
@@ -121,7 +231,10 @@ async function emitForfeitFinalResults(
   }
 }
 
-async function abandonPossessionTerminalMatch(
+// Exported for direct unit testing of the no-contest ticket-refund behavior
+// (the full undecidable→abandon path is impractical to drive end-to-end through
+// the cache/lock plumbing in an integration mock).
+export async function abandonPossessionTerminalMatch(
   io: QuizballServer,
   match: MatchRow,
   roster: PossessionTerminalPlayer[],
@@ -132,6 +245,34 @@ async function abandonPossessionTerminalMatch(
 
   cancelPossessionHalftimeTimer(match.id);
   await cleanupPossessionTerminalRedisKeys(match.id, roster);
+
+  // A ranked match that abandons as a no-contest (e.g. both players dropped and
+  // progress is undecidable) must refund every human's consumed ranked ticket —
+  // the same courtesy the single-forfeiter early-forfeit cancel already gives
+  // (match-forfeit.service.ts). Without this a round-1 double-drop silently
+  // costs both players a ticket. Best-effort; party-quiz uses its own flow.
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
+    const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
+    // Only refund players whose row resolved AND is explicitly human. An
+    // unresolved id (deleted/missing user) is excluded, not assumed human, so a
+    // ghost id is never passed to refundRankedTickets.
+    const humanUserIds = roster
+      .map((player) => rosterUsers.get(player.user_id))
+      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+      .map((user) => user.id);
+    if (humanUserIds.length > 0) {
+      try {
+        await storeService.refundRankedTickets(humanUserIds);
+      } catch (error) {
+        logger.warn(
+          { error, matchId: match.id, humanUserIds },
+          'Failed to refund ranked tickets on no-contest abandon'
+        );
+      }
+    }
+  }
+
   io.to(`match:${match.id}`).emit('error', {
     code: 'MATCH_ABANDONED',
     message: 'Match abandoned because it could not be resolved from active progress',
@@ -150,8 +291,44 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
   cacheSnapshot?: MatchCache | null;
   disconnectedUserIds: string[];
   source: string;
+  // When the forfeiter is already DEFINITIVE (e.g. they exceeded the reconnect
+  // limit), pass their id here. The resolver then forfeits THAT player directly,
+  // skipping the presence-based fork. This is critical: a player who exceeded
+  // the limit must lose even if a racing reconnect makes them look "present"
+  // again, and even when the opponent is an AI (whose synthetic presence can
+  // leave the presence fork unable to isolate a single absent player) — that
+  // race let a winning, limit-breaking player WIN from progress instead of
+  // forfeiting (the ranked-vs-AI reconnect_limit bug).
+  definiteForfeiterUserId?: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
-  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source } = params;
+  const { io, match, roster, cacheSnapshot, disconnectedUserIds, source, definiteForfeiterUserId } = params;
+
+  // Definitive-forfeiter fast path: the caller already knows who must lose
+  // (e.g. reconnect-limit exceeded). Forfeit them directly — do NOT re-derive
+  // absence from presence, which is racy (a just-in-time reconnect clears the
+  // disconnect marker) and unreliable vs an AI opponent. The opponent (human or
+  // AI) is the winner.
+  if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
+    const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
+    const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
+    for (const player of presentForPending) {
+      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+    }
+    const finalized = await finalizeMatchAsForfeit({
+      matchId: match.id,
+      forfeitingUserId: definiteForfeiterUserId,
+      activeMatch: match,
+      cacheSnapshot,
+      cleanupRedisKeys: possessionTerminalCleanupKeys(match.id, roster),
+    });
+    if (!finalized.completed) return { finalized: false, abandoned: false };
+    await emitForfeitFinalResults(io, match.id, finalized.resultVersion);
+    logger.info(
+      { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
+      'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
+    );
+    return { finalized: true, abandoned: false };
+  }
 
   // Forfeit-first: a player who disconnected and never came back must always
   // lose by forfeit, no matter what the score/progress says. The player who
@@ -335,7 +512,27 @@ export async function handleMatchLeave(
         });
         return;
       }
-      if (resolveMatchVariant(activeMatch.state_payload, activeMatch.mode) === 'friendly_party_quiz') {
+      const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+      if (variant !== 'friendly_party_quiz') {
+        const disconnectedOpponentId = await findOpponentInDisconnectGrace(
+          activeMatch.id,
+          userId,
+          participants
+        );
+        if (disconnectedOpponentId) {
+          await markExcusedExitPending({
+            matchId: activeMatch.id,
+            userId,
+            opponentId: disconnectedOpponentId,
+            source: 'match_leave',
+          });
+          socket.leave(`match:${activeMatch.id}`);
+          socket.data.matchId = undefined;
+          return;
+        }
+      }
+
+      if (variant === 'friendly_party_quiz') {
         const partyState = sanitizePartyQuizState(activeMatch.state_payload, activeMatch.total_questions);
         if (isPartyQuizDropped(partyState, userId)) {
           const payload = buildPartyDropoutPayload(activeMatch.id, 'disconnect_timeout');
@@ -435,6 +632,7 @@ export async function handleMatchRejoin(
 
       const redis = getRedisClient();
       if (redis) {
+        await redis.del(matchExitPendingKey(match.id, userId));
         await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
       }
 
@@ -494,27 +692,158 @@ export async function handleMatchRejoin(
   await userSessionGuardService.emitState(io, userId);
 }
 
-export async function handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
-  const matchId = socket.data.matchId;
-  if (!matchId) return;
+const MATCH_DISCONNECT_LOCK_ATTEMPTS = 3;
+const MATCH_DISCONNECT_LOCK_RETRY_DELAY_MS = 1_000;
 
-  const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'active') return;
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const userId = socket.data.user.id;
-  const variant = resolveMatchVariant(match.state_payload, match.mode);
-  const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
-    await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
-      ignoreSocketId: socket.id,
-      disconnectedConnectedAt: socket.data.connectedAt,
-      autoResumeReplacementSocket: true,
-    });
-  }, {
-    operation: 'match:disconnect',
-    ...(variant === 'friendly_party_quiz' ? { waitMs: 5000 } : {}),
+async function startResumeCountdown(params: {
+  io: QuizballServer;
+  matchId: string;
+  notifyUserId?: string | null;
+  pauseStartedAtMs: number;
+  readyReason: MatchUiReadyDispatchReason;
+  missingUserIds: string[];
+}): Promise<void> {
+  const { io, matchId, notifyUserId, pauseStartedAtMs, readyReason, missingUserIds } = params;
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const resumeCountdownMs = harnessDelayMs(MATCH_RESUME_COUNTDOWN_MS);
+  const countdownEndsAtMs = Date.now() + resumeCountdownMs;
+  const countdownKey = matchResumeCountdownKey(matchId);
+  const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
+    NX: true,
+    EX: RESUME_COUNTDOWN_TTL_SEC,
   });
-  if (!completed) return;
-  await userSessionGuardService.emitState(io, userId);
+
+  if (acquired !== 'OK') {
+    const rawEndsAt = await redis.get(countdownKey);
+    const existingEndsAtMs = Number(rawEndsAt);
+    if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+      const nowMs = Date.now();
+      const payload = {
+        matchId,
+        seconds: Math.max(1, Math.ceil((existingEndsAtMs - nowMs) / 1000)),
+        startsAt: new Date(existingEndsAtMs).toISOString(),
+        serverNow: new Date(nowMs).toISOString(),
+        reason: 'resume' as const,
+      };
+      if (notifyUserId) {
+        io.to(`user:${notifyUserId}`).emit('match:countdown', payload);
+      } else {
+        io.to(`match:${matchId}`).emit('match:countdown', payload);
+      }
+    }
+    return;
+  }
+
+  io.to(`match:${matchId}`).emit('match:countdown', {
+    matchId,
+    seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
+    startsAt: new Date(countdownEndsAtMs).toISOString(),
+    serverNow: new Date().toISOString(),
+    reason: 'resume',
+  });
+  logger.info(
+    {
+      eventName: 'match:countdown',
+      matchId,
+      reason: 'resume',
+      readyReason,
+      missingUserIds,
+    },
+    'Match resume countdown scheduled'
+  );
+
+  // Durable: the countdown completion used to be an in-process setTimeout —
+  // a restart in the 5s window stranded the match paused (pause key set, no
+  // timer, nothing to re-dispatch the question) until key TTLs / a rejoin /
+  // the stale sweeper recovered it. The Redis-backed timer survives restarts;
+  // completeResumeCountdown re-checks every condition so a late or duplicate
+  // fire is a no-op.
+  await scheduleRealtimeTimer(
+    'match_resume_countdown',
+    matchId,
+    new Date(countdownEndsAtMs),
+    {
+      kind: 'match_resume_countdown',
+      matchId,
+      pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0 ? pauseStartedAtMs : null,
+    }
+  );
+}
+
+export async function handleMatchDisconnect(io: QuizballServer, socket: QuizballSocket): Promise<void> {
+  const userId = socket.data.user.id;
+  const boundMatchId = socket.data.matchId;
+
+  // Fallback: a socket can lose (or never gain) its match binding — e.g. a
+  // reconnected socket that re-authenticated but never completed the
+  // match:rejoin handshake (diagnosed prod pattern during token-refresh
+  // flap storms). Its disconnect previously no-oped silently, so the match
+  // never paused and no grace timer was armed. Resolve the user's active
+  // match from the DB instead of dropping the event.
+  const match = boundMatchId
+    ? await matchesRepo.getMatch(boundMatchId)
+    : await matchesRepo.getActiveMatchForUser(userId);
+  if (!match || match.status !== 'active') return;
+  const matchId = match.id;
+
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (!boundMatchId) {
+    // Fallback is scoped to 1v1 possession variants: their pause flow skips
+    // when the user still has a stable live match socket, so a menu/re-auth
+    // socket disconnect cannot pause a healthy match. Party quiz has no such
+    // guard (its pause flow is variant-gated) — a binding-less disconnect
+    // there would arm pause/grace for a live N-player match, so it keeps the
+    // old behavior (only bound sockets drive party disconnects).
+    if (variant === 'friendly_party_quiz') {
+      logger.info(
+        { userId, matchId, socketId: socket.id, variant },
+        'Match disconnect fallback skipped for party quiz match'
+      );
+      return;
+    }
+    logger.info(
+      { userId, matchId, socketId: socket.id },
+      'Match disconnect resolved active match for socket without match binding'
+    );
+  }
+  // Bounded retry: the per-user transition lock can be busy at the exact
+  // moment a socket drops (connect hydration, queue ops). Previously a single
+  // failed attempt silently dropped the pause — no grace timer, no opponent
+  // banner — leaving the match to the 15-minute sweeper. Everything inside
+  // pauseMatchForDisconnectedPlayer re-checks state (match still active,
+  // replacement sockets, disconnect-episode dedupe), so a delayed retry is
+  // safe even if the player already reconnected.
+  for (let attempt = 1; attempt <= MATCH_DISCONNECT_LOCK_ATTEMPTS; attempt += 1) {
+    const completed = await userSessionGuardService.runWithUserTransitionLock(io, socket, async () => {
+      await pauseMatchForDisconnectedPlayer(io, matchId, userId, {
+        ignoreSocketId: socket.id,
+        disconnectedConnectedAt: socket.data.connectedAt,
+        autoResumeReplacementSocket: true,
+      });
+    }, {
+      operation: 'match:disconnect',
+      ...(variant === 'friendly_party_quiz' ? { waitMs: 5000 } : {}),
+    });
+    if (completed) {
+      await userSessionGuardService.emitState(io, userId);
+      return;
+    }
+    if (attempt < MATCH_DISCONNECT_LOCK_ATTEMPTS) {
+      await waitMs(MATCH_DISCONNECT_LOCK_RETRY_DELAY_MS * attempt);
+      const stillActive = await matchesRepo.getMatch(matchId);
+      if (!stillActive || stillActive.status !== 'active') return;
+    }
+  }
+  logger.warn(
+    { userId, matchId, socketId: socket.id, attempts: MATCH_DISCONNECT_LOCK_ATTEMPTS },
+    'Match disconnect pause abandoned after transition-lock retries'
+  );
 }
 
 export async function resumePausedMatch(
@@ -530,126 +859,270 @@ export async function resumePausedMatch(
 
   const pauseStartedRaw = await redis.get(matchPauseKey(matchId));
   const pauseStartedAtMs = Number(pauseStartedRaw);
-  await redis.del(matchDisconnectKey(matchId, userId));
 
   const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-  const stillDisconnectedExists = await Promise.all(
+  const disconnectedExists = await Promise.all(
     roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
   );
-  const stillDisconnected = roster
-    .filter((_, index) => stillDisconnectedExists[index])
+  const disconnectedBeforeResume = roster
+    .filter((_, index) => disconnectedExists[index])
     .map((player) => player.user_id);
+  const userWasDisconnected = disconnectedBeforeResume.includes(userId);
 
-  if (stillDisconnected.length > 0) {
-    const ttl = await redis.ttl(matchGraceKey(matchId));
-    const graceMs = ttl > 0 ? ttl * 1000 : MATCH_DISCONNECT_GRACE_MS;
+  const otherDisconnected = disconnectedBeforeResume.filter((disconnectedUserId) => disconnectedUserId !== userId);
+  if (otherDisconnected.length > 0) {
+    if (userWasDisconnected) {
+      await redis.del(matchDisconnectKey(matchId, userId));
+    }
+    const disconnectedOpponentId = otherDisconnected[0];
+    if (!disconnectedOpponentId) return;
+    const graceMs = await getRemainingDisconnectGraceMs(matchId);
     const remainingReconnects = toRemainingReconnects(
-      await getDisconnectCount(matchId, stillDisconnected[0] ?? userId)
+      await getDisconnectCount(matchId, disconnectedOpponentId)
     );
     io.to(`user:${userId}`).emit('match:opponent_disconnected', {
       matchId,
-      opponentId: stillDisconnected[0],
+      opponentId: disconnectedOpponentId,
       graceMs,
       remainingReconnects,
     });
     return;
   }
 
-  await redis.del(matchGraceKey(matchId));
-  // The match resumed before the grace window expired — drop the pending durable
-  // forfeit timer so it can't fire after a successful reconnect. (The handler also
-  // re-checks the grace key, so this is belt-and-suspenders.)
-  await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
+  const reconnectingDisconnectedUserIds = userWasDisconnected ? [userId] : [];
 
-  // Harness collapses the resume countdown so reconnect-resume completes fast.
-  const resumeCountdownMs = harnessDelayMs(MATCH_RESUME_COUNTDOWN_MS);
-  const countdownEndsAtMs = Date.now() + resumeCountdownMs;
-  const countdownKey = matchResumeCountdownKey(matchId);
-  const acquired = await redis.set(countdownKey, String(countdownEndsAtMs), {
-    NX: true,
-    EX: RESUME_COUNTDOWN_TTL_SEC,
-  });
-
-  if (acquired !== 'OK') {
-    const rawEndsAt = await redis.get(countdownKey);
-    const existingEndsAtMs = Number(rawEndsAt);
-    if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
-      const nowMs = Date.now();
-      io.to(`user:${userId}`).emit('match:countdown', {
-        matchId,
-        seconds: Math.max(1, Math.ceil((existingEndsAtMs - nowMs) / 1000)),
-        startsAt: new Date(existingEndsAtMs).toISOString(),
-        serverNow: new Date(nowMs).toISOString(),
-        reason: 'resume',
-      });
+  const exitPendingExists = await Promise.all(
+    roster.map((player) => redis.exists(matchExitPendingKey(matchId, player.user_id)))
+  );
+  const exitPendingUserIds = roster
+    .filter((player, index) => player.user_id !== userId && exitPendingExists[index] === 1)
+    .map((player) => player.user_id);
+  if (exitPendingUserIds.length > 0) {
+    await redis.del(matchGraceKey(matchId));
+    if (disconnectedBeforeResume.includes(userId)) {
+      await redis.del(matchDisconnectKey(matchId, userId));
     }
+    for (const exitPendingUserId of exitPendingUserIds) {
+      await redis.del(matchExitPendingKey(matchId, exitPendingUserId));
+      const pauseResult = await pauseMatchForDisconnectedPlayer(io, matchId, exitPendingUserId);
+      if (!pauseResult.finalized) {
+        await emitRejoinAvailableToUser(
+          io,
+          match,
+          exitPendingUserId,
+          pauseResult.graceMs,
+          pauseResult.remainingReconnects
+        );
+      }
+    }
+    logger.info(
+      { matchId, rejoinedUserId: userId, exitPendingUserIds },
+      'Opponent rejoined during grace; converted excused exits into normal disconnect grace'
+    );
     return;
   }
 
-  io.to(`match:${matchId}`).emit('match:countdown', {
-    matchId,
-    seconds: Math.ceil(MATCH_RESUME_COUNTDOWN_MS / 1000),
-    startsAt: new Date(countdownEndsAtMs).toISOString(),
-    serverNow: new Date().toISOString(),
-    reason: 'resume',
-  });
-
-  setTimeout(() => {
+  const countdownKey = matchResumeCountdownKey(matchId);
+  const rawEndsAt = await redis.get(countdownKey);
+  const existingEndsAtMs = Number(rawEndsAt);
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  const activeRoster = variant === 'friendly_party_quiz'
+    ? getActivePartyPlayers(roster, sanitizePartyQuizState(match.state_payload, match.total_questions).droppedUserIds)
+    : roster;
+  const resumeReadyUserIds = await resolveHumanReadyUserIds(matchId, activeRoster.map((player) => player.user_id));
+  const dispatchResumeCountdown = (params: { reason: MatchUiReadyDispatchReason; missingUserIds: string[] }) => {
     void (async () => {
-      try {
-        const countdownStillActive = (await redis.exists(countdownKey)) === 1;
-        if (!countdownStillActive) return;
-
-        const activeMatch = await matchesRepo.getMatch(matchId);
-        if (!activeMatch || activeMatch.status !== 'active') {
-          await redis.del([countdownKey, matchPauseKey(matchId)]);
-          return;
-        }
-
-        const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-        const stillDisconnected = await Promise.all(
-          roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+      const missingRecoveringUsers = reconnectingDisconnectedUserIds.filter((recoveringUserId) =>
+        params.missingUserIds.includes(recoveringUserId)
+      );
+      if (missingRecoveringUsers.length > 0) {
+        const missingRecoveringUserId = missingRecoveringUsers[0];
+        if (!missingRecoveringUserId) return;
+        const graceMs = await getRemainingDisconnectGraceMs(matchId);
+        const remainingReconnects = toRemainingReconnects(
+          await getDisconnectCount(matchId, missingRecoveringUserId)
         );
-        if (stillDisconnected.some((exists) => exists === 1)) {
-          await redis.del(countdownKey);
-          return;
-        }
-
-        await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
-
-        const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
-        const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
-        if (activeQuestion) {
-          const effectivePauseStartedAtMs = Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
-            ? pauseStartedAtMs
-            : Date.now();
-          const resumed = variant === 'friendly_party_quiz'
-            ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
-            : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
-          if (resumed) {
-            io.to(`match:${matchId}`).emit('match:resume', {
+        activeRoster
+          .filter((player) => !missingRecoveringUsers.includes(player.user_id))
+          .forEach((player) => {
+            io.to(`user:${player.user_id}`).emit('match:opponent_disconnected', {
               matchId,
-              nextQIndex: activeMatch.current_q_index,
+              opponentId: missingRecoveringUserId,
+              graceMs,
+              remainingReconnects,
             });
-            return;
-          }
-        }
+          });
+        logger.info(
+          { matchId, missingRecoveringUsers, readyReason: params.reason },
+          'Match resume UI-ready gate timed out before reconnecting player restored match UI'
+        );
+        return;
+      }
 
+      const liveDisconnectedExists = await Promise.all(
+        activeRoster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+      );
+      const blockingDisconnectedUserIds = activeRoster
+        .filter((_, index) => liveDisconnectedExists[index] === 1)
+        .map((player) => player.user_id)
+        .filter(
+          (liveDisconnectedUserId) =>
+            !reconnectingDisconnectedUserIds.includes(liveDisconnectedUserId) ||
+            params.missingUserIds.includes(liveDisconnectedUserId)
+        );
+      if (blockingDisconnectedUserIds.length > 0) {
+        for (const recoveredUserId of reconnectingDisconnectedUserIds) {
+          await redis.del(matchDisconnectKey(matchId, recoveredUserId));
+        }
+        logger.info(
+          { matchId, blockingDisconnectedUserIds, readyReason: params.reason },
+          'Match resume UI-ready gate kept grace active because disconnect markers remain'
+        );
+        return;
+      }
+
+      for (const recoveredUserId of reconnectingDisconnectedUserIds) {
+        await redis.del(matchDisconnectKey(matchId, recoveredUserId));
+      }
+      await redis.del(matchGraceKey(matchId));
+      // The match resumed before the grace window expired — drop the pending durable
+      // forfeit timer so it can't fire after a successful reconnect. (The handler also
+      // re-checks the grace key, so this is belt-and-suspenders.)
+      await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
+
+      await startResumeCountdown({
+        io,
+        matchId,
+        pauseStartedAtMs,
+        readyReason: params.reason,
+        missingUserIds: params.missingUserIds,
+      });
+    })().catch((error) => {
+      logger.warn({ error, matchId }, 'Failed to start resume countdown after UI-ready gate');
+    });
+  };
+
+  if (Number.isFinite(existingEndsAtMs) && existingEndsAtMs > Date.now()) {
+    dispatchResumeCountdown({ reason: 'all_ready', missingUserIds: [] });
+    return;
+  }
+
+  if (resumeReadyUserIds.length > 0) {
+    openMatchUiReadyGate({
+      io,
+      matchId,
+      phase: 'resume',
+      waitingUserIds: resumeReadyUserIds,
+      ceilingMs: harnessDelayMs(MATCH_RESUME_UI_READY_CEILING_MS),
+      dispatch: dispatchResumeCountdown,
+    });
+    logger.info(
+      { eventName: 'match:waiting_for_ready', matchId, phase: 'resume', waitingUserIds: resumeReadyUserIds },
+      'Match resume waiting for client UI ready'
+    );
+    return;
+  }
+
+  dispatchResumeCountdown({ reason: 'empty', missingUserIds: [] });
+}
+
+export async function handleResumeUiReady(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  payload: MatchResumeUiReadyPayload
+): Promise<void> {
+  const userId = socket.data.user?.id;
+  if (!userId) return;
+  const acknowledged = acknowledgeMatchUiReady(io, userId, payload.matchId, 'resume');
+  if (!acknowledged) {
+    logger.debug({ eventName: 'match:resume_ui_ready', matchId: payload.matchId, userId }, 'Resume UI-ready ack ignored');
+  }
+}
+
+/**
+ * Complete a resume countdown (fired by the durable realtime timer). Safe to
+ * fire late or twice: bails unless the countdown key is still present, the
+ * match is still active, and nobody is marked disconnected.
+ */
+export async function completeResumeCountdown(
+  io: QuizballServer,
+  matchId: string,
+  pauseStartedAtMs: number | null
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const countdownKey = matchResumeCountdownKey(matchId);
+  try {
+    const countdownStillActive = (await redis.exists(countdownKey)) === 1;
+    if (!countdownStillActive) return;
+
+    const activeMatch = await matchesRepo.getMatch(matchId);
+    if (!activeMatch || activeMatch.status !== 'active') {
+      await redis.del([countdownKey, matchPauseKey(matchId)]);
+      return;
+    }
+
+    const roster = await matchPlayersRepo.listMatchPlayers(matchId);
+    const stillDisconnected = await Promise.all(
+      roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+    );
+    if (stillDisconnected.some((exists) => exists === 1)) {
+      await redis.del(countdownKey);
+      return;
+    }
+
+    await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
+
+    const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+    if (variant !== 'friendly_party_quiz'
+      && (activeMatch.state_payload as PossessionStatePayload | null | undefined)?.phase === 'HALFTIME') {
+      const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+        ? pauseStartedAtMs
+        : Date.now();
+      const resumedHalftime = await resumePossessionHalftimeAfterPause(
+        io,
+        matchId,
+        effectivePauseStartedAtMs
+      );
+      if (resumedHalftime) {
         io.to(`match:${matchId}`).emit('match:resume', {
           matchId,
           nextQIndex: activeMatch.current_q_index,
         });
-
-        if (variant === 'friendly_party_quiz') {
-          await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
-          return;
-        }
-        await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
-      } catch (err) {
-        logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
+        return;
       }
-    })();
-  }, resumeCountdownMs);
+    }
+
+    const activeQuestion = await matchQuestionsRepo.getMatchQuestion(matchId, activeMatch.current_q_index);
+    if (activeQuestion) {
+      const effectivePauseStartedAtMs = pauseStartedAtMs !== null && Number.isFinite(pauseStartedAtMs) && pauseStartedAtMs > 0
+        ? pauseStartedAtMs
+        : Date.now();
+      const resumed = variant === 'friendly_party_quiz'
+        ? await resumePartyQuizQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs)
+        : await resumePossessionMatchQuestion(io, matchId, activeMatch.current_q_index, effectivePauseStartedAtMs);
+      if (resumed) {
+        io.to(`match:${matchId}`).emit('match:resume', {
+          matchId,
+          nextQIndex: activeMatch.current_q_index,
+        });
+        return;
+      }
+    }
+
+    io.to(`match:${matchId}`).emit('match:resume', {
+      matchId,
+      nextQIndex: activeMatch.current_q_index,
+    });
+
+    if (variant === 'friendly_party_quiz') {
+      await sendPartyQuizQuestion(io, matchId, activeMatch.current_q_index);
+      return;
+    }
+    await sendMatchQuestion(io, matchId, activeMatch.current_q_index);
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Failed to resume paused match after countdown');
+  }
 }
 
 export async function pauseMatchForDisconnectedPlayer(
@@ -682,19 +1155,33 @@ export async function pauseMatchForDisconnectedPlayer(
     };
   }
 
+  const exitPending = (await redis.exists(matchExitPendingKey(matchId, userId))) === 1;
+  if (exitPending && variant !== 'friendly_party_quiz') {
+    logger.info(
+      { matchId, userId, variant },
+      'Match disconnect pause skipped because user already has an excused exit pending'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
+      finalized: false,
+    };
+  }
+
   const sockets = await io.in(`match:${matchId}`).fetchSockets();
   const sameUserSockets = sockets.filter(
     (connectedSocket) =>
       connectedSocket.id !== options.ignoreSocketId &&
       connectedSocket.data.user.id === userId
   );
-  const replacementSocketPresent = sameUserSockets.some((connectedSocket) => {
+  const replacementSocketIds = sameUserSockets.filter((connectedSocket) => {
     if (typeof options.disconnectedConnectedAt !== 'number') return true;
     const connectedAt = connectedSocket.data.connectedAt;
     return typeof connectedAt === 'number' && connectedAt >= options.disconnectedConnectedAt;
-  });
+  }).map((connectedSocket) => connectedSocket.id);
+  const replacementSocketPresent = replacementSocketIds.length > 0;
   const nowMs = Date.now();
-  const stableLiveSocket = sameUserSockets.some((connectedSocket) => {
+  const stableLiveSocketIds = sameUserSockets.filter((connectedSocket) => {
     if (typeof options.disconnectedConnectedAt === 'number') {
       const connectedAt = connectedSocket.data.connectedAt;
       if (typeof connectedAt === 'number' && connectedAt < options.disconnectedConnectedAt) {
@@ -703,11 +1190,30 @@ export async function pauseMatchForDisconnectedPlayer(
     }
     const connectedAt = connectedSocket.data.connectedAt;
     return typeof connectedAt !== 'number' || nowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
+  }).map((connectedSocket) => connectedSocket.id);
+  const matchUiReplacementSocketPresent = await hasReplacementMatchUiSocket({
+    match,
+    variant,
+    userId,
+    socketIds: replacementSocketIds,
   });
-  if (stableLiveSocket && variant !== 'friendly_party_quiz') {
+  const stableMatchUiSocketPresent = await hasReplacementMatchUiSocket({
+    match,
+    variant,
+    userId,
+    socketIds: stableLiveSocketIds,
+  });
+  if (stableMatchUiSocketPresent && variant !== 'friendly_party_quiz') {
     logger.info(
-      { matchId, userId, socketCount: sockets.length, sameUserSocketCount: sameUserSockets.length },
-      'Match disconnect pause skipped because user still has a live match socket'
+      {
+        matchId,
+        userId,
+        socketCount: sockets.length,
+        sameUserSocketCount: sameUserSockets.length,
+        replacementSocketCount: replacementSocketIds.length,
+        stableLiveSocketCount: stableLiveSocketIds.length,
+      },
+      'Match disconnect pause skipped because user still has live match UI presence'
     );
     return {
       graceMs: MATCH_DISCONNECT_GRACE_MS,
@@ -746,13 +1252,14 @@ export async function pauseMatchForDisconnectedPlayer(
   //  (a) the match:disconnect marker is already set — a duplicate handler for the
   //      SAME episode (socket `disconnect` + `match:leave`), which previously
   //      double-counted and forfeited players after only 2 real disconnects; or
-  //  (b) a newer same-user socket is already present (replacementSocketPresent) —
-  //      a STALE disconnect for a socket the user already replaced by reconnecting.
-  //      Counting it would forfeit a player who is back online (the "lost while
-  //      playing" bug). The auto-resume below still runs so the match continues.
+  //  (b) a newer same-user socket is already present AND proving live match-UI
+  //      presence (matchUiReplacementSocketPresent) — a STALE disconnect for a
+  //      socket the user already replaced by reconnecting. A bare user/site
+  //      socket is not enough: it can be on the menu while the player is absent
+  //      from the actual match UI.
   // The marker is cleared on resume, so a genuinely new disconnect counts again.
   const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
-  const skipCount = alreadyDisconnected || replacementSocketPresent;
+  const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
   const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
     : await incrementDisconnectCount(matchId, userId);
@@ -767,6 +1274,7 @@ export async function pauseMatchForDisconnectedPlayer(
       remainingReconnects,
       alreadyDisconnected,
       replacementSocketPresent,
+      matchUiReplacementSocketPresent,
       skippedCount: skipCount,
       graceMs: MATCH_DISCONNECT_GRACE_MS,
       playerCount: players.length,
@@ -774,6 +1282,7 @@ export async function pauseMatchForDisconnectedPlayer(
         ? getActivePartyPlayers(players, partyState.droppedUserIds).length
         : undefined,
       sameUserSocketCount: sameUserSockets.length,
+      stableLiveSocketCount: stableLiveSocketIds.length,
       autoResumeReplacementSocket: Boolean(options.autoResumeReplacementSocket),
     },
     'Match disconnect pause requested'
@@ -785,7 +1294,15 @@ export async function pauseMatchForDisconnectedPlayer(
     await redis.set(matchPauseKey(matchId), String(disconnectedAtMs), { EX: PRESENCE_TTL_SEC });
   }
 
-  cancelMatchQuestionTimer(matchId, match.current_q_index);
+  if (variant === 'friendly_party_quiz') {
+    cancelMatchQuestionTimer(matchId, match.current_q_index);
+  } else {
+    // Defer — never cancel — the possession question timer on pause. A
+    // cancelled timer leaves the round with zero resolvers if the resume never
+    // happens; prod audit (Jun 2026) showed matches freezing exactly this way,
+    // concentrated on the 50s clue_chain window (~4× MCQ death rate).
+    deferPossessionQuestionTimerForPause(matchId, match.current_q_index, PAUSE_QUESTION_BACKSTOP_MS);
+  }
   if (variant !== 'friendly_party_quiz') {
     cancelPossessionHalftimeTimer(matchId);
     // Pause checkpoint (db-optimize.md #7): routine rounds no longer persist
@@ -825,7 +1342,7 @@ export async function pauseMatchForDisconnectedPlayer(
       'Party quiz opponent disconnected emitted'
     );
   }
-  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && replacementSocketPresent) {
+  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && matchUiReplacementSocketPresent) {
     await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
   }
 
@@ -872,6 +1389,9 @@ export async function pauseMatchForDisconnectedPlayer(
       cacheSnapshot: cache,
       disconnectedUserIds: [userId],
       source: 'reconnect_limit',
+      // The reconnect limit was exceeded by `userId` — they MUST forfeit, even
+      // if a racing reconnect makes them look present or the opponent is an AI.
+      definiteForfeiterUserId: userId,
     });
     if (resolved.finalized) {
       await redis.del(matchForfeitPendingUserKey(userId));
@@ -897,7 +1417,7 @@ export async function pauseMatchForDisconnectedPlayer(
       acquired === 'OK' ? 'Party quiz shared grace window started' : 'Party quiz shared grace window already active'
     );
   }
-  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && replacementSocketPresent) {
+  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && matchUiReplacementSocketPresent) {
     logger.info(
       { matchId, userId, socketCount: sameUserSockets.length },
       'Auto-resuming match after fast socket replacement'
@@ -1025,110 +1545,6 @@ export async function resolveExpiredGraceWindow(
         pauseStartedAtMs: Number.isFinite(pauseStartedAtMs) ? pauseStartedAtMs : Date.now(),
       });
       return;
-    }
-
-    // ── Auto-resume reachable players before any terminal resolution ──
-    // Mass socket flaps (diagnosed prod pattern: token-refresh reconnect
-    // storms re-authenticate fresh sockets into `user:<id>` rooms, but the
-    // client doesn't always complete the match:rejoin handshake) leave players
-    // with a live socket AND a stale disconnect marker. They are online —
-    // killing the match hands out an undeserved loss while both humans stare
-    // at a frozen question. If EVERY marked-disconnected player is reachable,
-    // pull their sockets back into the match room and resume instead.
-    //
-    // "Reachable" deliberately means a FRESH socket: one that connected AFTER
-    // the disconnect marker was written. A socket that predates the marker is
-    // a zombie or a voluntary match:leave (the user's socket stays alive in
-    // the menus) — those players must NOT be yanked back into the match, and
-    // the terminal forfeit path below keeps owning them. A socket already
-    // attached to a different match is likewise excluded.
-    const reachability = await Promise.all(
-      disconnected.map(async (disconnectedUserId) => {
-        const markerRaw = await redis.get(matchDisconnectKey(matchId, disconnectedUserId));
-        const disconnectedAtMs = Number(markerRaw);
-        const markerTimeMs = Number.isFinite(disconnectedAtMs) ? disconnectedAtMs : Number.POSITIVE_INFINITY;
-        const allSockets = await fetchUserRoomSockets(io, disconnectedUserId);
-        const freshSockets = allSockets.filter((rawSocket) => {
-          const data = (rawSocket as { data?: { connectedAt?: unknown; matchId?: unknown } }).data;
-          const connectedAt = Number(data?.connectedAt);
-          if (!Number.isFinite(connectedAt) || connectedAt <= markerTimeMs) return false;
-          if (typeof data?.matchId === 'string' && data.matchId !== matchId) return false;
-          return true;
-        });
-        return { userId: disconnectedUserId, sockets: freshSockets };
-      })
-    );
-    const allReachable = reachability.every((entry) => entry.sockets.length > 0);
-    if (allReachable) {
-      // A user only counts as recovered once at least one of their sockets has
-      // ACTUALLY joined the match room — "reachable during fetchSockets()" is
-      // not enough (the socket can vanish between fetch and join). data.matchId
-      // is only mutated after a successful join. A failed state emit is logged
-      // but non-fatal: once the socket is in the room, the resume choreography
-      // (match:countdown / match:resume / question redelivery) reaches it.
-      const recoveredUserIds: string[] = [];
-      for (const entry of reachability) {
-        let joinedSockets = 0;
-        for (const rawSocket of entry.sockets) {
-          const socket = rawSocket as QuizballSocket;
-          try {
-            await socket.join(`match:${matchId}`);
-            socket.data.matchId = matchId;
-            joinedSockets += 1;
-          } catch (error) {
-            logger.warn(
-              { error, matchId, userId: entry.userId },
-              'Failed to rejoin reachable socket during grace-expiry auto-resume'
-            );
-            continue;
-          }
-          try {
-            await emitPossessionStateToSocket(socket, matchId);
-          } catch (error) {
-            logger.warn(
-              { error, matchId, userId: entry.userId },
-              'Failed to emit state to rejoined socket during grace-expiry auto-resume'
-            );
-          }
-        }
-        if (joinedSockets > 0) recoveredUserIds.push(entry.userId);
-      }
-
-      if (recoveredUserIds.length === reachability.length) {
-        // Clear every recovered player's disconnect marker BEFORE the resume
-        // choreography so a single resumePausedMatch call sees no remaining
-        // disconnects and goes straight to the countdown — calling it once per
-        // user would emit a spurious match:opponent_disconnected to players
-        // that are already recovered.
-        for (const userId of recoveredUserIds) {
-          await redis.del(matchDisconnectKey(matchId, userId));
-          await redis.set(matchPresenceKey(matchId, userId), '1', { EX: PRESENCE_TTL_SEC });
-        }
-        logger.info(
-          {
-            matchId,
-            recoveredUserIds,
-            socketCounts: reachability.map((entry) => entry.sockets.length),
-            source: 'disconnect_grace_expired',
-          },
-          'Grace expired but all disconnected players are reachable; auto-resuming match'
-        );
-        const resumeInitiatorUserId = recoveredUserIds[0];
-        if (resumeInitiatorUserId) {
-          await resumePausedMatch(io, matchId, resumeInitiatorUserId);
-        }
-        return;
-      }
-
-      logger.warn(
-        {
-          matchId,
-          recoveredUserIds,
-          expectedUserIds: reachability.map((entry) => entry.userId),
-          source: 'disconnect_grace_expired',
-        },
-        'Grace-expiry auto-resume could not rejoin every reachable player; falling through to terminal resolution'
-      );
     }
 
     // Forfeit finalization persists final totals from the cache snapshot;

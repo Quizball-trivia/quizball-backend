@@ -1,4 +1,5 @@
 import type { AvatarCustomization } from '../modules/users/avatar-customization.js';
+import type { I18nField } from '../db/types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
@@ -72,7 +73,13 @@ export interface LobbySettings {
 
 export interface DraftCategory {
   id: string;
-  name: string;
+  /**
+   * Full i18n object (e.g. { en, ka }) so the client can localize the category
+   * name to each viewer's language. The draft payload is broadcast to a lobby
+   * room that may contain players with different languages, so the name must not
+   * be collapsed to a single locale server-side.
+   */
+  name: I18nField;
   icon: string | null;
   imageUrl: string | null;
 }
@@ -116,6 +123,9 @@ export interface OpponentInfo {
   recentForm?: Array<'W' | 'L' | 'D'>;
   lat?: number;
   lon?: number;
+  /** Opponent's last reported connection RTT (ms), for the showdown ping pill.
+   *  null/undefined when no recent reading is available. */
+  pingMs?: number | null;
 }
 
 export type MatchQuestionKind =
@@ -214,6 +224,24 @@ export interface MatchCountdownPayload {
   startsAt: string;
   serverNow?: string;
   reason?: 'kickoff' | 'resume';
+}
+
+export type MatchUiReadyPhase = 'kickoff' | 'resume';
+
+export type MatchStagePresencePayload = {
+  matchId: string;
+  stageKey: string;
+};
+
+export interface MatchWaitingForReadyPayload {
+  matchId: string;
+  phase: MatchUiReadyPhase;
+  readyCount: number;
+  totalCount: number;
+  readyUserIds?: string[];
+  waitingUserIds?: string[];
+  forceStartsAt: string;
+  serverNow?: string;
 }
 
 export interface MatchQuestionPayload {
@@ -431,6 +459,7 @@ export interface MatchFinalResultsPayload {
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
+  cancelledNoContest?: boolean;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: RankedMatchOutcomePayload | null;
 }
@@ -758,6 +787,7 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
+  'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:countdown_guess': (data: { matchId: string; qIndex: number; guess: string }) => void;
@@ -765,12 +795,24 @@ export interface ClientToServerEvents {
   'match:clues_answer': (data: MatchCluesAnswerPayload) => void;
   'match:halftime_ban': (data: { matchId: string; categoryId: string }) => void;
   'match:halftime_ui_ready': (data: { matchId: string }) => void;
+  'match:kickoff_ui_ready': (data: { matchId: string }) => void;
+  'match:resume_ui_ready': (data: { matchId: string }) => void;
+  'match:presence_heartbeat': (data: MatchStagePresencePayload) => void;
+  'match:stage_ready': (data: MatchStagePresencePayload) => void;
   'match:leave': (data?: { matchId?: string }) => void;
   'match:rejoin': (data?: { matchId?: string }) => void;
   'match:forfeit': (data?: { matchId?: string }) => void;
   'match:play_again': (data: MatchPlayAgainPayload) => void;
   'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
   'match:ready_for_next_question': (data: { matchId: string; qIndex: number }) => void;
+  'connection:ping': (
+    data: { sentAt: number },
+    ack?: (result: { sentAt: number; serverNow: string }) => void
+  ) => void;
+  // Client reports its own measured RTT so the opponent can be shown this
+  // player's ping (the server doesn't otherwise know it). Stored per-user with
+  // a short TTL; surfaced as opponentInfo.pingMs on the match/showdown payload.
+  'connection:rtt': (data: { rttMs: number }) => void;
   'warmup:tap': (data: WarmupTapPayload) => void;
   'warmup:dropped': (data: WarmupDroppedPayload) => void;
   'warmup:restart': () => void;
@@ -791,9 +833,25 @@ export interface ForceLogoutPayload {
   reason: 'account_deleted' | 'admin_revoked';
 }
 
+export interface NotificationPayload {
+  id: string;
+  type: string;
+  title: Record<string, string>;
+  body: Record<string, string> | null;
+  data: Record<string, unknown>;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationUnreadCountPayload {
+  unreadCount: number;
+}
+
 export interface ServerToClientEvents {
   'error': (data: ErrorPayload) => void;
   'presence:online_count': (data: PresenceOnlineCountPayload) => void;
+  'notification:new': (data: NotificationPayload) => void;
+  'notification:unread_count': (data: NotificationUnreadCountPayload) => void;
   'session:state': (data: SessionStatePayload) => void;
   'session:blocked': (data: SessionBlockedPayload) => void;
   'auth:force_logout': (data: ForceLogoutPayload) => void;
@@ -807,6 +865,7 @@ export interface ServerToClientEvents {
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;
   'match:start': (data: MatchStartPayload) => void;
+  'match:waiting_for_ready': (data: MatchWaitingForReadyPayload) => void;
   'match:countdown': (data: MatchCountdownPayload) => void;
   'match:state': (data: MatchStatePayload) => void;
   'match:party_state': (data: MatchPartyStatePayload) => void;

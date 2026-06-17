@@ -148,6 +148,24 @@ export function createApp(): Express {
       },
     });
     app.use('/api/v1/auth', authLimiter);
+
+    // Tight limiter for the public feedback endpoint to deter spam (it relays
+    // to email). A handful of submissions per 10 min per IP is plenty.
+    const feedbackLimiter = rateLimit({
+      windowMs: 10 * 60 * 1000, // 10 minutes
+      max: 5, // 5 submissions per window per IP
+      standardHeaders: true,
+      legacyHeaders: false,
+      validate: false,
+      skip: skipForChaos,
+      message: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many feedback submissions, please try again later',
+        details: null,
+        request_id: null,
+      },
+    });
+    app.use('/api/v1/feedback', feedbackLimiter);
   }
 
   // Disable ETag caching in development (forces fresh responses)

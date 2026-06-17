@@ -10,6 +10,11 @@ import { matchPauseKey } from './match-keys.js';
 /** Regular penalty rounds before sudden-death kicks in. Mirrors the
  *  frontend constant in `features/possession/types/possession.types.ts`. */
 const MAX_PENALTY_ROUNDS = 5;
+
+/** Retry delay when a timeout fire no-ops (lock busy / paused / transient
+ *  cache miss). The fire already consumed the durable ZSET member, so without
+ *  an explicit re-arm the round would be left with no resolver at all. */
+const TIMEOUT_NOOP_RETRY_MS = 5000;
 import {
   answerCount,
   buildAnswerPayload,
@@ -37,6 +42,7 @@ import {
 } from './possession-payload-mappers.js';
 import {
   clearQuestionTimer,
+  deferQuestionTimer,
   emitMatchState,
   scheduleNextPossessionQuestion,
 } from './possession-question-dispatch.js';
@@ -78,6 +84,11 @@ export async function resolvePossessionRound(
   const lock = await acquireLock(lockKey, 5000);
   if (!lock.acquired || !lock.token) {
     logger.warn({ eventName: 'match:round_result', matchId, qIndex, fromTimeout }, 'Possession round resolve skipped: lock busy');
+    // A timeout fire already consumed the durable timer (the scheduler pops the
+    // member before handling) — re-arm it so the round keeps a resolver. The
+    // concurrent lock holder either concludes the round (the retry then no-ops
+    // and clears) or itself bailed, in which case the retry resolves it.
+    if (fromTimeout) await deferQuestionTimer(matchId, qIndex, TIMEOUT_NOOP_RETRY_MS);
     return;
   }
 
@@ -743,6 +754,15 @@ export async function resolvePossessionRound(
     if (roundConcluded) {
       clearQuestionTimer(matchId, qIndex);
       clearAiAnswerTimer(matchId, qIndex);
+    } else if (fromTimeout) {
+      // The fired durable timer was popped before this handler ran; "leaving
+      // it armed" is only true for answer-triggered resolves. Re-arm so the
+      // unconcluded round always keeps an auto-resolve pending.
+      await deferQuestionTimer(matchId, qIndex, TIMEOUT_NOOP_RETRY_MS);
+      logger.info(
+        { eventName: 'match:round_result', matchId, qIndex, fromTimeout, retryInMs: TIMEOUT_NOOP_RETRY_MS },
+        'Possession round resolve re-armed timeout: round not concluded'
+      );
     } else {
       logger.info(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout },

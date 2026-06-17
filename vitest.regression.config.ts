@@ -30,6 +30,8 @@ export default defineConfig({
       'tests/regression/match-boot.test.ts',
       'tests/regression/clean-match-invariants.test.ts',
       'tests/regression/disconnect-scenarios.test.ts',
+      'tests/regression/clues-freeze-backstop.test.ts',
+      'tests/regression/safe-leave-opponent-grace.test.ts',
       'tests/regression/orphan-sweeper-attribution.test.ts',
       'tests/regression/penalty-shootout.test.ts',
       'tests/regression/halftime-uiready-withheld.test.ts',
@@ -37,8 +39,18 @@ export default defineConfig({
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
       'tests/regression/user-recent-categories.test.ts',
+      'tests/regression/forfeit-economy.test.ts',
+      'tests/regression/draft-ban-collision.test.ts',
+      'tests/regression/question-history.test.ts',
+      'tests/regression/featured-ranked-only.test.ts',
+      'tests/regression/boot-timer-rearm.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
+    // Stream progress: the `verbose` reporter prints each scenario name as it
+    // runs (line-buffered, so it shows live in a pipe/background/file tail) and
+    // `hanging-process` surfaces a leaked timer/handle if a match never tears
+    // down. Override with REGRESSION_REPORTERS=dot for a quiet run.
+    reporters: (process.env.REGRESSION_REPORTERS ?? 'verbose,hanging-process').split(','),
     // ── Serialize at the FILE level: one match owns the shared DB/Redis at a
     // time, but each file runs in its own fresh fork (singleFork stays false). ──
     fileParallelism: false,

@@ -45,6 +45,7 @@ import {
 import { decideWinner } from './possession-completion.js';
 import {
   clearQuestionTimer,
+  deferQuestionTimer,
   sendPossessionMatchQuestion,
 } from './possession-question-dispatch.js';
 export {
@@ -94,6 +95,7 @@ const {
   scheduleHalftimeTimeout,
   schedulePossessionAiHalftimeBan,
   handlePossessionHalftimeUiReady: handlePossessionHalftimeUiReadyInternal,
+  resumePossessionHalftimeAfterPause,
 } = possessionHalftime;
 
 export {
@@ -109,6 +111,7 @@ export {
   scheduleHalftimeTimeout,
   schedulePossessionAiAnswer,
   schedulePossessionAiHalftimeBan,
+  resumePossessionHalftimeAfterPause,
 };
 
 
@@ -131,6 +134,24 @@ export { resolvePossessionRound };
 
 export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): void {
   clearQuestionTimer(matchId, qIndex);
+  clearAiAnswerTimer(matchId, qIndex);
+}
+
+/**
+ * Pause-time variant of cancelPossessionQuestionTimer: the AI answer timer is
+ * cancelled (resume re-plans it), but the question-timeout timer is DEFERRED
+ * instead of deleted so a paused round always keeps a durable backstop
+ * resolver. If the resume path never runs (player never rejoins, process
+ * restarts mid-resume, grace-expiry resolution is dropped on lock contention),
+ * the backstop fires and resolves the round with timeout zeros instead of
+ * freezing the match until the stale sweeper.
+ */
+export function deferPossessionQuestionTimerForPause(
+  matchId: string,
+  qIndex: number,
+  backstopMs: number
+): void {
+  void deferQuestionTimer(matchId, qIndex, backstopMs);
   clearAiAnswerTimer(matchId, qIndex);
 }
 

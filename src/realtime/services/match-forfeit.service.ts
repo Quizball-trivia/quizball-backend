@@ -16,6 +16,7 @@ import { getRedisClient } from '../redis.js';
 import {
   lastMatchKey,
   matchDisconnectKey,
+  matchExitPendingKey,
   matchForfeitPendingUserKey,
   matchGraceKey,
   matchPauseKey,
@@ -34,6 +35,10 @@ import {
 } from './match-final-results.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
+import {
+  findOpponentInDisconnectGrace,
+  markExcusedExitPending,
+} from './match-excused-exit.service.js';
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 const FORFEIT_PENDING_TTL_SEC = 60;
@@ -208,8 +213,9 @@ export async function finalizeMatchAsForfeit(
       // Refund the ranked ticket to every human participant (best-effort).
       const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
       const humanUserIds = roster
-        .filter((player) => !rosterUsers.get(player.user_id)?.is_ai)
-        .map((player) => player.user_id);
+        .map((player) => rosterUsers.get(player.user_id))
+        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+        .map((user) => user.id);
       if (humanUserIds.length > 0) {
         try {
           await storeService.refundRankedTickets(humanUserIds);
@@ -226,10 +232,31 @@ export async function finalizeMatchAsForfeit(
         'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
       );
 
+      const resultVersion = Date.now();
+      const redis = getRedisClient();
+      if (redis) {
+        const cleanupKeys = params.cleanupRedisKeys?.filter(Boolean) ?? [];
+        if (cleanupKeys.length > 0) {
+          await redis.del(cleanupKeys);
+        }
+        await redis.set(matchForfeitKey(params.matchId), 'no_contest', {
+          EX: FORFEIT_REPLAY_TTL_SEC,
+        });
+        await Promise.all(
+          roster.map((player) =>
+            redis.set(
+              lastMatchKey(player.user_id),
+              JSON.stringify({ matchId: params.matchId, resultVersion }),
+              { EX: FORFEIT_REPLAY_TTL_SEC }
+            )
+          )
+        );
+      }
+
       return {
         matchId: params.matchId,
         winnerId: null,
-        resultVersion: Date.now(),
+        resultVersion,
         completed: true,
         cancelledNoContest: true,
       };
@@ -346,6 +373,25 @@ export async function handleMatchForfeit(
       }
 
       if (variant !== 'friendly_party_quiz') {
+        const disconnectedOpponentId = await findOpponentInDisconnectGrace(
+          activeMatch.id,
+          userId,
+          roster
+        );
+        if (disconnectedOpponentId) {
+          await markExcusedExitPending({
+            matchId: activeMatch.id,
+            userId,
+            opponentId: disconnectedOpponentId,
+            source: 'match_forfeit',
+          });
+          socket.leave(`match:${activeMatch.id}`);
+          socket.data.matchId = undefined;
+          return;
+        }
+      }
+
+      if (variant !== 'friendly_party_quiz') {
         cancelMatchQuestionTimer(activeMatch.id, activeMatch.current_q_index);
         cancelPossessionHalftimeTimer(activeMatch.id);
       }
@@ -383,6 +429,7 @@ export async function handleMatchForfeit(
         matchGraceKey(activeMatch.id),
         ...roster.flatMap((player) => [
           matchDisconnectKey(activeMatch.id, player.user_id),
+          matchExitPendingKey(activeMatch.id, player.user_id),
           matchPresenceKey(activeMatch.id, player.user_id),
           matchReconnectCountKey(activeMatch.id, player.user_id),
         ]),

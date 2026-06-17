@@ -18,6 +18,11 @@ type FakeRedis = {
   zAdd: ReturnType<typeof vi.fn>;
   zRem: ReturnType<typeof vi.fn>;
   del: ReturnType<typeof vi.fn>;
+  multi: () => {
+    set: (key: string, value: string, options?: unknown) => unknown;
+    zAdd: (key: string, entries: Array<{ score: number; value: string }>) => unknown;
+    exec: () => Promise<unknown[]>;
+  };
 };
 
 let redis: FakeRedis;
@@ -96,6 +101,25 @@ function createRedis(): FakeRedis {
     }),
     zRem: vi.fn(async (key: string, member: string) => zsets.get(key)?.delete(member) ? 1 : 0),
     del: vi.fn(async (key: string) => values.delete(key) ? 1 : 0),
+    multi(this: FakeRedis) {
+      const ops: Array<() => Promise<unknown>> = [];
+      const chain = {
+        set: (key: string, value: string, options?: unknown) => {
+          ops.push(() => this.set(key, value, options));
+          return chain;
+        },
+        zAdd: (key: string, entries: Array<{ score: number; value: string }>) => {
+          ops.push(() => this.zAdd(key, entries));
+          return chain;
+        },
+        exec: async () => {
+          const results: unknown[] = [];
+          for (const op of ops) results.push(await op());
+          return results;
+        },
+      };
+      return chain;
+    },
   };
 }
 

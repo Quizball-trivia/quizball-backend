@@ -5,12 +5,14 @@ import {
   matchCountdownGuessSchema,
   matchHalftimeBanSchema,
   matchHalftimeUiReadySchema,
+  matchKickoffUiReadySchema,
   matchFinalResultsAckSchema,
   matchForfeitSchema,
   matchLeaveSchema,
   matchPutInOrderAnswerSchema,
   matchPlayAgainSchema,
   matchReadyForNextQuestionSchema,
+  matchResumeUiReadySchema,
   matchRejoinSchema,
 } from '../schemas/match.schemas.js';
 import { logger } from '../../core/logger.js';
@@ -167,6 +169,48 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
           matchId: parsed.data.matchId,
         },
         'Error handling match:halftime_ui_ready'
+      );
+    }
+  });
+
+  socket.on('match:kickoff_ui_ready', async (payload) => {
+    const parsed = matchKickoffUiReadySchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:kickoff_ui_ready payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleKickoffUiReady(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+        },
+        'Error handling match:kickoff_ui_ready'
+      );
+    }
+  });
+
+  socket.on('match:resume_ui_ready', async (payload) => {
+    const parsed = matchResumeUiReadySchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:resume_ui_ready payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleResumeUiReady(io, socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+        },
+        'Error handling match:resume_ui_ready'
       );
     }
   });

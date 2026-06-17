@@ -1,6 +1,8 @@
 import { BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { isUserAccountInactive, usersRepo } from '../users/users.repo.js';
 import { progressionService } from '../progression/progression.service.js';
+import { notificationsService } from '../notifications/notifications.service.js';
+import { logger } from '../../core/logger.js';
 import { friendsRepo } from './friends.repo.js';
 import type { RankedProfileResponse } from '../ranked/ranked.schemas.js';
 import { parseStoredAvatarCustomization } from '../users/avatar-customization.js';
@@ -98,6 +100,25 @@ export const friendsService = {
     }
 
     const request = await friendsRepo.createFriendRequest(senderUserId, targetUserId);
+
+    // Persist a feed notification for the recipient (additive to the interactive
+    // friend-request row; this gives the bell badge + toast + 3-day retention).
+    try {
+      const sender = await usersRepo.getById(senderUserId);
+      const senderName = sender?.nickname?.trim() || 'Someone';
+      await notificationsService.notify(targetUserId, {
+        type: 'friend_request',
+        title: { en: 'New friend request', ka: 'ახალი მეგობრობის მოთხოვნა' },
+        body: {
+          en: `${senderName} sent you a friend request.`,
+          ka: `${senderName}-მ გამოგიგზავნა მეგობრობის მოთხოვნა.`,
+        },
+        data: { requestId: request.id, senderUserId, senderName },
+      });
+    } catch (err) {
+      logger.warn({ err, targetUserId }, 'Failed to send friend-request notification');
+    }
+
     return {
       requestId: request.id,
       status: 'pending' as const,

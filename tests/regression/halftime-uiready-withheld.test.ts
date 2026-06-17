@@ -30,7 +30,7 @@ if (isLocal) {
   process.env.REGRESSION_DETERMINISTIC = '1';
   process.env.REGRESSION_FAST_TIMERS = '1';
 }
-process.env.LOG_LEVEL = 'silent';
+process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent';
 
 const describeLocal = isLocal ? describe : describe.skip;
 

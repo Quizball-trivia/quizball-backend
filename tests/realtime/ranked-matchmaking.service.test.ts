@@ -742,4 +742,85 @@ describe('ranked-matchmaking.service queue behavior', () => {
       ])
     );
   });
+
+  // ── runRankedDraftStart: durable replacement for the in-process 1.2s
+  //    "match found" modal delay (a restart in that window used to leave a
+  //    ranked lobby stuck in 'waiting' forever). The handler re-checks
+  //    everything, so late/duplicate fires must be no-ops. ──
+  it('runRankedDraftStart starts the draft for a waiting ranked lobby', async () => {
+    const io = createIoMock();
+    redisMock.get.mockResolvedValue(null);
+    getLobbyByIdMock.mockResolvedValue(makeOpenLobby('lobby-1', 'waiting'));
+
+    const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
+    await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
+
+    expect(startDraftMock).toHaveBeenCalledWith(io, 'lobby-1');
+  });
+
+  it('runRankedDraftStart skips when either player cancelled the search', async () => {
+    const io = createIoMock();
+    redisMock.get.mockImplementation(async (key: string) =>
+      key.includes('u2') ? '1' : null
+    );
+    getLobbyByIdMock.mockResolvedValue(makeOpenLobby('lobby-1', 'waiting'));
+
+    const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
+    await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
+
+    expect(startDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('runRankedDraftStart no-ops when the lobby already left waiting (late/duplicate fire)', async () => {
+    const io = createIoMock();
+    redisMock.get.mockResolvedValue(null);
+    getLobbyByIdMock.mockResolvedValue(makeOpenLobby('lobby-1', 'active'));
+
+    const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
+    await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
+
+    expect(startDraftMock).not.toHaveBeenCalled();
+  });
+
+  // ── handleSocketDisconnect: the cancel marker must land even when the
+  //    per-user transition lock is busy — previously NOTHING was written in
+  //    that case and the 10s AI fallback could start a ranked match for an
+  //    offline user. ──
+  it('disconnect cleanup sets the cancel marker BEFORE attempting the transition lock', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+
+    const pending = service.handleSocketDisconnect(io, socket as never);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await pending;
+
+    const cancelSetCall = redisMock.set.mock.calls.find(([key]) =>
+      typeof key === 'string' && key.includes('cancel') && key.includes('u1')
+    );
+    expect(cancelSetCall).toBeTruthy();
+    const cancelSetOrder = redisMock.set.mock.invocationCallOrder[
+      redisMock.set.mock.calls.indexOf(cancelSetCall!)
+    ];
+    const firstLockOrder = acquireLockMock.mock.invocationCallOrder[0];
+    expect(firstLockOrder).toBeGreaterThan(cancelSetOrder);
+  });
+
+  it('disconnect cleanup still sets the cancel marker when the transition lock never frees', async () => {
+    acquireLockMock.mockResolvedValue({ acquired: false });
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+
+    const pending = service.handleSocketDisconnect(io, socket as never);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await pending;
+
+    // Marker written despite the busy lock; the cancel SCRIPT never ran.
+    const cancelSetCall = redisMock.set.mock.calls.find(([key]) =>
+      typeof key === 'string' && key.includes('cancel') && key.includes('u1')
+    );
+    expect(cancelSetCall).toBeTruthy();
+    expect(redisMock.eval).not.toHaveBeenCalled();
+  });
 });

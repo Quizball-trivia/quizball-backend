@@ -73,6 +73,11 @@ import type { MatchQuestionKind } from './socket.types.js';
 
 const SPECIAL_QUESTION_CANDIDATE_LIMIT = 50;
 
+// History-aware selection window: don't re-serve a question a player saw within
+// this many days (best-effort; falls back to a repeat if a thin category would
+// otherwise run dry). See getRecentlySeenQuestionIds.
+const QUESTION_HISTORY_WINDOW_DAYS = 14;
+
 // The 0-based slot within a half whose question is forced to be an image MCQ
 // (the 4th question → slot index 3). See questionTypeForState / NORMAL_HALF_SEQUENCE.
 const IMAGE_MCQ_SLOT_INDEX = 3;
@@ -100,6 +105,41 @@ export function clearQuestionTimer(matchId: string, qIndex: number): void {
   void cancelRealtimeTimer('possession_question', key).catch((error) => {
     logger.warn({ error, matchId, qIndex }, 'Failed to cancel possession question timer');
   });
+}
+
+/**
+ * Re-arm (or push back) the durable question-timeout timer for a round that is
+ * NOT concluded yet, instead of leaving it with no resolver at all.
+ *
+ * Two callers:
+ *  - pause-on-disconnect: previously the timer was CANCELLED on pause and only
+ *    a successful resume re-armed it. If the resume never happened the round
+ *    had no auto-resolve left — the match froze silently until the stale
+ *    sweeper (observed in prod as matches dying on 50s clue_chain questions
+ *    at ~4× the MCQ rate; the long window maximizes disconnect exposure).
+ *  - timeout fires that no-op: the scheduler pops the ZSET member BEFORE the
+ *    handler runs, so a no-op return (paused / lock busy / transient cache
+ *    miss) consumes the timer permanently. The resolver re-arms it here.
+ *
+ * scheduleRealtimeTimer overwrites the member's score+payload, so deferring an
+ * already-armed timer just moves it; a later resume rebases it again.
+ */
+export async function deferQuestionTimer(matchId: string, qIndex: number, delayMs: number): Promise<void> {
+  const key = questionTimerKey(matchId, qIndex);
+  const dueAt = new Date(Date.now() + delayMs);
+  try {
+    // Awaited (not fire-and-forget): when called from inside a fired timer's
+    // handler, the re-armed member+payload must be fully persisted before the
+    // scheduler's post-handling cleanup runs, or the cleanup could observe the
+    // member as unscheduled and delete the payload we just wrote.
+    await scheduleRealtimeTimer('possession_question', key, dueAt, {
+      kind: 'possession_question',
+      matchId,
+      qIndex,
+    });
+  } catch (error) {
+    logger.error({ error, matchId, qIndex, delayMs }, 'Failed to defer possession question timer');
+  }
 }
 
 function scheduleQuestionTimeout(
@@ -440,7 +480,8 @@ async function pickImageMcqForState(
 async function maybePickQuestionForState(
   matchId: string,
   state: PossessionStatePayload,
-  categoryIds: string[]
+  categoryIds: string[],
+  humanUserIds: string[] = []
 ): Promise<PickedQuestion | null> {
   if (isImageMcqSlot(state)) {
     const imagePicked = await pickImageMcqForState(matchId, state, categoryIds);
@@ -458,18 +499,49 @@ async function maybePickQuestionForState(
   // Keep the half's reserved image MCQ out of every other slot so the
   // preloaded image is never consumed early by a normal MCQ pick.
   const reserved = reservedImageMcqForHalf(state);
-  const excludeQuestionIds = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : undefined;
+  const reservedExclusion = reserved && !isImageMcqSlot(state) ? [reserved.questionId] : [];
+
+  // History-aware selection: bias the random pick AWAY from questions these
+  // players already saw in the recency window, so heavy players stop re-seeing
+  // the same question while unseen ones sit in the pool. Best-effort — fetched
+  // once per pick (~1-5ms, indexed) and applied as a SOFT exclusion: if it would
+  // empty a (thin) category we drop it and pick normally rather than stall.
+  let recentlySeenIds: string[] = [];
+  if (humanUserIds.length > 0) {
+    try {
+      recentlySeenIds = await matchQuestionsRepo.getRecentlySeenQuestionIds(
+        humanUserIds,
+        QUESTION_HISTORY_WINDOW_DAYS,
+      );
+    } catch (error) {
+      // Never let the freshness optimization break question dispatch.
+      logger.warn({ error, matchId }, 'getRecentlySeenQuestionIds failed; picking without history exclusion');
+      recentlySeenIds = [];
+    }
+  }
+
   const pickValidCandidate = async (
     difficulties?: Array<'easy' | 'medium' | 'hard'>,
-    opts?: { allowImageMcqs?: boolean; dropReservedExclusion?: boolean }
+    opts?: {
+      allowImageMcqs?: boolean;
+      dropReservedExclusion?: boolean;
+      excludeSeen?: boolean;
+      /** Exhaustion fallback: order the repeat by least-recently-seen. */
+      leastRecent?: boolean;
+    }
   ): Promise<PickedQuestion | null> => {
+    const exclude = [
+      ...(opts?.dropReservedExclusion ? [] : reservedExclusion),
+      ...(opts?.excludeSeen ? recentlySeenIds : []),
+    ];
     const rows = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
       categoryIds,
       difficulties,
       questionTypes: [questionType],
-      excludeQuestionIds: opts?.dropReservedExclusion ? undefined : excludeQuestionIds,
+      excludeQuestionIds: exclude.length > 0 ? exclude : undefined,
       allowImageMcqs: opts?.allowImageMcqs,
+      leastRecentForUserIds: opts?.leastRecent && humanUserIds.length > 0 ? humanUserIds : undefined,
       limit: questionType === 'mcq_single' ? 1 : SPECIAL_QUESTION_CANDIDATE_LIMIT,
     });
     return pickFirstValidCandidate(rows, questionType, {
@@ -480,9 +552,24 @@ async function maybePickQuestionForState(
     });
   };
 
-  let picked = await pickValidCandidate(preferredDifficulties);
+  // Selection ladder — EXHAUST unseen questions (at every difficulty) before
+  // ever allowing a repeat:
+  //   1. preferred difficulty, unseen only
+  //   2. all difficulties, unseen only   ← keeps the exclusion, so a fully-seen
+  //      "hard" slice still finds unseen easy/medium before repeating
+  //   3. only once NO unseen question exists in the category: a repeat ordered
+  //      by LEAST-recently-seen (the question they saw longest ago), never a
+  //      random recent repeat, and never a stall.
+  const excludeSeen = recentlySeenIds.length > 0;
+  let picked = await pickValidCandidate(preferredDifficulties, { excludeSeen });
   if (!picked && useDifficulty) {
-    picked = await pickValidCandidate(['easy', 'medium', 'hard']);
+    picked = await pickValidCandidate(['easy', 'medium', 'hard'], { excludeSeen });
+  }
+  if (!picked && excludeSeen) {
+    picked = await pickValidCandidate(
+      useDifficulty ? ['easy', 'medium', 'hard'] : preferredDifficulties,
+      { leastRecent: true },
+    );
   }
   if (!picked && useDifficulty) {
     // Anti-stall last resort: the drafted category has no PLAIN MCQs left
@@ -601,6 +688,15 @@ export async function sendPossessionMatchQuestion(
       return null;
     }
 
+    const liveMatch = await matchesRepo.getMatch(matchId);
+    if (!liveMatch || liveMatch.status !== 'active') {
+      logger.info(
+        { matchId, qIndex, status: liveMatch?.status ?? null, postReadyAck: preloaded?.postReadyAck ?? false },
+        'Possession question dispatch skipped: match no longer active'
+      );
+      return null;
+    }
+
     const pauseStartedAt = await getPauseStartedAt(matchId);
     if (pauseStartedAt) {
       logger.info(
@@ -668,7 +764,14 @@ export async function sendPossessionMatchQuestion(
     // the match:state emitted below carries its image URL — the client preloads
     // it immediately, well before the image slot (Q4) dispatches.
     await ensureImageMcqReservedForHalf(matchId, state, categoryIds);
-    const picked = await maybePickQuestionForState(matchId, state, categoryIds);
+    // Human players only — AI ids are never tracked as PostHog/seen persons and
+    // their "history" is irrelevant. Used to bias the pick away from questions
+    // these players have recently seen.
+    const aiUserId = await resolveAiUserIdForMatch(matchId);
+    const humanUserIds = cache.players
+      .map((p) => p.userId)
+      .filter((id) => id !== aiUserId);
+    const picked = await maybePickQuestionForState(matchId, state, categoryIds, humanUserIds);
     if (!picked) {
       logger.error(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },

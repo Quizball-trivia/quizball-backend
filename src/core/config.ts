@@ -34,7 +34,6 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
-
   // When false, objectives stop progressing and stop awarding coins/XP after
   // matches (paired with hiding the Objectives UI behind the frontend flag).
   OBJECTIVES_ENABLED: z
@@ -102,6 +101,8 @@ const configSchema = z.object({
   RESEND_FROM_EMAIL: z.string().default("Quizball Ops <ops@quizball.io>"),
   // Shared secret the scheduled report agent presents to POST the daily report.
   OPS_REPORT_TOKEN: z.string().optional(),
+  // Where player contact/feedback submissions are emailed.
+  FEEDBACK_RECIPIENT_EMAIL: z.string().email().default("nika@quizball.io"),
 });
 
 type ConfigSchema = z.infer<typeof configSchema>;

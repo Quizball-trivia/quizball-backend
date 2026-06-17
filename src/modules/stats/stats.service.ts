@@ -32,6 +32,7 @@ export interface RecentMatchSummary {
   opponentGoals: number;
   opponentPenaltyGoals: number;
   winnerDecisionMethod: WinnerDecisionMethod | null;
+  cancelledNoContest: boolean;
   rpDelta: number | null;
   opponent: {
     id: string | null;
@@ -144,6 +145,7 @@ export const statsService = {
         opponentGoals: row.opponent_goals,
         opponentPenaltyGoals: row.opponent_penalty_goals,
         winnerDecisionMethod,
+        cancelledNoContest: row.cancelled_no_contest === true,
         rpDelta: row.mode === 'ranked' ? row.ranked_delta_rp : null,
         opponent: {
           id: row.opponent_id,

@@ -1,5 +1,24 @@
+import type { I18nField } from '../db/types.js';
 import type { MatchPlayerRow } from '../modules/matches/matches.types.js';
 import type { MatchStandingPayload } from './socket.types.js';
+
+/**
+ * Normalize a persisted category name into the i18n object shape. Matches drafted
+ * after the i18n change store `{ en, ka }`; older cached/persisted matches stored a
+ * collapsed string. Returns null for anything unusable so the caller can skip it.
+ */
+export function normalizeI18nName(value: unknown): I18nField | null {
+  if (typeof value === 'string') {
+    return value.length > 0 ? { en: value } : null;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+  }
+  return null;
+}
 
 /**
  * Increment the state version counter on any match state payload.

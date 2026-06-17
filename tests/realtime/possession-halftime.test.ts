@@ -123,7 +123,7 @@ describe('possession halftime finalize', () => {
     setMatchStatePayloadMock.mockResolvedValue(undefined);
   });
 
-  it('auto-resolves missing bans on first timeout for human-only friendly possession matches', async () => {
+  it('reveals auto-filled missing bans before starting the second half when no AI can respond', async () => {
     const cache = createHalftimeCache();
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);
     const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
@@ -134,7 +134,25 @@ describe('possession halftime finalize', () => {
     await halftime.finalizeHalftime(createIo(), 'match-1');
 
     expect(resolveAiUserId).toHaveBeenCalledWith('match-1');
-    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+    expect(sendQuestion).not.toHaveBeenCalled();
+    expect(cache.statePayload.phase).toBe('HALFTIME');
+    expect(cache.statePayload.half).toBe(1);
+    expect(cache.statePayload.halftime.deadlineAt).toBeNull();
+    expect(cache.statePayload.halftime.uiReadyAt).toBeNull();
+    expect(cache.statePayload.halftime.bans.seat1).toBeTruthy();
+    expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
+    expect(cache.categoryBId).toBeNull();
+    await vi.waitFor(() => {
+      expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+        'possession_halftime',
+        'match-1',
+        expect.any(Date),
+        { kind: 'possession_halftime', matchId: 'match-1' }
+      );
+    });
+
+    await halftime.finalizeHalftime(createIo(), 'match-1');
+
     expect(sendQuestion).toHaveBeenCalledWith(
       expect.anything(),
       'match-1',
@@ -149,6 +167,108 @@ describe('possession halftime finalize', () => {
     expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
     expect(cache.categoryBId).toBeTruthy();
     expect(releaseLockMock).toHaveBeenCalledWith('lock:match:match-1:halftime', 'lock-token');
+  });
+
+  it('auto-fills an expired human ban and lets the AI respond before starting the second half', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    const deadlineAt = new Date(Date.now() - 1000).toISOString();
+    cache.statePayload.halftime.deadlineAt = deadlineAt;
+    cache.statePayload.halftime.uiReadyAt = deadlineAt;
+    cache.statePayload.halftime.firstBanSeat = 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      await halftime.finalizeHalftime(createIo(), 'match-1');
+
+      expect(sendQuestion).not.toHaveBeenCalled();
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+      expect(cache.statePayload.half).toBe(1);
+      expect(cache.statePayload.halftime.bans.seat1).toBeTruthy();
+      expect(cache.statePayload.halftime.bans.seat2).toBeNull();
+      expect(cache.statePayload.halftime.deadlineAt).toBeNull();
+      expect(cache.categoryBId).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await vi.waitFor(() => {
+        expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
+        expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+          'possession_halftime',
+          'match-1',
+          expect.any(Date),
+          { kind: 'possession_halftime', matchId: 'match-1' }
+        );
+      });
+      expect(sendQuestion).not.toHaveBeenCalled();
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('auto-fills an expired penalty ban, lets the AI respond, then enters the shootout', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const cache = createHalftimeCache();
+    const deadlineAt = new Date(Date.now() - 1000).toISOString();
+    cache.statePayload.halftime.purpose = 'penalty';
+    cache.statePayload.halftime.deadlineAt = deadlineAt;
+    cache.statePayload.halftime.uiReadyAt = deadlineAt;
+    cache.statePayload.halftime.firstBanSeat = 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      await halftime.finalizeHalftime(createIo(), 'match-1');
+
+      expect(sendQuestion).not.toHaveBeenCalled();
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+      expect(cache.statePayload.halftime.purpose).toBe('penalty');
+      expect(cache.statePayload.halftime.bans.seat1).toBeTruthy();
+      expect(cache.statePayload.halftime.bans.seat2).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await vi.waitFor(() => {
+        expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
+        expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+          'possession_halftime',
+          'match-1',
+          expect.any(Date),
+          { kind: 'possession_halftime', matchId: 'match-1' }
+        );
+      });
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+
+      await halftime.finalizeHalftime(createIo(), 'match-1');
+
+      expect(cache.statePayload.phase).toBe('PENALTY_SHOOTOUT');
+      expect(cache.statePayload.penaltyCategoryId).toBeTruthy();
+      expect(cache.statePayload.penalty.round).toBe(1);
+      expect(cache.statePayload.penalty.shooterSeat).toBe(1);
+      expect(cache.statePayload.halftime.purpose).toBe('second_half');
+      expect(cache.categoryBId).toBeNull();
+      expect(setMatchCategoryBMock).not.toHaveBeenCalled();
+      expect(sendQuestion).toHaveBeenCalledWith(
+        expect.anything(),
+        'match-1',
+        6,
+        { cache }
+      );
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
   });
 
   it('defers AI possession halftime WITHOUT forging ui_ready when no client has signalled', async () => {
@@ -266,6 +386,47 @@ describe('possession halftime finalize', () => {
         expect(cache.statePayload.halftime.bans.seat2).toBeTruthy();
       });
       expect(cache.statePayload.halftime.bans.seat1).toBeNull();
+    } finally {
+      halftime.clearHalftimeAiBanTimer('match-1');
+      vi.useRealTimers();
+    }
+  });
+
+  it('rebases a visible halftime ban deadline after disconnect pause resume', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:12.000Z'));
+    const cache = createHalftimeCache();
+    const originalDeadlineAt = '2026-06-03T12:00:20.000Z';
+    cache.statePayload.halftime.deadlineAt = originalDeadlineAt;
+    cache.statePayload.halftime.uiReadyAt = originalDeadlineAt;
+    cache.statePayload.halftime.firstBanSeat = 1;
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+
+    try {
+      const resumed = await halftime.resumePossessionHalftimeAfterPause(
+        createIo(),
+        'match-1',
+        new Date('2026-06-03T12:00:05.000Z').getTime()
+      );
+
+      expect(resumed).toBe(true);
+      expect(cache.statePayload.phase).toBe('HALFTIME');
+      expect(cache.statePayload.halftime.deadlineAt).toBe('2026-06-03T12:00:27.000Z');
+      expect(cache.statePayload.halftime.uiReadyAt).toBe('2026-06-03T12:00:27.000Z');
+      expect(setMatchCacheMock).toHaveBeenCalledWith(cache);
+      expect(setMatchStatePayloadMock).toHaveBeenCalledWith('match-1', cache.statePayload, cache.currentQIndex);
+      await vi.waitFor(() => {
+        expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+          'possession_halftime',
+          'match-1',
+          new Date('2026-06-03T12:00:27.000Z'),
+          { kind: 'possession_halftime', matchId: 'match-1' }
+        );
+      });
     } finally {
       halftime.clearHalftimeAiBanTimer('match-1');
       vi.useRealTimers();

@@ -230,6 +230,18 @@ const ABANDONED_RANKED_MATCH = {
   ended_at: null,
 };
 
+const ABANDONED_RANKED_NOCONTEST_MATCH = {
+  ...ABANDONED_RANKED_MATCH,
+  winner_user_id: null,
+  ended_at: new Date().toISOString(),
+  state_payload: {
+    variant: 'ranked_sim',
+    winnerDecisionMethod: 'forfeit',
+    cancelledNoContest: true,
+    roundsPlayed: 0,
+  },
+};
+
 const PLAYERS = [
   { user_id: 'u1', seat: 1, total_points: 100, correct_answers: 5, avg_time_ms: 3000, goals: 1, penalty_goals: 0 },
   { user_id: 'u2', seat: 2, total_points: 200, correct_answers: 8, avg_time_ms: 2500, goals: 3, penalty_goals: 0 },
@@ -322,6 +334,30 @@ describe('match completion recovery on replay', () => {
         code: 'MATCH_ABANDONED',
       }));
       expect(fakeRedisStore.values.has('user:last_match:u1')).toBe(false);
+    });
+
+    it('replays early-forfeit no-contest results for abandoned ranked matches', async () => {
+      const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const socket = createSocketMock('u1');
+
+      getMatchMock.mockResolvedValue(ABANDONED_RANKED_NOCONTEST_MATCH);
+      seedLastMatch('u1', 'm1');
+      seedEnteredMarker('m1', 'u1');
+
+      await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
+
+      expect(socket.emit).not.toHaveBeenCalledWith('error', expect.objectContaining({
+        code: 'MATCH_ABANDONED',
+      }));
+      expect(socket.emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
+        matchId: 'm1',
+        winnerId: null,
+        winnerDecisionMethod: 'forfeit',
+        cancelledNoContest: true,
+      }));
+      expect(getMatchOutcomeMock).not.toHaveBeenCalled();
+      expect(settleCompletedRankedMatchMock).not.toHaveBeenCalled();
+      expect(awardCompletedMatchXpMock).not.toHaveBeenCalled();
     });
 
     it('suppresses pending forfeit replay when the user never entered or answered the match', async () => {

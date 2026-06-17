@@ -10,6 +10,10 @@ export function matchDisconnectKey(matchId: string, userId: string): string {
   return `match:disconnect:${matchId}:${userId}`;
 }
 
+export function matchExitPendingKey(matchId: string, userId: string): string {
+  return `match:exit_pending:${matchId}:${userId}`;
+}
+
 export function matchPauseKey(matchId: string): string {
   return `match:pause:${matchId}`;
 }
@@ -40,6 +44,14 @@ export function lastMatchKey(userId: string): string {
 
 export function matchEnteredKey(matchId: string, userId: string): string {
   return `match:entered:${matchId}:${userId}`;
+}
+
+export function matchStagePresenceKey(matchId: string, stageKey: string, userId: string): string {
+  return `match:stage_presence:${matchId}:${stageKey}:${userId}`;
+}
+
+export function matchStageReadyKey(matchId: string, stageKey: string, userId: string): string {
+  return `match:stage_ready:${matchId}:${stageKey}:${userId}`;
 }
 
 /** Per-player Redis Set storing found answer group IDs during a countdown round. */

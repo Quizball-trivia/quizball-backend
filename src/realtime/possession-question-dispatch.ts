@@ -688,6 +688,15 @@ export async function sendPossessionMatchQuestion(
       return null;
     }
 
+    const liveMatch = await matchesRepo.getMatch(matchId);
+    if (!liveMatch || liveMatch.status !== 'active') {
+      logger.info(
+        { matchId, qIndex, status: liveMatch?.status ?? null, postReadyAck: preloaded?.postReadyAck ?? false },
+        'Possession question dispatch skipped: match no longer active'
+      );
+      return null;
+    }
+
     const pauseStartedAt = await getPauseStartedAt(matchId);
     if (pauseStartedAt) {
       logger.info(

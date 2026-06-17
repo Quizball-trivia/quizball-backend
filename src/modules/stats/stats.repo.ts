@@ -23,6 +23,7 @@ export interface RecentMatchRow {
   opponent_goals: number;
   opponent_penalty_goals: number;
   winner_decision_method: string | null;
+  cancelled_no_contest: boolean;
   ranked_delta_rp: number | null;
   ranked_is_placement: boolean | null;
   opponent_id: string | null;
@@ -103,6 +104,7 @@ export const statsRepo = {
         COALESCE(mp_opp.goals, 0) AS opponent_goals,
         COALESCE(mp_opp.penalty_goals, 0) AS opponent_penalty_goals,
         m.state_payload->>'winnerDecisionMethod' AS winner_decision_method,
+        COALESCE((m.state_payload->>'cancelledNoContest')::boolean, false) AS cancelled_no_contest,
         rrc.delta_rp AS ranked_delta_rp,
         rrc.is_placement AS ranked_is_placement,
         CASE

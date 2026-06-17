@@ -232,10 +232,31 @@ export async function finalizeMatchAsForfeit(
         'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
       );
 
+      const resultVersion = Date.now();
+      const redis = getRedisClient();
+      if (redis) {
+        const cleanupKeys = params.cleanupRedisKeys?.filter(Boolean) ?? [];
+        if (cleanupKeys.length > 0) {
+          await redis.del(cleanupKeys);
+        }
+        await redis.set(matchForfeitKey(params.matchId), 'no_contest', {
+          EX: FORFEIT_REPLAY_TTL_SEC,
+        });
+        await Promise.all(
+          roster.map((player) =>
+            redis.set(
+              lastMatchKey(player.user_id),
+              JSON.stringify({ matchId: params.matchId, resultVersion }),
+              { EX: FORFEIT_REPLAY_TTL_SEC }
+            )
+          )
+        );
+      }
+
       return {
         matchId: params.matchId,
         winnerId: null,
-        resultVersion: Date.now(),
+        resultVersion,
         completed: true,
         cancelledNoContest: true,
       };

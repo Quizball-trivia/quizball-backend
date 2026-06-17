@@ -345,4 +345,44 @@ describe('statsService.getRecentMatchesForUser', () => {
       }),
     ]);
   });
+
+  it('maps cancelled no-contest abandoned matches', async () => {
+    const userId = '00000000-0000-0000-0000-000000000051';
+    (statsRepo.listRecentMatchesForUser as Mock).mockResolvedValue([
+      {
+        match_id: '00000000-0000-0000-0000-000000000052',
+        mode: 'ranked',
+        status: 'abandoned',
+        winner_user_id: null,
+        ended_at: '2026-06-16T23:30:00.000Z',
+        started_at: '2026-06-16T23:29:00.000Z',
+        player_score: 0,
+        opponent_score: 0,
+        player_goals: 0,
+        player_penalty_goals: 0,
+        opponent_goals: 0,
+        opponent_penalty_goals: 0,
+        winner_decision_method: 'forfeit',
+        cancelled_no_contest: true,
+        ranked_delta_rp: null,
+        ranked_is_placement: false,
+        opponent_id: '00000000-0000-0000-0000-000000000053',
+        opponent_username: 'cancelled-opponent',
+        opponent_avatar_url: null,
+        opponent_is_ai: false,
+      },
+    ]);
+
+    const matches = await statsService.getRecentMatchesForUser(userId, 10);
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        status: 'abandoned',
+        result: 'draw',
+        winnerDecisionMethod: 'forfeit',
+        cancelledNoContest: true,
+        rpDelta: null,
+      }),
+    ]);
+  });
 });

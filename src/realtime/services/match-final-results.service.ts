@@ -20,6 +20,15 @@ import { buildParticipantPayloads } from './match-participants.helpers.js';
 
 type QuestionResult = NonNullable<MatchFinalResultsPayload['questionResults']>[string][number];
 
+function isCancelledNoContestPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const candidate = payload as {
+    cancelledNoContest?: unknown;
+    winnerDecisionMethod?: unknown;
+  };
+  return candidate.cancelledNoContest === true && candidate.winnerDecisionMethod === 'forfeit';
+}
+
 export type LastMatchReplay = {
   matchId: string;
   resultVersion: number;
@@ -95,11 +104,15 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   durationMs: number;
   resultVersion: number;
   winnerDecisionMethod?: 'goals' | 'penalty_goals' | 'total_points' | 'total_points_fallback' | 'forfeit' | null;
+  cancelledNoContest?: boolean;
   totalPointsFallbackUsed?: boolean;
   rankedOutcome?: Awaited<ReturnType<typeof rankedService.getMatchOutcome>> | null;
 } | null> {
   const match = await matchesRepo.getMatch(matchId);
-  if (!match || match.status !== 'completed') return null;
+  const cancelledNoContest = isCancelledNoContestPayload(match?.state_payload);
+  if (!match || (match.status !== 'completed' && !(match.status === 'abandoned' && cancelledNoContest))) {
+    return null;
+  }
 
   const players = await matchPlayersRepo.listMatchPlayers(matchId);
   const payloadPlayers: Record<string, {
@@ -196,7 +209,7 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   const explicitNoWinnerForfeit = winnerDecisionMethod === 'forfeit' && match.winner_user_id === null;
 
   let rankedOutcome = null;
-  if (match.mode === 'ranked') {
+  if (match.mode === 'ranked' && !cancelledNoContest) {
     try { rankedOutcome = await rankedService.getMatchOutcome(matchId); }
     catch (err) { logger.warn({ err, matchId }, 'Failed to fetch ranked outcome for replay'); }
   }
@@ -214,6 +227,7 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
     durationMs,
     resultVersion,
     winnerDecisionMethod,
+    ...(cancelledNoContest ? { cancelledNoContest: true } : {}),
     totalPointsFallbackUsed: winnerDecisionMethod === 'total_points_fallback',
     ...(rankedOutcome ? { rankedOutcome } : {}),
   };
@@ -250,7 +264,8 @@ export async function emitLastMatchResultIfAny(
     return;
   }
 
-  if (lastMatch.status === 'abandoned') {
+  const cancelledNoContest = isCancelledNoContestPayload(lastMatch.state_payload);
+  if (lastMatch.status === 'abandoned' && !cancelledNoContest) {
     socket.emit('error', {
       code: 'MATCH_ABANDONED',
       message: 'Match was abandoned due to disconnects.',
@@ -282,7 +297,7 @@ export async function emitLastMatchResultIfAny(
   // Retry idempotent post-completion writes that may have been missed
   // (e.g. player disconnected before they fired after match completion).
   try {
-    if (lastMatch.mode === 'ranked') {
+    if (lastMatch.mode === 'ranked' && !cancelledNoContest) {
       const existing = await rankedService.getMatchOutcome(replay.matchId);
       if (!existing) {
         await rankedService.settleCompletedRankedMatch(replay.matchId);
@@ -291,7 +306,9 @@ export async function emitLastMatchResultIfAny(
   } catch (err) { logger.warn({ err, matchId: replay.matchId }, 'Failed to settle ranked outcome during replay'); }
 
   try {
-    await progressionService.awardCompletedMatchXp(replay.matchId);
+    if (!cancelledNoContest) {
+      await progressionService.awardCompletedMatchXp(replay.matchId);
+    }
   } catch (err) { logger.warn({ err, matchId: replay.matchId }, 'Failed to retry XP award during replay'); }
 
   const payload = await buildFinalResultsPayload(replay.matchId, replay.resultVersion);

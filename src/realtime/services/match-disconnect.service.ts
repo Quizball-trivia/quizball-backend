@@ -1155,6 +1155,19 @@ export async function pauseMatchForDisconnectedPlayer(
     };
   }
 
+  const exitPending = (await redis.exists(matchExitPendingKey(matchId, userId))) === 1;
+  if (exitPending && variant !== 'friendly_party_quiz') {
+    logger.info(
+      { matchId, userId, variant },
+      'Match disconnect pause skipped because user already has an excused exit pending'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
+      finalized: false,
+    };
+  }
+
   const sockets = await io.in(`match:${matchId}`).fetchSockets();
   const sameUserSockets = sockets.filter(
     (connectedSocket) =>

@@ -17,6 +17,8 @@ const resolveMatchPresenceMock = vi.fn();
 const completeFromProgressMock = vi.fn();
 const finalizeForfeitMock = vi.fn();
 const abandonWithLockMock = vi.fn();
+const refundRankedTicketsMock = vi.fn();
+const getByIdsMock = vi.fn();
 
 vi.mock('../../src/realtime/services/match-presence.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/realtime/services/match-presence.service.js')>();
@@ -49,6 +51,13 @@ vi.mock('../../src/realtime/match-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/realtime/match-cache.js')>();
   return { ...actual, getMatchCache: vi.fn(async () => null) };
 });
+// The orphan resolver's no-contest abandon path refunds ranked tickets to humans.
+vi.mock('../../src/modules/store/store.service.js', () => ({
+  storeService: { refundRankedTickets: (...a: unknown[]) => refundRankedTicketsMock(...a) },
+}));
+vi.mock('../../src/modules/users/users.repo.js', () => ({
+  usersRepo: { getByIds: (...a: unknown[]) => getByIdsMock(...a) },
+}));
 
 function createIo() {
   const emit = vi.fn();
@@ -143,6 +152,12 @@ describe('resolveOrphanPossessionMatchTerminal — same guard on the stale/orpha
     vi.clearAllMocks();
     completeFromProgressMock.mockResolvedValue({ completed: true, winnerId: HUMAN, decisionBasis: 'total_points' });
     finalizeForfeitMock.mockResolvedValue({ completed: true, winnerId: BOT, resultVersion: 1 });
+    abandonWithLockMock.mockResolvedValue({ abandoned: true });
+    refundRankedTicketsMock.mockResolvedValue({ wallets: {} });
+    getByIdsMock.mockResolvedValue(new Map([
+      [HUMAN, { id: HUMAN, is_ai: false }],
+      [BOT, { id: BOT, is_ai: true }],
+    ]));
   });
 
   it('AI-present + human stale-absent -> resolves from progress, no forfeit to bot', async () => {
@@ -159,5 +174,28 @@ describe('resolveOrphanPossessionMatchTerminal — same guard on the stale/orpha
     expect(finalizeForfeitMock).not.toHaveBeenCalled();
     expect(completeFromProgressMock).toHaveBeenCalledOnce();
     expect(result.outcome).toBe('completed_from_progress');
+  });
+
+  it('AI-present + undecidable progress -> abandons AND refunds the human ranked ticket', async () => {
+    // The AI-forfeit guard routes this away from forfeit; progress can't decide
+    // (no answers). It must abandon as a no-contest and refund the human — NOT
+    // silently cost them a ticket (CodeRabbit finding on the orphan abandon path).
+    const { resolveOrphanPossessionMatchTerminal } = await import(
+      '../../src/realtime/services/match-orphan-resolver.service.js'
+    );
+    resolveMatchPresenceMock.mockResolvedValue(presence([
+      { id: HUMAN, present: false, reasons: ['stale_missing_signal'] },
+      { id: BOT, present: true, reasons: ['ai'] },
+    ]));
+    completeFromProgressMock.mockResolvedValue({ completed: false, reason: 'undecidable' });
+
+    const result = await resolveOrphanPossessionMatchTerminal({
+      io: createIo(), match, roster, source: 'session_guard_orphan',
+    });
+
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(abandonWithLockMock).toHaveBeenCalledWith('m1');
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([HUMAN]);
+    expect(result.outcome).toBe('abandoned');
   });
 });

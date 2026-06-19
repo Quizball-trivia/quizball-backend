@@ -9,8 +9,6 @@ export const MAX_TICKETS = 5;
 // MAX_TICKETS so wallet-shaping helpers can use it without importing
 // store.service (which imports this module).
 export const TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW = 5;
-// One ticket refills every 4 hours, up to MAX_TICKETS.
-export const TICKET_REFILL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 // CAS attempts before giving up. Each attempt re-reads fresh wallet state, so a
 // higher ceiling lets transient contention (refill hydration / presence
 // touching the same row) converge instead of throwing 409 and aborting a match.
@@ -39,65 +37,28 @@ export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'ti
   };
 }
 
+/**
+ * Normalize a wallet's ticket count to the valid range [0, MAX_TICKETS].
+ *
+ * Refills are now granted by the global `refill-tickets-every-4h` cron (one
+ * ticket for every user under MAX, at a fixed wall-clock cadence), NOT lazily on
+ * read. So this no longer adds tickets from elapsed time — it only clamps a
+ * stored value back into range (defensive: a stale/corrupt row, or a future
+ * write that overshoots). `tickets_refill_started_at` is now inert and is left
+ * untouched so existing rows are not churned; a later migration can drop it.
+ *
+ * `nowInput` is accepted for signature compatibility with existing callers and
+ * is otherwise unused.
+ */
 export function resolveHydratedTicketState(
   wallet: Pick<WalletStateRow, 'tickets' | 'tickets_refill_started_at'>,
-  nowInput: Date | string = new Date()
+  _nowInput: Date | string = new Date()
 ): HydratedTicketState {
-  const nowIso = toIsoString(nowInput);
-  const nowMs = Date.parse(nowIso);
   const cappedTickets = Math.max(0, Math.min(MAX_TICKETS, Math.trunc(wallet.tickets)));
-  const currentAnchor = wallet.tickets_refill_started_at;
-
-  if (cappedTickets >= MAX_TICKETS) {
-    return {
-      tickets: MAX_TICKETS,
-      ticketsRefillStartedAt: null,
-      changed: cappedTickets !== wallet.tickets || currentAnchor !== null,
-    };
-  }
-
-  if (!currentAnchor) {
-    return {
-      tickets: cappedTickets,
-      ticketsRefillStartedAt: nowIso,
-      changed: cappedTickets !== wallet.tickets || currentAnchor !== nowIso,
-    };
-  }
-
-  const anchorMs = Date.parse(currentAnchor);
-  if (!Number.isFinite(anchorMs) || anchorMs > nowMs) {
-    return {
-      tickets: cappedTickets,
-      ticketsRefillStartedAt: nowIso,
-      changed: cappedTickets !== wallet.tickets || currentAnchor !== nowIso,
-    };
-  }
-
-  const elapsedHours = Math.floor((nowMs - anchorMs) / TICKET_REFILL_INTERVAL_MS);
-  if (elapsedHours <= 0) {
-    return {
-      tickets: cappedTickets,
-      ticketsRefillStartedAt: currentAnchor,
-      changed: cappedTickets !== wallet.tickets,
-    };
-  }
-
-  const restoredTickets = Math.min(MAX_TICKETS, cappedTickets + elapsedHours);
-  if (restoredTickets >= MAX_TICKETS) {
-    return {
-      tickets: MAX_TICKETS,
-      ticketsRefillStartedAt: null,
-      changed: restoredTickets !== wallet.tickets || currentAnchor !== null,
-    };
-  }
-
-  const advancedAnchorMs = anchorMs + elapsedHours * TICKET_REFILL_INTERVAL_MS;
-  const advancedAnchor = new Date(advancedAnchorMs).toISOString();
-
   return {
-    tickets: restoredTickets,
-    ticketsRefillStartedAt: advancedAnchor,
-    changed: restoredTickets !== wallet.tickets || advancedAnchor !== currentAnchor,
+    tickets: cappedTickets,
+    ticketsRefillStartedAt: wallet.tickets_refill_started_at,
+    changed: cappedTickets !== wallet.tickets,
   };
 }
 

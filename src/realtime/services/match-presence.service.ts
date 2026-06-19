@@ -207,3 +207,26 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
     matchSocketCount: roomPresence.socketCount,
   };
 }
+
+/**
+ * Whether the forfeit-first branch may award the win to the present player(s).
+ *
+ * An AI opponent is synthetically "present" (reason `'ai'`) because it has no
+ * socket to lose — see line ~167. So a human who drops would be the lone absent
+ * player and forfeit the match TO THE BOT, even while leading on points (prod
+ * case Thenotorious vs qartlosii, 2026-06-19). Forfeit-first exists to protect a
+ * HUMAN who stayed, never to gift a bot a win it didn't earn. When EVERY present
+ * player is an AI, the caller must skip forfeit-first and fall through to
+ * progress-based completion (the human's lead wins) or a no-contest abandon
+ * (ticket refunded) when progress is undecidable.
+ *
+ * Shared by every terminal resolver (live disconnect grace + orphan/stale
+ * resolver) so the rule can't drift between them.
+ */
+export function canForfeitToPresentPlayers<Player extends MatchPresencePlayer>(
+  resolution: MatchPresenceResolution<Player>
+): boolean {
+  if (resolution.presentPlayers.length === 0) return false;
+  const presentStates = resolution.playerStates.filter((state) => state.present);
+  return !presentStates.every((state) => state.reasons.includes('ai'));
+}

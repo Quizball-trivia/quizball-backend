@@ -85,7 +85,7 @@ import {
   type MatchParticipantSnapshot,
 } from './match-participants.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { canForfeitToPresentPlayers, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 import {
   findOpponentInDisconnectGrace,
@@ -284,7 +284,7 @@ export async function abandonPossessionTerminalMatch(
   return true;
 }
 
-async function resolvePossessionTerminalAfterDisconnect(params: {
+export async function resolvePossessionTerminalAfterDisconnect(params: {
   io: QuizballServer;
   match: MatchRow;
   roster: PossessionTerminalPlayer[];
@@ -345,7 +345,15 @@ async function resolvePossessionTerminalAfterDisconnect(params: {
     disconnectedUserIds,
     includeUserRoomSockets: true,
   });
-  if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
+  // Guard: an AI-only "present" set must NOT collect a forfeit win from a
+  // human's drop (the AI is synthetically present and cannot disconnect). Skip
+  // forfeit-first and fall through to progress / no-contest. See
+  // canForfeitToPresentPlayers.
+  if (
+    canForfeitToPresentPlayers(presence) &&
+    presence.absentPlayers.length === 1 &&
+    presence.presentPlayers.length > 0
+  ) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
     if (!forfeitingUserId) return { finalized: false, abandoned: false };
 

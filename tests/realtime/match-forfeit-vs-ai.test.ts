@@ -198,4 +198,27 @@ describe('resolveOrphanPossessionMatchTerminal — same guard on the stale/orpha
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([HUMAN]);
     expect(result.outcome).toBe('abandoned');
   });
+
+  it('still returns the abandoned outcome if the refund user lookup throws', async () => {
+    // The match is already abandoned by the time the refund runs; a throw in
+    // usersRepo.getByIds must be swallowed so the resolver still reports
+    // 'abandoned' (and reaches its Redis cleanup) — CodeRabbit be#131.
+    const { resolveOrphanPossessionMatchTerminal } = await import(
+      '../../src/realtime/services/match-orphan-resolver.service.js'
+    );
+    resolveMatchPresenceMock.mockResolvedValue(presence([
+      { id: HUMAN, present: false, reasons: ['stale_missing_signal'] },
+      { id: BOT, present: true, reasons: ['ai'] },
+    ]));
+    completeFromProgressMock.mockResolvedValue({ completed: false, reason: 'undecidable' });
+    getByIdsMock.mockRejectedValue(new Error('db down'));
+
+    const result = await resolveOrphanPossessionMatchTerminal({
+      io: createIo(), match, roster, source: 'session_guard_orphan',
+    });
+
+    expect(abandonWithLockMock).toHaveBeenCalledWith('m1');
+    expect(refundRankedTicketsMock).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('abandoned');
+  });
 });

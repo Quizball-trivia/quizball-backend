@@ -161,22 +161,26 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
   // costs the human a ticket. Best-effort; party-quiz uses its own flow.
   const variant = resolveMatchVariant(match.state_payload, match.mode);
   if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
-    const rosterUsers = await usersRepo.getByIds(userIds);
-    // Only refund ids that resolved to an explicitly human row — never assume a
-    // missing/deleted id is human (no ghost refunds).
-    const humanUserIds = roster
-      .map((player) => rosterUsers.get(player.user_id))
-      .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
-      .map((user) => user.id);
-    if (humanUserIds.length > 0) {
-      try {
+    // Best-effort over the WHOLE refund computation: the match is already
+    // abandoned above, so a throw in usersRepo.getByIds must not skip the Redis
+    // cleanup / return below. Wrap the lookup too, not just the refund call.
+    let humanUserIds: string[] = [];
+    try {
+      const rosterUsers = await usersRepo.getByIds(userIds);
+      // Only refund ids that resolved to an explicitly human row — never assume a
+      // missing/deleted id is human (no ghost refunds).
+      humanUserIds = roster
+        .map((player) => rosterUsers.get(player.user_id))
+        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+        .map((user) => user.id);
+      if (humanUserIds.length > 0) {
         await storeService.refundRankedTickets(humanUserIds);
-      } catch (error) {
-        logger.warn(
-          { error, matchId: match.id, humanUserIds },
-          'Failed to refund ranked tickets on orphan no-contest abandon'
-        );
       }
+    } catch (error) {
+      logger.warn(
+        { error, matchId: match.id, humanUserIds },
+        'Failed to refund ranked tickets on orphan no-contest abandon'
+      );
     }
   }
 

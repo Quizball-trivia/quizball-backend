@@ -355,7 +355,7 @@ export const auctionRepo = {
         published_at = CASE WHEN ${status === 'published'} THEN NOW() ELSE published_at END,
         published_by = CASE WHEN ${status === 'published'} THEN ${publishedBy ?? null} ELSE published_by END,
         editor_notes = CASE
-          WHEN ${status === 'published' && options?.force === true}
+          WHEN ${status === 'published' && options?.force === true}::boolean
           THEN concat_ws(
             E'\n',
             NULLIF(editor_notes, ''),
@@ -363,7 +363,7 @@ export const auctionRepo = {
               '[force_publish] ',
               NOW()::text,
               ' by ',
-              ${publishedBy ?? 'unknown'},
+              ${publishedBy ?? 'unknown'}::text,
               ' with verification_status=',
               verification_status
             )

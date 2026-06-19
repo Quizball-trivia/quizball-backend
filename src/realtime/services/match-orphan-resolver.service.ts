@@ -17,7 +17,7 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { canForfeitToPresentPlayers, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 type OrphanRosterPlayer = { user_id: string };
@@ -84,7 +84,14 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
     ...(connectingUserId ? { connectingUserId } : {}),
   });
 
-  if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
+  // Same guard as the live disconnect path: an AI-only "present" set must not
+  // be handed a forfeit win over an absent human (the AI is synthetically
+  // present and cannot leave). Fall through to progress / abandon instead.
+  if (
+    canForfeitToPresentPlayers(presence) &&
+    presence.absentPlayers.length === 1 &&
+    presence.presentPlayers.length > 0
+  ) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
     if (forfeitingUserId) {
       const finalized = await finalizeMatchAsForfeit({

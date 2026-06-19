@@ -19,6 +19,7 @@ import { auctionService } from '../../src/modules/auction/auction.service.js';
 const CARD_ID = '11111111-1111-1111-1111-111111111111';
 const PLAYER_ID = '22222222-2222-2222-2222-222222222222';
 const FACT_ID = '33333333-3333-3333-3333-333333333333';
+const ADMIN_USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 const baseCard = {
   id: CARD_ID,
@@ -99,7 +100,7 @@ describe('auctionService', () => {
     (auctionRepo.getClues as Mock).mockResolvedValue(threeClues);
 
     await expect(
-      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, 'admin-user-id')
+      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, ADMIN_USER_ID)
     ).rejects.toBeInstanceOf(BadRequestError);
 
     expect(auctionRepo.updateStatus).not.toHaveBeenCalled();
@@ -113,9 +114,41 @@ describe('auctionService', () => {
     (auctionRepo.getClues as Mock).mockResolvedValue(threeClues.slice(0, 2));
 
     await expect(
-      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, 'admin-user-id')
+      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, ADMIN_USER_ID)
     ).rejects.toBeInstanceOf(BadRequestError);
 
+    expect(auctionRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('blocks publish when clue order or localized clue text is invalid', async () => {
+    (auctionRepo.getCardDetail as Mock).mockResolvedValue({
+      ...baseCard,
+      verification_status: 'passed',
+    });
+    (auctionRepo.getClues as Mock).mockResolvedValue([
+      { ...threeClues[0], clue_order: 1 },
+      { ...threeClues[1], clue_order: 2, clue_ka: '   ' },
+      { ...threeClues[2], clue_order: 2 },
+    ]);
+
+    await expect(
+      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, ADMIN_USER_ID)
+    ).rejects.toBeInstanceOf(BadRequestError);
+
+    expect(auctionRepo.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('blocks publish when the authenticated admin id is not a UUID', async () => {
+    (auctionRepo.getCardDetail as Mock).mockResolvedValue({
+      ...baseCard,
+      verification_status: 'passed',
+    });
+
+    await expect(
+      auctionService.updateStatus(CARD_ID, { status: 'published', force: false }, 'admin-user-id')
+    ).rejects.toThrow('A valid authenticated admin user is required');
+
+    expect(auctionRepo.getClues).not.toHaveBeenCalled();
     expect(auctionRepo.updateStatus).not.toHaveBeenCalled();
   });
 
@@ -126,7 +159,8 @@ describe('auctionService', () => {
         ...baseCard,
         status: 'published',
         published_at: '2026-06-19T01:00:00.000Z',
-        published_by: 'admin-user-id',
+        published_by: ADMIN_USER_ID,
+        editor_notes: '[force_publish] 2026-06-19 01:00:00+00 by admin with verification_status=needs_review',
       });
     (auctionRepo.getClues as Mock).mockResolvedValue(threeClues);
     (auctionRepo.updateStatus as Mock).mockResolvedValue({
@@ -137,22 +171,23 @@ describe('auctionService', () => {
     const result = await auctionService.updateStatus(
       CARD_ID,
       { status: 'published', force: true },
-      'admin-user-id'
+      ADMIN_USER_ID
     );
 
     expect(result.status).toBe('published');
-    expect(auctionRepo.updateStatus).toHaveBeenCalledWith(CARD_ID, 'published', 'admin-user-id');
+    expect(result.editor_notes).toContain('[force_publish]');
+    expect(auctionRepo.updateStatus).toHaveBeenCalledWith(CARD_ID, 'published', ADMIN_USER_ID, { force: true });
   });
 
-  it('rejects clue fact ids that do not belong to the card player', async () => {
+  it('deduplicates and rejects clue fact ids that do not belong to the card player', async () => {
     (auctionRepo.getCardDetail as Mock).mockResolvedValue(baseCard);
     (auctionRepo.getFactsByIdsForPlayer as Mock).mockResolvedValue([]);
 
     await expect(
       auctionService.updateCard(CARD_ID, {
         clues: [
-          { clue_order: 1, clue_en: 'A', clue_ka: 'ა', clue_kind: 'fact', supported_fact_ids: [FACT_ID] },
-          { clue_order: 2, clue_en: 'B', clue_ka: 'ბ', clue_kind: 'fact', supported_fact_ids: [] },
+          { clue_order: 1, clue_en: 'A', clue_ka: 'ა', clue_kind: 'fact', supported_fact_ids: [FACT_ID, FACT_ID] },
+          { clue_order: 2, clue_en: 'B', clue_ka: 'ბ', clue_kind: 'fact', supported_fact_ids: [FACT_ID] },
           { clue_order: 3, clue_en: 'C', clue_ka: 'გ', clue_kind: 'fact', supported_fact_ids: [] },
         ],
       })

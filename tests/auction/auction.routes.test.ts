@@ -19,7 +19,7 @@ vi.mock('../../src/modules/auction/auction.service.js', () => ({
 
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
-    req.user = { id: 'admin-user-id', role: 'admin' };
+    req.user = { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', role: 'admin' };
     req.identity = { provider: 'test', subject: 'test-sub' };
     next();
   }),
@@ -33,8 +33,10 @@ vi.mock('../../src/http/middleware/require-role.js', () => ({
 
 import { adminAuctionRoutes } from '../../src/http/routes/admin-auction.routes.js';
 import { auctionService } from '../../src/modules/auction/auction.service.js';
+import { authMiddleware } from '../../src/http/middleware/auth.js';
 
 const CARD_ID = '11111111-1111-1111-1111-111111111111';
+const ADMIN_USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 describe('Admin Auction Routes', () => {
   let app: Express;
@@ -49,6 +51,20 @@ describe('Admin Auction Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('uses admin auth middleware for the route group', async () => {
+    (auctionService.listCards as Mock).mockResolvedValue({
+      data: [],
+      page: 1,
+      limit: 50,
+      total: 0,
+      total_pages: 0,
+    });
+
+    await request(app).get('/api/v1/admin/auction/cards');
+
+    expect(authMiddleware).toHaveBeenCalled();
   });
 
   it('GET /cards passes parsed filters and pagination to the service', async () => {
@@ -88,6 +104,16 @@ describe('Admin Auction Routes', () => {
       2,
       10
     );
+  });
+
+  it('GET /cards rejects invalid enum filters', async () => {
+    const response = await request(app)
+      .get('/api/v1/admin/auction/cards')
+      .query({ status: 'live' });
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(auctionService.listCards).not.toHaveBeenCalled();
   });
 
   it('PATCH /cards/:id rejects a starting price below the Auction minimum', async () => {
@@ -130,7 +156,7 @@ describe('Admin Auction Routes', () => {
     expect(auctionService.updateStatus).toHaveBeenCalledWith(
       CARD_ID,
       { status: 'published', force: false },
-      'admin-user-id'
+      ADMIN_USER_ID
     );
   });
 });

@@ -1,4 +1,6 @@
-import { BadRequestError, NotFoundError } from '../../core/errors.js';
+import { z } from 'zod';
+import { AuthorizationError, BadRequestError, NotFoundError } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 import {
   auctionRepo,
   type AuctionCardDetailRow,
@@ -19,6 +21,7 @@ import type {
 } from './auction.schemas.js';
 
 const AUCTION_MIN_STARTING_PRICE_EUR = 20_000_000;
+const uuidSchema = z.string().uuid();
 
 function toNumber(value: string | number | null): number | null {
   if (value === null) return null;
@@ -184,6 +187,39 @@ function uniqueFactIds(input: UpdateAuctionCardRequest): string[] {
   return [...new Set(ids)];
 }
 
+function requirePublishUserId(userId: string | undefined): string {
+  const result = uuidSchema.safeParse(userId);
+  if (!result.success) {
+    throw new AuthorizationError('A valid authenticated admin user is required to publish auction cards');
+  }
+  return result.data;
+}
+
+function validatePublishClues(clues: AuctionCardClueRow[]): string[] {
+  const errors: string[] = [];
+
+  if (clues.length !== 3) {
+    errors.push('Card must have exactly 3 clues');
+    return errors;
+  }
+
+  const orders = clues.map((clue) => clue.clue_order).sort((a, b) => a - b);
+  if (orders[0] !== 1 || orders[1] !== 2 || orders[2] !== 3) {
+    errors.push('clue_order values must be exactly 1, 2, and 3');
+  }
+
+  for (const clue of clues) {
+    if (!clue.clue_en.trim()) {
+      errors.push(`clue_en is required for clue_order ${clue.clue_order}`);
+    }
+    if (!clue.clue_ka.trim()) {
+      errors.push(`clue_ka is required for clue_order ${clue.clue_order}`);
+    }
+  }
+
+  return errors;
+}
+
 async function validateSupportedFactIds(playerId: string, input: UpdateAuctionCardRequest): Promise<void> {
   const factIds = uniqueFactIds(input);
   if (factIds.length === 0) return;
@@ -245,11 +281,12 @@ export const auctionService = {
     const existing = await auctionRepo.getCardDetail(id);
     if (!existing) throw new NotFoundError('Auction card not found');
 
+    let publishedBy: string | undefined;
     if (input.status === 'published') {
+      publishedBy = requirePublishUserId(userId);
       const clues = await auctionRepo.getClues(id);
-      const errors: string[] = [];
+      const errors: string[] = validatePublishClues(clues);
 
-      if (clues.length !== 3) errors.push('Card must have exactly 3 clues');
       if ((toNumber(existing.true_value_eur) ?? 0) <= 0) errors.push('true_value_eur must be greater than 0');
       if ((toNumber(existing.starting_price_eur) ?? 0) < AUCTION_MIN_STARTING_PRICE_EUR) {
         errors.push('starting_price_eur must be at least 20000000');
@@ -261,12 +298,24 @@ export const auctionService = {
       if (errors.length > 0) {
         throw new BadRequestError('Auction card is not publishable', { errors });
       }
+
+      if (input.force) {
+        logger.warn(
+          {
+            auctionCardId: id,
+            userId: publishedBy,
+            verificationStatus: existing.verification_status,
+          },
+          'Auction card force-published by admin'
+        );
+      }
     }
 
     const updated = await auctionRepo.updateStatus(
       id,
       input.status,
-      input.status === 'published' ? userId : undefined
+      publishedBy,
+      { force: input.force }
     );
     if (!updated) throw new NotFoundError('Auction card not found');
 

@@ -345,7 +345,8 @@ export const auctionRepo = {
   async updateStatus(
     id: string,
     status: AuctionCardStatus,
-    publishedBy?: string
+    publishedBy?: string,
+    options?: { force?: boolean }
   ): Promise<AuctionCardColumns | null> {
     const [row] = await sql<AuctionCardColumns[]>`
       UPDATE auction_cards
@@ -353,6 +354,22 @@ export const auctionRepo = {
         status = ${status},
         published_at = CASE WHEN ${status === 'published'} THEN NOW() ELSE published_at END,
         published_by = CASE WHEN ${status === 'published'} THEN ${publishedBy ?? null} ELSE published_by END,
+        editor_notes = CASE
+          WHEN ${status === 'published' && options?.force === true}
+          THEN concat_ws(
+            E'\n',
+            NULLIF(editor_notes, ''),
+            concat(
+              '[force_publish] ',
+              NOW()::text,
+              ' by ',
+              ${publishedBy ?? 'unknown'},
+              ' with verification_status=',
+              verification_status
+            )
+          )
+          ELSE editor_notes
+        END,
         updated_at = NOW()
       WHERE id = ${id}
       RETURNING *

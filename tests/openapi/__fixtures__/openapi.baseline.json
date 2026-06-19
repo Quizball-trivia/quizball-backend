@@ -6080,6 +6080,18 @@
               "rejected"
             ]
           },
+          "generator_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "verifier_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_version": {
+            "type": "string",
+            "nullable": true
+          },
           "verification_status": {
             "type": "string",
             "enum": [
@@ -6207,6 +6219,9 @@
           "card_type",
           "difficulty",
           "status",
+          "generator_model",
+          "verifier_model",
+          "prompt_version",
           "verification_status",
           "published_at",
           "created_at",
@@ -6794,6 +6809,18 @@
                     "rejected"
                   ]
                 },
+                "generator_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "verifier_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "prompt_version": {
+                  "type": "string",
+                  "nullable": true
+                },
                 "verification_status": {
                   "type": "string",
                   "enum": [
@@ -6921,6 +6948,9 @@
                 "card_type",
                 "difficulty",
                 "status",
+                "generator_model",
+                "verifier_model",
+                "prompt_version",
                 "verification_status",
                 "published_at",
                 "created_at",

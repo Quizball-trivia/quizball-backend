@@ -22,6 +22,7 @@ import {
   matchDisconnectKey,
   matchExitPendingKey,
   matchForfeitPendingUserKey,
+  matchGraceExtendedKey,
   matchGraceKey,
   matchPauseKey,
   matchPresenceKey,
@@ -85,7 +86,11 @@ import {
   type MatchParticipantSnapshot,
 } from './match-participants.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import { canForfeitToPresentPlayers, resolveMatchPresence } from './match-presence.service.js';
+import {
+  canForfeitToPresentPlayers,
+  fetchUserRoomSockets,
+  resolveMatchPresence,
+} from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 import {
   findOpponentInDisconnectGrace,
@@ -97,6 +102,14 @@ import {
 } from './match-stage-presence.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
+// Bounded extra window granted at grace expiry to a player who RECONNECTED
+// (fresh socket, connected after their disconnect marker) but has not yet
+// completed the match:rejoin / match:ui_ready handshake. The marker clears only
+// on a real rejoin; if this window also lapses with the marker still set, the
+// player forfeits (zombie / never-rejoined protection). Sized to the resume
+// UI-ready ceiling so a healthy client comfortably finishes its handshake.
+const MATCH_RECONNECT_PENDING_GRACE_MS = 8_000;
+const GRACE_EXTENDED_TTL_SEC = 30;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;
@@ -203,6 +216,7 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
   return [
     matchPauseKey(matchId),
     matchGraceKey(matchId),
+    matchGraceExtendedKey(matchId),
     matchResumeCountdownKey(matchId),
     rankedAiMatchKey(matchId),
     ...roster.flatMap((player) => [
@@ -993,6 +1007,7 @@ export async function resumePausedMatch(
         await redis.del(matchDisconnectKey(matchId, recoveredUserId));
       }
       await redis.del(matchGraceKey(matchId));
+      await redis.del(matchGraceExtendedKey(matchId));
       // The match resumed before the grace window expired — drop the pending durable
       // forfeit timer so it can't fire after a successful reconnect. (The handler also
       // re-checks the grace key, so this is belt-and-suspenders.)
@@ -1079,7 +1094,7 @@ export async function completeResumeCountdown(
       return;
     }
 
-    await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), countdownKey]);
+    await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), matchGraceExtendedKey(matchId), countdownKey]);
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
     if (variant !== 'friendly_party_quiz'
@@ -1458,6 +1473,64 @@ export async function pauseMatchForDisconnectedPlayer(
   };
 }
 
+function socketConnectedAt(socket: unknown): number | null {
+  const value = (socket as { data?: { connectedAt?: unknown } } | null)?.data?.connectedAt;
+  return typeof value === 'number' ? value : null;
+}
+
+/**
+ * Of the players Redis still marks disconnected, which have a FRESH live socket
+ * — one that connected AFTER their disconnect marker was written? That is a
+ * genuine reconnect mid-grace whose rejoin/ui-ready handshake simply hasn't
+ * cleared the marker yet (prod: Thenotorious reconnected at 11:24:18, forfeited
+ * at 11:24:48). Such players get a bounded extra UI-ready window rather than an
+ * immediate forfeit.
+ *
+ * The `connectedAt > markerMs` test is what separates a real reconnect from a
+ * ZOMBIE socket — one alive since BEFORE the drop (e.g. a menu socket after a
+ * match:leave). A zombie's connectedAt predates the marker, so it is NOT
+ * reconnect-pending and still forfeits (preserves S15b6). A socket with no
+ * usable connectedAt is treated conservatively as NOT a fresh reconnect.
+ */
+async function findReconnectPendingUsers(
+  io: QuizballServer,
+  matchId: string,
+  markedDisconnected: Array<{ userId: string; markerMs: number }>
+): Promise<Set<string>> {
+  if (markedDisconnected.length === 0) return new Set();
+
+  let matchRoomSockets: unknown[] = [];
+  try {
+    matchRoomSockets = await io.in(`match:${matchId}`).fetchSockets();
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Failed to inspect match-room sockets during reconnect-pending check');
+  }
+
+  const pending = new Set<string>();
+  await Promise.all(
+    markedDisconnected.map(async ({ userId, markerMs }) => {
+      // Without a usable marker timestamp we cannot tell a reconnect from a
+      // zombie, so do NOT defer — fall through to the normal forfeit decision.
+      if (!(markerMs > 0)) return;
+      const hasFreshMatchSocket = matchRoomSockets.some(
+        (socket) =>
+          (socket as { data?: { user?: { id?: unknown } } }).data?.user?.id === userId &&
+          (socketConnectedAt(socket) ?? 0) >= markerMs
+      );
+      if (hasFreshMatchSocket) {
+        pending.add(userId);
+        return;
+      }
+      const userRoomSockets = await fetchUserRoomSockets(io, userId);
+      const hasFreshUserSocket = userRoomSockets.some(
+        (socket) => (socketConnectedAt(socket) ?? 0) >= markerMs
+      );
+      if (hasFreshUserSocket) pending.add(userId);
+    })
+  );
+  return pending;
+}
+
 /**
  * Run when a disconnect grace window expires (fired by the durable realtime
  * timer scheduler). Resolves the match: drops party-quiz players, abandons /
@@ -1473,6 +1546,9 @@ export async function resolveExpiredGraceWindow(
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
+  // Hoisted so the finally can preserve the grace/pause keys when we defer for a
+  // reconnect-pending player (the re-armed timer needs the grace window alive).
+  let deferredForReconnect = false;
   try {
     const graceStillActive = (await redis.exists(matchGraceKey(matchId))) === 1;
     if (!graceStillActive) return;
@@ -1483,12 +1559,57 @@ export async function resolveExpiredGraceWindow(
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
 
     const roster = await matchPlayersRepo.listMatchPlayers(matchId);
-    const disconnectedExists = await Promise.all(
-      roster.map((player) => redis.exists(matchDisconnectKey(matchId, player.user_id)))
+    // Read the marker VALUE (the disconnect timestamp), not just existence — the
+    // reconnect-pending check below compares it against each fresh socket's
+    // connectedAt to tell a genuine reconnect from a zombie socket.
+    const disconnectMarkerValues = await Promise.all(
+      roster.map((player) => redis.get(matchDisconnectKey(matchId, player.user_id)))
     );
-    const disconnected = roster
-      .filter((_, index) => disconnectedExists[index])
-      .map((player) => player.user_id);
+    const markedDisconnected = roster
+      .map((player, index) => ({ player, raw: disconnectMarkerValues[index] }))
+      .filter((entry): entry is { player: (typeof roster)[number]; raw: string } => entry.raw != null)
+      .map((entry) => ({ userId: entry.player.user_id, markerMs: Number(entry.raw) || 0 }));
+    let disconnected = markedDisconnected.map((entry) => entry.userId);
+
+    // Reconnect-pending deferral (possession only): a player who RECONNECTED
+    // within grace (fresh socket, connected after their marker) but hasn't yet
+    // completed the rejoin/ui-ready handshake must NOT be forfeited on this fire.
+    // Grant ONE bounded extra window — re-arm the forfeit timer, nudge the
+    // client to rejoin, and leave the marker in place (only a real rejoin clears
+    // it). If the window lapses with the marker still set, the next fire finds
+    // the extended flag and forfeits (zombie / never-rejoined protection). The
+    // grace key is preserved here (NOT cleared by the finally) so the re-armed
+    // timer still sees an active grace window.
+    if (variant !== 'friendly_party_quiz' && markedDisconnected.length > 0) {
+      const alreadyExtended = (await redis.exists(matchGraceExtendedKey(matchId))) === 1;
+      if (!alreadyExtended) {
+        const reconnectPending = await findReconnectPendingUsers(io, matchId, markedDisconnected);
+        if (reconnectPending.size > 0) {
+          await redis.set(matchGraceExtendedKey(matchId), '1', { EX: GRACE_EXTENDED_TTL_SEC });
+          await scheduleRealtimeTimer(
+            'match_disconnect_forfeit',
+            matchId,
+            new Date(Date.now() + MATCH_RECONNECT_PENDING_GRACE_MS),
+            { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: [...reconnectPending][0]! }
+          );
+          for (const userId of reconnectPending) {
+            await emitRejoinAvailableToUser(
+              io,
+              activeMatch,
+              userId,
+              MATCH_RECONNECT_PENDING_GRACE_MS,
+              toRemainingReconnects(await getDisconnectCount(matchId, userId))
+            );
+          }
+          deferredForReconnect = true;
+          logger.info(
+            { matchId, reconnectPendingUserIds: [...reconnectPending], windowMs: MATCH_RECONNECT_PENDING_GRACE_MS },
+            'Grace expiry deferred: player(s) reconnected within grace, awaiting rejoin handshake'
+          );
+        }
+      }
+    }
+    if (deferredForReconnect) return;
 
     if (disconnected.length === 0) {
       // Everyone reconnected before the grace expired. The finally below
@@ -1503,6 +1624,7 @@ export async function resolveExpiredGraceWindow(
       // scoped to the possession freeze, where the diagnosed race lives.
       if (variant !== 'friendly_party_quiz') {
         await redis.del(matchGraceKey(matchId));
+        await redis.del(matchGraceExtendedKey(matchId));
         await redis.del(matchPauseKey(matchId));
         const ensured = await ensurePossessionActiveTimers(io, matchId);
         logger.info(
@@ -1569,7 +1691,12 @@ export async function resolveExpiredGraceWindow(
   } catch (err) {
     logger.warn({ err, matchId }, 'Grace expiry handler failed');
   } finally {
-    await redis.del(matchGraceKey(matchId));
-    await redis.del(matchPauseKey(matchId));
+    // When we deferred for a reconnect-pending player, keep grace + pause alive
+    // so the re-armed forfeit timer still fires on an active window and the match
+    // stays paused until the rejoin handshake (or the bounded window) resolves it.
+    if (!deferredForReconnect) {
+      await redis.del(matchGraceKey(matchId));
+      await redis.del(matchPauseKey(matchId));
+    }
   }
 }

@@ -1566,16 +1566,18 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(abandonMatchMock).not.toHaveBeenCalled();
   });
 
-  it('S15b4: grace expiry does not auto-resume from generic user-room sockets', async () => {
-    // Token-refresh reconnect storm: both players' sockets flapped (disconnect
-    // markers set), both re-authenticated FRESH sockets (user rooms populated,
-    // connectedAt after the disconnect markers) but neither completed the
-    // match:rejoin + UI-ready handshake. Generic site sockets must not be
-    // pulled back into active gameplay after grace expires.
+  it('S15b4: a fresh reconnect socket gets ONE deferral, then forfeits if it never rejoins', async () => {
+    // Token-refresh reconnect storm: both players flapped (markers set), both
+    // re-authenticated FRESH sockets (connectedAt AFTER the markers) but neither
+    // completed the match:rejoin handshake. New contract: a genuine reconnect
+    // is not forfeited on the first grace fire — it gets one bounded UI-ready
+    // window (rejoin nudge + re-armed timer). If that window also lapses with
+    // the markers still set, the next fire forfeits (zombie / never-rejoined).
+    const markerMs = Date.now() - 60_000;
     const s1 = createSocketMock('u1');
     const s2 = createSocketMock('u2');
-    s1.data.connectedAt = Date.now() - 30_000;
-    s2.data.connectedAt = Date.now() - 30_000;
+    s1.data.connectedAt = markerMs + 5_000; // reconnected AFTER the marker
+    s2.data.connectedAt = markerMs + 5_000;
     const { io, roomEmits } = createIoWithUserRooms({ u1: [s1], u2: [s2] });
     const nowIso = new Date().toISOString();
 
@@ -1590,14 +1592,27 @@ describe('match-realtime.service high-risk integration behavior', () => {
       lobby_id: 'l1',
       state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
     });
-    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:grace:m1', String(markerMs));
+    fakeRedisStore.values.set('match:pause:m1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(markerMs));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
-    await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
+    // First fire: DEFER. No terminal resolution; grace + extended flag survive.
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:grace_extended:m1')).toBe(true);
+    // The deferred players were nudged to rejoin.
+    const u1Emits = roomEmits.get('user:u1');
+    expect(u1Emits).toBeDefined();
+    expect(u1Emits!).toHaveBeenCalledWith('match:rejoin_available', expect.objectContaining({ matchId: 'm1' }));
+
+    // Second fire (extended window lapsed, still no rejoin → markers intact):
+    // now forfeit. No auto-resume into gameplay from generic sockets.
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
     expect(s1.join).not.toHaveBeenCalledWith('match:m1');
     expect(s2.join).not.toHaveBeenCalledWith('match:m1');
     const allEmitCalls = [...roomEmits.values()].flatMap((emitFn) => emitFn.mock.calls);
@@ -1608,14 +1623,15 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(completeMatchMock.mock.calls.length + abandonMatchMock.mock.calls.length).toBe(1);
   });
 
-  it('S15b4a: grace expiry falls through to terminal resolution when a reachable socket fails to rejoin', async () => {
-    // u1's socket is fetched as reachable but vanishes before join(); u2
-    // rejoins fine. Recovery must NOT claim success — the match falls through
-    // to terminal resolution instead of resuming with u1 outside the room.
+  it('S15b4a: a reachable fresh socket that fails to rejoin is forfeited after the deferral window', async () => {
+    // u1 reconnected (fresh socket) but its rejoin will fail; u2 likewise.
+    // First fire defers; the second resolves terminally (no resume) because the
+    // markers were never cleared by a successful rejoin.
+    const markerMs = Date.now() - 60_000;
     const s1 = createSocketMock('u1');
     const s2 = createSocketMock('u2');
-    s1.data.connectedAt = Date.now() - 30_000;
-    s2.data.connectedAt = Date.now() - 30_000;
+    s1.data.connectedAt = markerMs + 5_000;
+    s2.data.connectedAt = markerMs + 5_000;
     (s1.join as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error('socket gone');
     });
@@ -1633,15 +1649,19 @@ describe('match-realtime.service high-risk integration behavior', () => {
       lobby_id: 'l1',
       state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
     });
-    fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:disconnect:m1:u1', String(Date.now() - 60_000));
-    fakeRedisStore.values.set('match:disconnect:m1:u2', String(Date.now() - 60_000));
+    fakeRedisStore.values.set('match:grace:m1', String(markerMs));
+    fakeRedisStore.values.set('match:pause:m1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u2', String(markerMs));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
-    await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
-    // No resume countdown; the match was resolved terminally instead.
+    // First fire defers (no terminal resolution yet).
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+    expect(completeMatchMock).not.toHaveBeenCalled();
+
+    // Second fire resolves terminally; never a resume countdown.
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
     expect(roomEmits.get('match:m1') ?? vi.fn()).not.toHaveBeenCalledWith(
       'match:countdown',
       expect.objectContaining({ reason: 'resume' })

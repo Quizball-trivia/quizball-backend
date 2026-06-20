@@ -6,6 +6,7 @@ export { auctionService } from './auction.service.js';
 export { auctionStateStore } from './auction-state.store.js';
 export * from './auction.errors.js';
 export * from './auction.constants.js';
+export * from './auction-engine.js';
 export * from './auction-rules.js';
 export * from './auction-state.store.js';
 export * from './auction-match-state.js';

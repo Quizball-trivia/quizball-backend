@@ -35,6 +35,7 @@ import type {
   AuctionTurnStartedPayload,
   AuctionTurnTimeoutPayload,
 } from '../socket.types.js';
+import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
 
 export type AuctionTurnTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_turn_timeout' }>;
 
@@ -111,6 +112,7 @@ export async function emitAndScheduleAuctionTurnStarted(
 
   io.to(`match:${state.matchId}`).emit('auction:turn_started', payload);
   await scheduleAuctionTurnTimeoutTimer(state, options);
+  await scheduleAuctionBotActionTimer(state, options);
 }
 
 export async function runAuctionTurnTimeoutTimer(

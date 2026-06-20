@@ -45,6 +45,7 @@ import {
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
+import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 
@@ -257,6 +258,10 @@ async function runPostConnectHydration(
  */
 export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
   return {
+    auction_bot_action: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_bot_action') return;
+      await runAuctionBotActionTimer(server, payload);
+    },
     auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_clue_reveal') return;
       await runAuctionClueRevealTimer(server, payload);

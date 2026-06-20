@@ -11,6 +11,7 @@ const TIMER_POLL_INTERVAL_MS = 500;
 const TIMER_BATCH_SIZE = 100;
 
 export type RealtimeTimerKind =
+  | 'auction_bot_action'
   | 'auction_clue_reveal'
   | 'auction_turn_timeout'
   | 'draft_ai_ban'
@@ -25,6 +26,7 @@ export type RealtimeTimerKind =
   | 'ranked_draft_start';
 
 export type RealtimeTimerPayload =
+  | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
   | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
@@ -69,7 +71,8 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   const key = member.slice(separator + 1);
   if (!key) return null;
   if (
-    kind !== 'auction_clue_reveal'
+    kind !== 'auction_bot_action'
+    && kind !== 'auction_clue_reveal'
     && kind !== 'auction_turn_timeout'
     && kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'

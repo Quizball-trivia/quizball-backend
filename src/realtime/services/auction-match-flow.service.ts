@@ -26,7 +26,6 @@ import {
   toPublicAuctionMatchState,
   type AuctionMatchState,
   type PublicAuctionMatchState,
-  type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
 import {
   auctionStateStore,
@@ -43,6 +42,7 @@ import type {
   AuctionSoloPickStartedPayload,
   AuctionSquadUpdatedPayload,
 } from '../socket.types.js';
+import { requirePublicRound } from './auction-realtime-payloads.js';
 
 export interface AuctionMatchFlowOptions {
   now?: Date;
@@ -318,13 +318,6 @@ function buildRoundRevealedPayload(publicState: PublicAuctionMatchState): Auctio
     round,
     stateVersion: publicState.version,
   };
-}
-
-function requirePublicRound(publicState: PublicAuctionMatchState): PublicAuctionRoundState {
-  if (!publicState.currentRound) {
-    throw new Error('Auction round unavailable');
-  }
-  return publicState.currentRound;
 }
 
 function resolveLocale(state: AuctionMatchState): AuctionContentLocale {

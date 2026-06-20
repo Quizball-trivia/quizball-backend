@@ -9,12 +9,9 @@ import {
 } from '../../modules/auction/auction-engine.js';
 import {
   findAuctionSeatByUserId,
-  toPublicAuctionMatchState,
   type AuctionMatchState,
-  type PublicAuctionMatchState,
-  type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
-import { getEmptySlots, getMaxBid, getMinBid, needsPosition } from '../../modules/auction/auction-rules.js';
+import { needsPosition } from '../../modules/auction/auction-rules.js';
 import {
   auctionStateStore,
   saveAuctionMatchMutation,
@@ -26,14 +23,10 @@ import {
 } from '../realtime-timer-scheduler.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
-  AuctionBidAcceptedPayload,
   AuctionBidPayload,
   AuctionErrorPayload,
-  AuctionFoldAcceptedPayload,
   AuctionFoldPayload,
   AuctionSoloPickSelectPayload,
-  AuctionTurnStartedPayload,
-  AuctionTurnTimeoutPayload,
 } from '../socket.types.js';
 import {
   advanceAuctionMatchFlowAfterMutation,
@@ -41,6 +34,12 @@ import {
   handleAuctionSoloPickSelectionForUser,
 } from './auction-match-flow.service.js';
 import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
+import {
+  buildBidAcceptedPayload,
+  buildFoldAcceptedPayload,
+  buildTurnStartedPayload,
+  buildTurnTimeoutPayload,
+} from './auction-realtime-payloads.js';
 
 export type AuctionTurnTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_turn_timeout' }>;
 
@@ -333,82 +332,6 @@ async function emitPostTurnMutationEvents(
   }
 
   await advanceAuctionMatchFlowAfterMutation(io, state, options);
-}
-
-function buildTurnStartedPayload(state: AuctionMatchState): AuctionTurnStartedPayload | null {
-  const publicState = toPublicAuctionMatchState(state);
-  const round = state.currentRound;
-  const publicRound = publicState.currentRound;
-  if (state.phase !== 'bidding' || !round?.currentTurnSeatId || !publicRound) return null;
-
-  const player = state.seats.find((seat) => seat.seatId === round.currentTurnSeatId);
-  if (!player) return null;
-
-  return {
-    matchId: state.matchId,
-    roundId: round.roundId,
-    currentTurnSeatId: round.currentTurnSeatId,
-    minBid: getMinBid(round.startingPrice, round.highestBid),
-    maxBid: getMaxBid(player.budget, getEmptySlots(player.team)),
-    turnEndsAt: round.turnEndsAt,
-    round: publicRound,
-    stateVersion: state.version,
-  };
-}
-
-function buildBidAcceptedPayload(
-  state: AuctionMatchState,
-  outcome: Extract<AuctionTurnActionOutcome, { kind: 'bid_accepted' }>
-): AuctionBidAcceptedPayload {
-  const publicState = toPublicAuctionMatchState(state);
-  const round = requirePublicRound(publicState);
-  return {
-    matchId: state.matchId,
-    roundId: round.roundId,
-    seatId: outcome.seatId,
-    amount: outcome.amount,
-    round,
-    stateVersion: state.version,
-  };
-}
-
-function buildFoldAcceptedPayload(
-  state: AuctionMatchState,
-  outcome: Extract<AuctionTurnActionOutcome, { kind: 'fold_accepted' }>
-): AuctionFoldAcceptedPayload {
-  const publicState = toPublicAuctionMatchState(state);
-  const round = requirePublicRound(publicState);
-  return {
-    matchId: state.matchId,
-    roundId: round.roundId,
-    seatId: outcome.seatId,
-    round,
-    stateVersion: state.version,
-  };
-}
-
-function buildTurnTimeoutPayload(
-  state: AuctionMatchState,
-  outcome: Extract<AuctionTurnActionOutcome, { kind: 'turn_timeout' }>
-): AuctionTurnTimeoutPayload {
-  const publicState = toPublicAuctionMatchState(state);
-  const round = requirePublicRound(publicState);
-  return {
-    matchId: state.matchId,
-    roundId: round.roundId,
-    seatId: outcome.seatId,
-    action: outcome.action,
-    amount: outcome.amount,
-    round,
-    stateVersion: state.version,
-  };
-}
-
-function requirePublicRound(publicState: PublicAuctionMatchState): PublicAuctionRoundState {
-  if (!publicState.currentRound) {
-    throw new Error('Auction round unavailable');
-  }
-  return publicState.currentRound;
 }
 
 function emitAuctionActionError(socket: QuizballSocket, payload: AuctionErrorPayload): void {

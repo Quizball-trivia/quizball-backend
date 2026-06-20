@@ -17,9 +17,9 @@ import {
 import {
   toPublicAuctionMatchState,
   type PublicAuctionMatchState,
-  type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
+import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
@@ -174,13 +174,11 @@ async function attachUserSocketsToAuctionMatch(
 }
 
 function buildRoundStartedPayload(publicState: PublicAuctionMatchState): AuctionRoundStartedPayload {
-  if (!publicState.currentRound) {
-    throw new Error('Auction round unavailable');
-  }
+  const round = requirePublicRound(publicState);
 
   return {
     matchId: publicState.matchId,
-    round: publicState.currentRound as PublicAuctionRoundState,
+    round,
     stateVersion: publicState.version,
   };
 }

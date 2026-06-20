@@ -8,7 +8,6 @@ import {
   AuctionContentUnavailableError,
   AuctionStartingPriceUnavailableError,
 } from './auction.errors.js';
-import { MIN_PLAYER_COST } from './auction.constants.js';
 import type { AuctionFootballer, PositionGroup } from './auction.types.js';
 
 export interface PublishedAuctionCard extends AuctionFootballer {
@@ -59,16 +58,6 @@ function mapPublishedAuctionCard(row: PublishedAuctionCardRow): PublishedAuction
   const auctionPriceEur = requirePositivePrice(row.auction_price_eur, 'auction_price_eur', row);
   const startingPriceEur = requirePositivePrice(row.starting_price_eur, 'starting_price_eur', row);
   const currentValueEur = requirePositivePrice(row.current_value_eur, 'auction_price_eur', row);
-
-  if (startingPriceEur < MIN_PLAYER_COST) {
-    throw new AuctionStartingPriceUnavailableError({
-      code: 'auction_starting_price_unavailable',
-      field: 'starting_price_eur',
-      clue_card_id: row.clue_card_id,
-      starting_price_eur: startingPriceEur,
-      min_player_cost: MIN_PLAYER_COST,
-    });
-  }
 
   return {
     id: row.football_player_id,

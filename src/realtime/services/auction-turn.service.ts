@@ -29,12 +29,15 @@ import type {
   AuctionErrorPayload,
   AuctionFoldAcceptedPayload,
   AuctionFoldPayload,
-  AuctionMatchFinishedPayload,
-  AuctionRoundRevealedPayload,
-  AuctionSquadUpdatedPayload,
+  AuctionSoloPickSelectPayload,
   AuctionTurnStartedPayload,
   AuctionTurnTimeoutPayload,
 } from '../socket.types.js';
+import {
+  advanceAuctionMatchFlowAfterMutation,
+  AuctionSoloPickActionError,
+  handleAuctionSoloPickSelectionForUser,
+} from './auction-match-flow.service.js';
 import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
 
 export type AuctionTurnTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_turn_timeout' }>;
@@ -168,6 +171,33 @@ export async function handleAuctionFold(
     io.to(`match:${outcome.state.matchId}`).emit('auction:fold_accepted', buildFoldAcceptedPayload(outcome.state, outcome));
     await emitPostTurnMutationEvents(io, outcome.state, options);
     return outcome;
+  } catch (error) {
+    emitAuctionActionError(socket, toAuctionActionErrorPayload(error));
+    return null;
+  }
+}
+
+export async function handleAuctionSoloPickSelect(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  input: AuctionSoloPickSelectPayload,
+  options: AuctionTurnTimerOptions = {}
+): Promise<AuctionMatchState | null> {
+  try {
+    const userId = socket.data.user?.id;
+    if (!userId) {
+      throw new AuctionRealtimeActionError('AUTHENTICATION_ERROR', 'Authentication required');
+    }
+    if (socket.data.matchId && socket.data.matchId !== input.matchId) {
+      throw new AuctionRealtimeActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
+    }
+    return await handleAuctionSoloPickSelectionForUser(
+      io,
+      input.matchId,
+      userId,
+      input.option,
+      options
+    );
   } catch (error) {
     emitAuctionActionError(socket, toAuctionActionErrorPayload(error));
     return null;
@@ -316,33 +346,7 @@ async function emitPostTurnMutationEvents(
     return;
   }
 
-  if (state.phase === 'reveal' && state.currentRound) {
-    const publicState = toPublicAuctionMatchState(state);
-    io.to(`match:${state.matchId}`).emit('auction:round_revealed', buildRoundRevealedPayload(publicState));
-    if (state.currentRound.winnerSeatId) {
-      const player = publicState.seats.find((seat) => seat.seatId === state.currentRound?.winnerSeatId);
-      if (player) {
-        io.to(`match:${state.matchId}`).emit('auction:squad_updated', {
-          matchId: state.matchId,
-          seatId: player.seatId,
-          player,
-          stateVersion: state.version,
-        } satisfies AuctionSquadUpdatedPayload);
-      }
-    }
-    return;
-  }
-
-  if (state.phase === 'finished' && state.rankings) {
-    const publicState = toPublicAuctionMatchState(state);
-    io.to(`match:${state.matchId}`).emit('auction:match_finished', {
-      matchId: state.matchId,
-      rankings: state.rankings,
-      winnerSeatId: state.rankings[0]?.seatId ?? null,
-      state: publicState,
-      stateVersion: state.version,
-    } satisfies AuctionMatchFinishedPayload);
-  }
+  await advanceAuctionMatchFlowAfterMutation(io, state, options);
 }
 
 function buildTurnStartedPayload(state: AuctionMatchState): AuctionTurnStartedPayload | null {
@@ -414,18 +418,6 @@ function buildTurnTimeoutPayload(
   };
 }
 
-function buildRoundRevealedPayload(publicState: PublicAuctionMatchState): AuctionRoundRevealedPayload {
-  const round = requirePublicRound(publicState);
-  return {
-    matchId: publicState.matchId,
-    roundId: round.roundId,
-    winnerSeatId: round.winnerSeatId,
-    winningBid: round.winningBid,
-    round,
-    stateVersion: publicState.version,
-  };
-}
-
 function requirePublicRound(publicState: PublicAuctionMatchState): PublicAuctionRoundState {
   if (!publicState.currentRound) {
     throw new Error('Auction round unavailable');
@@ -439,6 +431,13 @@ function emitAuctionActionError(socket: QuizballSocket, payload: AuctionErrorPay
 
 function toAuctionActionErrorPayload(error: unknown): AuctionErrorPayload {
   if (error instanceof AuctionRealtimeActionError) {
+    return {
+      code: error.code,
+      message: error.message,
+      meta: error.meta,
+    };
+  }
+  if (error instanceof AuctionSoloPickActionError) {
     return {
       code: error.code,
       message: error.message,

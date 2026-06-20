@@ -16,6 +16,18 @@ const schedulerMock = vi.hoisted(() => ({
   scheduleRealtimeTimer: vi.fn(),
 }));
 
+const contentServiceMock = vi.hoisted(() => ({
+  getRandomPublishedAuctionCard: vi.fn(),
+}));
+
+vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/modules/auction/index.js')>();
+  return {
+    ...actual,
+    auctionContentService: contentServiceMock,
+  };
+});
+
 vi.mock('../../src/modules/auction/auction-state.store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/modules/auction/auction-state.store.js')>();
   return {
@@ -131,6 +143,7 @@ describe('auction turn service', () => {
     vi.clearAllMocks();
     stateStoreMock.withLock.mockImplementation(async (_matchId: string, fn: () => Promise<unknown>) => fn());
     stateStoreMock.save.mockImplementation(async (state: unknown) => state);
+    contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
   });
 
   it('schedules turn timeouts through the durable realtime scheduler', async () => {

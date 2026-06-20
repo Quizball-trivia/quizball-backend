@@ -60,6 +60,7 @@ export interface AuctionSoloPickState {
 export interface AuctionMatchState {
   matchId: string;
   version: number;
+  locale?: 'en' | 'ka';
   phase: AuctionMatchPhase;
   formation: FormationName;
   seats: AuctionPlayer[];

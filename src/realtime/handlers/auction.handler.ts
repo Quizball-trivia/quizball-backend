@@ -2,12 +2,14 @@ import { logger } from '../../core/logger.js';
 import {
   auctionBidSchema,
   auctionFoldSchema,
+  auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
 } from '../schemas/auction.schemas.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
 import {
   handleAuctionBid,
   handleAuctionFold,
+  handleAuctionSoloPickSelect,
 } from '../services/auction-turn.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
@@ -77,6 +79,29 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
       socket.emit('auction:error', {
         code: 'auction_action_failed',
         message: 'Failed to submit auction fold',
+      });
+    }
+  });
+
+  socket.on('auction:solo_pick_select', async (payload) => {
+    const parsed = auctionSoloPickSelectSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:solo_pick_select payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction solo pick payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await handleAuctionSoloPickSelect(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:solo_pick_select handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_action_failed',
+        message: 'Failed to submit auction solo pick',
       });
     }
   });

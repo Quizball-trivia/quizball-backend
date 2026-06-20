@@ -83,6 +83,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
   return {
     matchId: input.matchId ?? context.createId('match'),
     version: 0,
+    locale: input.locale ?? 'en',
     phase: 'created',
     formation,
     seats,

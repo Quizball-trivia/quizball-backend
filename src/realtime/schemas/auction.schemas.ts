@@ -28,5 +28,11 @@ export const auctionFoldSchema = z.object({
   matchId: z.string().min(1),
 });
 
+export const auctionSoloPickSelectSchema = z.object({
+  matchId: z.string().min(1),
+  option: z.enum(['A', 'B']),
+});
+
 export type AuctionBidInput = z.infer<typeof auctionBidSchema>;
 export type AuctionFoldInput = z.infer<typeof auctionFoldSchema>;
+export type AuctionSoloPickSelectInput = z.infer<typeof auctionSoloPickSelectSchema>;

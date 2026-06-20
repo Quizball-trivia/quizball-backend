@@ -8,6 +8,7 @@ const auctionRealtimeServiceMock = vi.hoisted(() => ({
 const auctionTurnServiceMock = vi.hoisted(() => ({
   handleAuctionBid: vi.fn(),
   handleAuctionFold: vi.fn(),
+  handleAuctionSoloPickSelect: vi.fn(),
 }));
 
 vi.mock('../../src/realtime/services/auction-realtime.service.js', () => ({
@@ -17,6 +18,7 @@ vi.mock('../../src/realtime/services/auction-realtime.service.js', () => ({
 vi.mock('../../src/realtime/services/auction-turn.service.js', () => ({
   handleAuctionBid: auctionTurnServiceMock.handleAuctionBid,
   handleAuctionFold: auctionTurnServiceMock.handleAuctionFold,
+  handleAuctionSoloPickSelect: auctionTurnServiceMock.handleAuctionSoloPickSelect,
 }));
 
 import { registerAuctionHandlers } from '../../src/realtime/handlers/auction.handler.js';
@@ -53,6 +55,7 @@ describe('registerAuctionHandlers', () => {
     expect(socket.on).toHaveBeenCalledWith('auction:start_ai_match', expect.any(Function));
     expect(socket.on).toHaveBeenCalledWith('auction:bid', expect.any(Function));
     expect(socket.on).toHaveBeenCalledWith('auction:fold', expect.any(Function));
+    expect(socket.on).toHaveBeenCalledWith('auction:solo_pick_select', expect.any(Function));
     expect(auctionRealtimeServiceMock.handleStartAiMatch).toHaveBeenCalledWith(
       io,
       socket,
@@ -67,6 +70,7 @@ describe('registerAuctionHandlers', () => {
     registerAuctionHandlers(io, socket);
     await handlers.get('auction:bid')?.({ matchId: 'match-1', amount: 30_000_000 });
     await handlers.get('auction:fold')?.({ matchId: 'match-1' });
+    await handlers.get('auction:solo_pick_select')?.({ matchId: 'match-1', option: 'B' });
 
     expect(auctionTurnServiceMock.handleAuctionBid).toHaveBeenCalledWith(
       io,
@@ -77,6 +81,11 @@ describe('registerAuctionHandlers', () => {
       io,
       socket,
       { matchId: 'match-1' }
+    );
+    expect(auctionTurnServiceMock.handleAuctionSoloPickSelect).toHaveBeenCalledWith(
+      io,
+      socket,
+      { matchId: 'match-1', option: 'B' }
     );
   });
 
@@ -102,6 +111,7 @@ describe('registerAuctionHandlers', () => {
     registerAuctionHandlers({} as QuizballServer, socket);
     await handlers.get('auction:bid')?.({ matchId: 'match-1', amount: 0 });
     await handlers.get('auction:fold')?.({});
+    await handlers.get('auction:solo_pick_select')?.({ matchId: 'match-1', option: 'C' });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'auction:error',
@@ -117,7 +127,15 @@ describe('registerAuctionHandlers', () => {
         message: 'Invalid auction fold payload',
       })
     );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'auction:error',
+      expect.objectContaining({
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction solo pick payload',
+      })
+    );
     expect(auctionTurnServiceMock.handleAuctionBid).not.toHaveBeenCalled();
     expect(auctionTurnServiceMock.handleAuctionFold).not.toHaveBeenCalled();
+    expect(auctionTurnServiceMock.handleAuctionSoloPickSelect).not.toHaveBeenCalled();
   });
 });

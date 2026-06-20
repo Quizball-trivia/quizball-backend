@@ -10,7 +10,6 @@ import {
 import {
   toPublicAuctionMatchState,
   type AuctionMatchState,
-  type PublicAuctionMatchState,
   type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
 import { getEmptySlots, getMaxBid, getMinBid, needsPosition } from '../../modules/auction/auction-rules.js';
@@ -26,11 +25,9 @@ import type { QuizballServer } from '../socket-server.js';
 import type {
   AuctionBidAcceptedPayload,
   AuctionFoldAcceptedPayload,
-  AuctionMatchFinishedPayload,
-  AuctionRoundRevealedPayload,
-  AuctionSquadUpdatedPayload,
   AuctionTurnStartedPayload,
 } from '../socket.types.js';
+import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.service.js';
 
 export const AUCTION_BOT_MIN_THINK_MS = 800;
 export const AUCTION_BOT_MAX_THINK_MS = 2_800;
@@ -187,33 +184,7 @@ async function emitPostBotMutationEvents(
     return;
   }
 
-  if (state.phase === 'reveal' && state.currentRound) {
-    const publicState = toPublicAuctionMatchState(state);
-    io.to(`match:${state.matchId}`).emit('auction:round_revealed', buildRoundRevealedPayload(publicState));
-    if (state.currentRound.winnerSeatId) {
-      const player = publicState.seats.find((seat) => seat.seatId === state.currentRound?.winnerSeatId);
-      if (player) {
-        io.to(`match:${state.matchId}`).emit('auction:squad_updated', {
-          matchId: state.matchId,
-          seatId: player.seatId,
-          player,
-          stateVersion: state.version,
-        } satisfies AuctionSquadUpdatedPayload);
-      }
-    }
-    return;
-  }
-
-  if (state.phase === 'finished' && state.rankings) {
-    const publicState = toPublicAuctionMatchState(state);
-    io.to(`match:${state.matchId}`).emit('auction:match_finished', {
-      matchId: state.matchId,
-      rankings: state.rankings,
-      winnerSeatId: state.rankings[0]?.seatId ?? null,
-      state: publicState,
-      stateVersion: state.version,
-    } satisfies AuctionMatchFinishedPayload);
-  }
+  await advanceAuctionMatchFlowAfterMutation(io, state, options);
 }
 
 async function emitAndScheduleBotTurnStarted(
@@ -313,19 +284,7 @@ function buildFoldAcceptedPayload(
   };
 }
 
-function buildRoundRevealedPayload(publicState: PublicAuctionMatchState): AuctionRoundRevealedPayload {
-  const round = requirePublicRound(publicState);
-  return {
-    matchId: publicState.matchId,
-    roundId: round.roundId,
-    winnerSeatId: round.winnerSeatId,
-    winningBid: round.winningBid,
-    round,
-    stateVersion: publicState.version,
-  };
-}
-
-function requirePublicRound(publicState: PublicAuctionMatchState): PublicAuctionRoundState {
+function requirePublicRound(publicState: ReturnType<typeof toPublicAuctionMatchState>): PublicAuctionRoundState {
   if (!publicState.currentRound) {
     throw new Error('Auction round unavailable');
   }

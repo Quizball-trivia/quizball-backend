@@ -4,6 +4,7 @@ import type {
   PublicAuctionMatchState,
   PublicAuctionPlayer,
   PublicAuctionRoundState,
+  PublicAuctionSoloPickState,
 } from '../modules/auction/auction-match-state.js';
 import type { AuctionPlayerRanking, FormationName } from '../modules/auction/auction.types.js';
 
@@ -644,6 +645,11 @@ export interface AuctionFoldPayload {
   matchId: string;
 }
 
+export interface AuctionSoloPickSelectPayload {
+  matchId: string;
+  option: 'A' | 'B';
+}
+
 export interface AuctionMatchStartedPayload {
   matchId: string;
   locale: 'en' | 'ka';
@@ -733,6 +739,20 @@ export interface AuctionMatchFinishedPayload {
   rankings: AuctionPlayerRanking[];
   winnerSeatId: string | null;
   state: PublicAuctionMatchState;
+  stateVersion: number;
+}
+
+export interface AuctionSoloPickStartedPayload {
+  matchId: string;
+  soloPick: PublicAuctionSoloPickState;
+  stateVersion: number;
+}
+
+export interface AuctionSoloPickSelectedPayload {
+  matchId: string;
+  seatId: string;
+  option: 'A' | 'B';
+  player: PublicAuctionPlayer;
   stateVersion: number;
 }
 
@@ -907,6 +927,7 @@ export interface ClientToServerEvents {
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
   'auction:bid': (data: AuctionBidPayload) => void;
   'auction:fold': (data: AuctionFoldPayload) => void;
+  'auction:solo_pick_select': (data: AuctionSoloPickSelectPayload) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
@@ -1017,6 +1038,8 @@ export interface ServerToClientEvents {
   'auction:turn_timeout': (data: AuctionTurnTimeoutPayload) => void;
   'auction:round_revealed': (data: AuctionRoundRevealedPayload) => void;
   'auction:squad_updated': (data: AuctionSquadUpdatedPayload) => void;
+  'auction:solo_pick_started': (data: AuctionSoloPickStartedPayload) => void;
+  'auction:solo_pick_selected': (data: AuctionSoloPickSelectedPayload) => void;
   'auction:match_finished': (data: AuctionMatchFinishedPayload) => void;
   'warmup:state': (data: WarmupStatePayload) => void;
   'warmup:tapped': (data: WarmupTappedPayload) => void;

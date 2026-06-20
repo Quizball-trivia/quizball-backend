@@ -149,4 +149,16 @@ describe('auctionContentService', () => {
       excludeClueCardIds: [CLUE_CARD_ID],
     });
   });
+
+  it('accepts a value-decorrelated 10M starting price from the content view', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue({
+      ...basePublishedCard,
+      starting_price_eur: 10_000_000,
+    });
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(result.startingPrice).toBe(10_000_000);
+    expect(result.trueValue).toBe(180_000_000);
+  });
 });

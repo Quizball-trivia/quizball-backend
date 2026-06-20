@@ -20,6 +20,7 @@ import type {
   AuctionBiddingStartedPayload,
   AuctionClueRevealedPayload,
 } from '../socket.types.js';
+import { emitAndScheduleAuctionTurnStarted } from './auction-turn.service.js';
 
 export type AuctionClueRevealPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_reveal' }>;
 
@@ -87,6 +88,7 @@ export async function runAuctionClueRevealTimer(
 
   if (outcome.kind === 'bidding_started') {
     io.to(`match:${outcome.state.matchId}`).emit('auction:bidding_started', buildBiddingStartedPayload(publicState));
+    await emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
     return outcome;
   }
 

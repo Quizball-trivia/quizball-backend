@@ -18,3 +18,15 @@ export const auctionStartAiMatchSchema = z
   }));
 
 export type AuctionStartAiMatchInput = z.infer<typeof auctionStartAiMatchSchema>;
+
+export const auctionBidSchema = z.object({
+  matchId: z.string().min(1),
+  amount: z.number().int().positive(),
+});
+
+export const auctionFoldSchema = z.object({
+  matchId: z.string().min(1),
+});
+
+export type AuctionBidInput = z.infer<typeof auctionBidSchema>;
+export type AuctionFoldInput = z.infer<typeof auctionFoldSchema>;

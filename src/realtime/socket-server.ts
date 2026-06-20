@@ -46,6 +46,7 @@ import {
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
+import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -259,6 +260,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_clue_reveal') return;
       await runAuctionClueRevealTimer(server, payload);
+    },
+    auction_turn_timeout: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_turn_timeout') return;
+      await runAuctionTurnTimeoutTimer(server, payload);
     },
     draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_ai_ban') return;

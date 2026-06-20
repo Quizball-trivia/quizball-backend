@@ -1,6 +1,14 @@
 import { logger } from '../../core/logger.js';
-import { auctionStartAiMatchSchema } from '../schemas/auction.schemas.js';
+import {
+  auctionBidSchema,
+  auctionFoldSchema,
+  auctionStartAiMatchSchema,
+} from '../schemas/auction.schemas.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
+import {
+  handleAuctionBid,
+  handleAuctionFold,
+} from '../services/auction-turn.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
 export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSocket): void {
@@ -23,6 +31,52 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
       socket.emit('auction:error', {
         code: 'auction_content_unavailable',
         message: 'Failed to start auction match',
+      });
+    }
+  });
+
+  socket.on('auction:bid', async (payload) => {
+    const parsed = auctionBidSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:bid payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction bid payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await handleAuctionBid(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:bid handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_action_failed',
+        message: 'Failed to submit auction bid',
+      });
+    }
+  });
+
+  socket.on('auction:fold', async (payload) => {
+    const parsed = auctionFoldSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:fold payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction fold payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await handleAuctionFold(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:fold handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_action_failed',
+        message: 'Failed to submit auction fold',
       });
     }
   });

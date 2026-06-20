@@ -2,9 +2,10 @@ import type { AvatarCustomization } from '../modules/users/avatar-customization.
 import type { I18nField } from '../db/types.js';
 import type {
   PublicAuctionMatchState,
+  PublicAuctionPlayer,
   PublicAuctionRoundState,
 } from '../modules/auction/auction-match-state.js';
-import type { FormationName } from '../modules/auction/auction.types.js';
+import type { AuctionPlayerRanking, FormationName } from '../modules/auction/auction.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
@@ -634,6 +635,15 @@ export interface AuctionStartAiMatchPayload {
   locale?: 'en' | 'ka';
 }
 
+export interface AuctionBidPayload {
+  matchId: string;
+  amount: number;
+}
+
+export interface AuctionFoldPayload {
+  matchId: string;
+}
+
 export interface AuctionMatchStartedPayload {
   matchId: string;
   locale: 'en' | 'ka';
@@ -661,6 +671,68 @@ export interface AuctionBiddingStartedPayload {
   round: PublicAuctionRoundState;
   currentTurnSeatId: string | null;
   turnEndsAt: string | null;
+  stateVersion: number;
+}
+
+export interface AuctionTurnStartedPayload {
+  matchId: string;
+  roundId: string;
+  currentTurnSeatId: string;
+  minBid: number;
+  maxBid: number;
+  turnEndsAt: string | null;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionBidAcceptedPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  amount: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionFoldAcceptedPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionTurnTimeoutPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  action: 'bid' | 'fold';
+  amount?: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionRoundRevealedPayload {
+  matchId: string;
+  roundId: string;
+  winnerSeatId: string | null;
+  winningBid: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionSquadUpdatedPayload {
+  matchId: string;
+  seatId: string;
+  player: PublicAuctionPlayer;
+  stateVersion: number;
+}
+
+export interface AuctionMatchFinishedPayload {
+  matchId: string;
+  rankings: AuctionPlayerRanking[];
+  winnerSeatId: string | null;
+  state: PublicAuctionMatchState;
   stateVersion: number;
 }
 
@@ -833,6 +905,8 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
+  'auction:bid': (data: AuctionBidPayload) => void;
+  'auction:fold': (data: AuctionFoldPayload) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
@@ -937,6 +1011,13 @@ export interface ServerToClientEvents {
   'auction:round_started': (data: AuctionRoundStartedPayload) => void;
   'auction:clue_revealed': (data: AuctionClueRevealedPayload) => void;
   'auction:bidding_started': (data: AuctionBiddingStartedPayload) => void;
+  'auction:turn_started': (data: AuctionTurnStartedPayload) => void;
+  'auction:bid_accepted': (data: AuctionBidAcceptedPayload) => void;
+  'auction:fold_accepted': (data: AuctionFoldAcceptedPayload) => void;
+  'auction:turn_timeout': (data: AuctionTurnTimeoutPayload) => void;
+  'auction:round_revealed': (data: AuctionRoundRevealedPayload) => void;
+  'auction:squad_updated': (data: AuctionSquadUpdatedPayload) => void;
+  'auction:match_finished': (data: AuctionMatchFinishedPayload) => void;
   'warmup:state': (data: WarmupStatePayload) => void;
   'warmup:tapped': (data: WarmupTappedPayload) => void;
   'warmup:over': (data: WarmupOverPayload) => void;

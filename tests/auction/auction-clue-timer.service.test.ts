@@ -225,7 +225,25 @@ describe('auction clue reveal timers', () => {
         stateVersion: 3,
       })
     );
-    expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:turn_started',
+      expect.objectContaining({
+        matchId: 'match-1',
+        roundId: 'round-1',
+        currentTurnSeatId: 'seat-human',
+        stateVersion: 3,
+      })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_turn_timeout',
+      'match-1:round-1:seat-human',
+      new Date('2026-06-20T10:00:30.000Z'),
+      expect.objectContaining({
+        kind: 'auction_turn_timeout',
+        expectedTurnSeatId: 'seat-human',
+        stateVersion: 3,
+      })
+    );
 
     const payloadText = JSON.stringify(roomEmit.mock.calls);
     expect(payloadText).not.toContain('Erling Haaland');

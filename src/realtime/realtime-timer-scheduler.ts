@@ -12,6 +12,7 @@ const TIMER_BATCH_SIZE = 100;
 
 export type RealtimeTimerKind =
   | 'auction_clue_reveal'
+  | 'auction_turn_timeout'
   | 'draft_ai_ban'
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
@@ -25,6 +26,7 @@ export type RealtimeTimerKind =
 
 export type RealtimeTimerPayload =
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
+  | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
@@ -68,6 +70,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   if (!key) return null;
   if (
     kind !== 'auction_clue_reveal'
+    && kind !== 'auction_turn_timeout'
     && kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'

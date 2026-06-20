@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer } from './socket-server.js';
@@ -8,6 +9,7 @@ const TIMER_PAYLOAD_PREFIX = 'realtime:timer:payload:';
 const TIMER_LOCK_PREFIX = 'lock:realtime_timer:';
 const TIMER_PAYLOAD_TTL_SEC = 60 * 60 * 6;
 const TIMER_POLL_INTERVAL_MS = 500;
+const TIMER_HARNESS_POLL_INTERVAL_MS = 25;
 const TIMER_BATCH_SIZE = 100;
 
 export type RealtimeTimerKind =
@@ -250,7 +252,7 @@ export function startRealtimeTimerScheduler(
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     void pollDueTimers();
-  }, TIMER_POLL_INTERVAL_MS);
+  }, harnessDelayMs(TIMER_POLL_INTERVAL_MS, TIMER_HARNESS_POLL_INTERVAL_MS));
   pollTimer.unref?.();
 
   void pollDueTimers();

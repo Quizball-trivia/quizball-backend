@@ -19,6 +19,7 @@ import {
   type PublicAuctionMatchState,
   type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
+import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
@@ -92,6 +93,10 @@ export const auctionRealtimeService = {
 
       io.to(`match:${saved.matchId}`).emit('auction:match_started', startedPayload);
       io.to(`match:${saved.matchId}`).emit('auction:round_started', roundPayload);
+      await scheduleAuctionClueRevealTimer(saved, {
+        now: options.context?.now?.(),
+        context: options.context,
+      });
 
       logger.info(
         {

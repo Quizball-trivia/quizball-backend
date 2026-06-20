@@ -45,6 +45,7 @@ import {
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
+import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -255,6 +256,10 @@ async function runPostConnectHydration(
  */
 export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
   return {
+    auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_clue_reveal') return;
+      await runAuctionClueRevealTimer(server, payload);
+    },
     draft_ai_ban: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'draft_ai_ban') return;
       await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);

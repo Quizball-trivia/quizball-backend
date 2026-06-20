@@ -646,6 +646,24 @@ export interface AuctionRoundStartedPayload {
   stateVersion: number;
 }
 
+export interface AuctionClueRevealedPayload {
+  matchId: string;
+  roundId: string;
+  clueIndex: number;
+  clue: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionBiddingStartedPayload {
+  matchId: string;
+  roundId: string;
+  round: PublicAuctionRoundState;
+  currentTurnSeatId: string | null;
+  turnEndsAt: string | null;
+  stateVersion: number;
+}
+
 export interface AuctionErrorPayload {
   code: string;
   message: string;
@@ -917,6 +935,8 @@ export interface ServerToClientEvents {
   'auction:error': (data: AuctionErrorPayload) => void;
   'auction:match_started': (data: AuctionMatchStartedPayload) => void;
   'auction:round_started': (data: AuctionRoundStartedPayload) => void;
+  'auction:clue_revealed': (data: AuctionClueRevealedPayload) => void;
+  'auction:bidding_started': (data: AuctionBiddingStartedPayload) => void;
   'warmup:state': (data: WarmupStatePayload) => void;
   'warmup:tapped': (data: WarmupTappedPayload) => void;
   'warmup:over': (data: WarmupOverPayload) => void;

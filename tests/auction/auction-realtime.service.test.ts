@@ -10,6 +10,10 @@ const auctionStateStoreMock = vi.hoisted(() => ({
   save: vi.fn(async (state: unknown) => state),
 }));
 
+const clueTimerMock = vi.hoisted(() => ({
+  scheduleAuctionClueRevealTimer: vi.fn(),
+}));
+
 vi.mock('../../src/modules/auction/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/modules/auction/index.js')>();
   return {
@@ -25,6 +29,10 @@ vi.mock('../../src/modules/auction/auction-state.store.js', async (importOrigina
     auctionStateStore: auctionStateStoreMock,
   };
 });
+
+vi.mock('../../src/realtime/services/auction-clue-timer.service.js', () => ({
+  scheduleAuctionClueRevealTimer: clueTimerMock.scheduleAuctionClueRevealTimer,
+}));
 
 import {
   AuctionContentUnavailableError,
@@ -122,6 +130,10 @@ describe('auctionRealtimeService', () => {
     expect(auctionContentServiceMock.assertPublishedAuctionContentAvailable).toHaveBeenCalledWith('en');
     expect(auctionContentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith({ locale: 'en' });
     expect(auctionStateStoreMock.save).toHaveBeenCalledTimes(1);
+    expect(clueTimerMock.scheduleAuctionClueRevealTimer).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-id', phase: 'clue_reveal' }),
+      { now: new Date('2026-06-20T10:00:00.000Z'), context: deterministicContext }
+    );
     expect(socket.join).toHaveBeenCalledWith('match:match-id');
     expect(socket.data.matchId).toBe('match-id');
     expect(socket.data.lobbyId).toBeUndefined();

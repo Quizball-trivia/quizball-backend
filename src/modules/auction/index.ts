@@ -1,9 +1,18 @@
 export { auctionController } from './auction.controller.js';
+export { auctionContentRepo } from './auction-content.repo.js';
+export { auctionContentService } from './auction-content.service.js';
 export { auctionRepo } from './auction.repo.js';
 export { auctionService } from './auction.service.js';
+export * from './auction.errors.js';
 export * from './auction.constants.js';
 export * from './auction-rules.js';
 export type * from './auction.types.js';
+export type {
+  AuctionContentLocale,
+  PublishedAuctionCardRow,
+  RandomPublishedAuctionCardOptions,
+} from './auction-content.repo.js';
+export type { PublishedAuctionCard } from './auction-content.service.js';
 export {
   auctionCardIdParamSchema,
   auctionCardStatusEnum,

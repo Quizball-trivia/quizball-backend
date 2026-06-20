@@ -1,4 +1,5 @@
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import { shuffle } from '../../core/rng.js';
 import {
   resolveAuctionContext,
   type ResolvedAuctionEngineContext,
@@ -352,13 +353,4 @@ async function scheduleAuctionClueRevealTimerFromFlow(
       stateVersion: state.version,
     }
   );
-}
-
-function shuffle<T>(items: readonly T[], random: () => number): T[] {
-  const out = [...items];
-  for (let index = out.length - 1; index > 0; index--) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [out[index], out[swapIndex]] = [out[swapIndex], out[index]];
-  }
-  return out;
 }

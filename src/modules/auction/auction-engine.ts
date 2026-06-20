@@ -1,3 +1,4 @@
+import { shuffle } from '../../core/rng.js';
 import {
   AUCTION_SEAT_COUNT,
   FORMATIONS,
@@ -661,15 +662,6 @@ function touch(state: AuctionMatchState, context: ResolvedAuctionEngineContext):
     ...state,
     updatedAt: context.nowIso(),
   };
-}
-
-function shuffle<T>(items: readonly T[], random: () => number): T[] {
-  const out = [...items];
-  for (let index = out.length - 1; index > 0; index--) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [out[index], out[swapIndex]] = [out[swapIndex], out[index]];
-  }
-  return out;
 }
 
 function pickOne<T>(items: readonly T[], random: () => number): T {

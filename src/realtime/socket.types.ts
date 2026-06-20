@@ -1,5 +1,10 @@
 import type { AvatarCustomization } from '../modules/users/avatar-customization.js';
 import type { I18nField } from '../db/types.js';
+import type {
+  PublicAuctionMatchState,
+  PublicAuctionRoundState,
+} from '../modules/auction/auction-match-state.js';
+import type { FormationName } from '../modules/auction/auction.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
@@ -624,6 +629,29 @@ export interface WarmupScoresPayload {
   pairBest: number;
 }
 
+export interface AuctionStartAiMatchPayload {
+  formation?: FormationName;
+  locale?: 'en' | 'ka';
+}
+
+export interface AuctionMatchStartedPayload {
+  matchId: string;
+  locale: 'en' | 'ka';
+  state: PublicAuctionMatchState;
+}
+
+export interface AuctionRoundStartedPayload {
+  matchId: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionErrorPayload {
+  code: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
 export interface PresenceOnlineCountPayload {
   onlineUsers: number;
 }
@@ -786,6 +814,7 @@ export interface ClientToServerEvents {
   'lobby:start': (data?: { lobbyId?: string }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
+  'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
@@ -885,6 +914,9 @@ export interface ServerToClientEvents {
   'ranked:search_started': (data: RankedSearchStartedPayload) => void;
   'ranked:match_found': (data: RankedMatchFoundPayload) => void;
   'ranked:queue_left': () => void;
+  'auction:error': (data: AuctionErrorPayload) => void;
+  'auction:match_started': (data: AuctionMatchStartedPayload) => void;
+  'auction:round_started': (data: AuctionRoundStartedPayload) => void;
   'warmup:state': (data: WarmupStatePayload) => void;
   'warmup:tapped': (data: WarmupTappedPayload) => void;
   'warmup:over': (data: WarmupOverPayload) => void;

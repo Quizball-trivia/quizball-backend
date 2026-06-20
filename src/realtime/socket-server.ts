@@ -11,6 +11,7 @@ import { registerMatchHandlers } from './handlers/match.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
+import { registerAuctionHandlers } from './handlers/auction.handler.js';
 import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
 import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
 import { matchRealtimeService } from './services/match-realtime.service.js';
@@ -372,6 +373,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerDraftHandlers(io, socket);
     registerMatchHandlers(io, socket);
     registerWarmupHandlers(io, socket);
+    registerAuctionHandlers(io, socket);
     registerDevHandlers(io, socket);
 
     socket.on('connection:ping', (payload, ack) => {

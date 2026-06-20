@@ -4,9 +4,11 @@ import '../setup.js';
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer } from '../../src/modules/auction/auction.types.js';
+import { installAuctionStateStoreMutationMock } from './auction-state-store-mock.js';
 
 const stateStoreMock = vi.hoisted(() => ({
   withLock: vi.fn(async (_matchId: string, fn: () => Promise<unknown>) => fn()),
+  mutate: vi.fn(),
   load: vi.fn(),
   save: vi.fn(async (state: unknown) => state),
 }));
@@ -119,6 +121,7 @@ describe('auction clue reveal timers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stateStoreMock.withLock.mockImplementation(async (_matchId: string, fn: () => Promise<unknown>) => fn());
+    installAuctionStateStoreMutationMock(stateStoreMock);
     stateStoreMock.save.mockImplementation(async (state: unknown) => state);
   });
 

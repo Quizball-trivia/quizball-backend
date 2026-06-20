@@ -17,7 +17,8 @@ import {
 import { getEmptySlots, getMaxBid, getMinBid, needsPosition } from '../../modules/auction/auction-rules.js';
 import {
   auctionStateStore,
-  AuctionMatchStateNotFoundError,
+  saveAuctionMatchMutation,
+  skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
 import {
   scheduleRealtimeTimer,
@@ -222,22 +223,23 @@ async function applyAuctionHumanAction(
     throw new AuctionRealtimeActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
   }
 
-  return auctionStateStore.withLock(input.matchId, async () => {
-    const current = await auctionStateStore.load(input.matchId);
-    if (!current) {
-      throw new AuctionRealtimeActionError('auction_match_not_found', 'Auction match not found');
-    }
-
+  const context = resolveTimerContext(options);
+  return auctionStateStore.mutate(input.matchId, (current) => {
     const seat = validateHumanTurnAction(current, userId, kind);
-    const context = resolveTimerContext(options);
     const nextState = kind === 'bid'
       ? applyBid(current, seat.seatId, (input as AuctionBidPayload).amount, context)
       : applyFold(current, seat.seatId, context);
-    const saved = await saveNextAuctionState(current, nextState, context);
 
-    return kind === 'bid'
-      ? { kind: 'bid_accepted', state: saved, seatId: seat.seatId, amount: (input as AuctionBidPayload).amount }
-      : { kind: 'fold_accepted', state: saved, seatId: seat.seatId };
+    return saveAuctionMatchMutation(nextState, (saved) => (
+      kind === 'bid'
+        ? { kind: 'bid_accepted', state: saved, seatId: seat.seatId, amount: (input as AuctionBidPayload).amount }
+        : { kind: 'fold_accepted', state: saved, seatId: seat.seatId }
+    ));
+  }, {
+    now: context.now,
+    onMissingState: () => {
+      throw new AuctionRealtimeActionError('auction_match_not_found', 'Auction match not found');
+    },
   });
 }
 
@@ -245,35 +247,29 @@ async function applyAuctionTurnTimeout(
   payload: AuctionTurnTimeoutTimerPayload,
   options: AuctionTurnTimerOptions
 ): Promise<AuctionTurnActionOutcome> {
-  return auctionStateStore.withLock(payload.matchId, async () => {
-    const current = await auctionStateStore.load(payload.matchId);
-    if (!current) return noop('missing_state');
-
+  const context = resolveTimerContext(options);
+  return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
-    if (validation) return noop(validation);
+    if (validation) return skipAuctionMatchMutation(noop(validation));
 
     const round = current.currentRound;
-    if (!round?.currentTurnSeatId) return noop('missing_turn');
+    if (!round?.currentTurnSeatId) return skipAuctionMatchMutation(noop('missing_turn'));
 
+    const seatId = round.currentTurnSeatId;
     const action = round.highestBidderSeatId ? 'fold' : 'bid';
     const amount = action === 'bid' ? round.startingPrice : undefined;
-    const context = resolveTimerContext(options);
     const nextState = applyTurnTimeout(current, context);
-    const saved = await saveNextAuctionState(current, nextState, context);
 
-    const outcome: Extract<AuctionTurnActionOutcome, { kind: 'turn_timeout' }> = {
+    return saveAuctionMatchMutation(nextState, (saved) => ({
       kind: 'turn_timeout',
       state: saved,
-      seatId: round.currentTurnSeatId,
+      seatId,
       action,
       amount,
-    };
-    return outcome;
-  }).catch((error) => {
-    if (error instanceof AuctionMatchStateNotFoundError) {
-      return noop('missing_state');
-    }
-    throw error;
+    }));
+  }, {
+    now: context.now,
+    onMissingState: () => noop('missing_state'),
   });
 }
 
@@ -324,20 +320,6 @@ function validateTimerPayload(
   if (round.currentTurnSeatId !== payload.expectedTurnSeatId) return 'turn_mismatch';
   if (round.turnEndsAt !== payload.turnEndsAt) return 'turn_deadline_mismatch';
   return null;
-}
-
-async function saveNextAuctionState(
-  current: AuctionMatchState,
-  nextState: AuctionMatchState,
-  context: Required<Pick<AuctionEngineContext, 'now'>>
-): Promise<AuctionMatchState> {
-  return auctionStateStore.save({
-    ...nextState,
-    version: current.version + 1,
-  }, {
-    expectedVersion: current.version,
-    now: context.now(),
-  });
 }
 
 async function emitPostTurnMutationEvents(

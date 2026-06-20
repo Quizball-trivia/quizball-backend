@@ -10,7 +10,8 @@ import {
 } from '../../modules/auction/auction-match-state.js';
 import {
   auctionStateStore,
-  AuctionMatchStateNotFoundError,
+  saveAuctionMatchMutation,
+  skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
 import {
   scheduleRealtimeTimer,
@@ -107,48 +108,35 @@ async function advanceClueRevealState(
   payload: AuctionClueRevealPayload,
   options: AuctionClueRevealTimerOptions
 ): Promise<AuctionClueTimerOutcome> {
-  return auctionStateStore.withLock(payload.matchId, async () => {
-    const current = await auctionStateStore.load(payload.matchId);
-    if (!current) return noop('missing_state');
-
+  const context = resolveTimerContext(options);
+  return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
-    if (validation) return noop(validation);
+    if (validation) return skipAuctionMatchMutation(noop(validation));
 
     const round = current.currentRound;
-    if (!round) return noop('missing_round');
+    if (!round) return skipAuctionMatchMutation(noop('missing_round'));
 
     const clue = round.footballer.clues?.[payload.expectedClueIndex - 1];
-    if (!clue) return noop('missing_clue');
+    if (!clue) return skipAuctionMatchMutation(noop('missing_clue'));
 
-    const context = resolveTimerContext(options);
     const revealed = revealNextClue(current, context);
     const revealedRound = revealed.currentRound;
-    if (!revealedRound) return noop('missing_revealed_round');
+    if (!revealedRound) return skipAuctionMatchMutation(noop('missing_revealed_round'));
 
     const clueCount = revealedRound.footballer.clues?.length ?? 0;
     const nextState = revealedRound.clueRevealIndex >= clueCount
       ? startBidding(revealed, context)
       : revealed;
 
-    const saved = await auctionStateStore.save({
-      ...nextState,
-      version: current.version + 1,
-    }, {
-      expectedVersion: current.version,
-      now: context.now(),
-    });
-
-    return {
+    return saveAuctionMatchMutation(nextState, (saved) => ({
       kind: saved.phase === 'bidding' ? 'bidding_started' : 'clue_revealed',
       state: saved,
       clue,
       clueIndex: payload.expectedClueIndex,
-    } as AuctionClueTimerOutcome;
-  }).catch((error) => {
-    if (error instanceof AuctionMatchStateNotFoundError) {
-      return noop('missing_state');
-    }
-    throw error;
+    } as AuctionClueTimerOutcome));
+  }, {
+    now: context.now,
+    onMissingState: () => noop('missing_state'),
   });
 }
 

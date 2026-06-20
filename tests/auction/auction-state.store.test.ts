@@ -220,6 +220,39 @@ describe('auction state store', () => {
     expect(AUCTION_MATCH_LOCK_TTL_MS).toBe(5_000);
   });
 
+  it('can skip a locked mutation without bumping version', async () => {
+    const {
+      auctionStateStore,
+      skipAuctionMatchMutation,
+    } = await import('../../src/modules/auction/auction-state.store.js');
+    await auctionStateStore.save(matchState({ version: 4 }));
+
+    const result = await auctionStateStore.mutate('match-1', () => (
+      skipAuctionMatchMutation({ kind: 'noop', reason: 'version_mismatch' })
+    ));
+    const loaded = await auctionStateStore.load('match-1');
+
+    expect(result).toEqual({ kind: 'noop', reason: 'version_mismatch' });
+    expect(loaded?.version).toBe(4);
+  });
+
+  it('releases the match lock when a mutator throws', async () => {
+    const {
+      auctionMatchLockKey,
+      auctionStateStore,
+    } = await import('../../src/modules/auction/auction-state.store.js');
+    await auctionStateStore.save(matchState());
+
+    await expect(
+      auctionStateStore.mutate('match-1', () => {
+        throw new Error('mutation failed');
+      })
+    ).rejects.toThrow('mutation failed');
+
+    expect(redis?.values.has(auctionMatchLockKey('match-1'))).toBe(false);
+    expect(redis?.expirations.get(auctionMatchLockKey('match-1'))).toBeUndefined();
+  });
+
   it('lists active auction matches and clears user indexes when a match finishes', async () => {
     const {
       AUCTION_ACTIVE_MATCHES_KEY,

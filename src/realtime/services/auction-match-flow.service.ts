@@ -28,7 +28,11 @@ import {
   type PublicAuctionMatchState,
   type PublicAuctionRoundState,
 } from '../../modules/auction/auction-match-state.js';
-import { auctionStateStore } from '../../modules/auction/auction-state.store.js';
+import {
+  auctionStateStore,
+  saveAuctionMatchMutation,
+  skipAuctionMatchMutation,
+} from '../../modules/auction/auction-state.store.js';
 import type { AuctionFootballer, PositionGroup } from '../../modules/auction/auction.types.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { QuizballServer } from '../socket-server.js';
@@ -101,11 +105,7 @@ export async function handleAuctionSoloPickSelectionForUser(
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
   const context = resolveFlowContext(options);
-  const saved = await auctionStateStore.withLock(matchId, async () => {
-    const current = await auctionStateStore.load(matchId);
-    if (!current) {
-      throw new AuctionSoloPickActionError('auction_match_not_found', 'Auction match not found');
-    }
+  const saved = await auctionStateStore.mutate(matchId, (current) => {
     if (current.phase !== 'solo_pick' || !current.soloPick) {
       throw new AuctionSoloPickActionError('auction_no_active_solo_pick', 'No active auction solo pick');
     }
@@ -118,13 +118,12 @@ export async function handleAuctionSoloPickSelectionForUser(
     }
 
     const selected = selectSoloPickOption(current, seat.seatId, option, context);
-    return auctionStateStore.save({
-      ...selected,
-      version: current.version + 1,
-    }, {
-      expectedVersion: current.version,
-      now: context.now(),
-    });
+    return saveAuctionMatchMutation(selected, (savedState) => savedState);
+  }, {
+    now: context.now,
+    onMissingState: () => {
+      throw new AuctionSoloPickActionError('auction_match_not_found', 'Auction match not found');
+    },
   });
 
   emitSoloPickSelected(io, saved, saved.soloPick?.playerSeatId ?? '', option);
@@ -181,18 +180,15 @@ async function advanceToNextAuctionStep(
   if (nextState === state) return state;
   if (nextState.version !== state.version) return nextState;
 
-  return auctionStateStore.withLock(state.matchId, async () => {
-    const current = await auctionStateStore.load(state.matchId);
-    if (!current || current.version !== state.version) return nextState;
+  return auctionStateStore.mutate(state.matchId, (current) => {
+    if (current.version !== state.version) {
+      return skipAuctionMatchMutation(nextState);
+    }
 
-    const saved = await auctionStateStore.save({
-      ...nextState,
-      version: current.version + 1,
-    }, {
-      expectedVersion: current.version,
-      now: context.now(),
-    });
-    return saved;
+    return saveAuctionMatchMutation(nextState, (saved) => saved);
+  }, {
+    now: context.now,
+    onMissingState: () => nextState,
   });
 }
 

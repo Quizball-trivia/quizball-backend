@@ -16,7 +16,8 @@ import {
 import { getEmptySlots, getMaxBid, getMinBid, needsPosition } from '../../modules/auction/auction-rules.js';
 import {
   auctionStateStore,
-  AuctionMatchStateNotFoundError,
+  saveAuctionMatchMutation,
+  skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
 import {
   scheduleRealtimeTimer,
@@ -147,35 +148,26 @@ async function applyAuctionBotAction(
   payload: AuctionBotActionTimerPayload,
   options: AuctionBotTimerOptions
 ): Promise<AuctionBotActionOutcome> {
-  return auctionStateStore.withLock(payload.matchId, async () => {
-    const current = await auctionStateStore.load(payload.matchId);
-    if (!current) return noop('missing_state');
-
+  const context = resolveBotContext(options);
+  return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateBotPayload(current, payload);
-    if (validation) return noop(validation);
+    if (validation) return skipAuctionMatchMutation(noop(validation));
 
-    const context = resolveBotContext(options);
     const decision = decideAuctionBotAction(current, payload.expectedTurnSeatId, context.random);
-    if (decision.kind === 'noop') return noop(decision.reason);
+    if (decision.kind === 'noop') return skipAuctionMatchMutation(noop(decision.reason));
 
     const nextState = decision.kind === 'bid'
       ? applyBid(current, payload.expectedTurnSeatId, decision.amount, context)
       : applyFold(current, payload.expectedTurnSeatId, context);
-    const saved = await auctionStateStore.save({
-      ...nextState,
-      version: current.version + 1,
-    }, {
-      expectedVersion: current.version,
-      now: context.now(),
-    });
 
-    const outcome: AuctionBotActionOutcome = decision.kind === 'bid'
-      ? { kind: 'bot_bid', state: saved, seatId: payload.expectedTurnSeatId, amount: decision.amount }
-      : { kind: 'bot_fold', state: saved, seatId: payload.expectedTurnSeatId };
-    return outcome;
-  }).catch((error) => {
-    if (error instanceof AuctionMatchStateNotFoundError) return noop('missing_state');
-    throw error;
+    return saveAuctionMatchMutation(nextState, (saved) => (
+      decision.kind === 'bid'
+        ? { kind: 'bot_bid', state: saved, seatId: payload.expectedTurnSeatId, amount: decision.amount }
+        : { kind: 'bot_fold', state: saved, seatId: payload.expectedTurnSeatId }
+    ));
+  }, {
+    now: context.now,
+    onMissingState: () => noop('missing_state'),
   });
 }
 

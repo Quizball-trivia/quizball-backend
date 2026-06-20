@@ -1,5 +1,5 @@
 import { logger } from '../../core/logger.js';
-import { acquireLock, releaseLock } from '../../realtime/locks.js';
+import { withLock } from '../../realtime/locks.js';
 import { getRedisClient } from '../../realtime/redis.js';
 import type { AuctionMatchState } from './auction-match-state.js';
 
@@ -43,13 +43,26 @@ export interface SaveAuctionMatchStateOptions {
   now?: Date;
 }
 
-export interface MutateAuctionMatchStateOptions {
-  now?: Date;
+export interface MutateAuctionMatchStateOptions<T = never> {
+  now?: Date | (() => Date);
+  onMissingState?: () => T;
 }
 
-export type AuctionMatchStateMutator = (
+export type AuctionMatchMutation<T> =
+  | AuctionMatchState
+  | {
+    kind: 'save';
+    state: AuctionMatchState;
+    map: (saved: AuctionMatchState) => T;
+  }
+  | {
+    kind: 'skip';
+    result: T;
+  };
+
+export type AuctionMatchStateMutator<T = AuctionMatchState> = (
   state: AuctionMatchState
-) => AuctionMatchState | Promise<AuctionMatchState>;
+) => AuctionMatchMutation<T> | Promise<AuctionMatchMutation<T>>;
 
 export function auctionMatchStateKey(matchId: string): string {
   return `auction:match:${matchId}`;
@@ -107,34 +120,51 @@ export async function saveAuctionMatchState(
   return saved;
 }
 
-export async function mutateAuctionMatchState(
-  matchId: string,
-  mutator: AuctionMatchStateMutator,
-  options: MutateAuctionMatchStateOptions = {}
-): Promise<AuctionMatchState> {
-  const lockKey = auctionMatchLockKey(matchId);
-  const lock = await acquireLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS);
-  if (!lock.acquired || !lock.token) {
-    throw new AuctionMatchLockUnavailableError(matchId);
-  }
+export function saveAuctionMatchMutation<T>(
+  state: AuctionMatchState,
+  map: (saved: AuctionMatchState) => T
+): Extract<AuctionMatchMutation<T>, { kind: 'save' }> {
+  return { kind: 'save', state, map };
+}
 
-  try {
+export function skipAuctionMatchMutation<T>(result: T): Extract<AuctionMatchMutation<T>, { kind: 'skip' }> {
+  return { kind: 'skip', result };
+}
+
+export async function mutateAuctionMatchState<T = AuctionMatchState>(
+  matchId: string,
+  mutator: AuctionMatchStateMutator<T>,
+  options: MutateAuctionMatchStateOptions<T> = {}
+): Promise<T> {
+  return withAuctionMatchLock(matchId, async () => {
     const current = await loadAuctionMatchState(matchId);
-    if (!current) throw new AuctionMatchStateNotFoundError(matchId);
+    if (!current) {
+      if (options.onMissingState) return options.onMissingState();
+      throw new AuctionMatchStateNotFoundError(matchId);
+    }
 
     const draft = cloneAuctionMatchState(current);
-    const mutated = await mutator(draft);
+    const mutation = await mutator(draft);
+
+    if (isSkipMutation(mutation)) {
+      return mutation.result;
+    }
+
+    const mutated = isSaveMutation(mutation) ? mutation.state : mutation;
+    const now = resolveMutationNow(options.now);
     const next = {
       ...mutated,
       matchId,
       version: current.version + 1,
-      updatedAt: (options.now ?? new Date()).toISOString(),
+      updatedAt: now.toISOString(),
     };
 
-    return saveAuctionMatchState(next, { now: options.now });
-  } finally {
-    await releaseLock(lockKey, lock.token);
-  }
+    const saved = await saveAuctionMatchState(next, {
+      expectedVersion: current.version,
+      now,
+    });
+    return isSaveMutation(mutation) ? mutation.map(saved) : saved as T;
+  });
 }
 
 export async function withAuctionMatchLock<T>(
@@ -142,16 +172,9 @@ export async function withAuctionMatchLock<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   const lockKey = auctionMatchLockKey(matchId);
-  const lock = await acquireLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS);
-  if (!lock.acquired || !lock.token) {
-    throw new AuctionMatchLockUnavailableError(matchId);
-  }
-
-  try {
-    return await fn();
-  } finally {
-    await releaseLock(lockKey, lock.token);
-  }
+  return withLock(lockKey, AUCTION_MATCH_LOCK_TTL_MS, fn, {
+    onUnavailable: () => new AuctionMatchLockUnavailableError(matchId),
+  });
 }
 
 export async function deleteAuctionMatchState(matchId: string): Promise<void> {
@@ -227,6 +250,32 @@ function requireRedis() {
 
 function cloneAuctionMatchState(state: AuctionMatchState): AuctionMatchState {
   return JSON.parse(JSON.stringify(state)) as AuctionMatchState;
+}
+
+function isSaveMutation<T>(
+  mutation: AuctionMatchMutation<T>
+): mutation is Extract<AuctionMatchMutation<T>, { kind: 'save' }> {
+  return (
+    typeof mutation === 'object'
+    && mutation !== null
+    && 'kind' in mutation
+    && mutation.kind === 'save'
+  );
+}
+
+function isSkipMutation<T>(
+  mutation: AuctionMatchMutation<T>
+): mutation is Extract<AuctionMatchMutation<T>, { kind: 'skip' }> {
+  return (
+    typeof mutation === 'object'
+    && mutation !== null
+    && 'kind' in mutation
+    && mutation.kind === 'skip'
+  );
+}
+
+function resolveMutationNow(now?: Date | (() => Date)): Date {
+  return typeof now === 'function' ? now() : now ?? new Date();
 }
 
 function getHumanUserIds(state: AuctionMatchState): string[] {

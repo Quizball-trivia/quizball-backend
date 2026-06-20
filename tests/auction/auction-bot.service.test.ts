@@ -5,9 +5,11 @@ import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer } from '../../src/modules/auction/auction.types.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
+import { installAuctionStateStoreMutationMock } from './auction-state-store-mock.js';
 
 const stateStoreMock = vi.hoisted(() => ({
   withLock: vi.fn(async (_matchId: string, fn: () => Promise<unknown>) => fn()),
+  mutate: vi.fn(),
   load: vi.fn(),
   save: vi.fn(async (state: unknown) => state),
   clearIndexes: vi.fn(),
@@ -139,6 +141,7 @@ describe('auction bot service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stateStoreMock.withLock.mockImplementation(async (_matchId: string, fn: () => Promise<unknown>) => fn());
+    installAuctionStateStoreMutationMock(stateStoreMock);
     stateStoreMock.save.mockImplementation(async (state: unknown) => state);
     stateStoreMock.clearIndexes.mockResolvedValue(undefined);
     contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);

@@ -1,8 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { ErrorCode } from '../../core/errors.js';
 import {
   auctionContentService,
-  AuctionContentError,
-  AuctionContentErrorCode,
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import {
@@ -23,10 +22,13 @@ import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
-  AuctionErrorPayload,
   AuctionMatchStartedPayload,
   AuctionRoundStartedPayload,
 } from '../socket.types.js';
+import {
+  emitAuctionError,
+  toAuctionErrorPayload,
+} from './auction-action-errors.js';
 
 export interface AuctionStartAiMatchServiceInput {
   formation?: FormationName;
@@ -59,7 +61,7 @@ export const auctionRealtimeService = {
     const user = socket.data.user;
     if (!user?.id) {
       emitAuctionError(socket, {
-        code: 'AUTHENTICATION_ERROR',
+        code: ErrorCode.AUTHENTICATION_ERROR,
         message: 'Authentication required',
       });
       return;
@@ -87,7 +89,10 @@ export const auctionRealtimeService = {
         'Auction AI match started'
       );
     } catch (error) {
-      const payload = toAuctionErrorPayload(error);
+      const payload = toAuctionErrorPayload(error, {
+        fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+        fallbackMessage: 'Auction content unavailable',
+      });
       emitAuctionError(socket, payload);
       logger.warn({ error, userId: user.id, code: payload.code }, 'auction:start_ai_match failed');
     }
@@ -180,26 +185,5 @@ function buildRoundStartedPayload(publicState: PublicAuctionMatchState): Auction
     matchId: publicState.matchId,
     round,
     stateVersion: publicState.version,
-  };
-}
-
-function emitAuctionError(socket: QuizballSocket, payload: AuctionErrorPayload): void {
-  socket.emit('auction:error', payload);
-}
-
-function toAuctionErrorPayload(error: unknown): AuctionErrorPayload {
-  if (error instanceof AuctionContentError) {
-    return {
-      code: error.auctionCode,
-      message: error.message,
-      meta: error.details && typeof error.details === 'object'
-        ? error.details as Record<string, unknown>
-        : undefined,
-    };
-  }
-
-  return {
-    code: AuctionContentErrorCode.CONTENT_UNAVAILABLE,
-    message: error instanceof Error ? error.message : 'Auction content unavailable',
   };
 }

@@ -6,7 +6,6 @@ import {
   applyFold,
   applyTurnTimeout,
   type AuctionEngineContext,
-  AuctionInvalidActionError,
 } from '../../modules/auction/auction-engine.js';
 import {
   findAuctionSeatByUserId,
@@ -25,16 +24,20 @@ import {
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   AuctionBidPayload,
-  AuctionErrorPayload,
   AuctionFoldPayload,
   AuctionSoloPickSelectPayload,
 } from '../socket.types.js';
 import {
   advanceAuctionMatchFlowAfterMutation,
-  AuctionSoloPickActionError,
   handleAuctionSoloPickSelectionForUser,
 } from './auction-match-flow.service.js';
 import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
+import {
+  AuctionActionError,
+  authenticationRequiredError,
+  emitAuctionError,
+  toAuctionErrorPayload,
+} from './auction-action-errors.js';
 import {
   buildBidAcceptedPayload,
   buildFoldAcceptedPayload,
@@ -69,17 +72,6 @@ type AuctionTurnActionOutcome =
     action: 'bid' | 'fold';
     amount?: number;
   };
-
-export class AuctionRealtimeActionError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly meta?: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = this.constructor.name;
-  }
-}
 
 export function auctionTurnTimeoutTimerKey(matchId: string, roundId: string, seatId: string): string {
   return `${matchId}:${roundId}:${seatId}`;
@@ -158,7 +150,7 @@ export async function handleAuctionBid(
     await emitPostTurnMutationEvents(io, outcome.state, options);
     return outcome;
   } catch (error) {
-    emitAuctionActionError(socket, toAuctionActionErrorPayload(error));
+    emitAuctionError(socket, toAuctionErrorPayload(error));
     return null;
   }
 }
@@ -177,7 +169,7 @@ export async function handleAuctionFold(
     await emitPostTurnMutationEvents(io, outcome.state, options);
     return outcome;
   } catch (error) {
-    emitAuctionActionError(socket, toAuctionActionErrorPayload(error));
+    emitAuctionError(socket, toAuctionErrorPayload(error));
     return null;
   }
 }
@@ -191,10 +183,10 @@ export async function handleAuctionSoloPickSelect(
   try {
     const userId = socket.data.user?.id;
     if (!userId) {
-      throw new AuctionRealtimeActionError('AUTHENTICATION_ERROR', 'Authentication required');
+      throw authenticationRequiredError();
     }
     if (socket.data.matchId && socket.data.matchId !== input.matchId) {
-      throw new AuctionRealtimeActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
+      throw new AuctionActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
     }
     return await handleAuctionSoloPickSelectionForUser(
       io,
@@ -204,7 +196,7 @@ export async function handleAuctionSoloPickSelect(
       options
     );
   } catch (error) {
-    emitAuctionActionError(socket, toAuctionActionErrorPayload(error));
+    emitAuctionError(socket, toAuctionErrorPayload(error));
     return null;
   }
 }
@@ -217,10 +209,10 @@ async function applyAuctionHumanAction(
 ): Promise<AuctionTurnActionOutcome> {
   const userId = socket.data.user?.id;
   if (!userId) {
-    throw new AuctionRealtimeActionError('AUTHENTICATION_ERROR', 'Authentication required');
+    throw authenticationRequiredError();
   }
   if (socket.data.matchId && socket.data.matchId !== input.matchId) {
-    throw new AuctionRealtimeActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
+    throw new AuctionActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
   }
 
   const context = resolveAuctionContext(options);
@@ -238,7 +230,7 @@ async function applyAuctionHumanAction(
   }, {
     now: context.now,
     onMissingState: () => {
-      throw new AuctionRealtimeActionError('auction_match_not_found', 'Auction match not found');
+      throw new AuctionActionError('auction_match_not_found', 'Auction match not found');
     },
   });
 }
@@ -280,30 +272,30 @@ function validateHumanTurnAction(
 ) {
   const round = state.currentRound;
   if (state.phase !== 'bidding' || !round) {
-    throw new AuctionRealtimeActionError('auction_no_active_bidding', 'No active auction bidding turn');
+    throw new AuctionActionError('auction_no_active_bidding', 'No active auction bidding turn');
   }
 
   const seat = findAuctionSeatByUserId(state, userId);
   if (!seat) {
-    throw new AuctionRealtimeActionError('auction_user_not_in_match', 'User is not seated in this auction match');
+    throw new AuctionActionError('auction_user_not_in_match', 'User is not seated in this auction match');
   }
   if (seat.isBot) {
-    throw new AuctionRealtimeActionError('auction_bot_action_forbidden', 'Bot seats cannot submit human actions');
+    throw new AuctionActionError('auction_bot_action_forbidden', 'Bot seats cannot submit human actions');
   }
   if (round.currentTurnSeatId !== seat.seatId) {
-    throw new AuctionRealtimeActionError('auction_not_current_turn', 'Not this seat turn');
+    throw new AuctionActionError('auction_not_current_turn', 'Not this seat turn');
   }
   if (seat.isEliminated || !needsPosition(seat, round.positionGroup)) {
-    throw new AuctionRealtimeActionError('auction_seat_cannot_bid', 'Seat cannot bid this round');
+    throw new AuctionActionError('auction_seat_cannot_bid', 'Seat cannot bid this round');
   }
   if (round.foldedSeatIds.includes(seat.seatId)) {
-    throw new AuctionRealtimeActionError('auction_seat_already_folded', 'Seat already folded');
+    throw new AuctionActionError('auction_seat_already_folded', 'Seat already folded');
   }
   if (round.highestBidderSeatId === seat.seatId) {
-    throw new AuctionRealtimeActionError('auction_high_bidder_self_bid', 'Current high bidder cannot bid against themselves');
+    throw new AuctionActionError('auction_high_bidder_self_bid', 'Current high bidder cannot bid against themselves');
   }
   if (action === 'fold' && !round.highestBidderSeatId) {
-    throw new AuctionRealtimeActionError('auction_opening_bidder_cannot_fold', 'Opening bidder cannot fold');
+    throw new AuctionActionError('auction_opening_bidder_cannot_fold', 'Opening bidder cannot fold');
   }
   return seat;
 }
@@ -333,37 +325,6 @@ async function emitPostTurnMutationEvents(
   }
 
   await advanceAuctionMatchFlowAfterMutation(io, state, options);
-}
-
-function emitAuctionActionError(socket: QuizballSocket, payload: AuctionErrorPayload): void {
-  socket.emit('auction:error', payload);
-}
-
-function toAuctionActionErrorPayload(error: unknown): AuctionErrorPayload {
-  if (error instanceof AuctionRealtimeActionError) {
-    return {
-      code: error.code,
-      message: error.message,
-      meta: error.meta,
-    };
-  }
-  if (error instanceof AuctionSoloPickActionError) {
-    return {
-      code: error.code,
-      message: error.message,
-      meta: error.meta,
-    };
-  }
-  if (error instanceof AuctionInvalidActionError) {
-    return {
-      code: 'auction_invalid_action',
-      message: error.message,
-    };
-  }
-  return {
-    code: 'auction_action_failed',
-    message: error instanceof Error ? error.message : 'Auction action failed',
-  };
 }
 
 function noop(reason: string): AuctionTurnActionOutcome {

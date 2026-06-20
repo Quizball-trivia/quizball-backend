@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { ErrorCode } from '../../core/errors.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { acquireLock, releaseLock } from '../locks.js';
@@ -7,8 +8,6 @@ import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-sc
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   auctionContentService,
-  AuctionContentError,
-  AuctionContentErrorCode,
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
@@ -18,12 +17,15 @@ import {
 } from './auction-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import type {
-  AuctionErrorPayload,
   AuctionMatchFoundPayload,
   AuctionSearchCancelledPayload,
   AuctionSearchStartedPayload,
   AuctionSearchStatusPayload,
 } from '../socket.types.js';
+import {
+  emitAuctionError,
+  toAuctionErrorPayload,
+} from './auction-action-errors.js';
 
 const AUCTION_MM_QUEUE_KEY = 'auction:mm:queue';
 const AUCTION_MM_USER_MAP_KEY = 'auction:mm:user';
@@ -64,7 +66,7 @@ export const auctionMatchmakingService = {
     const user = socket.data.user;
     if (!user?.id) {
       emitAuctionError(socket, {
-        code: 'AUTHENTICATION_ERROR',
+        code: ErrorCode.AUTHENTICATION_ERROR,
         message: 'Authentication required',
       });
       return;
@@ -81,7 +83,10 @@ export const auctionMatchmakingService = {
     try {
       await auctionContentService.assertPublishedAuctionContentAvailable(input.locale);
     } catch (error) {
-      emitAuctionError(socket, toAuctionErrorPayload(error));
+      emitAuctionError(socket, toAuctionErrorPayload(error, {
+        fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+        fallbackMessage: 'Auction matchmaking failed',
+      }));
       return;
     }
 
@@ -99,7 +104,10 @@ export const auctionMatchmakingService = {
           displayName: user.nickname ?? 'Player',
         }], 2, input.locale, match.formation);
       } catch (error) {
-        emitAuctionError(socket, toAuctionErrorPayload(error));
+        emitAuctionError(socket, toAuctionErrorPayload(error, {
+          fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+          fallbackMessage: 'Auction matchmaking failed',
+        }));
       }
       return;
     }
@@ -276,7 +284,10 @@ async function startMatchFromQueuedSearches(
       'Auction matchmaking started match'
     );
   } catch (error) {
-    const payload = toAuctionErrorPayload(error);
+    const payload = toAuctionErrorPayload(error, {
+      fallbackCode: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+      fallbackMessage: 'Auction matchmaking failed',
+    });
     for (const search of searches) {
       io.to(`user:${search.userId}`).emit('auction:error', payload);
     }
@@ -326,10 +337,6 @@ function emitSearchStarted(
     seatsNeeded: Math.max(0, 3 - queuedUserCount),
     fallbackAt: new Date(search.fallbackAt).toISOString(),
   } satisfies AuctionSearchStatusPayload);
-}
-
-function emitAuctionError(socket: QuizballSocket, payload: AuctionErrorPayload): void {
-  socket.emit('auction:error', payload);
 }
 
 async function scheduleAuctionMatchmakingFill(search: QueuedAuctionSearch): Promise<void> {
@@ -466,21 +473,4 @@ function isFormationName(value: string | undefined): value is FormationName {
     || value === '3-5-2'
     || value === '4-2-3-1'
     || value === '3-4-3';
-}
-
-function toAuctionErrorPayload(error: unknown): AuctionErrorPayload {
-  if (error instanceof AuctionContentError) {
-    return {
-      code: error.auctionCode,
-      message: error.message,
-      meta: error.details && typeof error.details === 'object'
-        ? error.details as Record<string, unknown>
-        : undefined,
-    };
-  }
-
-  return {
-    code: AuctionContentErrorCode.CONTENT_UNAVAILABLE,
-    message: error instanceof Error ? error.message : 'Auction matchmaking failed',
-  };
 }

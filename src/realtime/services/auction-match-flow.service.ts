@@ -45,22 +45,12 @@ import type {
   AuctionSoloPickStartedPayload,
   AuctionSquadUpdatedPayload,
 } from '../socket.types.js';
+import { AuctionActionError } from './auction-action-errors.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
 
 export interface AuctionMatchFlowOptions {
   now?: Date;
   context?: AuctionEngineContext;
-}
-
-export class AuctionSoloPickActionError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly meta?: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = this.constructor.name;
-  }
 }
 
 export async function advanceAuctionMatchFlowAfterMutation(
@@ -110,14 +100,14 @@ export async function handleAuctionSoloPickSelectionForUser(
   const context = resolveAuctionContext(options);
   const saved = await auctionStateStore.mutate(matchId, (current) => {
     if (current.phase !== 'solo_pick' || !current.soloPick) {
-      throw new AuctionSoloPickActionError('auction_no_active_solo_pick', 'No active auction solo pick');
+      throw new AuctionActionError('auction_no_active_solo_pick', 'No active auction solo pick');
     }
     const seat = findAuctionSeatByUserId(current, userId);
     if (!seat) {
-      throw new AuctionSoloPickActionError('auction_user_not_in_match', 'User is not seated in this auction match');
+      throw new AuctionActionError('auction_user_not_in_match', 'User is not seated in this auction match');
     }
     if (current.soloPick.playerSeatId !== seat.seatId) {
-      throw new AuctionSoloPickActionError('auction_solo_pick_not_yours', 'Solo pick belongs to another seat');
+      throw new AuctionActionError('auction_solo_pick_not_yours', 'Solo pick belongs to another seat');
     }
 
     const selected = selectSoloPickOption(current, seat.seatId, option, context);
@@ -125,7 +115,7 @@ export async function handleAuctionSoloPickSelectionForUser(
   }, {
     now: context.now,
     onMissingState: () => {
-      throw new AuctionSoloPickActionError('auction_match_not_found', 'Auction match not found');
+      throw new AuctionActionError('auction_match_not_found', 'Auction match not found');
     },
   });
 

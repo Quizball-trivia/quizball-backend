@@ -1,8 +1,8 @@
-import { AppError } from '../../core/errors.js';
+import { AppError, ErrorCode } from '../../core/errors.js';
 
 export const AuctionContentErrorCode = {
-  CONTENT_UNAVAILABLE: 'auction_content_unavailable',
-  STARTING_PRICE_UNAVAILABLE: 'auction_starting_price_unavailable',
+  CONTENT_UNAVAILABLE: ErrorCode.AUCTION_CONTENT_UNAVAILABLE,
+  STARTING_PRICE_UNAVAILABLE: ErrorCode.AUCTION_STARTING_PRICE_UNAVAILABLE,
 } as const;
 
 export type AuctionContentErrorCodeType =
@@ -19,7 +19,7 @@ export class AuctionContentError extends AppError {
 
 export class AuctionContentUnavailableError extends AuctionContentError {
   constructor(details: unknown = null) {
-    super('Published auction content unavailable', AuctionContentErrorCode.CONTENT_UNAVAILABLE, details);
+    super('Published auction content unavailable', ErrorCode.AUCTION_CONTENT_UNAVAILABLE, details);
   }
 }
 
@@ -27,7 +27,7 @@ export class AuctionStartingPriceUnavailableError extends AuctionContentError {
   constructor(details: unknown = null) {
     super(
       'Published auction content is missing auction price fields',
-      AuctionContentErrorCode.STARTING_PRICE_UNAVAILABLE,
+      ErrorCode.AUCTION_STARTING_PRICE_UNAVAILABLE,
       details
     );
   }

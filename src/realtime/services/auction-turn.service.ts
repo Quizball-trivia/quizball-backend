@@ -1,5 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
+import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
 import {
   applyBid,
   applyFold,
@@ -222,7 +223,7 @@ async function applyAuctionHumanAction(
     throw new AuctionRealtimeActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
   }
 
-  const context = resolveTimerContext(options);
+  const context = resolveAuctionContext(options);
   return auctionStateStore.mutate(input.matchId, (current) => {
     const seat = validateHumanTurnAction(current, userId, kind);
     const nextState = kind === 'bid'
@@ -246,7 +247,7 @@ async function applyAuctionTurnTimeout(
   payload: AuctionTurnTimeoutTimerPayload,
   options: AuctionTurnTimerOptions
 ): Promise<AuctionTurnActionOutcome> {
-  const context = resolveTimerContext(options);
+  const context = resolveAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));
@@ -367,11 +368,6 @@ function toAuctionActionErrorPayload(error: unknown): AuctionErrorPayload {
 
 function noop(reason: string): AuctionTurnActionOutcome {
   return { kind: 'noop', reason };
-}
-
-function resolveTimerContext(options: AuctionTurnTimerOptions): Required<Pick<AuctionEngineContext, 'now'>> {
-  const now = options.context?.now ?? (() => options.now ?? new Date());
-  return { now };
 }
 
 function getHarnessDueAt(turnEndsAt: Date, options: AuctionTurnTimerOptions): Date {

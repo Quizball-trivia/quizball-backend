@@ -1,6 +1,8 @@
-import { randomUUID } from 'crypto';
-import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import {
+  resolveAuctionContext,
+  type ResolvedAuctionEngineContext,
+} from '../../modules/auction/auction-context.js';
 import {
   auctionContentService,
   AuctionContentUnavailableError,
@@ -82,7 +84,7 @@ export async function handleAuctionSoloPickSelection(
   option: 'A' | 'B',
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
-  const context = resolveFlowContext(options);
+  const context = resolveAuctionContext(options);
   const selected = selectSoloPickOption(state, seatId, option, context);
   const saved = await auctionStateStore.save({
     ...selected,
@@ -104,7 +106,7 @@ export async function handleAuctionSoloPickSelectionForUser(
   option: 'A' | 'B',
   options: AuctionMatchFlowOptions = {}
 ): Promise<AuctionMatchState> {
-  const context = resolveFlowContext(options);
+  const context = resolveAuctionContext(options);
   const saved = await auctionStateStore.mutate(matchId, (current) => {
     if (current.phase !== 'solo_pick' || !current.soloPick) {
       throw new AuctionSoloPickActionError('auction_no_active_solo_pick', 'No active auction solo pick');
@@ -173,7 +175,7 @@ async function advanceToNextAuctionStep(
   state: AuctionMatchState,
   options: AuctionMatchFlowOptions
 ): Promise<AuctionMatchState> {
-  const context = resolveFlowContext(options);
+  const context = resolveAuctionContext(options);
   const nextBase = closeResolvedRound(state);
   const nextState = await createNextStepState(nextBase, context);
 
@@ -194,7 +196,7 @@ async function advanceToNextAuctionStep(
 
 async function createNextStepState(
   state: AuctionMatchState,
-  context: Required<Pick<AuctionEngineContext, 'now' | 'random' | 'createId'>>
+  context: ResolvedAuctionEngineContext
 ): Promise<AuctionMatchState> {
   if (state.phase === 'finished' || state.phase === 'clue_reveal' || state.phase === 'solo_pick') {
     return state;
@@ -359,14 +361,4 @@ function shuffle<T>(items: readonly T[], random: () => number): T[] {
     [out[index], out[swapIndex]] = [out[swapIndex], out[index]];
   }
   return out;
-}
-
-function resolveFlowContext(
-  options: AuctionMatchFlowOptions
-): Required<Pick<AuctionEngineContext, 'now' | 'random' | 'createId'>> {
-  return {
-    now: options.context?.now ?? (() => options.now ?? new Date()),
-    random: options.context?.random ?? getRandom,
-    createId: options.context?.createId ?? (() => randomUUID()),
-  };
 }

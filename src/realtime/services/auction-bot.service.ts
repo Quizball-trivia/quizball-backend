@@ -1,5 +1,6 @@
 import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
+import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
 import {
   MIN_BID_INCREMENT,
 } from '../../modules/auction/auction.constants.js';
@@ -63,7 +64,7 @@ export async function scheduleAuctionBotActionTimer(
   const player = state.seats.find((seat) => seat.seatId === round.currentTurnSeatId);
   if (!player?.isBot) return;
 
-  const context = resolveBotContext(options);
+  const context = resolveAuctionContext(options);
   const now = context.now();
   const dueAt = getBotActionDueAt(now, new Date(round.turnEndsAt), context.random);
   const scheduledDueAt = isHarnessFastTimers()
@@ -146,7 +147,7 @@ async function applyAuctionBotAction(
   payload: AuctionBotActionTimerPayload,
   options: AuctionBotTimerOptions
 ): Promise<AuctionBotActionOutcome> {
-  const context = resolveBotContext(options);
+  const context = resolveAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateBotPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));
@@ -237,13 +238,6 @@ function getBotActionDueAt(now: Date, turnEndsAt: Date, random: () => number): D
     + Math.floor(random() * (AUCTION_BOT_MAX_THINK_MS - AUCTION_BOT_MIN_THINK_MS + 1));
   const dueAtMs = Math.min(now.getTime() + delayMs, turnEndsAt.getTime());
   return new Date(dueAtMs);
-}
-
-function resolveBotContext(options: AuctionBotTimerOptions): Required<Pick<AuctionEngineContext, 'now' | 'random'>> {
-  return {
-    now: options.context?.now ?? (() => options.now ?? new Date()),
-    random: options.context?.random ?? getRandom,
-  };
 }
 
 function noop(reason: string): AuctionBotActionOutcome {

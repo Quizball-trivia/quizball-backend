@@ -1,5 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
 import { CLUE_REVEAL_INTERVAL_MS } from '../../modules/auction/auction.constants.js';
 import { revealNextClue, startBidding, type AuctionEngineContext } from '../../modules/auction/auction-engine.js';
 import {
@@ -108,7 +109,7 @@ async function advanceClueRevealState(
   payload: AuctionClueRevealPayload,
   options: AuctionClueRevealTimerOptions
 ): Promise<AuctionClueTimerOutcome> {
-  const context = resolveTimerContext(options);
+  const context = resolveAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));
@@ -190,9 +191,4 @@ function buildBiddingStartedPayload(publicState: PublicAuctionMatchState): Aucti
     turnEndsAt: round.turnEndsAt,
     stateVersion: publicState.version,
   };
-}
-
-function resolveTimerContext(options: AuctionClueRevealTimerOptions): Required<Pick<AuctionEngineContext, 'now'>> {
-  const now = options.context?.now ?? (() => options.now ?? new Date());
-  return { now };
 }

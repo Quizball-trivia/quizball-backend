@@ -1,5 +1,3 @@
-import { randomUUID } from 'crypto';
-import { getRandom } from '../../core/rng.js';
 import {
   AUCTION_SEAT_COUNT,
   FORMATIONS,
@@ -29,14 +27,15 @@ import type {
   AuctionRoundState,
   AuctionSoloPickOptionState,
 } from './auction-match-state.js';
+import {
+  resolveAuctionContext,
+  type AuctionEngineContext,
+  type ResolvedAuctionEngineContext,
+} from './auction-context.js';
+
+export type { AuctionEngineContext } from './auction-context.js';
 
 export type AuctionCardPool = Partial<Record<PositionGroup, readonly AuctionFootballer[]>>;
-
-export interface AuctionEngineContext {
-  now?: () => Date;
-  random?: () => number;
-  createId?: (kind: 'match' | 'round' | 'bot-seat') => string;
-}
 
 export interface CreateInitialAuctionMatchInput {
   matchId?: string;
@@ -58,7 +57,7 @@ export class AuctionEngineError extends Error {
 export class AuctionInvalidActionError extends AuctionEngineError {}
 
 export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput): AuctionMatchState {
-  const context = resolveContext(input.context);
+  const context = resolveAuctionContext(input.context);
   const now = context.nowIso();
   const formation = input.formation ?? pickOne(FORMATIONS, context.random).name;
   const humanPlayers = input.humanPlayers && input.humanPlayers.length > 0
@@ -110,7 +109,7 @@ export function pickNextPosition(
   cards: AuctionCardPool,
   contextInput?: AuctionEngineContext
 ): PositionGroup | null {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const activePlayers = state.seats.filter(canPlayerContinue);
   const candidates = POSITION_GROUPS.filter((position) => (
     activePlayers.some((player) => needsPosition(player, position))
@@ -128,7 +127,7 @@ export function startBiddingRound(
   needers: readonly AuctionPlayer[],
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const now = context.nowIso();
   const turnOrder = shuffle(needers.map((player) => player.seatId), context.random);
   const round: AuctionRoundState = {
@@ -169,7 +168,7 @@ export function startSoloPick(
   optionB: AuctionFootballer,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const now = context.nowIso();
 
   return touch({
@@ -201,7 +200,7 @@ export function selectSoloPickOption(
   option: 'A' | 'B',
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   if (state.phase !== 'solo_pick' || !state.soloPick) {
     throw new AuctionInvalidActionError('No active solo pick');
   }
@@ -236,7 +235,7 @@ export function revealNextClue(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireCurrentRound(state);
   if (state.phase !== 'clue_reveal') {
     throw new AuctionInvalidActionError('Cannot reveal clue outside clue reveal phase');
@@ -259,7 +258,7 @@ export function startBidding(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireCurrentRound(state);
   if (state.phase !== 'clue_reveal') {
     throw new AuctionInvalidActionError('Cannot start bidding outside clue reveal phase');
@@ -296,7 +295,7 @@ export function applyBid(
   amount: number,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireBiddingRound(state);
   const player = requireCurrentTurnPlayer(state, seatId);
 
@@ -331,7 +330,7 @@ export function applyFold(
   seatId: string,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireBiddingRound(state);
   requireCurrentTurnPlayer(state, seatId);
 
@@ -352,7 +351,7 @@ export function applyTurnTimeout(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireBiddingRound(state);
   const seatId = round.currentTurnSeatId;
   if (!seatId) throw new AuctionInvalidActionError('No active turn');
@@ -373,7 +372,7 @@ export function advanceTurnOrResolveRound(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireBiddingRound(state);
   const remaining = getRemainingBidders(round, state.seats);
 
@@ -403,7 +402,7 @@ export function resolveRoundWin(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireCurrentRound(state);
   if (!round.highestBidderSeatId) {
     throw new AuctionInvalidActionError('Cannot resolve round win without a bidder');
@@ -438,7 +437,7 @@ export function resolveUnsoldRound(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   const round = requireCurrentRound(state);
   const completedRound = {
     ...round,
@@ -491,7 +490,7 @@ export function advanceToNextRoundOrFinish(
   cards: AuctionCardPool,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   let nextState = state;
 
   if (nextState.phase === 'reveal' && nextState.currentRound) {
@@ -531,7 +530,7 @@ export function finishMatch(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
 ): AuctionMatchState {
-  const context = resolveContext(contextInput);
+  const context = resolveAuctionContext(contextInput);
   return touch({
     ...state,
     phase: 'finished',
@@ -679,21 +678,4 @@ function pickOne<T>(items: readonly T[], random: () => number): T {
 
 function unique<T>(items: readonly T[]): T[] {
   return [...new Set(items)];
-}
-
-interface ResolvedAuctionEngineContext {
-  now: () => Date;
-  nowIso: () => string;
-  random: () => number;
-  createId: (kind: 'match' | 'round' | 'bot-seat') => string;
-}
-
-function resolveContext(input?: AuctionEngineContext): ResolvedAuctionEngineContext {
-  const now = input?.now ?? (() => new Date());
-  return {
-    now,
-    nowIso: () => now().toISOString(),
-    random: input?.random ?? getRandom,
-    createId: input?.createId ?? (() => randomUUID()),
-  };
 }

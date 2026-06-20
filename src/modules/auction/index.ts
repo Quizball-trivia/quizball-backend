@@ -3,9 +3,12 @@ export { auctionContentRepo } from './auction-content.repo.js';
 export { auctionContentService } from './auction-content.service.js';
 export { auctionRepo } from './auction.repo.js';
 export { auctionService } from './auction.service.js';
+export { auctionStateStore } from './auction-state.store.js';
 export * from './auction.errors.js';
 export * from './auction.constants.js';
 export * from './auction-rules.js';
+export * from './auction-state.store.js';
+export * from './auction-match-state.js';
 export type * from './auction.types.js';
 export type {
   AuctionContentLocale,

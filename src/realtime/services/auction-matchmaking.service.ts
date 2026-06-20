@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { getRedisClient } from '../redis.js';
@@ -137,7 +138,7 @@ export const auctionMatchmakingService = {
             locale: input.locale,
             formation: input.formation,
             queuedAt: now,
-            fallbackAt: now + AUCTION_ONE_HUMAN_FALLBACK_MS,
+            fallbackAt: now + harnessDelayMs(AUCTION_ONE_HUMAN_FALLBACK_MS, 1_000),
           };
           await writeSearch(redis, search);
           await scheduleAuctionMatchmakingFill(search);
@@ -215,7 +216,7 @@ export const auctionMatchmakingService = {
       if (!fillGroup.some((entry) => entry.searchId === anchor.searchId)) return;
       if (fillGroup.length === 0) return;
       if (fillGroup.length >= 2) {
-        const twoHumanReadyAt = fillGroup[1].queuedAt + AUCTION_TWO_HUMAN_FALLBACK_MS;
+        const twoHumanReadyAt = fillGroup[1].queuedAt + harnessDelayMs(AUCTION_TWO_HUMAN_FALLBACK_MS, 1_000);
         if (Date.now() < twoHumanReadyAt) {
           await scheduleRealtimeTimer(
             'auction_matchmaking_fill',

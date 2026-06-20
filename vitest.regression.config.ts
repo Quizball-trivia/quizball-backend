@@ -44,6 +44,7 @@ export default defineConfig({
       'tests/regression/question-history.test.ts',
       'tests/regression/featured-ranked-only.test.ts',
       'tests/regression/boot-timer-rearm.test.ts',
+      'tests/regression/auction-full-flow.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     // Stream progress: the `verbose` reporter prints each scenario name as it

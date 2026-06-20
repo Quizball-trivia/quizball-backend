@@ -1,4 +1,5 @@
 import { getRandom } from '../../core/rng.js';
+import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
 import {
   MIN_BID_INCREMENT,
 } from '../../modules/auction/auction.constants.js';
@@ -64,12 +65,16 @@ export async function scheduleAuctionBotActionTimer(
   if (!player?.isBot) return;
 
   const context = resolveBotContext(options);
-  const dueAt = getBotActionDueAt(context.now(), new Date(round.turnEndsAt), context.random);
+  const now = context.now();
+  const dueAt = getBotActionDueAt(now, new Date(round.turnEndsAt), context.random);
+  const scheduledDueAt = isHarnessFastTimers()
+    ? new Date(now.getTime() + harnessDelayMs(Math.max(0, dueAt.getTime() - now.getTime()), 75))
+    : dueAt;
 
   await scheduleRealtimeTimer(
     'auction_bot_action',
     auctionBotActionTimerKey(state.matchId, round.roundId, round.currentTurnSeatId),
-    dueAt,
+    scheduledDueAt,
     {
       kind: 'auction_bot_action',
       matchId: state.matchId,
@@ -203,11 +208,16 @@ async function emitAndScheduleBotTurnStarted(
 async function scheduleAuctionTurnTimeoutTimerForBotService(state: AuctionMatchState): Promise<void> {
   const round = state.currentRound;
   if (state.phase !== 'bidding' || !round?.currentTurnSeatId || !round.turnEndsAt) return;
+  const turnEndsAt = new Date(round.turnEndsAt);
+  const nowMs = Date.now();
+  const dueAt = isHarnessFastTimers()
+    ? new Date(nowMs + harnessDelayMs(Math.max(0, turnEndsAt.getTime() - nowMs), 75))
+    : turnEndsAt;
 
   await scheduleRealtimeTimer(
     'auction_turn_timeout',
     `${state.matchId}:${round.roundId}:${round.currentTurnSeatId}`,
-    new Date(round.turnEndsAt),
+    dueAt,
     {
       kind: 'auction_turn_timeout',
       matchId: state.matchId,

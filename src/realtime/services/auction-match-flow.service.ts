@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getRandom } from '../../core/rng.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import {
   auctionContentService,
   AuctionContentUnavailableError,
@@ -346,7 +347,7 @@ async function scheduleAuctionClueRevealTimerFromFlow(
   if (expectedClueIndex > clueCount) return;
 
   const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
-  const dueAt = new Date(nowMs + CLUE_REVEAL_INTERVAL_MS);
+  const dueAt = new Date(nowMs + harnessDelayMs(CLUE_REVEAL_INTERVAL_MS, 50));
 
   await scheduleRealtimeTimer(
     'auction_clue_reveal',

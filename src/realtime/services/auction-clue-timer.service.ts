@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { CLUE_REVEAL_INTERVAL_MS } from '../../modules/auction/auction.constants.js';
 import { revealNextClue, startBidding, type AuctionEngineContext } from '../../modules/auction/auction-engine.js';
 import {
@@ -55,7 +56,7 @@ export async function scheduleAuctionClueRevealTimer(
   if (expectedClueIndex > clueCount) return;
 
   const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
-  const dueAt = new Date(nowMs + CLUE_REVEAL_INTERVAL_MS);
+  const dueAt = new Date(nowMs + harnessDelayMs(CLUE_REVEAL_INTERVAL_MS, 50));
 
   await scheduleRealtimeTimer(
     'auction_clue_reveal',

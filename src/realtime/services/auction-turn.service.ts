@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
 import {
   applyBid,
   applyFold,
@@ -85,15 +86,18 @@ export function auctionTurnTimeoutTimerKey(matchId: string, roundId: string, sea
 
 export async function scheduleAuctionTurnTimeoutTimer(
   state: AuctionMatchState,
-  _options: AuctionTurnTimerOptions = {}
+  options: AuctionTurnTimerOptions = {}
 ): Promise<void> {
   const round = state.currentRound;
   if (state.phase !== 'bidding' || !round?.currentTurnSeatId || !round.turnEndsAt) return;
+  const dueAt = isHarnessFastTimers()
+    ? getHarnessDueAt(new Date(round.turnEndsAt), options)
+    : new Date(round.turnEndsAt);
 
   await scheduleRealtimeTimer(
     'auction_turn_timeout',
     auctionTurnTimeoutTimerKey(state.matchId, round.roundId, round.currentTurnSeatId),
-    new Date(round.turnEndsAt),
+    dueAt,
     {
       kind: 'auction_turn_timeout',
       matchId: state.matchId,
@@ -463,4 +467,10 @@ function noop(reason: string): AuctionTurnActionOutcome {
 function resolveTimerContext(options: AuctionTurnTimerOptions): Required<Pick<AuctionEngineContext, 'now'>> {
   const now = options.context?.now ?? (() => options.now ?? new Date());
   return { now };
+}
+
+function getHarnessDueAt(turnEndsAt: Date, options: AuctionTurnTimerOptions): Date {
+  const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
+  const turnEndsAtMs = turnEndsAt.getTime();
+  return new Date(nowMs + harnessDelayMs(Math.max(0, turnEndsAtMs - nowMs), 75));
 }

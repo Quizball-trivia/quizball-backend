@@ -47,6 +47,10 @@ import {
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
+import {
+  auctionLifecycleService,
+  scheduleBootAuctionTimerRearm,
+} from './services/auction-lifecycle.service.js';
 import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 
@@ -227,6 +231,14 @@ async function runPostConnectHydration(
     }
   }
 
+  if (!socket.data.matchId && !socket.data.lobbyId) {
+    try {
+      await auctionLifecycleService.rejoinActiveAuctionMatchOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin active auction match on connect');
+    }
+  }
+
   if (!socket.data.matchId) {
     try {
       await lobbyRealtimeService.emitPendingChallengeInvitesOnConnect(socket);
@@ -365,6 +377,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   // gates, inter-question delay) — re-arm timers for every active match so no
   // match silently freezes until the 15-minute sweeper.
   scheduleBootMatchTimerRearm(io);
+  scheduleBootAuctionTimerRearm(io);
 
   rankedMatchmakingService.start(io);
 
@@ -458,6 +471,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       void matchRealtimeService.handleMatchDisconnect(io, socket);
       void rankedMatchmakingService.handleSocketDisconnect(io, socket);
       void auctionMatchmakingService.handleSocketDisconnect(io, socket);
+      void auctionLifecycleService.handleAuctionSocketDisconnect(io, socket);
       void trackUserOffline(io, user.id);
       scheduleOnlineCountBroadcast(io);
     });

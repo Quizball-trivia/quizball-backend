@@ -20,6 +20,7 @@ const stateStoreMock = vi.hoisted(() => ({
   withLock: vi.fn(async (_matchId: string, fn: () => Promise<unknown>) => fn()),
   load: vi.fn(),
   save: vi.fn(async (state: unknown) => state),
+  clearIndexes: vi.fn(),
 }));
 
 const schedulerMock = vi.hoisted(() => ({
@@ -174,6 +175,7 @@ describe('auction match flow service', () => {
       persisted = state;
       return state;
     });
+    stateStoreMock.clearIndexes.mockResolvedValue(undefined);
   });
 
   it('starts the next published-content round after a reveal', async () => {
@@ -276,6 +278,9 @@ describe('auction match flow service', () => {
         rankings: expect.any(Array),
         winnerSeatId: expect.any(String),
       })
+    );
+    expect(stateStoreMock.clearIndexes).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-1', phase: 'finished' })
     );
   });
 

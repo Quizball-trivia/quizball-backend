@@ -14,6 +14,7 @@ class FakeRedis {
   isOpen = true;
   values = new Map<string, string>();
   expirations = new Map<string, number>();
+  sets = new Map<string, Set<string>>();
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
@@ -35,6 +36,24 @@ class FakeRedis {
       this.expirations.delete(key);
     }
     return removed;
+  }
+
+  async sAdd(key: string, member: string): Promise<number> {
+    const set = this.sets.get(key) ?? new Set<string>();
+    const sizeBefore = set.size;
+    set.add(member);
+    this.sets.set(key, set);
+    return set.size - sizeBefore;
+  }
+
+  async sRem(key: string, member: string): Promise<number> {
+    const set = this.sets.get(key);
+    if (!set) return 0;
+    return set.delete(member) ? 1 : 0;
+  }
+
+  async sMembers(key: string): Promise<string[]> {
+    return [...(this.sets.get(key) ?? new Set<string>())];
   }
 
   async eval(_script: string, params: { keys: string[]; arguments: string[] }): Promise<unknown> {
@@ -130,8 +149,10 @@ describe('auction state store', () => {
 
   it('saves and loads auction match state with the expected TTL', async () => {
     const {
+      AUCTION_ACTIVE_MATCHES_KEY,
       AUCTION_MATCH_STATE_TTL_SECONDS,
       auctionMatchStateKey,
+      auctionUserMatchKey,
       auctionStateStore,
     } = await import('../../src/modules/auction/auction-state.store.js');
     const state = matchState();
@@ -144,6 +165,9 @@ describe('auction state store', () => {
     expect(saved.updatedAt).toBe('2026-06-20T10:05:00.000Z');
     expect(loaded).toEqual(saved);
     expect(redis?.expirations.get(auctionMatchStateKey(state.matchId))).toBe(AUCTION_MATCH_STATE_TTL_SECONDS);
+    expect(redis?.sets.get(AUCTION_ACTIVE_MATCHES_KEY)?.has(state.matchId)).toBe(true);
+    expect(redis?.values.get(auctionUserMatchKey('user-1'))).toBe(state.matchId);
+    expect(redis?.expirations.get(auctionUserMatchKey('user-1'))).toBe(AUCTION_MATCH_STATE_TTL_SECONDS);
   });
 
   it('returns null for missing match state', async () => {
@@ -194,6 +218,40 @@ describe('auction state store', () => {
     expect(redis?.values.has(auctionMatchLockKey('match-1'))).toBe(false);
     expect(redis?.expirations.get(auctionMatchLockKey('match-1'))).toBeUndefined();
     expect(AUCTION_MATCH_LOCK_TTL_MS).toBe(5_000);
+  });
+
+  it('lists active auction matches and clears user indexes when a match finishes', async () => {
+    const {
+      AUCTION_ACTIVE_MATCHES_KEY,
+      auctionStateStore,
+      auctionUserMatchKey,
+    } = await import('../../src/modules/auction/auction-state.store.js');
+    await auctionStateStore.save(matchState());
+
+    await expect(auctionStateStore.getActiveMatchIdForUser('user-1')).resolves.toBe('match-1');
+    await expect(auctionStateStore.listActiveMatchIds()).resolves.toEqual(['match-1']);
+
+    await auctionStateStore.save(matchState({
+      phase: 'finished',
+      rankings: [],
+    }));
+
+    expect(redis?.sets.get(AUCTION_ACTIVE_MATCHES_KEY)?.has('match-1')).toBe(false);
+    expect(redis?.values.has(auctionUserMatchKey('user-1'))).toBe(false);
+  });
+
+  it('can clear a stale user match index without touching a newer match id', async () => {
+    const {
+      auctionStateStore,
+      auctionUserMatchKey,
+    } = await import('../../src/modules/auction/auction-state.store.js');
+    await auctionStateStore.save(matchState());
+
+    await auctionStateStore.clearUserMatchIndex('user-1', 'other-match');
+    expect(redis?.values.get(auctionUserMatchKey('user-1'))).toBe('match-1');
+
+    await auctionStateStore.clearUserMatchIndex('user-1', 'match-1');
+    expect(redis?.values.has(auctionUserMatchKey('user-1'))).toBe(false);
   });
 
   it('rejects concurrent mutations while the match lock is held', async () => {

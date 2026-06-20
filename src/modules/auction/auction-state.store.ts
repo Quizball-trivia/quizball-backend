@@ -5,6 +5,7 @@ import type { AuctionMatchState } from './auction-match-state.js';
 
 export const AUCTION_MATCH_STATE_TTL_SECONDS = 2 * 60 * 60;
 export const AUCTION_MATCH_LOCK_TTL_MS = 5_000;
+export const AUCTION_ACTIVE_MATCHES_KEY = 'auction:matches:active';
 
 export class AuctionStateStoreError extends Error {
   constructor(message: string) {
@@ -58,6 +59,10 @@ export function auctionMatchLockKey(matchId: string): string {
   return `lock:auction:match:${matchId}`;
 }
 
+export function auctionUserMatchKey(userId: string): string {
+  return `auction:user:${userId}:match`;
+}
+
 export async function loadAuctionMatchState(matchId: string): Promise<AuctionMatchState | null> {
   const redis = requireRedis();
   const raw = await redis.get(auctionMatchStateKey(matchId));
@@ -93,6 +98,11 @@ export async function saveAuctionMatchState(
   await redis.set(auctionMatchStateKey(saved.matchId), JSON.stringify(saved), {
     EX: AUCTION_MATCH_STATE_TTL_SECONDS,
   });
+  if (saved.phase === 'finished') {
+    await clearAuctionMatchIndexes(saved);
+  } else {
+    await indexAuctionMatchState(saved);
+  }
 
   return saved;
 }
@@ -146,7 +156,54 @@ export async function withAuctionMatchLock<T>(
 
 export async function deleteAuctionMatchState(matchId: string): Promise<void> {
   const redis = requireRedis();
+  const existing = await loadAuctionMatchState(matchId);
   await redis.del(auctionMatchStateKey(matchId));
+  await clearAuctionMatchIndexes(existing ?? matchId);
+}
+
+export async function indexAuctionMatchState(state: AuctionMatchState): Promise<void> {
+  const redis = requireRedis();
+  const humanUserIds = getHumanUserIds(state);
+  await redis.sAdd(AUCTION_ACTIVE_MATCHES_KEY, state.matchId);
+  await Promise.all(humanUserIds.map((userId) => (
+    redis.set(auctionUserMatchKey(userId), state.matchId, {
+      EX: AUCTION_MATCH_STATE_TTL_SECONDS,
+    })
+  )));
+}
+
+export async function clearAuctionMatchIndexes(stateOrMatchId: AuctionMatchState | string): Promise<void> {
+  const redis = requireRedis();
+  const matchId = typeof stateOrMatchId === 'string' ? stateOrMatchId : stateOrMatchId.matchId;
+  const state = typeof stateOrMatchId === 'string'
+    ? await loadAuctionMatchState(matchId)
+    : stateOrMatchId;
+  const userKeys = state ? getHumanUserIds(state).map(auctionUserMatchKey) : [];
+
+  await Promise.all([
+    redis.sRem(AUCTION_ACTIVE_MATCHES_KEY, matchId),
+    userKeys.length > 0 ? redis.del(userKeys) : Promise.resolve(0),
+  ]);
+}
+
+export async function getActiveAuctionMatchIdForUser(userId: string): Promise<string | null> {
+  const redis = requireRedis();
+  return redis.get(auctionUserMatchKey(userId));
+}
+
+export async function clearAuctionUserMatchIndex(userId: string, expectedMatchId?: string): Promise<void> {
+  const redis = requireRedis();
+  const key = auctionUserMatchKey(userId);
+  if (expectedMatchId) {
+    const currentMatchId = await redis.get(key);
+    if (currentMatchId !== expectedMatchId) return;
+  }
+  await redis.del(key);
+}
+
+export async function listActiveAuctionMatchIds(): Promise<string[]> {
+  const redis = requireRedis();
+  return redis.sMembers(AUCTION_ACTIVE_MATCHES_KEY);
 }
 
 export const auctionStateStore = {
@@ -155,6 +212,11 @@ export const auctionStateStore = {
   mutate: mutateAuctionMatchState,
   withLock: withAuctionMatchLock,
   delete: deleteAuctionMatchState,
+  index: indexAuctionMatchState,
+  clearIndexes: clearAuctionMatchIndexes,
+  getActiveMatchIdForUser: getActiveAuctionMatchIdForUser,
+  clearUserMatchIndex: clearAuctionUserMatchIndex,
+  listActiveMatchIds: listActiveAuctionMatchIds,
 };
 
 function requireRedis() {
@@ -165,4 +227,10 @@ function requireRedis() {
 
 function cloneAuctionMatchState(state: AuctionMatchState): AuctionMatchState {
   return JSON.parse(JSON.stringify(state)) as AuctionMatchState;
+}
+
+function getHumanUserIds(state: AuctionMatchState): string[] {
+  return state.seats
+    .filter((seat) => !seat.isBot && seat.userId)
+    .map((seat) => seat.userId as string);
 }

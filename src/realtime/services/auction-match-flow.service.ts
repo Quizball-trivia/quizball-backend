@@ -164,6 +164,7 @@ export async function emitAuctionStepStarted(
 
   if (state.phase === 'finished' && state.rankings) {
     emitMatchFinished(io, state);
+    await auctionStateStore.clearIndexes(state);
   }
   return state;
 }

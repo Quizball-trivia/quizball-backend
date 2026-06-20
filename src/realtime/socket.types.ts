@@ -690,6 +690,12 @@ export interface AuctionMatchStartedPayload {
   state: PublicAuctionMatchState;
 }
 
+export interface AuctionStatePayload {
+  matchId: string;
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+}
+
 export interface AuctionRoundStartedPayload {
   matchId: string;
   round: PublicAuctionRoundState;
@@ -1069,6 +1075,7 @@ export interface ServerToClientEvents {
   'auction:search_cancelled': (data: AuctionSearchCancelledPayload) => void;
   'auction:match_found': (data: AuctionMatchFoundPayload) => void;
   'auction:match_started': (data: AuctionMatchStartedPayload) => void;
+  'auction:state': (data: AuctionStatePayload) => void;
   'auction:round_started': (data: AuctionRoundStartedPayload) => void;
   'auction:clue_revealed': (data: AuctionClueRevealedPayload) => void;
   'auction:bidding_started': (data: AuctionBiddingStartedPayload) => void;

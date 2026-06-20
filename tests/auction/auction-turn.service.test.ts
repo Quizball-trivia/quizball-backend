@@ -10,6 +10,7 @@ const stateStoreMock = vi.hoisted(() => ({
   withLock: vi.fn(async (_matchId: string, fn: () => Promise<unknown>) => fn()),
   load: vi.fn(),
   save: vi.fn(async (state: unknown) => state),
+  clearIndexes: vi.fn(),
 }));
 
 const schedulerMock = vi.hoisted(() => ({
@@ -143,6 +144,7 @@ describe('auction turn service', () => {
     vi.clearAllMocks();
     stateStoreMock.withLock.mockImplementation(async (_matchId: string, fn: () => Promise<unknown>) => fn());
     stateStoreMock.save.mockImplementation(async (state: unknown) => state);
+    stateStoreMock.clearIndexes.mockResolvedValue(undefined);
     contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
   });
 

@@ -11,8 +11,17 @@ const auctionTurnServiceMock = vi.hoisted(() => ({
   handleAuctionSoloPickSelect: vi.fn(),
 }));
 
+const auctionMatchmakingServiceMock = vi.hoisted(() => ({
+  handleSearchStart: vi.fn(),
+  handleSearchCancel: vi.fn(),
+}));
+
 vi.mock('../../src/realtime/services/auction-realtime.service.js', () => ({
   auctionRealtimeService: auctionRealtimeServiceMock,
+}));
+
+vi.mock('../../src/realtime/services/auction-matchmaking.service.js', () => ({
+  auctionMatchmakingService: auctionMatchmakingServiceMock,
 }));
 
 vi.mock('../../src/realtime/services/auction-turn.service.js', () => ({
@@ -56,6 +65,8 @@ describe('registerAuctionHandlers', () => {
     expect(socket.on).toHaveBeenCalledWith('auction:bid', expect.any(Function));
     expect(socket.on).toHaveBeenCalledWith('auction:fold', expect.any(Function));
     expect(socket.on).toHaveBeenCalledWith('auction:solo_pick_select', expect.any(Function));
+    expect(socket.on).toHaveBeenCalledWith('auction:search_start', expect.any(Function));
+    expect(socket.on).toHaveBeenCalledWith('auction:search_cancel', expect.any(Function));
     expect(auctionRealtimeServiceMock.handleStartAiMatch).toHaveBeenCalledWith(
       io,
       socket,
@@ -63,15 +74,23 @@ describe('registerAuctionHandlers', () => {
     );
   });
 
-  it('routes valid bid and fold actions to the auction turn service', async () => {
+  it('routes valid auction actions to their services', async () => {
     const { socket, handlers } = createSocket();
     const io = {} as QuizballServer;
 
     registerAuctionHandlers(io, socket);
+    await handlers.get('auction:search_start')?.({ formation: '4-3-3' });
+    await handlers.get('auction:search_cancel')?.();
     await handlers.get('auction:bid')?.({ matchId: 'match-1', amount: 30_000_000 });
     await handlers.get('auction:fold')?.({ matchId: 'match-1' });
     await handlers.get('auction:solo_pick_select')?.({ matchId: 'match-1', option: 'B' });
 
+    expect(auctionMatchmakingServiceMock.handleSearchStart).toHaveBeenCalledWith(
+      io,
+      socket,
+      { formation: '4-3-3', locale: 'en' }
+    );
+    expect(auctionMatchmakingServiceMock.handleSearchCancel).toHaveBeenCalledWith(io, socket);
     expect(auctionTurnServiceMock.handleAuctionBid).toHaveBeenCalledWith(
       io,
       socket,
@@ -112,6 +131,7 @@ describe('registerAuctionHandlers', () => {
     await handlers.get('auction:bid')?.({ matchId: 'match-1', amount: 0 });
     await handlers.get('auction:fold')?.({});
     await handlers.get('auction:solo_pick_select')?.({ matchId: 'match-1', option: 'C' });
+    await handlers.get('auction:search_start')?.({ formation: '9-9-9' });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'auction:error',
@@ -134,6 +154,14 @@ describe('registerAuctionHandlers', () => {
         message: 'Invalid auction solo pick payload',
       })
     );
+    expect(socket.emit).toHaveBeenCalledWith(
+      'auction:error',
+      expect.objectContaining({
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction search payload',
+      })
+    );
+    expect(auctionMatchmakingServiceMock.handleSearchStart).not.toHaveBeenCalled();
     expect(auctionTurnServiceMock.handleAuctionBid).not.toHaveBeenCalled();
     expect(auctionTurnServiceMock.handleAuctionFold).not.toHaveBeenCalled();
     expect(auctionTurnServiceMock.handleAuctionSoloPickSelect).not.toHaveBeenCalled();

@@ -119,6 +119,27 @@ describe('auction engine transitions', () => {
     expect(state).not.toHaveProperty('totalRounds');
   });
 
+  it('creates a 3-human casual auction match without bots for matchmaking', () => {
+    const state = createInitialAuctionMatch({
+      matchId: 'match-human',
+      humanUserId: 'user-1',
+      humanDisplayName: 'One',
+      humanPlayers: [
+        { userId: 'user-1', displayName: 'One' },
+        { userId: 'user-2', displayName: 'Two' },
+        { userId: 'user-3', displayName: 'Three' },
+      ],
+      formation: '4-3-3',
+      context: context(),
+    });
+
+    expect(state.seats).toHaveLength(3);
+    expect(state.seats.filter((seat) => seat.isBot)).toHaveLength(0);
+    expect(state.seats.map((seat) => seat.userId)).toEqual(['user-1', 'user-2', 'user-3']);
+    expect(state.seats.map((seat) => seat.seatId)).toEqual(['seat-human-1', 'seat-human-2', 'seat-human-3']);
+    expect(state.seats.every((seat) => seat.budget === 1_000_000_000)).toBe(true);
+  });
+
   it('picks only positions that active players still need and that have available cards', () => {
     const state = createMatch(context(0.1));
     const pool: AuctionCardPool = {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getRandom } from '../../core/rng.js';
 import {
+  AUCTION_SEAT_COUNT,
   FORMATIONS,
   OPENING_TURN_MS,
   POSITION_GROUPS,
@@ -41,6 +42,7 @@ export interface CreateInitialAuctionMatchInput {
   matchId?: string;
   humanUserId: string;
   humanDisplayName: string;
+  humanPlayers?: readonly { userId: string; displayName: string }[];
   formation?: FormationName;
   locale?: 'en' | 'ka';
   context?: AuctionEngineContext;
@@ -59,17 +61,23 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
   const context = resolveContext(input.context);
   const now = context.nowIso();
   const formation = input.formation ?? pickOne(FORMATIONS, context.random).name;
+  const humanPlayers = input.humanPlayers && input.humanPlayers.length > 0
+    ? [...input.humanPlayers]
+    : [{ userId: input.humanUserId, displayName: input.humanDisplayName }];
+  if (humanPlayers.length > AUCTION_SEAT_COUNT) {
+    throw new AuctionEngineError('Auction match cannot exceed seat count');
+  }
   const seats: AuctionPlayer[] = [
-    {
-      seatId: 'seat-human',
-      userId: input.humanUserId,
-      displayName: input.humanDisplayName,
+    ...humanPlayers.map((player, index) => ({
+      seatId: humanPlayers.length === 1 ? 'seat-human' : `seat-human-${index + 1}`,
+      userId: player.userId,
+      displayName: player.displayName,
       isBot: false,
       budget: STARTING_BUDGET,
       team: createEmptyTeam(formation),
       isEliminated: false,
-    },
-    ...Array.from({ length: 2 }, (_, index) => ({
+    })),
+    ...Array.from({ length: AUCTION_SEAT_COUNT - humanPlayers.length }, (_, index) => ({
       seatId: context.createId('bot-seat') || `seat-bot-${index + 1}`,
       userId: null,
       displayName: `Bot ${index + 1}`,

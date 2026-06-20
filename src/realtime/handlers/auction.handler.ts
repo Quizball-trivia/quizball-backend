@@ -2,9 +2,11 @@ import { logger } from '../../core/logger.js';
 import {
   auctionBidSchema,
   auctionFoldSchema,
+  auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
 } from '../schemas/auction.schemas.js';
+import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
 import {
   handleAuctionBid,
@@ -102,6 +104,41 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
       socket.emit('auction:error', {
         code: 'auction_action_failed',
         message: 'Failed to submit auction solo pick',
+      });
+    }
+  });
+
+  socket.on('auction:search_start', async (payload) => {
+    const parsed = auctionSearchStartSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:search_start payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction search payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    try {
+      await auctionMatchmakingService.handleSearchStart(io, socket, parsed.data);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:search_start handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_search_failed',
+        message: 'Failed to start auction search',
+      });
+    }
+  });
+
+  socket.on('auction:search_cancel', async () => {
+    try {
+      await auctionMatchmakingService.handleSearchCancel(io, socket);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:search_cancel handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_search_cancel_failed',
+        message: 'Failed to cancel auction search',
       });
     }
   });

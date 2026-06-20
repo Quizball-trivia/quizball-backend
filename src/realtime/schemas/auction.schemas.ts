@@ -19,6 +19,10 @@ export const auctionStartAiMatchSchema = z
 
 export type AuctionStartAiMatchInput = z.infer<typeof auctionStartAiMatchSchema>;
 
+export const auctionSearchStartSchema = auctionStartAiMatchSchema;
+
+export type AuctionSearchStartInput = z.infer<typeof auctionSearchStartSchema>;
+
 export const auctionBidSchema = z.object({
   matchId: z.string().min(1),
   amount: z.number().int().positive(),

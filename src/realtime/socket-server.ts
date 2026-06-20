@@ -47,6 +47,7 @@ import {
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
+import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
@@ -266,6 +267,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       if (payload.kind !== 'auction_clue_reveal') return;
       await runAuctionClueRevealTimer(server, payload);
     },
+    auction_matchmaking_fill: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_matchmaking_fill') return;
+      await auctionMatchmakingService.runFillTimer(server, payload);
+    },
     auction_turn_timeout: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_turn_timeout') return;
       await runAuctionTurnTimeoutTimer(server, payload);
@@ -452,6 +457,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
       void matchRealtimeService.handleMatchDisconnect(io, socket);
       void rankedMatchmakingService.handleSocketDisconnect(io, socket);
+      void auctionMatchmakingService.handleSocketDisconnect(io, socket);
       void trackUserOffline(io, user.id);
       scheduleOnlineCountBroadcast(io);
     });

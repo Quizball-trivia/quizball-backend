@@ -636,6 +636,11 @@ export interface AuctionStartAiMatchPayload {
   locale?: 'en' | 'ka';
 }
 
+export interface AuctionSearchStartPayload {
+  formation?: FormationName;
+  locale?: 'en' | 'ka';
+}
+
 export interface AuctionBidPayload {
   matchId: string;
   amount: number;
@@ -648,6 +653,35 @@ export interface AuctionFoldPayload {
 export interface AuctionSoloPickSelectPayload {
   matchId: string;
   option: 'A' | 'B';
+}
+
+export interface AuctionSearchStartedPayload {
+  searchId: string;
+  locale: 'en' | 'ka';
+  queuedUserCount: number;
+  seatsNeeded: number;
+  fallbackAt: string;
+}
+
+export interface AuctionSearchStatusPayload {
+  searchId: string;
+  locale: 'en' | 'ka';
+  queuedUserCount: number;
+  seatsNeeded: number;
+  fallbackAt: string;
+}
+
+export interface AuctionSearchCancelledPayload {
+  searchId: string | null;
+  reason: 'cancelled' | 'disconnect';
+}
+
+export interface AuctionMatchFoundPayload {
+  matchId: string;
+  humanUserIds: string[];
+  botCount: number;
+  locale: 'en' | 'ka';
+  formation: FormationName;
 }
 
 export interface AuctionMatchStartedPayload {
@@ -925,6 +959,8 @@ export interface ClientToServerEvents {
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
+  'auction:search_start': (data?: AuctionSearchStartPayload) => void;
+  'auction:search_cancel': () => void;
   'auction:bid': (data: AuctionBidPayload) => void;
   'auction:fold': (data: AuctionFoldPayload) => void;
   'auction:solo_pick_select': (data: AuctionSoloPickSelectPayload) => void;
@@ -1028,6 +1064,10 @@ export interface ServerToClientEvents {
   'ranked:match_found': (data: RankedMatchFoundPayload) => void;
   'ranked:queue_left': () => void;
   'auction:error': (data: AuctionErrorPayload) => void;
+  'auction:search_start': (data: AuctionSearchStartedPayload) => void;
+  'auction:search_status': (data: AuctionSearchStatusPayload) => void;
+  'auction:search_cancelled': (data: AuctionSearchCancelledPayload) => void;
+  'auction:match_found': (data: AuctionMatchFoundPayload) => void;
   'auction:match_started': (data: AuctionMatchStartedPayload) => void;
   'auction:round_started': (data: AuctionRoundStartedPayload) => void;
   'auction:clue_revealed': (data: AuctionClueRevealedPayload) => void;

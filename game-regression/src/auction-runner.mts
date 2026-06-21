@@ -10,7 +10,7 @@ import {
   type SeededAuctionFixtures,
 } from './fixtures.mjs';
 
-import { getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
+import { closeRedisClients, getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
 import { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } from '../../src/realtime/realtime-timer-scheduler.js';
 import { buildRealtimeTimerHandlers } from '../../src/realtime/socket-server.js';
 import { auctionRealtimeService } from '../../src/realtime/services/auction-realtime.service.js';
@@ -22,6 +22,7 @@ import {
 import { auctionStateStore } from '../../src/modules/auction/auction-state.store.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { FormationName } from '../../src/modules/auction/auction.types.js';
+import { disconnectDb } from '../../src/db/index.js';
 
 const AUCTION_USER_ID = '00000000-0000-0000-0000-00000000a001';
 
@@ -45,6 +46,10 @@ export interface RunAuctionOptions {
 export interface PlayAuctionOptions {
   maxMs?: number;
   tickMs?: number;
+}
+
+export interface TeardownAuctionRunOptions {
+  closeClients?: boolean;
 }
 
 async function waitUntil(predicate: () => boolean, maxMs: number, stepMs = 25): Promise<boolean> {
@@ -128,10 +133,16 @@ export async function runFullAuctionMatch(options: RunAuctionOptions = {}): Prom
   return run;
 }
 
-export async function teardownAuctionRun(): Promise<void> {
+export async function teardownAuctionRun(options: TeardownAuctionRunOptions = {}): Promise<void> {
   stopRealtimeTimerScheduler();
   const redis = getRedisClient();
   if (redis?.isOpen) await redis.flushDb();
+  if (options.closeClients) {
+    await Promise.all([
+      closeRedisClients(),
+      disconnectDb(),
+    ]);
+  }
 }
 
 async function driveHumanAuctionActions(

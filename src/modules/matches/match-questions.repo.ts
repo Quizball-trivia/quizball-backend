@@ -315,24 +315,43 @@ export const matchQuestionsRepo = {
         excludeClause = `AND q.id <> ALL($${values.length}::uuid[])`;
       }
 
-      // Exhaustion fallback: order the unavoidable repeat by least-recently-seen
-      // (oldest first), so a fully-seen tiny category shows the question they saw
-      // longest ago rather than a random recent repeat. A correlated subselect
-      // for MAX(shown_at) by these users; only added when the caller opts in, so
-      // the normal RANDOM() pick keeps zero extra cost.
+      // Exhaustion fallback: when a category is fully seen, the repeat is
+      // unavoidable — pick the FAIREST one to repeat for BOTH players, in this
+      // priority order:
+      //   1. fewest times played — GREATEST(per-player seen count): the question
+      //      whose most-repeated side has seen it the least. Protects whichever
+      //      player has already over-seen a question, so a 3×/1× question loses to
+      //      a 1×/1× one. NULLS FIRST: a question NEITHER of these users has ever
+      //      seen still wins outright (count = 0).
+      //   2. longest ago — least-recently-seen (oldest MAX(shown_at) across the
+      //      pair) breaks ties between equally-played questions.
+      //   3. RANDOM() when both are equal.
+      // Two correlated subselects over the same indexed join (match_players →
+      // match_questions); added only on the opt-in fallback path, so the normal
+      // RANDOM() pick keeps zero extra cost.
       let leastRecentSelect = '';
       let orderBy = `ORDER BY ${RANDOM_ORDER_SQL}`;
       if (params.leastRecentForUserIds?.length) {
         values.push(params.leastRecentForUserIds);
         const uidParam = `$${values.length}`;
         leastRecentSelect = `,
+          (SELECT max(seen.cnt)
+             FROM (
+               SELECT count(*) AS cnt
+                 FROM match_questions mq2
+                 JOIN match_players mp2 ON mp2.match_id = mq2.match_id
+                WHERE mq2.question_id = q.id
+                  AND mq2.shown_at IS NOT NULL
+                  AND mp2.user_id = ANY(${uidParam}::uuid[])
+                GROUP BY mp2.user_id
+             ) seen) AS max_seen_count,
           (SELECT max(mq2.shown_at)
              FROM match_questions mq2
              JOIN match_players mp2 ON mp2.match_id = mq2.match_id
             WHERE mq2.question_id = q.id
               AND mp2.user_id = ANY(${uidParam}::uuid[])) AS last_seen_at`;
-        // NULLS FIRST: a question never seen by these users still wins outright.
-        orderBy = `ORDER BY last_seen_at ASC NULLS FIRST, ${RANDOM_ORDER_SQL}`;
+        // NULLS FIRST on both: a question never seen by these users wins outright.
+        orderBy = `ORDER BY max_seen_count ASC NULLS FIRST, last_seen_at ASC NULLS FIRST, ${RANDOM_ORDER_SQL}`;
       }
 
       values.push(params.limit ?? 1);

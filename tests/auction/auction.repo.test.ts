@@ -119,8 +119,12 @@ describe('auctionRepo (player_clue_cards backend)', () => {
     expect(query).toContain('v.clue_card_id = $param');
   });
 
-  it('shapes the 3 inline clues into ordered clue rows', async () => {
-    dbMocks.taggedResults.push([{ clue_1: 'First', clue_2: 'Second', clue_3: 'Third' }]);
+  it('shapes en clues + ka sibling clues into ordered clue rows', async () => {
+    // First query returns the en card row; second returns the ka sibling clues.
+    dbMocks.taggedResults.push([
+      { clue_1: 'First', clue_2: 'Second', clue_3: 'Third', locale: 'en', football_player_id: PLAYER_ID },
+    ]);
+    dbMocks.taggedResults.push([{ clue_1: 'Pirveli', clue_2: 'Meore', clue_3: 'Mesame' }]);
 
     const clues = await auctionRepo.getClues(CARD_ID);
 
@@ -129,7 +133,7 @@ describe('auctionRepo (player_clue_cards backend)', () => {
     expect(clues).toHaveLength(3);
     expect(clues.map((c) => c.clue_order)).toEqual([1, 2, 3]);
     expect(clues.map((c) => c.clue_en)).toEqual(['First', 'Second', 'Third']);
-    expect(clues[0].clue_ka).toBe('First');
+    expect(clues.map((c) => c.clue_ka)).toEqual(['Pirveli', 'Meore', 'Mesame']);
     expect(clues.every((c) => c.clue_kind === 'fact')).toBe(true);
   });
 
@@ -139,8 +143,9 @@ describe('auctionRepo (player_clue_cards backend)', () => {
     expect(clues).toEqual([]);
   });
 
-  it('updates the inline clue columns on player_clue_cards (no separate clue table)', async () => {
-    dbMocks.unsafeResults.push([{ id: CARD_ID }]); // UPDATE ... RETURNING id
+  it('updates the en inline clues + ka sibling on player_clue_cards', async () => {
+    dbMocks.unsafeResults.push([{ id: CARD_ID }]); // UPDATE en ... RETURNING id
+    dbMocks.unsafeResults.push([]); // UPDATE ka sibling
     dbMocks.taggedResults.push([viewRow]); // getCardDetail reload
 
     const updated = await auctionRepo.updateCardAndReplaceClues(CARD_ID, {
@@ -154,13 +159,17 @@ describe('auctionRepo (player_clue_cards backend)', () => {
 
     expect(updated).not.toBeNull();
     expect(dbMocks.begin).toHaveBeenCalledTimes(1);
-    expect(dbMocks.unsafe).toHaveBeenCalledTimes(1);
+    // One UPDATE for the en row, one for the ka sibling.
+    expect(dbMocks.unsafe).toHaveBeenCalledTimes(2);
 
     const updateQuery = dbMocks.unsafe.mock.calls[0][0] as string;
     expect(updateQuery).toContain('UPDATE player_clue_cards');
     expect(updateQuery).toContain('clue_1');
     expect(updateQuery).toContain('clue_2');
     expect(updateQuery).toContain('clue_3');
+    // The second call targets the ka sibling.
+    const kaQuery = dbMocks.unsafe.mock.calls[1][0] as string;
+    expect(kaQuery).toContain("locale = 'ka'");
     expect(updateQuery).toContain('difficulty');
     expect(updateQuery).not.toContain('auction_card_clues');
 

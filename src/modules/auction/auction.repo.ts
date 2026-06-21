@@ -223,6 +223,7 @@ export const auctionRepo = {
         3 AS clue_count
       FROM player_clue_card_content_view v
       WHERE 1=1
+        AND v.locale = 'en'
         ${filters.statusFilter}
         ${filters.positionFilter}
         ${filters.difficultyFilter}
@@ -235,6 +236,7 @@ export const auctionRepo = {
       SELECT COUNT(*)::text AS total
       FROM player_clue_card_content_view v
       WHERE 1=1
+        AND v.locale = 'en'
         ${filters.statusFilter}
         ${filters.positionFilter}
         ${filters.difficultyFilter}
@@ -272,24 +274,42 @@ export const auctionRepo = {
   },
 
   async getClues(cardId: string): Promise<AuctionCardClueRow[]> {
-    // Clues are inline columns (clue_1/clue_2/clue_3) on player_clue_cards.
-    // Shape them into the legacy 3-row clue response. There is no KA/EN split or
-    // clue_kind in the new schema, so clue_ka mirrors the text and clue_kind is
-    // a constant; supported_fact_ids is always empty (no player_facts linkage).
-    const [card] = await sql<{ clue_1: string; clue_2: string; clue_3: string }[]>`
-      SELECT clue_1, clue_2, clue_3
+    // player_clue_cards is per-locale: the requested card is the `en` row; its
+    // `ka` sibling (same football_player_id, locale='ka') holds the Georgian
+    // clues. Pull the EN clues from this card and the KA clues from the sibling
+    // so the editor shows clue_en + clue_ka side by side. (clue_kind is a
+    // constant and supported_fact_ids empty — no per-clue metadata in this schema.)
+    const [card] = await sql<
+      { clue_1: string; clue_2: string; clue_3: string; locale: string; football_player_id: string }[]
+    >`
+      SELECT clue_1, clue_2, clue_3, locale, football_player_id
       FROM player_clue_cards
       WHERE id = ${cardId}
     `;
     if (!card) return [];
 
-    const texts = [card.clue_1, card.clue_2, card.clue_3];
-    return texts.map((text, index) => ({
+    // The sibling in the OTHER locale (en card -> ka sibling, and vice versa).
+    const siblingLocale = card.locale === 'en' ? 'ka' : 'en';
+    const [sibling] = await sql<{ clue_1: string; clue_2: string; clue_3: string }[]>`
+      SELECT clue_1, clue_2, clue_3
+      FROM player_clue_cards
+      WHERE football_player_id = ${card.football_player_id} AND locale = ${siblingLocale}
+      LIMIT 1
+    `;
+
+    const enClues = card.locale === 'en'
+      ? [card.clue_1, card.clue_2, card.clue_3]
+      : [sibling?.clue_1, sibling?.clue_2, sibling?.clue_3];
+    const kaClues = card.locale === 'en'
+      ? [sibling?.clue_1, sibling?.clue_2, sibling?.clue_3]
+      : [card.clue_1, card.clue_2, card.clue_3];
+
+    return [0, 1, 2].map((index) => ({
       id: `${cardId}:${index + 1}`,
       auction_card_id: cardId,
       clue_order: index + 1,
-      clue_en: text ?? '',
-      clue_ka: text ?? '',
+      clue_en: enClues[index] ?? '',
+      clue_ka: kaClues[index] ?? '',
       clue_kind: 'fact',
       supported_fact_ids: [],
       created_at: new Date(0).toISOString(),
@@ -393,6 +413,9 @@ async function updateCardFields(
   const clue1 = input.clues?.find((c) => c.clue_order === 1)?.clue_en;
   const clue2 = input.clues?.find((c) => c.clue_order === 2)?.clue_en;
   const clue3 = input.clues?.find((c) => c.clue_order === 3)?.clue_en;
+  const clueKa1 = input.clues?.find((c) => c.clue_order === 1)?.clue_ka;
+  const clueKa2 = input.clues?.find((c) => c.clue_order === 2)?.clue_ka;
+  const clueKa3 = input.clues?.find((c) => c.clue_order === 3)?.clue_ka;
   const reviewNotes =
     input.editor_notes !== undefined
       ? input.editor_notes
@@ -427,5 +450,32 @@ async function updateCardFields(
   );
   const [row] = rows;
   if (!row) return null;
+
+  // Edited Georgian clues persist to the ka sibling row (same football_player_id,
+  // locale='ka'), since clues are stored per-locale. Only writes provided values.
+  if (clueKa1 !== undefined || clueKa2 !== undefined || clueKa3 !== undefined) {
+    await tx.unsafe(
+      `UPDATE player_clue_cards ka
+       SET
+         clue_1 = CASE WHEN $2 THEN $3 ELSE clue_1 END,
+         clue_2 = CASE WHEN $4 THEN $5 ELSE clue_2 END,
+         clue_3 = CASE WHEN $6 THEN $7 ELSE clue_3 END,
+         updated_at = NOW()
+       FROM player_clue_cards en
+       WHERE en.id = $1
+         AND ka.football_player_id = en.football_player_id
+         AND ka.locale = 'ka'`,
+      [
+        id,
+        clueKa1 !== undefined,
+        clueKa1 ?? '',
+        clueKa2 !== undefined,
+        clueKa2 ?? '',
+        clueKa3 !== undefined,
+        clueKa3 ?? '',
+      ]
+    );
+  }
+
   return auctionRepo.getCardDetail(id);
 }

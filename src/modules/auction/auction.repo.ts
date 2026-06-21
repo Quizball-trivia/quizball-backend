@@ -121,78 +121,91 @@ export interface ListAuctionCardsResult {
   total: number;
 }
 
+// The admin CMS now reads/writes the content-pipeline schema:
+//   table `player_clue_cards`  (inline clue_1/clue_2/clue_3, status lifecycle)
+//   view  `player_clue_card_content_view`  (player facts + auction/starting price)
+// The legacy `auction_cards` / `auction_card_clues` tables are NOT used here.
+// Fields the old rich schema had but this schema lacks are projected as stable
+// defaults in SQL (`*_DEFAULT` aliases below) so the response shapes the CMS
+// frontend depends on still type-check and render.
+
+const CARD_TYPE_DEFAULT = 'normal';
+const VALUE_TYPE_DEFAULT = 'current';
+const PLAYER_ACTIVE_STATUS_DEFAULT = 'unknown';
+const PLAYER_DATA_QUALITY_DEFAULT = 'usable';
+
 function buildListFilters(filter: AuctionCardListFilter | undefined) {
-  const statusFilter = filter?.status ? sql`AND ac.status = ${filter.status}` : sql``;
-  const positionFilter = filter?.positionGroup ? sql`AND ac.position_group = ${filter.positionGroup}` : sql``;
-  const cardTypeFilter = filter?.cardType ? sql`AND ac.card_type = ${filter.cardType}` : sql``;
-  const difficultyFilter = filter?.difficulty ? sql`AND ac.difficulty = ${filter.difficulty}` : sql``;
-  const fameBucketFilter = filter?.fameBucket ? sql`AND fp.fame_bucket = ${filter.fameBucket}` : sql``;
-  const verificationFilter = filter?.verificationStatus
-    ? sql`AND ac.verification_status = ${filter.verificationStatus}`
+  const statusFilter = filter?.status ? sql`AND v.status = ${filter.status}` : sql``;
+  const positionFilter = filter?.positionGroup
+    ? sql`AND v.position_group = ${filter.positionGroup}`
     : sql``;
+  const difficultyFilter = filter?.difficulty ? sql`AND v.difficulty = ${filter.difficulty}` : sql``;
   const searchTerm = filter?.search?.trim();
   const searchPattern = searchTerm ? `%${searchTerm}%` : null;
   const searchFilter = searchPattern
     ? sql`AND (
-        fp.name ILIKE ${searchPattern}
-        OR COALESCE(fp.display_name::text, '') ILIKE ${searchPattern}
-        OR COALESCE(fp.current_club, '') ILIKE ${searchPattern}
-        OR COALESCE(fp.nationality, '') ILIKE ${searchPattern}
+        v.name ILIKE ${searchPattern}
+        OR COALESCE(v.current_club, '') ILIKE ${searchPattern}
+        OR COALESCE(v.nationality, '') ILIKE ${searchPattern}
       )`
     : sql``;
 
   return {
     statusFilter,
     positionFilter,
-    cardTypeFilter,
     difficultyFilter,
-    fameBucketFilter,
-    verificationFilter,
     searchFilter,
   };
 }
 
+// Maps one `player_clue_card_content_view` row onto the AuctionCardColumns +
+// AuctionPlayerColumns shape. `verification_status` is derived from the clue
+// card status because the new schema has no separate verification step.
 const cardSelect = sql`
-  ac.id,
-  ac.player_id,
-  ac.position_group,
-  ac.true_value_eur,
-  ac.starting_price_eur,
-  ac.value_type,
-  ac.card_type,
-  ac.difficulty,
-  ac.status,
-  ac.generator_model,
-  ac.verifier_model,
-  ac.prompt_version,
-  ac.generation_run_id,
-  ac.verification_status,
-  ac.verification_notes,
-  ac.editor_notes,
-  ac.published_at,
-  ac.published_by,
-  ac.created_at,
-  ac.updated_at,
-  fp.id AS p_id,
-  fp.transfermarkt_id AS p_transfermarkt_id,
-  fp.wikidata_id AS p_wikidata_id,
-  fp.name AS p_name,
-  fp.display_name AS p_display_name,
-  fp.nationality AS p_nationality,
-  fp.nationality_code AS p_nationality_code,
-  fp.position_group AS p_position_group,
-  fp.current_club AS p_current_club,
-  fp.date_of_birth AS p_date_of_birth,
-  fp.active_status AS p_active_status,
-  fp.image_url AS p_image_url,
-  fp.current_value_eur AS p_current_value_eur,
-  fp.peak_value_eur AS p_peak_value_eur,
-  fp.fame_score AS p_fame_score,
-  fp.fame_bucket AS p_fame_bucket,
-  fp.data_quality_status AS p_data_quality_status,
-  fp.source_payload AS p_source_payload,
-  fp.created_at AS p_created_at,
-  fp.updated_at AS p_updated_at
+  v.clue_card_id AS id,
+  v.football_player_id AS player_id,
+  v.position_group,
+  v.auction_price_eur AS true_value_eur,
+  v.starting_price_eur,
+  ${VALUE_TYPE_DEFAULT}::text AS value_type,
+  ${CARD_TYPE_DEFAULT}::text AS card_type,
+  v.difficulty,
+  v.status,
+  v.generation_model AS generator_model,
+  NULL::text AS verifier_model,
+  v.prompt_version,
+  NULL::uuid AS generation_run_id,
+  CASE
+    WHEN v.status IN ('approved', 'published') THEN 'passed'
+    WHEN v.status = 'rejected' THEN 'failed'
+    ELSE 'needs_review'
+  END AS verification_status,
+  v.review_notes AS verification_notes,
+  v.review_notes AS editor_notes,
+  CASE WHEN v.status = 'published' THEN v.updated_at ELSE NULL END AS published_at,
+  NULL::uuid AS published_by,
+  v.created_at,
+  v.updated_at,
+  v.football_player_id AS p_id,
+  v.transfermarkt_id::text AS p_transfermarkt_id,
+  NULL::text AS p_wikidata_id,
+  v.name AS p_name,
+  jsonb_build_object('en', v.name) AS p_display_name,
+  v.nationality AS p_nationality,
+  NULL::text AS p_nationality_code,
+  v.position_group AS p_position_group,
+  v.current_club AS p_current_club,
+  NULL::text AS p_date_of_birth,
+  ${PLAYER_ACTIVE_STATUS_DEFAULT}::text AS p_active_status,
+  v.image_url AS p_image_url,
+  v.current_value_eur AS p_current_value_eur,
+  v.peak_value_eur AS p_peak_value_eur,
+  NULL::numeric AS p_fame_score,
+  NULL::text AS p_fame_bucket,
+  ${PLAYER_DATA_QUALITY_DEFAULT}::text AS p_data_quality_status,
+  '{}'::jsonb AS p_source_payload,
+  v.created_at AS p_created_at,
+  v.updated_at AS p_updated_at
 `;
 
 export const auctionRepo = {
@@ -207,37 +220,24 @@ export const auctionRepo = {
     const cardsQuery = sql<AuctionCardSummaryRow[]>`
       SELECT
         ${cardSelect},
-        COALESCE(clue_counts.clue_count, 0)::int AS clue_count
-      FROM auction_cards ac
-      JOIN football_players fp ON fp.id = ac.player_id
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS clue_count
-        FROM auction_card_clues acl
-        WHERE acl.auction_card_id = ac.id
-      ) clue_counts ON true
+        3 AS clue_count
+      FROM player_clue_card_content_view v
       WHERE 1=1
         ${filters.statusFilter}
         ${filters.positionFilter}
-        ${filters.cardTypeFilter}
         ${filters.difficultyFilter}
-        ${filters.fameBucketFilter}
-        ${filters.verificationFilter}
         ${filters.searchFilter}
-      ORDER BY ac.created_at DESC
+      ORDER BY v.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
 
     const countQuery = sql<{ total: string }[]>`
       SELECT COUNT(*)::text AS total
-      FROM auction_cards ac
-      JOIN football_players fp ON fp.id = ac.player_id
+      FROM player_clue_card_content_view v
       WHERE 1=1
         ${filters.statusFilter}
         ${filters.positionFilter}
-        ${filters.cardTypeFilter}
         ${filters.difficultyFilter}
-        ${filters.fameBucketFilter}
-        ${filters.verificationFilter}
         ${filters.searchFilter}
     `;
 
@@ -252,46 +252,55 @@ export const auctionRepo = {
     const [row] = await sql<AuctionCardDetailRow[]>`
       SELECT
         ${cardSelect},
-        gr.id AS gr_id,
-        gr.job_name AS gr_job_name,
-        gr.model_name AS gr_model_name,
-        gr.model_role AS gr_model_role,
-        gr.prompt_version AS gr_prompt_version,
-        gr.status AS gr_status,
-        gr.error_message AS gr_error_message,
-        gr.latency_ms AS gr_latency_ms,
-        gr.token_usage AS gr_token_usage,
-        gr.cost_estimate AS gr_cost_estimate,
-        gr.editor_rating AS gr_editor_rating,
-        gr.editor_selected AS gr_editor_selected,
-        gr.created_at AS gr_created_at
-      FROM auction_cards ac
-      JOIN football_players fp ON fp.id = ac.player_id
-      LEFT JOIN llm_generation_runs gr ON gr.id = ac.generation_run_id
-      WHERE ac.id = ${id}
+        NULL::uuid AS gr_id,
+        NULL::text AS gr_job_name,
+        NULL::text AS gr_model_name,
+        NULL::text AS gr_model_role,
+        NULL::text AS gr_prompt_version,
+        NULL::text AS gr_status,
+        NULL::text AS gr_error_message,
+        NULL::int AS gr_latency_ms,
+        NULL::jsonb AS gr_token_usage,
+        NULL::numeric AS gr_cost_estimate,
+        NULL::int AS gr_editor_rating,
+        NULL::boolean AS gr_editor_selected,
+        NULL::timestamptz AS gr_created_at
+      FROM player_clue_card_content_view v
+      WHERE v.clue_card_id = ${id}
     `;
     return row ?? null;
   },
 
   async getClues(cardId: string): Promise<AuctionCardClueRow[]> {
-    return sql<AuctionCardClueRow[]>`
-      SELECT *
-      FROM auction_card_clues
-      WHERE auction_card_id = ${cardId}
-      ORDER BY clue_order ASC
+    // Clues are inline columns (clue_1/clue_2/clue_3) on player_clue_cards.
+    // Shape them into the legacy 3-row clue response. There is no KA/EN split or
+    // clue_kind in the new schema, so clue_ka mirrors the text and clue_kind is
+    // a constant; supported_fact_ids is always empty (no player_facts linkage).
+    const [card] = await sql<{ clue_1: string; clue_2: string; clue_3: string }[]>`
+      SELECT clue_1, clue_2, clue_3
+      FROM player_clue_cards
+      WHERE id = ${cardId}
     `;
+    if (!card) return [];
+
+    const texts = [card.clue_1, card.clue_2, card.clue_3];
+    return texts.map((text, index) => ({
+      id: `${cardId}:${index + 1}`,
+      auction_card_id: cardId,
+      clue_order: index + 1,
+      clue_en: text ?? '',
+      clue_ka: text ?? '',
+      clue_kind: 'fact',
+      supported_fact_ids: [],
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+    }));
   },
 
-  async getFactsByIdsForPlayer(playerId: string, factIds: string[]): Promise<PlayerFactRow[]> {
-    if (factIds.length === 0) return [];
-
-    return sql<PlayerFactRow[]>`
-      SELECT *
-      FROM player_facts
-      WHERE player_id = ${playerId}
-        AND id = ANY(${sql.array(factIds)}::uuid[])
-      ORDER BY created_at DESC
-    `;
+  async getFactsByIdsForPlayer(_playerId: string, _factIds: string[]): Promise<PlayerFactRow[]> {
+    // player_clue_cards has no player_facts linkage; clue editing never
+    // references fact ids in this schema, so there is nothing to validate.
+    return [];
   },
 
   async updateCardAndReplaceClues(
@@ -299,46 +308,7 @@ export const auctionRepo = {
     input: UpdateAuctionCardRequest
   ): Promise<AuctionCardColumns | null> {
     return sql.begin(async (tx) => {
-      const card = await updateCardFields(tx, id, input);
-      if (!card) return null;
-
-      if (input.clues) {
-        await tx.unsafe(
-          `DELETE FROM auction_card_clues WHERE auction_card_id = $1`,
-          [id]
-        );
-
-        for (const clue of input.clues) {
-          await tx.unsafe(
-            `INSERT INTO auction_card_clues (
-              auction_card_id,
-              clue_order,
-              clue_en,
-              clue_ka,
-              clue_kind,
-              supported_fact_ids
-            )
-            VALUES (
-              $1,
-              $2,
-              $3,
-              $4,
-              $5,
-              $6::uuid[]
-            )`,
-            [
-              id,
-              clue.clue_order,
-              clue.clue_en,
-              clue.clue_ka,
-              clue.clue_kind,
-              clue.supported_fact_ids,
-            ]
-          );
-        }
-      }
-
-      return card;
+      return updateCardFields(tx, id, input);
     });
   },
 
@@ -348,33 +318,66 @@ export const auctionRepo = {
     publishedBy?: string,
     options?: { force?: boolean }
   ): Promise<AuctionCardColumns | null> {
-    const [row] = await sql<AuctionCardColumns[]>`
-      UPDATE auction_cards
-      SET
-        status = ${status},
-        published_at = CASE WHEN ${status === 'published'} THEN NOW() ELSE published_at END,
-        published_by = CASE WHEN ${status === 'published'} THEN ${publishedBy ?? null} ELSE published_by END,
-        editor_notes = CASE
-          WHEN ${status === 'published' && options?.force === true}::boolean
-          THEN concat_ws(
-            E'\n',
-            NULLIF(editor_notes, ''),
-            concat(
-              '[force_publish] ',
-              NOW()::text,
-              ' by ',
-              ${publishedBy ?? 'unknown'}::text,
-              ' with verification_status=',
-              verification_status
-            )
-          )
-          ELSE editor_notes
-        END,
-        updated_at = NOW()
-      WHERE id = ${id}
-      RETURNING *
-    `;
-    return row ?? null;
+    const forceNote =
+      status === 'published' && options?.force === true
+        ? `[force_publish] ${new Date().toISOString()} by ${publishedBy ?? 'unknown'}`
+        : null;
+
+    // player_clue_cards is per-locale: an `en` card and its `ka` sibling share
+    // football_player_id but are separate rows. Setting the `en` card to
+    // `published` must also publish its `ka` sibling so Georgian players get the
+    // content at the same moment (otherwise ka rows sit in needs_review forever
+    // and the game returns auction_content_unavailable). We do both writes in one
+    // transaction so they commit atomically. Status changes OTHER than publish on
+    // an `en` card do NOT propagate — the ka sibling is reviewed/published on its
+    // own lifecycle; only the publish gate is mirrored. A ka card updated directly
+    // still updates exactly one row (the sibling lookup keys off an `en` source).
+    const rowId = await sql.begin(async (tx) => {
+      const rows = await tx.unsafe<
+        { id: string; locale: string; football_player_id: string }[]
+      >(
+        `UPDATE player_clue_cards
+         SET
+           status = $2,
+           review_notes = CASE
+             WHEN $3::text IS NOT NULL
+             THEN concat_ws(E'\n', NULLIF(review_notes, ''), $3)
+             ELSE review_notes
+           END,
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, locale, football_player_id`,
+        [id, status, forceNote]
+      );
+      const [row] = rows;
+      if (!row) return null;
+
+      // Auto-publish the ka sibling only when publishing an en card. Idempotent:
+      // the WHERE filters out a sibling already published, and propagating the
+      // same force note is harmless. We never down-publish the sibling here.
+      if (status === 'published' && row.locale === 'en') {
+        await tx.unsafe(
+          `UPDATE player_clue_cards
+           SET
+             status = 'published',
+             review_notes = CASE
+               WHEN $2::text IS NOT NULL
+               THEN concat_ws(E'\n', NULLIF(review_notes, ''), $2)
+               ELSE review_notes
+             END,
+             updated_at = NOW()
+           WHERE football_player_id = $1
+             AND locale = 'ka'
+             AND status <> 'published'`,
+          [row.football_player_id, forceNote]
+        );
+      }
+
+      return row.id;
+    });
+
+    if (!rowId) return null;
+    return auctionRepo.getCardDetail(id);
   },
 };
 
@@ -383,40 +386,46 @@ async function updateCardFields(
   id: string,
   input: UpdateAuctionCardRequest
 ): Promise<AuctionCardColumns | null> {
-  const rows = await tx.unsafe<AuctionCardColumns[]>(
-    `UPDATE auction_cards
+  // The new schema has no card_type / value_type / true_value / starting_price /
+  // verification columns to write, and clues are inline. We persist the editable
+  // fields that exist on player_clue_cards: the 3 inline clues, difficulty, and
+  // review_notes (mapped from editor_notes ?? verification_notes).
+  const clue1 = input.clues?.find((c) => c.clue_order === 1)?.clue_en;
+  const clue2 = input.clues?.find((c) => c.clue_order === 2)?.clue_en;
+  const clue3 = input.clues?.find((c) => c.clue_order === 3)?.clue_en;
+  const reviewNotes =
+    input.editor_notes !== undefined
+      ? input.editor_notes
+      : input.verification_notes !== undefined
+        ? input.verification_notes
+        : undefined;
+
+  const rows = await tx.unsafe<{ id: string }[]>(
+    `UPDATE player_clue_cards
      SET
-       true_value_eur = CASE WHEN $2 THEN $3 ELSE true_value_eur END,
-       starting_price_eur = CASE WHEN $4 THEN $5 ELSE starting_price_eur END,
-       value_type = CASE WHEN $6 THEN $7 ELSE value_type END,
-       card_type = CASE WHEN $8 THEN $9 ELSE card_type END,
-       difficulty = CASE WHEN $10 THEN $11 ELSE difficulty END,
-       verification_status = CASE WHEN $12 THEN $13 ELSE verification_status END,
-       verification_notes = CASE WHEN $14 THEN $15 ELSE verification_notes END,
-       editor_notes = CASE WHEN $16 THEN $17 ELSE editor_notes END,
+       clue_1 = CASE WHEN $2 THEN $3 ELSE clue_1 END,
+       clue_2 = CASE WHEN $4 THEN $5 ELSE clue_2 END,
+       clue_3 = CASE WHEN $6 THEN $7 ELSE clue_3 END,
+       difficulty = CASE WHEN $8 THEN $9 ELSE difficulty END,
+       review_notes = CASE WHEN $10 THEN $11 ELSE review_notes END,
        updated_at = NOW()
      WHERE id = $1
-     RETURNING *`,
+     RETURNING id`,
     [
       id,
-      input.true_value_eur !== undefined,
-      input.true_value_eur ?? 1,
-      input.starting_price_eur !== undefined,
-      input.starting_price_eur ?? 20_000_000,
-      input.value_type !== undefined,
-      input.value_type ?? 'current',
-      input.card_type !== undefined,
-      input.card_type ?? 'normal',
+      clue1 !== undefined,
+      clue1 ?? '',
+      clue2 !== undefined,
+      clue2 ?? '',
+      clue3 !== undefined,
+      clue3 ?? '',
       input.difficulty !== undefined,
       input.difficulty ?? 'medium',
-      input.verification_status !== undefined,
-      input.verification_status ?? 'needs_review',
-      input.verification_notes !== undefined,
-      input.verification_notes ?? null,
-      input.editor_notes !== undefined,
-      input.editor_notes ?? null,
+      reviewNotes !== undefined,
+      reviewNotes ?? null,
     ]
   );
   const [row] = rows;
-  return row ?? null;
+  if (!row) return null;
+  return auctionRepo.getCardDetail(id);
 }

@@ -24,7 +24,7 @@ export type AuctionCardType = z.infer<typeof auctionCardTypeEnum>;
 export const auctionDifficultyEnum = z.enum(['easy', 'medium', 'hard', 'expert']);
 export type AuctionDifficulty = z.infer<typeof auctionDifficultyEnum>;
 
-export const auctionCardStatusEnum = z.enum(['draft', 'needs_review', 'published', 'archived', 'rejected']);
+export const auctionCardStatusEnum = z.enum(['draft', 'needs_review', 'approved', 'published', 'rejected']);
 export type AuctionCardStatus = z.infer<typeof auctionCardStatusEnum>;
 
 export const auctionVerificationStatusEnum = z.enum(['passed', 'failed', 'needs_review']);

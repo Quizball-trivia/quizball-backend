@@ -20,7 +20,6 @@ import type {
   UpdateAuctionCardStatusRequest,
 } from './auction.schemas.js';
 
-const AUCTION_MIN_STARTING_PRICE_EUR = 20_000_000;
 const uuidSchema = z.string().uuid();
 
 function toNumber(value: string | number | null): number | null {
@@ -290,12 +289,11 @@ export const auctionService = {
       const clues = await auctionRepo.getClues(id);
       const errors: string[] = validatePublishClues(clues);
 
-      if ((toNumber(existing.true_value_eur) ?? 0) <= 0) errors.push('true_value_eur must be greater than 0');
-      if ((toNumber(existing.starting_price_eur) ?? 0) < AUCTION_MIN_STARTING_PRICE_EUR) {
-        errors.push('starting_price_eur must be at least 20000000');
-      }
+      // Price gates were dropped with the schema move: auction_price_eur and
+      // starting_price_eur now come from player_clue_card_content_view (not
+      // admin-editable), so there is nothing for an editor to get wrong here.
       if (!input.force && existing.verification_status !== 'passed') {
-        errors.push('verification_status must be passed to publish');
+        errors.push('card must be approved before publishing (or use force)');
       }
 
       if (errors.length > 0) {

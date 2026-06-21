@@ -12,6 +12,10 @@ import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import { scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
 import { emitAuctionUiReadyGateState } from './auction-ui-ready.service.js';
+import {
+  handleAuctionSocketDisconnect as handleAuctionDisconnectGrace,
+  resumeAuctionUserIfDisconnected,
+} from './auction-disconnect.service.js';
 
 const BOOT_AUCTION_REARM_DELAY_MS = 3_000;
 const BOOT_AUCTION_REARM_BATCH = 500;
@@ -69,6 +73,7 @@ export const auctionLifecycleService = {
       serverNow: new Date().toISOString(),
     });
 
+    await resumeAuctionUserIfDisconnected(io, socket, state);
     await ensureAuctionActiveTimers(io, state);
     logger.info(
       { matchId: state.matchId, userId, phase: state.phase, stateVersion: state.version },
@@ -84,7 +89,10 @@ export const auctionLifecycleService = {
     const matchId = socket.data.matchId;
     if (!matchId) return;
 
-    const state = await auctionStateStore.load(matchId);
+    let state = await auctionStateStore.load(matchId);
+    if (!state) return;
+    await handleAuctionDisconnectGrace(io, socket);
+    state = await auctionStateStore.load(matchId);
     if (!state) return;
     await ensureAuctionActiveTimers(io, state);
   },

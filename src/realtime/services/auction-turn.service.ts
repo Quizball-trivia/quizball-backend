@@ -44,6 +44,10 @@ import {
   buildTurnStartedPayload,
   buildTurnTimeoutPayload,
 } from './auction-realtime-payloads.js';
+import {
+  buildAuctionPausedStatePayload,
+  pauseAuctionCurrentTurnIfDisconnected,
+} from './auction-disconnect-state.service.js';
 
 export type AuctionTurnTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_turn_timeout' }>;
 
@@ -107,6 +111,32 @@ export async function emitAndScheduleAuctionTurnStarted(
   state: AuctionMatchState,
   options: AuctionTurnTimerOptions = {}
 ): Promise<void> {
+  const paused = await pauseAuctionCurrentTurnIfDisconnected(state);
+  if (paused) {
+    const round = paused.state.currentRound;
+    const seat = round?.currentTurnSeatId
+      ? paused.state.seats.find((entry) => entry.seatId === round.currentTurnSeatId)
+      : null;
+    if (seat?.userId && round?.currentTurnSeatId) {
+      const statePayload = buildAuctionPausedStatePayload(paused);
+      io.to(`match:${paused.state.matchId}`).emit('auction:paused', {
+        matchId: paused.state.matchId,
+        seatId: round.currentTurnSeatId,
+        userId: seat.userId,
+        pauseUntil: paused.pauseUntil,
+        graceMs: paused.graceMs,
+        remainingReconnects: paused.remainingReconnects,
+        reason: 'disconnect',
+        state: statePayload.state,
+        stateVersion: paused.state.version,
+        serverNow: statePayload.serverNow,
+      });
+      io.to(`match:${paused.state.matchId}`).emit('auction:state', statePayload);
+      await scheduleAuctionTurnTimeoutTimer(paused.state, options);
+    }
+    return;
+  }
+
   const payload = buildTurnStartedPayload(state);
   if (!payload) return;
 

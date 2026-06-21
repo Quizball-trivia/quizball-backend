@@ -47,6 +47,7 @@ import {
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
+import { runAuctionDisconnectGraceTimer } from './services/auction-disconnect.service.js';
 import {
   auctionLifecycleService,
   scheduleBootAuctionTimerRearm,
@@ -278,6 +279,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_clue_reveal') return;
       await runAuctionClueRevealTimer(server, payload);
+    },
+    auction_disconnect_grace: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_disconnect_grace') return;
+      await runAuctionDisconnectGraceTimer(server, payload);
     },
     auction_matchmaking_fill: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_matchmaking_fill') return;

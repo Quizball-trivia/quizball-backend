@@ -786,6 +786,50 @@ export interface AuctionTurnTimeoutPayload {
   stateVersion: number;
 }
 
+export interface AuctionOpponentDisconnectedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  pauseUntil: string;
+  graceMs: number;
+  remainingReconnects: number;
+  reason: 'disconnect' | 'reconnect_limit';
+  serverNow?: string;
+}
+
+export interface AuctionPausedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  pauseUntil: string;
+  graceMs: number;
+  remainingReconnects: number;
+  reason: 'disconnect' | 'reconnect_limit';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionResumePayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  reason: 'reconnected';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionPlayerForfeitedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  reason: 'disconnect_timeout' | 'reconnect_limit';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
 export interface AuctionRoundRevealedPayload {
   matchId: string;
   roundId: string;
@@ -1113,6 +1157,10 @@ export interface ServerToClientEvents {
   'auction:bid_accepted': (data: AuctionBidAcceptedPayload) => void;
   'auction:fold_accepted': (data: AuctionFoldAcceptedPayload) => void;
   'auction:turn_timeout': (data: AuctionTurnTimeoutPayload) => void;
+  'auction:opponent_disconnected': (data: AuctionOpponentDisconnectedPayload) => void;
+  'auction:paused': (data: AuctionPausedPayload) => void;
+  'auction:resume': (data: AuctionResumePayload) => void;
+  'auction:player_forfeited': (data: AuctionPlayerForfeitedPayload) => void;
   'auction:round_revealed': (data: AuctionRoundRevealedPayload) => void;
   'auction:squad_updated': (data: AuctionSquadUpdatedPayload) => void;
   'auction:solo_pick_started': (data: AuctionSoloPickStartedPayload) => void;

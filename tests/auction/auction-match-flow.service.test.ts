@@ -228,6 +228,27 @@ describe('auction match flow service', () => {
       'auction:round_started',
       expect.objectContaining({ matchId: 'match-1', stateVersion: 2 })
     );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:waiting_for_ready',
+      expect.objectContaining({
+        matchId: 'match-1',
+        phase: 'round',
+        stateVersion: 2,
+        totalCount: 1,
+        waitingUserIds: ['user-1'],
+      })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
+
+    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
+    acknowledgeAuctionUiReady(io, 'user-1', {
+      matchId: 'match-1',
+      phase: 'round',
+      roundId: next.currentRound!.roundId,
+      stateVersion: 2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       expect.any(String),

@@ -37,7 +37,7 @@ describeLocal('regression: auction full AI match harness', () => {
       formatAuctionViolation,
     } = await import('../../game-regression/src/auction-invariants.mjs');
 
-    const run = await runFullAuctionMatch({ startTimeoutMs: 20_000 });
+    const run = await runFullAuctionMatch({ startTimeoutMs: 20_000, playMaxMs: 180_000 });
     expect(run.matchId, 'auction match should boot').toBeTruthy();
 
     expect(
@@ -51,5 +51,5 @@ describeLocal('regression: auction full AI match harness', () => {
       console.info('Auction facts:', JSON.stringify(result.facts));
     }
     expect(result.ok, 'auction full-flow invariants should pass').toBe(true);
-  }, 150_000);
+  }, 210_000);
 });

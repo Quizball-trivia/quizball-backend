@@ -41,6 +41,8 @@ export interface RunAuctionOptions {
   formation?: FormationName;
   locale?: 'en' | 'ka';
   startTimeoutMs?: number;
+  playMaxMs?: number;
+  playTickMs?: number;
 }
 
 export interface PlayAuctionOptions {
@@ -129,7 +131,12 @@ export async function playAuctionMatch(
 
 export async function runFullAuctionMatch(options: RunAuctionOptions = {}): Promise<RunAuctionResult> {
   const run = await bootAuctionMatch(options);
-  if (run.matchId) await playAuctionMatch(run);
+  if (run.matchId) {
+    await playAuctionMatch(run, {
+      maxMs: options.playMaxMs,
+      tickMs: options.playTickMs,
+    });
+  }
   return run;
 }
 

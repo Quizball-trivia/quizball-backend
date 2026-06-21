@@ -33,6 +33,10 @@ router.patch(
   playerClueCardsController.bulkUpdateStatus
 );
 
+router.get('/translate/status', playerClueCardsController.translateStatus);
+
+router.post('/translate/backfill', playerClueCardsController.translateBackfill);
+
 router.patch(
   '/:id/status',
   validate({ params: clueCardIdParamSchema, body: updateStatusRequestSchema }),

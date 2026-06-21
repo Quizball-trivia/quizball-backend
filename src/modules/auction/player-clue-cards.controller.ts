@@ -50,4 +50,19 @@ export const playerClueCardsController = {
     const result = await playerClueCardsService.bulkUpdateStatus(body, adminUserId);
     res.json(result);
   },
+
+  async translateStatus(_req: Request, res: Response): Promise<void> {
+    const result = await playerClueCardsService.getTranslateStatus();
+    res.json(result);
+  },
+
+  async translateBackfill(req: Request, res: Response): Promise<void> {
+    const adminUserId = req.user?.id;
+    if (!adminUserId) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    const result = await playerClueCardsService.translateMissingKaSiblings(adminUserId);
+    res.json(result);
+  },
 };

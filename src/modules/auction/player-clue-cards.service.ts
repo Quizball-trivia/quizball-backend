@@ -3,6 +3,7 @@ import { NotFoundError } from '../../core/errors.js';
 import { activityRepo } from '../activity/activity.repo.js';
 import { playerClueCardsRepo } from './player-clue-cards.repo.js';
 import { parsePlayerClueFile } from './player-clue-cards.parser.js';
+import { getTranslationProvider } from '../questions/translation.provider.js';
 import type {
   ClueCardDifficulty,
   ClueCardLocale,
@@ -202,5 +203,80 @@ export const playerClueCardsService = {
     });
 
     return { updated: count };
+  },
+
+  /** How many en clue cards still lack a ka translation. */
+  async getTranslateStatus(): Promise<{ clues: number }> {
+    const clues = await playerClueCardsRepo.countCardsMissingKaSibling();
+    return { clues };
+  },
+
+  /**
+   * Translate every en clue card that lacks a ka sibling into Georgian and
+   * write the ka rows. Runs in batches so one bad batch doesn't sink the rest.
+   * Mirrors the questions "Translate All" backfill.
+   */
+  async translateMissingKaSiblings(
+    adminUserId: string
+  ): Promise<{ status: 'started' | 'done'; total: number; translated: number; failed: number }> {
+    const BATCH_SIZE = 25;
+    const total = await playerClueCardsRepo.countCardsMissingKaSibling();
+    if (total === 0) {
+      return { status: 'done', total: 0, translated: 0, failed: 0 };
+    }
+
+    const provider = getTranslationProvider();
+    if (!provider.isConfigured()) {
+      throw new NotFoundError('Translation provider is not configured');
+    }
+
+    let translated = 0;
+    let failed = 0;
+
+    // Drain the queue batch by batch; each loop re-queries so already-written
+    // siblings drop out and we converge to zero.
+    for (;;) {
+      const cards = await playerClueCardsRepo.listCardsMissingKaSibling(BATCH_SIZE);
+      if (cards.length === 0) break;
+
+      try {
+        const outputs = await provider.translateClues(
+          cards.map((c) => ({ id: c.id, clue_1: c.clue1, clue_2: c.clue2, clue_3: c.clue3 }))
+        );
+        const byId = new Map(outputs.map((o) => [o.id, o]));
+
+        for (const card of cards) {
+          const out = byId.get(card.id);
+          if (!out || !out.clue_1 || !out.clue_2 || !out.clue_3) {
+            failed += 1;
+            continue;
+          }
+          await playerClueCardsRepo.upsertKaSibling({
+            footballPlayerId: card.footballPlayerId,
+            clue1: out.clue_1,
+            clue2: out.clue_2,
+            clue3: out.clue_3,
+            difficulty: card.difficulty,
+            status: 'needs_review',
+            promptVersion: card.promptVersion,
+          });
+          translated += 1;
+        }
+      } catch (error) {
+        // A failed batch would otherwise loop forever (same cards re-fetched).
+        logger.error({ error, batchSize: cards.length }, 'Clue translation batch failed');
+        failed += cards.length;
+        break;
+      }
+    }
+
+    await activityRepo.insertAuditLog({
+      userId: adminUserId,
+      action: 'translate_backfill',
+      entityType: 'player_clue_card',
+      metadata: { total, translated, failed },
+    });
+
+    return { status: 'started', total, translated, failed };
   },
 };

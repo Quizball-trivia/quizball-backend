@@ -328,4 +328,86 @@ export const playerClueCardsRepo = {
       return result.count;
     });
   },
+
+  /** Count en clue cards that have no ka sibling yet (or an empty one). */
+  async countCardsMissingKaSibling(): Promise<number> {
+    const [row] = await sql<Array<{ count: string }>>`
+      SELECT COUNT(*)::text AS count
+      FROM player_clue_cards en
+      WHERE en.locale = 'en'
+        AND NOT EXISTS (
+          SELECT 1 FROM player_clue_cards ka
+          WHERE ka.football_player_id = en.football_player_id
+            AND ka.locale = 'ka'
+            AND ka.clue_1 IS NOT NULL AND ka.clue_1 <> ''
+        )
+    `;
+    return row ? parseInt(row.count, 10) : 0;
+  },
+
+  /** Fetch a batch of en cards needing a ka translation, source clues included. */
+  async listCardsMissingKaSibling(
+    limit: number
+  ): Promise<Array<{ id: string; footballPlayerId: string; clue1: string; clue2: string; clue3: string; difficulty: ClueCardDifficulty; promptVersion: string }>> {
+    const rows = await sql<
+      Array<{
+        id: string;
+        football_player_id: string;
+        clue_1: string;
+        clue_2: string;
+        clue_3: string;
+        difficulty: ClueCardDifficulty;
+        prompt_version: string;
+      }>
+    >`
+      SELECT en.id, en.football_player_id, en.clue_1, en.clue_2, en.clue_3, en.difficulty, en.prompt_version
+      FROM player_clue_cards en
+      WHERE en.locale = 'en'
+        AND NOT EXISTS (
+          SELECT 1 FROM player_clue_cards ka
+          WHERE ka.football_player_id = en.football_player_id
+            AND ka.locale = 'ka'
+            AND ka.clue_1 IS NOT NULL AND ka.clue_1 <> ''
+        )
+      ORDER BY en.updated_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      id: r.id,
+      footballPlayerId: r.football_player_id,
+      clue1: r.clue_1,
+      clue2: r.clue_2,
+      clue3: r.clue_3,
+      difficulty: r.difficulty,
+      promptVersion: r.prompt_version,
+    }));
+  },
+
+  /** Upsert a translated ka sibling card (mirrors the en card's player + prompt version). */
+  async upsertKaSibling(params: {
+    footballPlayerId: string;
+    clue1: string;
+    clue2: string;
+    clue3: string;
+    difficulty: ClueCardDifficulty;
+    status: ClueCardStatus;
+    promptVersion: string;
+  }): Promise<void> {
+    await sql`
+      INSERT INTO player_clue_cards (
+        football_player_id, locale, clue_1, clue_2, clue_3,
+        difficulty, status, source, generation_provider, generation_model, prompt_version
+      )
+      VALUES (
+        ${params.footballPlayerId}, 'ka', ${params.clue1}, ${params.clue2}, ${params.clue3},
+        ${params.difficulty}, ${params.status}, 'imported', 'openrouter-translate', '', ${params.promptVersion}
+      )
+      ON CONFLICT (football_player_id, locale, prompt_version) DO UPDATE SET
+        clue_1 = EXCLUDED.clue_1,
+        clue_2 = EXCLUDED.clue_2,
+        clue_3 = EXCLUDED.clue_3,
+        difficulty = EXCLUDED.difficulty,
+        updated_at = NOW()
+    `;
+  },
 };

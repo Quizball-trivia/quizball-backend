@@ -40,3 +40,38 @@ export {
   type UpdateAuctionCardStatusRequest,
 } from './auction.schemas.js';
 export { registerAuctionOpenApi } from './auction.openapi.js';
+
+// Player clue card import/review (CMS admin) — consolidated from feat/player-clue-import.
+export { registerPlayerClueCardsOpenApi } from './player-clue-cards.openapi.js';
+export { playerClueCardsController } from './player-clue-cards.controller.js';
+export { playerClueCardsService } from './player-clue-cards.service.js';
+export { playerClueCardsRepo } from './player-clue-cards.repo.js';
+export {
+  clueCardIdParamSchema,
+  clueCardLocaleEnum,
+  clueCardDifficultyEnum,
+  clueCardImportStatusEnum,
+  clueCardStatusTransitionEnum,
+  clueCardBulkStatusEnum,
+  importPreviewRequestSchema,
+  importCommitRequestSchema,
+  updateStatusRequestSchema,
+  bulkUpdateStatusRequestSchema,
+  playerClueCardDetailSchema,
+  type ClueCardIdParam,
+  type ImportPreviewRequest,
+  type ImportCommitRequest,
+  type UpdateStatusRequest,
+  type BulkUpdateStatusRequest,
+} from './player-clue-cards.schemas.js';
+export type {
+  ClueCardDifficulty,
+  ClueCardStatus,
+  ClueCardLocale,
+  PreviewRow,
+  PreviewResult,
+  CommitRow,
+  CommitResult,
+  PlayerClueCardDetail,
+  FootballPlayerCandidate,
+} from './player-clue-cards.types.js';

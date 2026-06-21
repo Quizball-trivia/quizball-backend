@@ -44,6 +44,7 @@ import { registerNotificationsOpenApi } from '../../modules/notifications/notifi
 import { registerAnnouncementsOpenApi } from '../../modules/announcements/announcements.openapi.js';
 import { registerFeedbackOpenApi } from '../../modules/feedback/feedback.openapi.js';
 import { registerAuctionOpenApi } from '../../modules/auction/auction.openapi.js';
+import { registerPlayerClueCardsOpenApi } from '../../modules/auction/player-clue-cards.openapi.js';
 
 extendZodWithOpenApi(z);
 
@@ -69,6 +70,7 @@ registerNotificationsOpenApi(registry);
 registerAnnouncementsOpenApi(registry);
 registerFeedbackOpenApi(registry);
 registerAuctionOpenApi(registry);
+registerPlayerClueCardsOpenApi(registry);
 
 function buildOpenApiServers(): Array<{ url: string; description: string }> {
   const servers: Array<{ url: string; description: string }> = [];

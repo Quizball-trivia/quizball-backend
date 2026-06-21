@@ -323,35 +323,42 @@ export const matchQuestionsRepo = {
       //      player has already over-seen a question, so a 3×/1× question loses to
       //      a 1×/1× one. NULLS FIRST: a question NEITHER of these users has ever
       //      seen still wins outright (count = 0).
-      //   2. longest ago — least-recently-seen (oldest MAX(shown_at) across the
-      //      pair) breaks ties between equally-played questions.
+      //   2. longest ago — least-recently-seen (oldest shown_at across the pair)
+      //      breaks ties between equally-played questions.
       //   3. RANDOM() when both are equal.
-      // Two correlated subselects over the same indexed join (match_players →
-      // match_questions); added only on the opt-in fallback path, so the normal
-      // RANDOM() pick keeps zero extra cost.
-      let leastRecentSelect = '';
+      //
+      // PERF: this pair's per-question history is aggregated ONCE in a CTE and
+      // LEFT JOINed — NOT a correlated subselect per candidate. The per-row
+      // version was ~1.8s / 1.25M buffers on the 857-question category (it
+      // re-ran a 300k-iteration nested loop for every candidate, twice); the
+      // pre-aggregated form is ~22ms / 4k buffers. Only built on the opt-in
+      // fallback path, so the normal RANDOM() pick keeps zero extra cost.
+      let userSeenCte = '';
+      let userSeenSelect = '';
+      let userSeenJoin = '';
       let orderBy = `ORDER BY ${RANDOM_ORDER_SQL}`;
       if (params.leastRecentForUserIds?.length) {
         values.push(params.leastRecentForUserIds);
         const uidParam = `$${values.length}`;
-        leastRecentSelect = `,
-          (SELECT max(seen.cnt)
-             FROM (
-               SELECT count(*) AS cnt
-                 FROM match_questions mq2
-                 JOIN match_players mp2 ON mp2.match_id = mq2.match_id
-                WHERE mq2.question_id = q.id
-                  AND mq2.shown_at IS NOT NULL
-                  AND mp2.user_id = ANY(${uidParam}::uuid[])
-                GROUP BY mp2.user_id
-             ) seen) AS max_seen_count,
-          (SELECT max(mq2.shown_at)
-             FROM match_questions mq2
-             JOIN match_players mp2 ON mp2.match_id = mq2.match_id
-            WHERE mq2.question_id = q.id
-              AND mp2.user_id = ANY(${uidParam}::uuid[])) AS last_seen_at`;
-        // NULLS FIRST on both: a question never seen by these users wins outright.
-        orderBy = `ORDER BY max_seen_count ASC NULLS FIRST, last_seen_at ASC NULLS FIRST, ${RANDOM_ORDER_SQL}`;
+        userSeenCte = `WITH user_seen AS (
+          SELECT pu.question_id,
+                 max(pu.cnt)        AS max_seen_count,
+                 max(pu.last_seen)  AS last_seen_at
+          FROM (
+            SELECT mq2.question_id, mp2.user_id,
+                   count(*)          AS cnt,
+                   max(mq2.shown_at) AS last_seen
+              FROM match_players mp2
+              JOIN match_questions mq2 ON mq2.match_id = mp2.match_id
+             WHERE mp2.user_id = ANY(${uidParam}::uuid[])
+               AND mq2.shown_at IS NOT NULL
+             GROUP BY mq2.question_id, mp2.user_id
+          ) pu
+          GROUP BY pu.question_id
+        )`;
+        userSeenSelect = `, us.max_seen_count, us.last_seen_at`;
+        userSeenJoin = `LEFT JOIN user_seen us ON us.question_id = q.id`;
+        orderBy = `ORDER BY us.max_seen_count ASC NULLS FIRST, us.last_seen_at ASC NULLS FIRST, ${RANDOM_ORDER_SQL}`;
       }
 
       values.push(params.limit ?? 1);
@@ -359,10 +366,12 @@ export const matchQuestionsRepo = {
 
       const rows = await sql.unsafe<RandomQuestionCandidate[]>(
         `
-        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload${leastRecentSelect}
+        ${userSeenCte}
+        SELECT q.id, q.prompt, q.difficulty, q.category_id, qp.payload${userSeenSelect}
         FROM questions q
         JOIN categories c ON c.id = q.category_id
         JOIN question_payloads qp ON qp.question_id = q.id
+        ${userSeenJoin}
         ${includesMcq ? NORMALIZED_MCQ_PAYLOAD_LATERAL_RAW : ''}
         WHERE q.category_id = ANY($2::uuid[])
           AND c.is_active = true

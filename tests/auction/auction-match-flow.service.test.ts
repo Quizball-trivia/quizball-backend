@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '../setup.js';
 
 import {
@@ -181,8 +181,13 @@ describe('auction match flow service', () => {
     stateStoreMock.clearIndexes.mockResolvedValue(undefined);
   });
 
-  it('starts the next published-content round after a reveal', async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('waits for reveal ui-ready before starting the next published-content round', async () => {
     const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
     const { io, roomEmit } = createIo();
     const pool = fixturePool();
     mockContentFromPool(pool);
@@ -216,14 +221,40 @@ describe('auction match flow service', () => {
 
     const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
 
-    expect(next.phase).toBe('clue_reveal');
-    expect(next.version).toBe(2);
-    expect(next.completedRounds).toHaveLength(1);
-    expect(next.currentRound?.footballer.positionGroup).toBeDefined();
+    expect(next.phase).toBe('reveal');
+    expect(next.version).toBe(1);
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:round_revealed',
       expect.objectContaining({ winnerSeatId: 'seat-human', stateVersion: 1 })
     );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:waiting_for_ready',
+      expect.objectContaining({
+        matchId: 'match-1',
+        phase: 'reveal',
+        roundId: 'round-current',
+        stateVersion: 1,
+        totalCount: 1,
+        waitingUserIds: ['user-1'],
+      })
+    );
+    expect(roomEmit).not.toHaveBeenCalledWith(
+      'auction:round_started',
+      expect.anything()
+    );
+
+    acknowledgeAuctionUiReady(io, 'user-1', {
+      matchId: 'match-1',
+      phase: 'reveal',
+      roundId: 'round-current',
+      stateVersion: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(persisted?.phase).toBe('clue_reveal');
+    expect(persisted?.version).toBe(2);
+    expect(persisted?.completedRounds).toHaveLength(1);
+    expect(persisted?.currentRound?.footballer.positionGroup).toBeDefined();
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:round_started',
       expect.objectContaining({ matchId: 'match-1', stateVersion: 2 })
@@ -240,11 +271,10 @@ describe('auction match flow service', () => {
     );
     expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
 
-    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
     acknowledgeAuctionUiReady(io, 'user-1', {
       matchId: 'match-1',
       phase: 'round',
-      roundId: next.currentRound!.roundId,
+      roundId: persisted!.currentRound!.roundId,
       stateVersion: 2,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -260,11 +290,119 @@ describe('auction match flow service', () => {
     );
   });
 
+  it('does not stall a bots-only reveal gate', async () => {
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    mockContentFromPool(fixturePool());
+
+    const state = startInitialState();
+    persisted = {
+      ...state,
+      seats: state.seats.map((seat) => ({
+        ...seat,
+        userId: null,
+        isBot: true,
+      })),
+      phase: 'reveal',
+      version: 1,
+      currentRound: {
+        roundId: 'round-current',
+        roundIndex: 1,
+        positionGroup: 'FWD',
+        footballer: card('current', 'FWD', 60_000_000),
+        clueRevealIndex: 3,
+        bids: [{ seatId: 'bot-seat-1', amount: 10_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
+        highestBidderSeatId: 'bot-seat-1',
+        highestBid: 10_000_000,
+        startingPrice: 10_000_000,
+        winnerSeatId: 'bot-seat-1',
+        winningBid: 10_000_000,
+        revealed: true,
+        turnOrder: ['bot-seat-1'],
+        currentTurnSeatId: null,
+        foldedSeatIds: [],
+        turnEndsAt: null,
+        startedAt: '2026-06-20T10:00:00.000Z',
+        updatedAt: '2026-06-20T10:00:00.000Z',
+      },
+    };
+
+    const next = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+    expect(next.phase).toBe('reveal');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(persisted?.phase).toBe('clue_reveal');
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:round_revealed',
+      expect.objectContaining({ winnerSeatId: 'bot-seat-1', stateVersion: 1 })
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:round_started',
+      expect.objectContaining({ matchId: 'match-1', stateVersion: 2 })
+    );
+  });
+
+  it('advances reveal on the force-ready fallback when a human never acks', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T10:00:00.000Z'));
+
+    const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    mockContentFromPool(fixturePool());
+
+    const state = startInitialState();
+    persisted = {
+      ...state,
+      phase: 'reveal',
+      version: 1,
+      currentRound: {
+        roundId: 'round-current',
+        roundIndex: 1,
+        positionGroup: 'FWD',
+        footballer: card('current', 'FWD', 60_000_000),
+        clueRevealIndex: 3,
+        bids: [{ seatId: 'seat-human', amount: 10_000_000, placedAt: '2026-06-20T10:00:00.000Z' }],
+        highestBidderSeatId: 'seat-human',
+        highestBid: 10_000_000,
+        startingPrice: 10_000_000,
+        winnerSeatId: 'seat-human',
+        winningBid: 10_000_000,
+        revealed: true,
+        turnOrder: ['seat-human'],
+        currentTurnSeatId: null,
+        foldedSeatIds: [],
+        turnEndsAt: null,
+        startedAt: '2026-06-20T10:00:00.000Z',
+        updatedAt: '2026-06-20T10:00:00.000Z',
+      },
+    };
+
+    await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:waiting_for_ready',
+      expect.objectContaining({
+        phase: 'reveal',
+        forceStartsAt: '2026-06-20T10:00:06.000Z',
+      })
+    );
+    expect(persisted?.phase).toBe('reveal');
+
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    expect(persisted?.phase).toBe('clue_reveal');
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:round_started',
+      expect.objectContaining({ matchId: 'match-1', stateVersion: 2 })
+    );
+  });
+
   it('can drive an AI auction match to a final ranking with enough fixture cards', async () => {
     const {
       advanceAuctionMatchFlowAfterMutation,
       handleAuctionSoloPickSelection,
     } = await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
     const { io, roomEmit } = createIo();
     mockContentFromPool(fixturePool());
     persisted = startInitialState();
@@ -276,8 +414,26 @@ describe('auction match flow service', () => {
       }
 
       if (persisted.phase === 'clue_reveal') {
+        acknowledgeAuctionUiReady(io, 'user-1', {
+          matchId: persisted.matchId,
+          phase: 'round',
+          roundId: persisted.currentRound!.roundId,
+          stateVersion: persisted.version,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
         persisted = resolveCurrentRoundForFirstNeeder(persisted);
         persisted = await advanceAuctionMatchFlowAfterMutation(io, persisted, { context });
+        continue;
+      }
+
+      if (persisted.phase === 'reveal' && persisted.currentRound) {
+        acknowledgeAuctionUiReady(io, 'user-1', {
+          matchId: persisted.matchId,
+          phase: 'reveal',
+          roundId: persisted.currentRound.roundId,
+          stateVersion: persisted.version,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
         continue;
       }
 

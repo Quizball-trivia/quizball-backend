@@ -39,7 +39,7 @@ export const auctionSoloPickSelectSchema = z.object({
 
 export const auctionUiReadySchema = z.object({
   matchId: z.string().min(1),
-  phase: z.enum(['round', 'bidding']),
+  phase: z.enum(['round', 'bidding', 'reveal']),
   roundId: z.string().min(1),
   stateVersion: z.number().int().nonnegative(),
 });

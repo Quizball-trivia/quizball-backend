@@ -655,7 +655,7 @@ export interface AuctionSoloPickSelectPayload {
   option: 'A' | 'B';
 }
 
-export type AuctionUiReadyPhase = 'round' | 'bidding';
+export type AuctionUiReadyPhase = 'round' | 'bidding' | 'reveal';
 
 export interface AuctionUiReadyPayload {
   matchId: string;

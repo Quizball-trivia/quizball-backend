@@ -49,6 +49,8 @@ import { AuctionActionError } from './auction-action-errors.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
 import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
+const AUCTION_REVEAL_UI_READY_CEILING_MS = 6_000;
+
 export interface AuctionMatchFlowOptions {
   now?: Date;
   context?: AuctionEngineContext;
@@ -63,10 +65,29 @@ export async function advanceAuctionMatchFlowAfterMutation(
 
   if (state.phase === 'reveal' && state.currentRound) {
     emitRoundRevealed(io, state);
+    openAuctionUiReadyGate({
+      io,
+      state,
+      phase: 'reveal',
+      ceilingMs: AUCTION_REVEAL_UI_READY_CEILING_MS,
+      dispatch: () => {
+        void advanceAuctionMatchFlowFromRevealGate(io, state, options);
+      },
+    });
+    return state;
   }
 
   const advanced = await advanceToNextAuctionStep(state, options);
   return emitAuctionStepStarted(io, advanced, options);
+}
+
+async function advanceAuctionMatchFlowFromRevealGate(
+  io: QuizballServer,
+  state: AuctionMatchState,
+  options: AuctionMatchFlowOptions
+): Promise<void> {
+  const advanced = await advanceToNextAuctionStep(state, options);
+  await emitAuctionStepStarted(io, advanced, options);
 }
 
 export async function handleAuctionSoloPickSelection(

@@ -223,11 +223,43 @@ describe('auction clue reveal timers', () => {
       expect.objectContaining({
         matchId: 'match-1',
         roundId: 'round-1',
-        currentTurnSeatId: 'seat-human',
-        turnEndsAt: '2026-06-20T10:00:30.000Z',
+        currentTurnSeatId: null,
+        turnEndsAt: null,
         stateVersion: 3,
+        round: expect.objectContaining({
+          currentTurnSeatId: null,
+          turnEndsAt: null,
+        }),
       })
     );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:waiting_for_ready',
+      expect.objectContaining({
+        matchId: 'match-1',
+        phase: 'bidding',
+        roundId: 'round-1',
+        stateVersion: 3,
+        totalCount: 1,
+        waitingUserIds: ['user-1'],
+      })
+    );
+    expect(roomEmit).not.toHaveBeenCalledWith('auction:turn_started', expect.anything());
+    expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalledWith(
+      'auction_turn_timeout',
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+
+    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
+    acknowledgeAuctionUiReady(io, 'user-1', {
+      matchId: 'match-1',
+      phase: 'bidding',
+      roundId: 'round-1',
+      stateVersion: 3,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:turn_started',
       expect.objectContaining({

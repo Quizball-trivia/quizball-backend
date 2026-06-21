@@ -11,6 +11,7 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import { scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
+import { emitAuctionUiReadyGateState } from './auction-ui-ready.service.js';
 
 const BOOT_AUCTION_REARM_DELAY_MS = 3_000;
 const BOOT_AUCTION_REARM_BATCH = 500;
@@ -134,15 +135,17 @@ export const auctionLifecycleService = {
 };
 
 export async function ensureAuctionActiveTimers(
-  _io: QuizballServer,
+  io: QuizballServer,
   state: AuctionMatchState
 ): Promise<boolean> {
   if (state.phase === 'clue_reveal' && state.currentRound) {
+    if (emitAuctionUiReadyGateState(io, state, 'round')) return true;
     await scheduleAuctionClueRevealTimer(state);
     return true;
   }
 
   if (state.phase === 'bidding' && state.currentRound?.currentTurnSeatId) {
+    if (emitAuctionUiReadyGateState(io, state, 'bidding')) return true;
     await scheduleAuctionTurnTimeoutTimer(state);
     await scheduleAuctionBotActionTimer(state);
     return true;

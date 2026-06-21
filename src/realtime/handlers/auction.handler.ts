@@ -5,6 +5,7 @@ import {
   auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
+  auctionUiReadySchema,
 } from '../schemas/auction.schemas.js';
 import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
@@ -13,6 +14,7 @@ import {
   handleAuctionFold,
   handleAuctionSoloPickSelect,
 } from '../services/auction-turn.service.js';
+import { acknowledgeAuctionUiReady } from '../services/auction-ui-ready.service.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 
 export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSocket): void {
@@ -105,6 +107,36 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
         code: 'auction_action_failed',
         message: 'Failed to submit auction solo pick',
       });
+    }
+  });
+
+  socket.on('auction:ui_ready', async (payload) => {
+    const parsed = auctionUiReadySchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:ui_ready payload');
+      socket.emit('auction:error', {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid auction ui-ready payload',
+        meta: parsed.error.flatten() as Record<string, unknown>,
+      });
+      return;
+    }
+
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+    const acknowledged = acknowledgeAuctionUiReady(io, userId, parsed.data);
+    if (!acknowledged) {
+      logger.debug(
+        {
+          eventName: 'auction:ui_ready',
+          matchId: parsed.data.matchId,
+          phase: parsed.data.phase,
+          roundId: parsed.data.roundId,
+          stateVersion: parsed.data.stateVersion,
+          userId,
+        },
+        'Auction UI-ready ack ignored'
+      );
     }
   });
 

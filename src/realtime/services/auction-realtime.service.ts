@@ -18,6 +18,7 @@ import {
   type PublicAuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
+import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -150,9 +151,16 @@ export async function startAuctionMatchForHumans(
 
   io.to(`match:${saved.matchId}`).emit('auction:match_started', startedPayload);
   io.to(`match:${saved.matchId}`).emit('auction:round_started', roundPayload);
-  await scheduleAuctionClueRevealTimer(saved, {
-    now: options.context?.now?.(),
-    context: options.context,
+  openAuctionUiReadyGate({
+    io,
+    state: saved,
+    phase: 'round',
+    dispatch: () => {
+      void scheduleAuctionClueRevealTimer(saved, {
+        now: options.context?.now?.(),
+        context: options.context,
+      });
+    },
   });
 
   return saved;

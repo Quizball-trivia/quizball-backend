@@ -130,10 +130,7 @@ describe('auctionRealtimeService', () => {
     expect(auctionContentServiceMock.assertPublishedAuctionContentAvailable).toHaveBeenCalledWith('en');
     expect(auctionContentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith({ locale: 'en' });
     expect(auctionStateStoreMock.save).toHaveBeenCalledTimes(1);
-    expect(clueTimerMock.scheduleAuctionClueRevealTimer).toHaveBeenCalledWith(
-      expect.objectContaining({ matchId: 'match-id', phase: 'clue_reveal' }),
-      { now: new Date('2026-06-20T10:00:00.000Z'), context: deterministicContext }
-    );
+    expect(clueTimerMock.scheduleAuctionClueRevealTimer).not.toHaveBeenCalled();
     expect(socket.join).toHaveBeenCalledWith('match:match-id');
     expect(socket.data.matchId).toBe('match-id');
     expect(socket.data.lobbyId).toBeUndefined();
@@ -152,6 +149,30 @@ describe('auctionRealtimeService', () => {
           startingPrice: 30_000_000,
         }),
       })
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:waiting_for_ready',
+      expect.objectContaining({
+        matchId: 'match-id',
+        phase: 'round',
+        stateVersion: 0,
+        totalCount: 1,
+        waitingUserIds: ['user-1'],
+      })
+    );
+
+    const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
+    acknowledgeAuctionUiReady(io, 'user-1', {
+      matchId: 'match-id',
+      phase: 'round',
+      roundId: 'round-id',
+      stateVersion: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(clueTimerMock.scheduleAuctionClueRevealTimer).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-id', phase: 'clue_reveal' }),
+      { now: new Date('2026-06-20T10:00:00.000Z'), context: deterministicContext }
     );
   });
 

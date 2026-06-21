@@ -25,6 +25,7 @@ import type {
 } from '../socket.types.js';
 import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.service.js';
 import { emitAndScheduleAuctionTurnStarted } from './auction-turn.service.js';
+import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
 export type AuctionClueRevealPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_reveal' }>;
 
@@ -92,7 +93,14 @@ export async function runAuctionClueRevealTimer(
 
   if (outcome.kind === 'bidding_started') {
     io.to(`match:${outcome.state.matchId}`).emit('auction:bidding_started', buildBiddingStartedPayload(publicState));
-    await emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
+    openAuctionUiReadyGate({
+      io,
+      state: outcome.state,
+      phase: 'bidding',
+      dispatch: () => {
+        void emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
+      },
+    });
     return outcome;
   }
 
@@ -183,7 +191,7 @@ function buildBiddingStartedPayload(publicState: PublicAuctionMatchState): Aucti
   if (!publicState.currentRound) {
     throw new Error('Auction round unavailable for bidding payload');
   }
-  const round = publicState.currentRound as PublicAuctionRoundState;
+  const round = hidePendingTurn(publicState.currentRound as PublicAuctionRoundState);
   return {
     matchId: publicState.matchId,
     roundId: round.roundId,
@@ -192,5 +200,13 @@ function buildBiddingStartedPayload(publicState: PublicAuctionMatchState): Aucti
     turnEndsAt: round.turnEndsAt,
     stateVersion: publicState.version,
     serverNow: new Date().toISOString(),
+  };
+}
+
+function hidePendingTurn(round: PublicAuctionRoundState): PublicAuctionRoundState {
+  return {
+    ...round,
+    currentTurnSeatId: null,
+    turnEndsAt: null,
   };
 }

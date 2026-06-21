@@ -47,6 +47,7 @@ import type {
 } from '../socket.types.js';
 import { AuctionActionError } from './auction-action-errors.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
+import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
 export interface AuctionMatchFlowOptions {
   now?: Date;
@@ -136,7 +137,14 @@ export async function emitAuctionStepStarted(
       stateVersion: state.version,
       serverNow: new Date().toISOString(),
     });
-    await scheduleAuctionClueRevealTimerFromFlow(state, options);
+    openAuctionUiReadyGate({
+      io,
+      state,
+      phase: 'round',
+      dispatch: () => {
+        void scheduleAuctionClueRevealTimerFromFlow(state, options);
+      },
+    });
     return state;
   }
 

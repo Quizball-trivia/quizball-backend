@@ -37,6 +37,14 @@ export const auctionSoloPickSelectSchema = z.object({
   option: z.enum(['A', 'B']),
 });
 
+export const auctionUiReadySchema = z.object({
+  matchId: z.string().min(1),
+  phase: z.enum(['round', 'bidding']),
+  roundId: z.string().min(1),
+  stateVersion: z.number().int().nonnegative(),
+});
+
 export type AuctionBidInput = z.infer<typeof auctionBidSchema>;
 export type AuctionFoldInput = z.infer<typeof auctionFoldSchema>;
 export type AuctionSoloPickSelectInput = z.infer<typeof auctionSoloPickSelectSchema>;
+export type AuctionUiReadyInput = z.infer<typeof auctionUiReadySchema>;

@@ -134,6 +134,7 @@ export async function emitAuctionStepStarted(
       matchId: state.matchId,
       round: requirePublicRound(publicState),
       stateVersion: state.version,
+      serverNow: new Date().toISOString(),
     });
     await scheduleAuctionClueRevealTimerFromFlow(state, options);
     return state;

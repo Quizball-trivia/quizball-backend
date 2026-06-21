@@ -175,6 +175,7 @@ function buildClueRevealedPayload(
     clue,
     round: publicState.currentRound,
     stateVersion: publicState.version,
+    serverNow: new Date().toISOString(),
   };
 }
 
@@ -190,5 +191,6 @@ function buildBiddingStartedPayload(publicState: PublicAuctionMatchState): Aucti
     currentTurnSeatId: round.currentTurnSeatId,
     turnEndsAt: round.turnEndsAt,
     stateVersion: publicState.version,
+    serverNow: new Date().toISOString(),
   };
 }

@@ -52,6 +52,7 @@ export function buildTurnStartedPayload(state: AuctionMatchState): AuctionTurnSt
     turnEndsAt: round.turnEndsAt,
     round: publicRound,
     stateVersion: state.version,
+    serverNow: new Date().toISOString(),
   };
 }
 

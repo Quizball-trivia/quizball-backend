@@ -144,6 +144,7 @@ export async function startAuctionMatchForHumans(
     matchId: saved.matchId,
     locale: input.locale,
     state: publicState,
+    serverNow: new Date().toISOString(),
   };
   const roundPayload = buildRoundStartedPayload(publicState);
 
@@ -185,5 +186,6 @@ function buildRoundStartedPayload(publicState: PublicAuctionMatchState): Auction
     matchId: publicState.matchId,
     round,
     stateVersion: publicState.version,
+    serverNow: new Date().toISOString(),
   };
 }

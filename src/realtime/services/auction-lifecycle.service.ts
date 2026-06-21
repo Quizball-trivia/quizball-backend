@@ -65,6 +65,7 @@ export const auctionLifecycleService = {
       matchId: state.matchId,
       state: publicState,
       stateVersion: state.version,
+      serverNow: new Date().toISOString(),
     });
 
     await ensureAuctionActiveTimers(io, state);

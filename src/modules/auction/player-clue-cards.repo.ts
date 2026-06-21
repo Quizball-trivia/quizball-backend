@@ -270,16 +270,32 @@ export const playerClueCardsRepo = {
     reviewNotes: string | null,
     rejectionReason: string | null
   ): Promise<PlayerClueCardRow | null> {
-    const [row] = await sql<PlayerClueCardRow[]>`
-      UPDATE player_clue_cards
-      SET status = ${status},
-          review_notes = ${reviewNotes},
-          rejection_reason = ${rejectionReason},
-          updated_at = NOW()
-      WHERE id = ${id}
-      RETURNING *
-    `;
-    return row ?? null;
+    // player_clue_cards is per-locale: an `en` card and its `ka` sibling share
+    // football_player_id but are separate rows. Publishing an `en` card must also
+    // publish its `ka` sibling (same as the auction review endpoint) so Georgian
+    // players get the content at the same moment — otherwise ka rows sit in
+    // needs_review forever and the game returns auction_content_unavailable.
+    // Both writes run in one transaction. Only the publish gate is mirrored.
+    return sql.begin(async (tx) => {
+      const [row] = await tx.unsafe<PlayerClueCardRow[]>(
+        `UPDATE player_clue_cards
+         SET status = $2, review_notes = $3, rejection_reason = $4, updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, status, reviewNotes, rejectionReason]
+      );
+      if (!row) return null;
+
+      if (status === 'published' && row.locale === 'en') {
+        await tx.unsafe(
+          `UPDATE player_clue_cards
+           SET status = 'published', updated_at = NOW()
+           WHERE football_player_id = $1 AND locale = 'ka' AND status <> 'published'`,
+          [row.football_player_id]
+        );
+      }
+      return row;
+    });
   },
 
   async bulkUpdateStatus(
@@ -287,13 +303,29 @@ export const playerClueCardsRepo = {
     status: ClueCardStatus,
     reviewNotes: string | null
   ): Promise<number> {
-    const result = await sql`
-      UPDATE player_clue_cards
-      SET status = ${status},
-          review_notes = ${reviewNotes},
-          updated_at = NOW()
-      WHERE id = ANY(${sql.array(ids)}::uuid[])
-    `;
-    return result.count;
+    return sql.begin(async (tx) => {
+      const result = await tx.unsafe(
+        `UPDATE player_clue_cards
+         SET status = $2, review_notes = $3, updated_at = NOW()
+         WHERE id = ANY($1::uuid[])`,
+        [ids, status, reviewNotes]
+      );
+
+      // Cascade publish to the ka siblings of every en card just published.
+      if (status === 'published') {
+        await tx.unsafe(
+          `UPDATE player_clue_cards ka
+           SET status = 'published', updated_at = NOW()
+           FROM player_clue_cards en
+           WHERE en.id = ANY($1::uuid[])
+             AND en.locale = 'en'
+             AND ka.football_player_id = en.football_player_id
+             AND ka.locale = 'ka'
+             AND ka.status <> 'published'`,
+          [ids]
+        );
+      }
+      return result.count;
+    });
   },
 };

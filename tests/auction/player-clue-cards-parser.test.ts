@@ -78,11 +78,20 @@ Player 3 Difficulty: hard Clue 1: I am from Croatia. Clue 2: I won the Champions
     expect(rows[2].rowIndex).toBe(3);
   });
 
-  it('rejects clue containing answer name', () => {
+  it('rejects a clue that leaks the full answer name', () => {
     const text = `Player 1 Clue 1: I am Lionel Messi from Argentina. Clue 2: I won the World Cup. Clue 3: I play for Inter Miami. Answer: Lionel Messi`;
     const { rows } = parsePlayerClueFile(text);
 
-    expect(rows[0].validationErrors).toContainEqual(expect.stringContaining('contains part of the answer'));
+    expect(rows[0].validationErrors).toContainEqual(expect.stringContaining('contains the answer name'));
+  });
+
+  it('does NOT flag common football terms or a surname-only overlap', () => {
+    // Clues full of record/World Cup/final etc. are normal content, not errors.
+    const text = `Player 1 Clue 1: I hold the all-time scoring record in the World Cup final. Clue 2: I am the first and only to do this. Clue 3: I am a legendary striker. Answer: Some Player`;
+    const { rows } = parsePlayerClueFile(text);
+
+    expect(rows[0].validationErrors).toHaveLength(0);
+    expect(rows[0].factRiskFlags).toHaveLength(0);
   });
 
   it('rejects empty clues', () => {
@@ -99,20 +108,21 @@ Player 3 Difficulty: hard Clue 1: I am from Croatia. Clue 2: I won the Champions
     expect(rows[0].validationErrors).toContainEqual(expect.stringContaining('Clue 1 and Clue 2 are identical'));
   });
 
-  it('rejects market value references in clues', () => {
-    const text = `Player 1 Clue 1: My market value is 180 million euros. Clue 2: I am from France. Clue 3: I play for Real Madrid. Answer: Kylian Mbappé`;
+  it('parses a difficulty trailing the answer ("Answer: Name. Easy")', () => {
+    const text = `Player 1 Clue 1: I am from Argentina here. Clue 2: I won the World Cup. Clue 3: I play in Miami now. Answer: Lionel Messi. Easy`;
     const { rows } = parsePlayerClueFile(text);
 
-    expect(rows[0].validationErrors).toContainEqual(expect.stringContaining('market value'));
+    expect(rows[0].answerName).toBe('Lionel Messi');
+    expect(rows[0].difficulty).toBe('easy');
+    expect(rows[0].difficultySource).toBe('row');
   });
 
-  it('produces fact-risk flags for high-risk terms', () => {
-    const text = `Player 1 Clue 1: I hold the record for most goals. Clue 2: I won the World Cup twice. Clue 3: I won the Ballon d'Or three times. Answer: Pelé`;
+  it('flags difficulty for AI rating when none is provided', () => {
+    const text = `Player 1 Clue 1: I am from Argentina here. Clue 2: I won the World Cup. Clue 3: I play in Miami now. Answer: Lionel Messi`;
     const { rows } = parsePlayerClueFile(text);
 
-    expect(rows[0].factRiskFlags).toContain('record');
-    expect(rows[0].factRiskFlags).toContain('world cup');
-    expect(rows[0].factRiskFlags).toContain("ballon d'or");
+    expect(rows[0].difficultySource).toBe('default');
+    expect(rows[0].warnings).toContain('difficulty_defaulted');
   });
 
   it('handles whitespace variations', () => {

@@ -11,7 +11,7 @@ export interface ParsedClueRow {
   sourcePlayerNumber: number | null;
   answerName: string;
   difficulty: ClueCardDifficulty;
-  difficultySource: 'row' | 'default';
+  difficultySource: 'row' | 'default' | 'ai';
   clue1: string;
   clue2: string;
   clue3: string;
@@ -39,6 +39,10 @@ export interface PreviewRow extends ParsedClueRow {
   candidates: FootballPlayerCandidate[];
   matchMethod: MatchMethod | null;
   matchConfidence: MatchConfidence | null;
+  /** This resolved player already appears earlier in the same upload. */
+  duplicateInBatch: boolean;
+  /** This player already has a card for this locale in the database. */
+  alreadyHasCard: boolean;
 }
 
 export interface PreviewResult {
@@ -46,6 +50,7 @@ export interface PreviewResult {
   matchedCount: number;
   ambiguousCount: number;
   unmatchedCount: number;
+  duplicateCount: number;
   warningCount: number;
   rows: PreviewRow[];
 }

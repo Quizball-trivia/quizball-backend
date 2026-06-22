@@ -163,6 +163,21 @@ export const playerClueCardsRepo = {
     };
   },
 
+  /** Return the subset of player IDs that already have a card for this locale. */
+  async findPlayersWithExistingCard(
+    footballPlayerIds: string[],
+    locale: ClueCardLocale
+  ): Promise<Set<string>> {
+    if (footballPlayerIds.length === 0) return new Set();
+    const rows = await sql<Array<{ football_player_id: string }>>`
+      SELECT DISTINCT football_player_id
+      FROM player_clue_cards
+      WHERE locale = ${locale}
+        AND football_player_id = ANY(${sql.array(footballPlayerIds)}::uuid[])
+    `;
+    return new Set(rows.map((r) => r.football_player_id));
+  },
+
   async upsertPlayerClueCard(params: {
     footballPlayerId: string;
     locale: ClueCardLocale;

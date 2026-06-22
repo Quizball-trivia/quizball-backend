@@ -2,11 +2,15 @@ import type { ClueCardDifficulty, ParsedClueRow } from './player-clue-cards.type
 
 const PLAYER_PREFIX = /^Player\s+(\d+)\s*/i;
 const CLUE_MARKER = /Clue\s+(\d+)\s*:/gi;
-const ANSWER_PATTERN = /Answer\s*:\s*(.+?)(?=\s+Difficulty:|$)/i;
+// Answer runs to "Difficulty:" OR a trailing bare difficulty word
+// ("Answer: Lionel Messi. Easy" / "Answer: Lionel Messi Easy") OR end of block.
+const ANSWER_PATTERN =
+  /Answer\s*:\s*(.+?)(?:[.\s]+(?:Difficulty\s*:\s*)?(?:easy|medium|hard))?\s*$/i;
 const DIFFICULTY_PATTERN = /Difficulty\s*:\s*(easy|medium|hard)\b/i;
 const ANY_DIFFICULTY_PATTERN = /Difficulty\s*:\s*(\S+)/i;
-
-const VALID_DIFFICULTIES: readonly string[] = ['easy', 'medium', 'hard'];
+// A bare difficulty word right after the answer, with or without "Difficulty:".
+const TRAILING_DIFFICULTY_PATTERN =
+  /Answer\s*:\s*.+?[.\s]+(?:Difficulty\s*:\s*)?(easy|medium|hard)\s*$/i;
 
 const MIN_CLUE_LENGTH = 10;
 const MAX_CLUE_LENGTH = 300;
@@ -116,21 +120,19 @@ function parseBlock(
     return null;
   }
 
+  // Difficulty may come as "Difficulty: X" or as a bare word trailing the
+  // answer ("Answer: Lionel Messi. Easy"). When neither is present we leave it
+  // unset and flag for AI rating downstream.
   const difficultyMatch = blockText.match(DIFFICULTY_PATTERN);
+  const trailingMatch = blockText.match(TRAILING_DIFFICULTY_PATTERN);
   const anyDifficultyMatch = blockText.match(ANY_DIFFICULTY_PATTERN);
   let difficulty: ClueCardDifficulty;
   let difficultySource: 'row' | 'default';
 
-  if (difficultyMatch) {
-    const diff = difficultyMatch[1].toLowerCase();
-    if (!VALID_DIFFICULTIES.includes(diff)) {
-      validationErrors.push(`Invalid difficulty "${difficultyMatch[1]}"`);
-      difficulty = defaultDifficulty;
-      difficultySource = 'default';
-    } else {
-      difficulty = diff as ClueCardDifficulty;
-      difficultySource = 'row';
-    }
+  const explicit = difficultyMatch?.[1] ?? trailingMatch?.[1];
+  if (explicit) {
+    difficulty = explicit.toLowerCase() as ClueCardDifficulty;
+    difficultySource = 'row';
   } else if (anyDifficultyMatch) {
     validationErrors.push(`Invalid difficulty "${anyDifficultyMatch[1]}"`);
     difficulty = defaultDifficulty;
@@ -152,9 +154,9 @@ function parseBlock(
   const clue2 = clues[1] ?? '';
   const clue3 = clues[2] ?? '';
 
-  validateClue(clue1, answerName, validationErrors, factRiskFlags, 1);
-  validateClue(clue2, answerName, validationErrors, factRiskFlags, 2);
-  validateClue(clue3, answerName, validationErrors, factRiskFlags, 3);
+  validateClue(clue1, answerName, validationErrors, 1);
+  validateClue(clue2, answerName, validationErrors, 2);
+  validateClue(clue3, answerName, validationErrors, 3);
 
   if (clue1 && clue2 && clue1.toLowerCase() === clue2.toLowerCase()) {
     validationErrors.push('Clue 1 and Clue 2 are identical');
@@ -186,7 +188,6 @@ function validateClue(
   clue: string,
   answerName: string,
   validationErrors: string[],
-  factRiskFlags: string[],
   clueNum: number
 ): void {
   if (!clue || clue.trim().length === 0) {
@@ -202,28 +203,12 @@ function validateClue(
     validationErrors.push(`Clue ${clueNum} is too long (${trimmed.length} chars, max ${MAX_CLUE_LENGTH})`);
   }
 
+  // Only flag a genuine leak: the FULL answer name appearing in a clue.
+  // Common football terms (record, World Cup, final, …) are expected content,
+  // not risks, so we no longer flag them.
   const clueLower = clue.toLowerCase();
-  const answerLower = answerName.toLowerCase();
-  const answerParts = answerLower.split(/\s+/).filter((p) => p.length >= 3);
-  for (const part of answerParts) {
-    if (clueLower.includes(part)) {
-      validationErrors.push(`Clue ${clueNum} contains part of the answer name ("${part}")`);
-      break;
-    }
-  }
-
-  if (/\$?\d[\d,]*\s*(million|billion|m\b|bn\b|eur\b)/i.test(clue)) {
-    validationErrors.push(`Clue ${clueNum} contains a market value reference`);
-  }
-
-  const riskTerms = [
-    'record', 'youngest', 'fastest', 'all-time', 'first', 'only',
-    'top scorer', 'world cup', 'champions league', "ballon d'or",
-    'award', 'title', 'final',
-  ];
-  for (const term of riskTerms) {
-    if (clueLower.includes(term)) {
-      factRiskFlags.push(term);
-    }
+  const answerLower = answerName.toLowerCase().trim();
+  if (answerLower.length >= 4 && clueLower.includes(answerLower)) {
+    validationErrors.push(`Clue ${clueNum} contains the answer name`);
   }
 }

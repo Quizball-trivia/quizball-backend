@@ -22,7 +22,7 @@ export type ClueCardIdParam = z.infer<typeof clueCardIdParamSchema>;
 export const importPreviewRequestSchema = z.object({
   text: z.string().min(1, 'Text is required'),
   locale: clueCardLocaleEnum,
-  promptVersion: z.string().trim().min(1).optional().default('editor-v1'),
+  promptVersion: z.string().trim().min(1).optional().default('cms-import'),
   defaultDifficulty: clueCardDifficultyEnum.optional().default('medium'),
   style: z.string().trim().min(1).optional().default('editor_first_person'),
 });
@@ -85,7 +85,7 @@ export const commitRowSchema = z.object({
 
 export const importCommitRequestSchema = z.object({
   locale: clueCardLocaleEnum,
-  promptVersion: z.string().trim().min(1).optional().default('editor-v1'),
+  promptVersion: z.string().trim().min(1).optional().default('cms-import'),
   defaultDifficulty: clueCardDifficultyEnum.optional().default('medium'),
   status: clueCardImportStatusEnum.optional().default('needs_review'),
   force: z.boolean().optional().default(false),

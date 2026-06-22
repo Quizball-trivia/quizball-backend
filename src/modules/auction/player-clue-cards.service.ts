@@ -32,23 +32,57 @@ export const playerClueCardsService = {
     }
 
     const previewRows: PreviewRow[] = [];
+    const provider = getTranslationProvider();
 
     for (const parsed of parsedRows) {
       const matchResult = await playerClueCardsRepo.matchPlayerByName(parsed.answerName);
 
+      // When the upload gave no difficulty, let the LLM read the clues and
+      // assign one (shown in the preview before the editor accepts).
+      let difficulty = parsed.difficulty;
+      let difficultySource = parsed.difficultySource;
+      if (difficultySource === 'default' && provider.isConfigured()) {
+        difficulty = await provider.rateDifficulty([parsed.clue1, parsed.clue2, parsed.clue3]);
+        difficultySource = 'ai';
+      }
+
       previewRows.push({
         ...parsed,
+        difficulty,
+        difficultySource,
         matchStatus: matchResult.matchStatus,
         matchedPlayer: matchResult.matchedPlayer,
         candidates: matchResult.candidates,
         matchMethod: matchResult.matchMethod,
         matchConfidence: matchResult.matchConfidence,
+        duplicateInBatch: false,
+        alreadyHasCard: false,
       });
+    }
+
+    // Flag duplicates so the editor decides consciously instead of silently
+    // skipping/overwriting on commit. (a) the same resolved player appearing
+    // more than once in this paste, and (b) a player who already has a card.
+    const resolvedIds = previewRows
+      .map((r) => r.matchedPlayer?.footballPlayerId)
+      .filter((id): id is string => !!id);
+    const existing = await playerClueCardsRepo.findPlayersWithExistingCard(
+      resolvedIds,
+      params.locale as ClueCardLocale
+    );
+    const seenInBatch = new Set<string>();
+    for (const row of previewRows) {
+      const id = row.matchedPlayer?.footballPlayerId;
+      if (!id) continue;
+      if (seenInBatch.has(id)) row.duplicateInBatch = true;
+      else seenInBatch.add(id);
+      if (existing.has(id)) row.alreadyHasCard = true;
     }
 
     const matchedCount = previewRows.filter((r) => r.matchStatus === 'matched').length;
     const ambiguousCount = previewRows.filter((r) => r.matchStatus === 'ambiguous').length;
     const unmatchedCount = previewRows.filter((r) => r.matchStatus === 'unmatched').length;
+    const duplicateCount = previewRows.filter((r) => r.duplicateInBatch || r.alreadyHasCard).length;
     const warningCount = previewRows.reduce((sum, r) => sum + r.warnings.length + r.factRiskFlags.length, 0);
 
     return {
@@ -56,6 +90,7 @@ export const playerClueCardsService = {
       matchedCount,
       ambiguousCount,
       unmatchedCount,
+      duplicateCount,
       warningCount,
       rows: previewRows,
     };

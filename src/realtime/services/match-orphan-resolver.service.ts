@@ -1,6 +1,9 @@
 import type { QuizballServer } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
+import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { usersRepo } from '../../modules/users/users.repo.js';
+import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
 import { getRedisClient } from '../redis.js';
@@ -17,7 +20,7 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
 import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
-import { resolveMatchPresence } from './match-presence.service.js';
+import { canForfeitToPresentPlayers, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
 type OrphanRosterPlayer = { user_id: string };
@@ -84,7 +87,14 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
     ...(connectingUserId ? { connectingUserId } : {}),
   });
 
-  if (presence.absentPlayers.length === 1 && presence.presentPlayers.length > 0) {
+  // Same guard as the live disconnect path: an AI-only "present" set must not
+  // be handed a forfeit win over an absent human (the AI is synthetically
+  // present and cannot leave). Fall through to progress / abandon instead.
+  if (
+    canForfeitToPresentPlayers(presence) &&
+    presence.absentPlayers.length === 1 &&
+    presence.presentPlayers.length > 0
+  ) {
     const forfeitingUserId = presence.absentPlayers[0]?.user_id;
     if (forfeitingUserId) {
       const finalized = await finalizeMatchAsForfeit({
@@ -143,6 +153,37 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
   if (!abandoned.abandoned) {
     return { outcome: 'skipped', reason: 'abandon_lock_or_inactive' };
   }
+
+  // A ranked no-contest abandon must refund every human's consumed ranked ticket,
+  // mirroring the live disconnect path (abandonPossessionTerminalMatch). Without
+  // this, an orphan/stale abandon — now also reachable when the AI-forfeit guard
+  // routes an AI-only-present match here and progress is undecidable — silently
+  // costs the human a ticket. Best-effort; party-quiz uses its own flow.
+  const variant = resolveMatchVariant(match.state_payload, match.mode);
+  if (match.mode === 'ranked' && variant !== 'friendly_party_quiz') {
+    // Best-effort over the WHOLE refund computation: the match is already
+    // abandoned above, so a throw in usersRepo.getByIds must not skip the Redis
+    // cleanup / return below. Wrap the lookup too, not just the refund call.
+    let humanUserIds: string[] = [];
+    try {
+      const rosterUsers = await usersRepo.getByIds(userIds);
+      // Only refund ids that resolved to an explicitly human row — never assume a
+      // missing/deleted id is human (no ghost refunds).
+      humanUserIds = roster
+        .map((player) => rosterUsers.get(player.user_id))
+        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+        .map((user) => user.id);
+      if (humanUserIds.length > 0) {
+        await storeService.refundRankedTickets(humanUserIds);
+      }
+    } catch (error) {
+      logger.warn(
+        { error, matchId: match.id, humanUserIds },
+        'Failed to refund ranked tickets on orphan no-contest abandon'
+      );
+    }
+  }
+
   await cleanupOrphanMatchRedisKeys(match.id, userIds);
   logger.info(
     {

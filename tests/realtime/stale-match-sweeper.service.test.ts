@@ -55,9 +55,10 @@ vi.mock('../../src/realtime/possession-completion.js', () => ({
   completePossessionMatchFromProgress: (...a: unknown[]) => completePossessionMatchFromProgressMock(...a),
 }));
 
-vi.mock('../../src/realtime/services/match-presence.service.js', () => ({
-  resolveMatchPresence: (...a: unknown[]) => resolveMatchPresenceMock(...a),
-}));
+vi.mock('../../src/realtime/services/match-presence.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/services/match-presence.service.js')>();
+  return { ...actual, resolveMatchPresence: (...a: unknown[]) => resolveMatchPresenceMock(...a) };
+});
 
 vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
   abandonMatchWithCompleteLock: (...a: unknown[]) => abandonMatchWithCompleteLockMock(...a),
@@ -130,6 +131,44 @@ function player(userId: string, seat: number): MatchPlayerRow {
   } as MatchPlayerRow;
 }
 
+// Build a presence resolution with the playerStates the real resolver returns,
+// so the AI-forfeit guard (canForfeitToPresentPlayers, which reads the per-player
+// `'ai'` reason) sees the same shape it does in production. `aiUserIds` marks
+// which present players are AI bots.
+function presenceFor(
+  present: MatchPlayerRow[],
+  absent: MatchPlayerRow[],
+  aiUserIds: string[] = []
+) {
+  const ai = new Set(aiUserIds);
+  const playerStates = [
+    ...present.map((p) => ({
+      player: p,
+      userId: p.user_id,
+      present: true,
+      absent: false,
+      reasons: ai.has(p.user_id) ? ['ai'] : ['room_socket'],
+    })),
+    ...absent.map((p) => ({
+      player: p,
+      userId: p.user_id,
+      present: false,
+      absent: true,
+      reasons: ['disconnect_key'],
+    })),
+  ];
+  return {
+    playerStates,
+    presentPlayers: present,
+    absentPlayers: absent,
+    roomSocketUserIds: present.filter((p) => !ai.has(p.user_id)).map((p) => p.user_id),
+    presenceKeyUserIds: [],
+    disconnectKeyUserIds: absent.map((p) => p.user_id),
+    exitPendingUserIds: [],
+    matchSocketCount: present.length,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetTriggerCache();
@@ -150,14 +189,7 @@ beforeEach(() => {
     completed: false,
     reason: 'undecidable',
   });
-  resolveMatchPresenceMock.mockResolvedValue({
-    presentPlayers: [],
-    absentPlayers: [],
-    roomSocketUserIds: [],
-    presenceKeyUserIds: [],
-    disconnectKeyUserIds: [],
-    matchSocketCount: 0,
-  });
+  resolveMatchPresenceMock.mockResolvedValue(presenceFor([], []));
   finalizeMatchAsForfeitMock.mockResolvedValue({ matchId: 'match-1', winnerId: 'ai-1', resultVersion: 1, completed: true });
   buildFinalResultsPayloadMock.mockResolvedValue({ some: 'payload' });
   emitFinalResultsMock.mockResolvedValue(undefined);
@@ -190,14 +222,9 @@ describe('stale-match-sweeper', () => {
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('u1', 1), player('u2', 2)]);
     // Presence cannot isolate one absent loser (both absent) → progress fallback.
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [],
-      absentPlayers: [player('u1', 1), player('u2', 2)],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 0,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([], [player('u1', 1), player('u2', 2)])
+    );
     completePossessionMatchFromProgressMock.mockResolvedValue({
       matchId: 'match-1',
       winnerId: 'u1',
@@ -227,14 +254,9 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('human-2', 2)]);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [player('human-2', 2)],
-      absentPlayers: [player('human-1', 1)],
-      roomSocketUserIds: ['human-2'],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 1,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([player('human-2', 2)], [player('human-1', 1)])
+    );
     // Progress WOULD pick the absent points-leader — it must never be asked.
     completePossessionMatchFromProgressMock.mockResolvedValue({
       matchId: 'match-1',
@@ -252,27 +274,29 @@ describe('stale-match-sweeper', () => {
     expect(completePossessionMatchFromProgressMock).not.toHaveBeenCalled();
   });
 
-  it('forfeits the absent human when an AI counterpart is present', async () => {
+  it('does NOT forfeit the absent human to a present AI — completes from progress instead', async () => {
+    // The bot is synthetically "present" but cannot win by forfeit over a human
+    // who merely dropped. Resolve from progress (the human's lead) instead of
+    // gifting the bot the match. Regression: Thenotorious vs qartlosii 2026-06-19.
     const stale = match();
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [player('ai-1', 2)],
-      absentPlayers: [player('human-1', 1)],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 0,
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([player('ai-1', 2)], [player('human-1', 1)], ['ai-1'])
+    );
+    completePossessionMatchFromProgressMock.mockResolvedValue({
+      matchId: 'match-1',
+      winnerId: 'human-1',
+      resultVersion: 1,
+      completed: true,
+      decisionBasis: 'total_points',
     });
 
     await runSweep(io);
 
-    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledTimes(1);
-    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
-      expect.objectContaining({ matchId: 'match-1', forfeitingUserId: 'human-1' })
-    );
-    expect(emitFinalResultsMock).toHaveBeenCalledTimes(1);
+    expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
+    expect(completePossessionMatchFromProgressMock).toHaveBeenCalledTimes(1);
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 
@@ -281,14 +305,9 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('human-2', 2)]);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [],
-      absentPlayers: [player('human-1', 1), player('human-2', 2)],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 0,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([], [player('human-1', 1), player('human-2', 2)])
+    );
 
     await runSweep(io);
 
@@ -351,14 +370,9 @@ describe('stale-match-sweeper', () => {
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('u1', 1), player('u2', 2)]);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [player('u1', 1), player('u2', 2)],
-      absentPlayers: [],
-      roomSocketUserIds: ['u1', 'u2'],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 2,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([player('u1', 1), player('u2', 2)], [])
+    );
 
     await runSweep(io);
 
@@ -370,15 +384,10 @@ describe('stale-match-sweeper', () => {
     const stale = match();
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
-    listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [player('ai-1', 2)],
-      absentPlayers: [player('human-1', 1)],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 0,
-    });
+    listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('human-2', 2)]);
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([player('human-2', 2)], [player('human-1', 1)])
+    );
     finalizeMatchAsForfeitMock.mockResolvedValue({ matchId: 'match-1', winnerId: null, resultVersion: 1, completed: false });
 
     await runSweep(io);

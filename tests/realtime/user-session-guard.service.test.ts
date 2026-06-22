@@ -72,9 +72,10 @@ vi.mock('../../src/realtime/possession-completion.js', () => ({
   completePossessionMatchFromProgress: (...args: unknown[]) => completePossessionMatchFromProgressMock(...args),
 }));
 
-vi.mock('../../src/realtime/services/match-presence.service.js', () => ({
-  resolveMatchPresence: (...args: unknown[]) => resolveMatchPresenceMock(...args),
-}));
+vi.mock('../../src/realtime/services/match-presence.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/realtime/services/match-presence.service.js')>();
+  return { ...actual, resolveMatchPresence: (...args: unknown[]) => resolveMatchPresenceMock(...args) };
+});
 
 vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
   buildFinalResultsPayload: (...args: unknown[]) => buildFinalResultsPayloadMock(...args),
@@ -88,6 +89,34 @@ vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
 vi.mock('../../src/realtime/services/match-entry.service.js', () => ({
   resolveMatchReplayEvidence: (...args: unknown[]) => resolveMatchReplayEvidenceMock(...args),
 }));
+
+// Build the playerStates the real resolver returns so the AI-forfeit guard
+// (canForfeitToPresentPlayers) sees production-shaped data. aiUserIds marks bots.
+function presenceFor(
+  present: Array<{ user_id: string }>,
+  absent: Array<{ user_id: string }>,
+  aiUserIds: string[] = []
+) {
+  const ai = new Set(aiUserIds);
+  return {
+    playerStates: [
+      ...present.map((p) => ({
+        player: p, userId: p.user_id, present: true, absent: false,
+        reasons: ai.has(p.user_id) ? ['ai'] : ['room_socket'],
+      })),
+      ...absent.map((p) => ({
+        player: p, userId: p.user_id, present: false, absent: true, reasons: ['disconnect_key'],
+      })),
+    ],
+    presentPlayers: present,
+    absentPlayers: absent,
+    roomSocketUserIds: present.filter((p) => !ai.has(p.user_id)).map((p) => p.user_id),
+    presenceKeyUserIds: [],
+    disconnectKeyUserIds: absent.map((p) => p.user_id),
+    exitPendingUserIds: [],
+    matchSocketCount: present.length,
+  };
+}
 
 describe('user-session-guard.service', () => {
   beforeEach(() => {
@@ -125,14 +154,7 @@ describe('user-session-guard.service', () => {
       completed: false,
       reason: 'undecidable',
     });
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [],
-      absentPlayers: [],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: [],
-      matchSocketCount: 0,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(presenceFor([], []));
     buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
     emitFinalResultsMock.mockResolvedValue(undefined);
     abandonMatchWithCompleteLockMock.mockResolvedValue({ abandoned: true });
@@ -191,14 +213,9 @@ describe('user-session-guard.service', () => {
       })
       .mockResolvedValueOnce(null)
       .mockResolvedValue(null);
-    resolveMatchPresenceMock.mockResolvedValue({
-      presentPlayers: [{ user_id: 'u1' }],
-      absentPlayers: [{ user_id: 'u2' }],
-      roomSocketUserIds: [],
-      presenceKeyUserIds: [],
-      disconnectKeyUserIds: ['u2'],
-      matchSocketCount: 0,
-    });
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([{ user_id: 'u1' }], [{ user_id: 'u2' }])
+    );
 
     const io = {
       in: vi.fn(() => ({

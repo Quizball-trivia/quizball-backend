@@ -8,8 +8,10 @@ import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-sc
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import {
   auctionContentService,
+  auctionStateStore,
   type AuctionContentLocale,
 } from '../../modules/auction/index.js';
+import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-state.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import {
   startAuctionMatchForHumans,
@@ -33,8 +35,16 @@ const AUCTION_MM_SEARCH_KEY_PREFIX = 'auction:mm:search:';
 const AUCTION_MM_LOCK_KEY = 'lock:auction:mm';
 const AUCTION_MM_LOCK_TTL_MS = 5_000;
 const AUCTION_MM_SEARCH_TTL_SEC = 120;
-const AUCTION_ONE_HUMAN_FALLBACK_MS = 12_000;
-const AUCTION_TWO_HUMAN_FALLBACK_MS = 10_000;
+// First AI bidder is staged after this long alone (the initial wait for a
+// second real player before any bot fill begins).
+const AUCTION_ONE_HUMAN_FALLBACK_MS = 10_000;
+// Staged bot backfill: after this long with no new real player, add ONE AI
+// bidder, emit the updated count (so the client's search animation advances
+// 1→2→3), then wait again before adding the next. Real players joining the
+// queue short-circuit the wait. Tunable.
+const AUCTION_BOT_BACKFILL_STEP_MS = 10_000;
+// Server-authoritative pre-match "GET READY" countdown once all 3 seats fill.
+const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
 interface QueuedAuctionSearch {
@@ -45,6 +55,8 @@ interface QueuedAuctionSearch {
   formation?: FormationName;
   queuedAt: number;
   fallbackAt: number;
+  /** How many AI bidders have been staged into this search so far (0..2). */
+  botFillCount?: number;
 }
 
 export interface AuctionSearchStartServiceInput {
@@ -72,12 +84,31 @@ export const auctionMatchmakingService = {
       return;
     }
 
-    if (socket.data.matchId || socket.data.lobbyId) {
+    // Block only if the user is GENUINELY still in a live match/lobby. The
+    // `socket.data.matchId` flag can go stale (match finished, user forfeited/
+    // left, or a reconnect re-set it) — so we self-heal like ranked does:
+    // verify the match in Redis and clear the flag if it's dead, instead of
+    // dead-ending the user on "already in a match".
+    if (socket.data.lobbyId) {
       emitAuctionError(socket, {
         code: 'auction_search_blocked',
         message: 'You are already in a match or lobby',
       });
       return;
+    }
+    if (socket.data.matchId) {
+      const staleMatchId = socket.data.matchId;
+      const stillInLiveMatch = await isUserInLiveAuctionMatch(staleMatchId, user.id);
+      if (stillInLiveMatch) {
+        emitAuctionError(socket, {
+          code: 'auction_search_blocked',
+          message: 'You are already in a match or lobby',
+        });
+        return;
+      }
+      // Stale flag — clear it (and the user→match index) and let the search run.
+      socket.data.matchId = undefined;
+      await auctionStateStore.clearUserMatchIndex(user.id, staleMatchId).catch(() => {});
     }
 
     try {
@@ -132,7 +163,17 @@ export const auctionMatchmakingService = {
           if (existingSearchId) {
             const existing = await readSearch(redis, existingSearchId);
             if (existing) {
-              emitSearchStarted(io, existing, await countQueuedByLocale(redis, existing.locale));
+              // Re-attaching to an in-flight search (e.g. a page reload). Make
+              // sure the bot-backfill fill timer is still armed — otherwise the
+              // search hangs forever at its current count. Re-arm it relative to
+              // now so the staged fill resumes.
+              const rearmed: QueuedAuctionSearch = {
+                ...existing,
+                fallbackAt: Date.now() + harnessDelayMs(AUCTION_BOT_BACKFILL_STEP_MS, 1_000),
+              };
+              await writeSearch(redis, rearmed);
+              await scheduleAuctionMatchmakingFill(rearmed);
+              emitSearchStarted(io, rearmed, await countQueuedByLocale(redis, rearmed.locale));
               return;
             }
             await redis.hDel(AUCTION_MM_USER_MAP_KEY, user.id);
@@ -220,22 +261,45 @@ export const auctionMatchmakingService = {
       if (!anchor) return;
 
       const queued = await listQueuedSearches(redis, anchor.locale);
-      const fillGroup = queued.slice(0, 2);
+      const fillGroup = queued.slice(0, 3);
       if (!fillGroup.some((entry) => entry.searchId === anchor.searchId)) return;
       if (fillGroup.length === 0) return;
-      if (fillGroup.length >= 2) {
-        const twoHumanReadyAt = fillGroup[1].queuedAt + harnessDelayMs(AUCTION_TWO_HUMAN_FALLBACK_MS, 1_000);
-        if (Date.now() < twoHumanReadyAt) {
-          await scheduleRealtimeTimer(
-            'auction_matchmaking_fill',
-            fillTimerKey(anchor.searchId),
-            new Date(twoHumanReadyAt),
-            { kind: 'auction_matchmaking_fill', searchId: anchor.searchId }
-          );
-          return;
-        }
+
+      // Enough real humans to run a pure-human match — start it now.
+      if (fillGroup.length >= 3) {
+        await startMatchFromQueuedSearches(io, redis, fillGroup.slice(0, 3));
+        return;
       }
 
+      // Staged bot backfill: seats = real humans + AI bidders staged so far.
+      const botFillCount = anchor.botFillCount ?? 0;
+      const seatsFilled = fillGroup.length + botFillCount;
+
+      if (seatsFilled < 3) {
+        // Add ONE AI bidder, bump the broadcast count so the client's search
+        // animation advances (1→2→3), then wait again before the next.
+        const nextBotFill = botFillCount + 1;
+        const updated: QueuedAuctionSearch = {
+          ...anchor,
+          botFillCount: nextBotFill,
+          fallbackAt: Date.now() + harnessDelayMs(AUCTION_BOT_BACKFILL_STEP_MS, 1_000),
+        };
+        await writeSearch(redis, updated);
+        // Broadcast the new count to every human in the fill group.
+        for (const human of fillGroup) {
+          const humanSearch = await readSearch(redis, human.searchId);
+          if (humanSearch) emitSearchStatus(io, humanSearch, fillGroup.length + nextBotFill);
+        }
+        await scheduleRealtimeTimer(
+          'auction_matchmaking_fill',
+          fillTimerKey(anchor.searchId),
+          new Date(updated.fallbackAt),
+          { kind: 'auction_matchmaking_fill', searchId: anchor.searchId }
+        );
+        return;
+      }
+
+      // Seats are full (humans + staged bots) — start the match.
       await startMatchFromQueuedSearches(io, redis, fillGroup);
     });
   },
@@ -312,10 +376,25 @@ function emitMatchFound(
     botCount,
     locale,
     formation,
+    // Single server-chosen instant so all clients count down in sync.
+    countdownEndsAt: new Date(Date.now() + AUCTION_PREMATCH_COUNTDOWN_MS).toISOString(),
   };
   for (const human of humans) {
     io.to(`user:${human.userId}`).emit('auction:match_found', payload);
   }
+}
+
+/**
+ * True only if the user is genuinely still seated in a live (non-finished)
+ * auction match. Used to self-heal a stale `socket.data.matchId` so a user who
+ * left/forfeited/finished isn't wrongly blocked from searching again.
+ */
+async function isUserInLiveAuctionMatch(matchId: string, userId: string): Promise<boolean> {
+  const state = await auctionStateStore.load(matchId).catch(() => null);
+  if (!state) return false;
+  if (state.phase === 'finished') return false;
+  const seat = findAuctionSeatByUserId(state, userId);
+  return Boolean(seat) && !seat?.isBot;
 }
 
 function emitSearchStarted(
@@ -330,6 +409,21 @@ function emitSearchStarted(
     seatsNeeded: Math.max(0, 3 - queuedUserCount),
     fallbackAt: new Date(search.fallbackAt).toISOString(),
   } satisfies AuctionSearchStartedPayload);
+  io.to(`user:${search.userId}`).emit('auction:search_status', {
+    searchId: search.searchId,
+    locale: search.locale,
+    queuedUserCount,
+    seatsNeeded: Math.max(0, 3 - queuedUserCount),
+    fallbackAt: new Date(search.fallbackAt).toISOString(),
+  } satisfies AuctionSearchStatusPayload);
+}
+
+/** Emit just the live queue-count update (used by the staged bot backfill). */
+function emitSearchStatus(
+  io: QuizballServer,
+  search: QueuedAuctionSearch,
+  queuedUserCount: number
+): void {
   io.to(`user:${search.userId}`).emit('auction:search_status', {
     searchId: search.searchId,
     locale: search.locale,
@@ -371,6 +465,7 @@ async function writeSearch(
       status: 'queued',
       queuedAt: String(search.queuedAt),
       fallbackAt: String(search.fallbackAt),
+      botFillCount: String(search.botFillCount ?? 0),
     })
     .expire(searchKey(search.searchId), AUCTION_MM_SEARCH_TTL_SEC)
     .zAdd(AUCTION_MM_QUEUE_KEY, { score: search.queuedAt, value: search.searchId })
@@ -397,6 +492,7 @@ async function readSearch(
     formation: isFormationName(row.formation) ? row.formation : undefined,
     queuedAt,
     fallbackAt,
+    botFillCount: Number.isFinite(Number(row.botFillCount)) ? Number(row.botFillCount) : 0,
   };
 }
 

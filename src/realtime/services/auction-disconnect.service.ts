@@ -259,6 +259,66 @@ export async function runAuctionDisconnectGraceTimer(
   return outcome;
 }
 
+/**
+ * Explicit, immediate forfeit (the "Leave / Forfeit" modal) — unlike a network
+ * disconnect, there is no grace wait. The leaving seat is resolved right away
+ * (the same path the grace timer uses): the match CONTINUES for the others, or
+ * finishes if no one can continue. The leaver's socket is detached from the
+ * match so they aren't blocked from searching again.
+ */
+export async function handleAuctionForfeit(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  options: AuctionDisconnectOptions = {}
+): Promise<void> {
+  const userId = socket.data.user?.id;
+  if (!userId) return;
+
+  const matchId = socket.data.matchId ?? (await auctionStateStore.getActiveMatchIdForUser(userId));
+  if (!matchId) return;
+
+  const state = await auctionStateStore.load(matchId);
+  if (!state || state.phase === 'finished') {
+    // Nothing live to forfeit — just detach so the next search isn't blocked.
+    await detachAuctionForfeiter(socket, userId, matchId);
+    return;
+  }
+
+  const seat = findAuctionSeatByUserId(state, userId);
+  if (!seat || seat.isBot) {
+    await detachAuctionForfeiter(socket, userId, matchId);
+    return;
+  }
+
+  // Resolve the seat immediately, reusing the grace-expiry path (skips the wait).
+  await markAuctionUserDisconnected({
+    matchId,
+    userId,
+    seatId: seat.seatId,
+    pauseUntil: new Date(Date.now()).toISOString(),
+    disconnectCount: await incrementAuctionDisconnectCount(matchId, userId),
+  });
+  await runAuctionDisconnectGraceTimer(
+    io,
+    { kind: 'auction_disconnect_grace', matchId, userId, seatId: seat.seatId, disconnectCount: 0 },
+    options,
+    'reconnect_limit'
+  );
+
+  await detachAuctionForfeiter(socket, userId, matchId);
+}
+
+/** Detach a forfeiting socket from the match so search isn't blocked. */
+async function detachAuctionForfeiter(
+  socket: QuizballSocket,
+  userId: string,
+  matchId: string
+): Promise<void> {
+  socket.leave(`match:${matchId}`);
+  socket.data.matchId = undefined;
+  await auctionStateStore.clearUserMatchIndex(userId, matchId).catch(() => {});
+}
+
 async function scheduleAuctionDisconnectGraceTimer(
   matchId: string,
   userId: string,

@@ -44,6 +44,10 @@ export const auctionUiReadySchema = z.object({
   stateVersion: z.number().int().nonnegative(),
 });
 
+export const auctionForfeitSchema = z.object({
+  matchId: z.string().min(1),
+});
+
 export type AuctionBidInput = z.infer<typeof auctionBidSchema>;
 export type AuctionFoldInput = z.infer<typeof auctionFoldSchema>;
 export type AuctionSoloPickSelectInput = z.infer<typeof auctionSoloPickSelectSchema>;

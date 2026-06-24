@@ -2,11 +2,13 @@ import { logger } from '../../core/logger.js';
 import {
   auctionBidSchema,
   auctionFoldSchema,
+  auctionForfeitSchema,
   auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
   auctionUiReadySchema,
 } from '../schemas/auction.schemas.js';
+import { handleAuctionForfeit } from '../services/auction-disconnect.service.js';
 import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
 import {
@@ -159,6 +161,24 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
       socket.emit('auction:error', {
         code: 'auction_search_failed',
         message: 'Failed to start auction search',
+      });
+    }
+  });
+
+  socket.on('auction:forfeit', async (payload) => {
+    const parsed = auctionForfeitSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:forfeit payload');
+      return;
+    }
+
+    try {
+      await handleAuctionForfeit(io, socket);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:forfeit handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_action_failed',
+        message: 'Failed to leave auction match',
       });
     }
   });

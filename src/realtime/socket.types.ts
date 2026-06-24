@@ -691,6 +691,9 @@ export interface AuctionMatchFoundPayload {
   botCount: number;
   locale: 'en' | 'ka';
   formation: FormationName;
+  /** Absolute server time (ISO) the pre-match countdown ends — all clients
+   *  count down to this same instant so they start in sync. */
+  countdownEndsAt: string;
 }
 
 export interface AuctionMatchStartedPayload {
@@ -1043,6 +1046,7 @@ export interface ClientToServerEvents {
   'auction:fold': (data: AuctionFoldPayload) => void;
   'auction:solo_pick_select': (data: AuctionSoloPickSelectPayload) => void;
   'auction:ui_ready': (data: AuctionUiReadyPayload) => void;
+  'auction:forfeit': (data: { matchId: string }) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;

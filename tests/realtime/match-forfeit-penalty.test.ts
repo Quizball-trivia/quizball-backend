@@ -189,9 +189,8 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     expect(result.cancelledNoContest).toBe(true);
     expect(bumpEarlyForfeitCountMock).toHaveBeenCalledWith(FORFEITER_ID);
     expect(applyEarlyForfeitRpPenaltyMock).not.toHaveBeenCalled();
-    expect(refundRankedTicketsMock).toHaveBeenCalledWith(
-      expect.arrayContaining([FORFEITER_ID, OPPONENT_ID])
-    );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
   });
 
   it('refunds both players and does NOT penalize on the 3rd early-forfeit', async () => {
@@ -206,9 +205,8 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
 
     expect(result.cancelledNoContest).toBe(true);
     expect(applyEarlyForfeitRpPenaltyMock).not.toHaveBeenCalled();
-    expect(refundRankedTicketsMock).toHaveBeenCalledWith(
-      expect.arrayContaining([FORFEITER_ID, OPPONENT_ID])
-    );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
   });
 
   it('penalizes the forfeiter on the 4th early-forfeit: deducts RP, skips ticket refund', async () => {
@@ -228,10 +226,8 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       100
     );
     // Forfeiter excluded from refund — only the opponent gets their ticket back.
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([OPPONENT_ID]);
-    expect(refundRankedTicketsMock).not.toHaveBeenCalledWith(
-      expect.arrayContaining([FORFEITER_ID])
-    );
   });
 
   it('penalizes the forfeiter on every early-forfeit beyond the 4th', async () => {
@@ -249,11 +245,13 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       MATCH_ID,
       100
     );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([OPPONENT_ID]);
   });
 
-  it('still refunds the opponent even when the forfeiter is penalized', async () => {
+  it('still refunds both players when the penalty returns null (no ranked profile)', async () => {
     bumpEarlyForfeitCountMock.mockResolvedValue(5);
+    applyEarlyForfeitRpPenaltyMock.mockResolvedValue(null);
 
     const { finalizeMatchAsForfeit } = await import('../../src/realtime/services/match-forfeit.service.js');
 
@@ -262,10 +260,34 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       forfeitingUserId: FORFEITER_ID,
     });
 
-    // The opponent must still be in the refund list.
-    expect(refundRankedTicketsMock).toHaveBeenCalledWith(
-      expect.arrayContaining([OPPONENT_ID])
+    // Penalty attempted but nothing deducted (no profile) — forfeiter still refunded.
+    expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledWith(
+      FORFEITER_ID,
+      MATCH_ID,
+      100
     );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
+  });
+
+  it('still refunds both players when the penalty call throws', async () => {
+    bumpEarlyForfeitCountMock.mockResolvedValue(5);
+    applyEarlyForfeitRpPenaltyMock.mockRejectedValue(new Error('DB down'));
+
+    const { finalizeMatchAsForfeit } = await import('../../src/realtime/services/match-forfeit.service.js');
+
+    await finalizeMatchAsForfeit({
+      matchId: MATCH_ID,
+      forfeitingUserId: FORFEITER_ID,
+    });
+
+    expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledWith(
+      FORFEITER_ID,
+      MATCH_ID,
+      100
+    );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
   });
 
   it('falls back to non-penalized refund if the counter bump throws', async () => {
@@ -281,8 +303,7 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     expect(result.cancelledNoContest).toBe(true);
     expect(applyEarlyForfeitRpPenaltyMock).not.toHaveBeenCalled();
     // Both players refunded as a safe fallback.
-    expect(refundRankedTicketsMock).toHaveBeenCalledWith(
-      expect.arrayContaining([FORFEITER_ID, OPPONENT_ID])
-    );
+    expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
   });
 });

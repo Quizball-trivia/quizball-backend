@@ -503,12 +503,10 @@ export const rankedRepo = {
       const oldRp = profileRows[0].rp;
       const newRp = oldRp - penaltyRp;
 
-      await tx.unsafe(
-        `UPDATE ranked_profiles SET rp = $1, updated_at = NOW() WHERE user_id = $2`,
-        [newRp, userId]
-      );
-
-      await tx.unsafe(
+      // Insert the ledger row first and gate the profile update on whether it
+      // actually inserted — mirrors applySettlement's idempotency pattern so a
+      // replayed penalty (same match_id + user_id) doesn't double-deduct RP.
+      const inserted = await tx.unsafe(
         `INSERT INTO ranked_rp_changes (
           match_id, user_id, opponent_user_id, opponent_is_ai,
           old_rp, delta_rp, new_rp, result, is_placement,
@@ -516,8 +514,20 @@ export const rankedRepo = {
           calculation_method, coins_awarded
         )
         VALUES ($1, $2, NULL, false, $3, $4, $5, 'loss', false, NULL, NULL, NULL, 'ranked_formula', 0)
-        ON CONFLICT (match_id, user_id) DO NOTHING`,
+        ON CONFLICT (match_id, user_id) DO NOTHING
+        RETURNING 1`,
         [matchId, userId, oldRp, -penaltyRp, newRp]
+      );
+
+      if (!inserted || inserted.length === 0) {
+        // Ledger row already existed — this penalty was already applied in a
+        // previous run. Don't touch RP again; return the current value.
+        return { oldRp, newRp: oldRp };
+      }
+
+      await tx.unsafe(
+        `UPDATE ranked_profiles SET rp = $1, updated_at = NOW() WHERE user_id = $2`,
+        [newRp, userId]
       );
 
       return { oldRp, newRp };

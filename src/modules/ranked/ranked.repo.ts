@@ -478,4 +478,49 @@ export const rankedRepo = {
     `;
     return result ?? null;
   },
+
+  /**
+   * Directly deduct RP from a user as an early-forfeit abuse penalty and log
+   * it in ranked_rp_changes. Unlike normal settlement, this is NOT match-
+   * derived — it's a punitive deduction for serial early-forfeit abuse.
+   *
+   * The deduction is uncapped (can take RP below 0 / below the tier floor)
+   * per the direct-subtraction policy. Returns null if the user has no
+   * ranked profile (nothing to deduct).
+   */
+  async applyEarlyForfeitRpPenalty(
+    userId: string,
+    matchId: string,
+    penaltyRp: number
+  ): Promise<{ oldRp: number; newRp: number } | null> {
+    return sql.begin(async (tx) => {
+      const profileRows = await tx.unsafe<{ rp: number }[]>(
+        `SELECT rp FROM ranked_profiles WHERE user_id = $1 FOR UPDATE`,
+        [userId]
+      );
+      if (!profileRows || profileRows.length === 0) return null;
+
+      const oldRp = profileRows[0].rp;
+      const newRp = oldRp - penaltyRp;
+
+      await tx.unsafe(
+        `UPDATE ranked_profiles SET rp = $1, updated_at = NOW() WHERE user_id = $2`,
+        [newRp, userId]
+      );
+
+      await tx.unsafe(
+        `INSERT INTO ranked_rp_changes (
+          match_id, user_id, opponent_user_id, opponent_is_ai,
+          old_rp, delta_rp, new_rp, result, is_placement,
+          placement_game_no, placement_anchor_rp, placement_perf_score,
+          calculation_method, coins_awarded
+        )
+        VALUES ($1, $2, NULL, false, $3, $4, $5, 'loss', false, NULL, NULL, NULL, 'ranked_formula', 0)
+        ON CONFLICT (match_id, user_id) DO NOTHING`,
+        [matchId, userId, oldRp, -penaltyRp, newRp]
+      );
+
+      return { oldRp, newRp };
+    });
+  },
 };

@@ -260,7 +260,8 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       forfeitingUserId: FORFEITER_ID,
     });
 
-    // Penalty attempted but nothing deducted (no profile) — forfeiter still refunded.
+    // Penalty attempted exactly once but nothing deducted (no profile) — forfeiter still refunded.
+    expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledTimes(1);
     expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledWith(
       FORFEITER_ID,
       MATCH_ID,
@@ -281,6 +282,7 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
       forfeitingUserId: FORFEITER_ID,
     });
 
+    expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledTimes(1);
     expect(applyEarlyForfeitRpPenaltyMock).toHaveBeenCalledWith(
       FORFEITER_ID,
       MATCH_ID,

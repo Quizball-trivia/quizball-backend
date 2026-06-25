@@ -36,10 +36,19 @@ export const recentMatchResultSchema = z.enum(['win', 'loss', 'draw']);
 
 export const winnerDecisionMethodSchema = z.enum(['goals', 'penalty_goals', 'total_points', 'total_points_fallback', 'forfeit']);
 
+export const recentMatchOpponentSchema = z.object({
+  id: z.string().uuid().nullable(),
+  username: z.string(),
+  avatarUrl: z.string().url().nullable(),
+  avatarCustomization: avatarCustomizationSchema.nullable(),
+  isAi: z.boolean(),
+  placement: z.number().int().nullable(),
+});
+
 export const recentMatchResponseSchema = z.object({
   matchId: z.string().uuid(),
-  mode: z.enum(['friendly', 'ranked']),
-  competition: z.enum(['friendly', 'placement', 'ranked']),
+  mode: z.enum(['friendly', 'ranked', 'auction']),
+  competition: z.enum(['friendly', 'placement', 'ranked', 'auction']),
   status: z.enum(['completed', 'abandoned']),
   result: recentMatchResultSchema,
   endedAt: z.string().datetime().nullable(),
@@ -52,6 +61,9 @@ export const recentMatchResponseSchema = z.object({
   winnerDecisionMethod: winnerDecisionMethodSchema.nullable(),
   cancelledNoContest: z.boolean().default(false),
   rpDelta: z.number().int().nullable(),
+  placement: z.number().int().nullable(),
+  playerCount: z.number().int().nonnegative().default(2),
+  opponents: z.array(recentMatchOpponentSchema).default([]),
   opponent: z.object({
     id: z.string().uuid().nullable(),
     username: z.string(),

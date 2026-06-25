@@ -221,11 +221,13 @@ export async function finalizeMatchAsForfeit(
       // Bump the forfeiter's rolling 24h early-forfeit counter. Beyond the
       // free limit, the forfeiter is penalized: no ticket refund and a direct
       // 100 RP deduction. The opponent (victim) always gets their ticket back.
-      let forfeiterPenalized = false;
+      // The refund suppression only takes effect if the RP deduction actually
+      // committed — if the penalty call throws or the user has no ranked
+      // profile, the forfeiter still gets their ticket refunded (safe default).
+      let penaltyApplied = false;
       let earlyForfeitCount = 0;
       try {
         earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(params.forfeitingUserId);
-        forfeiterPenalized = earlyForfeitCount > EARLY_FORFEIT_FREE_LIMIT;
       } catch (error) {
         logger.warn(
           { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },
@@ -233,39 +235,49 @@ export async function finalizeMatchAsForfeit(
         );
       }
 
-      if (forfeiterPenalized) {
+      if (earlyForfeitCount > EARLY_FORFEIT_FREE_LIMIT) {
         try {
           const rpResult = await rankedRepo.applyEarlyForfeitRpPenalty(
             params.forfeitingUserId,
             params.matchId,
             EARLY_FORFEIT_PENALTY_RP
           );
-          logger.info(
-            {
-              matchId: params.matchId,
-              forfeitingUserId: params.forfeitingUserId,
-              earlyForfeitCount,
-              oldRp: rpResult?.oldRp ?? null,
-              newRp: rpResult?.newRp ?? null,
-              penaltyRp: EARLY_FORFEIT_PENALTY_RP,
-            },
-            'Early-forfeit RP penalty applied (serial early-forfeit abuse)'
-          );
+          // rpResult is null when the user has no ranked profile — in that case
+          // there's nothing to deduct, so don't suppress the ticket refund.
+          penaltyApplied = rpResult != null;
+          if (penaltyApplied) {
+            logger.info(
+              {
+                matchId: params.matchId,
+                forfeitingUserId: params.forfeitingUserId,
+                earlyForfeitCount,
+                oldRp: rpResult!.oldRp,
+                newRp: rpResult!.newRp,
+                penaltyRp: EARLY_FORFEIT_PENALTY_RP,
+              },
+              'Early-forfeit RP penalty applied (serial early-forfeit abuse)'
+            );
+          } else {
+            logger.warn(
+              { matchId: params.matchId, forfeitingUserId: params.forfeitingUserId, earlyForfeitCount },
+              'Early-forfeit penalty skipped (no ranked profile) — ticket still refunded'
+            );
+          }
         } catch (error) {
           logger.warn(
             { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },
-            'Failed to apply early-forfeit RP penalty'
+            'Failed to apply early-forfeit RP penalty — ticket still refunded'
           );
         }
       }
 
       // Refund the ranked ticket to every human participant EXCEPT the
-      // penalized forfeiter (best-effort).
+      // penalized forfeiter (best-effort). The opponent always gets refunded.
       const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
       const humanUserIds = roster
         .map((player) => rosterUsers.get(player.user_id))
         .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
-        .filter((user) => !(forfeiterPenalized && user.id === params.forfeitingUserId))
+        .filter((user) => !(penaltyApplied && user.id === params.forfeitingUserId))
         .map((user) => user.id);
       if (humanUserIds.length > 0) {
         try {
@@ -284,10 +296,10 @@ export async function finalizeMatchAsForfeit(
           roundsPlayed,
           forfeitingUserId: params.forfeitingUserId,
           humanUserIds,
-          forfeiterPenalized,
+          penaltyApplied,
           earlyForfeitCount,
         },
-        forfeiterPenalized
+        penaltyApplied
           ? 'Ranked match cancelled as no-contest (early forfeit) — forfeiter penalized, opponent ticket refunded'
           : 'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
       );

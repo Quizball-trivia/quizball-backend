@@ -541,13 +541,13 @@ export const usersRepo = {
       SET
         early_forfeit_count = CASE
           WHEN early_forfeit_window_started_at IS NULL
-            OR early_forfeit_window_started_at < NOW() - INTERVAL '24 hours'
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
           THEN 1
           ELSE early_forfeit_count + 1
         END,
         early_forfeit_window_started_at = CASE
           WHEN early_forfeit_window_started_at IS NULL
-            OR early_forfeit_window_started_at < NOW() - INTERVAL '24 hours'
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
           THEN NOW()
           ELSE early_forfeit_window_started_at
         END,

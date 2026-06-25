@@ -17,6 +17,7 @@ const stateStoreMock = vi.hoisted(() => ({
 
 const schedulerMock = vi.hoisted(() => ({
   scheduleRealtimeTimer: vi.fn(),
+  cancelRealtimeTimer: vi.fn(),
 }));
 
 const redisMock = vi.hoisted(() => {
@@ -53,6 +54,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (importOriginal)
   return {
     ...actual,
     scheduleRealtimeTimer: schedulerMock.scheduleRealtimeTimer,
+    cancelRealtimeTimer: schedulerMock.cancelRealtimeTimer,
   };
 });
 
@@ -239,7 +241,7 @@ describe('auction disconnect service', () => {
     expect(roomEmit).not.toHaveBeenCalled();
   });
 
-  it('clears disconnect state and emits resume hydration when the user reconnects', async () => {
+  it('on reconnect: clears the disconnect marker, cancels grace, and starts a resume countdown', async () => {
     const { resumeAuctionUserIfDisconnected } = await import('../../src/realtime/services/auction-disconnect.service.js');
     redisMock.store.set('auction:disconnect:match-1:user-1', JSON.stringify({
       matchId: 'match-1',
@@ -261,7 +263,37 @@ describe('auction disconnect service', () => {
     const resumed = await resumeAuctionUserIfDisconnected(io, socket, biddingState());
 
     expect(resumed).toBe(true);
+    // Disconnect marker cleared + grace timer cancelled (no late forfeit).
     expect(redisMock.store.has('auction:disconnect:match-1:user-1')).toBe(false);
+    expect(schedulerMock.cancelRealtimeTimer).toHaveBeenCalledWith('auction_disconnect_grace', 'match-1:user-1');
+    // Resume countdown scheduled + broadcast; the match stays paused until it ends.
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_resume_countdown',
+      'match-1:user-1',
+      expect.any(Date),
+      expect.objectContaining({ kind: 'auction_resume_countdown', matchId: 'match-1', userId: 'user-1' }),
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:resume_countdown',
+      expect.objectContaining({ matchId: 'match-1' }),
+    );
+    expect(redisMock.store.has('auction:pause:match-1')).toBe(true);
+  });
+
+  it('resume countdown elapses: clears the pause and broadcasts auction:resume', async () => {
+    const { runAuctionResumeCountdownTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    redisMock.store.set('auction:pause:match-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    stateStoreMock.load.mockResolvedValue(biddingState());
+    const { io, roomEmit } = createIo();
+
+    await runAuctionResumeCountdownTimer(io, { kind: 'auction_resume_countdown', matchId: 'match-1', userId: 'user-1' });
+
     expect(redisMock.store.has('auction:pause:match-1')).toBe(false);
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:resume',
@@ -270,11 +302,7 @@ describe('auction disconnect service', () => {
         userId: 'user-1',
         seatId: 'seat-human',
         reason: 'reconnected',
-      })
-    );
-    expect(socket.emit).toHaveBeenCalledWith(
-      'auction:state',
-      expect.objectContaining({ matchId: 'match-1', stateVersion: 3 })
+      }),
     );
   });
 

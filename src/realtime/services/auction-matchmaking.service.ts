@@ -15,6 +15,7 @@ import { findAuctionSeatByUserId } from '../../modules/auction/auction-match-sta
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import {
   startAuctionMatchForHumans,
+  rejoinAuctionMatch,
   type AuctionMatchHumanPlayer,
 } from './auction-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -109,6 +110,21 @@ export const auctionMatchmakingService = {
       // Stale flag — clear it (and the user→match index) and let the search run.
       socket.data.matchId = undefined;
       await auctionStateStore.clearUserMatchIndex(user.id, staleMatchId).catch(() => {});
+    }
+
+    // Reload guard (keyed by USER, not the socket): a fresh socket after a page
+    // reload has no socket.data.matchId, so the check above can't see an active
+    // match. Look it up by userId and, if the user is still seated in a live
+    // match, RE-JOIN them to it instead of starting a second match (which would
+    // leave two matches both gating on this one client → the user can't bid).
+    const activeMatchId = await auctionStateStore
+      .getActiveMatchIdForUser(user.id)
+      .catch(() => null);
+    if (activeMatchId && (await isUserInLiveAuctionMatch(activeMatchId, user.id))) {
+      const rejoined = await rejoinAuctionMatch(io, socket, activeMatchId);
+      if (rejoined) return;
+      // Match vanished between the two reads — fall through to a fresh search.
+      await auctionStateStore.clearUserMatchIndex(user.id, activeMatchId).catch(() => {});
     }
 
     try {

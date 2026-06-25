@@ -15,6 +15,25 @@ class FakeRedis {
   isOpen = true;
   hashes = new Map<string, Record<string, string>>();
   zsets = new Map<string, Map<string, number>>();
+  strings = new Map<string, string>();
+  sets = new Map<string, Set<string>>();
+
+  get(key: string): Promise<string | null> {
+    return Promise.resolve(this.strings.get(key) ?? null);
+  }
+
+  set(key: string, value: string): Promise<string> {
+    this.strings.set(key, value);
+    return Promise.resolve('OK');
+  }
+
+  sAdd(key: string, value: string): Promise<number> {
+    const set = this.sets.get(key) ?? new Set<string>();
+    const had = set.has(value);
+    set.add(value);
+    this.sets.set(key, set);
+    return Promise.resolve(had ? 0 : 1);
+  }
 
   hGet(key: string, field: string): Promise<string | null> {
     return Promise.resolve(this.hashes.get(key)?.[field] ?? null);
@@ -131,6 +150,7 @@ const startMatchMock = vi.hoisted(() => ({
       formation: input.formation ?? '4-3-3',
     };
   }),
+  rejoinAuctionMatch: vi.fn(async () => true),
 }));
 
 const sessionGuardMock = vi.hoisted(() => ({
@@ -179,6 +199,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
 
 vi.mock('../../src/realtime/services/auction-realtime.service.js', () => ({
   startAuctionMatchForHumans: startMatchMock.startAuctionMatchForHumans,
+  rejoinAuctionMatch: startMatchMock.rejoinAuctionMatch,
 }));
 
 vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
@@ -259,15 +280,27 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('fills one bot when two humans wait for the fallback timer', async () => {
+  it('stages one bot for two humans, then starts a 2-human + 1-bot match on the next tick', async () => {
     const { io, roomEmit } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
     await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
+    const searchId = scheduledSearchIds()[0];
+
+    // First tick: 2 humans + 0 bots = 2 seats < 3 → stage ONE bot, reschedule,
+    // do NOT start yet.
     vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
-      searchId: scheduledSearchIds()[0],
+      searchId,
+    });
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+
+    // Second tick: 2 humans + 1 staged bot = 3 seats → start the match.
+    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
+    await auctionMatchmakingService.runFillTimer(io, {
+      kind: 'auction_matchmaking_fill',
+      searchId,
     });
 
     expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledWith(
@@ -286,7 +319,7 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('waits after the second human joins before filling one bot', async () => {
+  it('stages one bot on the first tick after a second human joins, reschedules, then starts', async () => {
     const { io } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
@@ -295,6 +328,7 @@ describe('auctionMatchmakingService', () => {
     await auctionMatchmakingService.handleSearchStart(io, socket('u2', 'Two'), { locale: 'en' });
     vi.setSystemTime(new Date('2026-06-20T10:00:12.000Z'));
 
+    // First tick: 2 humans + 0 bots → stage one bot and reschedule one step out.
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId: firstSearchId,
@@ -304,11 +338,12 @@ describe('auctionMatchmakingService', () => {
     expect(timerMock.scheduleRealtimeTimer).toHaveBeenLastCalledWith(
       'auction_matchmaking_fill',
       `auction:mm:fill:${firstSearchId}`,
-      new Date('2026-06-20T10:00:21.000Z'),
+      new Date('2026-06-20T10:00:22.000Z'),
       { kind: 'auction_matchmaking_fill', searchId: firstSearchId }
     );
 
-    vi.setSystemTime(new Date('2026-06-20T10:00:21.000Z'));
+    // Second tick: 2 humans + 1 staged bot = 3 seats → start the match.
+    vi.setSystemTime(new Date('2026-06-20T10:00:22.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
       searchId: firstSearchId,
@@ -325,14 +360,33 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('fills two bots when one human reaches the fallback timer', async () => {
+  it('stages two bots over successive ticks for a lone human, then starts a 1-human + 2-bot match', async () => {
     const { io, roomEmit } = createIo();
 
     await auctionMatchmakingService.handleSearchStart(io, socket('u1', 'One'), { locale: 'en' });
-    vi.setSystemTime(new Date('2026-06-20T10:00:12.000Z'));
+    const searchId = scheduledSearchIds()[0];
+
+    // Tick 1: 1 human + 0 bots → stage bot #1, reschedule.
+    vi.setSystemTime(new Date('2026-06-20T10:00:10.000Z'));
     await auctionMatchmakingService.runFillTimer(io, {
       kind: 'auction_matchmaking_fill',
-      searchId: scheduledSearchIds()[0],
+      searchId,
+    });
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+
+    // Tick 2: 1 human + 1 bot → stage bot #2, reschedule.
+    vi.setSystemTime(new Date('2026-06-20T10:00:20.000Z'));
+    await auctionMatchmakingService.runFillTimer(io, {
+      kind: 'auction_matchmaking_fill',
+      searchId,
+    });
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+
+    // Tick 3: 1 human + 2 bots = 3 seats → start the match.
+    vi.setSystemTime(new Date('2026-06-20T10:00:30.000Z'));
+    await auctionMatchmakingService.runFillTimer(io, {
+      kind: 'auction_matchmaking_fill',
+      searchId,
     });
 
     expect(startMatchMock.startAuctionMatchForHumans).toHaveBeenCalledWith(
@@ -348,15 +402,47 @@ describe('auctionMatchmakingService', () => {
     );
   });
 
-  it('does not create a duplicate search for the same user', async () => {
+  it('does not create a duplicate search for the same user (re-attaches and re-arms the fill timer)', async () => {
     const { io } = createIo();
     const firstSocket = socket('u1', 'One');
 
     await auctionMatchmakingService.handleSearchStart(io, firstSocket, { locale: 'en' });
     await auctionMatchmakingService.handleSearchStart(io, firstSocket, { locale: 'en' });
 
-    expect(timerMock.scheduleRealtimeTimer).toHaveBeenCalledTimes(1);
+    // Only one search row exists for the user (no duplicate).
+    expect(scheduledSearchIds()).toEqual([scheduledSearchIds()[0], scheduledSearchIds()[0]]);
+    // The second start re-attaches to the existing search and re-arms the fill
+    // timer (so a reload doesn't leave the search hanging) — two schedules total.
+    expect(timerMock.scheduleRealtimeTimer).toHaveBeenCalledTimes(2);
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+  });
+
+  it('re-joins an existing live match (by userId) on reload instead of starting a new one', async () => {
+    const { io } = createIo();
+    // Seed Redis as if the user is already seated in a live match — the state
+    // (auction:match:*) and the user→match index (auction:user:*:match).
+    const matchId = 'live-match-1';
+    const liveState = {
+      matchId,
+      version: 12,
+      phase: 'bidding',
+      seats: [
+        { seatId: 'seat-human', userId: 'u1', displayName: 'One', isBot: false },
+        { seatId: 'seat-bot-1', userId: null, displayName: 'lukaberidze', isBot: true },
+        { seatId: 'seat-bot-2', userId: null, displayName: 'zaqoo', isBot: true },
+      ],
+    };
+    redisMock.client!.strings.set(`auction:match:${matchId}`, JSON.stringify(liveState));
+    redisMock.client!.strings.set('auction:user:u1:match', matchId);
+
+    // A fresh socket (post-reload) has no socket.data.matchId.
+    const reloadedSocket = socket('u1', 'One');
+    await auctionMatchmakingService.handleSearchStart(io, reloadedSocket, { locale: 'en' });
+
+    // Re-joined the live match; did NOT start a second match or a new search.
+    expect(startMatchMock.rejoinAuctionMatch).toHaveBeenCalledWith(io, reloadedSocket, matchId);
+    expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
+    expect(timerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
   });
 
   it('cancels a queued search and prevents its fallback from starting a match', async () => {

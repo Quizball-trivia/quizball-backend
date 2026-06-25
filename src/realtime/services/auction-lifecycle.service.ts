@@ -14,8 +14,9 @@ import { scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
 import { emitAuctionUiReadyGateState } from './auction-ui-ready.service.js';
 import {
   handleAuctionSocketDisconnect as handleAuctionDisconnectGrace,
-  resumeAuctionUserIfDisconnected,
+  buildAuctionRejoinAvailable,
 } from './auction-disconnect.service.js';
+import { getAuctionDisconnectedUser } from './auction-disconnect-state.service.js';
 
 const BOOT_AUCTION_REARM_DELAY_MS = 3_000;
 const BOOT_AUCTION_REARM_BATCH = 500;
@@ -61,6 +62,20 @@ export const auctionLifecycleService = {
       return false;
     }
 
+    // If the match is paused because THIS user disconnected, don't auto-join.
+    // Mirror ranked: prompt with auction:rejoin_available and wait for the
+    // client to opt in via auction:rejoin (→ handleAuctionRejoin).
+    const disconnected = await getAuctionDisconnectedUser(state.matchId, userId);
+    if (disconnected) {
+      const available = buildAuctionRejoinAvailable(disconnected);
+      socket.emit('auction:rejoin_available', { ...available, matchId: state.matchId });
+      logger.info(
+        { matchId: state.matchId, userId, seatId: seat.seatId },
+        'Auction rejoin available (paused on self-disconnect); awaiting client opt-in'
+      );
+      return true;
+    }
+
     socket.data.lobbyId = undefined;
     socket.data.matchId = state.matchId;
     socket.join(`match:${state.matchId}`);
@@ -73,7 +88,6 @@ export const auctionLifecycleService = {
       serverNow: new Date().toISOString(),
     });
 
-    await resumeAuctionUserIfDisconnected(io, socket, state);
     await ensureAuctionActiveTimers(io, state);
     logger.info(
       { matchId: state.matchId, userId, phase: state.phase, stateVersion: state.version },

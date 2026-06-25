@@ -36,6 +36,7 @@ import {
   skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
 import type { AuctionFootballer, PositionGroup } from '../../modules/auction/auction.types.js';
+import { persistFinishedAuctionMatch } from './auction-persistence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import type { QuizballServer } from '../socket-server.js';
 import type {
@@ -186,7 +187,12 @@ export async function emitAuctionStepStarted(
   }
 
   if (state.phase === 'finished' && state.rankings) {
-    emitMatchFinished(io, state);
+    // Persist first so we know each human's coin reward, then emit it with the
+    // finish payload. Persistence is best-effort (its own try/catch) and returns
+    // {} on failure, so a DB hiccup just means no reward shown — never blocks the
+    // finish broadcast.
+    const coinsByUserId = await persistFinishedAuctionMatch(state);
+    emitMatchFinished(io, state, coinsByUserId);
     await auctionStateStore.clearIndexes(state);
   }
   return state;
@@ -319,7 +325,11 @@ function emitSoloPickSelected(
   } satisfies AuctionSquadUpdatedPayload);
 }
 
-function emitMatchFinished(io: QuizballServer, state: AuctionMatchState): void {
+function emitMatchFinished(
+  io: QuizballServer,
+  state: AuctionMatchState,
+  coinsByUserId: Record<string, number> = {},
+): void {
   if (!state.rankings) return;
   const publicState = toPublicAuctionMatchState(state);
   io.to(`match:${state.matchId}`).emit('auction:match_finished', {
@@ -328,6 +338,7 @@ function emitMatchFinished(io: QuizballServer, state: AuctionMatchState): void {
     winnerSeatId: state.rankings[0]?.seatId ?? null,
     state: publicState,
     stateVersion: state.version,
+    coinsByUserId,
   } satisfies AuctionMatchFinishedPayload);
 }
 

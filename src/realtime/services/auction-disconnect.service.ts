@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { harnessDelayMs } from '../../core/harness-timing.js';
 import { resolveAuctionContext, type AuctionEngineContext } from '../../modules/auction/auction-context.js';
 import { advanceTurnOrResolveRound, finishMatch } from '../../modules/auction/auction-engine.js';
 import {
@@ -14,6 +15,7 @@ import {
 import { canPlayerContinue } from '../../modules/auction/auction-rules.js';
 import {
   scheduleRealtimeTimer,
+  cancelRealtimeTimer,
   type RealtimeTimerPayload,
 } from '../realtime-timer-scheduler.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -22,6 +24,7 @@ import type {
   AuctionPausedPayload,
   AuctionPlayerForfeitedPayload,
   AuctionResumePayload,
+  AuctionRejoinAvailablePayload,
 } from '../socket.types.js';
 import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.service.js';
 import { buildAuctionPausedStatePayload } from './auction-disconnect-state.service.js';
@@ -41,6 +44,15 @@ import {
 import { emitAndScheduleAuctionTurnStarted, scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
 
 export type AuctionDisconnectGraceTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_disconnect_grace' }>;
+export type AuctionResumeCountdownTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_resume_countdown' }>;
+
+// "Get ready" countdown after a player opts to rejoin, before the match
+// unpauses (mirrors ranked's MATCH_RESUME_COUNTDOWN_MS).
+const AUCTION_RESUME_COUNTDOWN_MS = 5_000;
+
+export function auctionResumeCountdownTimerKey(matchId: string, userId: string): string {
+  return `${matchId}:${userId}`;
+}
 
 export interface AuctionDisconnectOptions {
   now?: Date;
@@ -144,6 +156,13 @@ export async function handleAuctionSocketDisconnect(
   );
 }
 
+/**
+ * Reconnecting player who was disconnected mid-match opts back in: cancel the
+ * grace-forfeit timer and start a server-authoritative "get ready" resume
+ * countdown. The match actually unpauses when the countdown timer fires
+ * (runAuctionResumeCountdownTimer) — mirroring ranked's resume countdown rather
+ * than resuming instantly. Returns false if the user wasn't actually paused.
+ */
 export async function resumeAuctionUserIfDisconnected(
   io: QuizballServer,
   socket: QuizballSocket,
@@ -158,14 +177,61 @@ export async function resumeAuctionUserIfDisconnected(
   const disconnected = await getAuctionDisconnectedUser(state.matchId, userId);
   if (!disconnected) return false;
 
+  // Player is back: clear the disconnect marker + cancel the grace-forfeit timer
+  // so it can never fire late (mirrors ranked's explicit cancelRealtimeTimer).
   await clearAuctionUserDisconnected(state.matchId, userId);
-  const pause = await getAuctionPause(state.matchId);
+  await cancelRealtimeTimer('auction_disconnect_grace', auctionDisconnectGraceTimerKey(state.matchId, userId));
+
+  // Start the resume "get ready" countdown; the durable timer unpauses at the end.
+  const countdownMs = harnessDelayMs(AUCTION_RESUME_COUNTDOWN_MS, 150);
+  const countdownEndsAt = new Date(Date.now() + countdownMs).toISOString();
+  await scheduleRealtimeTimer(
+    'auction_resume_countdown',
+    auctionResumeCountdownTimerKey(state.matchId, userId),
+    new Date(countdownEndsAt),
+    { kind: 'auction_resume_countdown', matchId: state.matchId, userId },
+  );
+  io.to(`match:${state.matchId}`).emit('auction:resume_countdown', {
+    matchId: state.matchId,
+    countdownEndsAt,
+    serverNow: new Date().toISOString(),
+  });
+  logger.info(
+    { matchId: state.matchId, userId, seatId: seat.seatId, countdownMs },
+    'Auction user reconnected during grace; resume countdown started'
+  );
+  return true;
+}
+
+/**
+ * Resume countdown elapsed → actually unpause: clear the pause, push the fresh
+ * state to everyone (auction:resume), and re-arm the turn timer. Idempotent — a
+ * stale/duplicate timer with no pause is a no-op.
+ */
+export async function runAuctionResumeCountdownTimer(
+  io: QuizballServer,
+  payload: AuctionResumeCountdownTimerPayload,
+  options: AuctionDisconnectOptions = {}
+): Promise<void> {
+  const { matchId, userId } = payload;
+  const state = await auctionStateStore.load(matchId).catch(() => null);
+  if (!state || state.phase === 'finished') return;
+
+  const seat = findAuctionSeatByUserId(state, userId);
+  if (!seat || seat.isBot) return;
+
+  // If the player disconnected AGAIN during the countdown, don't resume — the
+  // new grace timer owns the match now.
+  const reDisconnected = await getAuctionDisconnectedUser(matchId, userId);
+  if (reDisconnected) return;
+
+  const pause = await getAuctionPause(matchId);
   if (pause?.userId === userId) {
-    await clearAuctionPause(state.matchId);
+    await clearAuctionPause(matchId);
   }
 
-  const freshState = await auctionStateStore.load(state.matchId) ?? state;
-  const payload: AuctionResumePayload = {
+  const freshState = await auctionStateStore.load(matchId) ?? state;
+  const payloadOut: AuctionResumePayload = {
     matchId: freshState.matchId,
     seatId: seat.seatId,
     userId,
@@ -174,15 +240,65 @@ export async function resumeAuctionUserIfDisconnected(
     stateVersion: freshState.version,
     serverNow: new Date().toISOString(),
   };
-  io.to(`match:${state.matchId}`).emit('auction:resume', payload);
+  io.to(`match:${matchId}`).emit('auction:resume', payloadOut);
+  await scheduleAuctionTurnTimeoutTimer(freshState, options);
+  logger.info({ matchId, userId, seatId: seat.seatId }, 'Auction resume countdown complete; match unpaused');
+}
+
+/**
+ * Client opted to rejoin (auction:rejoin) after a rejoin_available prompt:
+ * re-attach the socket to the match room, push the current state, and start the
+ * resume countdown. Returns false if the match is gone / the user isn't seated.
+ */
+export async function handleAuctionRejoin(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  matchId: string,
+): Promise<boolean> {
+  const userId = socket.data.user?.id;
+  if (!userId) return false;
+
+  const state = await auctionStateStore.load(matchId).catch(() => null);
+  if (!state || state.phase === 'finished') return false;
+
+  const seat = findAuctionSeatByUserId(state, userId);
+  if (!seat || seat.isBot) return false;
+
+  socket.data.lobbyId = undefined;
+  socket.data.matchId = matchId;
+  socket.join(`match:${matchId}`);
   socket.emit('auction:state', {
-    matchId: freshState.matchId,
-    state: payload.state,
-    stateVersion: freshState.version,
-    serverNow: payload.serverNow,
+    matchId: state.matchId,
+    state: toPublicAuctionMatchState(state),
+    stateVersion: state.version,
+    serverNow: new Date().toISOString(),
   });
-  logger.info({ matchId: state.matchId, userId, seatId: seat.seatId }, 'Auction user reconnected during grace');
+
+  // Start the resume countdown if still within grace; if not paused anymore
+  // (e.g. opponent's pause), the socket is simply back in sync.
+  await resumeAuctionUserIfDisconnected(io, socket, state);
   return true;
+}
+
+/**
+ * Build the "rejoin available" payload for a reconnecting player who is still
+ * within their grace window — the client shows a rejoin prompt and must emit
+ * auction:rejoin to come back (mirrors ranked's match:rejoin_available).
+ */
+export function buildAuctionRejoinAvailable(
+  disconnected: { seatId: string; pauseUntil: string; disconnectCount: number },
+): AuctionRejoinAvailablePayload {
+  const pauseUntilMs = Date.parse(disconnected.pauseUntil);
+  const graceMs = Number.isFinite(pauseUntilMs)
+    ? Math.max(0, pauseUntilMs - Date.now())
+    : getAuctionDisconnectGraceMs();
+  return {
+    matchId: '',
+    seatId: disconnected.seatId,
+    graceMs,
+    remainingReconnects: toRemainingAuctionReconnects(disconnected.disconnectCount),
+    serverNow: new Date().toISOString(),
+  };
 }
 
 export async function emitPausedAuctionTurnIfNeeded(

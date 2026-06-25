@@ -823,6 +823,29 @@ export interface AuctionResumePayload {
   serverNow?: string;
 }
 
+/**
+ * Sent to a reconnecting player who was disconnected from a still-paused match.
+ * The client shows a "rejoin" prompt and must emit `auction:rejoin` to come back
+ * (mirrors ranked's match:rejoin_available handshake).
+ */
+export interface AuctionRejoinAvailablePayload {
+  matchId: string;
+  seatId: string;
+  graceMs: number;
+  remainingReconnects: number;
+  serverNow: string;
+}
+
+/**
+ * Resume "get ready" countdown after a rejoin, before the match unpauses
+ * (mirrors ranked's match:countdown reason:'resume').
+ */
+export interface AuctionResumeCountdownPayload {
+  matchId: string;
+  countdownEndsAt: string;
+  serverNow: string;
+}
+
 export interface AuctionPlayerForfeitedPayload {
   matchId: string;
   seatId: string;
@@ -855,6 +878,12 @@ export interface AuctionMatchFinishedPayload {
   winnerSeatId: string | null;
   state: PublicAuctionMatchState;
   stateVersion: number;
+  /**
+   * Coin reward granted per real-human userId for this match (win = 500, any
+   * other finish = 300). Empty for AI seats / forfeiters. Each client reads its
+   * own entry to show the reward animation.
+   */
+  coinsByUserId?: Record<string, number>;
 }
 
 export interface AuctionSoloPickStartedPayload {
@@ -1047,6 +1076,10 @@ export interface ClientToServerEvents {
   'auction:solo_pick_select': (data: AuctionSoloPickSelectPayload) => void;
   'auction:ui_ready': (data: AuctionUiReadyPayload) => void;
   'auction:forfeit': (data: { matchId: string }) => void;
+  // Client opts in to rejoin a paused match it was disconnected from (after
+  // receiving auction:rejoin_available). This opt-in IS the readiness signal:
+  // the server re-attaches the socket and runs the resume "get ready" countdown.
+  'auction:rejoin': (data: { matchId: string }) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
@@ -1164,6 +1197,8 @@ export interface ServerToClientEvents {
   'auction:opponent_disconnected': (data: AuctionOpponentDisconnectedPayload) => void;
   'auction:paused': (data: AuctionPausedPayload) => void;
   'auction:resume': (data: AuctionResumePayload) => void;
+  'auction:rejoin_available': (data: AuctionRejoinAvailablePayload) => void;
+  'auction:resume_countdown': (data: AuctionResumeCountdownPayload) => void;
   'auction:player_forfeited': (data: AuctionPlayerForfeitedPayload) => void;
   'auction:round_revealed': (data: AuctionRoundRevealedPayload) => void;
   'auction:squad_updated': (data: AuctionSquadUpdatedPayload) => void;

@@ -38,6 +38,12 @@ export interface AuctionPlayer {
   seatId: string;
   userId?: string | null;
   displayName: string;
+  avatarUrl?: string | null;
+  /**
+   * Real user's layered avatar (passed through to the client as-is for opponent
+   * rendering). Null for bots — the client generates a random avatar for those.
+   */
+  avatarCustomization?: unknown | null;
   isBot: boolean;
   budget: number;
   team: AuctionTeam;

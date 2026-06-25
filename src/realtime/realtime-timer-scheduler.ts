@@ -17,6 +17,7 @@ export type RealtimeTimerKind =
   | 'auction_clue_reveal'
   | 'auction_disconnect_grace'
   | 'auction_matchmaking_fill'
+  | 'auction_resume_countdown'
   | 'auction_turn_timeout'
   | 'draft_ai_ban'
   | 'draft_auto_ban'
@@ -34,6 +35,7 @@ export type RealtimeTimerPayload =
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
+  | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
   | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
@@ -81,6 +83,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'auction_clue_reveal'
     && kind !== 'auction_disconnect_grace'
     && kind !== 'auction_matchmaking_fill'
+    && kind !== 'auction_resume_countdown'
     && kind !== 'auction_turn_timeout'
     && kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'

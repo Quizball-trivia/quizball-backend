@@ -3,12 +3,13 @@ import {
   auctionBidSchema,
   auctionFoldSchema,
   auctionForfeitSchema,
+  auctionRejoinSchema,
   auctionSearchStartSchema,
   auctionSoloPickSelectSchema,
   auctionStartAiMatchSchema,
   auctionUiReadySchema,
 } from '../schemas/auction.schemas.js';
-import { handleAuctionForfeit } from '../services/auction-disconnect.service.js';
+import { handleAuctionForfeit, handleAuctionRejoin } from '../services/auction-disconnect.service.js';
 import { auctionMatchmakingService } from '../services/auction-matchmaking.service.js';
 import { auctionRealtimeService } from '../services/auction-realtime.service.js';
 import {
@@ -179,6 +180,24 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
       socket.emit('auction:error', {
         code: 'auction_action_failed',
         message: 'Failed to leave auction match',
+      });
+    }
+  });
+
+  socket.on('auction:rejoin', async (payload) => {
+    const parsed = auctionRejoinSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten(), userId: socket.data.user?.id }, 'Invalid auction:rejoin payload');
+      return;
+    }
+
+    try {
+      await handleAuctionRejoin(io, socket, parsed.data.matchId);
+    } catch (error) {
+      logger.error({ error, userId: socket.data.user?.id }, 'auction:rejoin handler failed');
+      socket.emit('auction:error', {
+        code: 'auction_action_failed',
+        message: 'Failed to rejoin auction match',
       });
     }
   });

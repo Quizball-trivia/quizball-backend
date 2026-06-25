@@ -53,6 +53,13 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (importOriginal)
   };
 });
 
+// Persisting a finished match writes to Postgres — out of scope for this
+// in-memory flow test (and there's no DB in the unit env). Stub it out.
+vi.mock('../../src/realtime/services/auction-persistence.service.js', () => ({
+  // Returns the per-user coin map; {} = no rewards in this in-memory test.
+  persistFinishedAuctionMatch: vi.fn(async () => ({})),
+}));
+
 const context: AuctionEngineContext = {
   now: () => new Date('2026-06-20T10:00:00.000Z'),
   random: () => 0,

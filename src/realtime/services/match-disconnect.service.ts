@@ -96,21 +96,21 @@ import {
   type MatchStageKey,
 } from './match-stage-presence.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 30000;
+const MATCH_DISCONNECT_GRACE_MS = 20000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;
 const LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
-// Redis TTL on the grace key; must stay above the grace window (30s) so the key
+// Redis TTL on the grace key; must stay above the grace window (20s) so the key
 // outlives the durable grace-expiry timer with a small margin.
-const GRACE_TTL_SEC = 35;
+const GRACE_TTL_SEC = 25;
 const RESUME_COUNTDOWN_TTL_SEC = 15;
 const FORFEIT_TTL_SEC = 600;
 /**
  * How far the paused round's question-timeout timer is pushed back instead of
- * being cancelled. Must comfortably exceed grace (30s) + resume countdown (5s)
+ * being cancelled. Must comfortably exceed grace (20s) + resume countdown (5s)
  * so it never fires during a healthy pause/resume cycle; it exists purely as
  * the last-resort resolver when every other path (resume, grace expiry,
  * forfeit) was dropped. A successful resume re-bases the timer to the rebased

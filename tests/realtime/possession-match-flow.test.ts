@@ -85,7 +85,9 @@ describe('possession mixed-question sequencing', () => {
       questionKind: 'countdown',
     });
 
-    expect(result.playableAt.toISOString()).toBe(new Date(resumedAtMs).toISOString());
+    // playableAt preserves the ORIGINAL shownAt (not resumedAt) so the
+    // scoring clock (nowMs - shownAtMs) reflects real elapsed time.
+    expect(result.playableAt.toISOString()).toBe(new Date(shownAtMs).toISOString());
     expect(result.deadlineAt.toISOString()).toBe(new Date(resumedAtMs + 6_000).toISOString());
   });
 
@@ -131,9 +133,10 @@ describe('possession mixed-question sequencing', () => {
       questionKind: 'multipleChoice',
     });
 
-    // Already past reveal at pause → playable immediately; 3.5s answer time left
-    // (deadline 2s after resume + the 1.5s the pause ate back).
-    expect(result.playableAt.toISOString()).toBe(new Date(resumedAtMs).toISOString());
+    // Already past reveal at pause → playableAt preserves the original shownAt
+    // (not resumedAt) so scoring reflects real elapsed time. 3.5s answer time
+    // left (deadline 2s after resume + the 1.5s the pause ate back).
+    expect(result.playableAt.toISOString()).toBe(new Date(shownAtMs).toISOString());
     expect(result.deadlineAt.toISOString()).toBe(new Date(resumedAtMs + 3_500).toISOString());
   });
 
@@ -179,5 +182,56 @@ describe('possession mixed-question sequencing', () => {
     expect(__possessionInternals.selectedIndexForAnswerPersistence('countdown', 7)).toBeNull();
     expect(__possessionInternals.selectedIndexForAnswerPersistence('putInOrder', null)).toBeNull();
     expect(__possessionInternals.selectedIndexForAnswerPersistence('clues', null)).toBeNull();
+  });
+
+  // Regression: reconnecting mid-question must NOT reset the scoring clock.
+  // Before the fix, computeResumedPossessionTiming overwrote shownAt with
+  // resumedAt when the question was already revealed (revealRemainingMs === 0),
+  // so a player who disconnected 36s into a 50s clue_chain and reconnected
+  // would get timeMs ≈ 0s → clueIndex 0 → 100 pts, instead of the legitimate
+  // ~40 pts (clueIndex 3). The fix preserves the original shownAt so scoring
+  // reflects real elapsed time; only the deadline shifts to preserve remaining
+  // answer time.
+  it('preserves the original shownAt on resume so the scoring clock is not reset', () => {
+    const state = createInitialPossessionState('ranked_sim');
+    // Reproduces the bug-report match: 5-clue question (50s), shown 36s
+    // before reconnect, paused 22s in, deadline 50s after shown.
+    const resumedAtMs = Date.UTC(2026, 5, 25, 20, 48, 55, 88);
+    const shownAtMs = resumedAtMs - 36_200;   // shown 36.2s before reconnect
+    const deadlineAtMs = shownAtMs + 50_000;   // 50s clue_chain window
+    const pauseStartedAtMs = shownAtMs + 22_100; // disconnect 22s in
+
+    const result = __possessionInternals.computeResumedPossessionTiming({
+      shownAtRaw: new Date(shownAtMs).toISOString(),
+      deadlineAtRaw: new Date(deadlineAtMs).toISOString(),
+      pauseStartedAtMs,
+      resumedAtMs,
+      qIndex: 11,
+      state,
+      questionKind: 'clues',
+    });
+
+    // playableAt MUST be the original shownAt — NOT resumedAt. This is what
+    // stops the scoring clock from resetting.
+    expect(result.playableAt.getTime()).toBe(shownAtMs);
+    expect(result.playableAt.getTime()).not.toBe(resumedAtMs);
+
+    // Deadline is shifted to preserve the remaining answer time from the
+    // pause start (50s - 22.1s = 27.9s after resume).
+    expect(result.deadlineAt.getTime()).toBe(resumedAtMs + 27_900);
+
+    // Sanity: the authoritative timeMs for an answer 2.2s after reconnect
+    // uses the ORIGINAL shownAt, yielding ~38.4s (not ~2.2s).
+    const answerAtMs = resumedAtMs + 2_198;
+    const timeMs = __possessionInternals.computeAuthoritativeTimeMs(
+      { shownAt: result.playableAt.toISOString(), deadlineAt: result.deadlineAt.toISOString() },
+      answerAtMs,
+      0,
+      50_000
+    );
+    expect(timeMs).toBeGreaterThan(38_000);
+    expect(timeMs).toBeLessThan(39_000);
+    // clueIndex = floor(38.4s / 10s) = 3 → 40 pts (NOT 100).
+    expect(Math.floor(timeMs / 10_000)).toBe(3);
   });
 });

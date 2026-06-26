@@ -98,8 +98,18 @@ export function computeResumedPossessionTiming(params: {
   const revealRemainingMs = Math.max(0, shownAtMs - effectivePauseStartMs);
   const answerRemainingMs = Math.max(0, deadlineAtMs - effectivePauseStartMs);
 
+  // When the question was already revealed before the pause
+  // (revealRemainingMs === 0, i.e. shownAt <= pauseStart), preserve the
+  // ORIGINAL shownAt for scoring. Resetting it to resumedAt would zero the
+  // scoring clock (nowMs - shownAtMs), handing the reconnecting player a
+  // fresh full-duration window and an inflated clue index / points payout.
+  // Only the deadline is shifted to preserve the remaining answer time.
+  const playableAtMs = revealRemainingMs > 0
+    ? params.resumedAtMs + revealRemainingMs
+    : shownAtMs;
+
   return {
-    playableAt: new Date(params.resumedAtMs + revealRemainingMs),
+    playableAt: new Date(playableAtMs),
     deadlineAt: new Date(params.resumedAtMs + answerRemainingMs),
   };
 }

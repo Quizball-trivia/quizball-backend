@@ -98,15 +98,26 @@ export function computeResumedPossessionTiming(params: {
   const revealRemainingMs = Math.max(0, shownAtMs - effectivePauseStartMs);
   const answerRemainingMs = Math.max(0, deadlineAtMs - effectivePauseStartMs);
 
-  // When the question was already revealed before the pause
-  // (revealRemainingMs === 0, i.e. shownAt <= pauseStart), preserve the
-  // ORIGINAL shownAt for scoring. Resetting it to resumedAt would zero the
-  // scoring clock (nowMs - shownAtMs), handing the reconnecting player a
-  // fresh full-duration window and an inflated clue index / points payout.
-  // Only the deadline is shifted to preserve the remaining answer time.
+  // PAUSE the scoring clock during disconnect: shift playableAt forward by
+  // the disconnect duration so that timeMs = now - playableAt reflects only
+  // ACTUAL play time, not time spent disconnected.
+  //
+  // elapsedPlayMs = how long the player was actively playing before the pause
+  // (from question show to disconnect). playableAt is set so that
+  // (now - playableAt) = elapsedPlayMs + time_since_reconnect, i.e. the
+  // disconnect gap is excluded from scoring.
+  //
+  // Case 1 — question already revealed (shownAt <= pauseStart):
+  //   elapsedPlayMs = pauseStart - shownAt
+  //   playableAt = resumedAt - elapsedPlayMs
+  //   → timeMs after answering 2s post-reconnect = elapsedPlayMs + 2
+  //
+  // Case 2 — question not yet revealed (shownAt > pauseStart, e.g. during
+  // the reveal animation): revealRemainingMs > 0, schedule the reveal
+  // relative to resumedAt as before.
   const playableAtMs = revealRemainingMs > 0
     ? params.resumedAtMs + revealRemainingMs
-    : shownAtMs;
+    : params.resumedAtMs - Math.max(0, effectivePauseStartMs - shownAtMs);
 
   return {
     playableAt: new Date(playableAtMs),

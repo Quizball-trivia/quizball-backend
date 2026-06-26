@@ -96,7 +96,7 @@ import {
   type MatchStageKey,
 } from './match-stage-presence.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 30000;
+const MATCH_DISCONNECT_GRACE_MS = 20000;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;

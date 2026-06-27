@@ -75,5 +75,44 @@ export const agentEventSchema = z.object({
 export const budgetStatusSchema = z.object({
   limitCents: z.number(),
   spentTodayCents: z.number(),
+  spentWeekCents: z.number(),
+  spentMonthCents: z.number(),
+  monthlyCreditCents: z.number(),
   paused: z.boolean(),
 });
+
+// ── Editable sub-agent prompts (agents.prompts) ──
+export const promptRoleSchema = z.enum(['generator', 'factcheck', 'criteria', 'dedupe']);
+export type PromptRole = z.infer<typeof promptRoleSchema>;
+
+export const promptRoleParamSchema = z.object({ role: promptRoleSchema });
+export type PromptRoleParam = z.infer<typeof promptRoleParamSchema>;
+
+export const promptIdParamSchema = z.object({ promptId: z.string().uuid() });
+export type PromptIdParam = z.infer<typeof promptIdParamSchema>;
+
+export const savePromptBodySchema = z.object({
+  content: z.string().min(20),
+  note: z.string().max(500).optional(),
+});
+export type SavePromptBody = z.infer<typeof savePromptBodySchema>;
+
+// Response shapes (camelCase to the CMS)
+export const activePromptSchema = z.object({
+  role: z.string(),
+  content: z.string(),
+  version: z.number(),
+  note: z.string().nullable(),
+  updatedAt: z.string(),
+});
+export type ActivePrompt = z.infer<typeof activePromptSchema>;
+
+export const promptVersionSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  content: z.string(),
+  note: z.string().nullable(),
+  isActive: z.boolean(),
+  createdAt: z.string(),
+});
+export type PromptVersion = z.infer<typeof promptVersionSchema>;

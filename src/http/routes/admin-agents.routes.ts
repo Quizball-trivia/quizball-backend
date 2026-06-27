@@ -9,6 +9,9 @@ import {
   taskIdParamSchema,
   listJobsQuerySchema,
   setBudgetBodySchema,
+  promptRoleParamSchema,
+  promptIdParamSchema,
+  savePromptBodySchema,
 } from '../../modules/agents/index.js';
 
 // Admin-only: the CMS "Agents" section. Spawn generation jobs, monitor runs,
@@ -32,5 +35,14 @@ router.post('/tasks/:taskId/retry', validate({ params: taskIdParamSchema }), age
 router.get('/monitor', agentsController.monitor);
 router.get('/budget', agentsController.budget);
 router.patch('/budget', validate({ body: setBudgetBodySchema }), agentsController.setBudget);
+
+// sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
+router.get('/roster', agentsController.roster);
+
+// editable sub-agent prompts
+router.get('/prompts', agentsController.listPrompts);
+router.get('/prompts/:role/history', validate({ params: promptRoleParamSchema }), agentsController.promptHistory);
+router.put('/prompts/:role', validate({ params: promptRoleParamSchema, body: savePromptBodySchema }), agentsController.savePrompt);
+router.post('/prompts/:promptId/activate', validate({ params: promptIdParamSchema }), agentsController.activatePrompt);
 
 export const adminAgentsRoutes = router;

@@ -49,6 +49,17 @@ export interface AgentEventRow {
   data: Json;
 }
 
+export interface AgentPromptRow {
+  id: string;
+  role: string;
+  content: string;
+  version: number;
+  is_active: boolean;
+  note: string | null;
+  updated_by: string | null;
+  created_at: string;
+}
+
 export const agentsRepo = {
   async listJobs(limit = 50, offset = 0): Promise<AgentJobRow[]> {
     return sql<AgentJobRow[]>`
@@ -101,6 +112,45 @@ export const agentsRepo = {
     `;
   },
 
+  // per-role roster stats from sessions (today's runs, pass/fail, avg cost, running now, model)
+  async agentStats(): Promise<
+    {
+      role: string;
+      runs_today: number;
+      succeeded_today: number;
+      failed_today: number;
+      running_now: number;
+      avg_cost_cents: number;
+      last_model: string | null;
+      last_run_at: string | null;
+    }[]
+  > {
+    return sql`
+      SELECT
+        role,
+        COUNT(*) FILTER (WHERE started_at >= date_trunc('day', now() at time zone 'utc'))::int AS runs_today,
+        COUNT(*) FILTER (WHERE status = 'succeeded' AND started_at >= date_trunc('day', now() at time zone 'utc'))::int AS succeeded_today,
+        COUNT(*) FILTER (WHERE status IN ('failed','timeout','killed') AND started_at >= date_trunc('day', now() at time zone 'utc'))::int AS failed_today,
+        COUNT(*) FILTER (WHERE status = 'running')::int AS running_now,
+        COALESCE(ROUND(AVG(cost_cents) FILTER (WHERE started_at >= date_trunc('day', now() at time zone 'utc'))), 0)::int AS avg_cost_cents,
+        (ARRAY_AGG(model ORDER BY started_at DESC))[1] AS last_model,
+        MAX(started_at) AS last_run_at
+      FROM agents.sessions
+      GROUP BY role
+    ` as Promise<
+      {
+        role: string;
+        runs_today: number;
+        succeeded_today: number;
+        failed_today: number;
+        running_now: number;
+        avg_cost_cents: number;
+        last_model: string | null;
+        last_run_at: string | null;
+      }[]
+    >;
+  },
+
   async getBudget(): Promise<{ scope: string; limit_cents: number; spent_cents: number; paused: boolean } | undefined> {
     const [row] = await sql<{ scope: string; limit_cents: number; spent_cents: number; paused: boolean }[]>`
       SELECT scope, limit_cents, spent_cents, paused FROM agents.budgets WHERE scope = 'daily'
@@ -127,11 +177,66 @@ export const agentsRepo = {
     return row?.cents ?? 0;
   },
 
+  // spend since a given instant (sum of session costs) for the rollup windows
+  async spentSinceCents(sinceIso: string): Promise<number> {
+    const [row] = await sql<{ cents: number }[]>`
+      SELECT COALESCE(SUM(cost_cents),0)::int AS cents FROM agents.sessions
+      WHERE started_at >= ${sinceIso}
+    `;
+    return row?.cents ?? 0;
+  },
+
   // retry a failed task by re-queuing it (writes a control row the VPS consumes)
   async retryTask(taskId: string, createdBy: string | null): Promise<void> {
     await sql`
       INSERT INTO agents.control (action, target_id, created_by)
       VALUES ('retry_task', ${taskId}, ${createdBy})
     `;
+  },
+
+  // ── Editable sub-agent prompts (agents.prompts) ──
+
+  // the single active prompt per role
+  async listActivePrompts(): Promise<AgentPromptRow[]> {
+    return sql<AgentPromptRow[]>`
+      SELECT * FROM agents.prompts WHERE is_active = true ORDER BY role ASC
+    `;
+  },
+
+  // every version for a role, newest first
+  async getPromptHistory(role: string): Promise<AgentPromptRow[]> {
+    return sql<AgentPromptRow[]>`
+      SELECT * FROM agents.prompts WHERE role = ${role} ORDER BY version DESC
+    `;
+  },
+
+  // deactivate the current active prompt and insert a new active version
+  async savePrompt(
+    role: string,
+    content: string,
+    note: string | null,
+    userId: string | null
+  ): Promise<AgentPromptRow> {
+    const [row] = await sql<AgentPromptRow[]>`
+      SELECT * FROM agents.save_prompt(${role}, ${content}, ${note}, ${userId})
+    `;
+    return row;
+  },
+
+  // revert to a specific version: make it active and deactivate its siblings,
+  // keeping the one-active-per-role invariant
+  async activatePromptVersion(promptId: string): Promise<AgentPromptRow | undefined> {
+    const [target] = await sql<AgentPromptRow[]>`
+      SELECT * FROM agents.prompts WHERE id = ${promptId}
+    `;
+    if (!target) return undefined;
+    await sql`
+      UPDATE agents.prompts SET is_active = false
+      WHERE role = ${target.role} AND id <> ${promptId} AND is_active = true
+    `;
+    const [row] = await sql<AgentPromptRow[]>`
+      UPDATE agents.prompts SET is_active = true WHERE id = ${promptId} RETURNING *
+    `;
+    return row;
   },
 };

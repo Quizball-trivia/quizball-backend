@@ -1,6 +1,15 @@
 import type { Request, Response } from 'express';
 import { agentsService } from './agents.service.js';
-import type { JobIdParam, ListJobsQuery, SetBudgetBody, SpawnJobBody, TaskIdParam } from './agents.schemas.js';
+import type {
+  JobIdParam,
+  ListJobsQuery,
+  SetBudgetBody,
+  SpawnJobBody,
+  TaskIdParam,
+  PromptRoleParam,
+  PromptIdParam,
+  SavePromptBody,
+} from './agents.schemas.js';
 
 // Admin controller for the CMS Agents section. Thin HTTP ↔ service layer.
 export const agentsController = {
@@ -54,5 +63,30 @@ export const agentsController = {
     const { taskId } = req.validated.params as TaskIdParam;
     await agentsService.retryTask(taskId, req.user?.id ?? null);
     res.status(202).send();
+  },
+
+  async roster(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.roster());
+  },
+
+  async listPrompts(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.listPrompts());
+  },
+
+  async promptHistory(req: Request, res: Response): Promise<void> {
+    const { role } = req.validated.params as PromptRoleParam;
+    res.json(await agentsService.promptHistory(role));
+  },
+
+  async savePrompt(req: Request, res: Response): Promise<void> {
+    const { role } = req.validated.params as PromptRoleParam;
+    const body = req.validated.body as SavePromptBody;
+    const prompt = await agentsService.savePrompt(role, body.content, body.note ?? null, req.user?.id ?? null);
+    res.json(prompt);
+  },
+
+  async activatePrompt(req: Request, res: Response): Promise<void> {
+    const { promptId } = req.validated.params as PromptIdParam;
+    res.json(await agentsService.activatePrompt(promptId));
   },
 };

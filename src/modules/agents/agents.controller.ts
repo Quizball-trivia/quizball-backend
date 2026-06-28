@@ -8,7 +8,10 @@ import type {
   TaskIdParam,
   PromptRoleParam,
   PromptIdParam,
+  PromptTypeQuery,
   SavePromptBody,
+  QuestionTypeParam,
+  UpdateQuestionTypeBody,
 } from './agents.schemas.js';
 
 // Admin controller for the CMS Agents section. Thin HTTP ↔ service layer.
@@ -69,24 +72,44 @@ export const agentsController = {
     res.json(await agentsService.roster());
   },
 
-  async listPrompts(_req: Request, res: Response): Promise<void> {
-    res.json(await agentsService.listPrompts());
+  async listPrompts(req: Request, res: Response): Promise<void> {
+    const { type } = req.validated.query as PromptTypeQuery;
+    res.json(await agentsService.listPrompts(type));
   },
 
   async promptHistory(req: Request, res: Response): Promise<void> {
     const { role } = req.validated.params as PromptRoleParam;
-    res.json(await agentsService.promptHistory(role));
+    const { type } = req.validated.query as PromptTypeQuery;
+    res.json(await agentsService.promptHistory(role, type));
   },
 
   async savePrompt(req: Request, res: Response): Promise<void> {
     const { role } = req.validated.params as PromptRoleParam;
     const body = req.validated.body as SavePromptBody;
-    const prompt = await agentsService.savePrompt(role, body.content, body.note ?? null, req.user?.id ?? null);
+    const prompt = await agentsService.savePrompt(
+      role,
+      body.content,
+      body.note ?? null,
+      req.user?.id ?? null,
+      body.type
+    );
     res.json(prompt);
   },
 
   async activatePrompt(req: Request, res: Response): Promise<void> {
     const { promptId } = req.validated.params as PromptIdParam;
     res.json(await agentsService.activatePrompt(promptId));
+  },
+
+  // ── Question types ──
+
+  async listQuestionTypes(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.listQuestionTypes());
+  },
+
+  async updateQuestionType(req: Request, res: Response): Promise<void> {
+    const { type } = req.validated.params as QuestionTypeParam;
+    const body = req.validated.body as UpdateQuestionTypeBody;
+    res.json(await agentsService.updateQuestionType(type, body));
   },
 };

@@ -52,12 +52,23 @@ export interface AgentEventRow {
 export interface AgentPromptRow {
   id: string;
   role: string;
+  type: string;
   content: string;
   version: number;
   is_active: boolean;
   note: string | null;
   updated_by: string | null;
   created_at: string;
+}
+
+export interface AgentQuestionTypeRow {
+  type: string;
+  label: string;
+  description: string | null;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export const agentsRepo = {
@@ -196,35 +207,38 @@ export const agentsRepo = {
 
   // ── Editable sub-agent prompts (agents.prompts) ──
 
-  // the single active prompt per role
-  async listActivePrompts(): Promise<AgentPromptRow[]> {
+  // the single active prompt per role. When a type is given, the active
+  // (role, type) rows; otherwise the (role, '*') defaults.
+  async listActivePrompts(type?: string): Promise<AgentPromptRow[]> {
+    const t = type ?? '*';
     return sql<AgentPromptRow[]>`
-      SELECT * FROM agents.prompts WHERE is_active = true ORDER BY role ASC
+      SELECT * FROM agents.prompts WHERE type = ${t} AND is_active = true ORDER BY role ASC
     `;
   },
 
-  // every version for a role, newest first
-  async getPromptHistory(role: string): Promise<AgentPromptRow[]> {
+  // every version for a (role, type), newest first
+  async getPromptHistory(role: string, type = '*'): Promise<AgentPromptRow[]> {
     return sql<AgentPromptRow[]>`
-      SELECT * FROM agents.prompts WHERE role = ${role} ORDER BY version DESC
+      SELECT * FROM agents.prompts WHERE role = ${role} AND type = ${type} ORDER BY version DESC
     `;
   },
 
   // deactivate the current active prompt and insert a new active version
   async savePrompt(
     role: string,
+    type: string,
     content: string,
     note: string | null,
     userId: string | null
   ): Promise<AgentPromptRow> {
     const [row] = await sql<AgentPromptRow[]>`
-      SELECT * FROM agents.save_prompt(${role}, ${content}, ${note}, ${userId})
+      SELECT * FROM agents.save_prompt(${role}, ${type}, ${content}, ${note}, ${userId})
     `;
     return row;
   },
 
   // revert to a specific version: make it active and deactivate its siblings,
-  // keeping the one-active-per-role invariant
+  // keeping the one-active-per-(role,type) invariant
   async activatePromptVersion(promptId: string): Promise<AgentPromptRow | undefined> {
     const [target] = await sql<AgentPromptRow[]>`
       SELECT * FROM agents.prompts WHERE id = ${promptId}
@@ -232,10 +246,35 @@ export const agentsRepo = {
     if (!target) return undefined;
     await sql`
       UPDATE agents.prompts SET is_active = false
-      WHERE role = ${target.role} AND id <> ${promptId} AND is_active = true
+      WHERE role = ${target.role} AND type = ${target.type} AND id <> ${promptId} AND is_active = true
     `;
     const [row] = await sql<AgentPromptRow[]>`
       UPDATE agents.prompts SET is_active = true WHERE id = ${promptId} RETURNING *
+    `;
+    return row;
+  },
+
+  // ── Question types (agents.question_types) ──
+
+  // every configured question type, in display order
+  async listQuestionTypes(): Promise<AgentQuestionTypeRow[]> {
+    return sql<AgentQuestionTypeRow[]>`
+      SELECT * FROM agents.question_types ORDER BY sort_order ASC
+    `;
+  },
+
+  // COALESCE-style partial update; returns the updated row (or undefined if missing)
+  async updateQuestionType(
+    type: string,
+    params: { enabled?: boolean; description?: string }
+  ): Promise<AgentQuestionTypeRow | undefined> {
+    const [row] = await sql<AgentQuestionTypeRow[]>`
+      UPDATE agents.question_types
+      SET enabled = COALESCE(${params.enabled ?? null}, enabled),
+          description = COALESCE(${params.description ?? null}, description),
+          updated_at = now()
+      WHERE type = ${type}
+      RETURNING *
     `;
     return row;
   },

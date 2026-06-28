@@ -11,7 +11,10 @@ import {
   setBudgetBodySchema,
   promptRoleParamSchema,
   promptIdParamSchema,
+  promptTypeQuerySchema,
   savePromptBodySchema,
+  questionTypeParamSchema,
+  updateQuestionTypeBodySchema,
 } from '../../modules/agents/index.js';
 
 // Admin-only: the CMS "Agents" section. Spawn generation jobs, monitor runs,
@@ -39,10 +42,14 @@ router.patch('/budget', validate({ body: setBudgetBodySchema }), agentsControlle
 // sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
 router.get('/roster', agentsController.roster);
 
-// editable sub-agent prompts
-router.get('/prompts', agentsController.listPrompts);
-router.get('/prompts/:role/history', validate({ params: promptRoleParamSchema }), agentsController.promptHistory);
+// editable sub-agent prompts (type-aware: optional ?type=<question type>)
+router.get('/prompts', validate({ query: promptTypeQuerySchema }), agentsController.listPrompts);
+router.get('/prompts/:role/history', validate({ params: promptRoleParamSchema, query: promptTypeQuerySchema }), agentsController.promptHistory);
 router.put('/prompts/:role', validate({ params: promptRoleParamSchema, body: savePromptBodySchema }), agentsController.savePrompt);
 router.post('/prompts/:promptId/activate', validate({ params: promptIdParamSchema }), agentsController.activatePrompt);
+
+// question types (config-driven: enable/disable + edit description)
+router.get('/question-types', agentsController.listQuestionTypes);
+router.patch('/question-types/:type', validate({ params: questionTypeParamSchema, body: updateQuestionTypeBodySchema }), agentsController.updateQuestionType);
 
 export const adminAgentsRoutes = router;

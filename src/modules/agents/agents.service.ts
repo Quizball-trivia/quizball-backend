@@ -1,5 +1,11 @@
 import { NotFoundError } from '../../core/errors.js';
-import { agentsRepo, type AgentJobRow, type AgentTaskRow, type AgentPromptRow } from './agents.repo.js';
+import {
+  agentsRepo,
+  type AgentJobRow,
+  type AgentTaskRow,
+  type AgentPromptRow,
+  type AgentQuestionTypeRow,
+} from './agents.repo.js';
 import type {
   AgentJob,
   AgentTask,
@@ -7,6 +13,7 @@ import type {
   ActivePrompt,
   PromptVersion,
   PromptRole,
+  QuestionType,
 } from './agents.schemas.js';
 import type { Json } from '../../db/types.js';
 
@@ -32,10 +39,21 @@ export interface AgentRosterEntry {
 function toActivePrompt(r: AgentPromptRow): ActivePrompt {
   return {
     role: r.role,
+    type: r.type,
     content: r.content,
     version: r.version,
     note: r.note,
     updatedAt: r.created_at,
+  };
+}
+
+function toQuestionType(r: AgentQuestionTypeRow): QuestionType {
+  return {
+    type: r.type,
+    label: r.label,
+    description: r.description,
+    enabled: r.enabled,
+    sortOrder: r.sort_order,
   };
 }
 
@@ -100,6 +118,7 @@ export const agentsService = {
   async spawn(body: SpawnJobBody, userId: string | null): Promise<AgentJob> {
     const params: Json = {
       type: body.type,
+      questionType: body.questionType,
       category_id: body.categoryId,
       topic: body.topic,
       difficulty: body.difficulty,
@@ -212,13 +231,13 @@ export const agentsService = {
 
   // ── Editable sub-agent prompts ──
 
-  async listPrompts(): Promise<{ items: ActivePrompt[] }> {
-    const rows = await agentsRepo.listActivePrompts();
+  async listPrompts(type?: string): Promise<{ items: ActivePrompt[] }> {
+    const rows = await agentsRepo.listActivePrompts(type);
     return { items: rows.map(toActivePrompt) };
   },
 
-  async promptHistory(role: PromptRole): Promise<{ items: PromptVersion[] }> {
-    const rows = await agentsRepo.getPromptHistory(role);
+  async promptHistory(role: PromptRole, type?: string): Promise<{ items: PromptVersion[] }> {
+    const rows = await agentsRepo.getPromptHistory(role, type ?? '*');
     return { items: rows.map(toPromptVersion) };
   },
 
@@ -226,9 +245,10 @@ export const agentsService = {
     role: PromptRole,
     content: string,
     note: string | null,
-    userId: string | null
+    userId: string | null,
+    type?: string
   ): Promise<ActivePrompt> {
-    const row = await agentsRepo.savePrompt(role, content, note, userId);
+    const row = await agentsRepo.savePrompt(role, type ?? '*', content, note, userId);
     return toActivePrompt(row);
   },
 
@@ -236,5 +256,21 @@ export const agentsService = {
     const row = await agentsRepo.activatePromptVersion(promptId);
     if (!row) throw new NotFoundError('Prompt version not found');
     return toActivePrompt(row);
+  },
+
+  // ── Question types ──
+
+  async listQuestionTypes(): Promise<{ items: QuestionType[] }> {
+    const rows = await agentsRepo.listQuestionTypes();
+    return { items: rows.map(toQuestionType) };
+  },
+
+  async updateQuestionType(
+    type: string,
+    params: { enabled?: boolean; description?: string }
+  ): Promise<QuestionType> {
+    const row = await agentsRepo.updateQuestionType(type, params);
+    if (!row) throw new NotFoundError('Question type not found');
+    return toQuestionType(row);
   },
 };

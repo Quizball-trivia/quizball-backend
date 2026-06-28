@@ -3,6 +3,9 @@ import { z } from 'zod';
 // ── Spawn a generation job (CMS → agents.jobs) ──
 export const spawnJobBodySchema = z.object({
   type: z.enum(['mcq_generate', 'daily_challenge']).default('mcq_generate'),
+  questionType: z
+    .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path'])
+    .default('mcq_single'),
   categoryId: z.string().uuid(),
   topic: z.string().min(3).max(500),
   difficulty: z.enum(['easy', 'medium', 'hard']),
@@ -91,15 +94,24 @@ export type PromptRoleParam = z.infer<typeof promptRoleParamSchema>;
 export const promptIdParamSchema = z.object({ promptId: z.string().uuid() });
 export type PromptIdParam = z.infer<typeof promptIdParamSchema>;
 
+// Optional question-type selector on the prompt endpoints. When omitted the
+// endpoints operate on the (role, '*') defaults.
+export const promptTypeQuerySchema = z.object({
+  type: z.string().min(1).optional(),
+});
+export type PromptTypeQuery = z.infer<typeof promptTypeQuerySchema>;
+
 export const savePromptBodySchema = z.object({
   content: z.string().min(20),
   note: z.string().max(500).optional(),
+  type: z.string().min(1).optional(),
 });
 export type SavePromptBody = z.infer<typeof savePromptBodySchema>;
 
 // Response shapes (camelCase to the CMS)
 export const activePromptSchema = z.object({
   role: z.string(),
+  type: z.string(),
   content: z.string(),
   version: z.number(),
   note: z.string().nullable(),
@@ -116,3 +128,23 @@ export const promptVersionSchema = z.object({
   createdAt: z.string(),
 });
 export type PromptVersion = z.infer<typeof promptVersionSchema>;
+
+// ── Question types (agents.question_types) ──
+export const questionTypeParamSchema = z.object({ type: z.string().min(1) });
+export type QuestionTypeParam = z.infer<typeof questionTypeParamSchema>;
+
+export const updateQuestionTypeBodySchema = z.object({
+  enabled: z.boolean().optional(),
+  description: z.string().optional(),
+});
+export type UpdateQuestionTypeBody = z.infer<typeof updateQuestionTypeBodySchema>;
+
+// Response shape (camelCase to the CMS)
+export const questionTypeSchema = z.object({
+  type: z.string(),
+  label: z.string(),
+  description: z.string().nullable(),
+  enabled: z.boolean(),
+  sortOrder: z.number(),
+});
+export type QuestionType = z.infer<typeof questionTypeSchema>;

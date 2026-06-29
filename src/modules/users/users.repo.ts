@@ -469,7 +469,9 @@ export const usersRepo = {
       UPDATE users
       SET
         is_banned = ${banned},
-        banned_at = ${banned ? sql`NOW()` : null},
+        -- Preserve the original banned_at across re-bans (idempotent retries /
+        -- reason refreshes); only stamp it on the first transition into banned.
+        banned_at = ${banned ? sql`COALESCE(banned_at, NOW())` : null},
         ban_reason = ${banned ? options.reason ?? null : null},
         ban_metadata = ${banned ? sql.json((options.metadata ?? null) as Json) : null},
         updated_at = NOW()

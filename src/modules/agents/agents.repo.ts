@@ -195,22 +195,34 @@ export const agentsRepo = {
   },
 
   // ── Stats rollups (last N days) ──
-  // per-day published/approved/rejected counts + spend, for the stats charts
+  // per-day approved/rejected counts (from tasks) + spend (from sessions),
+  // computed in two grouped CTEs then full-joined by day — avoids a correlated
+  // subquery (which can't reference the outer GROUP BY).
   async dailyStats(days: number): Promise<
     { day: string; approved: number; rejected: number; cost_cents: number }[]
   > {
     return sql`
-      SELECT
-        to_char(date_trunc('day', t.created_at), 'YYYY-MM-DD') AS day,
-        COUNT(*) FILTER (WHERE t.decision = 'approved')::int AS approved,
-        COUNT(*) FILTER (WHERE t.decision = 'rejected')::int AS rejected,
-        COALESCE((
-          SELECT SUM(s.cost_cents)::int FROM agents.sessions s
-          WHERE date_trunc('day', s.started_at) = date_trunc('day', t.created_at)
-        ), 0) AS cost_cents
-      FROM agents.tasks t
-      WHERE t.created_at >= (now() - (${days} || ' days')::interval)
-      GROUP BY 1
+      WITH task_days AS (
+        SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+               COUNT(*) FILTER (WHERE decision = 'approved')::int AS approved,
+               COUNT(*) FILTER (WHERE decision = 'rejected')::int AS rejected
+        FROM agents.tasks
+        WHERE created_at >= (now() - make_interval(days => ${days}))
+        GROUP BY 1
+      ),
+      cost_days AS (
+        SELECT to_char(date_trunc('day', started_at), 'YYYY-MM-DD') AS day,
+               COALESCE(SUM(cost_cents),0)::int AS cost_cents
+        FROM agents.sessions
+        WHERE started_at >= (now() - make_interval(days => ${days}))
+        GROUP BY 1
+      )
+      SELECT COALESCE(t.day, c.day) AS day,
+             COALESCE(t.approved, 0) AS approved,
+             COALESCE(t.rejected, 0) AS rejected,
+             COALESCE(c.cost_cents, 0) AS cost_cents
+      FROM task_days t
+      FULL OUTER JOIN cost_days c ON c.day = t.day
       ORDER BY 1 ASC
     ` as Promise<{ day: string; approved: number; rejected: number; cost_cents: number }[]>;
   },
@@ -220,7 +232,7 @@ export const agentsRepo = {
     return sql`
       SELECT COALESCE(stage, 'unknown') AS stage, COUNT(*)::int AS count
       FROM agents.tasks
-      WHERE decision = 'rejected' AND created_at >= (now() - (${days} || ' days')::interval)
+      WHERE decision = 'rejected' AND created_at >= (now() - make_interval(days => ${days}))
       GROUP BY 1 ORDER BY count DESC
     ` as Promise<{ stage: string; count: number }[]>;
   },
@@ -232,7 +244,7 @@ export const agentsRepo = {
         COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (ended_at - started_at)))), 0)::int AS avg_seconds,
         COUNT(*)::int AS runs
       FROM agents.sessions
-      WHERE ended_at IS NOT NULL AND started_at >= (now() - (${days} || ' days')::interval)
+      WHERE ended_at IS NOT NULL AND started_at >= (now() - make_interval(days => ${days}))
       GROUP BY role ORDER BY role
     ` as Promise<{ role: string; avg_seconds: number; runs: number }[]>;
   },

@@ -745,15 +745,22 @@ export const matchesService = {
       const players = await matchPlayersRepo.listMatchPlayers(matchId, tx);
       if (players.length === 0) return;
 
+      // A no-winner match is only a genuine DRAW when both players were present
+      // and the result was tied. When fewer than 2 players are recorded (the
+      // opponent never joined / the match was abandoned), winnerId is null but
+      // it is NOT a draw — the ranked RP system already scores these as losses,
+      // so classify them as a loss to keep the W/L/D record consistent with RP
+      // instead of inflating the player's draw count.
+      const isRealDraw = winnerId === null && players.length >= 2;
+
       const statRows = players.map((player) => {
-        const isDraw = winnerId === null;
         const isWinner = winnerId !== null && winnerId === player.user_id;
         return {
           userId: player.user_id,
           mode: completed.mode,
           wins: (isWinner ? 1 : 0) as 0 | 1,
-          losses: (!isDraw && !isWinner ? 1 : 0) as 0 | 1,
-          draws: (isDraw ? 1 : 0) as 0 | 1,
+          losses: (!isRealDraw && !isWinner ? 1 : 0) as 0 | 1,
+          draws: (isRealDraw ? 1 : 0) as 0 | 1,
           lastMatchAt: completed.ended_at,
         };
       });

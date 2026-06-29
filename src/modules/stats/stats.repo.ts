@@ -193,11 +193,11 @@ export const statsRepo = {
         COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS event_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
-      JOIN (
-        SELECT match_id, COUNT(*) AS player_count
-        FROM match_players
-        GROUP BY match_id
-      ) pc ON pc.match_id = m.id
+      JOIN LATERAL (
+        SELECT COUNT(*) AS player_count
+        FROM match_players mp_count
+        WHERE mp_count.match_id = m.id
+      ) pc ON TRUE
       WHERE mp.user_id = ${userId}
         AND m.mode = 'ranked'
         AND m.status = 'completed'

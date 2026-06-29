@@ -178,16 +178,26 @@ export const statsRepo = {
     userId: string,
     eventStartIso: string,
   ): Promise<RankedSplitStatsRow> {
+    // A no-winner match is only a real DRAW when both players were present and
+    // the result was tied. Abandoned / opponent-never-joined matches also have a
+    // NULL winner but only one match_players row, and the RP system scores those
+    // as losses — so count them as losses here too (via pc.player_count), not as
+    // draws, to keep the profile W/L/D consistent with RP.
     const [row] = await sql<RankedSplitStatsRow[]>`
       SELECT
         COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS regular_wins,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS regular_losses,
-        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS regular_draws,
+        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS regular_losses,
+        COUNT(*) FILTER (WHERE m.ended_at < ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS regular_draws,
         COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id = ${userId})::int AS event_wins,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId})::int AS event_losses,
-        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL)::int AS event_draws
+        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS event_losses,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS event_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
+      JOIN LATERAL (
+        SELECT COUNT(*) AS player_count
+        FROM match_players mp_count
+        WHERE mp_count.match_id = m.id
+      ) pc ON TRUE
       WHERE mp.user_id = ${userId}
         AND m.mode = 'ranked'
         AND m.status = 'completed'

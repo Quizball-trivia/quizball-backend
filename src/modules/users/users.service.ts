@@ -1,5 +1,5 @@
 import type { User } from '../../db/types.js';
-import { isUserAccountInactive, usersRepo, type UpdateUserData } from './users.repo.js';
+import { isUserAccountInactive, isUserBanned, usersRepo, type UpdateUserData } from './users.repo.js';
 import { identitiesRepo } from './identities.repo.js';
 import { AuthenticationError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
@@ -48,6 +48,12 @@ function isPendingDeletionAccount(user: Pick<User, 'is_deleted' | 'deleted_at' |
 }
 
 function assertUserAccountActive(user: User): void {
+  // Ban is checked first so a banned account always sees the ban screen, even if
+  // it is also (e.g.) pending deletion. `reason: 'banned'` is the discriminator
+  // the web client branches on to render the ACCOUNT BANNED screen.
+  if (isUserBanned(user)) {
+    throw new AuthenticationError('Account is banned', { reason: 'banned' });
+  }
   if (isPendingDeletionAccount(user)) {
     throw new AuthenticationError('Account is scheduled for deletion', PENDING_DELETION_DETAILS);
   }
@@ -379,6 +385,7 @@ export const usersService = {
         coins: row.coins,
         tickets: row.tickets,
         created_at: row.created_at,
+        is_banned: row.is_banned,
       };
     });
 
@@ -748,6 +755,125 @@ export const usersService = {
 
     await invalidateByUserId(id);
     logger.info({ userId: id }, 'Admin restored pending account deletion');
+    return user;
+  },
+
+  /**
+   * Admin: soft-ban an account. Blocks login (enforced in assertUserAccountActive)
+   * while preserving ALL history so the ban can be lifted later. Snapshots the
+   * account's current RP/tier/placement into ban_metadata and zeroes RP so the
+   * banned account stops polluting the leaderboard; unbanUser restores it.
+   * Idempotent: re-banning an already-banned account refreshes reason but does
+   * NOT re-snapshot RP (it's already 0), so the original RP survives.
+   */
+  async banUser(
+    id: string,
+    options: { reason?: string | null; actorId: string; zeroRp?: boolean }
+  ): Promise<User> {
+    const existing = await usersRepo.getById(id);
+    if (!existing) {
+      throw new NotFoundError('User not found');
+    }
+
+    const zeroRp = options.zeroRp ?? true;
+    const alreadyBanned = isUserBanned(existing);
+
+    // Snapshot RP only on the first ban — re-banning must not capture the
+    // already-zeroed RP and clobber the real pre-ban value in ban_metadata.
+    let metadata: Json | null =
+      (existing.ban_metadata as Json | null) ?? null;
+    let profileToZero: Awaited<ReturnType<typeof rankedRepo.getProfile>> = null;
+    if (zeroRp && !alreadyBanned) {
+      profileToZero = await rankedRepo.getProfile(id);
+      metadata = {
+        prev_rp: profileToZero?.rp ?? null,
+        prev_tier: profileToZero?.tier ?? null,
+        prev_placement: profileToZero?.placement_status ?? null,
+        snapshot_at: new Date().toISOString(),
+      } as unknown as Json;
+    }
+
+    // Persist the ban (with the RP snapshot in ban_metadata) BEFORE zeroing RP.
+    // These repos each manage their own transaction and can't share one without
+    // a cross-repo signature change, so ordering is the safety mechanism: the
+    // recoverable snapshot is durably written first, so a failure between the
+    // two writes never strands RP at 0 with no way for unban to restore it.
+    const user = await usersRepo.setBanState(id, true, {
+      reason: options.reason ?? null,
+      metadata,
+    });
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    if (profileToZero) {
+      await rankedRepo.setRankPoints(id, 0, tierFromRp(0));
+    }
+
+    await storeRepo.insertTransactionLog({
+      eventType: 'admin_account_ban',
+      outcome: 'success',
+      userId: id,
+      actorUserId: options.actorId,
+      reason: options.reason ?? null,
+      requestId: getRequestId(),
+      metadata: { banned: true, zeroedRp: zeroRp, snapshot: metadata } as unknown as Json,
+    });
+
+    await invalidateByUserId(id);
+
+    // Kick any open sockets so an in-progress session can't keep playing.
+    try {
+      await disconnectUserSockets(id, 'banned');
+    } catch (err) {
+      logger.warn({ err, userId: id }, 'Force-disconnect on ban failed (non-fatal)');
+    }
+
+    // Don't log the free-form reason — it can carry sensitive moderation notes.
+    // It is still persisted in the audit transaction log above.
+    logger.info({ userId: id, actorId: options.actorId }, 'Admin banned account');
+    return user;
+  },
+
+  /**
+   * Admin: lift a ban and restore the RP that was snapshotted at ban time.
+   */
+  async unbanUser(id: string, options: { actorId: string }): Promise<User> {
+    const existing = await usersRepo.getById(id);
+    if (!existing) {
+      throw new NotFoundError('User not found');
+    }
+    // Idempotent: unbanning an already-active account is a successful no-op.
+    if (!isUserBanned(existing)) {
+      return existing;
+    }
+
+    const snapshot = (existing.ban_metadata as { prev_rp?: number | null } | null) ?? null;
+    const prevRp = typeof snapshot?.prev_rp === 'number' ? snapshot.prev_rp : null;
+    if (prevRp !== null) {
+      const profile = await rankedRepo.getProfile(id);
+      if (profile) {
+        await rankedRepo.setRankPoints(id, prevRp, tierFromRp(prevRp));
+      }
+    }
+
+    const user = await usersRepo.setBanState(id, false);
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    await storeRepo.insertTransactionLog({
+      eventType: 'admin_account_unban',
+      outcome: 'success',
+      userId: id,
+      actorUserId: options.actorId,
+      reason: null,
+      requestId: getRequestId(),
+      metadata: { banned: false, restoredRp: prevRp } as unknown as Json,
+    });
+
+    await invalidateByUserId(id);
+    logger.info({ userId: id, actorId: options.actorId, restoredRp: prevRp }, 'Admin unbanned account');
     return user;
   },
 

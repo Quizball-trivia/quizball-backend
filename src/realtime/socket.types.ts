@@ -830,7 +830,7 @@ export interface ErrorPayload {
 }
 
 export interface ForceLogoutPayload {
-  reason: 'account_deleted' | 'admin_revoked';
+  reason: 'account_deleted' | 'admin_revoked' | 'banned';
 }
 
 export interface NotificationPayload {

@@ -1,0 +1,42 @@
+-- Make the weekly AI-user cleanup actually complete: add the ONE missing index
+-- that was making `cleanup_ai_users()` time out on every run.
+--
+-- Background: 20260615210000_fix_ai_cleanup_fk.sql fixed the FK-violation bug and
+-- added indexes for several previously-unindexed FK columns, but the cron job
+-- STILL failed every week — now with `canceling statement due to statement
+-- timeout` inside the cascade delete on public.match_answers. The AI user count
+-- kept climbing (~30k) because not a single weekly run ever deleted a row.
+--
+-- Root cause: match_answers is the largest cascade child (~380 MB / 1.25M rows),
+-- and its ONLY index leading with user_id was the PARTIAL lightning index from
+-- 20260610020000_match_answers_lightning_index.sql:
+--   CREATE INDEX idx_match_answers_user_lightning
+--     ON match_answers (user_id) WHERE is_correct = true AND time_ms <= 2000;
+-- The ON DELETE CASCADE fires for ALL of a user's rows, not just the fast-correct
+-- subset, so the partial index is unusable for the cascade. Postgres fell back to
+-- a SEQ SCAN of the whole 380 MB table for EACH delete batch. Measured on prod:
+--   * match_answers cascade trigger: ~11,950 ms per 250-user batch (97% of total)
+--   * full 250-user delete:          ~12,300 ms
+-- A ~24k backlog ÷ 250 ≈ 96 batches could never finish under the 30s cap (a hard
+-- pooler-enforced 30s also applies to the `postgres` role, above the function's
+-- own statement_timeout=0), so the transaction rolled back → 0 deleted.
+--
+-- Fix: a FULL (non-partial) btree index on match_answers(user_id), so the cascade
+-- becomes an index lookup. Measured on prod after creating it:
+--   * match_answers cascade trigger: ~24 ms per 250-user batch  (498x faster)
+--   * full 250-user delete:          ~322 ms                    (38x faster)
+-- The whole backlog now drains in seconds, well under any timeout.
+--
+-- The partial lightning index is kept (it serves the lightning-round stats query);
+-- this full index is additive and is the one the FK cascade uses.
+--
+-- NOTE: the index was already created CONCURRENTLY on production on 2026-06-29 and
+-- the backlog was drained manually (9,221 deleted; the remainder are AI still
+-- inside some human's most-recent-50 window and are reaped on later runs by
+-- design — see 20260615210000_fix_ai_cleanup_fk.sql). This migration is the
+-- versioned record so staging and future environments converge. CONCURRENTLY
+-- cannot run inside a transaction; if this migration is applied inside a tx block,
+-- drop CONCURRENTLY (a brief lock on match_answers is acceptable). IF NOT EXISTS
+-- makes it a no-op where prod already has it.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_match_answers_user_id
+  ON public.match_answers (user_id);

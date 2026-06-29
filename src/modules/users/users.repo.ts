@@ -40,6 +40,10 @@ export function isUserAccountInactive(user: Pick<User, 'is_deleted' | 'deleted_a
   return Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at);
 }
 
+export function isUserBanned(user: Pick<User, 'is_banned'>): boolean {
+  return Boolean(user.is_banned);
+}
+
 export const usersRepo = {
   async ensureFixedUser(data: {
     id: string;
@@ -347,6 +351,7 @@ export const usersRepo = {
       coins: number;
       tickets: number;
       created_at: string;
+      is_banned: boolean;
       ranked_rp: number | null;
       ranked_tier: string | null;
       ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -404,6 +409,7 @@ export const usersRepo = {
       coins: number;
       tickets: number;
       created_at: string;
+      is_banned: boolean;
       ranked_rp: number | null;
       ranked_tier: string | null;
       ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -418,6 +424,7 @@ export const usersRepo = {
         u.coins,
         u.tickets,
         u.created_at,
+        u.is_banned,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
         rp.placement_status AS ranked_placement_status
@@ -445,6 +452,31 @@ export const usersRepo = {
       RETURNING total_xp
     `;
     return row?.total_xp ?? null;
+  },
+
+  /**
+   * Set or clear the ban state on an account. Soft + reversible: clearing the
+   * ban leaves all other history intact. `metadata` snapshots state the ban
+   * action mutates (e.g. pre-ban RP) so unban can restore it; it is cleared on
+   * unban.
+   */
+  async setBanState(
+    userId: string,
+    banned: boolean,
+    options: { reason?: string | null; metadata?: Json | null } = {}
+  ): Promise<User | null> {
+    const [user] = await sql<User[]>`
+      UPDATE users
+      SET
+        is_banned = ${banned},
+        banned_at = ${banned ? sql`NOW()` : null},
+        ban_reason = ${banned ? options.reason ?? null : null},
+        ban_metadata = ${banned ? sql.json((options.metadata ?? null) as Json) : null},
+        updated_at = NOW()
+      WHERE id = ${userId}
+      RETURNING *
+    `;
+    return user ?? null;
   },
 
   /**

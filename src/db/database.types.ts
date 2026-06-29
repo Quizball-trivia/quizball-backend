@@ -700,6 +700,9 @@ export type Database = {
         Row: {
           avatar_customization: Json | null
           avatar_url: string | null
+          ban_metadata: Json | null
+          ban_reason: string | null
+          banned_at: string | null
           country: string | null
           created_at: string
           deleted_at: string | null
@@ -708,6 +711,7 @@ export type Database = {
           favorite_club: string | null
           id: string
           is_ai: boolean
+          is_banned: boolean
           is_deleted: boolean
           nickname: string | null
           onboarding_complete: boolean
@@ -722,6 +726,9 @@ export type Database = {
         Insert: {
           avatar_customization?: Json | null
           avatar_url?: string | null
+          ban_metadata?: Json | null
+          ban_reason?: string | null
+          banned_at?: string | null
           country?: string | null
           created_at?: string
           deleted_at?: string | null
@@ -730,6 +737,7 @@ export type Database = {
           favorite_club?: string | null
           id?: string
           is_ai?: boolean
+          is_banned?: boolean
           is_deleted?: boolean
           nickname?: string | null
           onboarding_complete?: boolean
@@ -744,6 +752,9 @@ export type Database = {
         Update: {
           avatar_customization?: Json | null
           avatar_url?: string | null
+          ban_metadata?: Json | null
+          ban_reason?: string | null
+          banned_at?: string | null
           country?: string | null
           created_at?: string
           deleted_at?: string | null
@@ -752,6 +763,7 @@ export type Database = {
           favorite_club?: string | null
           id?: string
           is_ai?: boolean
+          is_banned?: boolean
           is_deleted?: boolean
           nickname?: string | null
           onboarding_complete?: boolean

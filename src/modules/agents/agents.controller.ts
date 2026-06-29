@@ -12,6 +12,8 @@ import type {
   SavePromptBody,
   QuestionTypeParam,
   UpdateQuestionTypeBody,
+  ScheduleIdParam,
+  UpdateScheduleBody,
 } from './agents.schemas.js';
 
 // Admin controller for the CMS Agents section. Thin HTTP ↔ service layer.
@@ -50,6 +52,37 @@ export const agentsController = {
 
   async monitor(_req: Request, res: Response): Promise<void> {
     res.json(await agentsService.monitor());
+  },
+
+  async activity(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.activity());
+  },
+
+  async stats(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.stats());
+  },
+
+  // ── Schedules ──
+
+  async listSchedules(_req: Request, res: Response): Promise<void> {
+    res.json(await agentsService.schedules());
+  },
+
+  async updateSchedule(req: Request, res: Response): Promise<void> {
+    const { id } = req.validated.params as ScheduleIdParam;
+    const body = req.validated.body as UpdateScheduleBody;
+    res.json(await agentsService.updateSchedule(id, body));
+  },
+
+  async scheduleRuns(req: Request, res: Response): Promise<void> {
+    const { id } = req.validated.params as ScheduleIdParam;
+    res.json(await agentsService.scheduleRuns(id));
+  },
+
+  async runScheduleNow(req: Request, res: Response): Promise<void> {
+    const { id } = req.validated.params as ScheduleIdParam;
+    const job = await agentsService.runScheduleNow(id, req.user?.id ?? null);
+    res.status(201).json(job);
   },
 
   async budget(_req: Request, res: Response): Promise<void> {

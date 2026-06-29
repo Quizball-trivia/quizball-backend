@@ -15,6 +15,9 @@ export {
   questionTypeParamSchema,
   updateQuestionTypeBodySchema,
   questionTypeSchema,
+  scheduleIdParamSchema,
+  updateScheduleBodySchema,
+  agentScheduleSchema,
   type SpawnJobBody,
   type JobIdParam,
   type TaskIdParam,
@@ -28,4 +31,7 @@ export {
   type QuestionTypeParam,
   type UpdateQuestionTypeBody,
   type QuestionType,
+  type ScheduleIdParam,
+  type UpdateScheduleBody,
+  type AgentSchedule,
 } from './agents.schemas.js';

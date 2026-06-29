@@ -5,6 +5,7 @@ import {
   type AgentTaskRow,
   type AgentPromptRow,
   type AgentQuestionTypeRow,
+  type AgentScheduleRow,
 } from './agents.repo.js';
 import type {
   AgentJob,
@@ -14,6 +15,7 @@ import type {
   PromptVersion,
   PromptRole,
   QuestionType,
+  AgentSchedule,
 } from './agents.schemas.js';
 import type { Json } from '../../db/types.js';
 
@@ -54,6 +56,20 @@ function toQuestionType(r: AgentQuestionTypeRow): QuestionType {
     description: r.description,
     enabled: r.enabled,
     sortOrder: r.sort_order,
+  };
+}
+
+function toSchedule(r: AgentScheduleRow): AgentSchedule {
+  return {
+    id: r.id,
+    label: r.label,
+    jobType: r.job_type,
+    enabled: r.enabled,
+    hourTbilisi: r.hour_tbilisi,
+    params: r.params,
+    lastRunAt: r.last_run_at,
+    lastJobId: r.last_job_id,
+    lastStatus: r.last_status,
   };
 }
 
@@ -159,6 +175,113 @@ export const agentsService = {
   async monitor(): Promise<{ running: { role: string; count: number }[]; total: number }> {
     const running = await agentsRepo.runningAgents();
     return { running, total: running.reduce((s, r) => s + r.count, 0) };
+  },
+
+  // ── Live activity feed ──
+  // Every running session + a rollup of the last hour, for the "what's happening
+  // now" screen. durationSeconds is computed server-side off started_at.
+  async activity(): Promise<{
+    running: {
+      id: string;
+      role: string;
+      model: string | null;
+      jobId: string | null;
+      taskSeq: number | null;
+      topic: string | null;
+      question: string | null;
+      startedAt: string;
+      durationSeconds: number;
+    }[];
+    recent: { generated: number; approved: number; rejected: number; failed: number; windowHours: number };
+  }> {
+    const windowHours = 1;
+    const sinceIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+    const [sessions, recent] = await Promise.all([
+      agentsRepo.liveSessions(),
+      agentsRepo.recentActivity(sinceIso),
+    ]);
+    const now = Date.now();
+    return {
+      running: sessions.map((s) => ({
+        id: s.id,
+        role: s.role,
+        model: s.model,
+        jobId: s.job_id,
+        taskSeq: s.task_seq,
+        topic: s.job_topic,
+        question: s.question,
+        startedAt: s.started_at,
+        durationSeconds: Math.max(0, Math.round((now - new Date(s.started_at).getTime()) / 1000)),
+      })),
+      recent: { ...recent, windowHours },
+    };
+  },
+
+  // ── Stats rollups ──
+  async stats(days = 7): Promise<{
+    days: number;
+    daily: { day: string; approved: number; rejected: number; costCents: number }[];
+    rejections: { stage: string; count: number }[];
+    timings: { role: string; avgSeconds: number; runs: number }[];
+    totals: { approved: number; rejected: number; costCents: number; approvalRate: number };
+  }> {
+    const [daily, rejections, timings] = await Promise.all([
+      agentsRepo.dailyStats(days),
+      agentsRepo.rejectionReasons(days),
+      agentsRepo.stageTimings(days),
+    ]);
+    const approved = daily.reduce((s, d) => s + d.approved, 0);
+    const rejected = daily.reduce((s, d) => s + d.rejected, 0);
+    const costCents = daily.reduce((s, d) => s + d.cost_cents, 0);
+    const decided = approved + rejected;
+    return {
+      days,
+      daily: daily.map((d) => ({ day: d.day, approved: d.approved, rejected: d.rejected, costCents: d.cost_cents })),
+      rejections: rejections.map((r) => ({ stage: r.stage, count: r.count })),
+      timings: timings.map((t) => ({ role: t.role, avgSeconds: t.avg_seconds, runs: t.runs })),
+      totals: { approved, rejected, costCents, approvalRate: decided ? Math.round((approved / decided) * 100) : 0 },
+    };
+  },
+
+  // ── Schedules ──
+  async schedules(): Promise<{ items: AgentSchedule[] }> {
+    const rows = await agentsRepo.listSchedules();
+    return { items: rows.map(toSchedule) };
+  },
+
+  async updateSchedule(
+    id: string,
+    body: { enabled?: boolean; hourTbilisi?: number; params?: Record<string, unknown> }
+  ): Promise<AgentSchedule> {
+    const row = await agentsRepo.updateSchedule(id, {
+      enabled: body.enabled,
+      hourTbilisi: body.hourTbilisi,
+      params: body.params as Json | undefined,
+    });
+    if (!row) throw new NotFoundError(`Schedule ${id} not found`);
+    return toSchedule(row);
+  },
+
+  // Recent runs (jobs) produced by a schedule — its history strip.
+  async scheduleRuns(id: string): Promise<{ items: AgentJob[] }> {
+    const sched = await agentsRepo.getSchedule(id);
+    if (!sched) throw new NotFoundError(`Schedule ${id} not found`);
+    const rows = await agentsRepo.scheduleRuns(sched.job_type);
+    return { items: rows.map(toJob) };
+  },
+
+  // Run a schedule immediately: expand its params template into a one-off job now.
+  // (The recurring cron still fires on its own; this is a manual "run now".)
+  async runScheduleNow(id: string, userId: string | null): Promise<AgentJob> {
+    const sched = await agentsRepo.getSchedule(id);
+    if (!sched) throw new NotFoundError(`Schedule ${id} not found`);
+    const row = await agentsRepo.createJob({
+      type: sched.job_type,
+      params: { ...(sched.params as object), manual: true } as Json,
+      requestedBy: userId,
+      budgetCents: null,
+    });
+    return toJob(row);
   },
 
   // The sub-agent roster: one entry per role with description, model, current

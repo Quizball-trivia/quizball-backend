@@ -15,6 +15,8 @@ import {
   savePromptBodySchema,
   questionTypeParamSchema,
   updateQuestionTypeBodySchema,
+  scheduleIdParamSchema,
+  updateScheduleBodySchema,
 } from '../../modules/agents/index.js';
 
 // Admin-only: the CMS "Agents" section. Spawn generation jobs, monitor runs,
@@ -36,8 +38,16 @@ router.post('/tasks/:taskId/retry', validate({ params: taskIdParamSchema }), age
 
 // monitor + budget
 router.get('/monitor', agentsController.monitor);
+router.get('/activity', agentsController.activity);
+router.get('/stats', agentsController.stats);
 router.get('/budget', agentsController.budget);
 router.patch('/budget', validate({ body: setBudgetBodySchema }), agentsController.setBudget);
+
+// schedules (recurring jobs: daily-challenge cron config + run history + run-now)
+router.get('/schedules', agentsController.listSchedules);
+router.patch('/schedules/:id', validate({ params: scheduleIdParamSchema, body: updateScheduleBodySchema }), agentsController.updateSchedule);
+router.get('/schedules/:id/runs', validate({ params: scheduleIdParamSchema }), agentsController.scheduleRuns);
+router.post('/schedules/:id/run-now', validate({ params: scheduleIdParamSchema }), agentsController.runScheduleNow);
 
 // sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
 router.get('/roster', agentsController.roster);

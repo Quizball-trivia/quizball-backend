@@ -71,6 +71,20 @@ export interface AgentQuestionTypeRow {
   updated_at: string;
 }
 
+export interface AgentScheduleRow {
+  id: string;
+  label: string;
+  job_type: string;
+  enabled: boolean;
+  hour_tbilisi: number;
+  params: Json;
+  last_run_at: string | null;
+  last_job_id: string | null;
+  last_status: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export const agentsRepo = {
   async listJobs(limit = 50, offset = 0): Promise<AgentJobRow[]> {
     return sql<AgentJobRow[]>`
@@ -120,6 +134,140 @@ export const agentsRepo = {
     return sql<{ role: string; count: number }[]>`
       SELECT role, COUNT(*)::int AS count FROM agents.sessions
       WHERE status = 'running' GROUP BY role
+    `;
+  },
+
+  // ── Live activity feed ──
+  // Every session running right now, with the job topic + the question stem it's
+  // working on (so the UI can show "factcheck · Q#2 'Beckenbauer…' · 42s").
+  async liveSessions(): Promise<
+    {
+      id: string;
+      role: string;
+      model: string | null;
+      started_at: string;
+      job_id: string | null;
+      task_seq: number | null;
+      job_topic: string | null;
+      question: string | null;
+    }[]
+  > {
+    return sql`
+      SELECT
+        s.id, s.role, s.model, s.started_at, s.job_id,
+        t.seq AS task_seq,
+        (j.params ->> 'topic') AS job_topic,
+        COALESCE(
+          t.question_draft -> 'prompt' ->> 'en',
+          t.question_draft -> 'display_answer' ->> 'en'
+        ) AS question
+      FROM agents.sessions s
+      LEFT JOIN agents.tasks t ON t.id = s.task_id
+      LEFT JOIN agents.jobs  j ON j.id = s.job_id
+      WHERE s.status = 'running'
+      ORDER BY s.started_at ASC
+    ` as Promise<
+      {
+        id: string;
+        role: string;
+        model: string | null;
+        started_at: string;
+        job_id: string | null;
+        task_seq: number | null;
+        job_topic: string | null;
+        question: string | null;
+      }[]
+    >;
+  },
+
+  // rollup over a recent window for the activity-feed header (last N hours)
+  async recentActivity(sinceIso: string): Promise<{ generated: number; approved: number; rejected: number; failed: number }> {
+    const [row] = await sql<{ generated: number; approved: number; rejected: number; failed: number }[]>`
+      SELECT
+        COUNT(*) FILTER (WHERE decision IS NOT NULL OR status IN ('approved','rejected','failed'))::int AS generated,
+        COUNT(*) FILTER (WHERE decision = 'approved')::int AS approved,
+        COUNT(*) FILTER (WHERE decision = 'rejected')::int AS rejected,
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+      FROM agents.tasks
+      WHERE created_at >= ${sinceIso}
+    `;
+    return row ?? { generated: 0, approved: 0, rejected: 0, failed: 0 };
+  },
+
+  // ── Stats rollups (last N days) ──
+  // per-day published/approved/rejected counts + spend, for the stats charts
+  async dailyStats(days: number): Promise<
+    { day: string; approved: number; rejected: number; cost_cents: number }[]
+  > {
+    return sql`
+      SELECT
+        to_char(date_trunc('day', t.created_at), 'YYYY-MM-DD') AS day,
+        COUNT(*) FILTER (WHERE t.decision = 'approved')::int AS approved,
+        COUNT(*) FILTER (WHERE t.decision = 'rejected')::int AS rejected,
+        COALESCE((
+          SELECT SUM(s.cost_cents)::int FROM agents.sessions s
+          WHERE date_trunc('day', s.started_at) = date_trunc('day', t.created_at)
+        ), 0) AS cost_cents
+      FROM agents.tasks t
+      WHERE t.created_at >= (now() - (${days} || ' days')::interval)
+      GROUP BY 1
+      ORDER BY 1 ASC
+    ` as Promise<{ day: string; approved: number; rejected: number; cost_cents: number }[]>;
+  },
+
+  // rejection reasons grouped by stage over the window (factcheck/dedupe/…)
+  async rejectionReasons(days: number): Promise<{ stage: string; count: number }[]> {
+    return sql`
+      SELECT COALESCE(stage, 'unknown') AS stage, COUNT(*)::int AS count
+      FROM agents.tasks
+      WHERE decision = 'rejected' AND created_at >= (now() - (${days} || ' days')::interval)
+      GROUP BY 1 ORDER BY count DESC
+    ` as Promise<{ stage: string; count: number }[]>;
+  },
+
+  // avg session duration + cost per role over the window (the "how fast per stage")
+  async stageTimings(days: number): Promise<{ role: string; avg_seconds: number; runs: number }[]> {
+    return sql`
+      SELECT role,
+        COALESCE(ROUND(AVG(EXTRACT(EPOCH FROM (ended_at - started_at)))), 0)::int AS avg_seconds,
+        COUNT(*)::int AS runs
+      FROM agents.sessions
+      WHERE ended_at IS NOT NULL AND started_at >= (now() - (${days} || ' days')::interval)
+      GROUP BY role ORDER BY role
+    ` as Promise<{ role: string; avg_seconds: number; runs: number }[]>;
+  },
+
+  // ── Schedules (agents.schedules) ──
+  async listSchedules(): Promise<AgentScheduleRow[]> {
+    return sql<AgentScheduleRow[]>`SELECT * FROM agents.schedules ORDER BY id ASC`;
+  },
+
+  async getSchedule(id: string): Promise<AgentScheduleRow | undefined> {
+    const [row] = await sql<AgentScheduleRow[]>`SELECT * FROM agents.schedules WHERE id = ${id}`;
+    return row;
+  },
+
+  async updateSchedule(
+    id: string,
+    params: { enabled?: boolean; hourTbilisi?: number; params?: Json }
+  ): Promise<AgentScheduleRow | undefined> {
+    const [row] = await sql<AgentScheduleRow[]>`
+      UPDATE agents.schedules
+      SET enabled = COALESCE(${params.enabled ?? null}, enabled),
+          hour_tbilisi = COALESCE(${params.hourTbilisi ?? null}, hour_tbilisi),
+          params = COALESCE(${params.params ? sql.json(params.params) : null}, params),
+          updated_at = now()
+      WHERE id = ${id}
+      RETURNING *
+    `;
+    return row;
+  },
+
+  // last N jobs produced by a schedule's job_type (the run history for that schedule)
+  async scheduleRuns(jobType: string, limit = 30): Promise<AgentJobRow[]> {
+    return sql<AgentJobRow[]>`
+      SELECT * FROM agents.jobs WHERE type = ${jobType}
+      ORDER BY created_at DESC LIMIT ${limit}
     `;
   },
 

@@ -148,3 +148,29 @@ export const questionTypeSchema = z.object({
   sortOrder: z.number(),
 });
 export type QuestionType = z.infer<typeof questionTypeSchema>;
+
+// ── Schedules (agents.schedules) ──
+export const scheduleIdParamSchema = z.object({ id: z.string().min(1) });
+export type ScheduleIdParam = z.infer<typeof scheduleIdParamSchema>;
+
+export const updateScheduleBodySchema = z.object({
+  enabled: z.boolean().optional(),
+  hourTbilisi: z.number().int().min(0).max(23).optional(),
+  // params template (count/difficulty/questionType/categoryId/topic/rotation)
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+export type UpdateScheduleBody = z.infer<typeof updateScheduleBodySchema>;
+
+// Response shape (camelCase to the CMS)
+export const agentScheduleSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  jobType: z.string(),
+  enabled: z.boolean(),
+  hourTbilisi: z.number(),
+  params: z.unknown(),
+  lastRunAt: z.string().nullable(),
+  lastJobId: z.string().nullable(),
+  lastStatus: z.string().nullable(),
+});
+export type AgentSchedule = z.infer<typeof agentScheduleSchema>;

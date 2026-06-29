@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { usersService } from './users.service.js';
 import { achievementsService } from '../achievements/index.js';
 import { config } from '../../core/config.js';
-import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type AdminSetProgressionBody, type AdminUsersListQuery, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
+import { toAccountDeletionResponse, toAchievementsResponse, toUserResponse, toPublicProfileResponse, type AdminBanUserBody, type AdminSetProgressionBody, type AdminUsersListQuery, type UpdateProfileRequest, type UserIdParam, type UserSearchQuery } from './users.schemas.js';
 import { maybeIdentifyUserProfile } from '../../core/analytics.js';
 import { logger } from '../../core/logger.js';
 
@@ -128,6 +128,31 @@ export const usersController = {
   async restorePendingDeletion(req: Request, res: Response): Promise<void> {
     const { userId } = req.validated.params as UserIdParam;
     const user = await usersService.restorePendingDeletion(userId);
+    res.json(toUserResponse(user));
+  },
+
+  /**
+   * POST /api/v1/admin/users/:userId/ban
+   * Admin: soft-ban an account (blocks login, zeroes RP, keeps all history).
+   */
+  async banUser(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const body = req.validated.body as AdminBanUserBody;
+    const user = await usersService.banUser(userId, {
+      reason: body.reason ?? null,
+      zeroRp: body.zeroRp,
+      actorId: req.user!.id,
+    });
+    res.json(toUserResponse(user));
+  },
+
+  /**
+   * POST /api/v1/admin/users/:userId/unban
+   * Admin: lift a ban and restore snapshotted RP.
+   */
+  async unbanUser(req: Request, res: Response): Promise<void> {
+    const { userId } = req.validated.params as UserIdParam;
+    const user = await usersService.unbanUser(userId, { actorId: req.user!.id });
     res.json(toUserResponse(user));
   },
 

@@ -256,6 +256,17 @@ export const adminUsersListQuerySchema = z.object({
 export type AdminUsersListQuery = z.infer<typeof adminUsersListQuerySchema>;
 
 /**
+ * Admin: ban an account. `zeroRp` defaults to true (snapshots + zeroes RP so the
+ * banned account leaves the leaderboard; restored on unban).
+ */
+export const adminBanUserBodySchema = z.object({
+  reason: z.string().min(1).max(500).optional(),
+  zeroRp: z.boolean().optional().default(true),
+});
+
+export type AdminBanUserBody = z.infer<typeof adminBanUserBodySchema>;
+
+/**
  * Admin: a single user row in the admin list, flattened with ranked + wallet data.
  */
 export const adminUserListItemSchema = z.object({
@@ -272,6 +283,7 @@ export const adminUserListItemSchema = z.object({
   coins: z.number().int().nonnegative(),
   tickets: z.number().int().nonnegative(),
   created_at: z.string().datetime(),
+  is_banned: z.boolean(),
 });
 
 export type AdminUserListItem = z.infer<typeof adminUserListItemSchema>;

@@ -1,4 +1,4 @@
-export { isUserAccountInactive, usersRepo, type CreateUserData, type UpdateUserData } from './users.repo.js';
+export { isUserAccountInactive, isUserBanned, usersRepo, type CreateUserData, type UpdateUserData } from './users.repo.js';
 export { identitiesRepo, type CreateIdentityData, type IdentityWithUser } from './identities.repo.js';
 export { usersService } from './users.service.js';
 export { usersController } from './users.controller.js';
@@ -17,6 +17,7 @@ export {
   adminUserListItemSchema,
   adminSetProgressionBodySchema,
   adminProgressionResultSchema,
+  adminBanUserBodySchema,
   toAchievementsResponse,
   toAccountDeletionResponse,
   toUserResponse,
@@ -37,4 +38,5 @@ export {
   type AdminUserListItem,
   type AdminSetProgressionBody,
   type AdminProgressionResult,
+  type AdminBanUserBody,
 } from './users.schemas.js';

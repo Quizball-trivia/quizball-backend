@@ -782,25 +782,32 @@ export const usersService = {
     // already-zeroed RP and clobber the real pre-ban value in ban_metadata.
     let metadata: Json | null =
       (existing.ban_metadata as Json | null) ?? null;
+    let profileToZero: Awaited<ReturnType<typeof rankedRepo.getProfile>> = null;
     if (zeroRp && !alreadyBanned) {
-      const profile = await rankedRepo.getProfile(id);
+      profileToZero = await rankedRepo.getProfile(id);
       metadata = {
-        prev_rp: profile?.rp ?? null,
-        prev_tier: profile?.tier ?? null,
-        prev_placement: profile?.placement_status ?? null,
+        prev_rp: profileToZero?.rp ?? null,
+        prev_tier: profileToZero?.tier ?? null,
+        prev_placement: profileToZero?.placement_status ?? null,
         snapshot_at: new Date().toISOString(),
       } as unknown as Json;
-      if (profile) {
-        await rankedRepo.setRankPoints(id, 0, tierFromRp(0));
-      }
     }
 
+    // Persist the ban (with the RP snapshot in ban_metadata) BEFORE zeroing RP.
+    // These repos each manage their own transaction and can't share one without
+    // a cross-repo signature change, so ordering is the safety mechanism: the
+    // recoverable snapshot is durably written first, so a failure between the
+    // two writes never strands RP at 0 with no way for unban to restore it.
     const user = await usersRepo.setBanState(id, true, {
       reason: options.reason ?? null,
       metadata,
     });
     if (!user) {
       throw new NotFoundError('User not found');
+    }
+
+    if (profileToZero) {
+      await rankedRepo.setRankPoints(id, 0, tierFromRp(0));
     }
 
     await storeRepo.insertTransactionLog({
@@ -822,7 +829,9 @@ export const usersService = {
       logger.warn({ err, userId: id }, 'Force-disconnect on ban failed (non-fatal)');
     }
 
-    logger.info({ userId: id, actorId: options.actorId, reason: options.reason }, 'Admin banned account');
+    // Don't log the free-form reason — it can carry sensitive moderation notes.
+    // It is still persisted in the audit transaction log above.
+    logger.info({ userId: id, actorId: options.actorId }, 'Admin banned account');
     return user;
   },
 
@@ -834,8 +843,9 @@ export const usersService = {
     if (!existing) {
       throw new NotFoundError('User not found');
     }
+    // Idempotent: unbanning an already-active account is a successful no-op.
     if (!isUserBanned(existing)) {
-      throw new BadRequestError('Account is not banned');
+      return existing;
     }
 
     const snapshot = (existing.ban_metadata as { prev_rp?: number | null } | null) ?? null;

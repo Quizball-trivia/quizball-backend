@@ -30,9 +30,21 @@ import postgres from 'postgres';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', 'supabase', 'migrations');
 
-const DATABASE_URL = process.env.DATABASE_URL;
+// Prefer DATABASE_URL (what the app uses); fall back to STAGING_DATABASE_URL,
+// which some environments set instead. If neither is present, list the env var
+// NAMES that look DB-related (never their values) so a failed pre-deploy is
+// diagnosable — Railway pre-deploy steps don't always inherit every var.
+const DATABASE_URL = process.env.DATABASE_URL || process.env.STAGING_DATABASE_URL;
 if (!DATABASE_URL) {
-  console.error('[migrate] DATABASE_URL is not set — cannot run migrations.');
+  const dbVarNames = Object.keys(process.env)
+    .filter((k) => /DATABASE|POSTGRES|SUPABASE|PG/i.test(k))
+    .sort();
+  console.error(
+    '[migrate] Neither DATABASE_URL nor STAGING_DATABASE_URL is set — cannot run migrations.',
+  );
+  console.error(
+    `[migrate] DB-related env var names present: ${dbVarNames.length ? dbVarNames.join(', ') : '(none)'}`,
+  );
   process.exit(1);
 }
 

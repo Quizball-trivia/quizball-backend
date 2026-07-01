@@ -309,6 +309,21 @@ export const agentsRepo = {
     `;
   },
 
+  // Active daily-challenge configs, for mapping a question → the challenges it can
+  // feed. Returns challenge_type + its category filter (empty = all categories).
+  async activeDailyChallenges(): Promise<{ challenge_type: string; category_ids: string[] }[]> {
+    const rows = await sql<{ challenge_type: string; category_ids: string[] | null }[]>`
+      SELECT challenge_type, (settings ->> 'categoryIds') IS NOT NULL AS has_cats,
+             COALESCE(settings -> 'categoryIds', '[]'::jsonb) AS category_ids
+      FROM public.daily_challenge_configs
+      WHERE is_active = true
+    `;
+    return rows.map((r) => ({
+      challenge_type: r.challenge_type,
+      category_ids: Array.isArray(r.category_ids) ? r.category_ids : [],
+    }));
+  },
+
   // ── Review queue ──
   // Draft questions the agents produced (status='draft', joined back to the task
   // that published them for source/verdicts). This is the editor's review inbox.

@@ -26,6 +26,18 @@ interface ReviewGroup {
   count: number;
   items: AgentReviewItem[];
 }
+
+// Which agent question type each daily-challenge type consumes (the inverse of
+// getQuestionTypeForChallenge in daily-challenges.service.ts) + its display name.
+// Used to tell the editor which live daily challenges a draft question can feed.
+const CHALLENGE_BY_QUESTION_TYPE: Record<string, { challengeType: string; title: string }[]> = {
+  mcq_single: [{ challengeType: 'moneyDrop', title: 'Money Drop' }],
+  true_false: [{ challengeType: 'trueFalse', title: 'True or False' }],
+  countdown_list: [{ challengeType: 'countdown', title: 'Countdown' }],
+  clue_chain: [{ challengeType: 'clues', title: 'Clues' }],
+  put_in_order: [{ challengeType: 'putInOrder', title: 'Put in Order' }],
+  career_path: [{ challengeType: 'careerPath', title: 'Career Path' }],
+};
 import type { Json } from '../../db/types.js';
 
 // Monthly Agent-SDK credit ceiling (Max-20x agent credit), in cents.
@@ -331,7 +343,25 @@ export const agentsService = {
 
   // ── Review queue: the editor's inbox of agent-generated draft questions ──
   async reviewQueue(): Promise<{ count: number; groups: ReviewGroup[] }> {
-    const rows = await agentsRepo.reviewQueue();
+    const [rows, activeChallenges] = await Promise.all([
+      agentsRepo.reviewQueue(),
+      agentsRepo.activeDailyChallenges(),
+    ]);
+    // For a question (type + category), which ACTIVE daily challenges can use it?
+    // A challenge qualifies when its consumed question type matches AND its
+    // category filter includes the category (empty filter = all categories).
+    const feedsFor = (qType: string, categoryId: string): string[] => {
+      const candidates = CHALLENGE_BY_QUESTION_TYPE[qType] ?? [];
+      return candidates
+        .filter((c) =>
+          activeChallenges.some(
+            (ac) =>
+              ac.challenge_type === c.challengeType &&
+              (ac.category_ids.length === 0 || ac.category_ids.includes(categoryId))
+          )
+        )
+        .map((c) => c.title);
+    };
     const items: AgentReviewItem[] = rows.map((r) => ({
       id: r.id,
       type: r.type,
@@ -344,6 +374,7 @@ export const agentsService = {
       source: r.job_type === 'daily_challenge' ? 'daily' : 'ranked',
       jobType: r.job_type,
       topic: r.topic,
+      feedsChallenges: feedsFor(r.type, r.category_id),
       createdAt: r.created_at,
     }));
     // group by source then topic, so the editor sees "Daily · Juventus (3)" etc.

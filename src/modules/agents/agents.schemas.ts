@@ -191,6 +191,9 @@ export const agentReviewItemSchema = z.object({
   source: z.string(), // 'daily' | 'ranked'
   jobType: z.string(),
   topic: z.string().nullable(),
+  // display titles of ACTIVE daily challenges this question can feed (type +
+  // category match). Empty = not used by any active daily challenge right now.
+  feedsChallenges: z.array(z.string()),
   createdAt: z.string(),
 });
 export type AgentReviewItem = z.infer<typeof agentReviewItemSchema>;

@@ -24,6 +24,7 @@
     "db:migrate:status:remote": "supabase migration list --linked",
     "db:migrate:up": "supabase db push",
     "db:migrate:up:remote": "supabase db push --linked",
+    "migrate:deploy": "node scripts/run-migrations.mjs",
     "db:reset": "supabase db reset",
     "db:reset:remote": "supabase db reset --linked",
     "db:diff": "supabase db diff",

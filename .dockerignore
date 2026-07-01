@@ -35,8 +35,13 @@ Dockerfile
 docker-compose*.yml
 .dockerignore
 
-# Scripts (not needed in container)
-scripts/
+# Scripts (not needed in container) — except the migration runner, which the
+# Railway preDeployCommand executes from inside the image. Exclude the CONTENTS
+# (scripts/*) not the directory (scripts/): a trailing-slash dir exclusion makes
+# Docker skip walking the dir, so a later negation for a file inside it is
+# ignored. Excluding contents keeps the negation working.
+scripts/*
+!scripts/run-migrations.mjs
 
 # Docs
 *.md

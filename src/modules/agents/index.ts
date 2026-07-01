@@ -18,6 +18,8 @@ export {
   scheduleIdParamSchema,
   updateScheduleBodySchema,
   agentScheduleSchema,
+  reviewQuestionIdParamSchema,
+  agentReviewItemSchema,
   type SpawnJobBody,
   type JobIdParam,
   type TaskIdParam,
@@ -34,4 +36,6 @@ export {
   type ScheduleIdParam,
   type UpdateScheduleBody,
   type AgentSchedule,
+  type ReviewQuestionIdParam,
+  type AgentReviewItem,
 } from './agents.schemas.js';

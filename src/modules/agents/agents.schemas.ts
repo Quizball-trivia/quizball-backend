@@ -174,3 +174,23 @@ export const agentScheduleSchema = z.object({
   lastStatus: z.string().nullable(),
 });
 export type AgentSchedule = z.infer<typeof agentScheduleSchema>;
+
+// ── Review queue ──
+export const reviewQuestionIdParamSchema = z.object({ questionId: z.string().uuid() });
+export type ReviewQuestionIdParam = z.infer<typeof reviewQuestionIdParamSchema>;
+
+export const agentReviewItemSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  difficulty: z.string(),
+  categoryId: z.string(),
+  prompt: z.unknown(),
+  payload: z.unknown(),
+  verdicts: z.unknown(),
+  warnings: z.unknown(),
+  source: z.string(), // 'daily' | 'ranked'
+  jobType: z.string(),
+  topic: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type AgentReviewItem = z.infer<typeof agentReviewItemSchema>;

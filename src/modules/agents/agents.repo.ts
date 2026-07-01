@@ -85,6 +85,21 @@ export interface AgentScheduleRow {
   updated_at: string;
 }
 
+export interface AgentReviewRow {
+  id: string;
+  type: string;
+  difficulty: string;
+  category_id: string;
+  prompt: Json;
+  created_at: string;
+  job_type: string;
+  topic: string | null;
+  task_id: string;
+  verdicts: Json;
+  warnings: Json;
+  payload: Json;
+}
+
 export const agentsRepo = {
   async listJobs(limit = 50, offset = 0): Promise<AgentJobRow[]> {
     return sql<AgentJobRow[]>`
@@ -281,6 +296,58 @@ export const agentsRepo = {
       SELECT * FROM agents.jobs WHERE type = ${jobType}
       ORDER BY created_at DESC LIMIT ${limit}
     `;
+  },
+
+  // ── Review queue ──
+  // Draft questions the agents produced (status='draft', joined back to the task
+  // that published them for source/verdicts). This is the editor's review inbox.
+  async reviewQueue(limit = 200): Promise<AgentReviewRow[]> {
+    return sql<AgentReviewRow[]>`
+      SELECT
+        q.id,
+        q.type,
+        q.difficulty,
+        q.category_id,
+        q.prompt,
+        q.created_at,
+        j.type   AS job_type,
+        (j.params ->> 'topic') AS topic,
+        t.id     AS task_id,
+        t.verdicts,
+        t.warnings,
+        p.payload
+      FROM public.questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      JOIN agents.jobs  j ON j.id = t.job_id
+      LEFT JOIN public.question_payloads p ON p.question_id = q.id
+      WHERE q.status = 'draft'
+      ORDER BY q.created_at DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  // count of draft agent questions waiting — for the "N waiting" badge/notification
+  async reviewQueueCount(): Promise<number> {
+    const [row] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM public.questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      WHERE q.status = 'draft'
+    `;
+    return row?.count ?? 0;
+  },
+
+  // approve → publish (goes live); reject → archive. Scoped to draft agent
+  // questions so we can't accidentally flip an unrelated question.
+  async setQuestionStatus(questionId: string, status: 'published' | 'archived'): Promise<boolean> {
+    const rows = await sql`
+      UPDATE public.questions SET status = ${status}, updated_at = now()
+      WHERE id = ${questionId}
+        AND status = 'draft'
+        AND id IN (SELECT published_question_id FROM agents.tasks WHERE published_question_id = ${questionId})
+      RETURNING id
+    `;
+    return rows.length > 0;
   },
 
   // per-role roster stats from sessions (today's runs, pass/fail, avg cost, running now, model)

@@ -17,6 +17,7 @@ import {
   updateQuestionTypeBodySchema,
   scheduleIdParamSchema,
   updateScheduleBodySchema,
+  reviewQuestionIdParamSchema,
 } from '../../modules/agents/index.js';
 
 // Admin-only: the CMS "Agents" section. Spawn generation jobs, monitor runs,
@@ -48,6 +49,12 @@ router.get('/schedules', agentsController.listSchedules);
 router.patch('/schedules/:id', validate({ params: scheduleIdParamSchema, body: updateScheduleBodySchema }), agentsController.updateSchedule);
 router.get('/schedules/:id/runs', validate({ params: scheduleIdParamSchema }), agentsController.scheduleRuns);
 router.post('/schedules/:id/run-now', validate({ params: scheduleIdParamSchema }), agentsController.runScheduleNow);
+
+// review queue (agent-generated draft questions awaiting editor approval)
+router.get('/review', agentsController.reviewQueue);
+router.get('/review/count', agentsController.reviewCount);
+router.post('/review/:questionId/approve', validate({ params: reviewQuestionIdParamSchema }), agentsController.approveQuestion);
+router.post('/review/:questionId/reject', validate({ params: reviewQuestionIdParamSchema }), agentsController.rejectQuestion);
 
 // sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
 router.get('/roster', agentsController.roster);

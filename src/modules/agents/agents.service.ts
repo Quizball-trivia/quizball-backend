@@ -16,7 +16,16 @@ import type {
   PromptRole,
   QuestionType,
   AgentSchedule,
+  AgentReviewItem,
 } from './agents.schemas.js';
+
+// A group of review items sharing a source + topic (e.g. "daily · Juventus").
+interface ReviewGroup {
+  source: string;
+  topic: string | null;
+  count: number;
+  items: AgentReviewItem[];
+}
 import type { Json } from '../../db/types.js';
 
 // Monthly Agent-SDK credit ceiling (Max-20x agent credit), in cents.
@@ -318,6 +327,52 @@ export const agentsService = {
       budgetCents: null,
     });
     return toJob(row);
+  },
+
+  // ── Review queue: the editor's inbox of agent-generated draft questions ──
+  async reviewQueue(): Promise<{ count: number; groups: ReviewGroup[] }> {
+    const rows = await agentsRepo.reviewQueue();
+    const items: AgentReviewItem[] = rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      difficulty: r.difficulty,
+      categoryId: r.category_id,
+      prompt: r.prompt,
+      payload: r.payload,
+      verdicts: r.verdicts,
+      warnings: r.warnings,
+      source: r.job_type === 'daily_challenge' ? 'daily' : 'ranked',
+      jobType: r.job_type,
+      topic: r.topic,
+      createdAt: r.created_at,
+    }));
+    // group by source then topic, so the editor sees "Daily · Juventus (3)" etc.
+    const byKey = new Map<string, ReviewGroup>();
+    for (const it of items) {
+      const key = `${it.source}::${it.topic ?? ''}`;
+      let g = byKey.get(key);
+      if (!g) {
+        g = { source: it.source, topic: it.topic, count: 0, items: [] };
+        byKey.set(key, g);
+      }
+      g.items.push(it);
+      g.count++;
+    }
+    return { count: items.length, groups: [...byKey.values()] };
+  },
+
+  async reviewCount(): Promise<{ count: number }> {
+    return { count: await agentsRepo.reviewQueueCount() };
+  },
+
+  async approveQuestion(questionId: string): Promise<void> {
+    const ok = await agentsRepo.setQuestionStatus(questionId, 'published');
+    if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+  },
+
+  async rejectQuestion(questionId: string): Promise<void> {
+    const ok = await agentsRepo.setQuestionStatus(questionId, 'archived');
+    if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
   },
 
   // The sub-agent roster: one entry per role with description, model, current

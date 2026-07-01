@@ -1,4 +1,4 @@
-import { NotFoundError } from '../../core/errors.js';
+import { NotFoundError, BadRequestError } from '../../core/errors.js';
 import {
   agentsRepo,
   type AgentJobRow,
@@ -71,6 +71,28 @@ function toSchedule(r: AgentScheduleRow): AgentSchedule {
     lastJobId: r.last_job_id,
     lastStatus: r.last_status,
   };
+}
+
+// Resolve a concrete category for a schedule run from its params. Supports:
+//   - a fixed `categoryId` (+ optional `topic`)
+//   - a `rotation` array of { categoryId, topic } — rotated by day-of-year so
+//     consecutive days differ; run-now picks today's entry.
+// Returns null if neither is configured (caller rejects the run).
+function pickScheduleCategory(
+  params: Record<string, unknown>
+): { categoryId: string; topic?: string } | null {
+  const fixed = (params.categoryId ?? params.category_id) as string | undefined;
+  if (fixed) return { categoryId: fixed, topic: params.topic as string | undefined };
+
+  const rotation = params.rotation as { categoryId: string; topic?: string }[] | undefined;
+  if (Array.isArray(rotation) && rotation.length > 0) {
+    const now = new Date();
+    const start = Date.UTC(now.getUTCFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now.getTime() - start) / 86_400_000);
+    const entry = rotation[dayOfYear % rotation.length];
+    if (entry?.categoryId) return { categoryId: entry.categoryId, topic: entry.topic };
+  }
+  return null;
 }
 
 function toPromptVersion(r: AgentPromptRow): PromptVersion {
@@ -272,12 +294,26 @@ export const agentsService = {
 
   // Run a schedule immediately: expand its params template into a one-off job now.
   // (The recurring cron still fires on its own; this is a manual "run now".)
+  // A category must be resolvable (fixed categoryId or a rotation entry) — else
+  // the job would generate questions that can't be published (category_id NOT NULL).
   async runScheduleNow(id: string, userId: string | null): Promise<AgentJob> {
     const sched = await agentsRepo.getSchedule(id);
     if (!sched) throw new NotFoundError(`Schedule ${id} not found`);
+    const p = (sched.params ?? {}) as Record<string, unknown>;
+    const picked = pickScheduleCategory(p);
+    if (!picked) {
+      throw new BadRequestError(
+        'This schedule has no category configured. Add a categoryId or a rotation (categoryIds) in its params first.'
+      );
+    }
     const row = await agentsRepo.createJob({
       type: sched.job_type,
-      params: { ...(sched.params as object), manual: true } as Json,
+      params: {
+        ...p,
+        category_id: picked.categoryId,
+        topic: picked.topic ?? (p.topic as string | undefined) ?? 'daily challenge — football history',
+        manual: true,
+      } as Json,
       requestedBy: userId,
       budgetCents: null,
     });

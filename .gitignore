@@ -37,6 +37,8 @@ scripts/*
 !scripts/optimize-question-images.ts
 !scripts/bench/
 !scripts/grant-dev-unlimited.ts
+# Migration runner — must ship in the deploy image (Railway preDeployCommand).
+!scripts/run-migrations.mjs
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**

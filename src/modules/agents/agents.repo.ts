@@ -102,15 +102,26 @@ export interface AgentReviewRow {
 
 export const agentsRepo = {
   async listJobs(limit = 50, offset = 0): Promise<AgentJobRow[]> {
+    // spent_cents is computed live from the sessions (the jobs column is never
+    // rolled up), so the Spend shown always reflects actual agent usage.
     return sql<AgentJobRow[]>`
-      SELECT * FROM agents.jobs
-      ORDER BY created_at DESC
+      SELECT j.*, COALESCE(s.spent, 0)::int AS spent_cents
+      FROM agents.jobs j
+      LEFT JOIN (
+        SELECT job_id, SUM(cost_cents) AS spent FROM agents.sessions GROUP BY job_id
+      ) s ON s.job_id = j.id
+      ORDER BY j.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
   },
 
   async getJob(id: string): Promise<AgentJobRow | undefined> {
-    const [row] = await sql<AgentJobRow[]>`SELECT * FROM agents.jobs WHERE id = ${id}`;
+    const [row] = await sql<AgentJobRow[]>`
+      SELECT j.*, COALESCE((
+        SELECT SUM(cost_cents) FROM agents.sessions WHERE job_id = j.id
+      ), 0)::int AS spent_cents
+      FROM agents.jobs j WHERE j.id = ${id}
+    `;
     return row;
   },
 

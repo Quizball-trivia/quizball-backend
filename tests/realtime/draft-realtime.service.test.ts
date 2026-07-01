@@ -578,6 +578,47 @@ describe('draftRealtimeService', () => {
     }
   });
 
+  it('aborts a ranked draft instead of force-auto-banning a human without draft:ui_ready', async () => {
+    const { runDraftAutoBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(320_000);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      exists: redisExistsMock,
+      del: redisDelMock,
+      getDel: redisGetDelMock,
+      isOpen: true,
+    };
+    redisExistsMock.mockResolvedValue(0);
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'ai-1' },
+    ]);
+
+    try {
+      await runDraftAutoBan(io, 'l1', { requireUiReady: true, forceAtMs: 310_000 });
+
+      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+      expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+      expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
+      expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
+      expect(redisDelMock).toHaveBeenCalledWith([
+        'ranked:ai:lobby:l1',
+        'draft:absent_after_grace:l1:u1',
+      ]);
+      expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('auto-bans for ranked AI even when redis AI key is missing', async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
@@ -654,6 +695,14 @@ describe('draftRealtimeService', () => {
       ]);
 
       scheduleDraftAutoBan(io, 'l1');
+      redisClientMock = {
+        get: redisGetMock,
+        set: redisSetMock,
+        exists: redisExistsMock,
+        del: redisDelMock,
+        getDel: redisGetDelMock,
+        isOpen: false,
+      };
       await vi.advanceTimersByTimeAsync(16_000);
 
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(1);
@@ -707,6 +756,14 @@ describe('draftRealtimeService', () => {
 
       // Simulate the broken state: AI ban runs but NO human ban exists yet.
       await runRankedAiDraftBan(io, 'l1', 'ai-1');
+      redisClientMock = {
+        get: redisGetMock,
+        set: redisSetMock,
+        exists: redisExistsMock,
+        del: redisDelMock,
+        getDel: redisGetDelMock,
+        isOpen: false,
+      };
 
       // It must not have dead-ended: auto-ban recovery should fire and drive the
       // draft to completion (both bans applied, match created).

@@ -210,6 +210,38 @@ async function abortRankedDraftBeforeMatchCreation(
   );
 }
 
+async function abortRankedDraftWithoutUiReady(params: {
+  io: QuizballServer;
+  lobby: { id: string; mode: 'friendly' | 'ranked' };
+  members: Array<{ user_id: string }>;
+  aiUserId: string | null;
+  expectedUserId: string;
+  banCount: number;
+  forceAtMs: number | null | undefined;
+}): Promise<void> {
+  const { io, lobby, members, aiUserId, expectedUserId, banCount, forceAtMs } = params;
+  const humanUserIds = members
+    .filter((member) => member.user_id !== aiUserId)
+    .map((member) => member.user_id);
+
+  logger.warn(
+    { lobbyId: lobby.id, expectedUserId, banCount, forceAtMs: forceAtMs ?? null, humanUserIds },
+    'Aborting ranked draft because human auto-ban reached force deadline without draft ui_ready'
+  );
+
+  await abortRankedDraftBeforeMatchCreation(
+    io,
+    lobby,
+    humanUserIds,
+    'human_auto_ban_without_ui_ready',
+    humanUserIds.map((userId) => ({
+      userId,
+      cancelled: false,
+      absentAfterGrace: false,
+    }))
+  );
+}
+
 // Inline retry for transient wallet contention during ranked ticket consume.
 // The wallet CAS (6 attempts, ≤375ms) can still lose against sustained outside
 // writers (wallet refill hydration bursts, reconnect-driven refetch storms,
@@ -783,7 +815,8 @@ export async function runDraftAutoBan(
     const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
     const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (bans.some((ban) => ban.user_id === expectedUserId)) return;
-    if (options.requireUiReady && !isHarnessFastTimers()) {
+    const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
+    if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
       const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
       const forceAtMs = options.forceAtMs ?? Date.now();
       if (!uiReady && Date.now() < forceAtMs) {
@@ -791,6 +824,18 @@ export async function runDraftAutoBan(
         return;
       }
       if (!uiReady) {
+        if (expectedActorIsRankedHuman) {
+          await abortRankedDraftWithoutUiReady({
+            io,
+            lobby,
+            members,
+            aiUserId,
+            expectedUserId,
+            banCount: bans.length,
+            forceAtMs: options.forceAtMs,
+          });
+          return;
+        }
         logger.warn(
           { lobbyId, expectedUserId, forceAtMs },
           'Draft auto-ban force-opened without client ui_ready'

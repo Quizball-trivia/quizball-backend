@@ -8,6 +8,7 @@ import type { MatchRow } from '../../modules/matches/matches.types.js';
 import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { cancelPossessionHalftimeTimer } from '../possession-match-flow.js';
@@ -51,6 +52,13 @@ const FORFEIT_PENDING_TTL_SEC = 60;
 // current_q_index is the 0-based round counter, so "< 2 rounds played" means
 // the index has not yet reached 2.
 const RANKED_EARLY_FORFEIT_MIN_ROUNDS = 2;
+
+// Early-forfeit abuse penalty: the first N early-forfeits in a 24h window are
+// treated leniently (no-contest, ticket refunded, no RP change). Beyond that,
+// the user is penalized — 100 RP deducted and the ticket is NOT refunded — to
+// prevent infinite reload-and-dodge farming.
+const EARLY_FORFEIT_FREE_LIMIT = 3;
+const EARLY_FORFEIT_PENALTY_RP = 100;
 
 export function matchForfeitKey(matchId: string): string {
   return `match:forfeit:${matchId}`;
@@ -210,11 +218,66 @@ export async function finalizeMatchAsForfeit(
       await matchesService.abandonMatch(params.matchId);
       await deleteMatchCache(params.matchId);
 
-      // Refund the ranked ticket to every human participant (best-effort).
+      // Bump the forfeiter's rolling 24h early-forfeit counter. Beyond the
+      // free limit, the forfeiter is penalized: no ticket refund and a direct
+      // 100 RP deduction. The opponent (victim) always gets their ticket back.
+      // The refund suppression only takes effect if the RP deduction actually
+      // committed — if the penalty call throws or the user has no ranked
+      // profile, the forfeiter still gets their ticket refunded (safe default).
+      let penaltyApplied = false;
+      let earlyForfeitCount = 0;
+      try {
+        earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(params.forfeitingUserId);
+      } catch (error) {
+        logger.warn(
+          { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },
+          'Failed to bump early-forfeit counter — treating as non-penalized fallback'
+        );
+      }
+
+      if (earlyForfeitCount > EARLY_FORFEIT_FREE_LIMIT) {
+        try {
+          const rpResult = await rankedRepo.applyEarlyForfeitRpPenalty(
+            params.forfeitingUserId,
+            params.matchId,
+            EARLY_FORFEIT_PENALTY_RP
+          );
+          // rpResult is null when the user has no ranked profile — in that case
+          // there's nothing to deduct, so don't suppress the ticket refund.
+          penaltyApplied = rpResult != null;
+          if (penaltyApplied) {
+            logger.info(
+              {
+                matchId: params.matchId,
+                forfeitingUserId: params.forfeitingUserId,
+                earlyForfeitCount,
+                oldRp: rpResult!.oldRp,
+                newRp: rpResult!.newRp,
+                penaltyRp: EARLY_FORFEIT_PENALTY_RP,
+              },
+              'Early-forfeit RP penalty applied (serial early-forfeit abuse)'
+            );
+          } else {
+            logger.warn(
+              { matchId: params.matchId, forfeitingUserId: params.forfeitingUserId, earlyForfeitCount },
+              'Early-forfeit penalty skipped (no ranked profile) — ticket still refunded'
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },
+            'Failed to apply early-forfeit RP penalty — ticket still refunded'
+          );
+        }
+      }
+
+      // Refund the ranked ticket to every human participant EXCEPT the
+      // penalized forfeiter (best-effort). The opponent always gets refunded.
       const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
       const humanUserIds = roster
         .map((player) => rosterUsers.get(player.user_id))
         .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+        .filter((user) => !(penaltyApplied && user.id === params.forfeitingUserId))
         .map((user) => user.id);
       if (humanUserIds.length > 0) {
         try {
@@ -228,8 +291,17 @@ export async function finalizeMatchAsForfeit(
       }
 
       logger.info(
-        { matchId: params.matchId, roundsPlayed, forfeitingUserId: params.forfeitingUserId, humanUserIds },
-        'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
+        {
+          matchId: params.matchId,
+          roundsPlayed,
+          forfeitingUserId: params.forfeitingUserId,
+          humanUserIds,
+          penaltyApplied,
+          earlyForfeitCount,
+        },
+        penaltyApplied
+          ? 'Ranked match cancelled as no-contest (early forfeit) — forfeiter penalized, opponent ticket refunded'
+          : 'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
       );
 
       const resultVersion = Date.now();

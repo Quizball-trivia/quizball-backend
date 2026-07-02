@@ -162,6 +162,22 @@ async function processDueMember(member: string): Promise<void> {
 
   let handled = false;
   try {
+    // Stale-pop guard: a concurrent scheduleRealtimeTimer for this same member
+    // (e.g. a pause/resume re-arming a turn deadline) may have landed between
+    // the ZSET pop and here, replacing the payload with a FUTURE deadline and
+    // re-adding the member. Handling now would execute that future deadline
+    // early (observed risk: insta-folding a just-paused auction turn). If the
+    // member is scheduled again in the future, this pop is stale — skip it and
+    // let the re-armed entry fire at its own time.
+    const redis = getRedisClient();
+    if (redis?.isOpen) {
+      const rescheduledAt = await redis.zScore(TIMER_ZSET_KEY, member);
+      if (typeof rescheduledAt === 'number' && rescheduledAt > Date.now() + 250) {
+        logger.debug({ member, rescheduledAt }, 'Realtime timer pop superseded by re-arm; skipping');
+        return;
+      }
+    }
+
     const payload = await readPayload(member);
     if (!payload) {
       // The member was already popped from the ZSET; without a payload it can

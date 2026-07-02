@@ -178,6 +178,24 @@ async function advanceAuctionMatchFlowFromRevealGate(
   state: AuctionMatchState,
   options: AuctionMatchFlowOptions
 ): Promise<void> {
+  // A paused match (player in their disconnect grace window) must not advance
+  // past the reveal — the gate's 6s ceiling is far shorter than the 30s grace.
+  // Defer past the grace instant; the grace-forfeit and resume paths both
+  // re-drive the reveal advance themselves, so this retry is only a fallback.
+  const pause = await getAuctionPause(state.matchId);
+  if (pause) {
+    const pauseUntilMs = Date.parse(pause.pauseUntil);
+    const retryInMs = Math.max(0, (Number.isFinite(pauseUntilMs) ? pauseUntilMs : Date.now()) - Date.now()) + 2_000;
+    logger.debug({ matchId: state.matchId }, 'Auction reveal advance deferred (match paused)');
+    const retry = setTimeout(() => {
+      advanceAuctionMatchFlowFromRevealGate(io, state, options).catch((error) => {
+        logger.warn({ error, matchId: state.matchId }, 'Deferred auction reveal advance failed');
+      });
+    }, retryInMs);
+    retry.unref?.();
+    return;
+  }
+
   const advanced = await advanceToNextAuctionStep(state, options);
   await emitAuctionStepStarted(io, advanced, options);
 }
@@ -305,13 +323,16 @@ async function advanceToNextAuctionStep(
 
   return auctionStateStore.mutate(state.matchId, (current) => {
     if (current.version !== state.version) {
-      return skipAuctionMatchMutation(nextState);
+      // A concurrent mutation advanced the match first. Return ITS persisted
+      // state — never the locally computed nextState, which was never saved
+      // (emitting a phantom state desyncs clients from the store).
+      return skipAuctionMatchMutation(current);
     }
 
     return saveAuctionMatchMutation(nextState, (saved) => saved);
   }, {
     now: context.now,
-    onMissingState: () => nextState,
+    onMissingState: () => state,
   });
 }
 

@@ -125,6 +125,26 @@ export async function getAuctionDisconnectedSeat(state: AuctionMatchState, seatI
   return getAuctionDisconnectedUser(state.matchId, seat.userId);
 }
 
+/**
+ * First human seat (excluding `excludeUserId`) that still has a live disconnect
+ * marker. Used to keep the single per-match pause row pointing at SOME
+ * still-disconnected player when its previous owner resolves — without this,
+ * one player's forfeit/resume would drop the pause protecting another player
+ * who is still inside their grace window.
+ */
+export async function findAnyDisconnectedHuman(
+  state: AuctionMatchState,
+  excludeUserId?: string
+): Promise<AuctionDisconnectPause | null> {
+  for (const seat of state.seats) {
+    if (seat.isBot || !seat.userId || seat.userId === excludeUserId) continue;
+    if (seat.isEliminated) continue;
+    const marker = await getAuctionDisconnectedUser(state.matchId, seat.userId);
+    if (marker) return marker;
+  }
+  return null;
+}
+
 export async function setAuctionPause(pause: AuctionDisconnectPause): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return;

@@ -410,7 +410,10 @@ async function isUserInLiveAuctionMatch(matchId: string, userId: string): Promis
   if (!state) return false;
   if (state.phase === 'finished') return false;
   const seat = findAuctionSeatByUserId(state, userId);
-  return Boolean(seat) && !seat?.isBot;
+  // A forfeited seat is not a live participation — the player quit; they must
+  // be free to start a new search, not be steered back into the old match.
+  // (Honest budget-elimination still counts as live: they spectate to the end.)
+  return Boolean(seat) && !seat?.isBot && !seat?.forfeited;
 }
 
 function emitSearchStarted(

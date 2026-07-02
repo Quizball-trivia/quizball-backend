@@ -186,7 +186,11 @@ export async function deleteAuctionMatchState(matchId: string): Promise<void> {
 
 export async function indexAuctionMatchState(state: AuctionMatchState): Promise<void> {
   const redis = requireRedis();
-  const humanUserIds = getHumanUserIds(state);
+  // Forfeiters are out of the match for good — never (re-)index them as active
+  // participants, or a later state save would re-point auction:user:{id}:match
+  // at the match they quit and block/steer their next search back into it.
+  // (clearAuctionMatchIndexes still clears ALL human ids, forfeited included.)
+  const humanUserIds = getHumanUserIds(state, { excludeForfeited: true });
   await redis.sAdd(AUCTION_ACTIVE_MATCHES_KEY, state.matchId);
   await Promise.all(humanUserIds.map((userId) => (
     redis.set(auctionUserMatchKey(userId), state.matchId, {
@@ -278,8 +282,12 @@ function resolveMutationNow(now?: Date | (() => Date)): Date {
   return typeof now === 'function' ? now() : now ?? new Date();
 }
 
-function getHumanUserIds(state: AuctionMatchState): string[] {
+function getHumanUserIds(
+  state: AuctionMatchState,
+  options: { excludeForfeited?: boolean } = {}
+): string[] {
   return state.seats
     .filter((seat) => !seat.isBot && seat.userId)
+    .filter((seat) => !options.excludeForfeited || !seat.forfeited)
     .map((seat) => seat.userId as string);
 }

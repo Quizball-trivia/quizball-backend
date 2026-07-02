@@ -192,7 +192,16 @@ export function registerAuctionHandlers(io: QuizballServer, socket: QuizballSock
     }
 
     try {
-      await handleAuctionRejoin(io, socket, parsed.data.matchId);
+      const rejoined = await handleAuctionRejoin(io, socket, parsed.data.matchId);
+      if (!rejoined) {
+        // Match gone / finished / seat already forfeited (grace expired before
+        // the tap). Tell the client so it can drop the rejoin prompt instead
+        // of hanging on it.
+        socket.emit('auction:error', {
+          code: 'auction_rejoin_unavailable',
+          message: 'This match can no longer be rejoined',
+        });
+      }
     } catch (error) {
       logger.error({ error, userId: socket.data.user?.id }, 'auction:rejoin handler failed');
       socket.emit('auction:error', {

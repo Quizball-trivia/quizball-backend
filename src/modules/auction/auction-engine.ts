@@ -24,6 +24,7 @@ import type {
   PositionGroup,
 } from './auction.types.js';
 import type {
+  AuctionBidState,
   AuctionMatchState,
   AuctionRoundState,
   AuctionSoloPickOptionState,
@@ -438,6 +439,40 @@ export function resolveRoundWin(
       updatedAt: context.nowIso(),
     },
   }, context);
+}
+
+/**
+ * Remove a (forfeiting) seat's bid leadership from the current round: when it
+ * holds the highest bid, recompute the highest bid from the remaining bids of
+ * seats that are still live (not folded, not eliminated). A quitter must never
+ * win the round — without this, resolveRoundWin would still assign the
+ * footballer to the forfeited seat once the others fold out.
+ */
+export function stripSeatBidLeadership(
+  state: AuctionMatchState,
+  seatId: string
+): AuctionMatchState {
+  const round = state.currentRound;
+  if (!round || round.highestBidderSeatId !== seatId) return state;
+
+  const liveBids = round.bids.filter((bid) => {
+    if (bid.seatId === seatId) return false;
+    if (round.foldedSeatIds.includes(bid.seatId)) return false;
+    const bidder = state.seats.find((entry) => entry.seatId === bid.seatId);
+    return Boolean(bidder) && !bidder!.isEliminated;
+  });
+  const top = liveBids.reduce<AuctionBidState | null>((best, bid) => (
+    !best || bid.amount > best.amount ? bid : best
+  ), null);
+
+  return {
+    ...state,
+    currentRound: {
+      ...round,
+      highestBidderSeatId: top?.seatId ?? null,
+      highestBid: top?.amount ?? 0,
+    },
+  };
 }
 
 export function resolveUnsoldRound(

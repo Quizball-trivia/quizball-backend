@@ -13,6 +13,7 @@ const stateStoreMock = vi.hoisted(() => ({
   save: vi.fn(async (state: unknown) => state),
   mutate: vi.fn(),
   clearIndexes: vi.fn(),
+  clearUserMatchIndex: vi.fn(async () => undefined),
 }));
 
 const schedulerMock = vi.hoisted(() => ({
@@ -421,5 +422,80 @@ describe('auction disconnect service', () => {
         stateVersion: 4,
       })
     );
+  });
+
+  it("strips a forfeiting high bidder's lead so a quitter can never win the round", async () => {
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    redisMock.store.set('auction:disconnect:match-1:user-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    // user-1 (seat-human) is the current HIGH BIDDER when they drop out.
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      currentRound: {
+        ...biddingState().currentRound!,
+        bids: [
+          { seatId: 'seat-bot-a', amount: 40_000_000, placedAt: '2026-06-20T09:59:50.000Z' },
+          { seatId: 'seat-human', amount: 50_000_000, placedAt: '2026-06-20T09:59:55.000Z' },
+        ],
+        highestBidderSeatId: 'seat-human',
+        highestBid: 50_000_000,
+      },
+    }));
+    const { io } = createIo();
+
+    const outcome = await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace',
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      disconnectCount: 1,
+    }, { context });
+
+    expect(outcome.kind).toBe('forfeited');
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    // Leadership recomputed to the best remaining LIVE bid — never the quitter.
+    expect(saved.currentRound?.highestBidderSeatId).toBe('seat-bot-a');
+    expect(saved.currentRound?.highestBid).toBe(40_000_000);
+    expect(saved.currentRound?.winnerSeatId ?? null).not.toBe('seat-human');
+  });
+
+  it('keeps the pause protecting a second disconnected player when the first forfeits', async () => {
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    // Both humans are disconnected; the shared pause row belongs to user-1.
+    for (const [userId, seatId] of [['user-1', 'seat-human'], ['user-2', 'seat-human-2']] as const) {
+      redisMock.store.set(`auction:disconnect:match-1:${userId}`, JSON.stringify({
+        matchId: 'match-1',
+        userId,
+        seatId,
+        pauseUntil: '2026-06-20T10:00:30.000Z',
+        disconnectCount: 1,
+      }));
+    }
+    redisMock.store.set('auction:pause:match-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    const { io } = createIo();
+
+    await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace',
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      disconnectCount: 1,
+    }, { context });
+
+    // user-1's forfeit must NOT drop the pause — it re-points to user-2, who is
+    // still inside their own grace window.
+    const pauseRaw = redisMock.store.get('auction:pause:match-1');
+    expect(pauseRaw).toBeTruthy();
+    expect(JSON.parse(pauseRaw!).userId).toBe('user-2');
   });
 });

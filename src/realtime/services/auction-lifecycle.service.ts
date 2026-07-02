@@ -61,7 +61,9 @@ export const auctionLifecycleService = {
     }
 
     const seat = findAuctionSeatByUserId(state, userId);
-    if (!seat || seat.isBot) {
+    if (!seat || seat.isBot || seat.forfeited) {
+      // Not seated (or quit for good) — clear the stale index and let the
+      // normal home/search flow take over.
       await auctionStateStore.clearUserMatchIndex(userId, matchId);
       return false;
     }

@@ -1,7 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { resolveAuctionContext, type AuctionEngineContext } from '../../modules/auction/auction-context.js';
-import { advanceTurnOrResolveRound, finishMatch, getTurnMs } from '../../modules/auction/auction-engine.js';
+import { advanceTurnOrResolveRound, finishMatch, getTurnMs, stripSeatBidLeadership } from '../../modules/auction/auction-engine.js';
 import {
   findAuctionSeatByUserId,
   toPublicAuctionMatchState,
@@ -35,6 +35,7 @@ import { buildAuctionPausedStatePayload } from './auction-disconnect-state.servi
 import {
   clearAuctionPause,
   clearAuctionUserDisconnected,
+  findAnyDisconnectedHuman,
   getAuctionDisconnectGraceMs,
   getAuctionDisconnectedUser,
   getAuctionPause,
@@ -160,7 +161,15 @@ export async function handleAuctionSocketDisconnect(
     // the pause row exists (clue + solo-pick handlers check it) and resume
     // re-arms them; bidding-not-their-turn keeps playing until the turn order
     // reaches the disconnected seat (pauseAuctionCurrentTurnIfDisconnected).
-    await setAuctionPause(pauseRow);
+    // Do NOT overwrite a pause row that still belongs to a DIFFERENT
+    // still-disconnected player — the row re-points when its owner resolves.
+    const existingPause = await getAuctionPause(matchId);
+    const existingOwnerStillGone = existingPause && existingPause.userId !== userId
+      ? await getAuctionDisconnectedUser(matchId, existingPause.userId)
+      : null;
+    if (!existingOwnerStillGone) {
+      await setAuctionPause(pauseRow);
+    }
     emitAuctionPaused(io, state, {
       userId,
       seatId: seat.seatId,
@@ -198,12 +207,10 @@ export async function resumeAuctionUserIfDisconnected(
   const disconnected = await getAuctionDisconnectedUser(state.matchId, userId);
   if (!disconnected) return false;
 
-  // Player is back: clear the disconnect marker + cancel the grace-forfeit timer
-  // so it can never fire late (mirrors ranked's explicit cancelRealtimeTimer).
-  await clearAuctionUserDisconnected(state.matchId, userId);
-  await cancelRealtimeTimer('auction_disconnect_grace', auctionDisconnectGraceTimerKey(state.matchId, userId));
-
-  // Start the resume "get ready" countdown; the durable timer unpauses at the end.
+  // Arm the resume countdown FIRST, then clear the disconnect marker + grace
+  // timer. Ordered this way, a crash mid-sequence leaves either the grace
+  // intact (before) or the countdown armed (after) — there is no window where
+  // the match is paused with neither timer to resolve it.
   const countdownMs = harnessDelayMs(AUCTION_RESUME_COUNTDOWN_MS, 150);
   const countdownEndsAt = new Date(Date.now() + countdownMs).toISOString();
   await scheduleRealtimeTimer(
@@ -212,6 +219,8 @@ export async function resumeAuctionUserIfDisconnected(
     new Date(countdownEndsAt),
     { kind: 'auction_resume_countdown', matchId: state.matchId, userId },
   );
+  await clearAuctionUserDisconnected(state.matchId, userId);
+  await cancelRealtimeTimer('auction_disconnect_grace', auctionDisconnectGraceTimerKey(state.matchId, userId));
   io.to(`match:${state.matchId}`).emit('auction:resume_countdown', {
     matchId: state.matchId,
     countdownEndsAt,
@@ -249,6 +258,11 @@ export async function runAuctionResumeCountdownTimer(
   const pause = await getAuctionPause(matchId);
   if (pause?.userId === userId) {
     await clearAuctionPause(matchId);
+    // Keep the match paused for any OTHER human still in their grace window.
+    const otherDisconnected = await findAnyDisconnectedHuman(state, userId);
+    if (otherDisconnected) {
+      await setAuctionPause(otherDisconnected);
+    }
   }
 
   // If the resumed player's turn was parked at the pause backstop, give them a
@@ -265,7 +279,16 @@ export async function runAuctionResumeCountdownTimer(
     stateVersion: freshState.version,
     serverNow: new Date().toISOString(),
   };
-  io.to(`match:${matchId}`).emit('auction:resume', payloadOut);
+  // Only broadcast the resume when no one else's pause is still active — a
+  // room-wide auction:resume clears every client's pause overlay, which would
+  // wrongly unpause the UI while another player is still in grace. In that
+  // case the resumed player alone gets the fresh state.
+  const remainingPause = await getAuctionPause(matchId);
+  if (!remainingPause || remainingPause.userId === userId) {
+    io.to(`match:${matchId}`).emit('auction:resume', payloadOut);
+  } else {
+    io.to(`user:${userId}`).emit('auction:resume', payloadOut);
+  }
 
   // Phase-aware timer re-arm (the pause deferred these while it was live).
   if (freshState.phase === 'bidding') {
@@ -274,6 +297,9 @@ export async function runAuctionResumeCountdownTimer(
     await scheduleAuctionClueRevealTimer(freshState, options);
   } else if (freshState.phase === 'solo_pick') {
     await scheduleAuctionSoloPickTimeoutTimer(freshState, { fromNow: true });
+  } else if (freshState.phase === 'reveal') {
+    // Re-open the reveal gate (its advance was deferred during the pause).
+    await advanceAuctionMatchFlowAfterMutation(io, freshState, options);
   }
   logger.info({ matchId, userId, seatId: seat.seatId }, 'Auction resume countdown complete; match unpaused');
 }
@@ -322,7 +348,8 @@ export async function handleAuctionRejoin(
   if (!state || state.phase === 'finished') return false;
 
   const seat = findAuctionSeatByUserId(state, userId);
-  if (!seat || seat.isBot) return false;
+  // A forfeited seat can't come back — their grace already expired.
+  if (!seat || seat.isBot || seat.forfeited) return false;
 
   socket.data.lobbyId = undefined;
   socket.data.matchId = matchId;
@@ -421,10 +448,20 @@ export async function runAuctionDisconnectGraceTimer(
   const outcome = await forfeitAuctionSeatForDisconnect(payload.matchId, payload.userId, payload.seatId, reason, options);
   if (outcome.kind === 'noop') return outcome;
 
-  await Promise.all([
-    clearAuctionUserDisconnected(payload.matchId, payload.userId),
-    clearAuctionPause(payload.matchId),
-  ]);
+  await clearAuctionUserDisconnected(payload.matchId, payload.userId);
+  // The pause row is shared per match: only clear it if it belongs to THIS
+  // forfeiter, then re-point it at any other human still in their grace window
+  // so the match stays paused for them (2-3 real-player overlap).
+  const pause = await getAuctionPause(payload.matchId);
+  if (!pause || pause.userId === payload.userId) {
+    await clearAuctionPause(payload.matchId);
+    const otherDisconnected = await findAnyDisconnectedHuman(outcome.state, payload.userId);
+    if (otherDisconnected) {
+      await setAuctionPause(otherDisconnected);
+    }
+  }
+  // The forfeiter is out of this match for good — free them to search again.
+  await auctionStateStore.clearUserMatchIndex(payload.userId, payload.matchId).catch(() => {});
 
   const forfeitPayload = buildPlayerForfeitedPayload(outcome.state, {
     userId: payload.userId,
@@ -550,14 +587,16 @@ async function forfeitAuctionSeatForDisconnect(
     };
 
     if (next.phase === 'bidding' && next.currentRound) {
-      next = advanceTurnOrResolveRound({
+      // Fold the forfeiter out AND strip their bid leadership — otherwise
+      // resolveRoundWin would still hand the footballer to the quit seat.
+      next = advanceTurnOrResolveRound(stripSeatBidLeadership({
         ...next,
         currentRound: {
           ...next.currentRound,
           foldedSeatIds: [...new Set([...next.currentRound.foldedSeatIds, seatId])],
           updatedAt: context.nowIso(),
         },
-      }, context);
+      }, seatId), context);
     } else if (next.phase === 'solo_pick' && next.soloPick?.playerSeatId === seatId) {
       next = {
         ...next,

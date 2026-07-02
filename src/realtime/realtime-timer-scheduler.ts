@@ -45,7 +45,7 @@ export type RealtimeTimerPayload =
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
-  | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null }
+  | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null; plannedIsCorrect?: boolean }
   | { kind: 'possession_halftime'; matchId: string }
   | { kind: 'possession_question'; matchId: string; qIndex: number }
   | { kind: 'ranked_draft_start'; lobbyId: string; userAId: string; userBId: string };

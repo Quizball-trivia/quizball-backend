@@ -406,6 +406,30 @@ export const agentsService = {
     if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
   },
 
+  // Manual "Regenerate": archive this draft and spawn a fresh 1-question job of
+  // the same type + category + topic. The new question flows through the pipeline
+  // and lands back in the review queue.
+  async regenerateQuestion(questionId: string, userId: string | null): Promise<AgentJob> {
+    const ctx = await agentsRepo.questionRegenContext(questionId);
+    if (!ctx) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    await agentsRepo.setQuestionStatus(questionId, 'archived');
+    const row = await agentsRepo.createJob({
+      type: ctx.job_type,
+      params: {
+        type: ctx.job_type,
+        questionType: ctx.type,
+        category_id: ctx.category_id,
+        topic: ctx.topic ?? 'football history',
+        difficulty: 'medium',
+        count: 1,
+        regenerated_from: questionId,
+      } as Json,
+      requestedBy: userId,
+      budgetCents: null,
+    });
+    return toJob(row);
+  },
+
   // The sub-agent roster: one entry per role with description, model, current
   // prompt (truncated), and live stats from sessions. Drives the "Sub-agents" page.
   async roster(): Promise<{ items: AgentRosterEntry[] }> {

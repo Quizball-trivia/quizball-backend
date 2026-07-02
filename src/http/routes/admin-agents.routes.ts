@@ -55,6 +55,7 @@ router.get('/review', agentsController.reviewQueue);
 router.get('/review/count', agentsController.reviewCount);
 router.post('/review/:questionId/approve', validate({ params: reviewQuestionIdParamSchema }), agentsController.approveQuestion);
 router.post('/review/:questionId/reject', validate({ params: reviewQuestionIdParamSchema }), agentsController.rejectQuestion);
+router.post('/review/:questionId/regenerate', validate({ params: reviewQuestionIdParamSchema }), agentsController.regenerateQuestion);
 
 // sub-agent roster (the 4 agents: description, model, prompt preview, live stats)
 router.get('/roster', agentsController.roster);

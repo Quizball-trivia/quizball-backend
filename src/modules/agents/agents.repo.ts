@@ -376,6 +376,21 @@ export const agentsRepo = {
     return rows.length > 0;
   },
 
+  // The context needed to regenerate a draft question: its type + category +
+  // the originating job's type/topic. Null if it's not an agent draft.
+  async questionRegenContext(
+    questionId: string
+  ): Promise<{ type: string; category_id: string; job_type: string; topic: string | null } | undefined> {
+    const [row] = await sql<{ type: string; category_id: string; job_type: string; topic: string | null }[]>`
+      SELECT q.type, q.category_id, j.type AS job_type, (j.params ->> 'topic') AS topic
+      FROM public.questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      JOIN agents.jobs  j ON j.id = t.job_id
+      WHERE q.id = ${questionId} AND q.status = 'draft'
+    `;
+    return row;
+  },
+
   // per-role roster stats from sessions (today's runs, pass/fail, avg cost, running now, model)
   async agentStats(): Promise<
     {

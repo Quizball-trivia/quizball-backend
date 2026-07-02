@@ -108,6 +108,12 @@ export const agentsController = {
     res.status(204).send();
   },
 
+  async regenerateQuestion(req: Request, res: Response): Promise<void> {
+    const { questionId } = req.validated.params as ReviewQuestionIdParam;
+    const job = await agentsService.regenerateQuestion(questionId, req.user?.id ?? null);
+    res.status(201).json(job);
+  },
+
   async budget(_req: Request, res: Response): Promise<void> {
     res.json(await agentsService.budget());
   },

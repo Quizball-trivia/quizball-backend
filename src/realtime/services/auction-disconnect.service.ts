@@ -1,7 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { resolveAuctionContext, type AuctionEngineContext } from '../../modules/auction/auction-context.js';
-import { advanceTurnOrResolveRound, finishMatch } from '../../modules/auction/auction-engine.js';
+import { advanceTurnOrResolveRound, finishMatch, getTurnMs } from '../../modules/auction/auction-engine.js';
 import {
   findAuctionSeatByUserId,
   toPublicAuctionMatchState,
@@ -26,7 +26,11 @@ import type {
   AuctionResumePayload,
   AuctionRejoinAvailablePayload,
 } from '../socket.types.js';
-import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.service.js';
+import {
+  advanceAuctionMatchFlowAfterMutation,
+  scheduleAuctionSoloPickTimeoutTimer,
+} from './auction-match-flow.service.js';
+import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import { buildAuctionPausedStatePayload } from './auction-disconnect-state.service.js';
 import {
   clearAuctionPause,
@@ -39,6 +43,7 @@ import {
   markAuctionUserDisconnected,
   MAX_AUCTION_DISCONNECTS,
   pauseAuctionCurrentTurnForDisconnectedSeat,
+  setAuctionPause,
   toRemainingAuctionReconnects,
 } from './auction-disconnect-state.service.js';
 import { emitAndScheduleAuctionTurnStarted, scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
@@ -130,13 +135,14 @@ export async function handleAuctionSocketDisconnect(
 
   await scheduleAuctionDisconnectGraceTimer(matchId, userId, seat.seatId, disconnectCount, pauseUntil);
 
-  const paused = await pauseAuctionCurrentTurnForDisconnectedSeat(state, {
+  const pauseRow = {
     matchId,
     userId,
     seatId: seat.seatId,
     pauseUntil,
     disconnectCount,
-  });
+  };
+  const paused = await pauseAuctionCurrentTurnForDisconnectedSeat(state, pauseRow);
   if (paused) {
     emitAuctionPaused(io, paused.state, {
       userId,
@@ -148,6 +154,21 @@ export async function handleAuctionSocketDisconnect(
     });
     io.to(`match:${matchId}`).emit('auction:state', buildAuctionPausedStatePayload(paused));
     await scheduleAuctionTurnTimeoutTimer(paused.state, options);
+  } else if (shouldPauseAuctionPhaseForSeat(state, seat.seatId)) {
+    // Phase-agnostic pause (ISSUE 1): clue_reveal / reveal / this player's own
+    // solo pick also pause for the grace window. The phase timers defer while
+    // the pause row exists (clue + solo-pick handlers check it) and resume
+    // re-arms them; bidding-not-their-turn keeps playing until the turn order
+    // reaches the disconnected seat (pauseAuctionCurrentTurnIfDisconnected).
+    await setAuctionPause(pauseRow);
+    emitAuctionPaused(io, state, {
+      userId,
+      seatId: seat.seatId,
+      pauseUntil,
+      graceMs,
+      remainingReconnects,
+      reason,
+    });
   }
 
   logger.info(
@@ -230,7 +251,11 @@ export async function runAuctionResumeCountdownTimer(
     await clearAuctionPause(matchId);
   }
 
-  const freshState = await auctionStateStore.load(matchId) ?? state;
+  // If the resumed player's turn was parked at the pause backstop, give them a
+  // fresh turn window from NOW (the backstop deadline is far in the future and
+  // the original one is long gone).
+  const rebased = await rebaseAuctionTurnDeadlineAfterResume(matchId, seat.seatId);
+  const freshState = rebased ?? (await auctionStateStore.load(matchId) ?? state);
   const payloadOut: AuctionResumePayload = {
     matchId: freshState.matchId,
     seatId: seat.seatId,
@@ -241,8 +266,43 @@ export async function runAuctionResumeCountdownTimer(
     serverNow: new Date().toISOString(),
   };
   io.to(`match:${matchId}`).emit('auction:resume', payloadOut);
-  await scheduleAuctionTurnTimeoutTimer(freshState, options);
+
+  // Phase-aware timer re-arm (the pause deferred these while it was live).
+  if (freshState.phase === 'bidding') {
+    await scheduleAuctionTurnTimeoutTimer(freshState, options);
+  } else if (freshState.phase === 'clue_reveal') {
+    await scheduleAuctionClueRevealTimer(freshState, options);
+  } else if (freshState.phase === 'solo_pick') {
+    await scheduleAuctionSoloPickTimeoutTimer(freshState, { fromNow: true });
+  }
   logger.info({ matchId, userId, seatId: seat.seatId }, 'Auction resume countdown complete; match unpaused');
+}
+
+/**
+ * After a resume, re-base the current turn's deadline to a fresh window when it
+ * belongs to the resumed seat (it was parked at the far-future pause backstop).
+ * Returns the updated state, or null when there was nothing to re-base.
+ */
+async function rebaseAuctionTurnDeadlineAfterResume(
+  matchId: string,
+  seatId: string
+): Promise<AuctionMatchState | null> {
+  return auctionStateStore.mutate(matchId, (current) => {
+    const round = current.currentRound;
+    if (current.phase !== 'bidding' || round?.currentTurnSeatId !== seatId || !round) {
+      return skipAuctionMatchMutation(null);
+    }
+    return saveAuctionMatchMutation({
+      ...current,
+      currentRound: {
+        ...round,
+        turnEndsAt: new Date(Date.now() + getTurnMs(round)).toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    }, (next) => next);
+  }, {
+    onMissingState: () => null,
+  });
 }
 
 /**
@@ -299,6 +359,17 @@ export function buildAuctionRejoinAvailable(
     remainingReconnects: toRemainingAuctionReconnects(disconnected.disconnectCount),
     serverNow: new Date().toISOString(),
   };
+}
+
+/**
+ * Should this phase pause while `seatId`'s player is disconnected? Bidding is
+ * handled separately (pauses only when/once it's their turn); everything else
+ * active pauses so the match can't advance past a player in their grace window.
+ */
+function shouldPauseAuctionPhaseForSeat(state: AuctionMatchState, seatId: string): boolean {
+  if (state.phase === 'clue_reveal' || state.phase === 'reveal') return true;
+  if (state.phase === 'solo_pick') return state.soloPick?.playerSeatId === seatId;
+  return false;
 }
 
 export async function emitPausedAuctionTurnIfNeeded(
@@ -472,7 +543,9 @@ async function forfeitAuctionSeatForDisconnect(
     let next: AuctionMatchState = {
       ...current,
       seats: current.seats.map((entry) => (
-        entry.seatId === seatId ? { ...entry, isEliminated: true } : entry
+        // `forfeited` distinguishes a quit/drop-out from honest budget
+        // elimination: forfeiters rank below everyone and earn no coins.
+        entry.seatId === seatId ? { ...entry, isEliminated: true, forfeited: true } : entry
       )),
     };
 

@@ -48,6 +48,12 @@ export interface AuctionPlayer {
   budget: number;
   team: AuctionTeam;
   isEliminated: boolean;
+  /**
+   * Player quit / disconnect-forfeited out of the match (distinct from honest
+   * budget elimination, which also sets isEliminated). Forfeiters always rank
+   * below every non-forfeiter and never receive coin rewards.
+   */
+  forfeited?: boolean;
 }
 
 export interface AuctionBidValidationInput {

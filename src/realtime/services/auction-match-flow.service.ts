@@ -1,4 +1,5 @@
 import { harnessDelayMs } from '../../core/harness-timing.js';
+import { logger } from '../../core/logger.js';
 import { shuffle } from '../../core/rng.js';
 import {
   resolveAuctionContext,
@@ -37,7 +38,8 @@ import {
 } from '../../modules/auction/auction-state.store.js';
 import type { AuctionFootballer, PositionGroup } from '../../modules/auction/auction.types.js';
 import { persistFinishedAuctionMatch } from './auction-persistence.service.js';
-import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
+import { getAuctionPause } from './auction-disconnect-state.service.js';
+import { scheduleRealtimeTimer, type RealtimeTimerPayload } from '../realtime-timer-scheduler.js';
 import type { QuizballServer } from '../socket-server.js';
 import type {
   AuctionMatchFinishedPayload,
@@ -51,10 +53,90 @@ import { requirePublicRound } from './auction-realtime-payloads.js';
 import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
 const AUCTION_REVEAL_UI_READY_CEILING_MS = 6_000;
+// A human's solo pick auto-resolves after this long (bots pick instantly).
+// Without a deadline a frozen tab / silent drop froze the whole match forever.
+const AUCTION_SOLO_PICK_TIMEOUT_MS = 30_000;
+// Auto-selection on timeout matches the bot default.
+const AUCTION_SOLO_PICK_DEFAULT_OPTION = 'B' as const;
+
+export type AuctionSoloPickTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_solo_pick_timeout' }>;
 
 export interface AuctionMatchFlowOptions {
   now?: Date;
   context?: AuctionEngineContext;
+}
+
+/**
+ * Durable deadline for a HUMAN solo pick (keyed by matchId — one solo pick at a
+ * time). `startedAt` scopes the timer to this exact pick so a stale timer for a
+ * previous pick no-ops.
+ */
+export async function scheduleAuctionSoloPickTimeoutTimer(
+  state: AuctionMatchState,
+  scheduleOptions: { fromNow?: boolean } = {}
+): Promise<void> {
+  const soloPick = state.soloPick;
+  if (state.phase !== 'solo_pick' || !soloPick || soloPick.selectedOption) return;
+  const seat = state.seats.find((entry) => entry.seatId === soloPick.playerSeatId);
+  if (!seat || seat.isBot) return;
+
+  const startedAtMs = Date.parse(soloPick.startedAt);
+  // `fromNow` re-bases the deadline after a pause/resume — the original
+  // startedAt-based deadline may already be in the past.
+  const baseMs = scheduleOptions.fromNow || !Number.isFinite(startedAtMs) ? Date.now() : startedAtMs;
+  const dueAt = baseMs + harnessDelayMs(AUCTION_SOLO_PICK_TIMEOUT_MS, 1_000);
+  await scheduleRealtimeTimer(
+    'auction_solo_pick_timeout',
+    state.matchId,
+    new Date(dueAt),
+    {
+      kind: 'auction_solo_pick_timeout',
+      matchId: state.matchId,
+      seatId: soloPick.playerSeatId,
+      startedAt: soloPick.startedAt,
+    },
+  );
+}
+
+/**
+ * Solo-pick deadline elapsed → auto-select the default option (same as the bot
+ * default) so the match can never freeze on an absent human. Idempotent: no-ops
+ * if the pick already resolved or a different pick is live.
+ */
+export async function runAuctionSoloPickTimeoutTimer(
+  io: QuizballServer,
+  payload: AuctionSoloPickTimeoutTimerPayload,
+  options: AuctionMatchFlowOptions = {}
+): Promise<void> {
+  const state = await auctionStateStore.load(payload.matchId).catch(() => null);
+  if (!state || state.phase !== 'solo_pick' || !state.soloPick) return;
+  if (state.soloPick.playerSeatId !== payload.seatId) return;
+  if (state.soloPick.startedAt !== payload.startedAt) return;
+  if (state.soloPick.selectedOption) return;
+
+  // Player is in their disconnect grace window: NEVER auto-select for them —
+  // the grace forfeit owns the outcome. Defer past the grace instant; if they
+  // resumed, resume re-arms a fresh deadline and this stale copy no-ops.
+  const pause = await getAuctionPause(payload.matchId);
+  if (pause?.seatId === payload.seatId) {
+    const pauseUntilMs = Date.parse(pause.pauseUntil);
+    const dueAt = new Date(Math.max(Number.isFinite(pauseUntilMs) ? pauseUntilMs : 0, Date.now()) + 2_000);
+    await scheduleRealtimeTimer('auction_solo_pick_timeout', payload.matchId, dueAt, payload);
+    logger.debug({ matchId: payload.matchId, seatId: payload.seatId }, 'Auction solo-pick timeout deferred (player paused)');
+    return;
+  }
+
+  logger.info(
+    { matchId: payload.matchId, seatId: payload.seatId },
+    'Auction solo pick timed out; auto-selecting default option'
+  );
+  try {
+    await handleAuctionSoloPickSelection(io, state, payload.seatId, AUCTION_SOLO_PICK_DEFAULT_OPTION, options);
+  } catch (error) {
+    // A racing manual selection can make this throw — that's fine, the pick
+    // resolved either way.
+    logger.warn({ error, matchId: payload.matchId }, 'Auction solo-pick timeout auto-select failed');
+  }
 }
 
 export async function advanceAuctionMatchFlowAfterMutation(
@@ -72,7 +154,16 @@ export async function advanceAuctionMatchFlowAfterMutation(
       phase: 'reveal',
       ceilingMs: AUCTION_REVEAL_UI_READY_CEILING_MS,
       dispatch: () => {
-        void advanceAuctionMatchFlowFromRevealGate(io, state, options);
+        // Never let a transient failure (e.g. a brief Redis blip) become an
+        // unhandled rejection — that would leave the match frozen at reveal.
+        // Log it; the boot/reconnect re-arm (ensureAuctionActiveTimers) re-opens
+        // the gate and advances if this dispatch was lost.
+        advanceAuctionMatchFlowFromRevealGate(io, state, options).catch((error) => {
+          logger.warn(
+            { error, matchId: state.matchId, phase: 'reveal' },
+            'Auction reveal-gate advance failed; will recover via re-arm'
+          );
+        });
       },
     });
     return state;
@@ -181,8 +272,11 @@ export async function emitAuctionStepStarted(
 
     const soloSeat = state.seats.find((seat) => seat.seatId === state.soloPick?.playerSeatId);
     if (soloSeat?.isBot) {
-      return handleAuctionSoloPickSelection(io, state, soloSeat.seatId, 'B', options);
+      return handleAuctionSoloPickSelection(io, state, soloSeat.seatId, AUCTION_SOLO_PICK_DEFAULT_OPTION, options);
     }
+    // Human pick: arm the durable deadline so an absent player can't freeze
+    // the match — auto-resolves to the default option on expiry.
+    await scheduleAuctionSoloPickTimeoutTimer(state);
     return state;
   }
 

@@ -201,4 +201,28 @@ describe('auction rules', () => {
     expect(rankings[0].totalTrueValue).toBeGreaterThan(rankings[1].totalTrueValue);
     expect(rankings[2].isComplete).toBe(false);
   });
+
+  it('ranks forfeiters below every non-forfeiter, regardless of squad value', () => {
+    // Best complete squad but quit — must NOT win by forfeiting while ahead.
+    const forfeitedBest = player('forfeited-best', completeTeam('4-3-3', 90_000_000), {
+      isEliminated: true,
+      forfeited: true,
+    });
+    const honestComplete = player('honest-complete', completeTeam('4-3-3', 10_000_000));
+    // Honest budget elimination is NOT penalized — ranks by what they built.
+    const budgetEliminated = player(
+      'budget-eliminated',
+      fillPosition(createEmptyTeam('4-3-3'), 'FWD', [5_000_000]),
+      { isEliminated: true }
+    );
+
+    const rankings = rankAuctionPlayers([forfeitedBest, honestComplete, budgetEliminated]);
+
+    expect(rankings.map((ranking) => ranking.seatId)).toEqual([
+      'honest-complete',
+      'budget-eliminated',
+      'forfeited-best',
+    ]);
+    expect(rankings[2].rank).toBe(3);
+  });
 });

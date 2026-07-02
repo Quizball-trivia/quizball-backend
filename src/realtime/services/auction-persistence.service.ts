@@ -65,6 +65,7 @@ export async function persistFinishedAuctionMatch(
           totalPoints: Math.round(ranking.totalTrueValue),
           placement: ranking.rank,
           isBot,
+          forfeited: Boolean(ranking.player?.forfeited),
         };
       })
     );
@@ -84,10 +85,11 @@ export async function persistFinishedAuctionMatch(
     await matchesService.completeMatch(state.matchId, winnerId);
 
     // 5) Coin rewards — real humans only (bots have synthetic wallets we don't
-    // care about). Gated by the `created` guard above, so paid exactly once.
+    // care about), and never for forfeiters (quit/drop-out = 0 coins). Gated by
+    // the `created` guard above, so paid exactly once.
     const coinsByUserId: Record<string, number> = {};
     for (const row of seatRows) {
-      if (row.isBot) continue;
+      if (row.isBot || row.forfeited) continue;
       const coins = auctionCoinsForPlacement(row.placement);
       await matchesRepo.addCoins(row.userId, coins);
       coinsByUserId[row.userId] = coins;

@@ -15,6 +15,19 @@ import type { QuizballServer } from '../socket-server.js';
 
 export const AUCTION_DISCONNECT_GRACE_MS = 30_000;
 export const MAX_AUCTION_DISCONNECTS = 3;
+// While a turn is paused for a disconnect, its deadline is pushed THIS far past
+// the grace instant (ranked's PAUSE_QUESTION_BACKSTOP_MS pattern). The grace
+// forfeit (at pauseUntil) therefore always resolves first — the turn-timeout
+// can never race it into an auto-fold that keeps a gone player "playing". The
+// backstop only fires as a last resort if the grace timer itself was lost.
+export const AUCTION_PAUSE_TURN_BACKSTOP_MS = 90_000;
+
+/** Deadline a paused turn is parked at (far beyond grace + resume countdown). */
+export function auctionPausedTurnBackstopEndsAt(pauseUntil: string): string {
+  const pauseUntilMs = Date.parse(pauseUntil);
+  const baseMs = Number.isFinite(pauseUntilMs) ? pauseUntilMs : Date.now();
+  return new Date(baseMs + AUCTION_PAUSE_TURN_BACKSTOP_MS).toISOString();
+}
 
 const AUCTION_DISCONNECT_TTL_SEC = 75;
 const AUCTION_PAUSE_TTL_SEC = 75;
@@ -168,12 +181,15 @@ export async function pauseAuctionCurrentTurnForDisconnectedSeat(
   state: AuctionMatchState,
   disconnected: AuctionDisconnectPause
 ): Promise<AuctionPausedTurn | null> {
+  // Park the paused turn FAR past the grace instant so the grace forfeit (at
+  // pauseUntil) always resolves before the turn-timeout can auto-fold.
+  const backstopEndsAt = auctionPausedTurnBackstopEndsAt(disconnected.pauseUntil);
   const round = state.currentRound;
   if (
     state.phase !== 'bidding' ||
     !round ||
     round.currentTurnSeatId !== disconnected.seatId ||
-    round.turnEndsAt === disconnected.pauseUntil
+    round.turnEndsAt === backstopEndsAt
   ) {
     return null;
   }
@@ -184,7 +200,7 @@ export async function pauseAuctionCurrentTurnForDisconnectedSeat(
       current.phase !== 'bidding' ||
       !currentRound ||
       currentRound.currentTurnSeatId !== disconnected.seatId ||
-      currentRound.turnEndsAt === disconnected.pauseUntil
+      currentRound.turnEndsAt === backstopEndsAt
     ) {
       return skipAuctionMatchMutation(null);
     }
@@ -198,7 +214,7 @@ export async function pauseAuctionCurrentTurnForDisconnectedSeat(
       ...current,
       currentRound: {
         ...currentRound,
-        turnEndsAt: disconnected.pauseUntil,
+        turnEndsAt: backstopEndsAt,
         updatedAt: new Date().toISOString(),
       },
     }, (next) => next);

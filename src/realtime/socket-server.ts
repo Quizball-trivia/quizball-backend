@@ -48,6 +48,7 @@ import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
 import { runAuctionDisconnectGraceTimer, runAuctionResumeCountdownTimer } from './services/auction-disconnect.service.js';
+import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
 import {
   auctionLifecycleService,
   scheduleBootAuctionTimerRearm,
@@ -291,6 +292,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     auction_resume_countdown: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_resume_countdown') return;
       await runAuctionResumeCountdownTimer(server, payload);
+    },
+    auction_solo_pick_timeout: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_solo_pick_timeout') return;
+      await runAuctionSoloPickTimeoutTimer(server, payload);
     },
     auction_turn_timeout: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_turn_timeout') return;

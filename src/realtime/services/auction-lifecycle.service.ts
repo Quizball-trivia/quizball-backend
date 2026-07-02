@@ -10,6 +10,10 @@ import {
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { scheduleAuctionBotActionTimer } from './auction-bot.service.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
+import {
+  advanceAuctionMatchFlowAfterMutation,
+  scheduleAuctionSoloPickTimeoutTimer,
+} from './auction-match-flow.service.js';
 import { scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
 import { emitAuctionUiReadyGateState } from './auction-ui-ready.service.js';
 import {
@@ -100,7 +104,17 @@ export const auctionLifecycleService = {
     io: QuizballServer,
     socket: QuizballSocket
   ): Promise<void> {
-    const matchId = socket.data.matchId;
+    // Resolve the match from the socket binding OR the user→match index. A
+    // socket that re-authenticated but never rebound to the match (e.g. a
+    // token-refresh flap) has no socket.data.matchId — without the fallback its
+    // disconnect would be a silent no-op (no pause, no grace) and the match
+    // would hang until Redis TTLs expire. Same pattern ranked fixed with its
+    // getActiveMatchForUser fallback.
+    const userId = socket.data.user?.id;
+    const matchId = socket.data.matchId
+      ?? (userId
+        ? await auctionStateStore.getActiveMatchIdForUser(userId).catch(() => null)
+        : null);
     if (!matchId) return;
 
     let state = await auctionStateStore.load(matchId);
@@ -170,6 +184,23 @@ export async function ensureAuctionActiveTimers(
     if (emitAuctionUiReadyGateState(io, state, 'bidding')) return true;
     await scheduleAuctionTurnTimeoutTimer(state);
     await scheduleAuctionBotActionTimer(state);
+    return true;
+  }
+
+  if (state.phase === 'solo_pick' && state.soloPick && !state.soloPick.selectedOption) {
+    // Re-arm the human solo-pick deadline (survives restarts). Without this a
+    // server restart during a human's solo pick left the match frozen forever.
+    await scheduleAuctionSoloPickTimeoutTimer(state);
+    return true;
+  }
+
+  if (state.phase === 'reveal' && state.currentRound) {
+    // If a live gate exists (plain reconnect), just resend it. Otherwise the
+    // gate + its ceiling timer were lost (server restart / crash) and the match
+    // is frozen at reveal — re-open the gate so it advances. Without this the
+    // match stays stuck and client ui_ready acks are ignored (no gate to match).
+    if (emitAuctionUiReadyGateState(io, state, 'reveal')) return true;
+    await advanceAuctionMatchFlowAfterMutation(io, state);
     return true;
   }
 

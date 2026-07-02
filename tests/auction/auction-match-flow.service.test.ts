@@ -507,6 +507,77 @@ describe('auction match flow service', () => {
     );
   });
 
+  it('arms a durable deadline for a human solo pick and auto-selects the default on expiry', async () => {
+    const { emitAuctionStepStarted, runAuctionSoloPickTimeoutTimer } =
+      await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    contentServiceMock.getRandomPublishedAuctionCard.mockResolvedValue(null);
+    persisted = startSoloPick(
+      startInitialState(),
+      'seat-human',
+      'FWD',
+      card('solo-option-a', 'FWD', 40_000_000),
+      card('solo-option-b', 'FWD', 45_000_000),
+      context
+    );
+    const startedAt = persisted.soloPick!.startedAt;
+
+    // Human pick: no instant auto-select, but the durable deadline is armed.
+    await emitAuctionStepStarted(io, persisted, { context });
+    expect(roomEmit).not.toHaveBeenCalledWith('auction:solo_pick_selected', expect.anything());
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_solo_pick_timeout',
+      'match-1',
+      expect.any(Date),
+      expect.objectContaining({
+        kind: 'auction_solo_pick_timeout',
+        matchId: 'match-1',
+        seatId: 'seat-human',
+        startedAt,
+      })
+    );
+
+    // Deadline elapses with no selection → default option applied (bot default).
+    await runAuctionSoloPickTimeoutTimer(io, {
+      kind: 'auction_solo_pick_timeout',
+      matchId: 'match-1',
+      seatId: 'seat-human',
+      startedAt,
+    }, { context });
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:solo_pick_selected',
+      expect.objectContaining({ matchId: 'match-1', seatId: 'seat-human', option: 'B' })
+    );
+  });
+
+  it('solo-pick timeout no-ops for a stale timer (pick already resolved or superseded)', async () => {
+    const { runAuctionSoloPickTimeoutTimer } =
+      await import('../../src/realtime/services/auction-match-flow.service.js');
+    const { io, roomEmit } = createIo();
+    persisted = startSoloPick(
+      startInitialState(),
+      'seat-human',
+      'FWD',
+      card('solo-option-a', 'FWD', 40_000_000),
+      card('solo-option-b', 'FWD', 45_000_000),
+      context
+    );
+    persisted = {
+      ...persisted,
+      soloPick: { ...persisted.soloPick!, selectedOption: 'A' },
+    };
+
+    await runAuctionSoloPickTimeoutTimer(io, {
+      kind: 'auction_solo_pick_timeout',
+      matchId: 'match-1',
+      seatId: 'seat-human',
+      startedAt: persisted.soloPick!.startedAt,
+    }, { context });
+
+    expect(roomEmit).not.toHaveBeenCalledWith('auction:solo_pick_selected', expect.anything());
+  });
+
   it('ranks complete teams above incomplete teams in the final event payload', async () => {
     const { advanceAuctionMatchFlowAfterMutation } = await import('../../src/realtime/services/auction-match-flow.service.js');
     const { io, roomEmit } = createIo();

@@ -26,6 +26,16 @@ const botTimerMock = vi.hoisted(() => ({
   scheduleAuctionBotActionTimer: vi.fn(),
 }));
 
+const matchFlowMock = vi.hoisted(() => ({
+  advanceAuctionMatchFlowAfterMutation: vi.fn(async (_io: unknown, state: unknown) => state),
+  scheduleAuctionSoloPickTimeoutTimer: vi.fn(),
+}));
+
+const disconnectServiceMock = vi.hoisted(() => ({
+  handleAuctionSocketDisconnect: vi.fn(),
+  buildAuctionRejoinAvailable: vi.fn(),
+}));
+
 vi.mock('../../src/modules/auction/auction-state.store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/modules/auction/auction-state.store.js')>();
   return {
@@ -44,6 +54,16 @@ vi.mock('../../src/realtime/services/auction-turn.service.js', () => ({
 
 vi.mock('../../src/realtime/services/auction-bot.service.js', () => ({
   scheduleAuctionBotActionTimer: botTimerMock.scheduleAuctionBotActionTimer,
+}));
+
+vi.mock('../../src/realtime/services/auction-match-flow.service.js', () => ({
+  advanceAuctionMatchFlowAfterMutation: matchFlowMock.advanceAuctionMatchFlowAfterMutation,
+  scheduleAuctionSoloPickTimeoutTimer: matchFlowMock.scheduleAuctionSoloPickTimeoutTimer,
+}));
+
+vi.mock('../../src/realtime/services/auction-disconnect.service.js', () => ({
+  handleAuctionSocketDisconnect: disconnectServiceMock.handleAuctionSocketDisconnect,
+  buildAuctionRejoinAvailable: disconnectServiceMock.buildAuctionRejoinAvailable,
 }));
 
 const footballer = {
@@ -205,6 +225,69 @@ describe('auction lifecycle service', () => {
     await expect(ensureAuctionActiveTimers(createIo(), biddingState('seat-bot-a'))).resolves.toBe(true);
     expect(turnTimerMock.scheduleAuctionTurnTimeoutTimer).toHaveBeenCalledTimes(2);
     expect(botTimerMock.scheduleAuctionBotActionTimer).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles a disconnect even when the socket lost its match binding (user-index fallback)', async () => {
+    const { auctionLifecycleService } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    // Token-refresh flap: the socket re-authenticated but never rebound, so
+    // socket.data.matchId is unset. The wrapper must resolve the match via the
+    // user→match index instead of silently no-op'ing (which left the match
+    // hanging unpaused until Redis TTLs).
+    stateStoreMock.load.mockResolvedValue(biddingState());
+    const socket = createSocket();
+    socket.data.matchId = undefined;
+
+    await auctionLifecycleService.handleAuctionSocketDisconnect(createIo(), socket);
+
+    expect(stateStoreMock.getActiveMatchIdForUser).toHaveBeenCalledWith('user-1');
+    expect(disconnectServiceMock.handleAuctionSocketDisconnect).toHaveBeenCalled();
+    // Re-arm still runs for the resolved match (bidding phase → turn timer).
+    expect(turnTimerMock.scheduleAuctionTurnTimeoutTimer).toHaveBeenCalled();
+  });
+
+  it('disconnect stays a no-op when the user has no active match anywhere', async () => {
+    const { auctionLifecycleService } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    stateStoreMock.getActiveMatchIdForUser.mockResolvedValue(null);
+    const socket = createSocket();
+    socket.data.matchId = undefined;
+
+    await auctionLifecycleService.handleAuctionSocketDisconnect(createIo(), socket);
+
+    expect(disconnectServiceMock.handleAuctionSocketDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('re-arms the human solo-pick deadline on boot/reconnect', async () => {
+    const { ensureAuctionActiveTimers } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    const soloState = auctionState({
+      phase: 'solo_pick',
+      currentRound: null,
+      soloPick: {
+        playerSeatId: 'seat-human',
+        positionGroup: 'FWD',
+        optionA: { type: 'revealed', footballer },
+        optionB: { type: 'mystery', footballer, clues: ['clue'] },
+        selectedOption: null,
+        startedAt: '2026-06-20T10:00:00.000Z',
+      },
+    });
+
+    await expect(ensureAuctionActiveTimers(createIo(), soloState)).resolves.toBe(true);
+    expect(matchFlowMock.scheduleAuctionSoloPickTimeoutTimer).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-1', phase: 'solo_pick' })
+    );
+  });
+
+  it('re-opens the reveal gate so a match frozen at reveal (restart/crash) advances', async () => {
+    const { ensureAuctionActiveTimers } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    // A reveal-phase match with no live gate (gate + ceiling timer lost on
+    // restart) must be re-advanced — otherwise it's stuck and ui_ready acks are
+    // ignored. With no in-memory gate, the re-arm re-opens it via the flow.
+    const revealState = auctionState({ phase: 'reveal' });
+    await expect(ensureAuctionActiveTimers(createIo(), revealState)).resolves.toBe(true);
+    expect(matchFlowMock.advanceAuctionMatchFlowAfterMutation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ phase: 'reveal', matchId: 'match-1' }),
+    );
   });
 
   it('rearms active auction timers on boot and cleans finished or missing states', async () => {

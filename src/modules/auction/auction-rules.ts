@@ -98,6 +98,12 @@ export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPl
       totalTrueValue: getTotalTeamValue(player.team),
     }))
     .sort((a, b) => {
+      // Forfeiters (quit / disconnect-timeout) always rank below every
+      // non-forfeiter, no matter how good their squad was — you can't win by
+      // quitting while ahead. Honest budget elimination is NOT penalized here.
+      const aForfeited = Boolean(a.player.forfeited);
+      const bForfeited = Boolean(b.player.forfeited);
+      if (aForfeited !== bForfeited) return aForfeited ? 1 : -1;
       if (a.isComplete !== b.isComplete) return a.isComplete ? -1 : 1;
       if (a.totalTrueValue !== b.totalTrueValue) return b.totalTrueValue - a.totalTrueValue;
       return a.index - b.index;

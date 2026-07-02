@@ -645,7 +645,7 @@ function getAvailableFootballers(
   return (cards[position] ?? []).filter((card) => !card.clueCardId || !used.has(card.clueCardId));
 }
 
-function getTurnMs(round: AuctionRoundState): number {
+export function getTurnMs(round: AuctionRoundState): number {
   return round.highestBidderSeatId ? RAISE_TURN_MS : OPENING_TURN_MS;
 }
 

@@ -187,7 +187,10 @@ describe('auction disconnect service', () => {
 
     const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
     expect(saved.version).toBe(4);
-    expect(saved.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:30.000Z');
+    // ISSUE 4: the paused turn is parked at the far-future backstop
+    // (pauseUntil + 90s), NOT at pauseUntil — so the grace forfeit (10:00:30)
+    // always resolves before the turn-timeout can auto-fold.
+    expect(saved.currentRound?.turnEndsAt).toBe('2026-06-20T10:02:00.000Z');
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_disconnect_grace',
       'match-1:user-1',
@@ -202,11 +205,11 @@ describe('auction disconnect service', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_turn_timeout',
       'match-1:round-1:seat-human',
-      new Date('2026-06-20T10:00:30.000Z'),
+      new Date('2026-06-20T10:02:00.000Z'),
       expect.objectContaining({
         expectedTurnSeatId: 'seat-human',
         stateVersion: 4,
-        turnEndsAt: '2026-06-20T10:00:30.000Z',
+        turnEndsAt: '2026-06-20T10:02:00.000Z',
       })
     );
     expect(roomEmit).toHaveBeenCalledWith(
@@ -303,6 +306,71 @@ describe('auction disconnect service', () => {
         seatId: 'seat-human',
         reason: 'reconnected',
       }),
+    );
+  });
+
+  it('pauses the match when a player disconnects during clue_reveal (phase-agnostic pause)', async () => {
+    const { handleAuctionSocketDisconnect } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    stateStoreMock.load.mockResolvedValue(biddingState({ phase: 'clue_reveal' }));
+    const { io, roomEmit } = createIo();
+
+    await handleAuctionSocketDisconnect(io, createSocket(), { context });
+
+    // Pause row written (clue/solo timers defer against it) + paused broadcast,
+    // without mutating the match state.
+    expect(redisMock.store.has('auction:pause:match-1')).toBe(true);
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:paused',
+      expect.objectContaining({
+        matchId: 'match-1',
+        userId: 'user-1',
+        seatId: 'seat-human',
+        pauseUntil: '2026-06-20T10:00:30.000Z',
+        stateVersion: 3,
+      })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_disconnect_grace',
+      'match-1:user-1',
+      new Date('2026-06-20T10:00:30.000Z'),
+      expect.objectContaining({ kind: 'auction_disconnect_grace' })
+    );
+    expect(stateStoreMock.save).not.toHaveBeenCalled();
+  });
+
+  it('re-bases the paused turn to a fresh window when the resume countdown completes', async () => {
+    const { runAuctionResumeCountdownTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    // Turn was parked at the pause backstop while the player was gone.
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      currentRound: {
+        ...biddingState().currentRound!,
+        turnEndsAt: '2026-06-20T10:02:00.000Z',
+      },
+    }));
+    redisMock.store.set('auction:pause:match-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    const { io, roomEmit } = createIo();
+
+    await runAuctionResumeCountdownTimer(io, { kind: 'auction_resume_countdown', matchId: 'match-1', userId: 'user-1' });
+
+    // Fresh opening-turn window from now (10:00:00 + 30s), not the backstop.
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    expect(saved.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:30.000Z');
+    expect(redisMock.store.has('auction:pause:match-1')).toBe(false);
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:resume',
+      expect.objectContaining({ matchId: 'match-1', userId: 'user-1', reason: 'reconnected' })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_turn_timeout',
+      'match-1:round-1:seat-human',
+      new Date('2026-06-20T10:00:30.000Z'),
+      expect.objectContaining({ turnEndsAt: '2026-06-20T10:00:30.000Z' })
     );
   });
 

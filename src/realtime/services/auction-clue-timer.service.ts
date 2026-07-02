@@ -24,6 +24,7 @@ import type {
   AuctionClueRevealedPayload,
 } from '../socket.types.js';
 import { advanceAuctionMatchFlowAfterMutation } from './auction-match-flow.service.js';
+import { getAuctionPause } from './auction-disconnect-state.service.js';
 import { emitAndScheduleAuctionTurnStarted } from './auction-turn.service.js';
 import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
@@ -80,6 +81,24 @@ export async function runAuctionClueRevealTimer(
   payload: AuctionClueRevealPayload,
   options: AuctionClueRevealTimerOptions = {}
 ): Promise<AuctionClueTimerOutcome> {
+  // Paused match (a player is in their disconnect grace window): defer instead
+  // of revealing — clues must not advance past an absent player. Re-check just
+  // after the grace instant; resume/forfeit re-arm with fresh payloads, so this
+  // deferred copy simply no-ops (version_mismatch) if the match moved on.
+  const pause = await getAuctionPause(payload.matchId);
+  if (pause) {
+    const pauseUntilMs = Date.parse(pause.pauseUntil);
+    const dueAt = new Date(Math.max(Number.isFinite(pauseUntilMs) ? pauseUntilMs : 0, Date.now()) + 2_000);
+    await scheduleRealtimeTimer(
+      'auction_clue_reveal',
+      auctionClueRevealTimerKey(payload.matchId, payload.roundId, payload.expectedClueIndex),
+      dueAt,
+      payload
+    );
+    logger.debug({ matchId: payload.matchId, roundId: payload.roundId }, 'Auction clue timer deferred (match paused)');
+    return { kind: 'noop', reason: 'paused' };
+  }
+
   const outcome = await advanceClueRevealState(payload, options);
 
   if (outcome.kind === 'noop') {

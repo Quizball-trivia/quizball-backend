@@ -961,6 +961,7 @@ export const rankedMatchmakingService = {
         socket,
         async () => {
           if (await redis.exists(rankedLeaveGuardKey(userId))) {
+            await redis.del(rankedJoinDebounceKey(userId));
             await ignoreRecentLeave();
             return;
           }

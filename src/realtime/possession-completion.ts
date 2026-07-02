@@ -4,6 +4,7 @@ import { logger } from '../core/logger.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
+import { usersRepo } from '../modules/users/users.repo.js';
 import { achievementsService } from '../modules/achievements/index.js';
 import {
   matchesService,
@@ -29,6 +30,12 @@ import {
   type ResolutionDecision,
 } from './possession-state.js';
 import { getRedisClient } from './redis.js';
+import {
+  buildFinalResultsPayload,
+  emitFinalResultsToMatchParticipants,
+} from './services/match-final-results.service.js';
+import { finalizeRankedMatchAsNoContest } from './services/ranked-no-contest.service.js';
+import { hasNoHumanInteraction } from './services/match-interaction.service.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchFinalResultsPayload } from './socket.types.js';
 
@@ -252,6 +259,55 @@ export async function completePossessionMatch(
         'Progress completion skipped because match progress is undecidable'
       );
       return { matchId, winnerId: null, resultVersion: Date.now(), completed: false, reason: 'undecidable' };
+    }
+
+    // Zero-interaction no-contest safety net: a ghost ranked match where BOTH
+    // clients were gone plays out entirely on round timeouts (every answer
+    // backfilled) via the natural round-resolver path and would otherwise
+    // finalize with a real winner, costing an innocent player RP. If no human
+    // ever genuinely submitted an answer, void it as a no-contest instead of
+    // applying the fabricated result. One-sided matches (a human who actually
+    // played beating an absent opponent) are NOT voided — a single genuine
+    // submission clears this guard.
+    //
+    // Scoped to the NATURAL completion strategy only: the progress strategy
+    // (grace expiry / orphan resolver / disconnect) already owns forfeit-first
+    // and its own no-contest+refund handling, and must keep completing by
+    // existing progress (S15b) — this guard must not intercept that path.
+    if (match.mode === 'ranked' && options.decisionStrategy !== 'progress') {
+      const rosterUsers = await usersRepo.getByIds(decisionInput.map((player) => player.user_id));
+      const humanUserIds = new Set(
+        decisionInput
+          .map((player) => rosterUsers.get(player.user_id))
+          .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+          .map((user) => user.id)
+      );
+      if (humanUserIds.size > 0) {
+        const answers = await matchAnswersRepo.listAnswersForMatch(matchId);
+        if (hasNoHumanInteraction(answers, humanUserIds)) {
+          const noContest = await finalizeRankedMatchAsNoContest({
+            matchId,
+            activeMatch: match,
+            cacheSnapshot: cache,
+            roundsPlayed: cache?.currentQIndex ?? match.current_q_index,
+          });
+          if (noContest.completed) {
+            clearAiMaps(matchId);
+            clearHalftimeTimer(matchId);
+            const finalPayload = await buildFinalResultsPayload(matchId, noContest.resultVersion);
+            if (finalPayload) {
+              await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
+            }
+          }
+          return {
+            matchId,
+            winnerId: null,
+            resultVersion: noContest.resultVersion,
+            completed: noContest.completed,
+            ...(noContest.completed ? {} : { reason: 'not_active' as const }),
+          };
+        }
+      }
     }
 
     completionState.phase = 'COMPLETED';

@@ -6,7 +6,7 @@
   },
   "deploy": {
     "preDeployCommand": "npm run migrate:deploy",
-    "startCommand": "node dist/main.js",
+    "startCommand": "node dist/bootstrap.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",

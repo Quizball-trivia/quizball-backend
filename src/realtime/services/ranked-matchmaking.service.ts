@@ -15,6 +15,7 @@ import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
+import { fetchUserRoomSockets } from './match-presence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
@@ -253,7 +254,52 @@ async function attachUserSocketsToLobby(
   });
 }
 
-async function startHumanRankedMatch(
+async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): Promise<boolean> {
+  const sockets = await fetchUserRoomSockets(io, userId);
+  return sockets.some((socket) => {
+    const data = (socket as { data?: { user?: { id?: unknown } } } | null)?.data;
+    return data?.user?.id === userId;
+  });
+}
+
+/**
+ * Put a still-present player back into the ranked queue with a fresh search
+ * after their pairing was aborted (opponent turned out to be a ghost). Mirrors
+ * the enqueue in handleQueueJoin so the player keeps searching instead of
+ * silently falling out of matchmaking.
+ */
+async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const now = Date.now();
+  const deadlineAt = now + SEARCH_DURATION_MS;
+  const newSearchId = randomUUID();
+  const socket = (await fetchUserRoomSockets(io, userId))[0] as
+    | { data?: { currentCountry?: string } }
+    | undefined;
+  const searchFields: Record<string, string> = {
+    userId,
+    status: 'queued',
+    queuedAt: String(now),
+    deadlineAt: String(deadlineAt),
+  };
+  if (socket?.data?.currentCountry) {
+    searchFields.countryCode = socket.data.currentCountry;
+  }
+  await redis
+    .multi()
+    .hSet(rankedSearchKey(newSearchId), searchFields)
+    .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
+    .zAdd(RANKED_MM_QUEUE_KEY, { score: now, value: newSearchId })
+    .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+    .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
+    .exec();
+  io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+  await userSessionGuardService.emitState(io, userId);
+  logger.info({ userId, searchId: newSearchId }, 'Re-queued present player after ghost pairing');
+}
+
+export async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
   userBId: string,
@@ -324,6 +370,56 @@ async function startHumanRankedMatch(
           });
           await releaseUncancelledUsers(userACancelled, userBCancelled);
           span.setAttribute('quizball.skipped_cancelled', true);
+          return;
+        }
+      }
+
+      // Ghost-pairing guard: the Lua pairing only checks the Redis queue, which
+      // can still hold searches whose clients died long ago (e.g. a freeze +
+      // restart replaying a 25-min-stale queue). Verify each player still has a
+      // live authenticated socket before creating the match. If one side is a
+      // ghost, don't start: tell the ghost the search ended and re-queue the
+      // present player so they keep matchmaking. No ticket has been consumed and
+      // no lobby created yet at this seam, so there is nothing else to unwind.
+      {
+        const [userAPresent, userBPresent] = await Promise.all([
+          hasLiveAuthenticatedSocket(io, userAId),
+          hasLiveAuthenticatedSocket(io, userBId),
+        ]);
+        if (!userAPresent || !userBPresent) {
+          logger.warn(
+            { userAId, userBId, userAPresent, userBPresent },
+            'Ranked human match creation skipped: a paired player has no live socket'
+          );
+          rankedDebug('human_pair_skipped_absent_socket', {
+            userA: rankedDebugUser(userAId),
+            userB: rankedDebugUser(userBId),
+            userAPresent,
+            userBPresent,
+          });
+          const absentUserIds = [
+            userAPresent ? null : userAId,
+            userBPresent ? null : userBId,
+          ].filter((id): id is string => Boolean(id));
+          const presentUserIds = [
+            userAPresent ? userAId : null,
+            userBPresent ? userBId : null,
+          ].filter((id): id is string => Boolean(id));
+          for (const absentId of absentUserIds) {
+            await bestEffortCancelRankedQueueSearch(absentId, 'ranked_human_pair_absent_socket');
+            trackRankedQueueLeft({
+              userId: absentId,
+              source: 'server_abort',
+              searchFound: false,
+              searchId: null,
+            });
+            io.to(`user:${absentId}`).emit('ranked:queue_left');
+            await userSessionGuardService.emitState(io, absentId);
+          }
+          for (const presentId of presentUserIds) {
+            await requeueRankedSearch(io, presentId);
+          }
+          span.setAttribute('quizball.skipped_absent_socket', true);
           return;
         }
       }

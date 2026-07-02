@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PossessionStatePayload } from '../../src/modules/matches/matches.service.js';
 
 // Tests the early-forfeit abuse penalty in finalizeMatchAsForfeit:
 //   - First 3 early-forfeits in a 24h window → free (ticket refunded, no RP)
@@ -12,13 +13,19 @@ const getMatchMock = vi.fn();
 const setMatchStatePayloadMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const completeMatchMock = vi.fn();
+const computeAvgTimesMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
+const setPlayerFinalTotalsMock = vi.fn();
+const updatePlayerAvgTimeMock = vi.fn();
 const getByIdsMock = vi.fn();
 const bumpEarlyForfeitCountMock = vi.fn();
 const applyEarlyForfeitRpPenaltyMock = vi.fn();
+const settleCompletedRankedMatchMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
 const getRedisClientMock = vi.fn();
+const awardCompletedMatchXpMock = vi.fn();
+const evaluateForMatchBestEffortMock = vi.fn();
 
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: (...a: unknown[]) => acquireLockMock(...a),
@@ -37,6 +44,7 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
   matchesService: {
     abandonMatch: (...a: unknown[]) => abandonMatchMock(...a),
     completeMatch: (...a: unknown[]) => completeMatchMock(...a),
+    computeAvgTimes: (...a: unknown[]) => computeAvgTimesMock(...a),
   },
   resolveMatchVariant: () => 'ranked_sim',
 }));
@@ -44,6 +52,8 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
 vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   matchPlayersRepo: {
     listMatchPlayers: (...a: unknown[]) => listMatchPlayersMock(...a),
+    setPlayerFinalTotals: (...a: unknown[]) => setPlayerFinalTotalsMock(...a),
+    updatePlayerAvgTime: (...a: unknown[]) => updatePlayerAvgTimeMock(...a),
   },
 }));
 
@@ -61,7 +71,7 @@ vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
 }));
 
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
-  rankedService: { settleCompletedRankedMatch: vi.fn() },
+  rankedService: { settleCompletedRankedMatch: (...a: unknown[]) => settleCompletedRankedMatchMock(...a) },
 }));
 
 vi.mock('../../src/modules/store/store.service.js', () => ({
@@ -130,11 +140,11 @@ vi.mock('../../src/realtime/services/match-excused-exit.service.js', () => ({
 }));
 
 vi.mock('../../src/modules/objectives/index.js', () => ({
-  objectivesService: { evaluate: vi.fn() },
+  objectivesService: { evaluateForMatchBestEffort: (...a: unknown[]) => evaluateForMatchBestEffortMock(...a) },
 }));
 
 vi.mock('../../src/modules/progression/progression.service.js', () => ({
-  progressionService: { awardMatchXp: vi.fn() },
+  progressionService: { awardCompletedMatchXp: (...a: unknown[]) => awardCompletedMatchXpMock(...a) },
 }));
 
 const FORFEITER_ID = 'forfeiter-uuid';
@@ -151,6 +161,13 @@ function setupActiveRankedMatch(roundsPlayed: number) {
   });
   setMatchStatePayloadMock.mockResolvedValue(undefined);
   abandonMatchMock.mockResolvedValue(undefined);
+  completeMatchMock.mockResolvedValue(undefined);
+  computeAvgTimesMock.mockResolvedValue(new Map());
+  setPlayerFinalTotalsMock.mockResolvedValue(undefined);
+  updatePlayerAvgTimeMock.mockResolvedValue(undefined);
+  settleCompletedRankedMatchMock.mockResolvedValue(null);
+  awardCompletedMatchXpMock.mockResolvedValue(undefined);
+  evaluateForMatchBestEffortMock.mockResolvedValue(undefined);
   deleteMatchCacheMock.mockResolvedValue(undefined);
   listMatchPlayersMock.mockResolvedValue([
     { user_id: FORFEITER_ID },
@@ -174,6 +191,92 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     releaseLockMock.mockResolvedValue(undefined);
     startLockHeartbeatMock.mockReturnValue({ stop: vi.fn() });
     setupActiveRankedMatch(0);
+  });
+
+  it('persists the frozen score before ranked settlement on late forfeits', async () => {
+    setupActiveRankedMatch(3);
+    listMatchPlayersMock.mockResolvedValue([
+      { match_id: MATCH_ID, user_id: FORFEITER_ID, seat: 1, total_points: 100, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { match_id: MATCH_ID, user_id: OPPONENT_ID, seat: 2, total_points: 220, correct_answers: 4, goals: 2, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    const statePayload: PossessionStatePayload = {
+      version: 1,
+      variant: 'ranked_sim',
+      phase: 'NORMAL_PLAY',
+      half: 1,
+      possessionDiff: 0,
+      kickOffSeat: 1,
+      speedStreakHolderSeat: null,
+      speedStreakCandidateSeat: null,
+      speedStreakCandidateCount: 0,
+      goals: { seat1: 0, seat2: 3 },
+      penaltyGoals: { seat1: 0, seat2: 0 },
+      normalQuestionsPerHalf: 6,
+      normalQuestionsAnsweredInHalf: 3,
+      normalQuestionsAnsweredTotal: 3,
+      lastAttack: { attackerSeat: null },
+      halftime: {
+        deadlineAt: null,
+        uiReadyAt: null,
+        readyDeferCount: 0,
+        categoryOptions: [],
+        firstHalfShownCategoryIds: [],
+        firstBanSeat: null,
+        bans: { seat1: null, seat2: null },
+        purpose: 'second_half',
+      },
+      penalty: {
+        round: 0,
+        shooterSeat: 1,
+        suddenDeath: false,
+        kicksTaken: { seat1: 0, seat2: 0 },
+      },
+      penaltyCategoryId: null,
+      imageMcq: {},
+      currentQuestion: null,
+      winnerDecisionMethod: null,
+      stateVersionCounter: 0,
+    };
+
+    const { finalizeMatchAsForfeit } = await import('../../src/realtime/services/match-forfeit.service.js');
+
+    await finalizeMatchAsForfeit({
+      matchId: MATCH_ID,
+      forfeitingUserId: FORFEITER_ID,
+      cacheSnapshot: {
+        matchId: MATCH_ID,
+        status: 'active',
+        mode: 'ranked',
+        totalQuestions: 12,
+        categoryAId: 'cat-a',
+        categoryBId: 'cat-b',
+        startedAt: new Date().toISOString(),
+        players: [
+          { userId: FORFEITER_ID, seat: 1, totalPoints: 100, correctAnswers: 1, goals: 0, penaltyGoals: 0, avgTimeMs: null },
+          { userId: OPPONENT_ID, seat: 2, totalPoints: 240, correctAnswers: 5, goals: 3, penaltyGoals: 0, avgTimeMs: null },
+        ],
+        currentQIndex: 3,
+        statePayload,
+        currentQuestion: null,
+        answers: {},
+        clueReveals: {},
+      },
+    });
+
+    expect(setPlayerFinalTotalsMock).toHaveBeenCalledWith(
+      MATCH_ID,
+      OPPONENT_ID,
+      expect.objectContaining({ totalPoints: 240, correctAnswers: 5, goals: 3, penaltyGoals: 0 })
+    );
+    expect(setPlayerFinalTotalsMock).toHaveBeenCalledWith(
+      MATCH_ID,
+      FORFEITER_ID,
+      expect.objectContaining({ goals: 0, penaltyGoals: 0 })
+    );
+    const lastTotalsWriteOrder = Math.max(...setPlayerFinalTotalsMock.mock.invocationCallOrder);
+    expect(lastTotalsWriteOrder).toBeLessThan(settleCompletedRankedMatchMock.mock.invocationCallOrder[0]!);
+    expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith(MATCH_ID);
   });
 
   it('refunds both players and does NOT penalize on the 1st early-forfeit', async () => {

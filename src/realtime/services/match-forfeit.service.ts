@@ -4,7 +4,7 @@ import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { matchesService, resolveMatchVariant } from '../../modules/matches/matches.service.js';
-import type { MatchRow } from '../../modules/matches/matches.types.js';
+import type { MatchPlayerRow, MatchRow } from '../../modules/matches/matches.types.js';
 import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
@@ -118,6 +118,71 @@ export function parseForfeitPendingPayload(raw: string): MatchForfeitPendingPayl
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stateScoreForSeat(
+  statePayload: Record<string, unknown>,
+  seat: number
+): { goals: number; penaltyGoals: number } {
+  const seatKey = seat === 2 ? 'seat2' : 'seat1';
+  const goals = asRecord(statePayload.goals);
+  const penaltyGoals = asRecord(statePayload.penaltyGoals);
+  return {
+    goals: finiteNumber(goals?.[seatKey]),
+    penaltyGoals: finiteNumber(penaltyGoals?.[seatKey]),
+  };
+}
+
+async function persistFrozenForfeitTotals(params: {
+  matchId: string;
+  roster: MatchPlayerRow[];
+  cacheSnapshot?: MatchCache | null;
+  statePayload: Record<string, unknown>;
+}): Promise<void> {
+  const existingByUserId = new Map(params.roster.map((player) => [player.user_id, player]));
+  const players = params.cacheSnapshot?.status === 'active' && params.cacheSnapshot.players.length > 0
+    ? params.cacheSnapshot.players.map((player) => {
+        const existing = existingByUserId.get(player.userId);
+        const stateScore = stateScoreForSeat(params.statePayload, player.seat);
+        return {
+          userId: player.userId,
+          totalPoints: Math.max(existing?.total_points ?? 0, player.totalPoints),
+          correctAnswers: Math.max(existing?.correct_answers ?? 0, player.correctAnswers),
+          goals: Math.max(existing?.goals ?? 0, player.goals, stateScore.goals),
+          penaltyGoals: Math.max(existing?.penalty_goals ?? 0, player.penaltyGoals, stateScore.penaltyGoals),
+        };
+      })
+    : params.roster.map((player) => {
+        const stateScore = stateScoreForSeat(params.statePayload, player.seat);
+        return {
+          userId: player.user_id,
+          totalPoints: player.total_points,
+          correctAnswers: player.correct_answers,
+          goals: Math.max(player.goals, stateScore.goals),
+          penaltyGoals: Math.max(player.penalty_goals, stateScore.penaltyGoals),
+        };
+      });
+
+  await Promise.all(
+    players.map((player) =>
+      matchPlayersRepo.setPlayerFinalTotals(params.matchId, player.userId, {
+        totalPoints: player.totalPoints,
+        correctAnswers: player.correctAnswers,
+        goals: player.goals,
+        penaltyGoals: player.penaltyGoals,
+      })
+    )
+  );
+}
+
 export interface FinalizeMatchAsForfeitParams {
   matchId: string;
   forfeitingUserId: string;
@@ -174,24 +239,6 @@ export async function finalizeMatchAsForfeit(
             roster.filter((player) => player.user_id !== params.forfeitingUserId)
           )[0]?.userId ?? null
         : roster.find((player) => player.user_id !== params.forfeitingUserId)?.user_id ?? null;
-
-    if (params.cacheSnapshot && params.cacheSnapshot.status === 'active' && variant !== 'friendly_party_quiz') {
-      await matchesRepo.setMatchStatePayload(
-        params.matchId,
-        params.cacheSnapshot.statePayload,
-        params.cacheSnapshot.currentQIndex
-      );
-      await Promise.all(
-        params.cacheSnapshot.players.map((player) =>
-          matchPlayersRepo.setPlayerFinalTotals(params.matchId, player.userId, {
-            totalPoints: player.totalPoints,
-            correctAnswers: player.correctAnswers,
-            goals: player.goals,
-            penaltyGoals: player.penaltyGoals,
-          })
-        )
-      );
-    }
 
     const currentPayload = (
       params.cacheSnapshot?.statePayload ?? activeMatch.state_payload ?? {}
@@ -292,6 +339,22 @@ export async function finalizeMatchAsForfeit(
         completed: true,
         cancelledNoContest: true,
       };
+    }
+
+    if (variant !== 'friendly_party_quiz') {
+      if (params.cacheSnapshot && params.cacheSnapshot.status === 'active') {
+        await matchesRepo.setMatchStatePayload(
+          params.matchId,
+          params.cacheSnapshot.statePayload,
+          params.cacheSnapshot.currentQIndex
+        );
+      }
+      await persistFrozenForfeitTotals({
+        matchId: params.matchId,
+        roster,
+        cacheSnapshot: params.cacheSnapshot,
+        statePayload: currentPayload,
+      });
     }
 
     await matchesRepo.setMatchStatePayload(params.matchId, {

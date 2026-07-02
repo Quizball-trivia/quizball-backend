@@ -121,15 +121,24 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startRankedAiForUser: (...args: unknown[]) => startRankedAiForUserMock(...args),
 }));
 
+// Users treated as having NO live socket (ghost searches). Anyone not listed is
+// present by default — queued users normally have an authenticated socket.
+const absentUserIds = new Set<string>();
+
 function createIoMock(): QuizballServer {
   const emit = vi.fn();
   const to = vi.fn(() => ({ emit }));
   const socketsJoin = vi.fn().mockResolvedValue(undefined);
-  const fetchSockets = vi.fn().mockResolvedValue([]);
-  const inFn = vi.fn(() => ({
-    socketsJoin,
-    fetchSockets,
-  }));
+  const inFn = vi.fn((room: string) => {
+    const userMatch = /^user:(.+)$/.exec(room);
+    const userId = userMatch?.[1] ?? null;
+    const fetchSockets = vi.fn().mockResolvedValue(
+      userId && !absentUserIds.has(userId)
+        ? [{ id: `sock-${userId}`, data: { user: { id: userId } } }]
+        : []
+    );
+    return { socketsJoin, fetchSockets };
+  });
 
   return {
     to,
@@ -165,6 +174,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    absentUserIds.clear();
 
     redisMock = {
       zRangeByScore: vi.fn().mockResolvedValue([]),
@@ -379,6 +389,94 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(createLobbyMock).toHaveBeenCalledTimes(1);
     expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start a match when a paired player has no live socket (ghost search)', async () => {
+    const service = await loadService();
+    absentUserIds.add('u2');
+    const io = createIoMock();
+
+    redisMock.eval
+      .mockImplementationOnce(async (script: string) => {
+        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        return [];
+      })
+      .mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('re-queues the present player and tells the ghost the search ended', async () => {
+    const service = await loadService();
+    absentUserIds.add('u2');
+    const io = createIoMock();
+
+    redisMock.eval.mockImplementationOnce(async (script: string) => {
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      return [];
+    });
+    redisMock.eval.mockImplementation(async () => []);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    // Present player u1 is re-queued: a fresh search is mapped in the user hash.
+    expect(redisMock.multi).toHaveBeenCalled();
+    const multiInstance = redisMock.multi.mock.results.at(-1)?.value;
+    expect(multiInstance.hSet).toHaveBeenCalledWith(
+      'ranked:mm:user',
+      'u1',
+      expect.any(String)
+    );
+    // The present player gets a fresh search_started and the ghost is told the
+    // search ended. (The io mock shares one emit spy across rooms, so we assert
+    // both events fired rather than attributing them per user.)
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(emit).toHaveBeenCalledWith(
+      'ranked:search_started',
+      expect.objectContaining({ durationMs: expect.any(Number) })
+    );
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+  });
+
+  it('rechecks live sockets immediately before lobby creation', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval.mockImplementationOnce(async (script: string) => {
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      return [];
+    });
+    redisMock.eval.mockImplementation(async () => []);
+    getWalletMock.mockImplementation(async (userId: string) => {
+      if (userId === 'u1') absentUserIds.add('u2');
+      return { coins: 0, tickets: 1 };
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(redisMock.multi).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userAId: 'u1',
+        userBId: 'u2',
+        userAPresent: true,
+        userBPresent: false,
+      }),
+      'Ranked human match creation skipped: a paired player has no live socket'
+    );
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(emit).toHaveBeenCalledWith(
+      'ranked:search_started',
+      expect.objectContaining({ durationMs: expect.any(Number) })
+    );
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
   it('pairs two matches when queue effectively has 4 users', async () => {

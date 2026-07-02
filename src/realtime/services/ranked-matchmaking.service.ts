@@ -15,6 +15,7 @@ import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { startDraft, startRankedAiForUser } from './lobby-realtime.service.js';
+import { fetchUserRoomSockets } from './match-presence.service.js';
 import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
@@ -253,7 +254,52 @@ async function attachUserSocketsToLobby(
   });
 }
 
-async function startHumanRankedMatch(
+async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): Promise<boolean> {
+  const sockets = await fetchUserRoomSockets(io, userId);
+  return sockets.some((socket) => {
+    const data = (socket as { data?: { user?: { id?: unknown } } } | null)?.data;
+    return data?.user?.id === userId;
+  });
+}
+
+/**
+ * Put a still-present player back into the ranked queue with a fresh search
+ * after their pairing was aborted (opponent turned out to be a ghost). Mirrors
+ * the enqueue in handleQueueJoin so the player keeps searching instead of
+ * silently falling out of matchmaking.
+ */
+async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const now = Date.now();
+  const deadlineAt = now + SEARCH_DURATION_MS;
+  const newSearchId = randomUUID();
+  const socket = (await fetchUserRoomSockets(io, userId))[0] as
+    | { data?: { currentCountry?: string } }
+    | undefined;
+  const searchFields: Record<string, string> = {
+    userId,
+    status: 'queued',
+    queuedAt: String(now),
+    deadlineAt: String(deadlineAt),
+  };
+  if (socket?.data?.currentCountry) {
+    searchFields.countryCode = socket.data.currentCountry;
+  }
+  await redis
+    .multi()
+    .hSet(rankedSearchKey(newSearchId), searchFields)
+    .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
+    .zAdd(RANKED_MM_QUEUE_KEY, { score: now, value: newSearchId })
+    .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
+    .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
+    .exec();
+  io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
+  await userSessionGuardService.emitState(io, userId);
+  logger.info({ userId, searchId: newSearchId }, 'Re-queued present player after ghost pairing');
+}
+
+export async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
   userBId: string,
@@ -328,189 +374,236 @@ async function startHumanRankedMatch(
         }
       }
 
-    const usersById = await usersRepo.getByIds([userAId, userBId]);
-    const userA = usersById.get(userAId) ?? null;
-    const userB = usersById.get(userBId) ?? null;
-    if (!userA || !userB) {
-      const missingUserIds = [userA ? null : userAId, userB ? null : userBId]
-        .filter((userId): userId is string => Boolean(userId));
-      logger.warn({ userAId, userBId, missingUserIds }, 'Ranked pairing skipped: user missing');
-      rankedDebug('human_pair_skipped_missing_user', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-      });
-      await Promise.all(
-        missingUserIds.map((userId) => handleStaleRankedQueueUser(io, userId, 'ranked_human_pair_user_lookup'))
-      );
-      span.setAttribute('quizball.skipped_missing_user', true);
-      return;
-    }
+      const abortIfMissingLiveSocket = async (): Promise<boolean> => {
+        const [userAPresent, userBPresent] = await Promise.all([
+          hasLiveAuthenticatedSocket(io, userAId),
+          hasLiveAuthenticatedSocket(io, userBId),
+        ]);
+        if (userAPresent && userBPresent) return false;
 
-    const [profileA, profileB] = await Promise.all([
-      rankedService.ensureProfile(userAId),
-      rankedService.ensureProfile(userBId),
-    ]);
-    const wallets = await getRankedTicketWallets([userAId, userBId]);
-    const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
-    if (insufficientUserIds.length > 0) {
-      logger.warn(
-        {
-          userAId,
-          userBId,
-          insufficientUserIds,
-          wallets,
-        },
-        'Ranked human match creation skipped: insufficient tickets after pairing'
-      );
-      rankedDebug('human_pair_skipped_insufficient_tickets', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-        insufficientCount: insufficientUserIds.length,
-      });
-      for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
-        trackRankedQueueLeft({
-          userId,
-          source: 'server_abort',
-          searchFound: false,
-          searchId: null,
+        logger.warn(
+          { userAId, userBId, userAPresent, userBPresent },
+          'Ranked human match creation skipped: a paired player has no live socket'
+        );
+        rankedDebug('human_pair_skipped_absent_socket', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          userAPresent,
+          userBPresent,
         });
-        io.to(`user:${userId}`).emit('ranked:queue_left');
-      }
-      for (const userId of insufficientUserIds) {
-        emitInsufficientTickets(io, userId, 'ranked_human_pair_preflight', wallets[userId]?.tickets ?? 0);
-      }
-      await Promise.all([userSessionGuardService.emitState(io, userAId), userSessionGuardService.emitState(io, userBId)]);
-      span.setAttribute('quizball.skipped_insufficient_tickets', true);
-      return;
-    }
-    {
-      const [userACancelled, userBCancelled] = await getCancelFlags();
-      if (userACancelled || userBCancelled) {
-        logger.info({ userAId, userBId, userACancelled, userBCancelled }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
-        rankedDebug('human_pair_skipped_cancelled_before_lobby', {
+        const absentUserIds = [
+          userAPresent ? null : userAId,
+          userBPresent ? null : userBId,
+        ].filter((id): id is string => Boolean(id));
+        const presentUserIds = [
+          userAPresent ? userAId : null,
+          userBPresent ? userBId : null,
+        ].filter((id): id is string => Boolean(id));
+        for (const absentId of absentUserIds) {
+          await bestEffortCancelRankedQueueSearch(absentId, 'ranked_human_pair_absent_socket');
+          trackRankedQueueLeft({
+            userId: absentId,
+            source: 'server_abort',
+            searchFound: false,
+            searchId: null,
+          });
+          io.to(`user:${absentId}`).emit('ranked:queue_left');
+          await userSessionGuardService.emitState(io, absentId);
+        }
+        for (const presentId of presentUserIds) {
+          await requeueRankedSearch(io, presentId);
+        }
+        span.setAttribute('quizball.skipped_absent_socket', true);
+        return true;
+      };
+
+      if (await abortIfMissingLiveSocket()) return;
+
+      const usersById = await usersRepo.getByIds([userAId, userBId]);
+      const userA = usersById.get(userAId) ?? null;
+      const userB = usersById.get(userBId) ?? null;
+      if (!userA || !userB) {
+        const missingUserIds = [userA ? null : userAId, userB ? null : userBId]
+          .filter((userId): userId is string => Boolean(userId));
+        logger.warn({ userAId, userBId, missingUserIds }, 'Ranked pairing skipped: user missing');
+        rankedDebug('human_pair_skipped_missing_user', {
           userA: rankedDebugUser(userAId),
           userB: rankedDebugUser(userBId),
         });
-        await releaseUncancelledUsers(userACancelled, userBCancelled);
-        span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
+        await Promise.all(
+          missingUserIds.map((userId) => handleStaleRankedQueueUser(io, userId, 'ranked_human_pair_user_lookup'))
+        );
+        span.setAttribute('quizball.skipped_missing_user', true);
         return;
       }
-    }
 
-    const [sessionBlockA, sessionBlockB] = await Promise.all([
-      getRankedMatchmakingSessionBlock(userAId, { ignorePairingInFlight: true }),
-      getRankedMatchmakingSessionBlock(userBId, { ignorePairingInFlight: true }),
-    ]);
-    if (sessionBlockA || sessionBlockB) {
-      logger.warn(
-        {
-          userAId,
-          userBId,
-          userASession: sessionBlockA,
-          userBSession: sessionBlockB,
+      const [profileA, profileB] = await Promise.all([
+        rankedService.ensureProfile(userAId),
+        rankedService.ensureProfile(userBId),
+      ]);
+      const wallets = await getRankedTicketWallets([userAId, userBId]);
+      const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
+      if (insufficientUserIds.length > 0) {
+        logger.warn(
+          {
+            userAId,
+            userBId,
+            insufficientUserIds,
+            wallets,
+          },
+          'Ranked human match creation skipped: insufficient tickets after pairing'
+        );
+        rankedDebug('human_pair_skipped_insufficient_tickets', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          insufficientCount: insufficientUserIds.length,
+        });
+        for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
+          trackRankedQueueLeft({
+            userId,
+            source: 'server_abort',
+            searchFound: false,
+            searchId: null,
+          });
+          io.to(`user:${userId}`).emit('ranked:queue_left');
+        }
+        for (const userId of insufficientUserIds) {
+          emitInsufficientTickets(io, userId, 'ranked_human_pair_preflight', wallets[userId]?.tickets ?? 0);
+        }
+        await Promise.all([userSessionGuardService.emitState(io, userAId), userSessionGuardService.emitState(io, userBId)]);
+        span.setAttribute('quizball.skipped_insufficient_tickets', true);
+        return;
+      }
+      {
+        const [userACancelled, userBCancelled] = await getCancelFlags();
+        if (userACancelled || userBCancelled) {
+          logger.info({ userAId, userBId, userACancelled, userBCancelled }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
+          rankedDebug('human_pair_skipped_cancelled_before_lobby', {
+            userA: rankedDebugUser(userAId),
+            userB: rankedDebugUser(userBId),
+          });
+          await releaseUncancelledUsers(userACancelled, userBCancelled);
+          span.setAttribute('quizball.skipped_cancelled_before_lobby', true);
+          return;
+        }
+      }
+
+      const [sessionBlockA, sessionBlockB] = await Promise.all([
+        getRankedMatchmakingSessionBlock(userAId, { ignorePairingInFlight: true }),
+        getRankedMatchmakingSessionBlock(userBId, { ignorePairingInFlight: true }),
+      ]);
+      if (sessionBlockA || sessionBlockB) {
+        logger.warn(
+          {
+            userAId,
+            userBId,
+            userASession: sessionBlockA,
+            userBSession: sessionBlockB,
+          },
+          'Ranked human match creation skipped because a player already has session state'
+        );
+        rankedDebug('human_pair_skipped_session_state', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          userAState: sessionBlockA?.state ?? 'clear',
+          userBState: sessionBlockB?.state ?? 'clear',
+        });
+        span.setAttribute('quizball.skipped_session_state', true);
+        return;
+      }
+
+      if (await abortIfMissingLiveSocket()) return;
+
+      const lobby = await lobbiesRepo.createLobby({
+        mode: 'ranked',
+        hostUserId: userAId,
+        inviteCode: null,
+      });
+
+      span.setAttribute('quizball.lobby_id', lobby.id);
+
+      await Promise.all([
+        lobbiesRepo.addMember(lobby.id, userAId, true),
+        lobbiesRepo.addMember(lobby.id, userBId, true),
+        attachUserSocketsToLobby(io, userAId, lobby.id),
+        attachUserSocketsToLobby(io, userBId, lobby.id),
+      ]);
+
+      await emitLobbyState(io, lobby.id);
+      await Promise.all([
+        userSessionGuardService.emitState(io, userAId),
+        userSessionGuardService.emitState(io, userBId),
+      ]);
+
+      const [formA, formB] = await Promise.all([
+        statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
+        statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
+      ]);
+
+      io.to(`user:${userAId}`).emit('ranked:match_found', {
+        lobbyId: lobby.id,
+        myRecentForm: formA,
+        opponent: {
+          id: userB.id,
+          username: userB.nickname ?? 'Player',
+          avatarUrl: userB.avatar_url,
+          avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+          favoriteClub: userB.favorite_club ?? null,
+          recentForm: formB,
+          rp: profileB.rp,
+          ...countryPayload(sessionCountries?.userB ?? userB.country),
         },
-        'Ranked human match creation skipped because a player already has session state'
-      );
-      rankedDebug('human_pair_skipped_session_state', {
+      });
+      io.to(`user:${userBId}`).emit('ranked:match_found', {
+        lobbyId: lobby.id,
+        myRecentForm: formB,
+        opponent: {
+          id: userA.id,
+          username: userA.nickname ?? 'Player',
+          avatarUrl: userA.avatar_url,
+          avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+          favoriteClub: userA.favorite_club ?? null,
+          recentForm: formA,
+          rp: profileA.rp,
+          ...countryPayload(sessionCountries?.userA ?? userA.country),
+        },
+      });
+
+      logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
+      rankedDebug('human_match_found', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),
-        userAState: sessionBlockA?.state ?? 'clear',
-        userBState: sessionBlockB?.state ?? 'clear',
+        lobby: lobby.id.slice(0, 8),
       });
-      span.setAttribute('quizball.skipped_session_state', true);
-      return;
-    }
+      appMetrics.rankedHumanMatches.add(1);
 
-    const lobby = await lobbiesRepo.createLobby({
-      mode: 'ranked',
-      hostUserId: userAId,
-      inviteCode: null,
-    });
-
-    span.setAttribute('quizball.lobby_id', lobby.id);
-
-    await Promise.all([
-      lobbiesRepo.addMember(lobby.id, userAId, true),
-      lobbiesRepo.addMember(lobby.id, userBId, true),
-      attachUserSocketsToLobby(io, userAId, lobby.id),
-      attachUserSocketsToLobby(io, userBId, lobby.id),
-    ]);
-
-    await emitLobbyState(io, lobby.id);
-    await Promise.all([
-      userSessionGuardService.emitState(io, userAId),
-      userSessionGuardService.emitState(io, userBId),
-    ]);
-
-    const [formA, formB] = await Promise.all([
-      statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-      statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-    ]);
-
-    io.to(`user:${userAId}`).emit('ranked:match_found', {
-      lobbyId: lobby.id,
-      myRecentForm: formA,
-      opponent: {
-        id: userB.id,
-        username: userB.nickname ?? 'Player',
-        avatarUrl: userB.avatar_url,
-        avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
-        favoriteClub: userB.favorite_club ?? null,
-        recentForm: formB,
-        rp: profileB.rp,
-        ...countryPayload(sessionCountries?.userB ?? userB.country),
-      },
-    });
-    io.to(`user:${userBId}`).emit('ranked:match_found', {
-      lobbyId: lobby.id,
-      myRecentForm: formB,
-      opponent: {
-        id: userA.id,
-        username: userA.nickname ?? 'Player',
-        avatarUrl: userA.avatar_url,
-        avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
-        favoriteClub: userA.favorite_club ?? null,
-        recentForm: formA,
-        rp: profileA.rp,
-        ...countryPayload(sessionCountries?.userA ?? userA.country),
-      },
-    });
-
-    logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
-    rankedDebug('human_match_found', {
-      userA: rankedDebugUser(userAId),
-      userB: rankedDebugUser(userBId),
-      lobby: lobby.id.slice(0, 8),
-    });
-    appMetrics.rankedHumanMatches.add(1);
-
-    // Durable: the "match found" modal delay used to be an in-process
-    // setTimeout — a restart in that 1.2s window left a ranked lobby stuck in
-    // 'waiting' with no draft until a player reconnect happened to heal it.
-    // The Redis-backed timer survives restarts; runRankedDraftStart re-checks
-    // cancel flags and lobby state so a late/duplicate fire is a no-op.
-    // If the Redis enqueue itself throws (scheduleRealtimeTimer only handles
-    // a CLOSED client, not a failing write), fall back to the old in-process
-    // timer — a non-durable draft start beats a stranded waiting lobby.
-    try {
-      await scheduleRealtimeTimer(
-        'ranked_draft_start',
-        lobby.id,
-        new Date(Date.now() + FOUND_MODAL_MS),
-        { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
-      );
-    } catch (err) {
-      logger.error(
-        { err, lobbyId: lobby.id, userAId, userBId },
-        'Failed to schedule durable ranked draft start; using local fallback'
-      );
-      const fallback = setTimeout(() => {
-        void runRankedDraftStart(io, lobby.id, userAId, userBId).catch((error) => {
-          logger.error({ error, lobbyId: lobby.id }, 'Local ranked draft-start fallback failed');
-        });
-      }, FOUND_MODAL_MS);
-      fallback.unref?.();
-    }
+      // Durable: the "match found" modal delay used to be an in-process
+      // setTimeout — a restart in that 1.2s window left a ranked lobby stuck in
+      // 'waiting' with no draft until a player reconnect happened to heal it.
+      // The Redis-backed timer survives restarts; runRankedDraftStart re-checks
+      // cancel flags and lobby state so a late/duplicate fire is a no-op.
+      // If the Redis enqueue itself throws (scheduleRealtimeTimer only handles
+      // a CLOSED client, not a failing write), fall back to the old in-process
+      // timer — a non-durable draft start beats a stranded waiting lobby.
+      try {
+        await scheduleRealtimeTimer(
+          'ranked_draft_start',
+          lobby.id,
+          new Date(Date.now() + FOUND_MODAL_MS),
+          { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+        );
+      } catch (err) {
+        logger.error(
+          { err, lobbyId: lobby.id, userAId, userBId },
+          'Failed to schedule durable ranked draft start; using local fallback'
+        );
+        const fallback = setTimeout(() => {
+          void runRankedDraftStart(io, lobby.id, userAId, userBId).catch((error) => {
+            logger.error({ error, lobbyId: lobby.id }, 'Local ranked draft-start fallback failed');
+          });
+        }, FOUND_MODAL_MS);
+        fallback.unref?.();
+      }
     } finally {
       await clearPairingInFlight([userAId, userBId]);
     }

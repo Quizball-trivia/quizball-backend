@@ -128,6 +128,10 @@ interface RankedQueueClientContext {
   socketId?: string | null;
 }
 
+function idPrefix(id?: string | null): string | null {
+  return id ? id.slice(0, 8) : null;
+}
+
 export function trackRankedQueueJoined(
   userId: string,
   rankPoints: number,
@@ -142,7 +146,7 @@ export function trackRankedQueueJoined(
     client_reason: context.clientReason ?? null,
     client_request_id: context.clientRequestId ?? null,
     socket_id: context.socketId ?? null,
-    search_id_prefix: context.searchId ? context.searchId.slice(0, 8) : null,
+    search_id_prefix: idPrefix(context.searchId),
     queue_size: context.queueSize ?? null,
   });
 }
@@ -156,7 +160,7 @@ export function trackRankedQueueLeft(params: {
   trackEvent('ranked_queue_left', params.userId, {
     source: params.source,
     search_found: params.searchFound,
-    search_id_prefix: params.searchId ? params.searchId.slice(0, 8) : null,
+    search_id_prefix: idPrefix(params.searchId),
   });
 }
 
@@ -179,9 +183,9 @@ export function trackRankedQueueJoinIgnored(params: RankedQueueClientContext & {
     client_request_id: params.clientRequestId ?? null,
     socket_id: params.socketId ?? null,
     session_state: params.sessionState ?? null,
-    active_match_id_prefix: params.activeMatchId ? params.activeMatchId.slice(0, 8) : null,
-    waiting_lobby_id_prefix: params.waitingLobbyId ? params.waitingLobbyId.slice(0, 8) : null,
-    queue_search_id_prefix: params.queueSearchId ? params.queueSearchId.slice(0, 8) : null,
+    active_match_id_prefix: idPrefix(params.activeMatchId),
+    waiting_lobby_id_prefix: idPrefix(params.waitingLobbyId),
+    queue_search_id_prefix: idPrefix(params.queueSearchId),
   });
 }
 

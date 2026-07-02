@@ -91,17 +91,19 @@ function isMissingUserWalletError(error: unknown): error is NotFoundError {
   return error instanceof NotFoundError && error.message === 'User not found';
 }
 
-async function bestEffortCancelRankedQueueSearch(userId: string, source: string): Promise<void> {
+async function bestEffortCancelRankedQueueSearch(userId: string, source: string): Promise<string | null> {
   const redis = getRedisClient();
-  if (!redis) return;
+  if (!redis) return null;
 
   try {
-    await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
+    const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
       keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
       arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
     });
+    return toStringArray(resultRaw)[0] ?? null;
   } catch (error) {
     logger.warn({ err: error, userId, source }, 'Ranked stale queue cleanup failed');
+    return null;
   }
 }
 
@@ -111,8 +113,14 @@ async function handleStaleRankedQueueUser(
   source: string
 ): Promise<void> {
   logger.warn({ userId, source }, 'Ranked queue user skipped because DB user was missing');
+  const searchId = await bestEffortCancelRankedQueueSearch(userId, source);
+  trackRankedQueueLeft({
+    userId,
+    source: 'server_abort',
+    searchFound: Boolean(searchId),
+    searchId,
+  });
   io.to(`user:${userId}`).emit('ranked:queue_left');
-  await bestEffortCancelRankedQueueSearch(userId, source);
 }
 
 async function getRankedMatchmakingSessionBlock(userId: string): Promise<{
@@ -173,6 +181,12 @@ function emitInsufficientTickets(
   source: string,
   tickets: number
 ): void {
+  trackRankedQueueLeft({
+    userId,
+    source: 'server_abort',
+    searchFound: false,
+    searchId: null,
+  });
   io.to(`user:${userId}`).emit('ranked:queue_left');
   io.to(`user:${userId}`).emit('error', {
     code: 'INSUFFICIENT_TICKETS',
@@ -284,6 +298,12 @@ async function startHumanRankedMatch(
           userBCancelled ? null : userBId,
         ].filter((id): id is string => Boolean(id));
         for (const survivorId of survivors) {
+          trackRankedQueueLeft({
+            userId: survivorId,
+            source: 'server_abort',
+            searchFound: false,
+            searchId: null,
+          });
           io.to(`user:${survivorId}`).emit('ranked:queue_left');
         }
         await Promise.all(survivors.map((id) => userSessionGuardService.emitState(io, id)));
@@ -348,6 +368,12 @@ async function startHumanRankedMatch(
         insufficientCount: insufficientUserIds.length,
       });
       for (const userId of [userAId, userBId].filter((id) => !insufficientUserIds.includes(id))) {
+        trackRankedQueueLeft({
+          userId,
+          source: 'server_abort',
+          searchFound: false,
+          searchId: null,
+        });
         io.to(`user:${userId}`).emit('ranked:queue_left');
       }
       for (const userId of insufficientUserIds) {
@@ -840,7 +866,7 @@ export const rankedMatchmakingService = {
       }
 
       const redis = getRedisClient();
-      if (redis && await redis.exists(rankedLeaveGuardKey(userId))) {
+      const ignoreRecentLeave = async (): Promise<void> => {
         logger.info(
           { userId, ...queueClientContext, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },
           'Ranked queue join ignored: recent queue leave guard is active'
@@ -858,6 +884,11 @@ export const rankedMatchmakingService = {
         });
         socket.emit('ranked:queue_left');
         await userSessionGuardService.emitState(io, userId);
+        return;
+      };
+
+      if (redis && await redis.exists(rankedLeaveGuardKey(userId))) {
+        await ignoreRecentLeave();
         return;
       }
 
@@ -929,6 +960,11 @@ export const rankedMatchmakingService = {
         io,
         socket,
         async () => {
+          if (await redis.exists(rankedLeaveGuardKey(userId))) {
+            await ignoreRecentLeave();
+            return;
+          }
+
           const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId);
           logger.info(
             {
@@ -1154,6 +1190,9 @@ export const rankedMatchmakingService = {
         socket,
         async () => {
           await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
+          // Set the leave guard even if the cancel script finds no search: the
+          // search may already be claimed by pairing, and this guard suppresses
+          // the stale client queue_join that can arrive right after Cancel.
           await redis.set(rankedLeaveGuardKey(userId), String(Date.now()), { EX: LEAVE_GUARD_TTL_SEC });
           logger.info(
             { userId, cancelKeyTtlSec: CANCEL_KEY_TTL_SEC, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },

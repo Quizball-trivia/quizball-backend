@@ -42,6 +42,7 @@ describeLocal('regression: ranked AI draft ui_ready withheld', () => {
 
     const { bootMatch } = await import('../../game-regression/src/runner.mjs');
     const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+    const { usersRepo } = await import('../../src/modules/users/users.repo.js');
 
     const result = await bootMatch({ startTimeoutMs: 70_000 });
     const eventNames = new Set(result.trace.events.map((event) => event.event));
@@ -55,5 +56,8 @@ describeLocal('regression: ranked AI draft ui_ready withheld', () => {
 
     const activeMatch = await matchesRepo.getActiveMatchForUser(result.botUserId);
     expect(activeMatch, 'no active match row should remain for the no-entry player').toBeNull();
+
+    const botUser = await usersRepo.getById(result.botUserId);
+    expect(botUser?.tickets, 'no-entry abort should not consume the ranked ticket').toBe(1);
   }, 90_000);
 });

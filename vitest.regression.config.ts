@@ -45,6 +45,7 @@ export default defineConfig({
       'tests/regression/question-history.test.ts',
       'tests/regression/featured-ranked-only.test.ts',
       'tests/regression/boot-timer-rearm.test.ts',
+      'tests/regression/auction-full-flow.test.ts',
       'tests/regression/ticket-refill-cron.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],

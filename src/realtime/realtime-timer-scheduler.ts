@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { harnessDelayMs } from '../core/harness-timing.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { getRedisClient } from './redis.js';
 import type { QuizballServer } from './socket-server.js';
@@ -8,9 +9,17 @@ const TIMER_PAYLOAD_PREFIX = 'realtime:timer:payload:';
 const TIMER_LOCK_PREFIX = 'lock:realtime_timer:';
 const TIMER_PAYLOAD_TTL_SEC = 60 * 60 * 6;
 const TIMER_POLL_INTERVAL_MS = 500;
+const TIMER_HARNESS_POLL_INTERVAL_MS = 25;
 const TIMER_BATCH_SIZE = 100;
 
 export type RealtimeTimerKind =
+  | 'auction_bot_action'
+  | 'auction_clue_reveal'
+  | 'auction_disconnect_grace'
+  | 'auction_matchmaking_fill'
+  | 'auction_resume_countdown'
+  | 'auction_solo_pick_timeout'
+  | 'auction_turn_timeout'
   | 'draft_ai_ban'
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
@@ -23,6 +32,13 @@ export type RealtimeTimerKind =
   | 'ranked_draft_start';
 
 export type RealtimeTimerPayload =
+  | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
+  | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
+  | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
+  | { kind: 'auction_matchmaking_fill'; searchId: string }
+  | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
+  | { kind: 'auction_solo_pick_timeout'; matchId: string; seatId: string; startedAt: string }
+  | { kind: 'auction_turn_timeout'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
@@ -65,7 +81,14 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   const key = member.slice(separator + 1);
   if (!key) return null;
   if (
-    kind !== 'draft_ai_ban'
+    kind !== 'auction_bot_action'
+    && kind !== 'auction_clue_reveal'
+    && kind !== 'auction_disconnect_grace'
+    && kind !== 'auction_matchmaking_fill'
+    && kind !== 'auction_resume_countdown'
+    && kind !== 'auction_solo_pick_timeout'
+    && kind !== 'auction_turn_timeout'
+    && kind !== 'draft_ai_ban'
     && kind !== 'draft_auto_ban'
     && kind !== 'draft_grace_expiry'
     && kind !== 'match_disconnect_forfeit'
@@ -139,6 +162,22 @@ async function processDueMember(member: string): Promise<void> {
 
   let handled = false;
   try {
+    // Stale-pop guard: a concurrent scheduleRealtimeTimer for this same member
+    // (e.g. a pause/resume re-arming a turn deadline) may have landed between
+    // the ZSET pop and here, replacing the payload with a FUTURE deadline and
+    // re-adding the member. Handling now would execute that future deadline
+    // early (observed risk: insta-folding a just-paused auction turn). If the
+    // member is scheduled again in the future, this pop is stale — skip it and
+    // let the re-armed entry fire at its own time.
+    const redis = getRedisClient();
+    if (redis?.isOpen) {
+      const rescheduledAt = await redis.zScore(TIMER_ZSET_KEY, member);
+      if (typeof rescheduledAt === 'number' && rescheduledAt > Date.now() + 250) {
+        logger.debug({ member, rescheduledAt }, 'Realtime timer pop superseded by re-arm; skipping');
+        return;
+      }
+    }
+
     const payload = await readPayload(member);
     if (!payload) {
       // The member was already popped from the ZSET; without a payload it can
@@ -238,7 +277,7 @@ export function startRealtimeTimerScheduler(
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     void pollDueTimers();
-  }, TIMER_POLL_INTERVAL_MS);
+  }, harnessDelayMs(TIMER_POLL_INTERVAL_MS, TIMER_HARNESS_POLL_INTERVAL_MS));
   pollTimer.unref?.();
 
   void pollDueTimers();

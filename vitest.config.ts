@@ -20,6 +20,7 @@ export default defineConfig({
       'tests/regression/question-timeout.test.ts',
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
+      'tests/regression/auction-full-flow.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     coverage: {

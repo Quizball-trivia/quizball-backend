@@ -70,6 +70,12 @@ export interface SeededFixtures {
   questionIdsByCategory: Record<string, string[]>;
 }
 
+export interface SeededAuctionFixtures {
+  footballPlayerIds: string[];
+  clueCardIds: string[];
+  countByPosition: Record<'GK' | 'DEF' | 'MID' | 'FWD', number>;
+}
+
 const i18n = (en: string) => ({ en, ka: en });
 
 function mcqPayload(seedLabel: string) {
@@ -266,4 +272,149 @@ export async function seedTestUserWithTicket(
       updated_at = NOW()
   `;
   return opts.userId;
+}
+
+const AUCTION_POSITIONS = ['GK', 'DEF', 'MID', 'FWD'] as const;
+const AUCTION_FIXTURE_PROMPT_VERSION = 'regression-auction-v1';
+const AUCTION_FIXTURE_TRANSFERMARKT_START = 9_100_000;
+
+function auctionFixtureCounts(): Record<'GK' | 'DEF' | 'MID' | 'FWD', number> {
+  return {
+    GK: 12,
+    DEF: 24,
+    MID: 24,
+    FWD: 24,
+  };
+}
+
+function auctionValue(position: 'GK' | 'DEF' | 'MID' | 'FWD', index: number): number {
+  const base = {
+    GK: 25_000_000,
+    DEF: 35_000_000,
+    MID: 45_000_000,
+    FWD: 55_000_000,
+  }[position];
+  return base + index * 1_000_000;
+}
+
+async function clearAuctionFixtures(): Promise<void> {
+  await assertRegressionDatabase();
+  await sql`
+    DELETE FROM player_clue_cards
+    WHERE prompt_version = ${AUCTION_FIXTURE_PROMPT_VERSION}
+  `;
+  await sql`
+    DELETE FROM football_players
+    WHERE transfermarkt_id LIKE 'regression-auction-%'
+  `;
+}
+
+export async function seedAuctionFixtures(): Promise<SeededAuctionFixtures> {
+  const result: SeededAuctionFixtures = {
+    footballPlayerIds: [],
+    clueCardIds: [],
+    countByPosition: {
+      GK: 0,
+      DEF: 0,
+      MID: 0,
+      FWD: 0,
+    },
+  };
+
+  await withFixtureLock(async () => {
+    await clearAuctionFixtures();
+
+    let ordinal = 0;
+    const counts = auctionFixtureCounts();
+    for (const position of AUCTION_POSITIONS) {
+      for (let index = 0; index < counts[position]; index++) {
+        const transfermarktNumber = AUCTION_FIXTURE_TRANSFERMARKT_START + ordinal;
+        const transfermarktId = `regression-auction-${transfermarktNumber}`;
+        const name = `Regression ${position} Player ${index + 1}`;
+        const value = auctionValue(position, index);
+        const [player] = await sql<{ id: string }[]>`
+          INSERT INTO football_players (
+            id,
+            transfermarkt_id,
+            name,
+            display_name,
+            nationality,
+            position_group,
+            current_club,
+            active_status,
+            image_url,
+            current_value_eur,
+            peak_value_eur,
+            fame_bucket,
+            data_quality_status,
+            source_payload
+          )
+          VALUES (
+            gen_random_uuid(),
+            ${transfermarktId},
+            ${name},
+            ${sql.json({ en: name })},
+            'Regressionland',
+            ${position},
+            ${`Regression ${position} FC`},
+            'active',
+            ${`https://images.quizball.local/regression-auction/${position.toLowerCase()}-${index + 1}.jpg`},
+            ${value},
+            ${value + 5_000_000},
+            'known',
+            'usable',
+            ${sql.json({ source: 'regression_harness', position, index })}
+          )
+          RETURNING id
+        `;
+
+        const [card] = await sql<{ id: string }[]>`
+          INSERT INTO player_clue_cards (
+            id,
+            football_player_id,
+            transfermarkt_id,
+            locale,
+            clue_1,
+            clue_2,
+            clue_3,
+            difficulty,
+            status,
+            source,
+            generation_provider,
+            generation_model,
+            prompt_version,
+            evidence,
+            source_payload,
+            review_notes
+          )
+          VALUES (
+            gen_random_uuid(),
+            ${player.id},
+            ${transfermarktNumber},
+            'en',
+            ${`This ${position} fixture has regression clue one ${index + 1}.`},
+            ${`This ${position} fixture has regression clue two ${index + 1}.`},
+            ${`This ${position} fixture has regression clue three ${index + 1}.`},
+            'easy',
+            'published',
+            'manual',
+            'regression-harness',
+            'fixture',
+            ${AUCTION_FIXTURE_PROMPT_VERSION},
+            ${sql.json({ source: 'regression_harness', evidence: [] })},
+            ${sql.json({ source: 'regression_harness', position, index })},
+            'Seeded by local Auction regression harness.'
+          )
+          RETURNING id
+        `;
+
+        result.footballPlayerIds.push(player.id);
+        result.clueCardIds.push(card.id);
+        result.countByPosition[position] += 1;
+        ordinal += 1;
+      }
+    }
+  });
+
+  return result;
 }

@@ -35,6 +35,7 @@ export default defineConfig({
       'tests/regression/orphan-sweeper-attribution.test.ts',
       'tests/regression/penalty-shootout.test.ts',
       'tests/regression/halftime-uiready-withheld.test.ts',
+      'tests/regression/draft-uiready-withheld.test.ts',
       'tests/regression/question-timeout.test.ts',
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',

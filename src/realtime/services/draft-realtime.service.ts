@@ -14,7 +14,11 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
-import { trackDraftCompleted } from '../../core/analytics/game-events.js';
+import {
+  trackDraftCompleted,
+  trackDraftUiReady,
+  trackRankedDraftAborted,
+} from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { rankedCancelKey } from '../ranked-matchmaking-keys.js';
@@ -186,7 +190,13 @@ async function abortRankedDraftBeforeMatchCreation(
   lobby: { id: string; mode: 'friendly' | 'ranked' },
   humanUserIds: string[],
   reason: string,
-  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>
+  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>,
+  details: {
+    expectedUserId?: string | null;
+    aiUserId?: string | null;
+    banCount?: number | null;
+    forceAtMs?: number | null;
+  } = {}
 ): Promise<void> {
   await lobbiesRepo.deleteLobby(lobby.id);
   const redis = getRedisClient();
@@ -199,14 +209,64 @@ async function abortRankedDraftBeforeMatchCreation(
   await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
   await detachAllSocketsFromLobby(io, lobby.id);
   for (const userId of humanUserIds) {
+    const signal = signals.find((candidate) => candidate.userId === userId);
+    trackRankedDraftAborted({
+      userId,
+      lobbyId: lobby.id,
+      reason,
+      cancelled: signal?.cancelled ?? false,
+      absentAfterGrace: signal?.absentAfterGrace ?? false,
+      expectedUserId: details.expectedUserId ?? null,
+      aiUserId: details.aiUserId ?? null,
+      banCount: details.banCount ?? null,
+      forceAtMs: details.forceAtMs ?? null,
+    });
     io.to(`user:${userId}`).emit('ranked:queue_left');
     await userSessionGuardService.emitState(io, userId).catch((error) => {
       logger.warn({ error, userId, lobbyId: lobby.id }, 'Failed to emit state after ranked draft abort');
     });
   }
   logger.warn(
-    { lobbyId: lobby.id, humanUserIds, reason, signals },
+    { lobbyId: lobby.id, humanUserIds, reason, signals, ...details },
     'Ranked draft aborted before match creation'
+  );
+}
+
+async function abortRankedDraftWithoutUiReady(params: {
+  io: QuizballServer;
+  lobby: { id: string; mode: 'friendly' | 'ranked' };
+  members: Array<{ user_id: string }>;
+  aiUserId: string | null;
+  expectedUserId: string;
+  banCount: number;
+  forceAtMs: number | null | undefined;
+}): Promise<void> {
+  const { io, lobby, members, aiUserId, expectedUserId, banCount, forceAtMs } = params;
+  const humanUserIds = members
+    .filter((member) => member.user_id !== aiUserId)
+    .map((member) => member.user_id);
+
+  logger.warn(
+    { lobbyId: lobby.id, expectedUserId, banCount, forceAtMs: forceAtMs ?? null, humanUserIds },
+    'Aborting ranked draft because human auto-ban reached force deadline without draft ui_ready'
+  );
+
+  await abortRankedDraftBeforeMatchCreation(
+    io,
+    lobby,
+    humanUserIds,
+    'human_auto_ban_without_ui_ready',
+    humanUserIds.map((userId) => ({
+      userId,
+      cancelled: false,
+      absentAfterGrace: false,
+    })),
+    {
+      expectedUserId,
+      aiUserId,
+      banCount,
+      forceAtMs: forceAtMs ?? null,
+    }
   );
 }
 
@@ -783,14 +843,31 @@ export async function runDraftAutoBan(
     const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
     const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (bans.some((ban) => ban.user_id === expectedUserId)) return;
-    if (options.requireUiReady && !isHarnessFastTimers()) {
+    const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
+    if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
       const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
-      const forceAtMs = options.forceAtMs ?? Date.now();
-      if (!uiReady && Date.now() < forceAtMs) {
-        await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
-        return;
-      }
       if (!uiReady) {
+        const forceAtMs = options.forceAtMs ?? null;
+        if (forceAtMs === null) {
+          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+          return;
+        }
+        if (Date.now() < forceAtMs) {
+          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
+          return;
+        }
+        if (expectedActorIsRankedHuman) {
+          await abortRankedDraftWithoutUiReady({
+            io,
+            lobby,
+            members,
+            aiUserId,
+            expectedUserId,
+            banCount: bans.length,
+            forceAtMs: options.forceAtMs,
+          });
+          return;
+        }
         logger.warn(
           { lobbyId, expectedUserId, forceAtMs },
           'Draft auto-ban force-opened without client ui_ready'
@@ -1189,7 +1266,17 @@ export const draftRealtimeService = {
     }
 
     await markDraftUiReady(lobbyId, socket.data.user.id, bans.length);
-    logger.info({ lobbyId, userId: socket.data.user.id, banCount: bans.length }, 'Draft UI ready');
+    trackDraftUiReady({
+      userId: socket.data.user.id,
+      lobbyId,
+      mode: lobby.mode,
+      banCount: bans.length,
+      socketId: socket.id,
+    });
+    logger.info(
+      { lobbyId, userId: socket.data.user.id, banCount: bans.length, socketId: socket.id, mode: lobby.mode },
+      'Draft UI ready'
+    );
     await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
   },
 

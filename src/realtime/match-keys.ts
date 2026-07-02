@@ -22,6 +22,14 @@ export function matchGraceKey(matchId: string): string {
   return `match:grace:${matchId}`;
 }
 
+// One-shot marker: grace was already extended once for a player who reconnected
+// (fresh socket) but had not yet completed the rejoin/ui-ready handshake. Bounds
+// the reconnect-pending deferral so a socket that reconnects-but-never-rejoins
+// cannot defer the forfeit forever (zombie protection).
+export function matchGraceExtendedKey(matchId: string): string {
+  return `match:grace_extended:${matchId}`;
+}
+
 export function matchResumeCountdownKey(matchId: string): string {
   return `match:resume_countdown:${matchId}`;
 }

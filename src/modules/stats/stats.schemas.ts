@@ -28,7 +28,13 @@ export const headToHeadResponseSchema = z.object({
 export type HeadToHeadResponse = z.infer<typeof headToHeadResponseSchema>;
 
 export const recentMatchesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional().default(10),
+  // Max is capped at 10 to match what the UI ever shows (mobile=5, web=10) and,
+  // critically, to stay in lockstep with the AI-cleanup protection window
+  // (cleanup_ai_users() recent_window). Cleanup deletes an AI opponent once it
+  // ages out of every human's most-recent-N matches; if this endpoint could
+  // return more than N, a deleted AI would render as a corrupted older match
+  // (name lost, score → 0). Keep this max == that window.
+  limit: z.coerce.number().int().min(1).max(10).optional().default(10),
   userId: z.string().uuid().optional(),
 });
 

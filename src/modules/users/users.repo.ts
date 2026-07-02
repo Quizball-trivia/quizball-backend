@@ -40,6 +40,10 @@ export function isUserAccountInactive(user: Pick<User, 'is_deleted' | 'deleted_a
   return Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at);
 }
 
+export function isUserBanned(user: Pick<User, 'is_banned'>): boolean {
+  return Boolean(user.is_banned);
+}
+
 export const usersRepo = {
   async ensureFixedUser(data: {
     id: string;
@@ -347,6 +351,7 @@ export const usersRepo = {
       coins: number;
       tickets: number;
       created_at: string;
+      is_banned: boolean;
       ranked_rp: number | null;
       ranked_tier: string | null;
       ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -404,6 +409,7 @@ export const usersRepo = {
       coins: number;
       tickets: number;
       created_at: string;
+      is_banned: boolean;
       ranked_rp: number | null;
       ranked_tier: string | null;
       ranked_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
@@ -418,6 +424,7 @@ export const usersRepo = {
         u.coins,
         u.tickets,
         u.created_at,
+        u.is_banned,
         rp.rp AS ranked_rp,
         rp.tier AS ranked_tier,
         rp.placement_status AS ranked_placement_status
@@ -445,6 +452,33 @@ export const usersRepo = {
       RETURNING total_xp
     `;
     return row?.total_xp ?? null;
+  },
+
+  /**
+   * Set or clear the ban state on an account. Soft + reversible: clearing the
+   * ban leaves all other history intact. `metadata` snapshots state the ban
+   * action mutates (e.g. pre-ban RP) so unban can restore it; it is cleared on
+   * unban.
+   */
+  async setBanState(
+    userId: string,
+    banned: boolean,
+    options: { reason?: string | null; metadata?: Json | null } = {}
+  ): Promise<User | null> {
+    const [user] = await sql<User[]>`
+      UPDATE users
+      SET
+        is_banned = ${banned},
+        -- Preserve the original banned_at across re-bans (idempotent retries /
+        -- reason refreshes); only stamp it on the first transition into banned.
+        banned_at = ${banned ? sql`COALESCE(banned_at, NOW())` : null},
+        ban_reason = ${banned ? options.reason ?? null : null},
+        ban_metadata = ${banned ? sql.json((options.metadata ?? null) as Json) : null},
+        updated_at = NOW()
+      WHERE id = ${userId}
+      RETURNING *
+    `;
+    return user ?? null;
   },
 
   /**
@@ -524,5 +558,37 @@ export const usersRepo = {
       RETURNING *
     `;
     return user ?? null;
+  },
+
+  /**
+   * Atomically bump the rolling 24h early-forfeit counter for a user and
+   * return the new count. The window opens on the first early forfeit and
+   * stays open for 24h; the next early forfeit after expiry resets the
+   * counter to 1 and opens a fresh window.
+   *
+   * Used by the ranked early-forfeit penalty: 4+ early-forfeits in the
+   * window trigger a 100 RP deduction and skip the ticket refund.
+   */
+  async bumpEarlyForfeitCount(userId: string): Promise<number> {
+    const [row] = await sql<{ early_forfeit_count: number }[]>`
+      UPDATE users
+      SET
+        early_forfeit_count = CASE
+          WHEN early_forfeit_window_started_at IS NULL
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+          THEN 1
+          ELSE early_forfeit_count + 1
+        END,
+        early_forfeit_window_started_at = CASE
+          WHEN early_forfeit_window_started_at IS NULL
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+          THEN NOW()
+          ELSE early_forfeit_window_started_at
+        END,
+        updated_at = NOW()
+      WHERE id = ${userId}
+      RETURNING early_forfeit_count
+    `;
+    return row?.early_forfeit_count ?? 0;
   },
 };

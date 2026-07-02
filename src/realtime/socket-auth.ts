@@ -8,6 +8,7 @@ import type { AuthIdentity } from '../core/types.js';
 import type { User as DbUser } from '../db/types.js';
 import { getCachedUser } from '../modules/users/user-cache.js';
 import { rememberCurrentCountry } from './session-country.js';
+import { AppError } from '../core/errors.js';
 
 export interface SocketAuthData {
   user: DbUser;
@@ -104,6 +105,21 @@ export async function socketAuthMiddleware(
       { error: error instanceof Error ? error.message : error, socketId: socket.id },
       'Socket authentication failed'
     );
+    // Preserve the ban reason so the client can show the ACCOUNT BANNED screen
+    // instead of a generic connection error. Everything else stays opaque.
+    const reason =
+      error instanceof AppError &&
+      typeof error.details === 'object' &&
+      error.details !== null &&
+      (error.details as { reason?: unknown }).reason === 'banned'
+        ? 'banned'
+        : null;
+    if (reason === 'banned') {
+      const bannedError = new Error('Account is banned');
+      (bannedError as Error & { data?: unknown }).data = { reason: 'banned' };
+      next(bannedError);
+      return;
+    }
     next(new Error('Invalid token'));
   }
 }

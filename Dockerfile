@@ -28,6 +28,13 @@ RUN npm ci --omit=dev
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist/
 
+# Migration runner + the .sql files it applies (used by the Railway
+# preDeployCommand `npm run migrate:deploy`). Not compiled by tsc, so copy
+# them into the image explicitly — otherwise the pre-deploy step fails with
+# MODULE_NOT_FOUND / no migrations to read.
+COPY scripts/run-migrations.mjs ./scripts/run-migrations.mjs
+COPY supabase/migrations ./supabase/migrations/
+
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001

@@ -169,12 +169,8 @@ function computeNextPlacementAnchor(profile: RankedProfileRow): number {
   return clamp(estimate, MIN_PLACEMENT_ANCHOR_RP, MAX_PLACEMENT_ANCHOR_RP);
 }
 
-function correctnessFromAnchor(anchorRp: number): number {
-  // Floor 40%, cap 60%. Lower than the original 52-86% range so the AI
-  // doesn't overwhelm new players in ranked. New players starting at
-  // ~1900 RP will face a ~53% AI; high-RP players cap at 60% instead of
-  // 86%.
-  return clamp(0.4 + (anchorRp / 13500), 0.4, 0.6);
+export function correctnessFromAnchor(anchorRp: number): number {
+  return clamp(0.35 + ((anchorRp - 150) / 2550) * 0.40, 0.35, 0.75);
 }
 
 function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: number } {

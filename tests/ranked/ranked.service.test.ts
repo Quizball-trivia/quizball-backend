@@ -356,14 +356,16 @@ describe('rankedService', () => {
   });
 
   it.each([
-    { name: 'opponent forfeits while winner leads 4-0', winnerGoals: 4, loserGoals: 0, expectedDelta: 90 }, // +50 forfeit win + 40 (by 4+)
-    { name: 'opponent forfeits while winner leads 2-0', winnerGoals: 2, loserGoals: 0, expectedDelta: 65 }, // +50 + 15 (by 2)
-    { name: 'opponent forfeits with no goal lead', winnerGoals: 0, loserGoals: 0, expectedDelta: 50 },      // +50 flat (no margin)
+    { name: 'opponent forfeits while winner leads 4-0', winnerGoals: 4, loserGoals: 0, winnerRp: 1200, loserRp: 1200, expectedDelta: 90 }, // +50 + 40
+    { name: 'opponent forfeits while winner leads 3-0', winnerGoals: 3, loserGoals: 0, winnerRp: 1200, loserRp: 1200, expectedDelta: 80 }, // +50 + 30
+    { name: 'stronger opponent forfeits while winner leads 3-0', winnerGoals: 3, loserGoals: 0, winnerRp: 1200, loserRp: 1400, expectedDelta: 90 }, // +50 + 30 + 10
+    { name: 'opponent forfeits while winner leads 2-0', winnerGoals: 2, loserGoals: 0, winnerRp: 1200, loserRp: 1200, expectedDelta: 65 }, // +50 + 15
+    { name: 'opponent forfeits with no goal lead', winnerGoals: 0, loserGoals: 0, winnerRp: 1200, loserRp: 1200, expectedDelta: 50 },      // +50 flat
     // Signed-margin guard: the forfeit winner was BEHIND on goals (1-3) when the
     // opponent quit → margin is negative → NO bonus, flat +50. (A |margin| bonus
     // would have wrongly paid +65 here.)
-    { name: 'opponent forfeits while winner trails 1-3', winnerGoals: 1, loserGoals: 3, expectedDelta: 50 },
-  ])('awards forfeit-win RP plus the goal-margin bonus: $name', async ({ winnerGoals, loserGoals, expectedDelta }) => {
+    { name: 'opponent forfeits while winner trails 1-3', winnerGoals: 1, loserGoals: 3, winnerRp: 1200, loserRp: 1200, expectedDelta: 50 },
+  ])('awards forfeit-win RP like a regular win at the frozen score: $name', async ({ winnerGoals, loserGoals, winnerRp, loserRp, expectedDelta }) => {
     // u-2 is the WINNER (the forfeiter is u-1, the absent player). A dominant
     // lead when the opponent quits earns the forfeit-win base + the margin bonus.
     (matchesRepo.getMatch as Mock).mockResolvedValue(
@@ -375,22 +377,25 @@ describe('rankedService', () => {
     ]);
     (usersRepo.getById as Mock).mockImplementation(async (userId: string) => ({ id: userId, is_ai: false }));
     (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
-    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
-      createProfile({
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => {
+      const rp = userId === 'u-2' ? winnerRp : loserRp;
+      return createProfile({
         user_id: userId,
-        rp: 1200,
-        tier: rankedService.tierFromRp(1200),
+        rp,
+        tier: rankedService.tierFromRp(rp),
         placement_status: 'placed',
         placement_played: 3,
-      })
-    );
+      });
+    });
     (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
 
     const outcome = await rankedService.settleCompletedRankedMatch('m-1');
     const winnerOutcome = outcome?.byUserId['u-2'];
+    const loserOutcome = outcome?.byUserId['u-1'];
     expect(winnerOutcome).toBeDefined();
-    expect(winnerOutcome?.newRp).toBe(1200 + expectedDelta); // a win → RP goes up by the delta
+    expect(winnerOutcome?.newRp).toBe(winnerRp + expectedDelta); // a win → RP goes up by the delta
     expect(winnerOutcome?.deltaRp).toBe(expectedDelta);
+    expect(loserOutcome?.deltaRp).toBe(-50);
   });
 
   it('clamps forfeit loss at zero and persists the applied delta', async () => {

@@ -148,12 +148,8 @@ function computeSeasonRpDelta(
     return isPenalty ? SEASON_PENALTY_LOSS_RP : SEASON_REGULAR_LOSS_RP; // -15 / -25
   }
 
-  // Win. Opponent forfeited → base forfeit-win RP, PLUS the goal-margin bonus
-  // if this player was already ahead by a margin when the opponent quit (a
-  // dominant 4-0 lead earns the win bonus + the +40 margin, not a flat +50).
-  if (isForfeit) return SEASON_OPPONENT_FORFEIT_WIN_RP + seasonMarginBonus(goalMargin);
-
-  let delta = isPenalty ? SEASON_PENALTY_WIN_RP : SEASON_REGULAR_WIN_RP; // +35 / +50
+  const regularWinBaseRp = isForfeit ? SEASON_OPPONENT_FORFEIT_WIN_RP : SEASON_REGULAR_WIN_RP;
+  let delta = isPenalty ? SEASON_PENALTY_WIN_RP : regularWinBaseRp; // +35 / +50
   // Margin bonus only applies to a decisive (goals) win — a shootout is by
   // definition level on goals, so no margin bonus there.
   if (!isPenalty) delta += seasonMarginBonus(goalMargin);

@@ -45,6 +45,7 @@ const socketOptions = {
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let watchdogTickInFlight = false;
 let stalledRounds = 0;
+let watchdogGeneration = 0;
 
 export async function initRedisClients(): Promise<{
   pubClient: RedisClientType;
@@ -144,16 +145,18 @@ function watchdogClients(): NamedClient[] {
 
 function startWatchdog(): void {
   if (watchdogTimer) return;
+  const generation = watchdogGeneration;
   stalledRounds = 0;
   watchdogTickInFlight = false;
   watchdogTimer = setInterval(() => {
-    void runWatchdogTick(watchdogClients());
+    void runWatchdogTick(watchdogClients(), { generation });
   }, WATCHDOG_INTERVAL_MS);
   // Don't let the watchdog keep the event loop alive on its own.
   watchdogTimer.unref?.();
 }
 
 function stopWatchdog(): void {
+  watchdogGeneration += 1;
   if (watchdogTimer) {
     clearInterval(watchdogTimer);
     watchdogTimer = null;
@@ -213,8 +216,12 @@ export async function runWatchdogTick(
     pingTimeoutMs?: number;
     maxStalledRounds?: number;
     onFatal?: () => void;
+    generation?: number;
   } = {}
 ): Promise<void> {
+  const generation = options.generation ?? watchdogGeneration;
+  const shouldContinue = () => generation === watchdogGeneration;
+  if (!shouldContinue()) return;
   if (watchdogTickInFlight) return;
   watchdogTickInFlight = true;
 
@@ -230,6 +237,8 @@ export async function runWatchdogTick(
     const stalled = results
       .map((result, index) => ({ result, named: clients[index]! }))
       .filter(({ result }) => result.status === 'rejected');
+
+    if (!shouldContinue()) return;
 
     if (stalled.length === 0) {
       stalledRounds = 0;
@@ -248,6 +257,7 @@ export async function runWatchdogTick(
     );
 
     if (stalledRounds >= maxStalledRounds) {
+      if (!shouldContinue()) return;
       logger.fatal(
         { stalledRounds },
         'Redis watchdog: clients unrecoverable after repeated stalls, exiting for a clean restart'
@@ -256,11 +266,14 @@ export async function runWatchdogTick(
       return;
     }
 
+    if (!shouldContinue()) return;
     await Promise.allSettled(
       stalled.map(({ named }) => forceReconnect(named))
     );
   } finally {
-    watchdogTickInFlight = false;
+    if (shouldContinue()) {
+      watchdogTickInFlight = false;
+    }
   }
 }
 
@@ -268,6 +281,7 @@ export const __watchdogTestHooks = {
   resetState() {
     stalledRounds = 0;
     watchdogTickInFlight = false;
+    watchdogGeneration = 0;
   },
   getStalledRounds: () => stalledRounds,
 };

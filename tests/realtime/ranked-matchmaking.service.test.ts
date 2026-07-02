@@ -443,6 +443,42 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
+  it('rechecks live sockets immediately before lobby creation', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.eval.mockImplementationOnce(async (script: string) => {
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      return [];
+    });
+    redisMock.eval.mockImplementation(async () => []);
+    getWalletMock.mockImplementation(async (userId: string) => {
+      if (userId === 'u1') absentUserIds.add('u2');
+      return { coins: 0, tickets: 1 };
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    expect(redisMock.multi).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userAId: 'u1',
+        userBId: 'u2',
+        userAPresent: true,
+        userBPresent: false,
+      }),
+      'Ranked human match creation skipped: a paired player has no live socket'
+    );
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(emit).toHaveBeenCalledWith(
+      'ranked:search_started',
+      expect.objectContaining({ durationMs: expect.any(Number) })
+    );
+    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
+  });
+
   it('pairs two matches when queue effectively has 4 users', async () => {
     const service = await loadService();
     const io = createIoMock();

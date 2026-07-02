@@ -9,7 +9,7 @@ vi.mock('../../src/core/logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), fatal },
 }));
 
-import { runWatchdogTick, __watchdogTestHooks } from '../../src/realtime/redis.js';
+import { closeRedisClients, runWatchdogTick, __watchdogTestHooks } from '../../src/realtime/redis.js';
 
 type PingBehaviour = 'ok' | 'reject' | 'hang';
 
@@ -81,6 +81,25 @@ describe('redis watchdog tick', () => {
     expect(healthy.calls.disconnect).toBe(0);
     expect(onFatal).not.toHaveBeenCalled();
     expect(__watchdogTestHooks.getStalledRounds()).toBe(1);
+  });
+
+  it('does not reconnect when the watchdog is stopped while a tick is in flight', async () => {
+    const dead = makeClient('command', () => 'hang');
+    const onFatal = vi.fn();
+
+    const tick = runWatchdogTick([dead], {
+      pingTimeoutMs: 8000,
+      onFatal,
+    });
+    await Promise.resolve();
+    await closeRedisClients();
+    await vi.advanceTimersByTimeAsync(8000);
+    await tick;
+
+    expect(dead.calls.ping).toBe(1);
+    expect(dead.calls.disconnect).toBe(0);
+    expect(dead.calls.connect).toBe(0);
+    expect(onFatal).not.toHaveBeenCalled();
   });
 
   it('resets the stall counter once a client recovers', async () => {

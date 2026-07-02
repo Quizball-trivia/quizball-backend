@@ -34,7 +34,7 @@ import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
 } from './services/match-final-results.service.js';
-import { finalizeRankedMatchAsNoContest } from './services/ranked-no-contest.service.js';
+import { finalizeRankedNoContest } from './services/ranked-no-contest.service.js';
 import { hasNoHumanInteraction } from './services/match-interaction.service.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchFinalResultsPayload } from './socket.types.js';
@@ -285,26 +285,27 @@ export async function completePossessionMatch(
       if (humanUserIds.size > 0) {
         const answers = await matchAnswersRepo.listAnswersForMatch(matchId);
         if (hasNoHumanInteraction(answers, humanUserIds)) {
-          const noContest = await finalizeRankedMatchAsNoContest({
+          const resultVersion = await finalizeRankedNoContest({
             matchId,
-            activeMatch: match,
-            cacheSnapshot: cache,
+            roster: decisionInput.map((player) => ({ user_id: player.user_id })),
+            statePayload: (cache?.statePayload ?? match.state_payload ?? {}) as Record<string, unknown>,
             roundsPlayed: cache?.currentQIndex ?? match.current_q_index,
           });
-          if (noContest.completed) {
-            clearAiMaps(matchId);
-            clearHalftimeTimer(matchId);
-            const finalPayload = await buildFinalResultsPayload(matchId, noContest.resultVersion);
-            if (finalPayload) {
-              await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
-            }
+          logger.info(
+            { matchId, roundsPlayed: cache?.currentQIndex ?? match.current_q_index },
+            'Ranked match cancelled as no-contest (zero human interaction) — RP unchanged, tickets refunded'
+          );
+          clearAiMaps(matchId);
+          clearHalftimeTimer(matchId);
+          const finalPayload = await buildFinalResultsPayload(matchId, resultVersion);
+          if (finalPayload) {
+            await emitFinalResultsToMatchParticipants(io, matchId, finalPayload);
           }
           return {
             matchId,
             winnerId: null,
-            resultVersion: noContest.resultVersion,
-            completed: noContest.completed,
-            ...(noContest.completed ? {} : { reason: 'not_active' as const }),
+            resultVersion,
+            completed: true,
           };
         }
       }

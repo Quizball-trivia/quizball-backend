@@ -12,10 +12,17 @@ const setMatchStatePayloadMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const completeMatchMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
+const listAnswersForMatchMock = vi.fn();
 const getByIdsMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
+const getMatchCacheOrRebuildMock = vi.fn();
+const setMatchCacheMock = vi.fn();
 const getRedisClientMock = vi.fn();
+const buildFinalResultsPayloadMock = vi.fn();
+const emitFinalResultsToMatchParticipantsMock = vi.fn();
+const clearAiMapsMock = vi.fn();
+const clearHalftimeTimerMock = vi.fn();
 
 vi.mock('../../src/realtime/locks.js', () => ({
   acquireLock: (...a: unknown[]) => acquireLockMock(...a),
@@ -43,6 +50,12 @@ vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
+  matchAnswersRepo: {
+    listAnswersForMatch: (...a: unknown[]) => listAnswersForMatchMock(...a),
+  },
+}));
+
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: { getByIds: (...a: unknown[]) => getByIdsMock(...a) },
 }));
@@ -53,14 +66,51 @@ vi.mock('../../src/modules/store/store.service.js', () => ({
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
   deleteMatchCache: (...a: unknown[]) => deleteMatchCacheMock(...a),
+  getMatchCacheOrRebuild: (...a: unknown[]) => getMatchCacheOrRebuildMock(...a),
+  setMatchCache: (...a: unknown[]) => setMatchCacheMock(...a),
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => getRedisClientMock(),
 }));
 
+vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
+  buildFinalResultsPayload: (...a: unknown[]) => buildFinalResultsPayloadMock(...a),
+  emitFinalResultsToMatchParticipants: (...a: unknown[]) => emitFinalResultsToMatchParticipantsMock(...a),
+}));
+
+vi.mock('../../src/realtime/possession-match-flow.js', () => ({
+  clearAiMaps: (...a: unknown[]) => clearAiMapsMock(...a),
+  clearHalftimeTimer: (...a: unknown[]) => clearHalftimeTimerMock(...a),
+  fireAndForget: vi.fn(),
+}));
+
 vi.mock('../../src/realtime/match-keys.js', () => ({
   lastMatchKey: (id: string) => `last-match:${id}`,
+}));
+
+vi.mock('../../src/core/analytics.js', () => ({
+  trackEvent: vi.fn(),
+}));
+
+vi.mock('../../src/core/analytics/game-events.js', () => ({
+  trackMatchCompleted: vi.fn(),
+}));
+
+vi.mock('../../src/modules/achievements/index.js', () => ({
+  achievementsService: { evaluateForMatch: vi.fn() },
+}));
+
+vi.mock('../../src/modules/objectives/index.js', () => ({
+  objectivesService: { evaluateForMatchBestEffort: vi.fn() },
+}));
+
+vi.mock('../../src/modules/progression/progression.service.js', () => ({
+  progressionService: { awardCompletedMatchXp: vi.fn() },
+}));
+
+vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
+  rankedService: { settleCompletedRankedMatch: vi.fn() },
 }));
 
 const MATCH_ID = 'match-uuid';
@@ -83,13 +133,24 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     setMatchStatePayloadMock.mockResolvedValue(undefined);
     abandonMatchMock.mockResolvedValue(undefined);
     deleteMatchCacheMock.mockResolvedValue(undefined);
+    getMatchCacheOrRebuildMock.mockResolvedValue(null);
+    setMatchCacheMock.mockResolvedValue(undefined);
     listMatchPlayersMock.mockResolvedValue([{ user_id: HUMAN_A }, { user_id: HUMAN_B }]);
+    listAnswersForMatchMock.mockResolvedValue([]);
     getByIdsMock.mockResolvedValue(new Map([
       [HUMAN_A, { id: HUMAN_A, is_ai: false }],
       [HUMAN_B, { id: HUMAN_B, is_ai: false }],
     ]));
     refundRankedTicketsMock.mockResolvedValue({ wallets: {} });
     getRedisClientMock.mockReturnValue(null);
+    buildFinalResultsPayloadMock.mockResolvedValue({
+      matchId: MATCH_ID,
+      winnerId: null,
+      players: {},
+      totalQuestions: 12,
+      resultVersion: 123,
+    });
+    emitFinalResultsToMatchParticipantsMock.mockResolvedValue(undefined);
   });
 
   it('abandons the match and refunds both humans, never completing it (no winner/RP)', async () => {
@@ -151,5 +212,56 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
 
     expect(result.completed).toBe(false);
     expect(getMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('voids zero-interaction possession completion without reacquiring the held completion lock', async () => {
+    acquireLockMock
+      .mockResolvedValueOnce({ acquired: true, token: 'completion-token' })
+      .mockResolvedValue({ acquired: false, token: null });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: HUMAN_A, seat: 1, total_points: 0, correct_answers: 0 },
+      { user_id: HUMAN_B, seat: 2, total_points: 0, correct_answers: 0 },
+    ]);
+    const finalPayload = {
+      matchId: MATCH_ID,
+      winnerId: null,
+      players: {},
+      totalQuestions: 12,
+      resultVersion: 456,
+    };
+    buildFinalResultsPayloadMock.mockResolvedValue(finalPayload);
+    const io = { to: vi.fn(() => ({ emit: vi.fn() })) };
+    const state = {
+      goals: { seat1: 1, seat2: 0 },
+      penaltyGoals: { seat1: 0, seat2: 0 },
+    };
+    const { completePossessionMatch } = await import(
+      '../../src/realtime/possession-completion.js'
+    );
+
+    const result = await completePossessionMatch(
+      io as never,
+      MATCH_ID,
+      state as never
+    );
+
+    expect(result.completed).toBe(true);
+    expect(result.winnerId).toBeNull();
+    expect(acquireLockMock).toHaveBeenCalledTimes(1);
+    expect(abandonMatchMock).toHaveBeenCalledWith(MATCH_ID);
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(refundRankedTicketsMock).toHaveBeenCalledWith([HUMAN_A, HUMAN_B]);
+    expect(clearAiMapsMock).toHaveBeenCalledWith(MATCH_ID);
+    expect(clearHalftimeTimerMock).toHaveBeenCalledWith(MATCH_ID);
+    expect(buildFinalResultsPayloadMock).toHaveBeenCalledWith(MATCH_ID, result.resultVersion);
+    expect(emitFinalResultsToMatchParticipantsMock).toHaveBeenCalledWith(
+      io,
+      MATCH_ID,
+      finalPayload
+    );
+    expect(releaseLockMock).toHaveBeenCalledWith(
+      `lock:match:${MATCH_ID}:complete`,
+      'completion-token'
+    );
   });
 });

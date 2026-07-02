@@ -121,9 +121,71 @@ export function trackLobbyLeft(
 }
 
 // Ranked Queue Events
-export function trackRankedQueueJoined(userId: string, rankPoints: number): void {
+interface RankedQueueClientContext {
+  source?: string | null;
+  clientReason?: string | null;
+  clientRequestId?: string | null;
+  socketId?: string | null;
+}
+
+function idPrefix(id?: string | null): string | null {
+  return id ? id.slice(0, 8) : null;
+}
+
+export function trackRankedQueueJoined(
+  userId: string,
+  rankPoints: number,
+  context: RankedQueueClientContext & {
+    searchId?: string | null;
+    queueSize?: number | null;
+  } = {}
+): void {
   trackEvent('ranked_queue_joined', userId, {
     rank_points: rankPoints,
+    source: context.source ?? null,
+    client_reason: context.clientReason ?? null,
+    client_request_id: context.clientRequestId ?? null,
+    socket_id: context.socketId ?? null,
+    search_id_prefix: idPrefix(context.searchId),
+    queue_size: context.queueSize ?? null,
+  });
+}
+
+export function trackRankedQueueLeft(params: {
+  userId: string;
+  source: 'explicit_leave' | 'disconnect_cleanup' | 'server_abort';
+  searchFound: boolean;
+  searchId?: string | null;
+}): void {
+  trackEvent('ranked_queue_left', params.userId, {
+    source: params.source,
+    search_found: params.searchFound,
+    search_id_prefix: idPrefix(params.searchId),
+  });
+}
+
+export function trackRankedQueueJoinIgnored(params: RankedQueueClientContext & {
+  userId: string;
+  reason:
+    | 'existing_session'
+    | 'recent_queue_leave'
+    | 'insufficient_tickets'
+    | 'transition_lock_busy';
+  sessionState?: string | null;
+  activeMatchId?: string | null;
+  waitingLobbyId?: string | null;
+  queueSearchId?: string | null;
+}): void {
+  trackEvent('ranked_queue_join_ignored', params.userId, {
+    reason: params.reason,
+    source: params.source ?? null,
+    client_reason: params.clientReason ?? null,
+    client_request_id: params.clientRequestId ?? null,
+    socket_id: params.socketId ?? null,
+    session_state: params.sessionState ?? null,
+    active_match_id_prefix: idPrefix(params.activeMatchId),
+    waiting_lobby_id_prefix: idPrefix(params.waitingLobbyId),
+    queue_search_id_prefix: idPrefix(params.queueSearchId),
   });
 }
 
@@ -274,6 +336,45 @@ export function trackDraftCompleted(params: {
     lobby_id: params.lobbyId,
     match_id: params.matchId,
     duration_ms: params.durationMs,
+  });
+}
+
+export function trackDraftUiReady(params: {
+  userId: string;
+  lobbyId: string;
+  mode: string;
+  banCount: number;
+  socketId?: string | null;
+}): void {
+  trackEvent('draft_ui_ready', params.userId, {
+    lobby_id: params.lobbyId,
+    mode: params.mode,
+    ban_count: params.banCount,
+    socket_id: params.socketId ?? null,
+  });
+}
+
+export function trackRankedDraftAborted(params: {
+  userId: string;
+  lobbyId: string;
+  reason: string;
+  cancelled?: boolean;
+  absentAfterGrace?: boolean;
+  expectedUserId?: string | null;
+  aiUserId?: string | null;
+  banCount?: number | null;
+  forceAtMs?: number | null;
+}): void {
+  trackEvent('ranked_draft_aborted_before_match', params.userId, {
+    lobby_id: params.lobbyId,
+    reason: params.reason,
+    cancelled: params.cancelled ?? false,
+    absent_after_grace: params.absentAfterGrace ?? false,
+    expected_user_id: params.expectedUserId ?? null,
+    ai_user_id: params.aiUserId ?? null,
+    ban_count: params.banCount ?? null,
+    force_at_ms: params.forceAtMs ?? null,
+    ms_after_force: params.forceAtMs ? Math.max(0, Date.now() - params.forceAtMs) : null,
   });
 }
 

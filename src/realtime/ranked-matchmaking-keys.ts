@@ -15,6 +15,10 @@ export function rankedJoinDebounceKey(userId: string): string {
   return `ranked:mm:join_debounce:${userId}`;
 }
 
+export function rankedLeaveGuardKey(userId: string): string {
+  return `ranked:mm:leave_guard:${userId}`;
+}
+
 export function rankedPairingInFlightKey(userId: string): string {
   return `ranked:mm:pairing:${userId}`;
 }

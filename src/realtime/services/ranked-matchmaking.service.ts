@@ -33,6 +33,7 @@ import {
   RANKED_MM_USER_MAP_KEY,
   rankedCancelKey,
   rankedJoinDebounceKey,
+  rankedLeaveGuardKey,
   rankedPairingInFlightKey,
   rankedSearchKey,
 } from '../ranked-matchmaking-keys.js';
@@ -47,6 +48,7 @@ const MAX_PAIRS_PER_TICK = 100;
 const FOUND_MODAL_MS = 1200;
 
 const CANCEL_KEY_TTL_SEC = 30;
+const LEAVE_GUARD_TTL_SEC = 2;
 const DISCONNECT_CLEANUP_LOCK_ATTEMPTS = 3;
 const DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS = 1_000;
 
@@ -800,13 +802,24 @@ export const rankedMatchmakingService = {
         return;
       }
 
+      const redis = getRedisClient();
+      if (redis && await redis.exists(rankedLeaveGuardKey(userId))) {
+        logger.info({ userId }, 'Ranked queue join ignored: recent queue leave guard is active');
+        rankedDebug('queue_join_ignored_recent_leave', {
+          user: rankedDebugUser(userId),
+        });
+        span.setAttribute('quizball.queue_block_reason', 'RECENT_QUEUE_LEAVE');
+        socket.emit('ranked:queue_left');
+        await userSessionGuardService.emitState(io, userId);
+        return;
+      }
+
       if (!config.RANKED_HUMAN_QUEUE_ENABLED) {
         logger.info({ userId }, 'Ranked human queue disabled, routing to AI');
         rankedDebug('queue_join_ai_only', {
           user: rankedDebugUser(userId),
         });
         span.setAttribute('quizball.queue_mode', 'ai_only');
-        const redis = getRedisClient();
         if (redis) {
           await redis.del(rankedCancelKey(userId));
         }
@@ -816,7 +829,6 @@ export const rankedMatchmakingService = {
         return;
       }
 
-      const redis = getRedisClient();
       if (!redis) {
         logger.warn({ userId }, 'Redis unavailable for ranked queue join, falling back to AI');
         rankedDebug('queue_join_redis_unavailable', {
@@ -1083,6 +1095,7 @@ export const rankedMatchmakingService = {
         socket,
         async () => {
           await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
+          await redis.set(rankedLeaveGuardKey(userId), String(Date.now()), { EX: LEAVE_GUARD_TTL_SEC });
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
             keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
             arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],

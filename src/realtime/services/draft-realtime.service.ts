@@ -14,7 +14,11 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { logger } from '../../core/logger.js';
 import { startDraft } from './lobby-realtime.service.js';
-import { trackDraftCompleted } from '../../core/analytics/game-events.js';
+import {
+  trackDraftCompleted,
+  trackDraftUiReady,
+  trackRankedDraftAborted,
+} from '../../core/analytics/game-events.js';
 import { abortRankedDraftStartForTickets } from './lobby-draft-start.service.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { rankedCancelKey } from '../ranked-matchmaking-keys.js';
@@ -186,7 +190,13 @@ async function abortRankedDraftBeforeMatchCreation(
   lobby: { id: string; mode: 'friendly' | 'ranked' },
   humanUserIds: string[],
   reason: string,
-  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>
+  signals: Array<{ userId: string; cancelled: boolean; absentAfterGrace: boolean }>,
+  details: {
+    expectedUserId?: string | null;
+    aiUserId?: string | null;
+    banCount?: number | null;
+    forceAtMs?: number | null;
+  } = {}
 ): Promise<void> {
   await lobbiesRepo.deleteLobby(lobby.id);
   const redis = getRedisClient();
@@ -199,13 +209,25 @@ async function abortRankedDraftBeforeMatchCreation(
   await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
   await detachAllSocketsFromLobby(io, lobby.id);
   for (const userId of humanUserIds) {
+    const signal = signals.find((candidate) => candidate.userId === userId);
+    trackRankedDraftAborted({
+      userId,
+      lobbyId: lobby.id,
+      reason,
+      cancelled: signal?.cancelled ?? false,
+      absentAfterGrace: signal?.absentAfterGrace ?? false,
+      expectedUserId: details.expectedUserId ?? null,
+      aiUserId: details.aiUserId ?? null,
+      banCount: details.banCount ?? null,
+      forceAtMs: details.forceAtMs ?? null,
+    });
     io.to(`user:${userId}`).emit('ranked:queue_left');
     await userSessionGuardService.emitState(io, userId).catch((error) => {
       logger.warn({ error, userId, lobbyId: lobby.id }, 'Failed to emit state after ranked draft abort');
     });
   }
   logger.warn(
-    { lobbyId: lobby.id, humanUserIds, reason, signals },
+    { lobbyId: lobby.id, humanUserIds, reason, signals, ...details },
     'Ranked draft aborted before match creation'
   );
 }
@@ -238,7 +260,13 @@ async function abortRankedDraftWithoutUiReady(params: {
       userId,
       cancelled: false,
       absentAfterGrace: false,
-    }))
+    })),
+    {
+      expectedUserId,
+      aiUserId,
+      banCount,
+      forceAtMs: forceAtMs ?? null,
+    }
   );
 }
 
@@ -1238,7 +1266,17 @@ export const draftRealtimeService = {
     }
 
     await markDraftUiReady(lobbyId, socket.data.user.id, bans.length);
-    logger.info({ lobbyId, userId: socket.data.user.id, banCount: bans.length }, 'Draft UI ready');
+    trackDraftUiReady({
+      userId: socket.data.user.id,
+      lobbyId,
+      mode: lobby.mode,
+      banCount: bans.length,
+      socketId: socket.id,
+    });
+    logger.info(
+      { lobbyId, userId: socket.data.user.id, banCount: bans.length, socketId: socket.id, mode: lobby.mode },
+      'Draft UI ready'
+    );
     await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
   },
 

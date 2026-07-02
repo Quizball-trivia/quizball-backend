@@ -19,7 +19,11 @@ import { scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
-import { trackRankedQueueJoined } from '../../core/analytics/game-events.js';
+import {
+  trackRankedQueueJoined,
+  trackRankedQueueJoinIgnored,
+  trackRankedQueueLeft,
+} from '../../core/analytics/game-events.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
@@ -749,17 +753,36 @@ export const rankedMatchmakingService = {
   async handleQueueJoin(
     io: QuizballServer,
     socket: QuizballSocket,
-    _payload?: { searchMode?: 'human_first' }
+    payload?: {
+      searchMode?: 'human_first';
+      source?: 'mode_select' | 'play_again' | 'retry' | 'recovery' | 'unknown';
+      reason?: 'initial' | 'retry' | 'recovery_retry';
+      clientRequestId?: string;
+    }
   ): Promise<void> {
     const userId = socket.data.user.id;
+    const queueClientContext = {
+      source: payload?.source ?? 'unknown',
+      clientReason: payload?.reason ?? 'initial',
+      clientRequestId: payload?.clientRequestId ?? null,
+      socketId: socket.id,
+    };
     await withSpan('ranked.queue_join', {
       'quizball.user_id': userId,
+      'quizball.client_source': queueClientContext.source,
+      'quizball.client_reason': queueClientContext.clientReason,
+      'quizball.client_request_id': queueClientContext.clientRequestId ?? '',
     }, async (span) => {
-      logger.info({ userId }, 'Ranked queue join requested');
+      logger.info(
+        { userId, ...queueClientContext, searchMode: payload?.searchMode ?? 'human_first' },
+        'Ranked queue join requested'
+      );
       rankedDebug('queue_join_start', {
         user: rankedDebugUser(userId),
         socket: socket.id,
         connected: socket.connected,
+        source: queueClientContext.source,
+        reason: queueClientContext.clientReason,
       });
       appMetrics.rankedQueueJoins.add(1);
 
@@ -793,22 +816,46 @@ export const rankedMatchmakingService = {
           queueSearch: earlySessionBlock.queueSearchId ? earlySessionBlock.queueSearchId.slice(0, 8) : 'none',
         });
         span.setAttribute('quizball.queue_block_reason', `EXISTING_${earlySessionBlock.state}`);
+        trackRankedQueueJoinIgnored({
+          userId,
+          reason: 'existing_session',
+          ...queueClientContext,
+          sessionState: earlySessionBlock.state,
+          activeMatchId: earlySessionBlock.activeMatchId,
+          waitingLobbyId: earlySessionBlock.waitingLobbyId,
+          queueSearchId: earlySessionBlock.queueSearchId,
+        });
         await userSessionGuardService.emitState(io, userId);
         return;
       }
 
       if (!await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
         span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');
+        trackRankedQueueJoinIgnored({
+          userId,
+          reason: 'insufficient_tickets',
+          ...queueClientContext,
+        });
         return;
       }
 
       const redis = getRedisClient();
       if (redis && await redis.exists(rankedLeaveGuardKey(userId))) {
-        logger.info({ userId }, 'Ranked queue join ignored: recent queue leave guard is active');
+        logger.info(
+          { userId, ...queueClientContext, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },
+          'Ranked queue join ignored: recent queue leave guard is active'
+        );
         rankedDebug('queue_join_ignored_recent_leave', {
           user: rankedDebugUser(userId),
+          source: queueClientContext.source,
+          reason: queueClientContext.clientReason,
         });
         span.setAttribute('quizball.queue_block_reason', 'RECENT_QUEUE_LEAVE');
+        trackRankedQueueJoinIgnored({
+          userId,
+          reason: 'recent_queue_leave',
+          ...queueClientContext,
+        });
         socket.emit('ranked:queue_left');
         await userSessionGuardService.emitState(io, userId);
         return;
@@ -1040,8 +1087,15 @@ export const rankedMatchmakingService = {
           io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
           const queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
           span.setAttribute('quizball.queue_size', queueSize);
-          logger.info({ userId, searchId: newSearchId, queueSize }, 'User joined ranked queue');
-          trackRankedQueueJoined(userId, 0);
+          logger.info(
+            { userId, searchId: newSearchId, queueSize, ...queueClientContext },
+            'User joined ranked queue'
+          );
+          trackRankedQueueJoined(userId, 0, {
+            ...queueClientContext,
+            searchId: newSearchId,
+            queueSize,
+          });
           rankedDebug('queue_enqueued', {
             user: rankedDebugUser(userId),
             search: newSearchId.slice(0, 8),
@@ -1067,11 +1121,16 @@ export const rankedMatchmakingService = {
         }
       );
       if (!completed) {
-        logger.warn({ userId }, 'Ranked queue join transition lock not acquired');
+        logger.warn({ userId, ...queueClientContext }, 'Ranked queue join transition lock not acquired');
         rankedDebug('queue_join_lock_not_acquired', {
           user: rankedDebugUser(userId),
         });
         span.setAttribute('quizball.transition_lock_acquired', false);
+        trackRankedQueueJoinIgnored({
+          userId,
+          reason: 'transition_lock_busy',
+          ...queueClientContext,
+        });
         return;
       }
       span.setAttribute('quizball.transition_lock_acquired', true);
@@ -1096,12 +1155,22 @@ export const rankedMatchmakingService = {
         async () => {
           await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
           await redis.set(rankedLeaveGuardKey(userId), String(Date.now()), { EX: LEAVE_GUARD_TTL_SEC });
+          logger.info(
+            { userId, cancelKeyTtlSec: CANCEL_KEY_TTL_SEC, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },
+            'Ranked queue leave guard set'
+          );
           const resultRaw = await redis.eval(RANKED_MM_CANCEL_SEARCH_SCRIPT, {
             keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
             arguments: [RANKED_MM_SEARCH_KEY_PREFIX, userId, String(Date.now())],
           });
           const result = toStringArray(resultRaw);
           span.setAttribute('quizball.queue_search_found', result.length > 0);
+          trackRankedQueueLeft({
+            userId,
+            source: 'explicit_leave',
+            searchFound: result.length > 0,
+            searchId: result[0] ?? null,
+          });
           if (result.length > 0) {
             logger.info({ userId, searchId: result[0] }, 'User left ranked queue');
             rankedDebug('queue_leave_removed_search', {
@@ -1189,6 +1258,12 @@ export const rankedMatchmakingService = {
           });
           const result = toStringArray(resultRaw);
           span.setAttribute('quizball.queue_search_found', result.length > 0);
+          trackRankedQueueLeft({
+            userId,
+            source: 'disconnect_cleanup',
+            searchFound: result.length > 0,
+            searchId: result[0] ?? null,
+          });
           if (result.length > 0) {
             logger.info({ userId, searchId: result[0] }, 'Socket disconnect removed ranked queue search');
             rankedDebug('disconnect_removed_queue_search', {

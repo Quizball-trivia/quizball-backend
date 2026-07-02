@@ -30,6 +30,10 @@ export interface LockResult {
   token?: string;
 }
 
+export interface WithLockOptions {
+  onUnavailable?: () => Error;
+}
+
 /**
  * Acquire a distributed lock with a unique token.
  * Returns { acquired: true, token } on success, { acquired: false } on failure.
@@ -65,6 +69,24 @@ export async function acquireLock(key: string, ttlMs: number): Promise<LockResul
     span.setAttribute('quizball.lock_acquired', true);
     return { acquired: true, token };
   });
+}
+
+export async function withLock<T>(
+  key: string,
+  ttlMs: number,
+  fn: () => Promise<T>,
+  options: WithLockOptions = {}
+): Promise<T> {
+  const lock = await acquireLock(key, ttlMs);
+  if (!lock.acquired || !lock.token) {
+    throw options.onUnavailable?.() ?? new Error(`Lock unavailable: ${key}`);
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await releaseLock(key, lock.token);
+  }
 }
 
 /**

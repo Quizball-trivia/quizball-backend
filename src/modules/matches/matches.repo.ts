@@ -6,7 +6,7 @@ import type { RankedLobbyContext } from '../lobbies/lobbies.types.js';
 
 export interface CreateMatchData {
   lobbyId: string | null;
-  mode: 'friendly' | 'ranked';
+  mode: 'friendly' | 'ranked' | 'auction';
   categoryAId: string;
   categoryBId: string | null;
   totalQuestions: number;
@@ -46,6 +46,62 @@ export const matchesRepo = {
       RETURNING *
     `;
     return row;
+  },
+
+  /**
+   * Create the persistent `matches` row for an auction match. Auction is not a
+   * quiz (no categories/questions) and already owns its match id (the Redis
+   * state UUID), so this uses an explicit id, null category, and 0 questions —
+   * unlike the quiz `createMatch` which generates an id and requires a category.
+   */
+  async createAuctionMatch(data: {
+    id: string;
+    statePayload?: unknown;
+  }): Promise<MatchRow> {
+    const [row] = await sql<MatchRow[]>`
+      INSERT INTO matches (
+        id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+      )
+      VALUES (
+        ${data.id}, null, 'auction', 'active',
+        null, null, 0, 0,
+        ${sql.json((data.statePayload ?? null) as Json)},
+        null, false, NOW()
+      )
+      ON CONFLICT (id) DO NOTHING
+      RETURNING *
+    `;
+    return row;
+  },
+
+  /** Insert auction match_players with team value (total_points) + placement. */
+  async insertAuctionMatchPlayers(
+    matchId: string,
+    players: Array<{ userId: string; seat: number; totalPoints: number; placement: number }>,
+  ): Promise<void> {
+    if (players.length === 0) return;
+    const rows = players.map((p) => [matchId, p.userId, p.seat, p.totalPoints, p.placement]);
+    await sql`
+      INSERT INTO match_players (match_id, user_id, seat, total_points, placement)
+      VALUES ${sql(rows)}
+      ON CONFLICT (match_id, user_id) DO UPDATE SET
+        total_points = EXCLUDED.total_points,
+        placement = EXCLUDED.placement
+    `;
+  },
+
+  /**
+   * Add coins to a user's wallet (auction match participation/win reward).
+   * Callers must gate this on a once-per-match guard (the createAuctionMatch
+   * "newly created" result) so a re-finish never double-pays.
+   */
+  async addCoins(userId: string, coins: number): Promise<void> {
+    if (coins <= 0) return;
+    await sql`
+      UPDATE users
+      SET coins = coins + ${coins}, updated_at = NOW()
+      WHERE id = ${userId}
+    `;
   },
 
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {

@@ -18,10 +18,20 @@ export interface HeadToHeadSummary {
 const VALID_WINNER_DECISION_METHODS = ['goals', 'penalty_goals', 'total_points', 'total_points_fallback', 'forfeit'] as const;
 export type WinnerDecisionMethod = (typeof VALID_WINNER_DECISION_METHODS)[number];
 
+export interface RecentMatchOpponentSummary {
+  id: string | null;
+  username: string;
+  avatarUrl: string | null;
+  avatarCustomization: AvatarCustomization | null;
+  isAi: boolean;
+  /** Finishing place in a multi-player (auction) match. null for 1v1. */
+  placement: number | null;
+}
+
 export interface RecentMatchSummary {
   matchId: string;
-  mode: 'friendly' | 'ranked';
-  competition: 'friendly' | 'placement' | 'ranked';
+  mode: 'friendly' | 'ranked' | 'auction';
+  competition: 'friendly' | 'placement' | 'ranked' | 'auction';
   status: 'completed' | 'abandoned';
   result: 'win' | 'loss' | 'draw';
   endedAt: string | null;
@@ -34,6 +44,12 @@ export interface RecentMatchSummary {
   winnerDecisionMethod: WinnerDecisionMethod | null;
   cancelledNoContest: boolean;
   rpDelta: number | null;
+  /** Auction: your finishing place (1 = won). null for 1v1 modes. */
+  placement: number | null;
+  /** Total players in the match (auction = 3). Used for "1st of N". */
+  playerCount: number;
+  /** Auction: all other players you faced (2 opponents). Empty for 1v1. */
+  opponents: RecentMatchOpponentSummary[];
   opponent: {
     id: string | null;
     username: string;
@@ -110,12 +126,18 @@ export const statsService = {
   async getRecentMatchesForUser(userId: string, limit: number): Promise<RecentMatchSummary[]> {
     const rows = await statsRepo.listRecentMatchesForUser(userId, limit);
     return rows.map((row) => {
+      // Auction has no single winner_user_id semantics for the viewer — derive
+      // result from the viewer's placement (1 = win, tie at 1 = draw, else loss).
       const result: RecentMatchSummary['result'] =
-        row.winner_user_id === null
-          ? 'draw'
-          : row.winner_user_id === userId
+        row.mode === 'auction'
+          ? row.player_placement === 1
             ? 'win'
-            : 'loss';
+            : 'loss'
+          : row.winner_user_id === null
+            ? 'draw'
+            : row.winner_user_id === userId
+              ? 'win'
+              : 'loss';
 
       const rawMethod = row.winner_decision_method;
       if (rawMethod && !(VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)) {
@@ -125,11 +147,22 @@ export const statsService = {
         rawMethod && (VALID_WINNER_DECISION_METHODS as readonly string[]).includes(rawMethod)
           ? (rawMethod as WinnerDecisionMethod)
           : null;
-      const competition: RecentMatchSummary['competition'] = row.mode === 'friendly'
-        ? 'friendly'
-        : row.ranked_is_placement
-          ? 'placement'
-          : 'ranked';
+      const competition: RecentMatchSummary['competition'] = row.mode === 'auction'
+        ? 'auction'
+        : row.mode === 'friendly'
+          ? 'friendly'
+          : row.ranked_is_placement
+            ? 'placement'
+            : 'ranked';
+
+      const opponents: RecentMatchOpponentSummary[] = (row.opponents ?? []).map((o) => ({
+        id: o.id,
+        username: o.username ?? 'Player',
+        avatarUrl: o.avatarUrl,
+        avatarCustomization: parseStoredAvatarCustomization(o.avatarCustomization),
+        isAi: o.isAi ?? false,
+        placement: o.placement,
+      }));
 
       return {
         matchId: row.match_id,
@@ -147,6 +180,9 @@ export const statsService = {
         winnerDecisionMethod,
         cancelledNoContest: row.cancelled_no_contest === true,
         rpDelta: row.mode === 'ranked' ? row.ranked_delta_rp : null,
+        placement: row.player_placement,
+        playerCount: row.player_count,
+        opponents,
         opponent: {
           id: row.opponent_id,
           username: row.opponent_username ?? 'Opponent',

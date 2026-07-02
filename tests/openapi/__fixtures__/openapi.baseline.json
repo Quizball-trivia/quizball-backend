@@ -6014,6 +6014,978 @@
         "required": [
           "ok"
         ]
+      },
+      "AuctionCardSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "player_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position_group": {
+            "type": "string",
+            "enum": [
+              "GK",
+              "DEF",
+              "MID",
+              "FWD"
+            ]
+          },
+          "true_value_eur": {
+            "type": "number"
+          },
+          "starting_price_eur": {
+            "type": "number"
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "current",
+              "peak",
+              "synthetic"
+            ]
+          },
+          "card_type": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "safe_star",
+              "bargain",
+              "trap",
+              "obscure_gem",
+              "lookalike_story",
+              "legend"
+            ]
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "easy",
+              "medium",
+              "hard",
+              "expert"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "needs_review",
+              "published",
+              "archived",
+              "rejected"
+            ]
+          },
+          "generator_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "verifier_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_version": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "needs_review"
+            ]
+          },
+          "published_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "player": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "nationality": {
+                "type": "string",
+                "nullable": true
+              },
+              "nationality_code": {
+                "type": "string",
+                "nullable": true
+              },
+              "position_group": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "GK",
+                  "DEF",
+                  "MID",
+                  "FWD"
+                ]
+              },
+              "current_club": {
+                "type": "string",
+                "nullable": true
+              },
+              "active_status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "retired",
+                  "legend",
+                  "unknown"
+                ]
+              },
+              "image_url": {
+                "type": "string",
+                "nullable": true
+              },
+              "fame_score": {
+                "type": "number",
+                "nullable": true
+              },
+              "fame_bucket": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "superstar",
+                  "known",
+                  "niche",
+                  "obscure",
+                  "legend"
+                ]
+              },
+              "data_quality_status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "usable",
+                  "needs_review",
+                  "rejected"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "display_name",
+              "nationality",
+              "nationality_code",
+              "position_group",
+              "current_club",
+              "active_status",
+              "image_url",
+              "fame_score",
+              "fame_bucket",
+              "data_quality_status"
+            ]
+          },
+          "clue_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "player_id",
+          "position_group",
+          "true_value_eur",
+          "starting_price_eur",
+          "value_type",
+          "card_type",
+          "difficulty",
+          "status",
+          "generator_model",
+          "verifier_model",
+          "prompt_version",
+          "verification_status",
+          "published_at",
+          "created_at",
+          "updated_at",
+          "player",
+          "clue_count"
+        ]
+      },
+      "AuctionCardDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "player_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position_group": {
+            "type": "string",
+            "enum": [
+              "GK",
+              "DEF",
+              "MID",
+              "FWD"
+            ]
+          },
+          "true_value_eur": {
+            "type": "number"
+          },
+          "starting_price_eur": {
+            "type": "number"
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "current",
+              "peak",
+              "synthetic"
+            ]
+          },
+          "card_type": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "safe_star",
+              "bargain",
+              "trap",
+              "obscure_gem",
+              "lookalike_story",
+              "legend"
+            ]
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "easy",
+              "medium",
+              "hard",
+              "expert"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "needs_review",
+              "published",
+              "archived",
+              "rejected"
+            ]
+          },
+          "generator_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "verifier_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_version": {
+            "type": "string",
+            "nullable": true
+          },
+          "generation_run_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "needs_review"
+            ]
+          },
+          "verification_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "editor_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "published_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "published_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "player": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "nationality": {
+                "type": "string",
+                "nullable": true
+              },
+              "nationality_code": {
+                "type": "string",
+                "nullable": true
+              },
+              "position_group": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "GK",
+                  "DEF",
+                  "MID",
+                  "FWD"
+                ]
+              },
+              "current_club": {
+                "type": "string",
+                "nullable": true
+              },
+              "active_status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "retired",
+                  "legend",
+                  "unknown"
+                ]
+              },
+              "image_url": {
+                "type": "string",
+                "nullable": true
+              },
+              "fame_score": {
+                "type": "number",
+                "nullable": true
+              },
+              "fame_bucket": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "superstar",
+                  "known",
+                  "niche",
+                  "obscure",
+                  "legend"
+                ]
+              },
+              "data_quality_status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "usable",
+                  "needs_review",
+                  "rejected"
+                ]
+              },
+              "transfermarkt_id": {
+                "type": "string",
+                "nullable": true
+              },
+              "wikidata_id": {
+                "type": "string",
+                "nullable": true
+              },
+              "date_of_birth": {
+                "type": "string",
+                "nullable": true
+              },
+              "current_value_eur": {
+                "type": "number",
+                "nullable": true
+              },
+              "peak_value_eur": {
+                "type": "number",
+                "nullable": true
+              },
+              "source_payload": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "display_name",
+              "nationality",
+              "nationality_code",
+              "position_group",
+              "current_club",
+              "active_status",
+              "image_url",
+              "fame_score",
+              "fame_bucket",
+              "data_quality_status",
+              "transfermarkt_id",
+              "wikidata_id",
+              "date_of_birth",
+              "current_value_eur",
+              "peak_value_eur",
+              "source_payload",
+              "created_at",
+              "updated_at"
+            ]
+          },
+          "clues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "auction_card_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "clue_order": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3
+                },
+                "clue_en": {
+                  "type": "string"
+                },
+                "clue_ka": {
+                  "type": "string"
+                },
+                "clue_kind": {
+                  "type": "string"
+                },
+                "supported_fact_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "auction_card_id",
+                "clue_order",
+                "clue_en",
+                "clue_ka",
+                "clue_kind",
+                "supported_fact_ids",
+                "created_at",
+                "updated_at"
+              ]
+            }
+          },
+          "supported_facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "player_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "fact_type": {
+                  "type": "string"
+                },
+                "fact_text_en": {
+                  "type": "string"
+                },
+                "fact_text_ka": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "source_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "source_url": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "evidence_quote": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "confidence": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "candidate",
+                    "verified",
+                    "rejected",
+                    "needs_review"
+                  ]
+                },
+                "discovered_by": {
+                  "type": "string",
+                  "enum": [
+                    "transfermarkt_dataset",
+                    "wikidata",
+                    "wikipedia",
+                    "llm_research",
+                    "manual",
+                    "derived"
+                  ]
+                },
+                "verified_by_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "verifier_notes": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "player_id",
+                "fact_type",
+                "fact_text_en",
+                "fact_text_ka",
+                "source_name",
+                "source_url",
+                "evidence_quote",
+                "confidence",
+                "status",
+                "discovered_by",
+                "verified_by_model",
+                "verifier_notes",
+                "created_at",
+                "updated_at"
+              ]
+            }
+          },
+          "generation_run": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "job_name": {
+                "type": "string"
+              },
+              "model_name": {
+                "type": "string"
+              },
+              "model_role": {
+                "type": "string",
+                "enum": [
+                  "researcher",
+                  "generator",
+                  "verifier",
+                  "translator"
+                ]
+              },
+              "prompt_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failed",
+                  "invalid_json",
+                  "rejected"
+                ]
+              },
+              "error_message": {
+                "type": "string",
+                "nullable": true
+              },
+              "latency_ms": {
+                "type": "integer",
+                "nullable": true
+              },
+              "token_usage": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "cost_estimate": {
+                "type": "number",
+                "nullable": true
+              },
+              "editor_rating": {
+                "type": "integer",
+                "nullable": true
+              },
+              "editor_selected": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "job_name",
+              "model_name",
+              "model_role",
+              "prompt_version",
+              "status",
+              "error_message",
+              "latency_ms",
+              "token_usage",
+              "cost_estimate",
+              "editor_rating",
+              "editor_selected",
+              "created_at"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "player_id",
+          "position_group",
+          "true_value_eur",
+          "starting_price_eur",
+          "value_type",
+          "card_type",
+          "difficulty",
+          "status",
+          "generator_model",
+          "verifier_model",
+          "prompt_version",
+          "generation_run_id",
+          "verification_status",
+          "verification_notes",
+          "editor_notes",
+          "published_at",
+          "published_by",
+          "created_at",
+          "updated_at",
+          "player",
+          "clues",
+          "supported_facts",
+          "generation_run"
+        ]
+      },
+      "PaginatedAuctionCardsResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "player_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "position_group": {
+                  "type": "string",
+                  "enum": [
+                    "GK",
+                    "DEF",
+                    "MID",
+                    "FWD"
+                  ]
+                },
+                "true_value_eur": {
+                  "type": "number"
+                },
+                "starting_price_eur": {
+                  "type": "number"
+                },
+                "value_type": {
+                  "type": "string",
+                  "enum": [
+                    "current",
+                    "peak",
+                    "synthetic"
+                  ]
+                },
+                "card_type": {
+                  "type": "string",
+                  "enum": [
+                    "normal",
+                    "safe_star",
+                    "bargain",
+                    "trap",
+                    "obscure_gem",
+                    "lookalike_story",
+                    "legend"
+                  ]
+                },
+                "difficulty": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "medium",
+                    "hard",
+                    "expert"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "needs_review",
+                    "published",
+                    "archived",
+                    "rejected"
+                  ]
+                },
+                "generator_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "verifier_model": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "prompt_version": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "verification_status": {
+                  "type": "string",
+                  "enum": [
+                    "passed",
+                    "failed",
+                    "needs_review"
+                  ]
+                },
+                "published_at": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "date-time"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "player": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "display_name": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    },
+                    "nationality": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nationality_code": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "position_group": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "GK",
+                        "DEF",
+                        "MID",
+                        "FWD"
+                      ]
+                    },
+                    "current_club": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "active_status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "retired",
+                        "legend",
+                        "unknown"
+                      ]
+                    },
+                    "image_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "fame_score": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "fame_bucket": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "superstar",
+                        "known",
+                        "niche",
+                        "obscure",
+                        "legend"
+                      ]
+                    },
+                    "data_quality_status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "usable",
+                        "needs_review",
+                        "rejected"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "display_name",
+                    "nationality",
+                    "nationality_code",
+                    "position_group",
+                    "current_club",
+                    "active_status",
+                    "image_url",
+                    "fame_score",
+                    "fame_bucket",
+                    "data_quality_status"
+                  ]
+                },
+                "clue_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "player_id",
+                "position_group",
+                "true_value_eur",
+                "starting_price_eur",
+                "value_type",
+                "card_type",
+                "difficulty",
+                "status",
+                "generator_model",
+                "verifier_model",
+                "prompt_version",
+                "verification_status",
+                "published_at",
+                "created_at",
+                "updated_at",
+                "player",
+                "clue_count"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "data",
+          "page",
+          "limit",
+          "total",
+          "total_pages"
+        ]
       }
     },
     "parameters": {}
@@ -16132,6 +17104,532 @@
           },
           "502": {
             "description": "Email provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction/cards": {
+      "get": {
+        "summary": "List Auction cards for CMS review",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "needs_review",
+                "published",
+                "archived",
+                "rejected"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "GK",
+                "DEF",
+                "MID",
+                "FWD"
+              ]
+            },
+            "required": false,
+            "name": "position_group",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "safe_star",
+                "bargain",
+                "trap",
+                "obscure_gem",
+                "lookalike_story",
+                "legend"
+              ]
+            },
+            "required": false,
+            "name": "card_type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "easy",
+                "medium",
+                "hard",
+                "expert"
+              ]
+            },
+            "required": false,
+            "name": "difficulty",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "superstar",
+                "known",
+                "niche",
+                "obscure",
+                "legend"
+              ]
+            },
+            "required": false,
+            "name": "fame_bucket",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "passed",
+                "failed",
+                "needs_review"
+              ]
+            },
+            "required": false,
+            "name": "verification_status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated Auction card summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedAuctionCardsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction/cards/{id}": {
+      "get": {
+        "summary": "Get Auction card detail for CMS review",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Auction card detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionCardDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid card id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Auction card not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update editable Auction card fields and clues",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "true_value_eur": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "starting_price_eur": {
+                    "type": "integer",
+                    "minimum": 20000000
+                  },
+                  "value_type": {
+                    "type": "string",
+                    "enum": [
+                      "current",
+                      "peak",
+                      "synthetic"
+                    ]
+                  },
+                  "card_type": {
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "safe_star",
+                      "bargain",
+                      "trap",
+                      "obscure_gem",
+                      "lookalike_story",
+                      "legend"
+                    ]
+                  },
+                  "difficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard",
+                      "expert"
+                    ]
+                  },
+                  "verification_status": {
+                    "type": "string",
+                    "enum": [
+                      "passed",
+                      "failed",
+                      "needs_review"
+                    ]
+                  },
+                  "verification_notes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "editor_notes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "clues": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "clue_order": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 3
+                        },
+                        "clue_en": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clue_ka": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clue_kind": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "supported_fact_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "default": []
+                        }
+                      },
+                      "required": [
+                        "clue_order",
+                        "clue_en",
+                        "clue_ka",
+                        "clue_kind"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Auction card detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionCardDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid card content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Auction card not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction/cards/{id}/status": {
+      "patch": {
+        "summary": "Update Auction card status",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "needs_review",
+                      "published",
+                      "archived",
+                      "rejected"
+                    ]
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Auction card detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionCardDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Card is not publishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Auction card not found",
             "content": {
               "application/json": {
                 "schema": {

@@ -447,11 +447,12 @@ export const agentsRepo = {
     `;
   },
 
-  // spend today (sum of session costs since midnight UTC) for the budget widget
+  // spend today for the budget widget — "today" = the Tbilisi calendar day, the
+  // same boundary the agents' kill-switch uses (see quizball-agents budget.ts).
   async spentTodayCents(): Promise<number> {
     const [row] = await sql<{ cents: number }[]>`
       SELECT COALESCE(SUM(cost_cents),0)::int AS cents FROM agents.sessions
-      WHERE started_at >= date_trunc('day', now() at time zone 'utc')
+      WHERE started_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi')
     `;
     return row?.cents ?? 0;
   },

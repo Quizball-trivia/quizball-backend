@@ -818,12 +818,16 @@ export async function runDraftAutoBan(
     const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
     if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
       const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
-      const forceAtMs = options.forceAtMs ?? Date.now();
-      if (!uiReady && Date.now() < forceAtMs) {
-        await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
-        return;
-      }
       if (!uiReady) {
+        const forceAtMs = options.forceAtMs ?? null;
+        if (forceAtMs === null) {
+          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+          return;
+        }
+        if (Date.now() < forceAtMs) {
+          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
+          return;
+        }
         if (expectedActorIsRankedHuman) {
           await abortRankedDraftWithoutUiReady({
             io,

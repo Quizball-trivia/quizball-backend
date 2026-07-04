@@ -15,6 +15,7 @@ import type {
   ScheduleIdParam,
   UpdateScheduleBody,
   ReviewQuestionIdParam,
+  UpdateReviewQuestionBody,
 } from './agents.schemas.js';
 
 // Admin controller for the CMS Agents section. Thin HTTP ↔ service layer.
@@ -112,6 +113,13 @@ export const agentsController = {
     const { questionId } = req.validated.params as ReviewQuestionIdParam;
     const job = await agentsService.regenerateQuestion(questionId, req.user?.id ?? null);
     res.status(201).json(job);
+  },
+
+  async updateReviewQuestion(req: Request, res: Response): Promise<void> {
+    const { questionId } = req.validated.params as ReviewQuestionIdParam;
+    const body = req.validated.body as UpdateReviewQuestionBody;
+    await agentsService.updateReviewQuestion(questionId, body);
+    res.status(204).send();
   },
 
   async budget(_req: Request, res: Response): Promise<void> {

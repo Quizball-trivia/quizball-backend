@@ -406,6 +406,20 @@ export const agentsService = {
     if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
   },
 
+  // Editor fix-ups (wrong translation, typo, awkward phrasing) applied in place
+  // from the review queue — no reject/regenerate cycle needed.
+  async updateReviewQuestion(
+    questionId: string,
+    body: { prompt?: { en: string; ka: string }; payload?: Record<string, unknown> }
+  ): Promise<void> {
+    const ok = await agentsRepo.updateQuestionContent(
+      questionId,
+      body.prompt as Json | undefined,
+      body.payload as Json | undefined
+    );
+    if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+  },
+
   // Manual "Regenerate": archive this draft and spawn a fresh 1-question job of
   // the same type + category + topic. The new question flows through the pipeline
   // and lands back in the review queue.

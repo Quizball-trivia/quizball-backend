@@ -179,6 +179,17 @@ export type AgentSchedule = z.infer<typeof agentScheduleSchema>;
 export const reviewQuestionIdParamSchema = z.object({ questionId: z.string().uuid() });
 export type ReviewQuestionIdParam = z.infer<typeof reviewQuestionIdParamSchema>;
 
+// Editor fix-ups: replace the prompt and/or the type-specific payload. The
+// payload is validated loosely — its shape varies per question type and the
+// editor only changes text leaves.
+export const updateReviewQuestionBodySchema = z
+  .object({
+    prompt: z.object({ en: z.string(), ka: z.string() }).optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((b) => b.prompt !== undefined || b.payload !== undefined, { message: 'nothing to update' });
+export type UpdateReviewQuestionBody = z.infer<typeof updateReviewQuestionBodySchema>;
+
 export const agentReviewItemSchema = z.object({
   id: z.string(),
   type: z.string(),

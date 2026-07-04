@@ -376,6 +376,26 @@ export const agentsRepo = {
     return rows.length > 0;
   },
 
+  // Editor fix-ups from the review queue: update the question's prompt and/or
+  // its payload text. Scoped to DRAFT agent questions only (same guard as
+  // approve/reject) so unrelated live questions can't be touched.
+  async updateQuestionContent(questionId: string, prompt?: Json, payload?: Json): Promise<boolean> {
+    const guard = sql`
+      SELECT q.id FROM public.questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      WHERE q.id = ${questionId} AND q.status = 'draft'
+    `;
+    const [exists] = await guard;
+    if (!exists) return false;
+    if (prompt !== undefined) {
+      await sql`UPDATE public.questions SET prompt = ${sql.json(prompt)}, updated_at = now() WHERE id = ${questionId}`;
+    }
+    if (payload !== undefined) {
+      await sql`UPDATE public.question_payloads SET payload = ${sql.json(payload)} WHERE question_id = ${questionId}`;
+    }
+    return true;
+  },
+
   // The context needed to regenerate a draft question: its type + category +
   // the originating job's type/topic. Null if it's not an agent draft.
   async questionRegenContext(

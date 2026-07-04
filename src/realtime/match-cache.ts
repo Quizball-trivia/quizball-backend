@@ -527,10 +527,9 @@ export async function commitCachedRevealAck(
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return false;
   const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  let stored: boolean;
   try {
-    const stored = await redis.hSetNX(key, `r:${userId}`, String(Math.round(revealAtMs)));
-    await redis.expire(key, MATCH_CACHE_TTL_SEC);
-    return stored;
+    stored = await redis.hSetNX(key, `r:${userId}`, String(Math.round(revealAtMs)));
   } catch (error) {
     logger.error(
       { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId },
@@ -539,6 +538,18 @@ export async function commitCachedRevealAck(
     await setMatchCache(cache);
     return true;
   }
+  // TTL refresh failure must not flip a lost hSetNX race into a full cache
+  // write — that would stomp the winning ack (and concurrent overlay writes
+  // from the other replica).
+  try {
+    await redis.expire(key, MATCH_CACHE_TTL_SEC);
+  } catch (error) {
+    logger.warn(
+      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId },
+      'Failed to refresh reveal ack overlay TTL'
+    );
+  }
+  return stored;
 }
 
 export async function setMatchCache(cache: MatchCache): Promise<void> {

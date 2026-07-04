@@ -30,6 +30,7 @@ import {
   handleCountdownGuess,
   handleHalftimeBan,
   handlePutInOrderAnswer,
+  handleQuestionRevealed,
   handleReadyForNextQuestion,
 } from './match-question-dispatch.service.js';
 import {
@@ -69,4 +70,5 @@ export const matchRealtimeService = {
   handlePutInOrderAnswer,
   handleCluesAnswer,
   handleReadyForNextQuestion,
+  handleQuestionRevealed,
 };

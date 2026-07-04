@@ -657,6 +657,7 @@ export async function resolvePossessionRound(
     cache.currentQIndex = nextIndex;
     cache.currentQuestion = null;
     cache.answers = {};
+    cache.revealAcks = {};
     bumpStateVersion(state);
 
     await setMatchCache(cache);

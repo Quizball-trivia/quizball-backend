@@ -130,6 +130,7 @@ export {
 
 export { devSkipToPossessionPhase } from './possession-dev-skip.js';
 export { handlePossessionHalftimeBan } from './possession-halftime-ban.js';
+export { handlePossessionQuestionRevealed } from './possession-reveal-ack.js';
 export { resolvePossessionRound };
 
 export function cancelPossessionQuestionTimer(matchId: string, qIndex: number): void {

@@ -9,6 +9,7 @@ import type {
   MatchCluesAnswerPayload,
   MatchCountdownGuessPayload,
   MatchPutInOrderAnswerPayload,
+  MatchQuestionRevealedPayload,
   MatchReadyForNextQuestionPayload,
 } from '../schemas/match.schemas.js';
 import {
@@ -17,6 +18,7 @@ import {
   handlePossessionCountdownGuess,
   handlePossessionHalftimeBan,
   handlePossessionPutInOrderAnswer,
+  handlePossessionQuestionRevealed,
   handlePossessionReadyForNextQuestion,
 } from '../possession-match-flow.js';
 import {
@@ -232,4 +234,16 @@ export async function handleReadyForNextQuestion(
   }
 
   handlePossessionReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
+}
+
+export async function handleQuestionRevealed(
+  socket: QuizballSocket,
+  payload: MatchQuestionRevealedPayload
+): Promise<void> {
+  const cache = await getActiveMatchCache(socket, payload.matchId);
+  if (!cache) return;
+
+  if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') return;
+
+  await handlePossessionQuestionRevealed(socket, payload, cache);
 }

@@ -1009,7 +1009,7 @@ describe('dailyChallengesService', () => {
     });
   });
 
-  it('uses Georgia midnight as the daily completion boundary', async () => {
+  it('uses UTC midnight as the daily completion boundary', async () => {
     getConfigMock.mockResolvedValue({
       challenge_type: 'countdown',
       is_active: true,
@@ -1033,40 +1033,30 @@ describe('dailyChallengesService', () => {
 
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date('2026-06-08T19:59:00.000Z'));
-      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
-      expect(createCompletionMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          challengeDay: '2026-06-08',
-        })
-      );
-      expect(grantXpMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          sourceKey: 'countdown:2026-06-08',
-          metadata: expect.objectContaining({
-            challengeDay: '2026-06-08',
-          }),
-        })
-      );
+      for (const [instant, expectedDay] of [
+        ['2026-07-01T23:59:00.000Z', '2026-07-01'],
+        ['2026-07-02T00:00:00.000Z', '2026-07-02'],
+        ['2026-07-01T20:30:00.000Z', '2026-07-01'],
+      ] as const) {
+        vi.setSystemTime(new Date(instant));
+        await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
+        expect(createCompletionMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            challengeDay: expectedDay,
+          })
+        );
+        expect(grantXpMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            sourceKey: `countdown:${expectedDay}`,
+            metadata: expect.objectContaining({
+              challengeDay: expectedDay,
+            }),
+          })
+        );
 
-      createCompletionMock.mockClear();
-      grantXpMock.mockClear();
-
-      vi.setSystemTime(new Date('2026-06-08T20:00:00.000Z'));
-      await dailyChallengesService.completeChallenge('user-1', 'countdown', 1);
-      expect(createCompletionMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          challengeDay: '2026-06-09',
-        })
-      );
-      expect(grantXpMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          sourceKey: 'countdown:2026-06-09',
-          metadata: expect.objectContaining({
-            challengeDay: '2026-06-09',
-          }),
-        })
-      );
+        createCompletionMock.mockClear();
+        grantXpMock.mockClear();
+      }
     } finally {
       vi.useRealTimers();
     }

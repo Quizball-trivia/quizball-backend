@@ -526,6 +526,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
 
       cache.currentQuestion = null;
       cache.answers = {};
+      cache.revealAcks = {};
       await setMatchCache(cache);
       fireAndForget('setMatchStatePayload(finalizeHalftime)', async () => {
         await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);

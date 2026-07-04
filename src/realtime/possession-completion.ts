@@ -263,6 +263,7 @@ export async function completePossessionMatch(
       cache.statePayload = completionState;
       cache.currentQuestion = null;
       cache.answers = {};
+      cache.revealAcks = {};
       await setMatchCache(cache);
       await flushCacheToDB(cache);
     } else {

@@ -41,15 +41,46 @@ import {
   getQuestionDurationMs,
   TIMING_DISCREPANCY_WARN_MS,
 } from './possession-state.js';
-import { toAuthoritativeTimeMsFromCache } from './possession-timing.js';
+import {
+  resolveAnswerElapsedMs,
+  type ResolvedAnswerElapsed,
+} from './possession-timing.js';
 import { getCachedMultipleChoiceCorrectIndex } from './question-compat.js';
 import {
   calculateCluesScore,
   calculatePoints,
   calculatePutInOrderScore,
-  clamp,
 } from './scoring.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
+
+function resolveAnswerTimingFromCache(params: {
+  cache: MatchCache;
+  question: NonNullable<MatchCache['currentQuestion']>;
+  userId: string;
+  clientTimeMs: number;
+  questionTimeMs: number;
+}): ResolvedAnswerElapsed {
+  const revealAck = params.cache.revealAcks?.[params.userId];
+  return resolveAnswerElapsedMs({
+    revealAtMs: revealAck?.qIndex === params.question.qIndex ? revealAck.revealAtMs : null,
+    shownAt: params.question.shownAt,
+    deadlineAt: params.question.deadlineAt,
+    nowMs: Date.now(),
+    clientTimeMs: params.clientTimeMs,
+    questionTimeMs: params.questionTimeMs,
+  });
+}
+
+function answerTimingLogFields(timing: ResolvedAnswerElapsed): Record<string, number | string | null> {
+  return {
+    timingSource: timing.source,
+    predictedTimeMs: timing.predictedElapsedMs,
+    rawPredictedTimeMs: timing.rawPredictedElapsedMs,
+    clientTimeMs: timing.clientElapsedMs,
+    revealAtMs: timing.revealAtMs,
+    effectiveRevealAtMs: timing.effectiveRevealAtMs,
+  };
+}
 
 export async function handlePossessionAnswer(
   io: QuizballServer,
@@ -197,17 +228,16 @@ export async function handlePossessionAnswer(
       return null;
     }
 
-    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
-      {
-        shownAt: question.shownAt,
-        deadlineAt: question.deadlineAt,
-      },
-      Date.now(),
-      timeMs,
-      getQuestionDurationMs(question.kind)
-    );
-    const clientTimeMs = clamp(timeMs, 0, getQuestionDurationMs(question.kind));
-    const diffMs = Math.abs(authoritativeTimeMs - clientTimeMs);
+    const questionDurationMs = getQuestionDurationMs(question.kind);
+    const answerTiming = resolveAnswerTimingFromCache({
+      cache,
+      question,
+      userId,
+      clientTimeMs: timeMs,
+      questionTimeMs: questionDurationMs,
+    });
+    const authoritativeTimeMs = answerTiming.elapsedMs;
+    const diffMs = Math.abs(authoritativeTimeMs - answerTiming.clientElapsedMs);
     if (diffMs > TIMING_DISCREPANCY_WARN_MS) {
       logger.warn(
         {
@@ -215,14 +245,15 @@ export async function handlePossessionAnswer(
           qIndex,
           userId,
           serverTimeMs: authoritativeTimeMs,
-          clientTimeMs,
+          clientTimeMs: answerTiming.clientElapsedMs,
           diffMs,
+          ...answerTimingLogFields(answerTiming),
         },
         'Match answer timing discrepancy detected'
       );
     }
     const isCorrect = selectedIndex !== null && selectedIndex === question.evaluation.correctIndex;
-    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, getQuestionDurationMs(question.kind));
+    const pointsEarned = calculatePoints(isCorrect, authoritativeTimeMs, questionDurationMs);
 
     const answer: CachedAnswer = {
       userId,
@@ -258,6 +289,7 @@ export async function handlePossessionAnswer(
         isCorrect,
         pointsEarned,
         answerTimeMs: authoritativeTimeMs,
+        ...answerTimingLogFields(answerTiming),
         expectedCount,
         answerCount: currentAnswerCount,
         myTotalPoints: player.totalPoints,
@@ -631,15 +663,15 @@ export async function handlePossessionPutInOrderAnswer(
       correctOrderIds[index] === itemId ? count + 1 : count
     ), 0);
 
-    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
-      {
-        shownAt: question.shownAt,
-        deadlineAt: question.deadlineAt,
-      },
-      Date.now(),
-      timeMs,
-      getQuestionDurationMs(question.kind)
-    );
+    const questionDurationMs = getQuestionDurationMs(question.kind);
+    const answerTiming = resolveAnswerTimingFromCache({
+      cache,
+      question,
+      userId,
+      clientTimeMs: timeMs,
+      questionTimeMs: questionDurationMs,
+    });
+    const authoritativeTimeMs = answerTiming.elapsedMs;
     const pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
 
     const answer: CachedAnswer = {
@@ -670,6 +702,7 @@ export async function handlePossessionPutInOrderAnswer(
         isCorrect,
         pointsEarned,
         answerTimeMs: authoritativeTimeMs,
+        ...answerTimingLogFields(answerTiming),
         foundCount,
         expectedCount,
         answerCount: currentAnswerCount,
@@ -883,15 +916,14 @@ export async function handlePossessionCluesAnswer(
     }
 
     const questionDurationMs = getQuestionDurationMs(question.kind, question.evaluation.clues.length);
-    const authoritativeTimeMs = toAuthoritativeTimeMsFromCache(
-      {
-        shownAt: question.shownAt,
-        deadlineAt: question.deadlineAt,
-      },
-      Date.now(),
-      timeMs,
-      questionDurationMs
-    );
+    const answerTiming = resolveAnswerTimingFromCache({
+      cache,
+      question,
+      userId,
+      clientTimeMs: timeMs,
+      questionTimeMs: questionDurationMs,
+    });
+    const authoritativeTimeMs = answerTiming.elapsedMs;
     const timedClueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
     const clueIndex = timedClueIndex;
     const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
@@ -926,6 +958,7 @@ export async function handlePossessionCluesAnswer(
         isCorrect,
         pointsEarned,
         answerTimeMs: authoritativeTimeMs,
+        ...answerTimingLogFields(answerTiming),
         clueIndex,
         clueCount: question.evaluation.clues.length,
         expectedCount,

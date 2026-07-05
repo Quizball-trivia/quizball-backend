@@ -844,6 +844,7 @@ export async function sendPossessionMatchQuestion(
       reveal: payload.reveal,
     };
     cache.answers = {};
+    cache.revealAcks = {};
     bumpStateVersion(state);
 
     await setMatchCache(cache);

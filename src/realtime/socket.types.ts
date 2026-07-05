@@ -1099,6 +1099,7 @@ export interface ClientToServerEvents {
   'match:play_again': (data: MatchPlayAgainPayload) => void;
   'match:final_results_ack': (data: { matchId: string; resultVersion: number }) => void;
   'match:ready_for_next_question': (data: { matchId: string; qIndex: number }) => void;
+  'match:question_revealed': (data: { matchId: string; qIndex: number }) => void;
   'connection:ping': (
     data: { sentAt: number },
     ack?: (result: { sentAt: number; serverNow: string }) => void

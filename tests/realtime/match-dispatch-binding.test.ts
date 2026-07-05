@@ -25,6 +25,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', () => ({
   handlePossessionCountdownGuess: vi.fn(),
   handlePossessionHalftimeBan: vi.fn(),
   handlePossessionPutInOrderAnswer: vi.fn(),
+  handlePossessionQuestionRevealed: vi.fn(),
   handlePossessionReadyForNextQuestion: vi.fn(),
 }));
 

@@ -111,6 +111,7 @@ export async function devSkipToPossessionPhase(
     cache.currentQIndex = nextQIndex;
     cache.currentQuestion = null;
     cache.answers = {};
+    cache.revealAcks = {};
     bumpStateVersion(state);
     await setMatchCache(cache);
     fireAndForget('setMatchStatePayload(devSkip)', async () => {

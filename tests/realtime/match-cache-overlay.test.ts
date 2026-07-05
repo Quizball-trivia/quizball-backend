@@ -32,6 +32,16 @@ vi.mock('../../src/realtime/redis.js', () => ({
       store.hashes.set(key, hash);
       return Object.keys(fields).length;
     },
+    async hSetNX(key: string, field: string, value: string): Promise<boolean> {
+      const hash = store.hashes.get(key) ?? new Map<string, string>();
+      if (hash.has(field)) {
+        store.hashes.set(key, hash);
+        return false;
+      }
+      hash.set(field, value);
+      store.hashes.set(key, hash);
+      return true;
+    },
     async hGetAll(key: string): Promise<Record<string, string>> {
       return Object.fromEntries(store.hashes.get(key) ?? new Map());
     },
@@ -44,6 +54,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
 import {
   buildInitialCache,
   commitCachedAnswer,
+  commitCachedRevealAck,
   getMatchCache,
   matchAnswersOverlayKey,
   matchCacheKey,
@@ -155,5 +166,23 @@ describe('match cache answer overlay (db-optimize #7)', () => {
     const merged = await getMatchCache(MATCH_ID);
     expect(merged?.currentQIndex).toBe(4);
     expect(merged?.answers).toEqual({});
+  });
+
+  it('commitCachedRevealAck writes a first-wins per-question overlay field', async () => {
+    const cache = createCache();
+    await setMatchCache(cache);
+    const blobBefore = store.values.get(matchCacheKey(MATCH_ID));
+
+    cache.revealAcks = { u1: { qIndex: 3, revealAtMs: 1234 } };
+    await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe(true);
+    cache.revealAcks.u1 = { qIndex: 3, revealAtMs: 5678 };
+    await expect(commitCachedRevealAck(cache, 'u1', 5678)).resolves.toBe(false);
+
+    expect(store.values.get(matchCacheKey(MATCH_ID))).toBe(blobBefore);
+    const overlay = store.hashes.get(matchAnswersOverlayKey(MATCH_ID, 3));
+    expect(overlay?.get('r:u1')).toBe('1234');
+
+    const merged = await getMatchCache(MATCH_ID);
+    expect(merged?.revealAcks?.u1).toEqual({ qIndex: 3, revealAtMs: 1234 });
   });
 });

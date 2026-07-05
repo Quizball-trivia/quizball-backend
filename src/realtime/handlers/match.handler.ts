@@ -11,6 +11,7 @@ import {
   matchLeaveSchema,
   matchPutInOrderAnswerSchema,
   matchPlayAgainSchema,
+  matchQuestionRevealedSchema,
   matchReadyForNextQuestionSchema,
   matchResumeUiReadySchema,
   matchRejoinSchema,
@@ -379,6 +380,28 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
           qIndex: parsed.data.qIndex,
         },
         'Error handling match:ready_for_next_question'
+      );
+    }
+  });
+
+  socket.on('match:question_revealed', async (payload) => {
+    const parsed = matchQuestionRevealedSchema.safeParse(payload);
+    if (!parsed.success) {
+      logger.warn({ errors: parsed.error.flatten() }, 'Invalid match:question_revealed payload');
+      return;
+    }
+
+    try {
+      await matchRealtimeService.handleQuestionRevealed(socket, parsed.data);
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          userId: socket.data.user?.id,
+          matchId: parsed.data.matchId,
+          qIndex: parsed.data.qIndex,
+        },
+        'Error handling match:question_revealed'
       );
     }
   });

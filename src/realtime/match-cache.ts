@@ -144,6 +144,11 @@ export interface CachedQuestion {
   reveal: MatchRoundReveal;
 }
 
+export interface CachedRevealAck {
+  qIndex: number;
+  revealAtMs: number;
+}
+
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -157,6 +162,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
+  revealAcks?: Record<string, CachedRevealAck>;
   clueReveals?: Record<string, CachedClueReveal>;
 }
 
@@ -385,6 +391,7 @@ export function buildInitialCache(params: {
     statePayload,
     currentQuestion: null,
     answers: {},
+    revealAcks: {},
     clueReveals: {},
   };
 }
@@ -428,6 +435,7 @@ export async function getMatchCache(matchId: string): Promise<MatchCache | null>
         }
       }
       cached.clueReveals ??= {};
+      cached.revealAcks ??= {};
       await mergeAnswerOverlay(redis, cached);
       span.setAttribute('quizball.cache_hit', true);
       return cached;
@@ -456,11 +464,18 @@ async function mergeAnswerOverlay(
   cached: MatchCache
 ): Promise<void> {
   try {
+    const revealAcks = cached.revealAcks ??= {};
     const overlay = await redis.hGetAll(matchAnswersOverlayKey(cached.matchId, cached.currentQIndex));
     for (const [field, value] of Object.entries(overlay)) {
       if (field.startsWith('a:')) {
         const userId = field.slice(2);
         cached.answers[userId] = JSON.parse(value) as CachedAnswer;
+      } else if (field.startsWith('r:')) {
+        const userId = field.slice(2);
+        const revealAtMs = Number(value);
+        if (Number.isFinite(revealAtMs)) {
+          revealAcks[userId] = { qIndex: cached.currentQIndex, revealAtMs: Math.round(revealAtMs) };
+        }
       } else if (field.startsWith('t:')) {
         const userId = field.slice(2);
         const totals = JSON.parse(value) as OverlayPlayerTotals;
@@ -509,6 +524,39 @@ export async function commitCachedAnswer(cache: MatchCache, answer: CachedAnswer
     );
     await setMatchCache(cache);
   }
+}
+
+export async function commitCachedRevealAck(
+  cache: MatchCache,
+  userId: string,
+  revealAtMs: number
+): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return false;
+  const key = matchAnswersOverlayKey(cache.matchId, cache.currentQIndex);
+  let stored: boolean;
+  try {
+    stored = await redis.hSetNX(key, `r:${userId}`, String(Math.round(revealAtMs)));
+  } catch (error) {
+    logger.error(
+      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId },
+      'Failed to write reveal ack overlay; falling back to full cache write'
+    );
+    await setMatchCache(cache);
+    return true;
+  }
+  // TTL refresh failure must not flip a lost hSetNX race into a full cache
+  // write — that would stomp the winning ack (and concurrent overlay writes
+  // from the other replica).
+  try {
+    await redis.expire(key, MATCH_CACHE_TTL_SEC);
+  } catch (error) {
+    logger.warn(
+      { error, matchId: cache.matchId, qIndex: cache.currentQIndex, userId },
+      'Failed to refresh reveal ack overlay TTL'
+    );
+  }
+  return stored;
 }
 
 export async function setMatchCache(cache: MatchCache): Promise<void> {
@@ -603,9 +651,11 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       };
       const answers = await matchAnswersRepo.listAnswersForQuestion(matchId, currentQuestionIndex);
       cache.answers = toCachedAnswer(answers);
+      cache.revealAcks = {};
     } else {
       cache.currentQuestion = null;
       cache.answers = {};
+      cache.revealAcks = {};
     }
 
     appMetrics.cacheRebuilds.add(1, { match_mode: match.mode });

@@ -15,7 +15,7 @@ const RECORDED_EVENTS = [
   'match:start', 'match:countdown', 'match:question', 'match:round_result',
   'match:final_results', 'match:state', 'match:party_state', 'match:resume',
   'match:rejoin_available', 'match:opponent_disconnected', 'match:halftime_ban',
-  'match:answer_ack', 'match:opponent_answered', 'match:question_revealed',
+  'match:answer_ack', 'match:opponent_answered',
   'draft:start', 'draft:banned', 'ranked:search_started', 'ranked:match_found',
   'lobby:state', 'error',
 ] as const;

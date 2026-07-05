@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const spawnJobBodySchema = z.object({
   type: z.enum(['mcq_generate', 'daily_challenge']).default('mcq_generate'),
   questionType: z
-    .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path'])
+    .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path', 'imposter_multi_select', 'high_low', 'image_mcq'])
     .default('mcq_single'),
   categoryId: z.string().uuid(),
   topic: z.string().min(3).max(500),

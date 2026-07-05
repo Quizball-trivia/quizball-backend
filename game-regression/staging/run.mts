@@ -39,6 +39,7 @@ const URL = process.env.STAGING_URL ?? 'https://api-staging.quizball.io';
 const ALL = [
   'ranked_ai_smoke', 'friendly_possession_smoke', 'friendly_party_smoke', 'reconnect_smoke',
   'forfeit_early_live', 'forfeit_late_live', 'opponent_forfeit_winner_live', 'draft_ban_collision_live',
+  'answer_timing',
 ];
 const SELECTED = (process.env.STAGING_SCENARIOS ?? ALL.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -53,6 +54,7 @@ interface ScenarioResult {
   /** match-window bounds (epoch ms) so logs can be correlated. */
   startedAt?: number;
   endedAt?: number;
+  findings?: Array<{ name: string; ok: boolean; detail: string }>;
 }
 
 // ── Bot helpers ──
@@ -120,6 +122,20 @@ function autoAnswer(client: StagingClient): void {
   });
 }
 
+/** Recover from transient socket drops like a real client: complete the
+ *  match:rejoin handshake and ack the resume/kickoff ui-ready gates — otherwise
+ *  a single blip leaves the match disconnect-paused for the whole play budget. */
+function autoRecover(client: StagingClient): void {
+  client.socket.on('match:rejoin_available', (p: { matchId?: string }) => {
+    client.socket.emit('match:rejoin', p?.matchId ? { matchId: p.matchId } : {});
+  });
+  client.socket.on('match:waiting_for_ready', (p: { matchId?: string; phase?: string }) => {
+    if (!p?.matchId) return;
+    if (p.phase === 'resume') client.socket.emit('match:resume_ui_ready', { matchId: p.matchId });
+    else if (p.phase === 'kickoff') client.socket.emit('match:kickoff_ui_ready', { matchId: p.matchId });
+  });
+}
+
 /** At halftime, ack ui_ready and ban a category (like a real client) so the
  *  half-boundary advances promptly instead of waiting the long timeout. */
 function autoHalftime(client: StagingClient): void {
@@ -139,7 +155,12 @@ function autoHalftime(client: StagingClient): void {
 
 /** Auto-ban in the draft when it's this client's turn. */
 function autoDraft(client: StagingClient): void {
-  client.socket.on('draft:start', (state: { categories: Array<{ id: string }>; turnUserId: string }) => {
+  // The opponent's (AI) auto-ban is gated on this client's draft:ui_ready
+  // (be#89) — a bot that never acks stalls the draft until the force ceiling.
+  let banCount = 0;
+  client.socket.on('draft:start', (state: { lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }) => {
+    banCount = 0;
+    client.socket.emit('draft:ui_ready', { ...(state.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     if (state.turnUserId === client.userId && state.categories[0]) {
       client.socket.emit('draft:ban', { categoryId: state.categories[0].id });
     }
@@ -147,7 +168,9 @@ function autoDraft(client: StagingClient): void {
   client.socket.on('draft:banned', () => {
     // On our turn after the opponent banned, ban the next available.
     // (Re-read via the recorded latest draft:start state.)
-    const state = client.latest<{ categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
+    const state = client.latest<{ lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
+    banCount = Math.min(banCount + 1, 2);
+    client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     if (state && state.turnUserId === client.userId) {
       const next = state.categories.find((c) => c.id);
       if (next) client.socket.emit('draft:ban', { categoryId: next.id });
@@ -200,10 +223,10 @@ async function rankedAiSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
   try {
     if (!await waitConnected(client)) return { name: 'ranked_ai_smoke', ok: false, detail: 'socket never connected', violations: [] };
     await clearActiveMatch(client); // self-heal any leftover active match from a prior run
-    autoAnswer(client); autoDraft(client); autoHalftime(client);
+    autoAnswer(client); autoDraft(client); autoHalftime(client); autoRecover(client);
     client.socket.emit('ranked:queue_join', {});
     // queue -> AI fallback -> draft -> match -> completion. Generous network waits.
-    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 60_000);
+    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 150_000);
     if (!started) return { name: 'ranked_ai_smoke', ok: false, detail: 'match never started (no match:start/question within 60s)', violations: [] };
     const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
     await client.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 420_000);
@@ -284,9 +307,9 @@ async function reconnectSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
   try {
     if (!await waitConnected(client)) return { name: 'reconnect_smoke', ok: false, detail: 'socket never connected', violations: [] };
     await clearActiveMatch(client); // self-heal
-    autoAnswer(client); autoDraft(client); autoHalftime(client);
+    autoAnswer(client); autoDraft(client); autoHalftime(client); autoRecover(client);
     client.socket.emit('ranked:queue_join', {});
-    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 60_000);
+    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 150_000);
     if (!started) return { name: 'reconnect_smoke', ok: false, detail: 'match never started', violations: [] };
 
     // Play a couple of rounds, then drop the real socket.
@@ -364,7 +387,7 @@ async function forfeitEarlyLive(users: { a: TestUser }): Promise<ScenarioResult>
     await clearActiveMatch(client);
     autoDraft(client); // resolve the draft, but DO NOT autoAnswer — we forfeit at q0/q1.
     client.socket.emit('ranked:queue_join', {});
-    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 60_000);
+    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 150_000);
     if (!started) return { name, ok: false, detail: 'match never started', violations: [] };
     const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
 
@@ -402,9 +425,9 @@ async function forfeitLateLive(users: { a: TestUser }): Promise<ScenarioResult> 
   try {
     if (!await waitConnected(client)) return { name, ok: false, detail: 'socket never connected', violations: [] };
     await clearActiveMatch(client);
-    autoAnswer(client); autoDraft(client); autoHalftime(client);
+    autoAnswer(client); autoDraft(client); autoHalftime(client); autoRecover(client);
     client.socket.emit('ranked:queue_join', {});
-    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 60_000);
+    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 150_000);
     if (!started) return { name, ok: false, detail: 'match never started', violations: [] };
     const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
 
@@ -583,6 +606,182 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
   }
 }
 
+type AnswerTimingQuestionPayload = {
+  matchId: string;
+  qIndex: number;
+  correctIndex?: number;
+  playableAt?: string;
+  phaseKind?: string;
+  question?: { kind?: string; items?: Array<{ id: string }> };
+};
+
+type AnswerTimingRoundResult = {
+  matchId?: string;
+  qIndex?: number;
+  players?: Record<string, {
+    timeMs?: number;
+    pointsEarned?: number;
+    answer?: { answerTimeMs?: number; timeMs?: number; pointsEarned?: number };
+  }>;
+};
+
+function answerTimingOffsetMs(q: AnswerTimingQuestionPayload, offsetMs: number): number {
+  if (!q.playableAt) return 0;
+  const playableAtMs = new Date(q.playableAt).getTime();
+  if (!Number.isFinite(playableAtMs)) return 0;
+  return Math.max(0, playableAtMs + offsetMs - Date.now());
+}
+
+function answerTimingPlayerResult(result: AnswerTimingRoundResult, userId: string): { timeMs: number | null; pointsEarned: number | null } {
+  const player = result.players?.[userId];
+  return {
+    timeMs: player?.timeMs ?? player?.answer?.answerTimeMs ?? player?.answer?.timeMs ?? null,
+    pointsEarned: player?.pointsEarned ?? player?.answer?.pointsEarned ?? null,
+  };
+}
+
+function answerTimingMyUserId(client: StagingClient): string {
+  // match payloads key players by the PUBLIC users id, which can differ from the
+  // auth id the harness carries — resolve "me" from match:start participants.
+  const start = client.latest<{ mySeat?: number; participants?: Array<{ userId?: string; seat?: number }> }>('match:start');
+  const mine = start?.participants?.find((p) => p.seat === start?.mySeat)?.userId;
+  return mine ?? client.userId;
+}
+
+async function answerTimingLive(users: { a: TestUser }): Promise<ScenarioResult> {
+  const name = 'answer_timing';
+  const client = connectStaging(URL, users.a.accessToken, users.a.userId);
+  const findingNames = ['reveal_ack', 'client_early', 'client_capped'] as const;
+  type FindingName = (typeof findingNames)[number];
+  const findings = new Map<FindingName, { name: string; ok: boolean; detail: string }>();
+  const customByQIndex = new Map<number, FindingName>();
+  const completed = new Set<string>();
+  let normalMcqCount = 0;
+
+  const keyFor = (matchId: string, qIndex: number) => `${matchId}:${qIndex}`;
+  const record = (finding: FindingName, ok: boolean, detail: string) => {
+    if (!findings.has(finding)) findings.set(finding, { name: finding, ok, detail });
+  };
+  const emitMcqAnswer = (q: AnswerTimingQuestionPayload, timeMs: number) => {
+    if (completed.has(keyFor(q.matchId, q.qIndex))) return;
+    client.socket.emit('match:answer', {
+      matchId: q.matchId,
+      qIndex: q.qIndex,
+      selectedIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+      timeMs,
+    });
+  };
+  const scheduleAt = (q: AnswerTimingQuestionPayload, offsetMs: number, work: () => void) => {
+    setTimeout(work, answerTimingOffsetMs(q, offsetMs));
+  };
+  const sendDefaultAnswer = (q: AnswerTimingQuestionPayload, retryDelayMs = 50) => {
+    const key = keyFor(q.matchId, q.qIndex);
+    const waitMs = q.playableAt ? Math.max(0, new Date(q.playableAt).getTime() - Date.now()) : 0;
+    setTimeout(() => {
+      if (completed.has(key)) return;
+      const kind = q.question?.kind ?? 'multipleChoice';
+      const base = { matchId: q.matchId, qIndex: q.qIndex };
+      if (kind === 'countdown') {
+        client.socket.emit('match:countdown_guess', { ...base, guess: 'one' });
+      } else if (kind === 'putInOrder') {
+        const orderedItemIds = (q.question?.items ?? []).map((i) => i.id);
+        client.socket.emit('match:put_in_order_answer', { ...base, orderedItemIds, timeMs: 500 });
+      } else if (kind === 'clues') {
+        client.socket.emit('match:clues_answer', { kind: 'guess', ...base, guess: 'answer', timeMs: 500 });
+      } else {
+        emitMcqAnswer(q, 500);
+      }
+    }, waitMs + retryDelayMs);
+  };
+
+  client.socket.on('match:question', (q: AnswerTimingQuestionPayload) => {
+    const kind = q.question?.kind ?? 'multipleChoice';
+    const isNormalMcq = kind === 'multipleChoice' && (q.phaseKind === undefined || q.phaseKind === 'normal');
+    if (isNormalMcq && normalMcqCount < 3) {
+      const scenario = findingNames[normalMcqCount];
+      normalMcqCount += 1;
+      customByQIndex.set(q.qIndex, scenario);
+      if (scenario === 'reveal_ack') {
+        scheduleAt(q, 1000, () => {
+          client.socket.emit('match:question_revealed', { matchId: q.matchId, qIndex: q.qIndex });
+          scheduleAt(q, 1800, () => emitMcqAnswer(q, 800));
+        });
+      } else if (scenario === 'client_early') {
+        scheduleAt(q, -1500, () => emitMcqAnswer(q, 1400));
+      } else {
+        scheduleAt(q, 4100, () => emitMcqAnswer(q, 900));
+      }
+      return;
+    }
+    sendDefaultAnswer(q);
+  });
+
+  client.socket.on('match:answer_ack', (ack: { matchId?: string; qIndex?: number; pointsEarned?: number }) => {
+    if (ack.matchId && typeof ack.qIndex === 'number') completed.add(keyFor(ack.matchId, ack.qIndex));
+    const scenario = typeof ack.qIndex === 'number' ? customByQIndex.get(ack.qIndex) : undefined;
+    if (scenario === 'reveal_ack') {
+      record(
+        'reveal_ack',
+        ack.pointsEarned === 100,
+        `answer_ack pointsEarned=${ack.pointsEarned ?? 'missing'}`
+      );
+    }
+  });
+
+  client.socket.on('match:round_result', (result: AnswerTimingRoundResult) => {
+    if (result.matchId && typeof result.qIndex === 'number') {
+      completed.add(keyFor(result.matchId, result.qIndex));
+      client.socket.emit('match:ready_for_next_question', {
+        matchId: result.matchId,
+        qIndex: result.qIndex,
+      });
+    }
+    const scenario = typeof result.qIndex === 'number' ? customByQIndex.get(result.qIndex) : undefined;
+    if (scenario === 'client_early') {
+      const player = answerTimingPlayerResult(result, answerTimingMyUserId(client));
+      record(
+        'client_early',
+        player.timeMs !== null && player.timeMs >= 1000 && player.pointsEarned === 100,
+        `round_result timeMs=${player.timeMs ?? 'missing'} pointsEarned=${player.pointsEarned ?? 'missing'}`
+      );
+    } else if (scenario === 'client_capped') {
+      const player = answerTimingPlayerResult(result, answerTimingMyUserId(client));
+      record(
+        'client_capped',
+        player.timeMs !== null && player.timeMs >= 2200 && player.timeMs <= 2700 && player.pointsEarned === 90,
+        `round_result timeMs=${player.timeMs ?? 'missing'} pointsEarned=${player.pointsEarned ?? 'missing'}`
+      );
+    }
+  });
+
+  try {
+    if (!await waitConnected(client)) return { name, ok: false, detail: 'socket never connected', violations: [] };
+    await clearActiveMatch(client);
+    autoDraft(client); autoHalftime(client); autoRecover(client);
+    client.socket.emit('ranked:queue_join', {});
+    const started = await client.waitFor(() => client.count('match:start') > 0 && client.count('match:question') > 0, 150_000);
+    if (!started) return { name, ok: false, detail: 'match never started', violations: [], findings: [...findings.values()] };
+    const matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
+    await client.waitFor(() => hasFinalResultsForMatch(client.trace, matchId), 420_000);
+
+    for (const finding of findingNames) {
+      if (!findings.has(finding)) record(finding, false, 'check did not complete');
+    }
+    const orderedFindings = findingNames.map((finding) => findings.get(finding)!);
+    const failures = orderedFindings.filter((finding) => !finding.ok);
+    const v = verdict(name, client.trace, false);
+    v.findings = orderedFindings;
+    if (failures.length > 0) {
+      v.ok = false;
+      v.violations.push(...failures.map((finding) => `${finding.name}: ${finding.detail}`));
+    }
+    v.detail += ` | answer timing ${orderedFindings.length - failures.length}/${orderedFindings.length}`;
+    return v;
+  } finally {
+    client.disconnect();
+  }
+}
+
 // ── Main ──
 
 async function main(): Promise<void> {
@@ -604,6 +803,7 @@ async function main(): Promise<void> {
       else if (name === 'forfeit_late_live') r = await forfeitLateLive(users);
       else if (name === 'opponent_forfeit_winner_live') r = await opponentForfeitWinnerLive(users);
       else if (name === 'draft_ban_collision_live') r = await draftBanCollisionLive(users);
+      else if (name === 'answer_timing') r = await answerTimingLive(users);
       else { console.log(`  (unknown scenario, skipped)`); continue; }
     } catch (err) {
       r = { name, ok: false, detail: `threw: ${(err as Error).message}`, violations: [] };

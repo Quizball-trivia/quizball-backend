@@ -37,6 +37,7 @@ export default defineConfig({
       'tests/regression/halftime-uiready-withheld.test.ts',
       'tests/regression/draft-uiready-withheld.test.ts',
       'tests/regression/question-timeout.test.ts',
+      'tests/regression/answer-timing-scenarios.test.ts',
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
       'tests/regression/user-recent-categories.test.ts',

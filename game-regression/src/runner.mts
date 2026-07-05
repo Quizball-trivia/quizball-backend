@@ -17,6 +17,7 @@ import { getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
 import { rankedMatchmakingService } from '../../src/realtime/services/ranked-matchmaking.service.js';
 import { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } from '../../src/realtime/realtime-timer-scheduler.js';
 import { buildRealtimeTimerHandlers } from '../../src/realtime/socket-server.js';
+import { draftRealtimeService } from '../../src/realtime/services/draft-realtime.service.js';
 import {
   handlePossessionAnswer,
   handlePossessionCountdownGuess,
@@ -26,14 +27,16 @@ import {
 import {
   handleMatchDisconnect,
   handleMatchRejoin,
-  handleResumeUiReady,
   resolveExpiredGraceWindow,
 } from '../../src/realtime/services/match-disconnect.service.js';
 import { handleMatchForfeit, finalizeMatchAsForfeit } from '../../src/realtime/services/match-forfeit.service.js';
 import { matchPlayersRepo } from '../../src/modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../src/modules/matches/matches.repo.js';
 import { matchRealtimeService } from '../../src/realtime/services/match-realtime.service.js';
-import { devSkipToPossessionPhase } from '../../src/realtime/possession-match-flow.js';
+import {
+  devSkipToPossessionPhase,
+  handlePossessionReadyForNextQuestion,
+} from '../../src/realtime/possession-match-flow.js';
 import {
   createLobby,
   joinByCode,
@@ -54,6 +57,7 @@ export interface RunMatchResult {
   matchId: string | null;
   io: FakeIo;
   botSocket: FakeSocket;
+  autoClientReadyAcks: boolean;
 }
 
 export interface RunMatchOptions {
@@ -62,6 +66,8 @@ export interface RunMatchOptions {
   /** Max real-ms to wait for the match to start. With REGRESSION_FAST_TIMERS the
    *  whole boot is a few hundred ms, so a couple of seconds is ample. */
   startTimeoutMs?: number;
+  /** Opt out only for withheld-ack regression scenarios. */
+  autoClientReadyAcks?: boolean;
 }
 
 const BOT_USER_ID = '00000000-0000-0000-0000-0000000000b0';
@@ -86,13 +92,143 @@ export interface RunLobbyResult {
   seats: Array<{ userId: string; socket: FakeSocket }>;
 }
 
+interface BotClientAckState {
+  draftUiReady: Set<string>;
+  kickoffUiReady: Set<string>;
+  resumeUiReady: Set<string>;
+  readyForNextQuestion: Set<string>;
+}
+
+function createBotClientAckState(): BotClientAckState {
+  return {
+    draftUiReady: new Set(),
+    kickoffUiReady: new Set(),
+    resumeUiReady: new Set(),
+    readyForNextQuestion: new Set(),
+  };
+}
+
+function matchIdFromPayload(payload: unknown): string | null {
+  const matchId = (payload as { matchId?: unknown } | undefined)?.matchId;
+  return typeof matchId === 'string' ? matchId : null;
+}
+
+function qIndexFromPayload(payload: unknown): number | null {
+  const qIndex = (payload as { qIndex?: unknown } | undefined)?.qIndex;
+  return typeof qIndex === 'number' ? qIndex : null;
+}
+
+function latestDraftStart(trace: EventTrace) {
+  const starts = trace.byEvent('draft:start');
+  return starts[starts.length - 1];
+}
+
+async function ackBotDraftUiReady(
+  io: FakeIo,
+  botSocket: FakeSocket,
+  trace: EventTrace,
+  acks: BotClientAckState,
+): Promise<void> {
+  const start = latestDraftStart(trace);
+  if (!start) return;
+  const lobbyId = (start.payload as { lobbyId?: unknown } | undefined)?.lobbyId;
+  if (typeof lobbyId !== 'string') return;
+
+  const banCount = trace.events.filter((event) =>
+    event.seq > start.seq
+    && event.event === 'draft:banned'
+    && event.target === `lobby:${lobbyId}`
+  ).length;
+  const key = `${botSocket.data.user.id}:${lobbyId}:${banCount}`;
+  if (acks.draftUiReady.has(key)) return;
+
+  await draftRealtimeService.handleUiReady(io as never, botSocket as never, { lobbyId, banCount });
+  acks.draftUiReady.add(key);
+}
+
+function collectKickoffMatchIds(trace: EventTrace): string[] {
+  const matchIds = new Set<string>();
+  for (const event of trace.byEvent('match:start')) {
+    const matchId = matchIdFromPayload(event.payload);
+    if (matchId) matchIds.add(matchId);
+  }
+  for (const event of trace.byEvent('match:waiting_for_ready')) {
+    const payload = event.payload as { phase?: unknown } | undefined;
+    if (payload?.phase !== 'kickoff') continue;
+    const matchId = matchIdFromPayload(event.payload);
+    if (matchId) matchIds.add(matchId);
+  }
+  return [...matchIds];
+}
+
+async function ackKickoffUiReadyFromTrace(
+  io: FakeIo,
+  trace: EventTrace,
+  sockets: FakeSocket[],
+  acks: BotClientAckState,
+): Promise<void> {
+  for (const matchId of collectKickoffMatchIds(trace)) {
+    for (const socket of sockets) {
+      const key = `${socket.data.user.id}:${matchId}`;
+      if (acks.kickoffUiReady.has(key)) continue;
+      await matchRealtimeService.handleKickoffUiReady(io as never, socket as never, { matchId });
+      acks.kickoffUiReady.add(key);
+    }
+  }
+}
+
+async function ackResumeUiReadyFromTrace(
+  io: FakeIo,
+  trace: EventTrace,
+  sockets: FakeSocket[],
+  acks: BotClientAckState,
+): Promise<void> {
+  for (const event of trace.byEvent('match:waiting_for_ready')) {
+    const payload = event.payload as { phase?: unknown } | undefined;
+    if (payload?.phase !== 'resume') continue;
+    const matchId = matchIdFromPayload(event.payload);
+    if (!matchId) continue;
+    for (const socket of sockets) {
+      const key = `${socket.data.user.id}:${matchId}`;
+      if (acks.resumeUiReady.has(key)) continue;
+      await matchRealtimeService.handleResumeUiReady(io as never, socket as never, { matchId });
+      acks.resumeUiReady.add(key);
+    }
+  }
+}
+
+function ackPossessionReadyForNextQuestionFromTrace(
+  trace: EventTrace,
+  seats: Array<{ userId: string }>,
+  acks: BotClientAckState,
+): void {
+  for (const event of trace.byEvent('match:round_result')) {
+    const matchId = matchIdFromPayload(event.payload);
+    const qIndex = qIndexFromPayload(event.payload);
+    if (!matchId || qIndex === null) continue;
+    for (const seat of seats) {
+      const key = `${seat.userId}:${matchId}:${qIndex}`;
+      if (acks.readyForNextQuestion.has(key)) continue;
+      handlePossessionReadyForNextQuestion(seat.userId, matchId, qIndex);
+      acks.readyForNextQuestion.add(key);
+    }
+  }
+}
+
 /** Real-time poll until `predicate` is true or `maxMs` elapses. */
-async function waitUntil(predicate: () => boolean, maxMs: number, stepMs = 25): Promise<boolean> {
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  maxMs: number,
+  stepMs = 25,
+  onPoll?: () => void | Promise<void>,
+): Promise<boolean> {
   const deadline = Date.now() + maxMs;
-  if (predicate()) return true;
+  await onPoll?.();
+  if (await predicate()) return true;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, stepMs));
-    if (predicate()) return true;
+    await onPoll?.();
+    if (await predicate()) return true;
   }
   return false;
 }
@@ -100,6 +236,7 @@ async function waitUntil(predicate: () => boolean, maxMs: number, stepMs = 25): 
 /** Boot a ranked-AI match and return the trace once a match:start is observed. */
 export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatchResult> {
   const botUserId = options.botUserId ?? BOT_USER_ID;
+  const autoClientReadyAcks = options.autoClientReadyAcks ?? true;
 
   const now = () => Date.now();
   const trace = createTrace(now);
@@ -132,9 +269,17 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
   // 5. Wait (real, fast time) for queue -> AI fallback -> draft -> match:start ->
   //    first question. With REGRESSION_FAST_TIMERS the delays are ~5ms each.
   const startTimeout = options.startTimeoutMs ?? 10_000;
+  const bootAcks = createBotClientAckState();
   const started = await waitUntil(
     () => trace.byEvent('match:start').length > 0 && trace.byEvent('match:question').length > 0,
     startTimeout,
+    25,
+    autoClientReadyAcks
+      ? async () => {
+          await ackBotDraftUiReady(io, botSocket, trace, bootAcks);
+          await ackKickoffUiReadyFromTrace(io, trace, [botSocket], bootAcks);
+        }
+      : undefined,
   );
 
   let matchId: string | null = null;
@@ -145,7 +290,7 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
     if (matchId) botSocket.data.matchId = matchId;
   }
 
-  return { trace, fixtures, botUserId, matchId, io, botSocket };
+  return { trace, fixtures, botUserId, matchId, io, botSocket, autoClientReadyAcks };
 }
 
 interface QuestionEventPayload {
@@ -173,6 +318,25 @@ function msUntilPlayable(q: QuestionEventPayload): number {
  *  the match toward a low-scoring draw → PENALTY_SHOOTOUT. */
 export type AnswerMode = 'correct' | 'wrong';
 
+export interface BotAnswerPlan {
+  mode?: AnswerMode;
+  timeMs?: number;
+  emitRevealAckAtMs?: number;
+  answerAtMs?: number;
+}
+
+function msUntilQuestionOffset(q: QuestionEventPayload, offsetMs: number): number {
+  if (!q.playableAt) return 0;
+  const at = new Date(q.playableAt).getTime();
+  if (!Number.isFinite(at)) return 0;
+  return Math.max(0, at + offsetMs - Date.now());
+}
+
+async function waitMs(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((r) => setTimeout(r, ms));
+}
+
 /** Submit a bot answer for whatever question kind was dispatched, so the round
  *  resolves on both-answered instead of waiting for the timeout. */
 async function answerQuestion(
@@ -180,8 +344,9 @@ async function answerQuestion(
   botSocket: FakeSocket,
   q: QuestionEventPayload,
   mode: AnswerMode = 'correct',
+  timeMs = 300,
 ): Promise<void> {
-  const base = { matchId: q.matchId, qIndex: q.qIndex, timeMs: 300 };
+  const base = { matchId: q.matchId, qIndex: q.qIndex, timeMs };
   const kind = q.question?.kind;
   if (kind === 'multipleChoice') {
     // 'wrong' picks any index != correctIndex (engine validates → 0 points).
@@ -206,7 +371,7 @@ async function answerQuestion(
   } else if (kind === 'clues') {
     await handlePossessionCluesAnswer(io as never, botSocket as never, {
       kind: 'guess', matchId: q.matchId, qIndex: q.qIndex,
-      guess: mode === 'wrong' ? 'zzzznotananswer' : 'answer', timeMs: 300,
+      guess: mode === 'wrong' ? 'zzzznotananswer' : 'answer', timeMs,
     });
   }
 }
@@ -227,6 +392,7 @@ export async function playMatch(
     /** qIndexes the bot deliberately does NOT answer, forcing the engine's
      *  question-timeout to resolve those rounds (the timeout-expire scenario). */
     skipQIndices?: Iterable<number>;
+    answerPlan?: Record<number, BotAnswerPlan>;
   } = {},
 ): Promise<void> {
   const { trace, io, botSocket } = run;
@@ -234,23 +400,38 @@ export async function playMatch(
   const answerMode = opts.answerMode ?? 'correct';
   const skip = new Set<number>(opts.skipQIndices ?? []);
   const answered = new Set<number>();
+  const playAcks = createBotClientAckState();
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
     if (trace.byEvent('match:final_results').length > 0) return;
+    if (run.autoClientReadyAcks !== false) {
+      ackPossessionReadyForNextQuestionFromTrace(trace, [{ userId: run.botUserId }], playAcks);
+      await ackResumeUiReadyFromTrace(io, trace, [botSocket], playAcks);
+    }
 
     // Answer the latest unanswered question (any kind) so the round resolves.
     const questions = trace.byEvent('match:question');
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
     if (latest && !answered.has(latest.qIndex) && !skip.has(latest.qIndex)) {
       answered.add(latest.qIndex);
-      // Respect the reveal window: don't answer before playableAt (a real client
-      // can't). Matters on RESUME, where the question's playableAt is pushed into
-      // the future by the reveal-remaining offset.
-      const wait = msUntilPlayable(latest);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait + 5));
+      const plan = opts.answerPlan?.[latest.qIndex];
+      if (typeof plan?.emitRevealAckAtMs === 'number') {
+        await waitMs(msUntilQuestionOffset(latest, plan.emitRevealAckAtMs));
+        await matchRealtimeService.handleQuestionRevealed(botSocket as never, {
+          matchId: latest.matchId,
+          qIndex: latest.qIndex,
+        });
+      }
+      const wait = typeof plan?.answerAtMs === 'number'
+        ? msUntilQuestionOffset(latest, plan.answerAtMs)
+        : (() => {
+            const untilPlayable = msUntilPlayable(latest);
+            return untilPlayable > 0 ? untilPlayable + 5 : 0;
+          })();
+      await waitMs(wait);
       try {
-        await answerQuestion(io, botSocket, latest, answerMode);
+        await answerQuestion(io, botSocket, latest, plan?.mode ?? answerMode, plan?.timeMs);
       } catch {
         // A late/duplicate/invalid answer can throw; ignore — the engine guards
         // it and the round still resolves on timeout if needed.
@@ -285,6 +466,7 @@ export async function playLobbyMatch(
   // Party quiz advances via a ready-ack gate per resolved round; track which
   // qIndexes each seat has acked so the bot "taps next" like a real client.
   const ackedBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
+  const playAcks = createBotClientAckState();
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
@@ -316,9 +498,13 @@ export async function playLobbyMatch(
       }
     }
 
-    // Party quiz: after a round resolves, every seat acks "ready for next" so the
-    // post-round gate advances immediately instead of waiting the ~8s ceiling.
-    if (run.variant === 'friendly_party_quiz' && run.matchId) {
+    if (run.variant === 'friendly_possession') {
+      ackPossessionReadyForNextQuestionFromTrace(
+        trace,
+        seats.map((seat) => ({ userId: seat.userId })),
+        playAcks,
+      );
+    } else if (run.matchId) {
       for (const evt of trace.byEvent('match:round_result')) {
         const qIndex = (evt.payload as { qIndex?: number }).qIndex;
         if (typeof qIndex !== 'number') continue;
@@ -371,13 +557,23 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
   if (run.matchId) {
     await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
-    await handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
+    if (run.autoClientReadyAcks !== false) {
+      await matchRealtimeService.handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
+    }
     // Rejoin schedules a resume countdown (collapsed under fast-timers) that emits
     // match:resume + re-dispatches the question. Wait for it so play can continue.
     // THROW if it never fires — "resume never happened" was a real bug, so this
     // helper must fail loudly rather than silently continue on a stuck match.
     const before = run.trace.byEvent('match:resume').length;
-    const resumed = await waitUntil(() => run.trace.byEvent('match:resume').length > before, 8_000);
+    const resumeAcks = createBotClientAckState();
+    const resumed = await waitUntil(
+      () => run.trace.byEvent('match:resume').length > before,
+      8_000,
+      25,
+      run.autoClientReadyAcks !== false
+        ? () => ackResumeUiReadyFromTrace(run.io, run.trace, [fresh], resumeAcks)
+        : undefined,
+    );
     if (!resumed) {
       throw new Error('botReconnect: match:resume never fired after rejoin (resume stuck).');
     }
@@ -503,9 +699,12 @@ export async function bootFriendlyLobbyMatch(opts: FriendlyLobbyOptions = {}): P
   await startFriendlyMatch(io as never, hostSocket as never);
 
   const startTimeout = opts.startTimeoutMs ?? 25_000;
+  const bootAcks = createBotClientAckState();
   const started = await waitUntil(
     () => trace.byEvent('match:start').length > 0 && trace.byEvent('match:question').length > 0,
     startTimeout,
+    25,
+    () => ackKickoffUiReadyFromTrace(io, trace, sockets, bootAcks),
   );
   let matchId: string | null = null;
   if (started) {

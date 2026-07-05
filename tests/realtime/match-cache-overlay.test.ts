@@ -173,9 +173,9 @@ describe('match cache answer overlay (db-optimize #7)', () => {
     await setMatchCache(cache);
     const blobBefore = store.values.get(matchCacheKey(MATCH_ID));
 
-    cache.revealAcks = { u1: 1234 };
+    cache.revealAcks = { u1: { qIndex: 3, revealAtMs: 1234 } };
     await expect(commitCachedRevealAck(cache, 'u1', 1234)).resolves.toBe(true);
-    cache.revealAcks.u1 = 5678;
+    cache.revealAcks.u1 = { qIndex: 3, revealAtMs: 5678 };
     await expect(commitCachedRevealAck(cache, 'u1', 5678)).resolves.toBe(false);
 
     expect(store.values.get(matchCacheKey(MATCH_ID))).toBe(blobBefore);
@@ -183,6 +183,6 @@ describe('match cache answer overlay (db-optimize #7)', () => {
     expect(overlay?.get('r:u1')).toBe('1234');
 
     const merged = await getMatchCache(MATCH_ID);
-    expect(merged?.revealAcks?.u1).toBe(1234);
+    expect(merged?.revealAcks?.u1).toEqual({ qIndex: 3, revealAtMs: 1234 });
   });
 });

@@ -60,8 +60,9 @@ function resolveAnswerTimingFromCache(params: {
   clientTimeMs: number;
   questionTimeMs: number;
 }): ResolvedAnswerElapsed {
+  const revealAck = params.cache.revealAcks?.[params.userId];
   return resolveAnswerElapsedMs({
-    revealAtMs: params.cache.revealAcks?.[params.userId],
+    revealAtMs: revealAck?.qIndex === params.question.qIndex ? revealAck.revealAtMs : null,
     shownAt: params.question.shownAt,
     deadlineAt: params.question.deadlineAt,
     nowMs: Date.now(),

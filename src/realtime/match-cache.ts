@@ -144,6 +144,11 @@ export interface CachedQuestion {
   reveal: MatchRoundReveal;
 }
 
+export interface CachedRevealAck {
+  qIndex: number;
+  revealAtMs: number;
+}
+
 export interface MatchCache {
   matchId: string;
   status: 'active' | 'completed' | 'abandoned';
@@ -157,7 +162,7 @@ export interface MatchCache {
   statePayload: PossessionStatePayload;
   currentQuestion: CachedQuestion | null;
   answers: Record<string, CachedAnswer>;
-  revealAcks?: Record<string, number>;
+  revealAcks?: Record<string, CachedRevealAck>;
   clueReveals?: Record<string, CachedClueReveal>;
 }
 
@@ -468,7 +473,9 @@ async function mergeAnswerOverlay(
       } else if (field.startsWith('r:')) {
         const userId = field.slice(2);
         const revealAtMs = Number(value);
-        if (Number.isFinite(revealAtMs)) revealAcks[userId] = Math.round(revealAtMs);
+        if (Number.isFinite(revealAtMs)) {
+          revealAcks[userId] = { qIndex: cached.currentQIndex, revealAtMs: Math.round(revealAtMs) };
+        }
       } else if (field.startsWith('t:')) {
         const userId = field.slice(2);
         const totals = JSON.parse(value) as OverlayPlayerTotals;

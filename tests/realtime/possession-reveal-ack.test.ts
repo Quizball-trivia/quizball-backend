@@ -111,7 +111,7 @@ describe('handlePossessionQuestionRevealed', () => {
 
     await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
 
-    expect(cache.revealAcks?.u1).toBe(SHOWN_AT_MS + 500);
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
     expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 500);
   });
 
@@ -123,7 +123,17 @@ describe('handlePossessionQuestionRevealed', () => {
     vi.setSystemTime(new Date(SHOWN_AT_MS + 900));
     await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
 
-    expect(cache.revealAcks?.u1).toBe(SHOWN_AT_MS + 500);
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
+    expect(commitCachedRevealAckMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces a stale ack from a previous question', async () => {
+    const cache = makeCache({ revealAcks: { u1: { qIndex: 1, revealAtMs: SHOWN_AT_MS - 9_000 } } });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 500 });
     expect(commitCachedRevealAckMock).toHaveBeenCalledTimes(1);
   });
 
@@ -145,5 +155,37 @@ describe('handlePossessionQuestionRevealed', () => {
 
     expect(getMatchCacheOrRebuildMock).not.toHaveBeenCalled();
     expect(commitCachedRevealAckMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores users who are not match players', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+
+    await handlePossessionQuestionRevealed(createSocket('u3'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u3).toBeUndefined();
+    expect(commitCachedRevealAckMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores acks when the cache is missing or inactive', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(null);
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+    expect(commitCachedRevealAckMock).not.toHaveBeenCalled();
+
+    const inactive = makeCache({ status: 'completed' });
+    getMatchCacheOrRebuildMock.mockResolvedValue(inactive);
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+    expect(inactive.revealAcks?.u1).toBeUndefined();
+    expect(commitCachedRevealAckMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the in-memory ack when the overlay write loses the race', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    commitCachedRevealAckMock.mockResolvedValue(false);
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toBeUndefined();
   });
 });

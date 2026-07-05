@@ -65,9 +65,9 @@ export async function handlePossessionQuestionRevealed(
   }
 
   cache.revealAcks ??= {};
-  if (cache.revealAcks[userId] !== undefined) {
+  if (cache.revealAcks[userId]?.qIndex === qIndex) {
     logger.debug(
-      { eventName: 'match:question_revealed', matchId, qIndex, userId, revealAtMs: cache.revealAcks[userId] },
+      { eventName: 'match:question_revealed', matchId, qIndex, userId, revealAtMs: cache.revealAcks[userId]?.revealAtMs },
       'Possession question reveal ack ignored: already recorded'
     );
     return;
@@ -75,7 +75,7 @@ export async function handlePossessionQuestionRevealed(
 
   const receivedAtMs = Date.now();
   const revealAtMs = clampRevealAckMs(receivedAtMs, cache.currentQuestion.shownAt);
-  cache.revealAcks[userId] = revealAtMs;
+  cache.revealAcks[userId] = { qIndex, revealAtMs };
 
   const stored = await commitCachedRevealAck(cache, userId, revealAtMs);
   if (!stored) {

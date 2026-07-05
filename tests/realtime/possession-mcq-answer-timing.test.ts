@@ -81,6 +81,7 @@ const T = new Date('2026-07-04T12:00:00.000Z').getTime();
 function makeCache(params: {
   shownAtMs: number;
   revealAtMs?: number;
+  revealAckQIndex?: number;
 }): MatchCache {
   const state = createInitialPossessionState('friendly_possession');
   state.currentQuestion = {
@@ -138,7 +139,9 @@ function makeCache(params: {
       },
     },
     answers: {},
-    revealAcks: params.revealAtMs === undefined ? {} : { u1: params.revealAtMs },
+    revealAcks: params.revealAtMs === undefined
+      ? {}
+      : { u1: { qIndex: params.revealAckQIndex ?? 3, revealAtMs: params.revealAtMs } },
     clueReveals: {},
   };
 }
@@ -217,6 +220,26 @@ describe('handlePossessionAnswer timing regression coverage', () => {
       pointsEarned: 100,
       myTotalPoints: 100,
     });
+  });
+
+  it('ignores a stale reveal ack from a previous question', async () => {
+    const cache = makeCache({ shownAtMs: T, revealAtMs: T - 15_000, revealAckQIndex: 2 });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    vi.setSystemTime(new Date(T + 2400));
+    const { socket, emitted } = createSocketMock('u1');
+
+    await handlePossessionAnswer(createIoMock(), socket, {
+      matchId: MATCH_ID,
+      qIndex: 3,
+      selectedIndex: 1,
+      timeMs: 2400,
+    });
+
+    expect(cache.answers.u1).toMatchObject({
+      timeMs: 2400,
+      pointsEarned: 90,
+    });
+    expect(answerAck(emitted).pointsEarned).toBe(90);
   });
 
   it('uses client time for legacy clients when predicted elapsed is negative', async () => {

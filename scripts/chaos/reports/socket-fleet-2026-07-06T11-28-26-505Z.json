@@ -1,0 +1,92 @@
+{
+  "startedAt": "2026-07-06T11:28:26.505Z",
+  "endedAt": "2026-07-06T11:36:34.954Z",
+  "elapsedSec": 488.449,
+  "clients": 3,
+  "flapRate": 1,
+  "rampSec": 10,
+  "matchesStarted": 3,
+  "matchesCompleted": 0,
+  "forfeits": 0,
+  "abandons": 3,
+  "wrongfulForfeits": 0,
+  "flapsPerformed": 2,
+  "disconnectCountInflation": 0,
+  "latenciesMs": {
+    "queueJoinToMatchStart": [
+      51594,
+      54999,
+      53383
+    ],
+    "answerToAck": [
+      207,
+      263,
+      186,
+      202,
+      205,
+      217,
+      332,
+      341,
+      328,
+      1313,
+      862,
+      185,
+      502,
+      216
+    ],
+    "roundResultToNextQuestion": [
+      1130,
+      2106,
+      2107,
+      1294,
+      1069,
+      1345,
+      1345,
+      10282,
+      1400,
+      10533,
+      10532,
+      1550,
+      1549,
+      1568,
+      1572,
+      5619,
+      1662,
+      1337,
+      1100,
+      10336
+    ]
+  },
+  "percentiles": {
+    "queueJoinToMatchStart": {
+      "count": 3,
+      "p50": 53383,
+      "p95": 54999,
+      "p99": 54999,
+      "max": 54999
+    },
+    "answerToAck": {
+      "count": 14,
+      "p50": 263,
+      "p95": 1313,
+      "p99": 1313,
+      "max": 1313
+    },
+    "roundResultToNextQuestion": {
+      "count": 20,
+      "p50": 1568,
+      "p95": 10533,
+      "p99": 10533,
+      "max": 10533
+    }
+  },
+  "socketErrors": {
+    "server:NOT_IN_LOBBY": 6,
+    "server:MATCH_BUSY": 5,
+    "server:MATCH_NOT_ACTIVE": 4
+  },
+  "disconnectReasons": {
+    "io client disconnect": 8,
+    "ping timeout": 1
+  }
+}

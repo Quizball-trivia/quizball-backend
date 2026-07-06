@@ -12,6 +12,7 @@
  *   - duplicate round resolution           -> oneRoundResultPerQIndex
  */
 import type { EventTrace, TraceEvent } from './adapter.mjs';
+import type { ChaosPlan } from './chaos.mjs';
 
 export interface Violation {
   invariant: string;
@@ -26,6 +27,13 @@ export interface InvariantResult {
 }
 
 type Invariant = (trace: EventTrace) => Violation[];
+
+export interface LifecycleInvariantContext {
+  matchId: string;
+  botUserId: string;
+  chaosPlan?: ChaosPlan | null;
+  runChaosLifecycleInvariants?: boolean;
+}
 
 function seatByUserId(trace: EventTrace): Map<string, 1 | 2> {
   const seats = new Map<string, 1 | 2>();
@@ -165,7 +173,7 @@ const legalPhaseOrder: Invariant = (trace) => {
       const phase = (evt.payload as { phase?: string }).phase;
       if (!phase) continue;
       if (prev && prev !== phase) {
-        const allowed = ALLOWED_NEXT[prev] ?? [];
+        const allowed: string[] = ALLOWED_NEXT[prev] ?? [];
         if (!allowed.includes(phase)) {
           out.push({
             invariant: 'legalPhaseOrder',
@@ -361,6 +369,265 @@ const winnerMatchesResults: Invariant = (trace) => {
   return out;
 };
 
+interface MatchLifecycleDbMatch {
+  id: string;
+  mode: string;
+  winner_user_id: string | null;
+  state_payload: unknown;
+}
+
+interface MatchLifecycleDbFacts {
+  match: MatchLifecycleDbMatch | null;
+  players: Array<{ user_id: string; is_ai: boolean | null }>;
+  answers: Array<{ q_index: number; user_id: string; time_ms: number; phase_kind: string | null }>;
+}
+
+function payloadRecord(event: TraceEvent): Record<string, unknown> {
+  return event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload as Record<string, unknown>
+    : {};
+}
+
+function payloadUserId(event: TraceEvent): string | null {
+  const userId = payloadRecord(event).userId;
+  return typeof userId === 'string' ? userId : null;
+}
+
+function payloadQIndex(event: TraceEvent): number | null {
+  const qIndex = payloadRecord(event).qIndex;
+  return typeof qIndex === 'number' ? qIndex : null;
+}
+
+function winnerDecisionMethodFromFacts(facts: MatchLifecycleDbFacts, trace: EventTrace): string | null {
+  const state = facts.match?.state_payload;
+  if (state && typeof state === 'object' && !Array.isArray(state)) {
+    const method = (state as { winnerDecisionMethod?: unknown }).winnerDecisionMethod;
+    if (typeof method === 'string') return method;
+  }
+  const final = trace.byEvent('match:final_results')[0]?.payload;
+  if (final && typeof final === 'object' && !Array.isArray(final)) {
+    const method = (final as { winnerDecisionMethod?: unknown }).winnerDecisionMethod;
+    if (typeof method === 'string') return method;
+  }
+  return null;
+}
+
+function lastDisconnectSeqForUser(trace: EventTrace, userId: string): number | null {
+  let seq: number | null = null;
+  for (const event of trace.events) {
+    if (payloadUserId(event) !== userId) continue;
+    if (
+      event.event === 'match:disconnect' ||
+      event.event === 'match:leave' ||
+      event.event === 'match:stale_disconnect'
+    ) {
+      seq = event.seq;
+    }
+  }
+  return seq;
+}
+
+function presentEvidenceAfterLastDisconnect(trace: EventTrace, userId: string): TraceEvent | null {
+  const lastDisconnectSeq = lastDisconnectSeqForUser(trace, userId);
+  if (lastDisconnectSeq === null) return null;
+  const userPresenceEvents = new Set([
+    'match:rejoin',
+    'match:resume_ui_ready',
+    'match:presence_heartbeat',
+    'match:question_revealed',
+    'match:answer',
+    'match:stale_disconnect',
+  ]);
+  for (const event of trace.events) {
+    if (event.seq < lastDisconnectSeq) continue;
+    if (userPresenceEvents.has(event.event) && payloadUserId(event) === userId) return event;
+    if (event.event === 'match:resume' && event.seq > lastDisconnectSeq) return event;
+  }
+  return null;
+}
+
+async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFacts> {
+  const { sql } = await import('../../src/db/index.js');
+  const [match] = await sql<MatchLifecycleDbMatch[]>
+    `SELECT id, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
+  const players = await sql<Array<{ user_id: string; is_ai: boolean | null }>>`
+    SELECT mp.user_id, u.is_ai
+    FROM match_players mp
+    LEFT JOIN users u ON u.id = mp.user_id
+    WHERE mp.match_id = ${matchId}
+  `;
+  const answers = await sql<MatchLifecycleDbFacts['answers']>`
+    SELECT q_index, user_id, time_ms, phase_kind
+    FROM match_answers
+    WHERE match_id = ${matchId}
+  `;
+  return { match: match ?? null, players, answers };
+}
+
+async function readReconnectCount(matchId: string, userId: string): Promise<number> {
+  const [{ getRedisClient }, { matchReconnectCountKey }] = await Promise.all([
+    import('../../src/realtime/redis.js'),
+    import('../../src/realtime/match-keys.js'),
+  ]);
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return 0;
+  const raw = await redis.get(matchReconnectCountKey(matchId, userId));
+  const parsed = Number(raw ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function realDisconnectEpisodesForChaosPlan(plan: ChaosPlan | null | undefined): number {
+  let count = 0;
+  for (const action of plan?.actions ?? []) {
+    if (action.kind === 'flap') {
+      count += Math.max(1, Math.floor(Number(action.params?.n ?? 1) || 1));
+    } else if (
+      action.kind === 'multiTab' ||
+      action.kind === 'quitRejoin' ||
+      action.kind === 'zombieReconnect' ||
+      action.kind === 'expireGraceAfterDisconnect'
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function presentPlayerNeverForfeited(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  const method = winnerDecisionMethodFromFacts(facts, trace);
+  const winnerId = facts.match?.winner_user_id ?? null;
+  if (method !== 'forfeit' || !winnerId || winnerId === context.botUserId) return [];
+  const evidence = presentEvidenceAfterLastDisconnect(trace, context.botUserId);
+  if (!evidence) return [];
+  return [{
+    invariant: 'presentPlayerNeverForfeited',
+    message: 'Bot was forfeited after trace evidence showed it was present in the match.',
+    seq: evidence.seq,
+    detail: {
+      matchId: context.matchId,
+      botUserId: context.botUserId,
+      winnerId,
+      winnerDecisionMethod: method,
+      evidenceEvent: evidence.event,
+      evidenceSeq: evidence.seq,
+      lastDisconnectSeq: lastDisconnectSeqForUser(trace, context.botUserId),
+    },
+  }];
+}
+
+async function disconnectCountBounded(
+  _trace: EventTrace,
+  context: LifecycleInvariantContext,
+): Promise<Violation[]> {
+  const actual = await readReconnectCount(context.matchId, context.botUserId);
+  const expectedMax = realDisconnectEpisodesForChaosPlan(context.chaosPlan);
+  if (actual <= expectedMax) return [];
+  return [{
+    invariant: 'disconnectCountBounded',
+    message: `Reconnect count ${actual} exceeded ${expectedMax} real disconnect episode(s) from the chaos plan.`,
+    detail: {
+      matchId: context.matchId,
+      botUserId: context.botUserId,
+      reconnectCount: actual,
+      realDisconnectEpisodes: expectedMax,
+      chaosPlan: context.chaosPlan ?? null,
+    },
+  }];
+}
+
+async function noForfeitWinToAiOverLeadingPresentHuman(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  const method = winnerDecisionMethodFromFacts(facts, trace);
+  const winnerId = facts.match?.winner_user_id ?? null;
+  if (method !== 'forfeit' || !winnerId || winnerId === context.botUserId) return [];
+  const winner = facts.players.find((player) => player.user_id === winnerId);
+  if (winner?.is_ai !== true) return [];
+  const evidence = presentEvidenceAfterLastDisconnect(trace, context.botUserId);
+  if (!evidence) return [];
+  return [{
+    invariant: 'noForfeitWinToAiOverLeadingPresentHuman',
+    message: 'AI was awarded a forfeit win while the human bot had present-match trace evidence after disconnect.',
+    seq: evidence.seq,
+    detail: {
+      matchId: context.matchId,
+      botUserId: context.botUserId,
+      winnerId,
+      evidenceEvent: evidence.event,
+      evidenceSeq: evidence.seq,
+    },
+  }];
+}
+
+function storedAnswerTimingSane(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Violation[] {
+  const out: Violation[] = [];
+  const chaosQIndices = new Set((context.chaosPlan?.actions ?? [])
+    .filter((action) => action.kind !== 'withholdReadyAcks')
+    .map((action) => action.atQIndex));
+  const answersByQIndex = new Map<number, { time_ms: number; phase_kind: string | null }>();
+  for (const row of facts.answers) {
+    if (row.user_id !== context.botUserId) continue;
+    answersByQIndex.set(row.q_index, { time_ms: row.time_ms, phase_kind: row.phase_kind });
+  }
+
+  for (const answerEvent of trace.events) {
+    if (answerEvent.event !== 'match:answer' || payloadUserId(answerEvent) !== context.botUserId) continue;
+    if (payloadRecord(answerEvent).questionKind !== 'multipleChoice') continue;
+    const qIndex = payloadQIndex(answerEvent);
+    if (qIndex === null || chaosQIndices.has(qIndex)) continue;
+    const row = answersByQIndex.get(qIndex);
+    if (!row || (row.phase_kind !== null && row.phase_kind !== 'normal')) continue;
+    const revealAck = [...trace.events].reverse().find((event) =>
+      event.seq < answerEvent.seq &&
+      event.event === 'match:question_revealed' &&
+      payloadUserId(event) === context.botUserId &&
+      payloadQIndex(event) === qIndex
+    );
+    if (!revealAck) continue;
+    const expected = answerEvent.t - revealAck.t;
+    const diff = Math.abs(row.time_ms - expected);
+    if (row.time_ms === 0 && expected > 1500) {
+      out.push({
+        invariant: 'storedAnswerTimingSane',
+        message: `qIndex ${qIndex}: persisted time_ms=0 but answer arrived ${expected}ms after reveal ack.`,
+        seq: answerEvent.seq,
+        detail: {
+          matchId: context.matchId,
+          qIndex,
+          storedTimeMs: row.time_ms,
+          answerMinusRevealAckMs: expected,
+          revealAckSeq: revealAck.seq,
+        },
+      });
+    } else if (diff > 1500) {
+      out.push({
+        invariant: 'storedAnswerTimingSane',
+        message: `qIndex ${qIndex}: persisted time_ms ${row.time_ms} diverged from answer-reveal delta ${expected}ms.`,
+        seq: answerEvent.seq,
+        detail: {
+          matchId: context.matchId,
+          qIndex,
+          storedTimeMs: row.time_ms,
+          answerMinusRevealAckMs: expected,
+          diffMs: diff,
+          revealAckSeq: revealAck.seq,
+        },
+      });
+    }
+  }
+  return out;
+}
+
 export const ALL_INVARIANTS: Array<{ name: string; check: Invariant }> = [
   { name: 'terminalStateReached', check: terminalStateReached },
   { name: 'scoreMatchesBars', check: scoreMatchesBars },
@@ -376,6 +643,26 @@ export const ALL_INVARIANTS: Array<{ name: string; check: Invariant }> = [
 export function checkInvariants(trace: EventTrace): InvariantResult {
   const violations: Violation[] = [];
   for (const { check } of ALL_INVARIANTS) violations.push(...check(trace));
+  return { ok: violations.length === 0, violations };
+}
+
+export async function checkLifecycleInvariants(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+): Promise<InvariantResult> {
+  const facts = await loadLifecycleDbFacts(context.matchId);
+  const violations: Violation[] = [
+    ...storedAnswerTimingSane(trace, context, facts),
+  ];
+  const runChaosChecks =
+    context.runChaosLifecycleInvariants ?? Boolean(context.chaosPlan && context.chaosPlan.actions.length > 0);
+  if (runChaosChecks) {
+    violations.push(
+      ...await presentPlayerNeverForfeited(trace, context, facts),
+      ...await disconnectCountBounded(trace, context),
+      ...await noForfeitWinToAiOverLeadingPresentHuman(trace, context, facts),
+    );
+  }
   return { ok: violations.length === 0, violations };
 }
 

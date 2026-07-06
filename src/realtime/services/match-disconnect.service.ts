@@ -1462,7 +1462,7 @@ export async function pauseMatchForDisconnectedPlayer(
   await scheduleRealtimeTimer(
     'match_disconnect_forfeit',
     matchId,
-    new Date(Date.now() + MATCH_DISCONNECT_GRACE_MS),
+    new Date(Date.now() + harnessDelayMs(MATCH_DISCONNECT_GRACE_MS)),
     { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId }
   );
 
@@ -1586,10 +1586,11 @@ export async function resolveExpiredGraceWindow(
         const reconnectPending = await findReconnectPendingUsers(io, matchId, markedDisconnected);
         if (reconnectPending.size > 0) {
           await redis.set(matchGraceExtendedKey(matchId), '1', { EX: GRACE_EXTENDED_TTL_SEC });
+          const reconnectPendingGraceMs = harnessDelayMs(MATCH_RECONNECT_PENDING_GRACE_MS);
           await scheduleRealtimeTimer(
             'match_disconnect_forfeit',
             matchId,
-            new Date(Date.now() + MATCH_RECONNECT_PENDING_GRACE_MS),
+            new Date(Date.now() + reconnectPendingGraceMs),
             { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: [...reconnectPending][0]! }
           );
           for (const userId of reconnectPending) {
@@ -1597,13 +1598,13 @@ export async function resolveExpiredGraceWindow(
               io,
               activeMatch,
               userId,
-              MATCH_RECONNECT_PENDING_GRACE_MS,
+              reconnectPendingGraceMs,
               toRemainingReconnects(await getDisconnectCount(matchId, userId))
             );
           }
           deferredForReconnect = true;
           logger.info(
-            { matchId, reconnectPendingUserIds: [...reconnectPending], windowMs: MATCH_RECONNECT_PENDING_GRACE_MS },
+            { matchId, reconnectPendingUserIds: [...reconnectPending], windowMs: reconnectPendingGraceMs },
             'Grace expiry deferred: player(s) reconnected within grace, awaiting rejoin handshake'
           );
         }

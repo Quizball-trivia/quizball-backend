@@ -35,6 +35,10 @@ export interface PostMatchResult {
   };
 }
 
+export interface PostMatchOptions {
+  allowAbandoned?: boolean;
+}
+
 interface MatchRow { status: string; mode: string; winner_user_id: string | null; }
 interface PlayerRow { user_id: string; is_ai: boolean; total_points: number | null; correct_answers: number | null; }
 interface RpRow { user_id: string; old_rp: number; delta_rp: number; new_rp: number; result: string; }
@@ -44,7 +48,10 @@ interface ProfileRow { user_id: string; rp: number; }
  * Check the persisted post-match state for `matchId`. `expectRanked` controls the
  * ranked-only assertions (RP changes + profile move); pass the match's mode.
  */
-export async function checkPostMatchState(matchId: string): Promise<PostMatchResult> {
+export async function checkPostMatchState(
+  matchId: string,
+  options: PostMatchOptions = {},
+): Promise<PostMatchResult> {
   const v: PostMatchViolation[] = [];
 
   const [match] = await sql<MatchRow[]>`
@@ -69,12 +76,18 @@ export async function checkPostMatchState(matchId: string): Promise<PostMatchRes
     return { ok: false, violations: v, facts };
   }
 
-  // 1. Match completed with a coherent winner (winner is a participant, or null for draw).
-  if (match.status !== 'completed') {
-    v.push({ check: 'matchCompleted', message: `Match status is "${match.status}", expected "completed".`, detail: { status: match.status } });
+  const acceptedTerminalStatus = match.status === 'completed' || (options.allowAbandoned === true && match.status === 'abandoned');
+
+  // 1. Match reached an accepted terminal status with a coherent winner (winner is a participant, or null for draw).
+  if (!acceptedTerminalStatus) {
+    const expected = options.allowAbandoned === true ? '"completed" or "abandoned"' : '"completed"';
+    v.push({ check: 'matchCompleted', message: `Match status is "${match.status}", expected ${expected}.`, detail: { status: match.status } });
   }
   if (match.winner_user_id !== null && !players.some((p) => p.user_id === match.winner_user_id)) {
     v.push({ check: 'winnerIsParticipant', message: `winner_user_id ${match.winner_user_id} is not a match participant.`, detail: { winner: match.winner_user_id } });
+  }
+  if (match.status !== 'completed') {
+    return { ok: v.length === 0, violations: v, facts };
   }
 
   // 2. Per-player totals recorded (numbers, not null).

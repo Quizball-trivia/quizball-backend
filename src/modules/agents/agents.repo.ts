@@ -378,6 +378,15 @@ export const agentsRepo = {
     return rows.length > 0;
   },
 
+  // The stored image URL of a question's payload (null when it has none).
+  async questionImageUrl(questionId: string): Promise<string | null> {
+    const [row] = await sql<{ url: string | null }[]>`
+      SELECT payload -> 'image' ->> 'url' AS url
+      FROM public.question_payloads WHERE question_id = ${questionId}
+    `;
+    return row?.url ?? null;
+  },
+
   // Editor fix-ups from the review queue: update the question's prompt and/or
   // its payload text. Scoped to DRAFT agent questions only (same guard as
   // approve/reject) so unrelated live questions can't be touched.

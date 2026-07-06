@@ -1,4 +1,5 @@
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
+import { deleteQuestionImageByUrl } from '../questions/question-image-storage.service.js';
 import {
   agentsRepo,
   type AgentJobRow,
@@ -402,8 +403,10 @@ export const agentsService = {
   },
 
   async rejectQuestion(questionId: string): Promise<void> {
+    const imageUrl = await agentsRepo.questionImageUrl(questionId);
     const ok = await agentsRepo.setQuestionStatus(questionId, 'archived');
     if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    await deleteQuestionImageByUrl(imageUrl); // rejected drafts don't keep their photo in the bucket
   },
 
   // Editor fix-ups (wrong translation, typo, awkward phrasing) applied in place
@@ -426,7 +429,9 @@ export const agentsService = {
   async regenerateQuestion(questionId: string, userId: string | null): Promise<AgentJob> {
     const ctx = await agentsRepo.questionRegenContext(questionId);
     if (!ctx) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    const imageUrl = await agentsRepo.questionImageUrl(questionId);
     await agentsRepo.setQuestionStatus(questionId, 'archived');
+    await deleteQuestionImageByUrl(imageUrl); // the replacement job sources a fresh photo
     const row = await agentsRepo.createJob({
       type: ctx.job_type,
       params: {

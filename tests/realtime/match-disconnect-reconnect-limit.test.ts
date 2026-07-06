@@ -205,9 +205,14 @@ function userMap(ids: string[]): Map<string, { id: string; nickname: string; ava
   return new Map(ids.map((id) => [id, { id, nickname: id, avatar_url: null, is_ai: id.startsWith('ai-') }]));
 }
 
-function createSocket(userId: string, matchId = 'm1', connectedAt = Date.now() - 10_000): QuizballSocket {
+function createSocket(
+  userId: string,
+  matchId = 'm1',
+  connectedAt = Date.now() - 10_000,
+  socketId = `socket-${userId}`
+): QuizballSocket {
   return {
-    id: `socket-${userId}`,
+    id: socketId,
     data: {
       user: { id: userId, role: 'user' },
       matchId,
@@ -229,6 +234,11 @@ function createIo(matchSockets: QuizballSocket[] = []): QuizballServer {
       socketsJoin: vi.fn(async () => undefined),
     })),
   } as unknown as QuizballServer;
+}
+
+function hasSocketId(params: unknown, socketId: string): boolean {
+  const socketIds = (params as { socketIds?: unknown }).socketIds;
+  return Array.isArray(socketIds) && socketIds.includes(socketId);
 }
 
 describe('pauseMatchForDisconnectedPlayer reconnect-limit hardening', () => {
@@ -276,6 +286,143 @@ describe('pauseMatchForDisconnectedPlayer reconnect-limit hardening', () => {
     expect(finalizeForfeitMock).not.toHaveBeenCalled();
     expect(completeFromProgressMock).not.toHaveBeenCalled();
     expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('treats an older in-room socket with matching heartbeat as presence proof without counting', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const now = Date.now();
+    redisValues.set('match:reconnect_count:m1:u1', '3');
+    hasAnyStagePresenceMock.mockImplementation(async (params: unknown) => hasSocketId(params, 'older-u1'));
+
+    const result = await pauseMatchForDisconnectedPlayer(
+      createIo([createSocket('u1', 'm1', now - 30_000, 'older-u1')]),
+      'm1',
+      'u1',
+      {
+        ignoreSocketId: 'dying-u1',
+        disconnectedConnectedAt: now - 10_000,
+      }
+    );
+
+    expect(result.finalized).toBe(false);
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('3');
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(1, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['older-u1'],
+    });
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(2, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['older-u1'],
+    });
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the reconnect count for an older heartbeat even before the socket is stable', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const now = Date.now();
+    redisValues.set('match:reconnect_count:m1:u1', '3');
+    hasAnyStagePresenceMock.mockImplementation(async (params: unknown) => hasSocketId(params, 'fresh-older-u1'));
+
+    const result = await pauseMatchForDisconnectedPlayer(
+      createIo([createSocket('u1', 'm1', now - 2_000, 'fresh-older-u1')]),
+      'm1',
+      'u1',
+      {
+        ignoreSocketId: 'dying-u1',
+        disconnectedConnectedAt: now - 1_000,
+      }
+    );
+
+    expect(result.finalized).toBe(false);
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('3');
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(1, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['fresh-older-u1'],
+    });
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(2, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: [],
+    });
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+  });
+
+  it('lets a fresh heartbeat prevent reconnect-limit forfeit during the liveness re-check', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const now = Date.now();
+    let presenceCheck = 0;
+    redisValues.set('match:reconnect_count:m1:u1', '3');
+    hasAnyStagePresenceMock.mockImplementation(async (params: unknown) => {
+      presenceCheck += 1;
+      return presenceCheck === 3 && hasSocketId(params, 'fresh-u1');
+    });
+
+    const result = await pauseMatchForDisconnectedPlayer(
+      createIo([createSocket('u1', 'm1', now - 1_000, 'fresh-u1')]),
+      'm1',
+      'u1',
+      {
+        ignoreSocketId: 'dying-u1',
+        disconnectedConnectedAt: now - 60_000,
+      }
+    );
+
+    expect(result.finalized).toBe(false);
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('4');
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(2, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: [],
+    });
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(3, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['fresh-u1'],
+    });
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
+  });
+
+  it('still counts and forfeits when an in-room same-user socket has no matching heartbeat', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const now = Date.now();
+    redisValues.set('match:reconnect_count:m1:u1', '3');
+    hasAnyStagePresenceMock.mockResolvedValue(false);
+
+    const result = await pauseMatchForDisconnectedPlayer(
+      createIo([createSocket('u1', 'm1', now - 30_000, 'zombie-u1')]),
+      'm1',
+      'u1',
+      {
+        ignoreSocketId: 'dying-u1',
+        disconnectedConnectedAt: now - 10_000,
+      }
+    );
+
+    expect(result.finalized).toBe(true);
+    expect(redisValues.get('match:reconnect_count:m1:u1')).toBe('4');
+    expect(hasAnyStagePresenceMock).toHaveBeenNthCalledWith(1, {
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['zombie-u1'],
+    });
+    expect(finalizeForfeitMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: 'm1',
+      forfeitingUserId: 'u1',
+    }));
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
   });
 
   it('still forfeits the limit-breaker vs an AI opponent (a fleeing leader must not win on progress)', async () => {

@@ -177,22 +177,35 @@ export const agentsService = {
     return toJob(row);
   },
 
-  async spawn(body: SpawnJobBody, userId: string | null): Promise<AgentJob> {
-    const params: Json = {
-      type: body.type,
-      questionType: body.questionType,
-      category_id: body.categoryId,
-      topic: body.topic,
-      difficulty: body.difficulty,
-      count: body.count,
-    } as Json;
-    const row = await agentsRepo.createJob({
-      type: body.type,
-      params,
-      requestedBy: userId,
-      budgetCents: body.budgetCents ?? null,
-    });
-    return toJob(row);
+  // A difficultyMix ("25 hard / 20 medium / 5 easy") fans out into one job per
+  // non-zero difficulty; a plain difficulty+count stays a single job. The first
+  // job is returned (with spawnedJobs = total) so the existing UI keeps working.
+  async spawn(body: SpawnJobBody, userId: string | null): Promise<AgentJob & { spawnedJobs: number }> {
+    const splits = body.difficultyMix
+      ? (['easy', 'medium', 'hard'] as const)
+          .map((d) => ({ difficulty: d, count: body.difficultyMix?.[d] ?? 0 }))
+          .filter((s) => s.count > 0)
+      : [{ difficulty: body.difficulty, count: body.count ?? 25 }];
+
+    let first: Awaited<ReturnType<typeof agentsRepo.createJob>> | null = null;
+    for (const split of splits) {
+      const params: Json = {
+        type: body.type,
+        questionType: body.questionType,
+        category_id: body.categoryId,
+        topic: body.topic,
+        difficulty: split.difficulty,
+        count: split.count,
+      } as Json;
+      const row = await agentsRepo.createJob({
+        type: body.type,
+        params,
+        requestedBy: userId,
+        budgetCents: body.budgetCents ?? null,
+      });
+      first ??= row;
+    }
+    return { ...toJob(first!), spawnedJobs: splits.length };
   },
 
   async cancel(id: string): Promise<void> {

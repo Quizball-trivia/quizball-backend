@@ -1,17 +1,31 @@
 import { z } from 'zod';
 
 // ── Spawn a generation job (CMS → agents.jobs) ──
-export const spawnJobBodySchema = z.object({
-  type: z.enum(['mcq_generate', 'daily_challenge']).default('mcq_generate'),
-  questionType: z
-    .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path', 'imposter_multi_select', 'high_low', 'image_mcq'])
-    .default('mcq_single'),
-  categoryId: z.string().uuid(),
-  topic: z.string().min(3).max(500),
-  difficulty: z.enum(['easy', 'medium', 'hard']),
-  count: z.number().int().min(1).max(500),
-  budgetCents: z.number().int().positive().nullable().optional(),
-});
+// Either a single difficulty+count, or a difficultyMix ("25 hard / 20 medium /
+// 5 easy") which fans out into one job per non-zero difficulty.
+export const spawnJobBodySchema = z
+  .object({
+    type: z.enum(['mcq_generate', 'daily_challenge']).default('mcq_generate'),
+    questionType: z
+      .enum(['mcq_single', 'true_false', 'clue_chain', 'put_in_order', 'countdown_list', 'career_path', 'imposter_multi_select', 'high_low', 'image_mcq'])
+      .default('mcq_single'),
+    categoryId: z.string().uuid(),
+    topic: z.string().min(3).max(500),
+    difficulty: z.enum(['easy', 'medium', 'hard']).default('medium'),
+    count: z.number().int().min(1).max(500).optional(),
+    difficultyMix: z
+      .object({
+        easy: z.number().int().min(0).max(500).default(0),
+        medium: z.number().int().min(0).max(500).default(0),
+        hard: z.number().int().min(0).max(500).default(0),
+      })
+      .optional(),
+    budgetCents: z.number().int().positive().nullable().optional(),
+  })
+  .refine(
+    (b) => (b.difficultyMix ? Object.values(b.difficultyMix).some((v) => v > 0) : (b.count ?? 0) >= 1),
+    { message: 'provide count, or a difficultyMix with at least one non-zero difficulty' }
+  );
 export type SpawnJobBody = z.infer<typeof spawnJobBodySchema>;
 
 export const jobIdParamSchema = z.object({ jobId: z.string().uuid() });

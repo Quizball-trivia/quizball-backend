@@ -29,6 +29,7 @@ const fakeRedis = {
     return 'OK';
   }),
   get: vi.fn(async (key: string) => redisValues.get(key) ?? null),
+  mGet: vi.fn(async (keys: string[]) => keys.map((key) => redisValues.get(key) ?? null)),
   del: vi.fn(async (keys: string | string[]) => {
     const keyList = Array.isArray(keys) ? keys : [keys];
     let deleted = 0;

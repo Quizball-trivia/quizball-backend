@@ -38,6 +38,8 @@ const CHALLENGE_BY_QUESTION_TYPE: Record<string, { challengeType: string; title:
   clue_chain: [{ challengeType: 'clues', title: 'Clues' }],
   put_in_order: [{ challengeType: 'putInOrder', title: 'Put in Order' }],
   career_path: [{ challengeType: 'careerPath', title: 'Career Path' }],
+  imposter_multi_select: [{ challengeType: 'imposter', title: "Pick'em" }],
+  high_low: [{ challengeType: 'highLow', title: 'High Low' }],
 };
 import type { Json } from '../../db/types.js';
 

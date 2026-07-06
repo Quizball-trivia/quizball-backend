@@ -46,6 +46,9 @@ const fakeRedis = {
     }
     return 'OK';
   },
+  async mGet(keys: string[]): Promise<Array<string | null>> {
+    return keys.map((key) => fakeRedisStore.values.get(key) ?? null);
+  },
   async get(key: string): Promise<string | null> {
     return fakeRedisStore.values.get(key) ?? null;
   },

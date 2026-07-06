@@ -10,6 +10,7 @@ const fakeRedis = {
     return 'OK';
   }),
   get: vi.fn(async (key: string) => redisValues.get(key) ?? null),
+  mGet: vi.fn(async (keys: string[]) => keys.map((key) => redisValues.get(key) ?? null)),
   exists: vi.fn(async (key: string) => (redisValues.has(key) ? 1 : 0)),
 };
 
@@ -99,6 +100,44 @@ describe('match-stage-presence.service', () => {
       userId: 'u1',
       stageKey: 'question',
       socketIds: ['menu-socket-1'],
+    })).resolves.toBe(false);
+  });
+
+  it('finds socket-scoped replacement presence under any valid match stage', async () => {
+    const {
+      hasAnyMatchStagePresenceFromSocketIds,
+      recordMatchStagePresenceHeartbeat,
+    } = await import('../../src/realtime/services/match-stage-presence.service.js');
+
+    await recordMatchStagePresenceHeartbeat({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketId: 'match-socket-1',
+    });
+
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['match-socket-1'],
+    })).resolves.toBe(true);
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['other-socket'],
+    })).resolves.toBe(false);
+  });
+
+  it('does not treat legacy timestamp-only stage presence as socket replacement proof', async () => {
+    const { hasAnyMatchStagePresenceFromSocketIds } = await import(
+      '../../src/realtime/services/match-stage-presence.service.js'
+    );
+    redisValues.set('match:stage_presence:m1:question:u1', String(Date.now()));
+
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['match-socket-1'],
     })).resolves.toBe(false);
   });
 

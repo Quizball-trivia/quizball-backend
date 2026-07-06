@@ -325,7 +325,7 @@ export const agentsService = {
   async scheduleRuns(id: string): Promise<{ items: AgentJob[] }> {
     const sched = await agentsRepo.getSchedule(id);
     if (!sched) throw new NotFoundError(`Schedule ${id} not found`);
-    const rows = await agentsRepo.scheduleRuns(sched.job_type);
+    const rows = await agentsRepo.scheduleRuns(id);
     return { items: rows.map(toJob) };
   },
 

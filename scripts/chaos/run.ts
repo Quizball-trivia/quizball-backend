@@ -7,25 +7,36 @@
 //   tsx scripts/chaos/run.ts --target=staging --rps=100 --duration=30 --users=25
 //   tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=20 --include-spend
 //   tsx scripts/chaos/run.ts --target=local --rps=200 --duration=15
+//   tsx scripts/chaos/run.ts --target=staging --sockets=5 --duration=300 --rps=50
 //
 // Flags:
 //   --target        staging | local  (PROD IS BLOCKED — see guard)
 //   --rps           target requests/sec PER route (default 100)
-//   --duration      seconds (default 30)
+//   --duration      seconds (default 30; 300 when --sockets > 0)
 //   --users         size of the test-user fleet to provision (default 25)
 //   --include-spend also hit ticket/coin-draining routes (daily/complete)
 //   --only          comma list of route names to restrict to
 //   --no-db-stats   skip the pg_stat_statements capture
 //   --api           override API base URL
 //   --db            override Postgres URL (for stats)
+//   --sockets       concurrent ranked socket clients (default 0 = off)
+//   --flap-rate     average reconnect flaps per socket match (default 0)
+//   --ramp-s        seconds to stagger socket queue joins (default 10)
+//   --matches-per-client  socket matches per client; overrides duration stop when duration omitted
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { CHAOS_ROUTES, SPEND_ROUTES, type ChaosRoute } from './routes.js';
-import { provisionUsers } from './auth.js';
+import { ensureTickets, provisionUsers } from './auth.js';
 import { runAllRoutes } from './engine.js';
 import { summarize, renderTable } from './metrics.js';
+import {
+  assertSocketTargetSafe,
+  renderSocketFleetSummary,
+  runSocketFleet,
+  type SocketFleetSummary,
+} from './socket-fleet.js';
 import {
   makeStatsClient,
   hasPgStatStatements,
@@ -48,6 +59,11 @@ interface Args {
   dbStats: boolean;
   api?: string;
   db?: string;
+  sockets: number;
+  flapRate: number;
+  rampSec: number;
+  matchesPerClient?: number;
+  durationWasExplicit: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -57,18 +73,49 @@ function parseArgs(argv: string[]): Args {
     const eq = hit.indexOf('=');
     return eq === -1 ? 'true' : hit.slice(eq + 1);
   };
+  const num = (k: string, fallback: number): number => {
+    const raw = get(k);
+    if (raw === undefined) return fallback;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) throw new Error(`--${k} must be a number.`);
+    return value;
+  };
+  const durationWasExplicit = get('duration') !== undefined;
+  const sockets = Math.max(0, Math.floor(num('sockets', 0)));
+  const matchesPerClientRaw = get('matches-per-client');
+  const parsedMatchesPerClient = matchesPerClientRaw === undefined ? undefined : Math.floor(Number(matchesPerClientRaw));
+  if (
+    matchesPerClientRaw !== undefined
+    && (parsedMatchesPerClient === undefined || !Number.isFinite(parsedMatchesPerClient) || parsedMatchesPerClient <= 0)
+  ) {
+    throw new Error('--matches-per-client must be a positive integer.');
+  }
   const target = (get('target') ?? 'staging') as 'staging' | 'local';
   return {
     target,
-    rps: Number(get('rps') ?? 100),
-    duration: Number(get('duration') ?? 30),
-    users: Number(get('users') ?? 25),
+    rps: num('rps', 100),
+    duration: num('duration', sockets > 0 ? 300 : 30),
+    users: Math.max(0, Math.floor(num('users', 25))),
     includeSpend: get('include-spend') === 'true',
     only: get('only') ? get('only')!.split(',').map((s) => s.trim()) : null,
     dbStats: get('no-db-stats') !== 'true',
     api: get('api'),
     db: get('db'),
+    sockets,
+    flapRate: Math.max(0, num('flap-rate', 0)),
+    rampSec: Math.max(0, num('ramp-s', 10)),
+    matchesPerClient: parsedMatchesPerClient,
+    durationWasExplicit,
   };
+}
+
+function writeSocketReport(summary: SocketFleetSummary): string {
+  const dir = resolve(REPO_ROOT, 'scripts/chaos/reports');
+  mkdirSync(dir, { recursive: true });
+  const stamp = summary.startedAt.replace(/[:.]/g, '-');
+  const path = resolve(dir, `socket-fleet-${stamp}.json`);
+  writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`);
+  return path;
 }
 
 // Read a KEY from a dotenv-style file without pulling in a dep.
@@ -146,6 +193,7 @@ function resolveTarget(args: Args): TargetConfig {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const target = resolveTarget(args);
+  if (args.sockets > 0) assertSocketTargetSafe(target.apiBase);
 
   console.log('━'.repeat(72));
   console.log('CHAOS HARNESS');
@@ -154,6 +202,12 @@ async function main() {
   console.log(`  duration    : ${args.duration}s`);
   console.log(`  users       : ${args.users}`);
   console.log(`  include-spend: ${args.includeSpend}`);
+  if (args.sockets > 0) {
+    console.log(`  sockets     : ${args.sockets}`);
+    console.log(`  flap-rate   : ${args.flapRate}`);
+    console.log(`  ramp        : ${args.rampSec}s`);
+    if (args.matchesPerClient !== undefined) console.log(`  matches/client: ${args.matchesPerClient}`);
+  }
   console.log('━'.repeat(72));
 
   // 1) Build the route set.
@@ -165,18 +219,20 @@ async function main() {
   console.log(`Offered load (peak): ${args.rps * routes.length} req/s total\n`);
 
   // 2) Provision the user fleet (needed for any bearer route).
-  const needsAuth = routes.some((r) => r.auth === 'bearer');
+  const socketEnabled = args.sockets > 0;
+  const needsAuth = routes.some((r) => r.auth === 'bearer') || socketEnabled;
   let users = [{ email: '', password: '', userId: '', token: '' }];
   if (needsAuth) {
     if (!target.serviceRoleKey) {
       throw new Error('SUPABASE_SERVICE_ROLE_KEY missing — cannot provision auth users.');
     }
-    console.log(`Provisioning ${args.users} confirmed test users…`);
+    const userCount = Math.max(args.users, args.sockets);
+    console.log(`Provisioning ${userCount} confirmed test users…`);
     users = await provisionUsers({
       apiBase: target.apiBase,
       supabaseUrl: target.supabaseUrl,
       serviceRoleKey: target.serviceRoleKey,
-      count: args.users,
+      count: userCount,
       password: 'ChaosTest12345!',
       emailPrefix: 'chaos',
       emailDomain: target.emailDomain,
@@ -184,6 +240,23 @@ async function main() {
     });
     console.log(`  → ${users.length} users authenticated.\n`);
     if (users.length === 0) throw new Error('Provisioning produced 0 usable users.');
+  }
+
+  if (socketEnabled) {
+    const socketUsers = users.slice(0, args.sockets);
+    if (socketUsers.length < args.sockets) {
+      throw new Error(`Socket fleet needs ${args.sockets} users, got ${socketUsers.length}.`);
+    }
+    console.log(`Restoring ranked tickets for ${socketUsers.length} socket users…`);
+    await ensureTickets({
+      target: args.target,
+      apiBase: target.apiBase,
+      supabaseUrl: target.supabaseUrl,
+      databaseUrl: target.databaseUrl,
+      userIds: socketUsers.map((u) => u.userId),
+      tickets: 5,
+    });
+    console.log('  → tickets ready.\n');
   }
 
   // 3) DB stats: reset before.
@@ -221,9 +294,9 @@ async function main() {
   }
 
   // 5) Run.
-  console.log('Firing load…\n');
-  const t0 = Date.now();
-  const results = await runAllRoutes(routes, {
+  console.log(socketEnabled ? 'Firing HTTP load + socket fleet…\n' : 'Firing load…\n');
+  const httpStart = Date.now();
+  const httpPromise = runAllRoutes(routes, {
     apiBase: target.apiBase,
     rps: args.rps,
     durationSec: args.duration,
@@ -231,8 +304,23 @@ async function main() {
     maxInflight: 2000,
     timeoutMs: 15000,
     bypassToken: target.bypassToken,
-  });
-  const elapsedSec = (Date.now() - t0) / 1000;
+  }).then((results) => ({
+    results,
+    elapsedSec: (Date.now() - httpStart) / 1000,
+  }));
+  const socketPromise = socketEnabled
+    ? runSocketFleet({
+        apiBase: target.apiBase,
+        durationSec: args.duration,
+        durationWasExplicit: args.durationWasExplicit,
+        sockets: args.sockets,
+        flapRate: args.flapRate,
+        rampSec: args.rampSec,
+        matchesPerClient: args.matchesPerClient,
+        users: users.slice(0, args.sockets),
+      })
+    : Promise.resolve<SocketFleetSummary | null>(null);
+  const [{ results, elapsedSec }, socketSummary] = await Promise.all([httpPromise, socketPromise]);
   if (peakTimer) clearInterval(peakTimer);
 
   // 6) Report.
@@ -249,6 +337,13 @@ async function main() {
   const totalErr = reports.reduce((s, r) => s + (r.errorRatePct / 100) * r.completed, 0);
   console.log('\nTotals:');
   console.log(`  sent=${totalSent}  completed=${totalOk}  effective=${(totalOk / elapsedSec).toFixed(0)} req/s  server-errors≈${Math.round(totalErr)}`);
+
+  if (socketSummary) {
+    console.log('\n' + '═'.repeat(72));
+    console.log(renderSocketFleetSummary(socketSummary));
+    const reportPath = writeSocketReport(socketSummary);
+    console.log(`\nSocket JSON report: ${reportPath}`);
+  }
 
   // 7) DB stats after.
   if (sql) {
@@ -293,6 +388,9 @@ async function main() {
   }
 
   console.log('\nDone.');
+  if (socketSummary && (socketSummary.wrongfulForfeits > 0 || socketSummary.matchesCompleted === 0)) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {

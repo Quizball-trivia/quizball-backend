@@ -485,6 +485,53 @@ export const translationService = {
   /**
    * Backfill: translate ALL questions that have "en" but no "ka".
    */
+  // Strip every Georgian value from DRAFT questions (prompt/explanation/payload)
+  // so the standard backfill re-translates them from scratch. Used by the CMS
+  // "re-translate drafts" action — scoped to drafts so live questions with
+  // hand-checked translations can never be overwritten.
+  async clearDraftGeorgian(): Promise<string[]> {
+    const wipeKa = (node: unknown): unknown => {
+      if (Array.isArray(node)) return node.map(wipeKa);
+      if (node && typeof node === 'object') {
+        const obj = { ...(node as Record<string, unknown>) };
+        if (typeof obj.en === 'string' && 'ka' in obj) obj.ka = '';
+        for (const k of Object.keys(obj)) {
+          if (k !== 'en' && k !== 'ka') obj[k] = wipeKa(obj[k]);
+        }
+        return obj;
+      }
+      return node;
+    };
+
+    const rows = await sql<{ id: string; prompt: Json | null; explanation: Json | null; payload: Json | null; payload_is_string: boolean }[]>`
+      SELECT q.id, q.prompt, q.explanation, qp.payload,
+             (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'string') AS payload_is_string
+      FROM questions q
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status = 'draft'
+    `;
+    const ids: string[] = [];
+    for (const row of rows) {
+      const prompt = wipeKa(parseI18nField(row.prompt));
+      const explanation = row.explanation ? wipeKa(parseI18nField(row.explanation)) : null;
+      await sql`UPDATE questions SET prompt = ${sql.json(prompt as Json)}, explanation = ${explanation ? sql.json(explanation as Json) : null}, updated_at = now() WHERE id = ${row.id}`;
+      if (row.payload != null) {
+        let payload = row.payload as unknown;
+        if (row.payload_is_string) {
+          try { payload = JSON.parse(payload as string); } catch { payload = null; }
+        }
+        if (payload) {
+          const wiped = wipeKa(payload);
+          // write back in the SAME encoding the row used (some June rows are double-encoded)
+          const out = row.payload_is_string ? JSON.stringify(wiped) : wiped;
+          await sql`UPDATE question_payloads SET payload = ${sql.json(out as Json)} WHERE question_id = ${row.id}`;
+        }
+      }
+      ids.push(row.id);
+    }
+    return ids;
+  },
+
   async backfillAll(): Promise<{
     translated: number;
     skipped: number;

@@ -138,6 +138,18 @@ router.post(
  * Translate all untranslated questions from English to Georgian.
  * Protected endpoint - requires admin role.
  */
+/**
+ * POST /api/v1/questions/translate/redo-drafts
+ * Re-translate all DRAFT questions from scratch (overwrites their Georgian).
+ */
+router.post(
+  '/translate/redo-drafts',
+  authMiddleware,
+  requireRole('admin'),
+  validate({ body: z.object({}).strict().optional() }),
+  questionsController.translateRedoDrafts
+);
+
 router.post(
   '/translate/backfill',
   authMiddleware,

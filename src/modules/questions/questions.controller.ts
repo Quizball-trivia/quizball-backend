@@ -310,6 +310,29 @@ export const questionsController = {
   },
 
   /**
+   * POST /api/v1/questions/translate/redo-drafts
+   * Wipe Georgian on DRAFT questions, then re-translate them from scratch.
+   * Overwrites existing draft translations; live questions are untouched.
+   */
+  async translateRedoDrafts(_req: Request, res: Response): Promise<void> {
+    if (!translationService.isConfigured()) {
+      throw new ExternalServiceError('Translation is not configured. Set OPENROUTER_API_KEY.', {
+        missing: ['OPENROUTER_API_KEY'],
+      });
+    }
+    const ids = await translationService.clearDraftGeorgian();
+    if (ids.length === 0) {
+      res.json({ status: 'done', total: 0, remaining: 0, categories: 0 });
+      return;
+    }
+    translationService
+      .translateQuestions(ids)
+      .then((result) => logger.info(result, 'Draft re-translation completed'))
+      .catch((err) => logger.error({ error: err }, 'Draft re-translation failed'));
+    res.json({ status: 'started', total: ids.length, remaining: ids.length, categories: 0 });
+  },
+
+  /**
    * GET /api/v1/questions/translate/status
    * Check translation progress.
    */

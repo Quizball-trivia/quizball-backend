@@ -378,6 +378,14 @@ export const agentsRepo = {
     return rows.length > 0;
   },
 
+  // Most recent auto_pause event message (why the system paused itself).
+  async latestAutoPauseReason(): Promise<string | null> {
+    const [row] = await sql<{ message: string | null }[]>`
+      SELECT message FROM agents.events WHERE type = 'auto_pause' ORDER BY ts DESC LIMIT 1
+    `;
+    return row?.message ?? null;
+  },
+
   // The stored image URL of a question's payload (null when it has none).
   async questionImageUrl(questionId: string): Promise<string | null> {
     const [row] = await sql<{ url: string | null }[]>`

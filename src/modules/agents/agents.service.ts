@@ -504,6 +504,7 @@ export const agentsService = {
     spentMonthCents: number;
     monthlyCreditCents: number;
     paused: boolean;
+    pauseReason: string | null;
   }> {
     const now = new Date();
     const weekSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -521,6 +522,9 @@ export const agentsService = {
       spentMonthCents: spentMonth,
       monthlyCreditCents: MONTHLY_CREDIT_CENTS,
       paused: b?.paused ?? false,
+      // why we're paused (latest auto_pause event, e.g. subscription limit) —
+      // only meaningful while paused
+      pauseReason: b?.paused ? await agentsRepo.latestAutoPauseReason() : null,
     };
   },
 

@@ -96,6 +96,7 @@ export const budgetStatusSchema = z.object({
   spentMonthCents: z.number(),
   monthlyCreditCents: z.number(),
   paused: z.boolean(),
+  pauseReason: z.string().nullable().optional(),
 });
 
 // ── Editable sub-agent prompts (agents.prompts) ──

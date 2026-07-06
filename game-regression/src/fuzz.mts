@@ -1,195 +1,336 @@
 /**
  * The fuzzer — "play a lot of games automatically and catch issues".
  *
- * Loops N full ranked-AI matches; each one is booted + played to completion, then
- * the referee runs EVERY check (trace invariants + post-match DB state). On the
- * first match that violates anything, it persists a failure ARTIFACT (the full
- * event trace, the violations, and a DB snapshot) and — by default — stops, so the
- * failing case is preserved for analysis. Clean matches just increment the counter.
- *
- * Reproducibility note: the harness AI answers from Math.random() (the durable
- * timer callback runs outside any seeded scope), so matches are NOT bit-for-bit
- * replayable by index. That's fine for fuzzing — variety is the point — and the
- * persisted full trace makes any failure analyzable without a replay.
- *
  * Run:
  *   FUZZ_COUNT=1000 \
+ *   FUZZ_CHAOS=1 \
  *   REGRESSION_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression \
- *   REGRESSION_REDIS_URL=redis://:changeme@127.0.0.1:6379/15 \
+ *   REGRESSION_REDIS_URL=redis://localhost:6379/15 \
  *     npx tsx game-regression/src/fuzz.mts
- *
- * Env:
- *   FUZZ_COUNT            how many matches to play (default 50)
- *   FUZZ_STOP_ON_FAIL     '1' (default) stop at first failure; '0' keep going + tally
- *   FUZZ_PLAY_MAX_MS      per-match play budget (default 90000)
- *   FUZZ_ARTIFACT_DIR     where to write failure artifacts (default game-regression/artifacts)
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { EventTrace } from './adapter.mjs';
+import type { ChaosPlan } from './chaos.mjs';
 
 process.env.NODE_ENV = 'local';
 process.env.DATABASE_URL = process.env.REGRESSION_DB_URL!;
-process.env.REDIS_URL = process.env.REGRESSION_REDIS_URL ?? 'redis://:changeme@localhost:6379/15';
+process.env.REDIS_URL = process.env.REGRESSION_REDIS_URL ?? 'redis://localhost:6379/15';
 process.env.RANKED_HUMAN_QUEUE_ENABLED = 'true';
 process.env.REGRESSION_DETERMINISTIC = '1';
 process.env.REGRESSION_FAST_TIMERS = '1';
-process.env.LOG_LEVEL = 'silent';
+process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent';
 
-const { bootMatch, playMatch, bootFriendlyLobbyMatch, playLobbyMatch, teardownRun } = await import('./runner.mjs');
-const { checkInvariants, formatViolation } = await import('./invariants.mjs');
+const {
+  bootMatch,
+  playMatch,
+  bootFriendlyLobbyMatch,
+  playLobbyMatch,
+  teardownRun,
+} = await import('./runner.mjs');
+const {
+  checkInvariants,
+  checkLifecycleInvariants,
+  formatViolation,
+} = await import('./invariants.mjs');
 const { checkPartyInvariants } = await import('./party-invariants.mjs');
 const { checkPostMatchState, formatPostMatchViolation } = await import('./post-match.mjs');
+const {
+  answerPlanFromChaosPlan,
+  chaosActionsSummary,
+  deriveChaosSeed,
+  generateChaosPlan,
+  planAllowsEarlyTerminal,
+  planUsesWithheldReadyAcks,
+} = await import('./chaos.mjs');
 const { sql } = await import('../../src/db/index.js');
 
 const COUNT = Number(process.env.FUZZ_COUNT ?? 50);
 const STOP_ON_FAIL = (process.env.FUZZ_STOP_ON_FAIL ?? '1') === '1';
 const PLAY_MAX_MS = Number(process.env.FUZZ_PLAY_MAX_MS ?? 90_000);
 const ARTIFACT_DIR = resolve(process.env.FUZZ_ARTIFACT_DIR ?? 'game-regression/artifacts');
-// Which match types to fuzz: 'ranked' (default), 'possession' (friendly h-v-h),
-// 'party' (friendly_party_quiz), or 'mix' (rotate through all three).
-const MODE = (process.env.FUZZ_MODE ?? 'ranked') as 'ranked' | 'possession' | 'party' | 'mix';
-const MIX_ROTATION = ['ranked', 'possession', 'party'] as const;
-function modeFor(i: number): 'ranked' | 'possession' | 'party' {
-  if (MODE === 'mix') return MIX_ROTATION[(i - 1) % MIX_ROTATION.length];
-  return MODE;
-}
-// new Date() is unavailable in workflow scripts but fine in a plain tsx run; still,
-// keep the run id index-based + a coarse epoch passed via env for stable artifact names.
+const MODE = (process.env.FUZZ_MODE ?? 'ranked') as FuzzMode | 'mix';
 const RUN_TAG = process.env.FUZZ_RUN_TAG ?? String(process.env.FUZZ_EPOCH ?? Math.floor(Date.now() / 1000));
+const CHAOS_ENABLED =
+  process.env.FUZZ_CHAOS !== undefined &&
+  !['0', 'false', 'off'].includes(process.env.FUZZ_CHAOS.toLowerCase());
+const CHAOS_BASE_SEED = process.env.FUZZ_CHAOS_SEED;
+const MIX_ROTATION = ['ranked', 'possession', 'party'] as const;
 
-interface MatchOutcome {
+export type FuzzMode = 'ranked' | 'possession' | 'party';
+
+export interface MatchOutcome {
   index: number;
+  mode: FuzzMode;
   matchId: string | null;
   booted: boolean;
   completed: boolean;
   ok: boolean;
+  chaosPlan: ChaosPlan | null;
   traceViolations: string[];
+  lifecycleViolations: string[];
   postViolations: string[];
+  violations: string[];
+  artifactPath?: string;
+  error?: string;
 }
 
-async function dbSnapshot(matchId: string): Promise<unknown> {
-  // A compact snapshot of the rows that prove (or disprove) a clean settlement.
+export interface RunFuzzMatchOptions {
+  index: number;
+  mode?: FuzzMode;
+  playMaxMs?: number;
+  chaosEnabled?: boolean;
+  chaosPlan?: ChaosPlan | null;
+  runTag?: string;
+  artifactDir?: string;
+  writeArtifactOnFailure?: boolean;
+}
+
+function modeFor(i: number): FuzzMode {
+  if (MODE === 'mix') return MIX_ROTATION[(i - 1) % MIX_ROTATION.length];
+  return MODE;
+}
+
+function planForMatch(options: RunFuzzMatchOptions, mode: FuzzMode): ChaosPlan | null {
+  if (options.chaosPlan !== undefined) return options.chaosPlan;
+  const enabled = options.chaosEnabled ?? CHAOS_ENABLED;
+  if (!enabled || mode !== 'ranked') return null;
+  const seed = deriveChaosSeed(options.runTag ?? RUN_TAG, options.index, CHAOS_BASE_SEED);
+  return generateChaosPlan(seed);
+}
+
+async function dbSnapshot(matchId: string, chaosPlan: ChaosPlan | null): Promise<unknown> {
   const [match] = await sql`SELECT id, status, mode, winner_user_id, total_questions, state_payload FROM matches WHERE id = ${matchId}`;
   const players = await sql`SELECT user_id, seat, total_points, correct_answers, goals, penalty_goals FROM match_players WHERE match_id = ${matchId}`;
+  const answers = await sql`SELECT q_index, user_id, time_ms, points_earned, phase_kind FROM match_answers WHERE match_id = ${matchId} ORDER BY q_index, user_id`;
   const rp = await sql`SELECT user_id, old_rp, delta_rp, new_rp, result, is_placement FROM ranked_rp_changes WHERE match_id = ${matchId}`;
   const xp = await sql`SELECT user_id, source_type, xp_delta FROM user_xp_events WHERE source_key = ${matchId}`;
-  return { match, players, rp, xp };
+  return { match, players, answers, rp, xp, chaosPlan };
 }
 
-async function writeArtifact(outcome: MatchOutcome, trace: unknown, snapshot: unknown): Promise<string> {
-  await mkdir(ARTIFACT_DIR, { recursive: true });
-  const path = resolve(ARTIFACT_DIR, `fail-${RUN_TAG}-m${outcome.index}.json`);
+async function writeArtifact(
+  outcome: MatchOutcome,
+  trace: unknown,
+  snapshot: unknown,
+  artifactDir = ARTIFACT_DIR,
+  runTag = RUN_TAG,
+): Promise<string> {
+  await mkdir(artifactDir, { recursive: true });
+  const path = resolve(artifactDir, `fail-${runTag}-m${outcome.index}.json`);
   await writeFile(path, JSON.stringify({
-    runTag: RUN_TAG,
+    runTag,
     index: outcome.index,
+    mode: outcome.mode,
     matchId: outcome.matchId,
     booted: outcome.booted,
     completed: outcome.completed,
+    chaosPlan: outcome.chaosPlan,
     traceViolations: outcome.traceViolations,
+    lifecycleViolations: outcome.lifecycleViolations,
     postViolations: outcome.postViolations,
+    error: outcome.error,
     dbSnapshot: snapshot,
     trace,
   }, null, 2));
   return path;
 }
 
-let passed = 0;
-let failed = 0;
-let bootFailures = 0;
-const failures: Array<{ index: number; path: string; summary: string[] }> = [];
-
-if (process.env.FUZZ_LLM_EVERY) {
-  console.log('[fuzz] FUZZ_LLM_EVERY is ignored: the LLM judge was removed; coded trace invariants are the gate.');
+async function waitForPostMatch(matchId: string, options: { allowAbandoned?: boolean } = {}) {
+  let post = await checkPostMatchState(matchId, options);
+  const settleDeadline = Date.now() + 2_000;
+  while (!post.ok && Date.now() < settleDeadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    post = await checkPostMatchState(matchId, options);
+  }
+  return post;
 }
 
-console.log(`[fuzz] running ${COUNT} matches | stopOnFail=${STOP_ON_FAIL} | artifacts=${ARTIFACT_DIR}`);
-
-for (let i = 1; i <= COUNT; i++) {
-  let outcome: MatchOutcome = {
-    index: i, matchId: null, booted: false, completed: false, ok: false,
-    traceViolations: [], postViolations: [],
+export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchOutcome> {
+  const mode = options.mode ?? modeFor(options.index);
+  const chaosPlan = planForMatch(options, mode);
+  const outcome: MatchOutcome = {
+    index: options.index,
+    mode,
+    matchId: null,
+    booted: false,
+    completed: false,
+    ok: false,
+    chaosPlan,
+    traceViolations: [],
+    lifecycleViolations: [],
+    postViolations: [],
+    violations: [],
   };
-  const mode = modeFor(i);
+
+  let trace: EventTrace | null = null;
+  let matchId: string | null = null;
+  let terminalAccepted = false;
+
   try {
-    // Boot + play by mode. ranked = AI queue path; possession/party = lobby h-v-h.
-    let trace: import('./adapter.mjs').EventTrace;
-    let matchId: string | null;
-    let isParty = false;
     if (mode === 'ranked') {
-      const run = await bootMatch({ startTimeoutMs: 25_000 });
-      trace = run.trace; matchId = run.matchId;
-      if (matchId) await playMatch(run, { maxMs: PLAY_MAX_MS });
+      const run = await bootMatch({
+        startTimeoutMs: 25_000,
+        autoClientReadyAcks: !planUsesWithheldReadyAcks(chaosPlan),
+      });
+      trace = run.trace;
+      matchId = run.matchId;
+      outcome.matchId = matchId;
+      outcome.booted = Boolean(matchId);
+      if (matchId) {
+        await playMatch(run, {
+          maxMs: options.playMaxMs ?? PLAY_MAX_MS,
+          chaosPlan: chaosPlan ?? undefined,
+          answerPlan: answerPlanFromChaosPlan(chaosPlan),
+        });
+      }
+      if (!matchId) {
+        outcome.violations = ['BOOT_FAILED'];
+        return outcome;
+      }
+      const allowEarlyTerminal = planAllowsEarlyTerminal(chaosPlan);
+      outcome.completed = trace.byEvent('match:final_results').length > 0;
+      const inv = checkInvariants(trace);
+      const post = await waitForPostMatch(matchId, { allowAbandoned: allowEarlyTerminal });
+      terminalAccepted = outcome.completed || (allowEarlyTerminal && post.facts.status === 'abandoned');
+      const traceViolations = terminalAccepted && post.facts.status === 'abandoned'
+        ? inv.violations.filter((violation) => violation.invariant !== 'terminalStateReached')
+        : inv.violations;
+      outcome.traceViolations = traceViolations.map(formatViolation);
+      outcome.postViolations = post.violations.map(formatPostMatchViolation);
+      const lifecycle = await checkLifecycleInvariants(trace, {
+        matchId,
+        botUserId: run.botUserId,
+        chaosPlan,
+        runChaosLifecycleInvariants: Boolean(chaosPlan?.actions.length),
+      });
+      outcome.lifecycleViolations = lifecycle.violations.map(formatViolation);
+      outcome.ok = terminalAccepted && traceViolations.length === 0 && post.ok && lifecycle.ok;
     } else {
       const variant = mode === 'party' ? 'friendly_party_quiz' : 'friendly_possession';
-      isParty = mode === 'party';
       const run = await bootFriendlyLobbyMatch({ variant, startTimeoutMs: 25_000 });
-      trace = run.trace; matchId = run.matchId;
-      if (matchId) await playLobbyMatch(run, { maxMs: PLAY_MAX_MS });
+      trace = run.trace;
+      matchId = run.matchId;
+      outcome.matchId = matchId;
+      outcome.booted = Boolean(matchId);
+      if (matchId) await playLobbyMatch(run, { maxMs: options.playMaxMs ?? PLAY_MAX_MS });
+      if (!matchId) {
+        outcome.violations = ['BOOT_FAILED'];
+        return outcome;
+      }
+      outcome.completed = trace.byEvent('match:final_results').length > 0;
+      terminalAccepted = outcome.completed;
+      const inv = mode === 'party' ? checkPartyInvariants(trace) : checkInvariants(trace);
+      outcome.traceViolations = inv.violations.map(formatViolation);
+      const post = await waitForPostMatch(matchId);
+      outcome.postViolations = post.violations.map(formatPostMatchViolation);
+      if (mode === 'possession') {
+        const lifecycle = await checkLifecycleInvariants(trace, {
+          matchId,
+          botUserId: run.hostUserId,
+          chaosPlan: null,
+          runChaosLifecycleInvariants: false,
+        });
+        outcome.lifecycleViolations = lifecycle.violations.map(formatViolation);
+      }
+      outcome.ok = outcome.completed && inv.ok && post.ok && outcome.lifecycleViolations.length === 0;
     }
-    outcome.matchId = matchId;
-    outcome.booted = !!matchId;
 
-    if (!matchId) {
-      bootFailures++;
-      console.log(`[fuzz] #${i} BOOT FAILED (${mode})`);
+    outcome.violations = [
+      !terminalAccepted ? 'did NOT complete (no final_results)' : null,
+      ...outcome.traceViolations,
+      ...outcome.lifecycleViolations,
+      ...outcome.postViolations,
+    ].filter((value): value is string => Boolean(value));
+
+    if (!outcome.ok && options.writeArtifactOnFailure !== false && trace && matchId) {
+      const snapshot = await dbSnapshot(matchId, chaosPlan);
+      outcome.artifactPath = await writeArtifact(
+        outcome,
+        trace.events,
+        snapshot,
+        options.artifactDir,
+        options.runTag,
+      );
+    }
+  } catch (err) {
+    outcome.error = (err as Error).message;
+    outcome.violations = [outcome.error];
+    if (options.writeArtifactOnFailure !== false && trace && matchId) {
+      const snapshot = await dbSnapshot(matchId, chaosPlan).catch((snapshotErr) => ({
+        snapshotError: (snapshotErr as Error).message,
+      }));
+      outcome.artifactPath = await writeArtifact(
+        outcome,
+        trace.events,
+        snapshot,
+        options.artifactDir,
+        options.runTag,
+      );
+    }
+  }
+
+  return outcome;
+}
+
+export async function runFuzz(): Promise<{ passed: number; failed: number; bootFailures: number; failures: MatchOutcome[] }> {
+  let passed = 0;
+  let failed = 0;
+  let bootFailures = 0;
+  const failures: MatchOutcome[] = [];
+
+  if (process.env.FUZZ_LLM_EVERY) {
+    console.log('[fuzz] FUZZ_LLM_EVERY is ignored: the LLM judge was removed; coded trace invariants are the gate.');
+  }
+
+  console.log(
+    `[fuzz] running ${COUNT} matches | stopOnFail=${STOP_ON_FAIL} | chaos=${CHAOS_ENABLED} | artifacts=${ARTIFACT_DIR}`,
+  );
+
+  for (let i = 1; i <= COUNT; i += 1) {
+    const mode = modeFor(i);
+    const outcome = await runFuzzMatch({ index: i, mode, writeArtifactOnFailure: true });
+    const seed = outcome.chaosPlan ? String(outcome.chaosPlan.seed) : 'none';
+    const actions = chaosActionsSummary(outcome.chaosPlan);
+    const status = outcome.ok ? 'PASS' : outcome.booted ? 'FAIL' : 'BOOT_FAILED';
+    console.log(`[fuzz] #${i} mode=${mode} seed=${seed} actions=${actions} ${status}`);
+
+    if (!outcome.booted) {
+      bootFailures += 1;
       await teardownRun();
-      // A boot failure is environmental, not a game bug — don't stop the run.
       continue;
     }
 
-    outcome.completed = trace.byEvent('match:final_results').length > 0;
-
-    // Party quiz uses its own invariant set; possession/ranked share the possession one.
-    const inv = isParty ? checkPartyInvariants(trace) : checkInvariants(trace);
-    outcome.traceViolations = inv.violations.map(formatViolation);
-    const run = { trace, matchId } as { trace: import('./adapter.mjs').EventTrace; matchId: string };
-
-    // Post-match settlement (RP/XP) is fire-and-forget; poll until it lands (or a
-    // short ceiling) instead of a fixed sleep — faster on the common case.
-    let post = await checkPostMatchState(run.matchId);
-    const settleDeadline = Date.now() + 2_000;
-    while (!post.ok && Date.now() < settleDeadline) {
-      await new Promise((r) => setTimeout(r, 100));
-      post = await checkPostMatchState(run.matchId);
-    }
-    outcome.postViolations = post.violations.map(formatPostMatchViolation);
-
-    outcome.ok = outcome.completed && inv.ok && post.ok;
-
     if (outcome.ok) {
-      passed++;
-      if (i % 25 === 0) console.log(`[fuzz] #${i} ok (passed=${passed})`);
+      passed += 1;
     } else {
-      failed++;
-      const snapshot = await dbSnapshot(run.matchId);
-      const path = await writeArtifact(outcome, run.trace.events, snapshot);
-      const summary = [
-        !outcome.completed ? 'did NOT complete (no final_results)' : null,
-        ...outcome.traceViolations,
-        ...outcome.postViolations,
-      ].filter((x): x is string => !!x);
-      failures.push({ index: i, path, summary });
-      console.log(`\n[fuzz] #${i} ✗ FAIL — artifact: ${path}`);
-      for (const s of summary) console.log(`        ${s}`);
+      failed += 1;
+      failures.push(outcome);
+      if (outcome.artifactPath) console.log(`        artifact: ${outcome.artifactPath}`);
+      for (const violation of outcome.violations) console.log(`        ${violation}`);
       await teardownRun();
       if (STOP_ON_FAIL) break;
       continue;
     }
-  } catch (err) {
-    failed++;
-    console.log(`[fuzz] #${i} ✗ THREW: ${(err as Error).message}`);
-    failures.push({ index: i, path: '(threw, no artifact)', summary: [(err as Error).message] });
-    try { await teardownRun(); } catch { /* ignore */ }
-    if (STOP_ON_FAIL) break;
-    continue;
+    await teardownRun();
   }
-  await teardownRun();
+
+  return { passed, failed, bootFailures, failures };
 }
 
-console.log(`\n[fuzz] DONE: passed=${passed} failed=${failed} bootFailures=${bootFailures} (of ${COUNT})`);
-if (failures.length > 0) {
-  console.log('[fuzz] failures:');
-  for (const f of failures) console.log(`  #${f.index}: ${f.summary[0]} -> ${f.path}`);
-  process.exit(1);
+function isMainModule(): boolean {
+  return Boolean(process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]));
 }
-process.exit(0);
+
+if (isMainModule()) {
+  const result = await runFuzz();
+  console.log(`\n[fuzz] DONE: passed=${result.passed} failed=${result.failed} bootFailures=${result.bootFailures} (of ${COUNT})`);
+  if (result.failures.length > 0) {
+    console.log('[fuzz] failures:');
+    for (const failure of result.failures) {
+      console.log(`  #${failure.index}: ${failure.violations[0] ?? failure.error ?? 'failed'} -> ${failure.artifactPath ?? '(no artifact)'}`);
+    }
+    process.exit(1);
+  }
+  process.exit(0);
+}

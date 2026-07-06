@@ -27,6 +27,7 @@ import {
 import {
   handleMatchDisconnect,
   handleMatchRejoin,
+  pauseMatchForDisconnectedPlayer,
   resolveExpiredGraceWindow,
 } from '../../src/realtime/services/match-disconnect.service.js';
 import { handleMatchForfeit, finalizeMatchAsForfeit } from '../../src/realtime/services/match-forfeit.service.js';
@@ -49,6 +50,8 @@ import { handleAnswer } from '../../src/realtime/services/match-question-dispatc
 // Party-quiz advances to the next question via a ready-ack gate; the bot must ack
 // (like a real client) or each round waits the full ~8s ceiling.
 import { handlePartyQuizReadyForNextQuestion } from '../../src/realtime/party-quiz-match-flow.js';
+import { recordMatchStagePresenceHeartbeat } from '../../src/realtime/services/match-stage-presence.service.js';
+import type { ChaosAction, ChaosPlan } from './chaos.mjs';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -58,6 +61,9 @@ export interface RunMatchResult {
   io: FakeIo;
   botSocket: FakeSocket;
   autoClientReadyAcks: boolean;
+  lastSupersededSocket?: { id: string; connectedAt: number };
+  suppressAutoRejoinAvailable?: boolean;
+  suppressedRejoinAvailableThroughSeq?: number;
 }
 
 export interface RunMatchOptions {
@@ -97,6 +103,7 @@ interface BotClientAckState {
   kickoffUiReady: Set<string>;
   resumeUiReady: Set<string>;
   readyForNextQuestion: Set<string>;
+  lastRejoinAvailableSeq: number;
 }
 
 function createBotClientAckState(): BotClientAckState {
@@ -105,6 +112,7 @@ function createBotClientAckState(): BotClientAckState {
     kickoffUiReady: new Set(),
     resumeUiReady: new Set(),
     readyForNextQuestion: new Set(),
+    lastRejoinAvailableSeq: -1,
   };
 }
 
@@ -182,19 +190,79 @@ async function ackResumeUiReadyFromTrace(
   trace: EventTrace,
   sockets: FakeSocket[],
   acks: BotClientAckState,
+  recordClientEvents = false,
 ): Promise<void> {
   for (const event of trace.byEvent('match:waiting_for_ready')) {
-    const payload = event.payload as { phase?: unknown } | undefined;
+    const payload = event.payload as { phase?: unknown; forceStartsAt?: unknown } | undefined;
     if (payload?.phase !== 'resume') continue;
     const matchId = matchIdFromPayload(event.payload);
     if (!matchId) continue;
+    const gateId = typeof payload.forceStartsAt === 'string' ? payload.forceStartsAt : String(event.seq);
     for (const socket of sockets) {
-      const key = `${socket.data.user.id}:${matchId}`;
+      const key = `${socket.data.user.id}:${matchId}:${gateId}`;
       if (acks.resumeUiReady.has(key)) continue;
+      if (recordClientEvents) {
+        trace.record('client->server', 'match:resume_ui_ready', {
+          matchId,
+          userId: socket.data.user.id,
+        }, socket.id);
+      }
       await matchRealtimeService.handleResumeUiReady(io as never, socket as never, { matchId });
       acks.resumeUiReady.add(key);
     }
   }
+}
+
+function latestTraceSeq(trace: EventTrace): number {
+  return trace.events[trace.events.length - 1]?.seq ?? -1;
+}
+
+async function botSocketIsLive(run: RunMatchResult): Promise<boolean> {
+  const sockets = await run.io.in(run.botSocket.id).fetchSockets();
+  return sockets.some((socket) => socket.id === run.botSocket.id);
+}
+
+async function handleBotRejoinAvailableFromTrace(
+  run: RunMatchResult,
+  acks: BotClientAckState,
+): Promise<boolean> {
+  if (run.autoClientReadyAcks === false) return false;
+
+  const userRoom = `user:${run.botUserId}`;
+  if (run.suppressAutoRejoinAvailable) {
+    const latest = Math.max(
+      run.suppressedRejoinAvailableThroughSeq ?? -1,
+      ...run.trace.events
+        .filter((event) => event.event === 'match:rejoin_available' && event.target === userRoom)
+        .map((event) => event.seq),
+    );
+    run.suppressedRejoinAvailableThroughSeq = latest;
+    return false;
+  }
+
+  let handled = false;
+  const suppressedThrough = run.suppressedRejoinAvailableThroughSeq ?? -1;
+  for (const event of run.trace.events) {
+    if (event.seq <= acks.lastRejoinAvailableSeq || event.seq <= suppressedThrough) continue;
+    if (event.event !== 'match:rejoin_available' || event.target !== userRoom) continue;
+
+    acks.lastRejoinAvailableSeq = event.seq;
+    const matchId = matchIdFromPayload(event.payload);
+    if (!matchId || (run.matchId && matchId !== run.matchId)) continue;
+    if (!(await botSocketIsLive(run))) continue;
+
+    run.trace.record('client->server', 'match:rejoin', {
+      matchId,
+      userId: run.botUserId,
+      socketId: run.botSocket.id,
+      source: 'autoRejoinAvailable',
+    }, run.botSocket.id);
+    await handleMatchRejoin(run.io as never, run.botSocket as never, matchId);
+    if (run.trace.byEvent('match:final_results').length > 0) return true;
+    await ackResumeUiReadyFromTrace(run.io, run.trace, [run.botSocket], acks, true);
+    handled = true;
+  }
+  return handled;
 }
 
 function ackPossessionReadyForNextQuestionFromTrace(
@@ -337,6 +405,30 @@ async function waitMs(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+async function executeChaosAction(run: RunMatchResult, action: ChaosAction): Promise<void> {
+  run.trace.record('client->server', 'chaos:action', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    atQIndex: action.atQIndex,
+    kind: action.kind,
+    params: action.params ?? null,
+  }, run.botSocket.id);
+
+  if (action.kind === 'flap') {
+    await flap(run, Math.max(1, Math.floor(Number(action.params?.n ?? 1) || 1)));
+  } else if (action.kind === 'staleDisconnect') {
+    await staleDisconnect(run);
+  } else if (action.kind === 'quitRejoin') {
+    await quitRejoin(run);
+  } else if (action.kind === 'multiTab') {
+    await multiTab(run);
+  } else if (action.kind === 'zombieReconnect') {
+    await zombieReconnect(run);
+  } else if (action.kind === 'expireGraceAfterDisconnect') {
+    await expireGraceAfterDisconnect(run);
+  }
+}
+
 /** Submit a bot answer for whatever question kind was dispatched, so the round
  *  resolves on both-answered instead of waiting for the timeout. */
 async function answerQuestion(
@@ -393,32 +485,55 @@ export async function playMatch(
      *  question-timeout to resolve those rounds (the timeout-expire scenario). */
     skipQIndices?: Iterable<number>;
     answerPlan?: Record<number, BotAnswerPlan>;
+    chaosPlan?: ChaosPlan;
   } = {},
 ): Promise<void> {
-  const { trace, io, botSocket } = run;
+  const { trace, io } = run;
   const maxMs = opts.maxMs ?? 30_000;
   const answerMode = opts.answerMode ?? 'correct';
   const skip = new Set<number>(opts.skipQIndices ?? []);
   const answered = new Set<number>();
+  const executedChaos = new Set<number>();
   const playAcks = createBotClientAckState();
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
     if (trace.byEvent('match:final_results').length > 0) return;
     if (run.autoClientReadyAcks !== false) {
+      await handleBotRejoinAvailableFromTrace(run, playAcks);
+      if (trace.byEvent('match:final_results').length > 0) return;
       ackPossessionReadyForNextQuestionFromTrace(trace, [{ userId: run.botUserId }], playAcks);
-      await ackResumeUiReadyFromTrace(io, trace, [botSocket], playAcks);
+      await ackResumeUiReadyFromTrace(io, trace, [run.botSocket], playAcks);
     }
 
     // Answer the latest unanswered question (any kind) so the round resolves.
     const questions = trace.byEvent('match:question');
-    const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
+    let latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
     if (latest && !answered.has(latest.qIndex) && !skip.has(latest.qIndex)) {
+      let ranChaos = false;
+      for (let i = 0; i < (opts.chaosPlan?.actions.length ?? 0); i += 1) {
+        const action = opts.chaosPlan!.actions[i]!;
+        if (executedChaos.has(i) || action.atQIndex !== latest.qIndex) continue;
+        executedChaos.add(i);
+        await executeChaosAction(run, action);
+        ranChaos = true;
+        if (trace.byEvent('match:final_results').length > 0) return;
+      }
+      if (ranChaos) {
+        const refreshedQuestions = trace.byEvent('match:question');
+        const refreshed = refreshedQuestions[refreshedQuestions.length - 1]?.payload as QuestionEventPayload | undefined;
+        if (refreshed?.qIndex === latest.qIndex) latest = refreshed;
+      }
       answered.add(latest.qIndex);
       const plan = opts.answerPlan?.[latest.qIndex];
       if (typeof plan?.emitRevealAckAtMs === 'number') {
         await waitMs(msUntilQuestionOffset(latest, plan.emitRevealAckAtMs));
-        await matchRealtimeService.handleQuestionRevealed(botSocket as never, {
+        trace.record('client->server', 'match:question_revealed', {
+          matchId: latest.matchId,
+          qIndex: latest.qIndex,
+          userId: run.botUserId,
+        }, run.botSocket.id);
+        await matchRealtimeService.handleQuestionRevealed(run.botSocket as never, {
           matchId: latest.matchId,
           qIndex: latest.qIndex,
         });
@@ -431,7 +546,14 @@ export async function playMatch(
           })();
       await waitMs(wait);
       try {
-        await answerQuestion(io, botSocket, latest, plan?.mode ?? answerMode, plan?.timeMs);
+        trace.record('client->server', 'match:answer', {
+          matchId: latest.matchId,
+          qIndex: latest.qIndex,
+          userId: run.botUserId,
+          questionKind: latest.question?.kind ?? null,
+          timeMs: plan?.timeMs ?? 300,
+        }, run.botSocket.id);
+        await answerQuestion(io, run.botSocket, latest, plan?.mode ?? answerMode, plan?.timeMs);
       } catch {
         // A late/duplicate/invalid answer can throw; ignore — the engine guards
         // it and the round still resolves on timeout if needed.
@@ -527,7 +649,25 @@ export async function playLobbyMatch(
 
 /** The bot disconnects (transport drop) — pauses the match, starts the grace window. */
 export async function botDisconnect(run: RunMatchResult): Promise<void> {
+  run.trace.record('client->server', 'match:disconnect', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: run.botSocket.id,
+    connectedAt: run.botSocket.data.connectedAt ?? null,
+  }, run.botSocket.id);
   await handleMatchDisconnect(run.io as never, run.botSocket as never);
+}
+
+export async function flap(run: RunMatchResult, n: number): Promise<void> {
+  const count = Math.max(1, Math.floor(n));
+  for (let i = 0; i < count; i += 1) {
+    await botDisconnect(run);
+    if (run.trace.byEvent('match:final_results').length > 0) return;
+    await waitMs(5);
+    await botReconnect(run);
+    if (run.trace.byEvent('match:final_results').length > 0) return;
+    await waitMs(5);
+  }
 }
 
 /**
@@ -540,11 +680,19 @@ export async function expireGrace(run: RunMatchResult): Promise<void> {
   }
 }
 
+export async function expireGraceAfterDisconnect(run: RunMatchResult): Promise<void> {
+  await botDisconnect(run);
+  await expireGrace(run);
+}
+
 /**
  * The bot reconnects: drop the old fake socket, make a NEW one for the same user,
  * run connect hydration + rejoin (the real reconnect path).
  */
 export async function botReconnect(run: RunMatchResult): Promise<void> {
+  const oldSocket = run.botSocket;
+  const oldConnectedAt = typeof oldSocket.data.connectedAt === 'number' ? oldSocket.data.connectedAt : Date.now();
+  run.lastSupersededSocket = { id: oldSocket.id, connectedAt: oldConnectedAt };
   run.io.removeSocket(run.botSocket);
   const fresh = run.io.createSocket(`bot-socket-${Date.now()}`, {
     user: { id: run.botUserId },
@@ -555,9 +703,21 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
   run.botSocket = fresh;
   // Connect hydration (rejoinActiveMatchOnConnect) then explicit rejoin.
   await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
+  if (run.trace.byEvent('match:final_results').length > 0) return;
   if (run.matchId) {
+    run.trace.record('client->server', 'match:rejoin', {
+      matchId: run.matchId,
+      userId: run.botUserId,
+      socketId: fresh.id,
+      supersededSocketId: oldSocket.id,
+    }, fresh.id);
     await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+    if (run.trace.byEvent('match:final_results').length > 0) return;
     if (run.autoClientReadyAcks !== false) {
+      run.trace.record('client->server', 'match:resume_ui_ready', {
+        matchId: run.matchId,
+        userId: run.botUserId,
+      }, fresh.id);
       await matchRealtimeService.handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
     }
     // Rejoin schedules a resume countdown (collapsed under fast-timers) that emits
@@ -567,16 +727,161 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
     const before = run.trace.byEvent('match:resume').length;
     const resumeAcks = createBotClientAckState();
     const resumed = await waitUntil(
-      () => run.trace.byEvent('match:resume').length > before,
+      () => run.trace.byEvent('match:resume').length > before || run.trace.byEvent('match:final_results').length > 0,
       8_000,
       25,
       run.autoClientReadyAcks !== false
         ? () => ackResumeUiReadyFromTrace(run.io, run.trace, [fresh], resumeAcks)
         : undefined,
     );
+    if (run.trace.byEvent('match:final_results').length > 0) return;
     if (!resumed) {
       throw new Error('botReconnect: match:resume never fired after rejoin (resume stuck).');
     }
+  }
+}
+
+async function recordQuestionPresence(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  run.trace.record('client->server', 'match:presence_heartbeat', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    stageKey: 'question',
+    socketId: run.botSocket.id,
+  }, run.botSocket.id);
+  await recordMatchStagePresenceHeartbeat({
+    matchId: run.matchId,
+    userId: run.botUserId,
+    stageKey: 'question',
+    socketId: run.botSocket.id,
+  });
+}
+
+export async function staleDisconnect(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  const now = Date.now();
+  const oldConnectedAt = run.lastSupersededSocket?.connectedAt ?? now - 12_000;
+  run.botSocket.data.connectedAt = Math.max(oldConnectedAt + 1, now - 6_000);
+  await recordQuestionPresence(run);
+  run.trace.record('client->server', 'match:stale_disconnect', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    staleSocketId: run.lastSupersededSocket?.id ?? 'old-superseded-id',
+    liveSocketId: run.botSocket.id,
+    disconnectedConnectedAt: oldConnectedAt,
+  }, run.botSocket.id);
+  const before = run.trace.byEvent('match:resume').length;
+  await pauseMatchForDisconnectedPlayer(run.io as never, run.matchId, run.botUserId, {
+    ignoreSocketId: run.lastSupersededSocket?.id ?? 'old-superseded-id',
+    disconnectedConnectedAt: oldConnectedAt,
+    autoResumeReplacementSocket: true,
+  });
+  const resumeAcks = createBotClientAckState();
+  await waitUntil(
+    () => run.trace.byEvent('match:resume').length > before,
+    1_000,
+    25,
+    run.autoClientReadyAcks !== false
+      ? async () => {
+          await handleBotRejoinAvailableFromTrace(run, resumeAcks);
+          await ackResumeUiReadyFromTrace(run.io, run.trace, [run.botSocket], resumeAcks);
+        }
+      : undefined,
+  );
+  await recordQuestionPresence(run);
+}
+
+export async function quitRejoin(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  run.trace.record('client->server', 'match:leave', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: run.botSocket.id,
+  }, run.botSocket.id);
+  await matchRealtimeService.handleMatchLeave(run.io as never, run.botSocket as never, run.matchId);
+  run.trace.record('client->server', 'match:rejoin', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: run.botSocket.id,
+  }, run.botSocket.id);
+  await handleMatchRejoin(run.io as never, run.botSocket as never, run.matchId);
+  if (run.autoClientReadyAcks !== false) {
+    run.trace.record('client->server', 'match:resume_ui_ready', {
+      matchId: run.matchId,
+      userId: run.botUserId,
+    }, run.botSocket.id);
+    await matchRealtimeService.handleResumeUiReady(run.io as never, run.botSocket as never, { matchId: run.matchId });
+  }
+  const before = run.trace.byEvent('match:resume').length;
+  const resumeAcks = createBotClientAckState();
+  await waitUntil(
+    () => run.trace.byEvent('match:resume').length > before || run.trace.byEvent('match:final_results').length > 0,
+    8_000,
+    25,
+    run.autoClientReadyAcks !== false
+      ? async () => {
+          await handleBotRejoinAvailableFromTrace(run, resumeAcks);
+          await ackResumeUiReadyFromTrace(run.io, run.trace, [run.botSocket], resumeAcks);
+        }
+      : undefined,
+  );
+}
+
+export async function multiTab(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  const first = run.botSocket;
+  const second = run.io.createSocket(`bot-socket-tab-${Date.now()}`, {
+    user: { id: run.botUserId },
+    // Newer than the socket being killed: the engine only accepts a REPLACEMENT
+    // (connectedAt >= dying socket's) as presence proof. An OLDER live tab is
+    // rejected by that rule — a real engine gap, tracked in CHAOS-FINDINGS.md.
+    connectedAt: Date.now(),
+    matchId: run.matchId,
+  });
+  second.join(`user:${run.botUserId}`);
+  run.trace.record('client->server', 'match:rejoin', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: second.id,
+    source: 'multiTab',
+  }, second.id);
+  await handleMatchRejoin(run.io as never, second as never, run.matchId);
+  run.botSocket = second;
+  await recordQuestionPresence(run);
+  run.io.removeSocket(first);
+  run.trace.record('client->server', 'match:disconnect', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: first.id,
+    connectedAt: first.data.connectedAt ?? null,
+    source: 'multiTabFirstSocketRemoved',
+  }, first.id);
+  await handleMatchDisconnect(run.io as never, first as never);
+  await recordQuestionPresence(run);
+}
+
+export async function zombieReconnect(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  const previousSuppressedThrough = run.suppressedRejoinAvailableThroughSeq ?? -1;
+  run.suppressAutoRejoinAvailable = true;
+  try {
+    const markerBefore = Date.now() - 10_000;
+    await botDisconnect(run);
+    const zombie = run.io.createSocket(`bot-socket-zombie-${Date.now()}`, {
+      user: { id: run.botUserId },
+      connectedAt: markerBefore,
+    });
+    zombie.join(`user:${run.botUserId}`);
+    run.trace.record('client->server', 'match:zombie_reconnect', {
+      matchId: run.matchId,
+      userId: run.botUserId,
+      socketId: zombie.id,
+      connectedAt: markerBefore,
+    }, zombie.id);
+    await expireGrace(run);
+  } finally {
+    run.suppressAutoRejoinAvailable = false;
+    run.suppressedRejoinAvailableThroughSeq = Math.max(previousSuppressedThrough, latestTraceSeq(run.trace));
   }
 }
 

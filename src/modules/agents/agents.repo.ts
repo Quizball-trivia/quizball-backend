@@ -327,7 +327,9 @@ export const agentsRepo = {
   // ── Review queue ──
   // Draft questions the agents produced (status='draft', joined back to the task
   // that published them for source/verdicts). This is the editor's review inbox.
-  async reviewQueue(limit = 200): Promise<AgentReviewRow[]> {
+  // The limit is a safety valve, not pagination — the CMS filter pills count
+  // what's loaded, so it must comfortably exceed the realistic queue size.
+  async reviewQueue(limit = 1000): Promise<AgentReviewRow[]> {
     return sql<AgentReviewRow[]>`
       SELECT
         q.id,

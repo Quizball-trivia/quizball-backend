@@ -1,4 +1,5 @@
 import { NotFoundError, BadRequestError } from '../../core/errors.js';
+import { deleteQuestionImageByUrl } from '../questions/question-image-storage.service.js';
 import {
   agentsRepo,
   type AgentJobRow,
@@ -37,6 +38,8 @@ const CHALLENGE_BY_QUESTION_TYPE: Record<string, { challengeType: string; title:
   clue_chain: [{ challengeType: 'clues', title: 'Clues' }],
   put_in_order: [{ challengeType: 'putInOrder', title: 'Put in Order' }],
   career_path: [{ challengeType: 'careerPath', title: 'Career Path' }],
+  imposter_multi_select: [{ challengeType: 'imposter', title: "Pick'em" }],
+  high_low: [{ challengeType: 'highLow', title: 'High Low' }],
 };
 import type { Json } from '../../db/types.js';
 
@@ -174,22 +177,35 @@ export const agentsService = {
     return toJob(row);
   },
 
-  async spawn(body: SpawnJobBody, userId: string | null): Promise<AgentJob> {
-    const params: Json = {
-      type: body.type,
-      questionType: body.questionType,
-      category_id: body.categoryId,
-      topic: body.topic,
-      difficulty: body.difficulty,
-      count: body.count,
-    } as Json;
-    const row = await agentsRepo.createJob({
-      type: body.type,
-      params,
-      requestedBy: userId,
-      budgetCents: body.budgetCents ?? null,
-    });
-    return toJob(row);
+  // A difficultyMix ("25 hard / 20 medium / 5 easy") fans out into one job per
+  // non-zero difficulty; a plain difficulty+count stays a single job. The first
+  // job is returned (with spawnedJobs = total) so the existing UI keeps working.
+  async spawn(body: SpawnJobBody, userId: string | null): Promise<AgentJob & { spawnedJobs: number }> {
+    const splits = body.difficultyMix
+      ? (['easy', 'medium', 'hard'] as const)
+          .map((d) => ({ difficulty: d, count: body.difficultyMix?.[d] ?? 0 }))
+          .filter((s) => s.count > 0)
+      : [{ difficulty: body.difficulty, count: body.count ?? 25 }];
+
+    let first: Awaited<ReturnType<typeof agentsRepo.createJob>> | null = null;
+    for (const split of splits) {
+      const params: Json = {
+        type: body.type,
+        questionType: body.questionType,
+        category_id: body.categoryId,
+        topic: body.topic,
+        difficulty: split.difficulty,
+        count: split.count,
+      } as Json;
+      const row = await agentsRepo.createJob({
+        type: body.type,
+        params,
+        requestedBy: userId,
+        budgetCents: body.budgetCents ?? null,
+      });
+      first ??= row;
+    }
+    return { ...toJob(first!), spawnedJobs: splits.length };
   },
 
   async cancel(id: string): Promise<void> {
@@ -402,7 +418,23 @@ export const agentsService = {
   },
 
   async rejectQuestion(questionId: string): Promise<void> {
+    const imageUrl = await agentsRepo.questionImageUrl(questionId);
     const ok = await agentsRepo.setQuestionStatus(questionId, 'archived');
+    if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    await deleteQuestionImageByUrl(imageUrl); // rejected drafts don't keep their photo in the bucket
+  },
+
+  // Editor fix-ups (wrong translation, typo, awkward phrasing) applied in place
+  // from the review queue — no reject/regenerate cycle needed.
+  async updateReviewQuestion(
+    questionId: string,
+    body: { prompt?: { en: string; ka: string }; payload?: Record<string, unknown> }
+  ): Promise<void> {
+    const ok = await agentsRepo.updateQuestionContent(
+      questionId,
+      body.prompt as Json | undefined,
+      body.payload as Json | undefined
+    );
     if (!ok) throw new NotFoundError('Draft agent question not found (already reviewed?)');
   },
 
@@ -412,7 +444,9 @@ export const agentsService = {
   async regenerateQuestion(questionId: string, userId: string | null): Promise<AgentJob> {
     const ctx = await agentsRepo.questionRegenContext(questionId);
     if (!ctx) throw new NotFoundError('Draft agent question not found (already reviewed?)');
+    const imageUrl = await agentsRepo.questionImageUrl(questionId);
     await agentsRepo.setQuestionStatus(questionId, 'archived');
+    await deleteQuestionImageByUrl(imageUrl); // the replacement job sources a fresh photo
     const row = await agentsRepo.createJob({
       type: ctx.job_type,
       params: {
@@ -470,6 +504,7 @@ export const agentsService = {
     spentMonthCents: number;
     monthlyCreditCents: number;
     paused: boolean;
+    pauseReason: string | null;
   }> {
     const now = new Date();
     const weekSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -487,6 +522,9 @@ export const agentsService = {
       spentMonthCents: spentMonth,
       monthlyCreditCents: MONTHLY_CREDIT_CENTS,
       paused: b?.paused ?? false,
+      // why we're paused (latest auto_pause event, e.g. subscription limit) —
+      // only meaningful while paused
+      pauseReason: b?.paused ? await agentsRepo.latestAutoPauseReason() : null,
     };
   },
 

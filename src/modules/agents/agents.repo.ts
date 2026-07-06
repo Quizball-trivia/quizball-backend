@@ -327,7 +327,9 @@ export const agentsRepo = {
   // ── Review queue ──
   // Draft questions the agents produced (status='draft', joined back to the task
   // that published them for source/verdicts). This is the editor's review inbox.
-  async reviewQueue(limit = 200): Promise<AgentReviewRow[]> {
+  // The limit is a safety valve, not pagination — the CMS filter pills count
+  // what's loaded, so it must comfortably exceed the realistic queue size.
+  async reviewQueue(limit = 1000): Promise<AgentReviewRow[]> {
     return sql<AgentReviewRow[]>`
       SELECT
         q.id,
@@ -374,6 +376,43 @@ export const agentsRepo = {
       RETURNING id
     `;
     return rows.length > 0;
+  },
+
+  // Most recent auto_pause event message (why the system paused itself).
+  async latestAutoPauseReason(): Promise<string | null> {
+    const [row] = await sql<{ message: string | null }[]>`
+      SELECT message FROM agents.events WHERE type = 'auto_pause' ORDER BY ts DESC LIMIT 1
+    `;
+    return row?.message ?? null;
+  },
+
+  // The stored image URL of a question's payload (null when it has none).
+  async questionImageUrl(questionId: string): Promise<string | null> {
+    const [row] = await sql<{ url: string | null }[]>`
+      SELECT payload -> 'image' ->> 'url' AS url
+      FROM public.question_payloads WHERE question_id = ${questionId}
+    `;
+    return row?.url ?? null;
+  },
+
+  // Editor fix-ups from the review queue: update the question's prompt and/or
+  // its payload text. Scoped to DRAFT agent questions only (same guard as
+  // approve/reject) so unrelated live questions can't be touched.
+  async updateQuestionContent(questionId: string, prompt?: Json, payload?: Json): Promise<boolean> {
+    const guard = sql`
+      SELECT q.id FROM public.questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      WHERE q.id = ${questionId} AND q.status = 'draft'
+    `;
+    const [exists] = await guard;
+    if (!exists) return false;
+    if (prompt !== undefined) {
+      await sql`UPDATE public.questions SET prompt = ${sql.json(prompt)}, updated_at = now() WHERE id = ${questionId}`;
+    }
+    if (payload !== undefined) {
+      await sql`UPDATE public.question_payloads SET payload = ${sql.json(payload)} WHERE question_id = ${questionId}`;
+    }
+    return true;
   },
 
   // The context needed to regenerate a draft question: its type + category +

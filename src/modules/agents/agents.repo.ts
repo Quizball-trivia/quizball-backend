@@ -302,9 +302,12 @@ export const agentsRepo = {
   },
 
   // last N jobs produced by a schedule's job_type (the run history for that schedule)
-  async scheduleRuns(jobType: string, limit = 30): Promise<AgentJobRow[]> {
+  // Runs are matched by the scheduled_by tag the cron stamps on its jobs —
+  // matching by job TYPE showed unrelated manual spawns (ranked shares
+  // mcq_generate with the Spawn form).
+  async scheduleRuns(scheduleId: string, limit = 30): Promise<AgentJobRow[]> {
     return sql<AgentJobRow[]>`
-      SELECT * FROM agents.jobs WHERE type = ${jobType}
+      SELECT * FROM agents.jobs WHERE params->>'scheduled_by' = ${scheduleId}
       ORDER BY created_at DESC LIMIT ${limit}
     `;
   },

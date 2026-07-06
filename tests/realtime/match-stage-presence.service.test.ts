@@ -102,6 +102,44 @@ describe('match-stage-presence.service', () => {
     })).resolves.toBe(false);
   });
 
+  it('finds socket-scoped replacement presence under any valid match stage', async () => {
+    const {
+      hasAnyMatchStagePresenceFromSocketIds,
+      recordMatchStagePresenceHeartbeat,
+    } = await import('../../src/realtime/services/match-stage-presence.service.js');
+
+    await recordMatchStagePresenceHeartbeat({
+      matchId: 'm1',
+      userId: 'u1',
+      stageKey: 'question',
+      socketId: 'match-socket-1',
+    });
+
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['match-socket-1'],
+    })).resolves.toBe(true);
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['other-socket'],
+    })).resolves.toBe(false);
+  });
+
+  it('does not treat legacy timestamp-only stage presence as socket replacement proof', async () => {
+    const { hasAnyMatchStagePresenceFromSocketIds } = await import(
+      '../../src/realtime/services/match-stage-presence.service.js'
+    );
+    redisValues.set('match:stage_presence:m1:question:u1', String(Date.now()));
+
+    await expect(hasAnyMatchStagePresenceFromSocketIds({
+      matchId: 'm1',
+      userId: 'u1',
+      socketIds: ['match-socket-1'],
+    })).resolves.toBe(false);
+  });
+
   it('returns redis_unavailable if Redis fails while polling stage readiness', async () => {
     const { waitForMatchStageReady } = await import('../../src/realtime/services/match-stage-presence.service.js');
     fakeRedis.exists.mockRejectedValueOnce(new Error('redis failover'));

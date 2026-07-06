@@ -132,10 +132,8 @@ export async function hasAnyMatchStagePresenceFromSocketIds(params: {
   if (!redis?.isOpen) return false;
 
   const socketIds = new Set(params.socketIds);
-  const rawValues = await Promise.all(
-    MATCH_STAGE_KEYS.map((stageKey) =>
-      redis.get(matchStagePresenceKey(params.matchId, stageKey, params.userId))
-    )
+  const rawValues = await redis.mGet(
+    MATCH_STAGE_KEYS.map((stageKey) => matchStagePresenceKey(params.matchId, stageKey, params.userId))
   );
 
   return rawValues.some((raw) => {

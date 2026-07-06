@@ -258,6 +258,8 @@ describe('pauseMatchForDisconnectedPlayer reconnect-limit hardening', () => {
       '../../src/realtime/services/match-disconnect.service.js'
     );
     redisValues.set('match:reconnect_count:m1:u1', '3');
+    // Call order: (1) matchUiReplacementSocketPresent, (2) stableMatchUiSocketPresent,
+    // (3) the reconnect-limit liveness re-check.
     hasAnyStagePresenceMock
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)

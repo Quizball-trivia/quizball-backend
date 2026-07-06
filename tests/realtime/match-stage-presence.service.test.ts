@@ -10,6 +10,7 @@ const fakeRedis = {
     return 'OK';
   }),
   get: vi.fn(async (key: string) => redisValues.get(key) ?? null),
+  mGet: vi.fn(async (keys: string[]) => keys.map((key) => redisValues.get(key) ?? null)),
   exists: vi.fn(async (key: string) => (redisValues.has(key) ? 1 : 0)),
 };
 

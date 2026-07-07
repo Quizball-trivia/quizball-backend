@@ -449,6 +449,35 @@ export const translationService = {
   /**
    * Get counts of items needing translation (fast query, no translation).
    */
+  // ── Agent-scoped translation (the Agents tab button) ──
+  // "Agent-generated" = joined to the agents.tasks row that published it. Only
+  // these are touched; the rest of the question bank is left alone.
+  async agentUntranslatedIds(): Promise<string[]> {
+    const rows = await sql<{ id: string }[]>`
+      SELECT DISTINCT q.id
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
+    `;
+    return rows.map((r) => r.id);
+  },
+
+  async getAgentBackfillCounts(): Promise<{ questions: number; categories: number }> {
+    const [qr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
+    `;
+    return { questions: qr?.n ?? 0, categories: 0 };
+  },
+
   async getBackfillCounts(): Promise<{ questions: number; categories: number }> {
     // Counted in SQL — the old version loaded EVERY question row + payload into
     // Node and filtered in JS, which timed out the start endpoint on staging.

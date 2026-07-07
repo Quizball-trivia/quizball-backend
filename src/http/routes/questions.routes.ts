@@ -154,7 +154,7 @@ router.post(
   '/translate/backfill',
   authMiddleware,
   requireRole('admin'),
-  validate({ body: z.object({}).strict().optional() }),
+  validate({ body: z.object({ scope: z.enum(['all', 'agents']).optional() }).strict().optional() }),
   questionsController.translateBackfill
 );
 
@@ -167,7 +167,7 @@ router.get(
   '/translate/status',
   authMiddleware,
   requireRole('admin'),
-  validate({ query: z.object({ cache_bust: z.coerce.number().optional() }).strict() }),
+  validate({ query: z.object({ cache_bust: z.coerce.number().optional(), scope: z.enum(['all', 'agents']).optional() }).strict() }),
   questionsController.translateStatus
 );
 

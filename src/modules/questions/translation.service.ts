@@ -501,10 +501,12 @@ export const translationService = {
   /**
    * Backfill: translate ALL questions that have "en" but no "ka".
    */
-  // Strip every Georgian value from DRAFT questions (prompt/explanation/payload)
-  // so the standard backfill re-translates them from scratch. Used by the CMS
-  // "re-translate drafts" action — scoped to drafts so live questions with
-  // hand-checked translations can never be overwritten.
+  // Strip every Georgian value from AGENT-GENERATED questions (drafts AND
+  // approved) so the standard backfill re-translates them from scratch. Scoped
+  // by the agents.tasks join — the wider question bank (hand-written Georgian)
+  // is untouchable. NOTE: published agent questions briefly lose their Georgian
+  // until the background run refills them — fine on staging; before prod
+  // go-live this should chunk (wipe+translate 50 at a time).
   async clearDraftGeorgian(): Promise<string[]> {
     const wipeKa = (node: unknown): unknown => {
       if (Array.isArray(node)) return node.map(wipeKa);
@@ -520,11 +522,12 @@ export const translationService = {
     };
 
     const rows = await sql<{ id: string; prompt: Json | null; explanation: Json | null; payload: Json | null; payload_is_string: boolean }[]>`
-      SELECT q.id, q.prompt, q.explanation, qp.payload,
+      SELECT DISTINCT ON (q.id) q.id, q.prompt, q.explanation, qp.payload,
              (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'string') AS payload_is_string
       FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE q.status = 'draft'
+      WHERE q.status IN ('draft', 'published')
     `;
     const ids: string[] = [];
     for (const row of rows) {

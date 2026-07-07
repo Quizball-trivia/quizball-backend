@@ -339,16 +339,19 @@ export const questionsController = {
         missing: ['OPENROUTER_API_KEY'],
       });
     }
-    const ids = await translationService.clearDraftGeorgian();
-    if (ids.length === 0) {
+    // Respond IMMEDIATELY — the wipe walks thousands of rows and used to run in
+    // the request path, timing out the client while the server kept going.
+    const counts = await translationService.getAgentBackfillCounts();
+    if (counts.agentTotal === 0) {
       res.json({ status: 'done', total: 0, remaining: 0, categories: 0 });
       return;
     }
     translationService
-      .translateQuestions(ids)
-      .then((result) => logger.info(result, 'Draft re-translation completed'))
-      .catch((err) => logger.error({ error: err }, 'Draft re-translation failed'));
-    res.json({ status: 'started', total: ids.length, remaining: ids.length, categories: 0 });
+      .clearDraftGeorgian()
+      .then((ids) => translationService.translateQuestions(ids))
+      .then((result) => logger.info(result, 'Agent re-translation completed'))
+      .catch((err) => logger.error({ error: err }, 'Agent re-translation failed'));
+    res.json({ status: 'started', total: counts.agentTotal, remaining: counts.agentTotal, categories: 0 });
   },
 
   /**

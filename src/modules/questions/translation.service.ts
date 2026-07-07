@@ -830,8 +830,11 @@ async function applyTranslation(
            updated_at = NOW()
        WHERE id = $3`,
       [
-        JSON.stringify(newPrompt),
-        newExplanation ? JSON.stringify(newExplanation) : null,
+        // pass OBJECTS — the driver JSON-serializes params bound to jsonb once;
+        // pre-stringifying double-encodes and stores a jsonb STRING (the bug
+        // behind every double-encoded prompt/payload row)
+        newPrompt,
+        newExplanation ?? null,
         original.id,
       ]
     );
@@ -842,7 +845,7 @@ async function applyTranslation(
          SET payload = $1::jsonb,
              updated_at = NOW()
          WHERE question_id = $2`,
-        [JSON.stringify(newPayload), original.id]
+        [newPayload, original.id]
       );
     }
   });

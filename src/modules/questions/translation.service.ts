@@ -465,7 +465,7 @@ export const translationService = {
     return rows.map((r) => r.id);
   },
 
-  async getAgentBackfillCounts(): Promise<{ questions: number; categories: number }> {
+  async getAgentBackfillCounts(): Promise<{ questions: number; categories: number; agentTotal: number }> {
     const [qr] = await sql<{ n: number }[]>`
       SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
@@ -475,7 +475,14 @@ export const translationService = {
          OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
          OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
     `;
-    return { questions: qr?.n ?? 0, categories: 0 };
+    // total agent questions the OVERWRITE mode would re-translate (draft + published)
+    const [tr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      WHERE q.status IN ('draft', 'published')
+    `;
+    return { questions: qr?.n ?? 0, categories: 0, agentTotal: tr?.n ?? 0 };
   },
 
   async getBackfillCounts(): Promise<{ questions: number; categories: number }> {

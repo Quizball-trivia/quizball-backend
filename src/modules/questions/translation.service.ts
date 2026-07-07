@@ -450,36 +450,23 @@ export const translationService = {
    * Get counts of items needing translation (fast query, no translation).
    */
   async getBackfillCounts(): Promise<{ questions: number; categories: number }> {
-    const questionRows = await sql<{
-      id: string;
-      prompt: Json | null;
-      explanation: Json | null;
-      payload: Json | null;
-    }[]>`
-      SELECT q.id, q.prompt, q.explanation, qp.payload
+    // Counted in SQL — the old version loaded EVERY question row + payload into
+    // Node and filtered in JS, which timed out the start endpoint on staging.
+    // The payload LIKE matches an untranslated leaf ({"en": ..., "ka": ""}) in
+    // jsonb text form; TARGET_LOCALE is 'ka' (hardcoded here for SQL simplicity).
+    const [qr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
     `;
-    const categoryRows = await sql<{ id: string; name: Json | null }[]>`
-      SELECT id, name FROM categories
+    const [cr] = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM categories c
+      WHERE COALESCE(c.name->>'en','') <> '' AND COALESCE(c.name->>'ka','') = ''
     `;
-    return {
-      questions: questionRows.filter((q) => {
-        const prompt = parseI18nField(q.prompt);
-        const explanation = parseI18nField(q.explanation);
-        const payload = parseQuestionPayload(q.payload);
-
-        return Boolean(
-          (prompt?.en && !prompt[TARGET_LOCALE])
-          || (explanation?.en && !explanation[TARGET_LOCALE])
-          || payloadNeedsTranslation(payload)
-        );
-      }).length,
-      categories: categoryRows.filter((c) => {
-        const name = parseI18nField(c.name);
-        return Boolean(name?.en && !name[TARGET_LOCALE]);
-      }).length,
-    };
+    return { questions: qr?.n ?? 0, categories: cr?.n ?? 0 };
   },
 
   /**

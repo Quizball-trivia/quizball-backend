@@ -42,9 +42,9 @@ describe('ranked possession AI skill scaling', () => {
   });
 
   it('tightens the high-band delay profile through 6000 RP', () => {
-    expect(delayProfileFromAnchor(4350)).toEqual({ minMs: 1000, maxMs: 3850 });
-    expect(delayProfileFromAnchor(6000)).toEqual({ minMs: 1500, maxMs: 4000 });
-    expect(delayProfileFromAnchor(25000)).toEqual({ minMs: 1500, maxMs: 4000 });
+    expect(delayProfileFromAnchor(4350)).toEqual({ minMs: 500, maxMs: 2950 });
+    expect(delayProfileFromAnchor(6000)).toEqual({ minMs: 500, maxMs: 2200 });
+    expect(delayProfileFromAnchor(25000)).toEqual({ minMs: 500, maxMs: 2200 });
   });
 
   it('orders adjusted correctness by question difficulty at a fixed rank', () => {

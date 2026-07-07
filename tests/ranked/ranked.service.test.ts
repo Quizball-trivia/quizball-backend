@@ -293,7 +293,23 @@ describe('rankedService', () => {
     expect(first.aiAnchorRp).toBeLessThanOrEqual(Math.round(20795 * 1.1));
     expect(first.aiAnchorRp % 25).toBe(0);
     expect(first.aiCorrectness).toBe(0.85);
-    expect(first.aiDelayProfile).toEqual({ minMs: 1500, maxMs: 4000 });
+    expect(first.aiDelayProfile).toEqual({ minMs: 500, maxMs: 2200 });
+  });
+
+  it('never lets jitter drop a high-band player onto the low-band curve', () => {
+    const profile = createProfile({
+      user_id: 'band-edge',
+      rp: 2800,
+      tier: 'GOAT',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_wins: 3,
+    });
+
+    for (let i = 0; i < 25; i += 1) {
+      const ctx = withSeed(`ranked-ai-band-edge-${i}`, () => rankedService.buildAiMatchContext(profile));
+      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
+    }
   });
 
   it('keeps placed low-RP AI anchors unchanged when jitter is neutral', () => {

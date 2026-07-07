@@ -39,7 +39,7 @@ const MAX_PLACEMENT_ANCHOR_RP = 2700;
 const MAX_RANKED_AI_ANCHOR_RP = 25000;
 const HIGH_BAND_TARGET_ANCHOR_RP = 6000;
 const HIGH_BAND_MAX_CORRECTNESS = 0.85;
-const HIGH_BAND_DELAY_PROFILE = { minMs: 1500, maxMs: 4000 };
+const HIGH_BAND_DELAY_PROFILE = { minMs: 500, maxMs: 2200 };
 // ── Season 2026 RP formula ──────────────────────────────────────────────────
 // Transparent, margin-based scoring (replaces the old Elo-style delta). A win
 // is worth a flat base by how it was decided, plus a goal-margin bonus, plus a
@@ -210,7 +210,9 @@ export function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs
 
 function computeRankedAiAnchor(profile: RankedProfileRow): number {
   const jitter = 0.9 + (getRandom() * 0.2);
-  return clamp(roundToNearest25(profile.rp * jitter), MIN_PLACEMENT_ANCHOR_RP, MAX_RANKED_AI_ANCHOR_RP);
+  const jittered = clamp(roundToNearest25(profile.rp * jitter), MIN_PLACEMENT_ANCHOR_RP, MAX_RANKED_AI_ANCHOR_RP);
+  // Jitter must not drop a high-band player back onto the low-band skill curve.
+  return profile.rp > MAX_PLACEMENT_ANCHOR_RP ? Math.max(jittered, MAX_PLACEMENT_ANCHOR_RP) : jittered;
 }
 
 export const rankedService = {

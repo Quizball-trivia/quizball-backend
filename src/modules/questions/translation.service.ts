@@ -458,9 +458,10 @@ export const translationService = {
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+      WHERE q.status IN ('draft', 'published') -- don't waste spend on judge-archived rejects
+        AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
          OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
-         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
     `;
     return rows.map((r) => r.id);
   },
@@ -471,9 +472,10 @@ export const translationService = {
       FROM questions q
       JOIN agents.tasks t ON t.published_question_id = q.id
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
-      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+      WHERE q.status IN ('draft', 'published')
+        AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
          OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
-         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
     `;
     // total agent questions the OVERWRITE mode would re-translate (draft + published)
     const [tr] = await sql<{ n: number }[]>`

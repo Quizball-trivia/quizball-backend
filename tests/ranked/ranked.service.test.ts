@@ -296,6 +296,23 @@ describe('rankedService', () => {
     expect(first.aiDelayProfile).toEqual({ minMs: 500, maxMs: 2200 });
   });
 
+  it('clamps extreme anchors at the 25000 ceiling', () => {
+    const profile = createProfile({
+      user_id: 'anchor-ceiling',
+      rp: 30000,
+      tier: 'GOAT',
+      placement_status: 'placed',
+      placement_played: 3,
+      placement_wins: 3,
+    });
+
+    for (let i = 0; i < 25; i += 1) {
+      const ctx = withSeed(`ranked-ai-anchor-ceiling-${i}`, () => rankedService.buildAiMatchContext(profile));
+      expect(ctx.aiAnchorRp).toBeLessThanOrEqual(25000);
+      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
+    }
+  });
+
   it('never lets jitter drop a high-band player onto the low-band curve', () => {
     const profile = createProfile({
       user_id: 'band-edge',

@@ -154,7 +154,7 @@ router.post(
   '/translate/backfill',
   authMiddleware,
   requireRole('admin'),
-  validate({ body: z.object({}).strict().optional() }),
+  validate({ body: z.object({ scope: z.enum(['all', 'agents']).optional() }).strict().optional() }),
   questionsController.translateBackfill
 );
 

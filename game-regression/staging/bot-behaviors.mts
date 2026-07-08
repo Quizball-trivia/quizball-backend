@@ -101,24 +101,31 @@ export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {
     client.socket.emit('draft:ban', payload);
     options.onDraftBanSent?.(payload);
   };
+  const bannedCategoryIds = new Set<string>();
   client.socket.on('draft:start', (state: { lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }) => {
     banCount = 0;
+    bannedCategoryIds.clear();
     if (!options.legacyProtocol) {
       client.socket.emit('draft:ui_ready', { ...(state.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     }
     if (state.turnUserId === client.userId && state.categories[0]) {
+      bannedCategoryIds.add(state.categories[0].id);
       emitBan(state.categories[0].id);
     }
   });
-  client.socket.on('draft:banned', () => {
+  client.socket.on('draft:banned', (banned: { categoryId?: string } | undefined) => {
     const state = client.latest<{ lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
     banCount = Math.min(banCount + 1, 2);
+    if (banned?.categoryId) bannedCategoryIds.add(banned.categoryId);
     if (!options.legacyProtocol) {
       client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     }
     if (state && state.turnUserId === client.userId) {
-      const next = state.categories.find((c) => c.id);
-      if (next) emitBan(next.id);
+      const next = state.categories.find((c) => !bannedCategoryIds.has(c.id));
+      if (next) {
+        bannedCategoryIds.add(next.id);
+        emitBan(next.id);
+      }
     }
   });
 }

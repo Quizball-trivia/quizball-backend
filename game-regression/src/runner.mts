@@ -69,6 +69,7 @@ export interface RunMatchResult {
   botSocket: FakeSocket;
   autoClientReadyAcks: boolean;
   lastSupersededSocket?: { id: string; connectedAt: number };
+  blindKickoffAckMinSeq?: number;
   suppressAutoRejoinAvailable?: boolean;
   suppressedRejoinAvailableThroughSeq?: number;
   economyBaseline?: Array<{ userId: string; ticketsBeforeQueueJoin: number }>;
@@ -185,8 +186,19 @@ async function ackKickoffUiReadyFromTrace(
   trace: EventTrace,
   sockets: FakeSocket[],
   acks: BotClientAckState,
+  minWaitingSeq?: number,
 ): Promise<void> {
-  for (const matchId of collectKickoffMatchIds(trace)) {
+  // A blind gate flap must not ack from pre-reconnect state: recovery is only
+  // legitimate off a waiting_for_ready the server re-emitted AFTER reconnect.
+  const matchIds = typeof minWaitingSeq === 'number'
+    ? [...new Set(trace.byEvent('match:waiting_for_ready')
+        .filter((event) =>
+          event.seq >= minWaitingSeq &&
+          (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff')
+        .map((event) => matchIdFromPayload(event.payload))
+        .filter((id): id is string => Boolean(id)))]
+    : collectKickoffMatchIds(trace);
+  for (const matchId of matchIds) {
     for (const socket of sockets) {
       const key = `${socket.data.user.id}:${matchId}`;
       if (acks.kickoffUiReady.has(key)) continue;
@@ -411,7 +423,7 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
       ? async () => {
           await ackBotDraftUiReady(io, run.botSocket, trace, bootAcks);
           await maybeExecuteKickoffGateChaos(run, gateAction, gateChaos);
-          await ackKickoffUiReadyFromTrace(io, trace, [run.botSocket], bootAcks);
+          await ackKickoffUiReadyFromTrace(io, trace, [run.botSocket], bootAcks, run.blindKickoffAckMinSeq);
           if (gateAction) await ackResumeUiReadyFromTrace(io, trace, [run.botSocket], bootAcks, true);
         }
       : undefined,
@@ -1143,6 +1155,7 @@ export async function flapAtKickoffGate(
     mode,
     withinGrace: reconnectDelayMs < 20_000,
   }, fresh.id);
+  if (mode === 'blind') run.blindKickoffAckMinSeq = latestTraceSeq(run.trace) + 1;
 }
 
 async function recordQuestionPresence(run: RunMatchResult): Promise<void> {

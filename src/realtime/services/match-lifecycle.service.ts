@@ -41,6 +41,7 @@ import { getRedisClient } from '../redis.js';
 import {
   acknowledgeMatchUiReady,
   emitMatchUiReadyGateState,
+  emitMatchUiReadyGateStateToSocket,
   openMatchUiReadyGate,
   type MatchUiReadyDispatchReason,
 } from '../match-ui-ready-gate.js';
@@ -595,7 +596,14 @@ export async function rejoinActiveMatchOnConnect(
     await redis.set(matchPresenceKey(match.id, userId), '1', { EX: PRESENCE_TTL_SEC });
   }
 
+  if (variant !== 'friendly_party_quiz') {
+    emitMatchUiReadyGateStateToSocket(socket, match.id, 'kickoff');
+  }
+
   if (redis && isPaused) {
+    if (variant !== 'friendly_party_quiz') {
+      emitMatchUiReadyGateStateToSocket(socket, match.id, 'resume');
+    }
     const otherParticipants = participants.filter((participant) => participant.user_id !== userId);
     const disconnectedExists = await Promise.all(
       otherParticipants.map((participant) =>

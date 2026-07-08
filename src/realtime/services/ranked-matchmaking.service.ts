@@ -687,6 +687,25 @@ async function startAiFallbackWithCountry(
       });
       return;
     }
+    if (!await hasLiveAuthenticatedSocket(io, userId)) {
+      if (redis) {
+        await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
+      }
+      const searchId = await bestEffortCancelRankedQueueSearch(userId, 'ranked_ai_fallback_absent_socket');
+      trackRankedQueueLeft({
+        userId,
+        source: 'server_abort',
+        searchFound: Boolean(searchId),
+        searchId,
+      });
+      io.to(`user:${userId}`).emit('ranked:queue_left');
+      await userSessionGuardService.emitState(io, userId);
+      logger.warn({ userId }, 'Ranked matchmaking fallback skipped: queued user has no live socket');
+      rankedDebug('fallback_skipped_absent_socket', {
+        user: rankedDebugUser(userId),
+      });
+      return;
+    }
     if (!await hasTicketForRankedQueue(io, userId, 'ranked_ai_fallback_preflight')) {
       return;
     }

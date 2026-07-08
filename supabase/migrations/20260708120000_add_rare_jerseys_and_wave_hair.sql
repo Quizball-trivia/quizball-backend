@@ -1,5 +1,5 @@
--- Add the "rare" jersey drop (11 club/national jerseys) and the Wave hairstyle
--- to the avatar store. Prices are in in-game coins.
+-- Add the "rare" store drop: 17 club/national jerseys, 6 hairstyles, and
+-- 2 facial hair items to the avatar store. Prices are in in-game coins.
 
 INSERT INTO public.store_products (slug, type, name, description, price_cents, currency, metadata, is_active, sort_order)
 VALUES

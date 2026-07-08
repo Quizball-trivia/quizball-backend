@@ -251,7 +251,7 @@ export const agentsService = {
       startedAt: string;
       durationSeconds: number;
     }[];
-    recent: { generated: number; approved: number; rejected: number; failed: number; windowHours: number };
+    recent: { generated: number; approved: number; rejected: number; failed: number; judged: number; windowHours: number };
   }> {
     const windowHours = 1;
     const sinceIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();

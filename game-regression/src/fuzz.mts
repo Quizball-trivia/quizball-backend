@@ -172,6 +172,7 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
       const run = await bootMatch({
         startTimeoutMs: 25_000,
         autoClientReadyAcks: !planUsesWithheldReadyAcks(chaosPlan),
+        chaosPlan,
       });
       trace = run.trace;
       matchId = run.matchId;

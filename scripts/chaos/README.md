@@ -35,6 +35,12 @@ npx tsx scripts/chaos/run.ts --target=local --rps=200 --duration=15
 
 # HTTP pressure plus 5 ranked socket clients for 5 minutes, staggered over 10s
 npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=300 --sockets=5 --flap-rate=0.5
+
+# Boot-stage flap coverage: search, draft, and kickoff gate once per socket match
+npx tsx scripts/chaos/run.ts --target=staging --sockets=3 --matches-per-client=1 --flap-stage=search,draft,gate
+
+# Old mobile protocol profile: no draft/kickoff/resume UI-ready acks
+npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1 --legacy-protocol
 ```
 
 ### Flags
@@ -51,6 +57,8 @@ npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=300 --sockets=
 | `--api` / `--db` | from env | override API base / Postgres URL |
 | `--sockets` | `0` | concurrent socket.io ranked clients; `0` keeps HTTP-only behavior |
 | `--flap-rate` | `0` | average reconnect flaps per socket match |
+| `--flap-stage` | `match` | socket flap stages: `search`, `draft`, `gate`, `match`; repeat or comma-separate |
+| `--legacy-protocol` | off | emulate the old React Native protocol by skipping `draft:ui_ready`, kickoff/resume UI-ready, and reveal acks |
 | `--ramp-s` | `10` | seconds to stagger initial socket queue joins |
 | `--matches-per-client` | unset | stop each socket client after this many matches; if set without `--duration`, socket clients run until this count |
 
@@ -62,8 +70,10 @@ npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=300 --sockets=
 3. Top queries by total DB time during the run.
 4. Seq-scan / missing-index candidates (EXPLAIN on the slowest reads).
 5. With `--sockets > 0`: socket fleet totals, wrongful-forfeit count,
-   reconnect inflation, latency percentiles, socket error histograms, and a JSON
-   report under `scripts/chaos/reports/`.
+   boot-stage detector counts (`deadSearch`, `banRollback`, `gateAbandon`,
+   `legacyDraftStall`), draft replay style metrics, reconnect inflation, latency
+   percentiles, socket error histograms, and a JSON report under
+   `scripts/chaos/reports/`.
 
 The engine is **open-loop**: it fires at the target rate regardless of response
 time, so a slow backend shows up as growing latency, not a self-throttled lower

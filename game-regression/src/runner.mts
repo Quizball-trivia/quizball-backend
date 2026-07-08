@@ -74,6 +74,7 @@ export interface RunMatchOptions {
   startTimeoutMs?: number;
   /** Opt out only for withheld-ack regression scenarios. */
   autoClientReadyAcks?: boolean;
+  chaosPlan?: ChaosPlan | null;
 }
 
 const BOT_USER_ID = '00000000-0000-0000-0000-0000000000b0';
@@ -217,6 +218,47 @@ function latestTraceSeq(trace: EventTrace): number {
   return trace.events[trace.events.length - 1]?.seq ?? -1;
 }
 
+function updateRunMatchIdFromTrace(run: RunMatchResult): void {
+  if (run.matchId) return;
+  const startEvt = run.trace.byEvent('match:start')[0];
+  const fromStart = startEvt ? matchIdFromPayload(startEvt.payload) : null;
+  const waitingEvt = run.trace.byEvent('match:waiting_for_ready')[0];
+  const fromWaiting = waitingEvt ? matchIdFromPayload(waitingEvt.payload) : null;
+  const matchId = fromStart ?? fromWaiting;
+  if (!matchId) return;
+  run.matchId = matchId;
+  run.botSocket.data.matchId = matchId;
+}
+
+function kickoffGateAction(plan: ChaosPlan | null | undefined): ChaosAction | null {
+  return plan?.actions.find((action) => action.kind === 'flapAtKickoffGate') ?? null;
+}
+
+async function maybeExecuteKickoffGateChaos(
+  run: RunMatchResult,
+  action: ChaosAction | null,
+  state: { executed: boolean },
+): Promise<void> {
+  if (!action || state.executed) return;
+  if (run.trace.byEvent('match:question').length > 0 || run.trace.byEvent('match:final_results').length > 0) return;
+  const waiting = run.trace.byEvent('match:waiting_for_ready')
+    .find((event) => (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff');
+  if (!waiting) return;
+  updateRunMatchIdFromTrace(run);
+  if (!run.matchId) return;
+  state.executed = true;
+  run.trace.record('client->server', 'chaos:action', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    atQIndex: action.atQIndex,
+    kind: action.kind,
+    params: action.params ?? null,
+  }, run.botSocket.id);
+  const reconnectDelayMs = Math.max(0, Math.floor(Number(action.params?.reconnectDelayMs ?? 0) || 0));
+  const mode = action.params?.mode === 'blind' ? 'blind' : 'recover';
+  await flapAtKickoffGate(run, reconnectDelayMs || 3000, mode);
+}
+
 async function botSocketIsLive(run: RunMatchResult): Promise<boolean> {
   const sockets = await run.io.in(run.botSocket.id).fetchSockets();
   return sockets.some((socket) => socket.id === run.botSocket.id);
@@ -330,6 +372,15 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
     connectedAt: now(),
   });
   botSocket.join(`user:${botUserId}`);
+  const run: RunMatchResult = {
+    trace,
+    fixtures,
+    botUserId,
+    matchId: null,
+    io,
+    botSocket,
+    autoClientReadyAcks,
+  };
 
   // 4. Join the ranked queue (real production entry point).
   await rankedMatchmakingService.handleQueueJoin(io as never, botSocket as never);
@@ -338,27 +389,26 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
   //    first question. With REGRESSION_FAST_TIMERS the delays are ~5ms each.
   const startTimeout = options.startTimeoutMs ?? 10_000;
   const bootAcks = createBotClientAckState();
+  const gateChaos = { executed: false };
+  const gateAction = kickoffGateAction(options.chaosPlan);
   const started = await waitUntil(
     () => trace.byEvent('match:start').length > 0 && trace.byEvent('match:question').length > 0,
     startTimeout,
     25,
     autoClientReadyAcks
       ? async () => {
-          await ackBotDraftUiReady(io, botSocket, trace, bootAcks);
-          await ackKickoffUiReadyFromTrace(io, trace, [botSocket], bootAcks);
+          await ackBotDraftUiReady(io, run.botSocket, trace, bootAcks);
+          await maybeExecuteKickoffGateChaos(run, gateAction, gateChaos);
+          await ackKickoffUiReadyFromTrace(io, trace, [run.botSocket], bootAcks);
+          if (gateAction) await ackResumeUiReadyFromTrace(io, trace, [run.botSocket], bootAcks, true);
         }
       : undefined,
   );
 
-  let matchId: string | null = null;
-  if (started) {
-    const startEvt = trace.byEvent('match:start')[0];
-    const payload = startEvt.payload as { matchId?: string } | undefined;
-    matchId = payload?.matchId ?? null;
-    if (matchId) botSocket.data.matchId = matchId;
-  }
+  void started;
+  updateRunMatchIdFromTrace(run);
 
-  return { trace, fixtures, botUserId, matchId, io, botSocket, autoClientReadyAcks };
+  return run;
 }
 
 interface QuestionEventPayload {
@@ -426,6 +476,8 @@ async function executeChaosAction(run: RunMatchResult, action: ChaosAction): Pro
     await zombieReconnect(run);
   } else if (action.kind === 'expireGraceAfterDisconnect') {
     await expireGraceAfterDisconnect(run);
+  } else if (action.kind === 'flapAtKickoffGate') {
+    return;
   }
 }
 
@@ -513,6 +565,7 @@ export async function playMatch(
       let ranChaos = false;
       for (let i = 0; i < (opts.chaosPlan?.actions.length ?? 0); i += 1) {
         const action = opts.chaosPlan!.actions[i]!;
+        if (action.kind === 'flapAtKickoffGate') continue;
         if (executedChaos.has(i) || action.atQIndex !== latest.qIndex) continue;
         executedChaos.add(i);
         await executeChaosAction(run, action);
@@ -739,6 +792,65 @@ export async function botReconnect(run: RunMatchResult): Promise<void> {
       throw new Error('botReconnect: match:resume never fired after rejoin (resume stuck).');
     }
   }
+}
+
+export type KickoffGateFlapMode = 'recover' | 'blind';
+
+export async function flapAtKickoffGate(
+  run: RunMatchResult,
+  reconnectDelayMs: number,
+  mode: KickoffGateFlapMode = 'recover',
+): Promise<void> {
+  if (!run.matchId) return;
+  const oldSocket = run.botSocket;
+  const oldConnectedAt = typeof oldSocket.data.connectedAt === 'number' ? oldSocket.data.connectedAt : Date.now();
+  // 'blind' emulates the pre-fix web client at the gate: the socket reconnects
+  // but the app never emits match:rejoin and ignores rejoin_available, so the
+  // only way it can recover is a server-initiated waiting_for_ready re-emit.
+  if (mode === 'blind') run.suppressAutoRejoinAvailable = true;
+  run.trace.record('client->server', 'match:disconnect', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: oldSocket.id,
+    connectedAt: oldSocket.data.connectedAt ?? null,
+    source: 'flapAtKickoffGate',
+    mode,
+  }, oldSocket.id);
+  await handleMatchDisconnect(run.io as never, oldSocket as never);
+  if (run.trace.byEvent('match:final_results').length > 0) return;
+
+  await waitMs(reconnectDelayMs);
+  run.lastSupersededSocket = { id: oldSocket.id, connectedAt: oldConnectedAt };
+  run.io.removeSocket(oldSocket);
+  const fresh = run.io.createSocket(`bot-socket-gate-${Date.now()}`, {
+    user: { id: run.botUserId },
+    connectedAt: Date.now(),
+    matchId: run.matchId,
+  });
+  fresh.join(`user:${run.botUserId}`);
+  run.botSocket = fresh;
+
+  await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
+  if (run.trace.byEvent('match:final_results').length > 0) return;
+  if (mode === 'recover') {
+    run.trace.record('client->server', 'match:rejoin', {
+      matchId: run.matchId,
+      userId: run.botUserId,
+      socketId: fresh.id,
+      supersededSocketId: oldSocket.id,
+      source: 'flapAtKickoffGate',
+    }, fresh.id);
+    await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+  }
+  run.trace.record('client->server', 'match:gate_reconnected', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: fresh.id,
+    freshSocketId: fresh.id,
+    reconnectDelayMs,
+    mode,
+    withinGrace: reconnectDelayMs < 20_000,
+  }, fresh.id);
 }
 
 async function recordQuestionPresence(run: RunMatchResult): Promise<void> {

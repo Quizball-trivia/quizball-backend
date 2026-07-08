@@ -1,6 +1,12 @@
 import type { StagingClient } from './staging-client.mjs';
 
-export function autoAnswer(client: StagingClient): void {
+export interface BotBehaviorOptions {
+  legacyProtocol?: boolean;
+  onDraftBanSent?: (payload: { categoryId: string }) => void;
+  onBeforeKickoffUiReady?: (payload: { matchId?: string; phase?: string }) => boolean;
+}
+
+export function autoAnswer(client: StagingClient, _options: BotBehaviorOptions = {}): void {
   type QuestionPayload = {
     matchId: string; qIndex: number; correctIndex?: number; playableAt?: string;
     question?: { kind?: string; items?: Array<{ id: string }> };
@@ -58,14 +64,18 @@ export function autoAnswer(client: StagingClient): void {
   });
 }
 
-export function autoRecover(client: StagingClient): void {
+export function autoRecover(client: StagingClient, options: BotBehaviorOptions = {}): void {
   client.socket.on('match:rejoin_available', (p: { matchId?: string }) => {
     client.socket.emit('match:rejoin', p?.matchId ? { matchId: p.matchId } : {});
   });
   client.socket.on('match:waiting_for_ready', (p: { matchId?: string; phase?: string }) => {
     if (!p?.matchId) return;
+    if (options.legacyProtocol) return;
     if (p.phase === 'resume') client.socket.emit('match:resume_ui_ready', { matchId: p.matchId });
-    else if (p.phase === 'kickoff') client.socket.emit('match:kickoff_ui_ready', { matchId: p.matchId });
+    else if (p.phase === 'kickoff') {
+      if (options.onBeforeKickoffUiReady?.(p)) return;
+      client.socket.emit('match:kickoff_ui_ready', { matchId: p.matchId });
+    }
   });
 }
 
@@ -84,22 +94,31 @@ export function autoHalftime(client: StagingClient): void {
   });
 }
 
-export function autoDraft(client: StagingClient): void {
+export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {}): void {
   let banCount = 0;
+  const emitBan = (categoryId: string) => {
+    const payload = { categoryId };
+    client.socket.emit('draft:ban', payload);
+    options.onDraftBanSent?.(payload);
+  };
   client.socket.on('draft:start', (state: { lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }) => {
     banCount = 0;
-    client.socket.emit('draft:ui_ready', { ...(state.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
+    if (!options.legacyProtocol) {
+      client.socket.emit('draft:ui_ready', { ...(state.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
+    }
     if (state.turnUserId === client.userId && state.categories[0]) {
-      client.socket.emit('draft:ban', { categoryId: state.categories[0].id });
+      emitBan(state.categories[0].id);
     }
   });
   client.socket.on('draft:banned', () => {
     const state = client.latest<{ lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
     banCount = Math.min(banCount + 1, 2);
-    client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
+    if (!options.legacyProtocol) {
+      client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
+    }
     if (state && state.turnUserId === client.userId) {
       const next = state.categories.find((c) => c.id);
-      if (next) client.socket.emit('draft:ban', { categoryId: next.id });
+      if (next) emitBan(next.id);
     }
   });
 }

@@ -7,6 +7,7 @@ export type ChaosActionKind =
   | 'multiTab'
   | 'zombieReconnect'
   | 'expireGraceAfterDisconnect'
+  | 'flapAtKickoffGate'
   | 'withholdReadyAcks'
   | 'timingSkew';
 
@@ -82,28 +83,41 @@ function timingSkewParams(rng: () => number): Record<string, unknown> {
   return cases[Math.floor(rng() * cases.length)]!;
 }
 
+function kickoffGateFlapParams(rng: () => number): Record<string, unknown> {
+  return {
+    reconnectDelayMs: Math.floor(3000 + rng() * 5000),
+    mode: rng() < 0.5 ? 'blind' : 'recover',
+  };
+}
+
 export function generateChaosPlan(seed: number): ChaosPlan {
   const rng = mulberry32(seed);
   const count = actionCount(rng);
   const actions: ChaosAction[] = [];
+  let hasKickoffGateFlap = false;
   for (let i = 0; i < count; i += 1) {
-    const kind = weighted(rng, [
+    let kind = weighted(rng, [
       { value: 'flap', weight: 26 },
       { value: 'staleDisconnect', weight: 20 },
       { value: 'timingSkew', weight: 18 },
       { value: 'multiTab', weight: 12 },
       { value: 'quitRejoin', weight: 10 },
+      { value: 'flapAtKickoffGate', weight: 8 },
       { value: 'expireGraceAfterDisconnect', weight: 6 },
       { value: 'zombieReconnect', weight: 5 },
       { value: 'withholdReadyAcks', weight: 3 },
     ]);
+    if (kind === 'flapAtKickoffGate' && hasKickoffGateFlap) kind = 'flap';
+    if (kind === 'flapAtKickoffGate') hasKickoffGateFlap = true;
     const params =
       kind === 'flap'
         ? { n: randomFlapCount(rng) }
         : kind === 'timingSkew'
           ? timingSkewParams(rng)
+          : kind === 'flapAtKickoffGate'
+            ? kickoffGateFlapParams(rng)
           : undefined;
-    actions.push({ atQIndex: randomQIndex(rng), kind, ...(params ? { params } : {}) });
+    actions.push({ atQIndex: kind === 'flapAtKickoffGate' ? 0 : randomQIndex(rng), kind, ...(params ? { params } : {}) });
   }
   actions.sort((a, b) => a.atQIndex - b.atQIndex || a.kind.localeCompare(b.kind));
   return { seed: seed >>> 0, actions };
@@ -150,7 +164,8 @@ export function realDisconnectEpisodesForPlan(plan: ChaosPlan | null | undefined
       action.kind === 'multiTab' ||
       action.kind === 'quitRejoin' ||
       action.kind === 'zombieReconnect' ||
-      action.kind === 'expireGraceAfterDisconnect'
+      action.kind === 'expireGraceAfterDisconnect' ||
+      action.kind === 'flapAtKickoffGate'
     ) {
       count += 1;
     }
@@ -162,6 +177,9 @@ export function chaosActionsSummary(plan: ChaosPlan | null | undefined): string 
   if (!plan || plan.actions.length === 0) return 'none';
   return plan.actions
     .map((action) => {
+      if (action.kind === 'flapAtKickoffGate') {
+        return `boot:flapAtKickoffGate(${Number(action.params?.reconnectDelayMs ?? 0)}ms)`;
+      }
       if (action.kind === 'flap') return `q${action.atQIndex}:flap(${Number(action.params?.n ?? 1)})`;
       if (action.kind === 'timingSkew') return `q${action.atQIndex}:timingSkew`;
       return `q${action.atQIndex}:${action.kind}`;

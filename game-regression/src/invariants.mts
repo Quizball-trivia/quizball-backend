@@ -371,6 +371,7 @@ const winnerMatchesResults: Invariant = (trace) => {
 
 interface MatchLifecycleDbMatch {
   id: string;
+  status: string;
   mode: string;
   winner_user_id: string | null;
   state_payload: unknown;
@@ -436,6 +437,7 @@ function presentEvidenceAfterLastDisconnect(trace: EventTrace, userId: string): 
     'match:presence_heartbeat',
     'match:question_revealed',
     'match:answer',
+    'match:gate_reconnected',
     'match:stale_disconnect',
   ]);
   for (const event of trace.events) {
@@ -449,7 +451,7 @@ function presentEvidenceAfterLastDisconnect(trace: EventTrace, userId: string): 
 async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFacts> {
   const { sql } = await import('../../src/db/index.js');
   const [match] = await sql<MatchLifecycleDbMatch[]>
-    `SELECT id, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
+    `SELECT id, status, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
   const players = await sql<Array<{ user_id: string; is_ai: boolean | null }>>`
     SELECT mp.user_id, u.is_ai
     FROM match_players mp
@@ -485,7 +487,8 @@ function realDisconnectEpisodesForChaosPlan(plan: ChaosPlan | null | undefined):
       action.kind === 'multiTab' ||
       action.kind === 'quitRejoin' ||
       action.kind === 'zombieReconnect' ||
-      action.kind === 'expireGraceAfterDisconnect'
+      action.kind === 'expireGraceAfterDisconnect' ||
+      action.kind === 'flapAtKickoffGate'
     ) {
       count += 1;
     }
@@ -561,6 +564,77 @@ async function noForfeitWinToAiOverLeadingPresentHuman(
       winnerId,
       evidenceEvent: evidence.event,
       evidenceSeq: evidence.seq,
+    },
+  }];
+}
+
+function gateStateReemittedOnReconnect(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+): Violation[] {
+  return trace.events
+    .filter((event) =>
+      event.event === 'match:gate_reconnected' &&
+      payloadUserId(event) === context.botUserId &&
+      payloadRecord(event).withinGrace === true
+    )
+    .filter((reconnected) => {
+      const freshSocketId = payloadRecord(reconnected).freshSocketId;
+      const roomTarget = `match:${context.matchId}`;
+      return !trace.events.some((event) =>
+        event.seq > reconnected.seq &&
+        event.event === 'match:waiting_for_ready' &&
+        (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff' &&
+        (event.target === freshSocketId || event.target === roomTarget)
+      );
+    })
+    .map((reconnected) => ({
+      invariant: 'gateStateReemittedOnReconnect',
+      message: 'Reconnected socket at the kickoff ready gate never received a match:waiting_for_ready re-emit — the client has no server-initiated path back into the gate.',
+      seq: reconnected.seq,
+      detail: {
+        matchId: context.matchId,
+        botUserId: context.botUserId,
+        freshSocketId: payloadRecord(reconnected).freshSocketId ?? null,
+        mode: payloadRecord(reconnected).mode ?? null,
+        reconnectDelayMs: payloadRecord(reconnected).reconnectDelayMs ?? null,
+      },
+    }));
+}
+
+async function matchNeverAbandonedWithPresentPlayer(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  if (facts.match?.status !== 'abandoned') return [];
+  const gateAction = trace.events.find((event) =>
+    event.event === 'chaos:action' &&
+    payloadUserId(event) === context.botUserId &&
+    payloadRecord(event).kind === 'flapAtKickoffGate'
+  );
+  if (!gateAction) return [];
+  const reconnected = trace.events.find((event) =>
+    event.seq > gateAction.seq &&
+    event.event === 'match:gate_reconnected' &&
+    payloadUserId(event) === context.botUserId &&
+    payloadRecord(event).withinGrace === true &&
+    // A 'blind' bot deliberately never completes the rejoin handshake — the
+    // server abandoning it after the bounded window is CORRECT (S15b6). Only
+    // a bot that actually recovered may claim wrongful abandonment.
+    payloadRecord(event).mode !== 'blind'
+  );
+  if (!reconnected) return [];
+  return [{
+    invariant: 'matchNeverAbandonedWithPresentPlayer',
+    message: 'Match was abandoned after the bot reconnected inside the kickoff gate grace window.',
+    seq: reconnected.seq,
+    detail: {
+      matchId: context.matchId,
+      botUserId: context.botUserId,
+      evidenceEvent: reconnected.event,
+      evidenceSeq: reconnected.seq,
+      reconnectDelayMs: payloadRecord(reconnected).reconnectDelayMs ?? null,
     },
   }];
 }
@@ -661,6 +735,8 @@ export async function checkLifecycleInvariants(
       ...await presentPlayerNeverForfeited(trace, context, facts),
       ...await disconnectCountBounded(trace, context),
       ...await noForfeitWinToAiOverLeadingPresentHuman(trace, context, facts),
+      ...await matchNeverAbandonedWithPresentPlayer(trace, context, facts),
+      ...gateStateReemittedOnReconnect(trace, context),
     );
   }
   return { ok: violations.length === 0, violations };

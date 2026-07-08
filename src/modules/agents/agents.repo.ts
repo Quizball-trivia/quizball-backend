@@ -185,7 +185,8 @@ export const agentsRepo = {
         (j.params ->> 'topic') AS job_topic,
         COALESCE(
           t.question_draft -> 'prompt' ->> 'en',
-          t.question_draft -> 'display_answer' ->> 'en'
+          t.question_draft -> 'display_answer' ->> 'en',
+          NULLIF(LEFT(s.input ->> 'userPrompt', 110), '')
         ) AS question
       FROM agents.sessions s
       LEFT JOIN agents.tasks t ON t.id = s.task_id
@@ -207,7 +208,7 @@ export const agentsRepo = {
   },
 
   // rollup over a recent window for the activity-feed header (last N hours)
-  async recentActivity(sinceIso: string): Promise<{ generated: number; approved: number; rejected: number; failed: number }> {
+  async recentActivity(sinceIso: string): Promise<{ generated: number; approved: number; rejected: number; failed: number; judged: number }> {
     const [row] = await sql<{ generated: number; approved: number; rejected: number; failed: number }[]>`
       SELECT
         COUNT(*) FILTER (WHERE decision IS NOT NULL OR status IN ('approved','rejected','failed'))::int AS generated,
@@ -217,7 +218,26 @@ export const agentsRepo = {
       FROM agents.tasks
       WHERE created_at >= ${sinceIso}
     `;
-    return row ?? { generated: 0, approved: 0, rejected: 0, failed: 0 };
+    // the BATCH judge adjudicates published/draft questions directly (no task
+    // rows) — count its completed sessions so the header reflects its work,
+    // and fold its accept/reject verdicts (judge_verdict events) into the
+    // Approved/Rejected cards
+    const [j] = await sql<{ judged: number; jaccepted: number; jrejected: number }[]>`
+      SELECT
+        (SELECT COUNT(*)::int FROM agents.sessions
+          WHERE role = 'judge' AND status = 'succeeded' AND started_at >= ${sinceIso}) AS judged,
+        COUNT(*) FILTER (WHERE message LIKE 'accept %')::int AS jaccepted,
+        COUNT(*) FILTER (WHERE message LIKE 'reject %')::int AS jrejected
+      FROM agents.events
+      WHERE type = 'judge_verdict' AND ts >= ${sinceIso}
+    `;
+    const base = row ?? { generated: 0, approved: 0, rejected: 0, failed: 0 };
+    return {
+      ...base,
+      approved: base.approved + (j?.jaccepted ?? 0),
+      rejected: base.rejected + (j?.jrejected ?? 0),
+      judged: j?.judged ?? 0,
+    };
   },
 
   // ── Stats rollups (last N days) ──

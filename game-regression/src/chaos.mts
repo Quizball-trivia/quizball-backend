@@ -8,11 +8,16 @@ export type ChaosActionKind =
   | 'zombieReconnect'
   | 'expireGraceAfterDisconnect'
   | 'flapAtKickoffGate'
+  | 'engineRestart'
+  | 'duplicateEmits'
   | 'withholdReadyAcks'
   | 'timingSkew';
 
+export type ChaosPhaseTarget = 'halftime' | 'clue_chain' | 'countdown' | 'put_in_order';
+
 export interface ChaosAction {
-  atQIndex: number;
+  atQIndex?: number;
+  atPhase?: ChaosPhaseTarget;
   kind: ChaosActionKind;
   params?: Record<string, unknown>;
 }
@@ -90,6 +95,11 @@ function kickoffGateFlapParams(rng: () => number): Record<string, unknown> {
   };
 }
 
+function randomPhaseTarget(rng: () => number): ChaosPhaseTarget {
+  const phases: ChaosPhaseTarget[] = ['halftime', 'clue_chain', 'countdown', 'put_in_order'];
+  return phases[Math.floor(rng() * phases.length)]!;
+}
+
 export function generateChaosPlan(seed: number): ChaosPlan {
   const rng = mulberry32(seed);
   const count = actionCount(rng);
@@ -105,6 +115,8 @@ export function generateChaosPlan(seed: number): ChaosPlan {
       { value: 'flapAtKickoffGate', weight: 8 },
       { value: 'expireGraceAfterDisconnect', weight: 6 },
       { value: 'zombieReconnect', weight: 5 },
+      { value: 'duplicateEmits', weight: 5 },
+      { value: 'engineRestart', weight: 3 },
       { value: 'withholdReadyAcks', weight: 3 },
     ]);
     if (kind === 'flapAtKickoffGate' && hasKickoffGateFlap) kind = 'flap';
@@ -117,9 +129,19 @@ export function generateChaosPlan(seed: number): ChaosPlan {
           : kind === 'flapAtKickoffGate'
             ? kickoffGateFlapParams(rng)
           : undefined;
-    actions.push({ atQIndex: kind === 'flapAtKickoffGate' ? 0 : randomQIndex(rng), kind, ...(params ? { params } : {}) });
+    const phaseTarget =
+      kind !== 'flapAtKickoffGate' &&
+      (kind === 'engineRestart' || kind === 'duplicateEmits' || kind === 'flap' || kind === 'quitRejoin') &&
+      rng() < 0.25
+        ? randomPhaseTarget(rng)
+        : null;
+    actions.push({
+      ...(phaseTarget ? { atPhase: phaseTarget } : { atQIndex: kind === 'flapAtKickoffGate' ? 0 : randomQIndex(rng) }),
+      kind,
+      ...(params ? { params } : {}),
+    });
   }
-  actions.sort((a, b) => a.atQIndex - b.atQIndex || a.kind.localeCompare(b.kind));
+  actions.sort((a, b) => (a.atQIndex ?? 99) - (b.atQIndex ?? 99) || (a.atPhase ?? '').localeCompare(b.atPhase ?? '') || a.kind.localeCompare(b.kind));
   return { seed: seed >>> 0, actions };
 }
 
@@ -132,9 +154,10 @@ export function planAllowsEarlyTerminal(plan: ChaosPlan | null | undefined): boo
   // match abandoned when a later rejoin's resume gate never completes
   // (see CHAOS-FINDINGS.md Finding 3 on abandon-vs-progress attribution).
   return Boolean(plan?.actions.some((action) =>
-    action.kind === 'zombieReconnect' ||
-    action.kind === 'expireGraceAfterDisconnect' ||
-    action.kind === 'withholdReadyAcks'
+      action.kind === 'zombieReconnect' ||
+      action.kind === 'expireGraceAfterDisconnect' ||
+      action.kind === 'engineRestart' ||
+      action.kind === 'withholdReadyAcks'
   ));
 }
 
@@ -142,6 +165,7 @@ export function answerPlanFromChaosPlan(plan: ChaosPlan | null | undefined): Rec
   const answerPlan: Record<number, BotAnswerPlan> = {};
   for (const action of plan?.actions ?? []) {
     if (action.kind !== 'timingSkew') continue;
+    if (typeof action.atQIndex !== 'number') continue;
     const params = action.params ?? {};
     answerPlan[action.atQIndex] = {
       ...(typeof params.mode === 'string' && (params.mode === 'correct' || params.mode === 'wrong')
@@ -165,7 +189,8 @@ export function realDisconnectEpisodesForPlan(plan: ChaosPlan | null | undefined
       action.kind === 'quitRejoin' ||
       action.kind === 'zombieReconnect' ||
       action.kind === 'expireGraceAfterDisconnect' ||
-      action.kind === 'flapAtKickoffGate'
+      action.kind === 'flapAtKickoffGate' ||
+      action.kind === 'engineRestart'
     ) {
       count += 1;
     }
@@ -180,9 +205,10 @@ export function chaosActionsSummary(plan: ChaosPlan | null | undefined): string 
       if (action.kind === 'flapAtKickoffGate') {
         return `boot:flapAtKickoffGate(${Number(action.params?.reconnectDelayMs ?? 0)}ms)`;
       }
-      if (action.kind === 'flap') return `q${action.atQIndex}:flap(${Number(action.params?.n ?? 1)})`;
-      if (action.kind === 'timingSkew') return `q${action.atQIndex}:timingSkew`;
-      return `q${action.atQIndex}:${action.kind}`;
+      const target = action.atPhase ? `phase:${action.atPhase}` : `q${action.atQIndex ?? '?'}`;
+      if (action.kind === 'flap') return `${target}:flap(${Number(action.params?.n ?? 1)})`;
+      if (action.kind === 'timingSkew') return `${target}:timingSkew`;
+      return `${target}:${action.kind}`;
     })
     .join(',');
 }

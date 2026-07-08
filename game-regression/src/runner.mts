@@ -13,11 +13,12 @@ import { FakeIo, createTrace, type EventTrace, type FakeSocket } from './adapter
 import { seedFixtures, seedTestUserWithTicket, type SeededFixtures } from './fixtures.mjs';
 
 // Engine imports (resolved against backend-node/src).
+import { sql } from '../../src/db/index.js';
 import { getRedisClient, initRedisClients } from '../../src/realtime/redis.js';
 import { rankedMatchmakingService } from '../../src/realtime/services/ranked-matchmaking.service.js';
 import { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } from '../../src/realtime/realtime-timer-scheduler.js';
 import { buildRealtimeTimerHandlers } from '../../src/realtime/socket-server.js';
-import { draftRealtimeService } from '../../src/realtime/services/draft-realtime.service.js';
+import { draftRealtimeService, resetDraftRuntimeState } from '../../src/realtime/services/draft-realtime.service.js';
 import {
   handlePossessionAnswer,
   handlePossessionCountdownGuess,
@@ -37,6 +38,8 @@ import { matchRealtimeService } from '../../src/realtime/services/match-realtime
 import {
   devSkipToPossessionPhase,
   handlePossessionReadyForNextQuestion,
+  resetPossessionReadyGates,
+  resetPossessionRuntimeState,
 } from '../../src/realtime/possession-match-flow.js';
 import {
   createLobby,
@@ -50,8 +53,12 @@ import { handleAnswer } from '../../src/realtime/services/match-question-dispatc
 // Party-quiz advances to the next question via a ready-ack gate; the bot must ack
 // (like a real client) or each round waits the full ~8s ceiling.
 import { handlePartyQuizReadyForNextQuestion } from '../../src/realtime/party-quiz-match-flow.js';
+import { resetPartyQuizReadyGates } from '../../src/realtime/party-quiz-match-flow.js';
 import { recordMatchStagePresenceHeartbeat } from '../../src/realtime/services/match-stage-presence.service.js';
 import type { ChaosAction, ChaosPlan } from './chaos.mjs';
+import { resetMatchUiReadyGates } from '../../src/realtime/match-ui-ready-gate.js';
+import { rearmActiveMatchTimersOnBoot, cancelBootMatchTimerRearm } from '../../src/realtime/services/boot-timer-rearm.service.js';
+import { startStaleMatchSweeper, stopStaleMatchSweeper } from '../../src/realtime/services/stale-match-sweeper.service.js';
 
 export interface RunMatchResult {
   trace: EventTrace;
@@ -64,6 +71,7 @@ export interface RunMatchResult {
   lastSupersededSocket?: { id: string; connectedAt: number };
   suppressAutoRejoinAvailable?: boolean;
   suppressedRejoinAvailableThroughSeq?: number;
+  economyBaseline?: Array<{ userId: string; ticketsBeforeQueueJoin: number }>;
 }
 
 export interface RunMatchOptions {
@@ -75,6 +83,7 @@ export interface RunMatchOptions {
   /** Opt out only for withheld-ack regression scenarios. */
   autoClientReadyAcks?: boolean;
   chaosPlan?: ChaosPlan | null;
+  onAfterChaosAction?: (run: RunMatchResult, action: ChaosAction) => Promise<void>;
 }
 
 const BOT_USER_ID = '00000000-0000-0000-0000-0000000000b0';
@@ -97,6 +106,7 @@ export interface RunLobbyResult {
   joinerSocket: FakeSocket;
   /** all human seats, for play loops. */
   seats: Array<{ userId: string; socket: FakeSocket }>;
+  economyBaseline?: Array<{ userId: string; ticketsBeforeQueueJoin: number }>;
 }
 
 interface BotClientAckState {
@@ -355,6 +365,7 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
   // 1. Seed fixtures + ticketed bot user.
   const fixtures = await seedFixtures({ categoryCount: 3, mcqPerCategory: 5 });
   await seedTestUserWithTicket({ userId: botUserId, nickname: 'RegressionBot', tickets: 1 });
+  const economyBaseline = await readTicketBaselines([botUserId]);
 
   // 2. Redis + the durable timer scheduler + the matchmaking loop.
   await initRedisClients();
@@ -380,6 +391,7 @@ export async function bootMatch(options: RunMatchOptions = {}): Promise<RunMatch
     io,
     botSocket,
     autoClientReadyAcks,
+    economyBaseline,
   };
 
   // 4. Join the ranked queue (real production entry point).
@@ -455,11 +467,136 @@ async function waitMs(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function executeChaosAction(run: RunMatchResult, action: ChaosAction): Promise<void> {
+async function readTicketBaselines(userIds: string[]): Promise<Array<{ userId: string; ticketsBeforeQueueJoin: number }>> {
+  if (userIds.length === 0) return [];
+  const rows = await sql<Array<{ id: string; tickets: number }>>`
+    SELECT id, tickets FROM users WHERE id = ANY(${userIds}::uuid[])
+  `;
+  const byId = new Map(rows.map((row) => [row.id, row.tickets]));
+  return userIds.map((userId) => ({ userId, ticketsBeforeQueueJoin: byId.get(userId) ?? 0 }));
+}
+
+function resetRealtimeRuntimeState(): void {
+  rankedMatchmakingService.stop();
+  stopRealtimeTimerScheduler();
+  stopStaleMatchSweeper();
+  cancelBootMatchTimerRearm();
+  resetMatchUiReadyGates();
+  resetDraftRuntimeState();
+  resetPossessionReadyGates();
+  resetPossessionRuntimeState();
+  resetPartyQuizReadyGates();
+}
+
+function startRealtimeBootstrap(io: FakeIo): void {
+  startRealtimeTimerScheduler(io as never, buildRealtimeTimerHandlers());
+  rankedMatchmakingService.start(io as never);
+  startStaleMatchSweeper(io as never);
+}
+
+export async function engineRestart(run: RunMatchResult): Promise<void> {
+  if (!run.matchId) return;
+  run.trace.record('client->server', 'chaos:engine_restart_begin', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    oldSocketId: run.botSocket.id,
+  }, run.botSocket.id);
+  resetRealtimeRuntimeState();
+
+  const freshIo = new FakeIo(run.trace);
+  run.io = freshIo;
+  startRealtimeBootstrap(freshIo);
+  await rearmActiveMatchTimersOnBoot(freshIo as never);
+
+  const fresh = freshIo.createSocket(`bot-socket-restart-${Date.now()}`, {
+    user: { id: run.botUserId },
+    connectedAt: Date.now(),
+    matchId: run.matchId,
+  });
+  fresh.join(`user:${run.botUserId}`);
+  run.botSocket = fresh;
+
+  await matchRealtimeService.rejoinActiveMatchOnConnect(freshIo as never, fresh as never);
+  if (run.trace.byEvent('match:final_results').length > 0) return;
+  run.trace.record('client->server', 'match:rejoin', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: fresh.id,
+    source: 'engineRestart',
+  }, fresh.id);
+  await handleMatchRejoin(freshIo as never, fresh as never, run.matchId);
+  if (run.autoClientReadyAcks !== false) {
+    const restartAcks = createBotClientAckState();
+    await ackResumeUiReadyFromTrace(freshIo, run.trace, [fresh], restartAcks, true);
+    await ackKickoffUiReadyFromTrace(freshIo, run.trace, [fresh], restartAcks);
+  }
+  run.trace.record('client->server', 'chaos:engine_restart_end', {
+    matchId: run.matchId,
+    userId: run.botUserId,
+    socketId: fresh.id,
+  }, fresh.id);
+}
+
+async function duplicateCurrentQuestionEmits(run: RunMatchResult, q: QuestionEventPayload): Promise<void> {
+  for (let i = 0; i < 2; i += 1) {
+    run.trace.record('client->server', 'match:question_revealed', {
+      matchId: q.matchId,
+      qIndex: q.qIndex,
+      userId: run.botUserId,
+      duplicateOrdinal: i + 1,
+    }, run.botSocket.id);
+    await matchRealtimeService.handleQuestionRevealed(run.botSocket as never, {
+      matchId: q.matchId,
+      qIndex: q.qIndex,
+    });
+  }
+  for (let i = 0; i < 2; i += 1) {
+    run.trace.record('client->server', 'match:answer', {
+      matchId: q.matchId,
+      qIndex: q.qIndex,
+      userId: run.botUserId,
+      questionKind: q.question?.kind ?? null,
+      timeMs: 300,
+      duplicateOrdinal: i + 1,
+    }, run.botSocket.id);
+    try {
+      await answerQuestion(run.io, run.botSocket, q, 'correct', 300);
+    } catch {
+      // duplicate/late emits are intentionally allowed to hit engine guards
+    }
+  }
+  if (run.matchId) {
+    for (let i = 0; i < 2; i += 1) {
+      run.trace.record('client->server', 'match:rejoin', {
+        matchId: run.matchId,
+        userId: run.botUserId,
+        socketId: run.botSocket.id,
+        source: 'duplicateEmits',
+        duplicateOrdinal: i + 1,
+      }, run.botSocket.id);
+      await handleMatchRejoin(run.io as never, run.botSocket as never, run.matchId);
+    }
+    for (let i = 0; i < 2; i += 1) {
+      run.trace.record('client->server', 'match:resume_ui_ready', {
+        matchId: run.matchId,
+        userId: run.botUserId,
+        duplicateOrdinal: i + 1,
+      }, run.botSocket.id);
+      await matchRealtimeService.handleResumeUiReady(run.io as never, run.botSocket as never, { matchId: run.matchId });
+    }
+  }
+}
+
+async function executeChaosAction(
+  run: RunMatchResult,
+  action: ChaosAction,
+  q?: QuestionEventPayload,
+): Promise<{ answered?: boolean }> {
   run.trace.record('client->server', 'chaos:action', {
     matchId: run.matchId,
     userId: run.botUserId,
-    atQIndex: action.atQIndex,
+    atQIndex: action.atQIndex ?? null,
+    atPhase: action.atPhase ?? null,
     kind: action.kind,
     params: action.params ?? null,
   }, run.botSocket.id);
@@ -476,9 +613,17 @@ async function executeChaosAction(run: RunMatchResult, action: ChaosAction): Pro
     await zombieReconnect(run);
   } else if (action.kind === 'expireGraceAfterDisconnect') {
     await expireGraceAfterDisconnect(run);
+  } else if (action.kind === 'engineRestart') {
+    await engineRestart(run);
+  } else if (action.kind === 'duplicateEmits') {
+    if (q) {
+      await duplicateCurrentQuestionEmits(run, q);
+      return { answered: true };
+    }
   } else if (action.kind === 'flapAtKickoffGate') {
-    return;
+    return {};
   }
+  return {};
 }
 
 /** Submit a bot answer for whatever question kind was dispatched, so the round
@@ -538,9 +683,10 @@ export async function playMatch(
     skipQIndices?: Iterable<number>;
     answerPlan?: Record<number, BotAnswerPlan>;
     chaosPlan?: ChaosPlan;
+    onAfterChaosAction?: (run: RunMatchResult, action: ChaosAction) => Promise<void>;
   } = {},
 ): Promise<void> {
-  const { trace, io } = run;
+  const { trace } = run;
   const maxMs = opts.maxMs ?? 30_000;
   const answerMode = opts.answerMode ?? 'correct';
   const skip = new Set<number>(opts.skipQIndices ?? []);
@@ -555,7 +701,19 @@ export async function playMatch(
       await handleBotRejoinAvailableFromTrace(run, playAcks);
       if (trace.byEvent('match:final_results').length > 0) return;
       ackPossessionReadyForNextQuestionFromTrace(trace, [{ userId: run.botUserId }], playAcks);
-      await ackResumeUiReadyFromTrace(io, trace, [run.botSocket], playAcks);
+      await ackResumeUiReadyFromTrace(run.io, trace, [run.botSocket], playAcks);
+    }
+
+    const latestState = trace.byEvent('match:state')[trace.byEvent('match:state').length - 1]?.payload as { phase?: string } | undefined;
+    if (latestState?.phase === 'HALFTIME') {
+      for (let i = 0; i < (opts.chaosPlan?.actions.length ?? 0); i += 1) {
+        const action = opts.chaosPlan!.actions[i]!;
+        if (executedChaos.has(i) || action.atPhase !== 'halftime') continue;
+        executedChaos.add(i);
+        await executeChaosAction(run, action);
+        await opts.onAfterChaosAction?.(run, action);
+        if (trace.byEvent('match:final_results').length > 0) return;
+      }
     }
 
     // Answer the latest unanswered question (any kind) so the round resolves.
@@ -563,13 +721,21 @@ export async function playMatch(
     let latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
     if (latest && !answered.has(latest.qIndex) && !skip.has(latest.qIndex)) {
       let ranChaos = false;
+      let chaosAnswered = false;
       for (let i = 0; i < (opts.chaosPlan?.actions.length ?? 0); i += 1) {
         const action = opts.chaosPlan!.actions[i]!;
         if (action.kind === 'flapAtKickoffGate') continue;
-        if (executedChaos.has(i) || action.atQIndex !== latest.qIndex) continue;
+        const matchesQIndex = typeof action.atQIndex === 'number' && action.atQIndex === latest.qIndex;
+        const matchesPhase =
+          (action.atPhase === 'clue_chain' && latest.question?.kind === 'clues') ||
+          (action.atPhase === 'countdown' && latest.question?.kind === 'countdown') ||
+          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder');
+        if (executedChaos.has(i) || (!matchesQIndex && !matchesPhase)) continue;
         executedChaos.add(i);
-        await executeChaosAction(run, action);
+        const result = await executeChaosAction(run, action, latest);
+        chaosAnswered = chaosAnswered || result.answered === true;
         ranChaos = true;
+        await opts.onAfterChaosAction?.(run, action);
         if (trace.byEvent('match:final_results').length > 0) return;
       }
       if (ranChaos) {
@@ -578,6 +744,10 @@ export async function playMatch(
         if (refreshed?.qIndex === latest.qIndex) latest = refreshed;
       }
       answered.add(latest.qIndex);
+      if (chaosAnswered) {
+        await new Promise((r) => setTimeout(r, opts.answerEveryMs ?? 50));
+        continue;
+      }
       const plan = opts.answerPlan?.[latest.qIndex];
       if (typeof plan?.emitRevealAckAtMs === 'number') {
         await waitMs(msUntilQuestionOffset(latest, plan.emitRevealAckAtMs));
@@ -606,7 +776,7 @@ export async function playMatch(
           questionKind: latest.question?.kind ?? null,
           timeMs: plan?.timeMs ?? 300,
         }, run.botSocket.id);
-        await answerQuestion(io, run.botSocket, latest, plan?.mode ?? answerMode, plan?.timeMs);
+        await answerQuestion(run.io, run.botSocket, latest, plan?.mode ?? answerMode, plan?.timeMs);
       } catch {
         // A late/duplicate/invalid answer can throw; ignore — the engine guards
         // it and the round still resolves on timeout if needed.
@@ -623,6 +793,113 @@ export async function runFullMatch(options: RunMatchOptions = {}): Promise<RunMa
   return run;
 }
 
+function replaceLobbySocket(run: RunLobbyResult, index: number, socket: FakeSocket): void {
+  run.seats[index] = { ...run.seats[index]!, socket };
+  if (index === 0) run.hostSocket = socket;
+  if (index === 1) run.joinerSocket = socket;
+}
+
+async function lobbySeatReconnect(run: RunLobbyResult, index: number): Promise<void> {
+  const seat = run.seats[index];
+  if (!seat || !run.matchId) return;
+  run.io.removeSocket(seat.socket);
+  const fresh = run.io.createSocket(`lobby-bot-rejoin-${index}-${Date.now()}`, {
+    user: { id: seat.userId },
+    connectedAt: Date.now(),
+    matchId: run.matchId,
+  });
+  fresh.join(`user:${seat.userId}`);
+  replaceLobbySocket(run, index, fresh);
+  await matchRealtimeService.rejoinActiveMatchOnConnect(run.io as never, fresh as never);
+  run.trace.record('client->server', 'match:rejoin', {
+    matchId: run.matchId,
+    userId: seat.userId,
+    socketId: fresh.id,
+    source: 'lobbyChaos',
+  }, fresh.id);
+  await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
+  await matchRealtimeService.handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
+}
+
+async function engineRestartLobby(run: RunLobbyResult): Promise<void> {
+  if (!run.matchId) return;
+  run.trace.record('client->server', 'chaos:engine_restart_begin', {
+    matchId: run.matchId,
+    variant: run.variant,
+  }, run.hostSocket.id);
+  resetRealtimeRuntimeState();
+  const freshIo = new FakeIo(run.trace);
+  run.io = freshIo;
+  startRealtimeBootstrap(freshIo);
+  await rearmActiveMatchTimersOnBoot(freshIo as never);
+
+  for (let i = 0; i < run.seats.length; i += 1) {
+    const seat = run.seats[i]!;
+    const fresh = freshIo.createSocket(`lobby-bot-restart-${i}-${Date.now()}`, {
+      user: { id: seat.userId },
+      connectedAt: Date.now(),
+      matchId: run.matchId,
+    });
+    fresh.join(`user:${seat.userId}`);
+    replaceLobbySocket(run, i, fresh);
+    await matchRealtimeService.rejoinActiveMatchOnConnect(freshIo as never, fresh as never);
+    await handleMatchRejoin(freshIo as never, fresh as never, run.matchId);
+    await matchRealtimeService.handleResumeUiReady(freshIo as never, fresh as never, { matchId: run.matchId });
+  }
+  run.trace.record('client->server', 'chaos:engine_restart_end', {
+    matchId: run.matchId,
+    variant: run.variant,
+  }, run.hostSocket.id);
+}
+
+async function executeLobbyChaosAction(run: RunLobbyResult, action: ChaosAction): Promise<void> {
+  if (!run.matchId) return;
+  const seat = run.seats[0];
+  if (!seat) return;
+  run.trace.record('client->server', 'chaos:action', {
+    matchId: run.matchId,
+    userId: seat.userId,
+    atQIndex: action.atQIndex ?? null,
+    atPhase: action.atPhase ?? null,
+    kind: action.kind,
+    params: action.params ?? null,
+    variant: run.variant,
+  }, seat.socket.id);
+  if (action.kind === 'engineRestart') {
+    await engineRestartLobby(run);
+    return;
+  }
+  if (action.kind === 'quitRejoin') {
+    run.trace.record('client->server', 'match:leave', {
+      matchId: run.matchId,
+      userId: seat.userId,
+      socketId: seat.socket.id,
+      source: 'lobbyChaos',
+    }, seat.socket.id);
+    await matchRealtimeService.handleMatchLeave(run.io as never, seat.socket as never, run.matchId);
+    await lobbySeatReconnect(run, 0);
+    return;
+  }
+  if (action.kind === 'flap') {
+    const count = Math.max(1, Math.floor(Number(action.params?.n ?? 1) || 1));
+    for (let i = 0; i < count; i += 1) {
+      const current = run.seats[0]!;
+      run.trace.record('client->server', 'match:disconnect', {
+        matchId: run.matchId,
+        userId: current.userId,
+        socketId: current.socket.id,
+        source: 'lobbyChaos',
+      }, current.socket.id);
+      await handleMatchDisconnect(run.io as never, current.socket as never);
+      if (run.trace.byEvent('match:final_results').length > 0) return;
+      await waitMs(5);
+      await lobbySeatReconnect(run, 0);
+      if (run.trace.byEvent('match:final_results').length > 0) return;
+      await waitMs(5);
+    }
+  }
+}
+
 /**
  * Drive a FRIENDLY (human-vs-human) match where EVERY seat answers each question.
  * For friendly_possession both seats answer the current question; for
@@ -631,9 +908,9 @@ export async function runFullMatch(options: RunMatchOptions = {}): Promise<RunMa
  */
 export async function playLobbyMatch(
   run: RunLobbyResult,
-  opts: { maxMs?: number; answerEveryMs?: number; answerMode?: AnswerMode } = {},
+  opts: { maxMs?: number; answerEveryMs?: number; answerMode?: AnswerMode; chaosPlan?: ChaosPlan } = {},
 ): Promise<void> {
-  const { trace, io, seats } = run;
+  const { trace, seats } = run;
   const maxMs = opts.maxMs ?? 90_000;
   const answerMode = opts.answerMode ?? 'correct';
   // qIndexes each seat has already answered.
@@ -642,6 +919,7 @@ export async function playLobbyMatch(
   // qIndexes each seat has acked so the bot "taps next" like a real client.
   const ackedBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
   const playAcks = createBotClientAckState();
+  const executedChaos = new Set<number>();
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
@@ -650,6 +928,20 @@ export async function playLobbyMatch(
     const questions = trace.byEvent('match:question');
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
     if (latest) {
+      for (let i = 0; i < (opts.chaosPlan?.actions.length ?? 0); i += 1) {
+        const action = opts.chaosPlan!.actions[i]!;
+        if (executedChaos.has(i)) continue;
+        const matchesQIndex = typeof action.atQIndex === 'number' && action.atQIndex === latest.qIndex;
+        const matchesPhase =
+          (action.atPhase === 'clue_chain' && latest.question?.kind === 'clues') ||
+          (action.atPhase === 'countdown' && latest.question?.kind === 'countdown') ||
+          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder');
+        if (!matchesQIndex && !matchesPhase) continue;
+        if (action.kind !== 'flap' && action.kind !== 'quitRejoin' && action.kind !== 'engineRestart') continue;
+        executedChaos.add(i);
+        await executeLobbyChaosAction(run, action);
+        if (trace.byEvent('match:final_results').length > 0) return;
+      }
       const wait = msUntilPlayable(latest);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait + 5));
       for (const seat of seats) {
@@ -660,12 +952,12 @@ export async function playLobbyMatch(
           if (run.variant === 'friendly_party_quiz') {
             // Party quiz is MCQ-only; route through the variant-aware entry.
             const correct = typeof latest.correctIndex === 'number' ? latest.correctIndex : 0;
-            await handleAnswer(io as never, seat.socket as never, {
+            await handleAnswer(run.io as never, seat.socket as never, {
               matchId: latest.matchId, qIndex: latest.qIndex, timeMs: 300,
               selectedIndex: answerMode === 'wrong' ? (correct === 0 ? 1 : 0) : correct,
             } as never);
           } else {
-            await answerQuestion(io, seat.socket, latest, answerMode);
+            await answerQuestion(run.io, seat.socket, latest, answerMode);
           }
         } catch {
           // late/duplicate/invalid — engine guards it; round still resolves.
@@ -1150,6 +1442,13 @@ function buildLobbyResult(
 export async function teardownRun(): Promise<void> {
   rankedMatchmakingService.stop();
   stopRealtimeTimerScheduler();
+  stopStaleMatchSweeper();
+  cancelBootMatchTimerRearm();
+  resetMatchUiReadyGates();
+  resetDraftRuntimeState();
+  resetPossessionReadyGates();
+  resetPossessionRuntimeState();
+  resetPartyQuizReadyGates();
   const redis = getRedisClient();
   if (redis?.isOpen) {
     // best-effort flush of harness keys is left to the caller's DB/redis reset

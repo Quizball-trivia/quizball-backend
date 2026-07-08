@@ -36,6 +36,8 @@ const {
 } = await import('./invariants.mjs');
 const { checkPartyInvariants } = await import('./party-invariants.mjs');
 const { checkPostMatchState, formatPostMatchViolation } = await import('./post-match.mjs');
+const { checkClientTruth } = await import('./client-model.mjs');
+const { checkEconomyInvariants } = await import('./economy-invariants.mjs');
 const {
   answerPlanFromChaosPlan,
   chaosActionsSummary,
@@ -71,6 +73,8 @@ export interface MatchOutcome {
   traceViolations: string[];
   lifecycleViolations: string[];
   postViolations: string[];
+  clientTruthViolations: string[];
+  economyViolations: string[];
   violations: string[];
   artifactPath?: string;
   error?: string;
@@ -95,7 +99,7 @@ function modeFor(i: number): FuzzMode {
 function planForMatch(options: RunFuzzMatchOptions, mode: FuzzMode): ChaosPlan | null {
   if (options.chaosPlan !== undefined) return options.chaosPlan;
   const enabled = options.chaosEnabled ?? CHAOS_ENABLED;
-  if (!enabled || mode !== 'ranked') return null;
+  if (!enabled) return null;
   const seed = deriveChaosSeed(options.runTag ?? RUN_TAG, options.index, CHAOS_BASE_SEED);
   return generateChaosPlan(seed);
 }
@@ -129,6 +133,8 @@ async function writeArtifact(
     traceViolations: outcome.traceViolations,
     lifecycleViolations: outcome.lifecycleViolations,
     postViolations: outcome.postViolations,
+    clientTruthViolations: outcome.clientTruthViolations,
+    economyViolations: outcome.economyViolations,
     error: outcome.error,
     dbSnapshot: snapshot,
     trace,
@@ -160,6 +166,8 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
     traceViolations: [],
     lifecycleViolations: [],
     postViolations: [],
+    clientTruthViolations: [],
+    economyViolations: [],
     violations: [],
   };
 
@@ -183,6 +191,15 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
           maxMs: options.playMaxMs ?? PLAY_MAX_MS,
           chaosPlan: chaosPlan ?? undefined,
           answerPlan: answerPlanFromChaosPlan(chaosPlan),
+          onAfterChaosAction: async (currentRun) => {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            if (!currentRun.matchId) return;
+            const clientTruth = await checkClientTruth(currentRun.trace, {
+              userId: currentRun.botUserId,
+              matchId: currentRun.matchId,
+            });
+            outcome.clientTruthViolations.push(...clientTruth.violations.map(formatViolation));
+          },
         });
       }
       if (!matchId) {
@@ -206,7 +223,15 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
         runChaosLifecycleInvariants: Boolean(chaosPlan?.actions.length),
       });
       outcome.lifecycleViolations = lifecycle.violations.map(formatViolation);
-      outcome.ok = terminalAccepted && traceViolations.length === 0 && post.ok && lifecycle.ok;
+      const economy = await checkEconomyInvariants(matchId, run.economyBaseline ?? []);
+      outcome.economyViolations = economy.violations.map(formatViolation);
+      outcome.ok =
+        terminalAccepted &&
+        traceViolations.length === 0 &&
+        post.ok &&
+        lifecycle.ok &&
+        outcome.clientTruthViolations.length === 0 &&
+        economy.ok;
     } else {
       const variant = mode === 'party' ? 'friendly_party_quiz' : 'friendly_possession';
       const run = await bootFriendlyLobbyMatch({ variant, startTimeoutMs: 25_000 });
@@ -214,7 +239,7 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
       matchId = run.matchId;
       outcome.matchId = matchId;
       outcome.booted = Boolean(matchId);
-      if (matchId) await playLobbyMatch(run, { maxMs: options.playMaxMs ?? PLAY_MAX_MS });
+      if (matchId) await playLobbyMatch(run, { maxMs: options.playMaxMs ?? PLAY_MAX_MS, chaosPlan: chaosPlan ?? undefined });
       if (!matchId) {
         outcome.violations = ['BOOT_FAILED'];
         return outcome;
@@ -234,7 +259,19 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
         });
         outcome.lifecycleViolations = lifecycle.violations.map(formatViolation);
       }
-      outcome.ok = outcome.completed && inv.ok && post.ok && outcome.lifecycleViolations.length === 0;
+      if (chaosPlan?.actions.length) {
+        const clientTruth = await checkClientTruth(trace, {
+          userId: run.hostUserId,
+          matchId,
+        });
+        outcome.clientTruthViolations = clientTruth.violations.map(formatViolation);
+      }
+      outcome.ok =
+        outcome.completed &&
+        inv.ok &&
+        post.ok &&
+        outcome.lifecycleViolations.length === 0 &&
+        outcome.clientTruthViolations.length === 0;
     }
 
     outcome.violations = [
@@ -242,6 +279,8 @@ export async function runFuzzMatch(options: RunFuzzMatchOptions): Promise<MatchO
       ...outcome.traceViolations,
       ...outcome.lifecycleViolations,
       ...outcome.postViolations,
+      ...outcome.clientTruthViolations,
+      ...outcome.economyViolations,
     ].filter((value): value is string => Boolean(value));
 
     if (!outcome.ok && options.writeArtifactOnFailure !== false && trace && matchId) {

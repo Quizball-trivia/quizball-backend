@@ -144,3 +144,10 @@ export function clearMatchUiReadyGate(matchId: string, phase: MatchUiReadyPhase)
   clearTimeout(gate.timeoutId);
   gates.delete(key);
 }
+
+export function resetMatchUiReadyGates(): void {
+  for (const gate of gates.values()) {
+    clearTimeout(gate.timeoutId);
+  }
+  gates.clear();
+}

@@ -753,6 +753,11 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     aiSettingsForMatch.delete(matchId);
   }
 
+  function clearAllAiMaps(): void {
+    aiUserIdByMatch.clear();
+    aiSettingsForMatch.clear();
+  }
+
   return {
     resolveAiUserIdForMatch,
     resolveAiCorrectnessForMatch,
@@ -760,5 +765,6 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     runPossessionAiAnswer,
     clearAiAnswerTimer,
     clearAiMaps,
+    clearAllAiMaps,
   };
 }

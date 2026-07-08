@@ -57,9 +57,17 @@ export function createReadyGateRegistry<Token>() {
     });
   }
 
+  function reset(): void {
+    for (const gate of pendingReadyGates.values()) {
+      clearTimeout(gate.timeoutId);
+    }
+    pendingReadyGates.clear();
+  }
+
   return {
     clear,
     acknowledge,
     open,
+    reset,
   };
 }

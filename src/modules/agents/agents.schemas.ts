@@ -100,7 +100,7 @@ export const budgetStatusSchema = z.object({
 });
 
 // ── Editable sub-agent prompts (agents.prompts) ──
-export const promptRoleSchema = z.enum(['generator', 'factcheck', 'criteria', 'dedupe']);
+export const promptRoleSchema = z.enum(['generator', 'factcheck', 'criteria', 'dedupe', 'judge']);
 export type PromptRole = z.infer<typeof promptRoleSchema>;
 
 export const promptRoleParamSchema = z.object({ role: promptRoleSchema });

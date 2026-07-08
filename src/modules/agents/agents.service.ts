@@ -468,10 +468,10 @@ export const agentsService = {
   // prompt (truncated), and live stats from sessions. Drives the "Sub-agents" page.
   async roster(): Promise<{ items: AgentRosterEntry[] }> {
     const ROLES: { role: PromptRole; label: string; description: string; defaultModel: string }[] = [
-      { role: 'generator', label: 'Question Generator', description: 'Writes new bilingual MCQ questions for a category in the Quizball style.', defaultModel: 'claude-sonnet-4-6' },
-      { role: 'factcheck', label: 'Fact Checker', description: 'Web-grounded; verifies the answer is correct and every option is factually accurate. The hard gate.', defaultModel: 'claude-sonnet-4-6' },
-      { role: 'criteria', label: 'Criteria / Style Checker', description: 'Checks each question against the style criteria (context-complete, not dry, good distractors). Advisory.', defaultModel: 'claude-sonnet-4-6' },
+      { role: 'generator', label: 'Question Generator', description: 'Writes new questions (English-first) for a category, following each type\u2019s quality contract.', defaultModel: 'claude-sonnet-4-6' },
       { role: 'dedupe', label: 'Dedupe Checker', description: 'Decides whether a generated question is genuinely new vs. already in the bank.', defaultModel: 'claude-haiku-4-5' },
+      { role: 'factcheck', label: 'Fact Checker', description: 'Web-grounded, enumerated verification: the premise, the marked answer (derived independently), every distractor/clue/value.', defaultModel: 'claude-sonnet-4-6' },
+      { role: 'judge', label: 'Final Judge', description: 'The editorial gate (replaced the criteria checker + the human happy path): accept \u2192 published live, reject \u2192 regenerate, unsure \u2192 review queue.', defaultModel: 'claude-sonnet-4-6' },
     ];
     const [stats, prompts] = await Promise.all([agentsRepo.agentStats(), agentsRepo.listActivePrompts()]);
     const statByRole = new Map(stats.map((s) => [s.role, s]));

@@ -484,6 +484,13 @@ export const agentsRepo = {
       UPDATE agents.budgets
       SET limit_cents = COALESCE(${params.limitCents ?? null}, limit_cents),
           paused = COALESCE(${params.paused ?? null}, paused),
+          -- a human's pause is 'manual' (the auto-resume probe must never
+          -- override it); resuming clears the source either way
+          pause_source = CASE
+            WHEN ${params.paused ?? null}::boolean IS TRUE THEN 'manual'
+            WHEN ${params.paused ?? null}::boolean IS FALSE THEN NULL
+            ELSE pause_source
+          END,
           updated_at = now()
       WHERE scope = 'daily'
     `;

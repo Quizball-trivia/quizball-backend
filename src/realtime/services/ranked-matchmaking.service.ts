@@ -663,6 +663,7 @@ async function startAiFallbackWithCountry(
   io: QuizballServer,
   userId: string,
   playerCountryCode: string | null | undefined,
+  claimedSearchId?: string,
 ): Promise<void> {
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
@@ -688,15 +689,15 @@ async function startAiFallbackWithCountry(
       return;
     }
     if (!await hasLiveAuthenticatedSocket(io, userId)) {
-      if (redis) {
-        await redis.set(rankedCancelKey(userId), '1', { EX: CANCEL_KEY_TTL_SEC });
-      }
-      const searchId = await bestEffortCancelRankedQueueSearch(userId, 'ranked_ai_fallback_absent_socket');
+      // The claim script already removed this search from the queue, timeouts
+      // and user map, so there is nothing left to cancel — and a userId-based
+      // cancel (or the ranked:mm:cancel marker) would hit a NEW search if the
+      // user re-queues in this window.
       trackRankedQueueLeft({
         userId,
         source: 'server_abort',
-        searchFound: Boolean(searchId),
-        searchId,
+        searchFound: Boolean(claimedSearchId),
+        searchId: claimedSearchId ?? null,
       });
       io.to(`user:${userId}`).emit('ranked:queue_left');
       await userSessionGuardService.emitState(io, userId);
@@ -748,7 +749,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       const countryCode = result[1] || null;
       fallbackCount += 1;
       try {
-        await startAiFallbackWithCountry(io, userId, countryCode);
+        await startAiFallbackWithCountry(io, userId, countryCode, searchId);
       } catch (error) {
         fallbackFailureCount += 1;
         logger.error(

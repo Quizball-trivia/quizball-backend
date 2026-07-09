@@ -131,6 +131,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
 
 vi.mock('../../src/realtime/match-ui-ready-gate.js', () => ({
   acknowledgeMatchUiReady: vi.fn(),
+  emitMatchUiReadyGateStateToSocket: vi.fn(),
   openMatchUiReadyGate: vi.fn(),
 }));
 

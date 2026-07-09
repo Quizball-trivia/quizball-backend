@@ -563,6 +563,35 @@ describe('ranked-matchmaking.service queue behavior', () => {
     });
   });
 
+  it('skips AI fallback without touching queue state when the claimed user has no live socket', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    absentUserIds.add('u-fallback');
+    redisMock.zRangeByScore.mockResolvedValue(['search-1']);
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback'];
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      return [];
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+    expect(createLobbyMock).not.toHaveBeenCalled();
+    // The claim script already cleaned the queue/map — a userId-based cancel or
+    // cancel marker here would race a re-queue and hit the user's NEW search.
+    expect(redisMock.set).not.toHaveBeenCalledWith('ranked:mm:cancel:u-fallback', '1', { EX: 30 });
+    expect(redisMock.eval).not.toHaveBeenCalledWith(
+      RANKED_MM_CANCEL_SEARCH_SCRIPT,
+      expect.objectContaining({
+        arguments: expect.arrayContaining(['u-fallback']),
+      })
+    );
+    expect(io.to).toHaveBeenCalledWith('user:u-fallback');
+  });
+
   it('skips AI fallback when the claimed user already has a ranked lobby', async () => {
     const service = await loadService();
     const io = createIoMock();

@@ -159,6 +159,7 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
     getMatch: (...args: unknown[]) => getMatchMock(...args),
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
     setMatchStatePayload: (...args: unknown[]) => setMatchStatePayloadMock(...args),
+    abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
     incrementGoalsAndInsertEventIfMissing: (...args: unknown[]) =>
       incrementGoalsAndInsertEventIfMissingMock(...args),
   },
@@ -552,6 +553,65 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }));
     settleCompletedRankedMatchMock.mockResolvedValue(null);
     listUnlockedForMatchMock.mockResolvedValue({});
+  });
+
+  it('re-emits kickoff UI-ready gate state to a reconnecting active socket', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const {
+      acknowledgeMatchUiReady,
+      clearMatchUiReadyGate,
+      openMatchUiReadyGate,
+    } = await import('../../src/realtime/match-ui-ready-gate.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getActiveMatchForUserMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', currentQuestion: null },
+      ranked_context: null,
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+
+    openMatchUiReadyGate({
+      io,
+      matchId: 'm1',
+      phase: 'kickoff',
+      waitingUserIds: ['u1', 'u2'],
+      ceilingMs: 10_000,
+      emitInitial: false,
+      dispatch: vi.fn(),
+    });
+    acknowledgeMatchUiReady(io, 'u2', 'm1', 'kickoff');
+
+    try {
+      await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+
+      expect(socket.join).toHaveBeenCalledWith('match:m1');
+      expect(socket.emit).toHaveBeenCalledWith(
+        'match:waiting_for_ready',
+        expect.objectContaining({
+          matchId: 'm1',
+          phase: 'kickoff',
+          readyCount: 1,
+          totalCount: 2,
+          readyUserIds: ['u2'],
+          waitingUserIds: ['u1', 'u2'],
+        })
+      );
+    } finally {
+      clearMatchUiReadyGate('m1', 'kickoff');
+    }
   });
 
   it('S15: match:leave uses pause/grace flow and emits rejoin_available', async () => {
@@ -1670,6 +1730,90 @@ describe('match-realtime.service high-risk integration behavior', () => {
       expect.objectContaining({ reason: 'resume' })
     );
     expect(completeMatchMock).toHaveBeenCalled();
+  });
+
+  it('S15b4b: kickoff gate grace expiry gives a live reconnected socket one bounded extension', async () => {
+    const markerMs = Date.now() - 60_000;
+    const socket = createSocketMock('u1');
+    socket.data.connectedAt = markerMs + 5_000;
+    const { io, roomEmits } = createIoWithUserRooms({ u1: [socket] });
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', currentQuestion: null, winnerDecisionMethod: null },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+    getMatchQuestionMock.mockResolvedValue(null);
+    buildMatchQuestionPayloadMock.mockResolvedValue(null);
+    abandonMatchMock.mockResolvedValue(true);
+    fakeRedisStore.values.set('match:grace:m1', String(markerMs));
+    fakeRedisStore.values.set('match:pause:m1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(markerMs));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    expect(completeMatchMock).not.toHaveBeenCalled();
+    expect(abandonMatchMock).not.toHaveBeenCalled();
+    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(true);
+    expect(fakeRedisStore.values.has('match:grace_extended:m1')).toBe(true);
+    const userEmit = roomEmits.get('user:u1');
+    expect(userEmit).toBeDefined();
+    expect(userEmit!).toHaveBeenCalledWith(
+      'match:rejoin_available',
+      expect.objectContaining({ matchId: 'm1', graceMs: 20_000 })
+    );
+
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    expect(abandonMatchMock).toHaveBeenCalledWith('m1');
+    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(false);
+  });
+
+  it('S15b4c: kickoff gate grace expiry with no live socket still abandons', async () => {
+    const markerMs = Date.now() - 60_000;
+    const { io } = createIoWithUserRooms({});
+    const nowIso = new Date().toISOString();
+
+    fakeRedis.isOpen = true;
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'ranked',
+      status: 'active',
+      current_q_index: 0,
+      total_questions: 12,
+      started_at: nowIso,
+      lobby_id: 'l1',
+      state_payload: { variant: 'ranked_sim', currentQuestion: null, winnerDecisionMethod: null },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'u1', seat: 1, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+      { user_id: 'u2', seat: 2, total_points: 0, correct_answers: 0, goals: 0, penalty_goals: 0, avg_time_ms: null },
+    ]);
+    getMatchQuestionMock.mockResolvedValue(null);
+    buildMatchQuestionPayloadMock.mockResolvedValue(null);
+    abandonMatchMock.mockResolvedValue(true);
+    fakeRedisStore.values.set('match:grace:m1', String(markerMs));
+    fakeRedisStore.values.set('match:pause:m1', String(markerMs));
+    fakeRedisStore.values.set('match:disconnect:m1:u1', String(markerMs));
+
+    const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
+    await resolveExpiredGraceWindow(io, 'm1', 'u1');
+
+    expect(fakeRedisStore.values.has('match:grace_extended:m1')).toBe(false);
+    expect(abandonMatchMock).toHaveBeenCalledWith('m1');
   });
 
   it('S15b5: grace expiry forfeits the truly-gone player when the other is reachable via a user-room socket only', async () => {

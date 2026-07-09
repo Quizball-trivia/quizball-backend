@@ -663,6 +663,7 @@ async function startAiFallbackWithCountry(
   io: QuizballServer,
   userId: string,
   playerCountryCode: string | null | undefined,
+  claimedSearchId?: string,
 ): Promise<void> {
   await withSpan('ranked.fallback_to_ai', {
     'quizball.user_id': userId,
@@ -684,6 +685,25 @@ async function startAiFallbackWithCountry(
       rankedDebug('fallback_skipped_session_state', {
         user: rankedDebugUser(userId),
         state: sessionBlock.state,
+      });
+      return;
+    }
+    if (!await hasLiveAuthenticatedSocket(io, userId)) {
+      // The claim script already removed this search from the queue, timeouts
+      // and user map, so there is nothing left to cancel — and a userId-based
+      // cancel (or the ranked:mm:cancel marker) would hit a NEW search if the
+      // user re-queues in this window.
+      trackRankedQueueLeft({
+        userId,
+        source: 'server_abort',
+        searchFound: Boolean(claimedSearchId),
+        searchId: claimedSearchId ?? null,
+      });
+      io.to(`user:${userId}`).emit('ranked:queue_left');
+      await userSessionGuardService.emitState(io, userId);
+      logger.warn({ userId }, 'Ranked matchmaking fallback skipped: queued user has no live socket');
+      rankedDebug('fallback_skipped_absent_socket', {
+        user: rankedDebugUser(userId),
       });
       return;
     }
@@ -729,7 +749,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       const countryCode = result[1] || null;
       fallbackCount += 1;
       try {
-        await startAiFallbackWithCountry(io, userId, countryCode);
+        await startAiFallbackWithCountry(io, userId, countryCode, searchId);
       } catch (error) {
         fallbackFailureCount += 1;
         logger.error(

@@ -29,6 +29,24 @@ function parseI18nField(raw: Json | string | null | undefined): I18nField | null
   return null;
 }
 
+// Agent-generated payloads carry untranslated leaves as `ka: ""`, which fails
+// i18nFieldSchema's min(1) — so safeParse returned null for exactly the rows
+// the backfill exists to translate, and they were all "skipped". Drop empty
+// translation values before validating; a missing key already means "needs
+// translation" to the descriptor extraction below.
+function stripEmptyTranslations(node: Json): Json {
+  if (Array.isArray(node)) return node.map(stripEmptyTranslations) as Json;
+  if (node && typeof node === 'object') {
+    const out: Record<string, Json> = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (/^[a-z]{2}$/.test(k) && v === '') continue;
+      out[k] = stripEmptyTranslations(v as Json);
+    }
+    return out as Json;
+  }
+  return node;
+}
+
 function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
   if (typeof raw === 'string') {
     try {
@@ -38,7 +56,7 @@ function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
     }
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const parsed = questionPayloadSchema.safeParse(raw);
+  const parsed = questionPayloadSchema.safeParse(stripEmptyTranslations(raw));
   return parsed.success ? parsed.data : null;
 }
 

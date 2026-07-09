@@ -4,14 +4,26 @@ export interface BotBehaviorOptions {
   legacyProtocol?: boolean;
   onDraftBanSent?: (payload: { categoryId: string }) => void;
   onBeforeKickoffUiReady?: (payload: { matchId?: string; phase?: string }) => boolean;
+  answerPlan?: (ctx: {
+    client: StagingClient;
+    question: QuestionPayload;
+  }) => AnswerMode | BotAnswerInstruction | undefined;
 }
 
-export function autoAnswer(client: StagingClient, _options: BotBehaviorOptions = {}): void {
-  type QuestionPayload = {
-    matchId: string; qIndex: number; correctIndex?: number; playableAt?: string;
-    question?: { kind?: string; items?: Array<{ id: string }> };
-  };
+export type AnswerMode = 'correct' | 'wrong';
 
+export type BotAnswerInstruction = {
+  mode?: AnswerMode;
+  timeMs?: number;
+};
+
+export type QuestionPayload = {
+  matchId: string; qIndex: number; correctIndex?: number; playableAt?: string;
+  phaseKind?: string; shooterSeat?: 1 | 2 | null;
+  question?: { kind?: string; items?: Array<{ id: string }> };
+};
+
+export function autoAnswer(client: StagingClient, options: BotBehaviorOptions = {}): void {
   const completed = new Set<string>();
   let activeQuestion: QuestionPayload | null = null;
   const keyFor = (matchId: string, qIndex: number) => `${matchId}:${qIndex}`;
@@ -24,16 +36,26 @@ export function autoAnswer(client: StagingClient, _options: BotBehaviorOptions =
       if (completed.has(key)) return;
       const kind = q.question?.kind ?? 'multipleChoice';
       const base = { matchId: q.matchId, qIndex: q.qIndex };
+      const planned = options.answerPlan?.({ client, question: q });
+      const mode = typeof planned === 'string' ? planned : planned?.mode ?? 'correct';
+      const timeMs = typeof planned === 'object' && typeof planned.timeMs === 'number' ? planned.timeMs : 500;
       if (kind === 'countdown') {
-        client.socket.emit('match:countdown_guess', { ...base, guess: 'one' });
+        client.socket.emit('match:countdown_guess', { ...base, guess: mode === 'wrong' ? 'zzzznotananswer' : 'one' });
       } else if (kind === 'putInOrder') {
         const orderedItemIds = (q.question?.items ?? []).map((i) => i.id);
-        client.socket.emit('match:put_in_order_answer', { ...base, orderedItemIds, timeMs: 500 });
+        client.socket.emit('match:put_in_order_answer', {
+          ...base,
+          orderedItemIds: mode === 'wrong' ? [...orderedItemIds].reverse() : orderedItemIds,
+          timeMs,
+        });
       } else if (kind === 'clues') {
-        client.socket.emit('match:clues_answer', { kind: 'guess', ...base, guess: 'answer' });
+        client.socket.emit('match:clues_answer', { kind: 'guess', ...base, guess: mode === 'wrong' ? 'zzzznotananswer' : 'answer', timeMs });
       } else {
+        const correct = typeof q.correctIndex === 'number' ? q.correctIndex : 0;
         client.socket.emit('match:answer', {
-          ...base, selectedIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0, timeMs: 500,
+          ...base,
+          selectedIndex: mode === 'wrong' ? (correct === 0 ? 1 : 0) : correct,
+          timeMs,
         });
       }
     }, waitMs + retryDelayMs);
@@ -80,17 +102,46 @@ export function autoRecover(client: StagingClient, options: BotBehaviorOptions =
 }
 
 export function autoHalftime(client: StagingClient): void {
-  const handled = new Set<string>();
-  client.socket.on('match:state', (s: { matchId?: string; phase?: string; halftime?: { categoryOptions?: Array<{ id: string }> } }) => {
+  const uiReady = new Set<string>();
+  const bansSent = new Set<string>();
+  client.socket.on('match:state', (s: {
+    matchId?: string;
+    phase?: string;
+    halftime?: {
+      deadlineAt?: string | null;
+      categoryOptions?: Array<{ id: string }>;
+      firstBanSeat?: 1 | 2 | null;
+      bans?: { seat1?: string | null; seat2?: string | null };
+    };
+  }) => {
     if (s.phase !== 'HALFTIME' || !s.matchId) return;
     const opts = s.halftime?.categoryOptions ?? [];
-    const key = `${s.matchId}:${opts.map((o) => o.id).join(',')}`;
-    if (handled.has(key)) return;
-    handled.add(key);
-    client.socket.emit('match:halftime_ui_ready', { matchId: s.matchId });
-    if (opts[0]) {
-      setTimeout(() => client.socket.emit('match:halftime_ban', { matchId: s.matchId!, categoryId: opts[0].id }), 300);
+    const optionKey = opts.map((o) => o.id).join(',');
+    const readyKey = `${s.matchId}:${s.halftime?.deadlineAt ?? 'no-deadline'}:${optionKey}`;
+    if (!uiReady.has(readyKey)) {
+      uiReady.add(readyKey);
+      client.socket.emit('match:halftime_ui_ready', { matchId: s.matchId });
     }
+    const mySeat = client.latest<{ mySeat?: number }>('match:start')?.mySeat;
+    if (mySeat !== 1 && mySeat !== 2) return;
+    const firstBanSeat = s.halftime?.firstBanSeat ?? 1;
+    const secondBanSeat: 1 | 2 = firstBanSeat === 1 ? 2 : 1;
+    const bans = s.halftime?.bans ?? {};
+    const firstKey = firstBanSeat === 1 ? 'seat1' : 'seat2';
+    const secondKey = secondBanSeat === 1 ? 'seat1' : 'seat2';
+    const turnSeat: 1 | 2 | null = !bans[firstKey]
+      ? firstBanSeat
+      : !bans[secondKey]
+        ? secondBanSeat
+        : null;
+    if (turnSeat !== mySeat) return;
+    const banned = new Set([bans.seat1, bans.seat2].filter((id): id is string => typeof id === 'string'));
+    const category = opts.find((option) => !banned.has(option.id));
+    if (!category) return;
+    const banKey = `${s.matchId}:${mySeat}:${category.id}:${optionKey}`;
+    if (bansSent.has(banKey)) return;
+    bansSent.add(banKey);
+    setTimeout(() => client.socket.emit('match:halftime_ban', { matchId: s.matchId!, categoryId: category.id }), 300);
   });
 }
 

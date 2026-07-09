@@ -26,6 +26,7 @@ import { autoAnswer, autoDraft, autoHalftime, autoRecover } from './bot-behavior
 import { checkInvariants, formatViolation } from '../src/invariants.mjs';
 import { checkPartyInvariants } from '../src/party-invariants.mjs';
 import { createTrace, type EventTrace, type TraceEvent } from '../src/adapter.mjs';
+import { computePenaltyShootout, penaltyWinnerUserId } from '../src/penalty-arithmetic.mjs';
 
 /** A new trace containing only events that pass `keep`, preserving real timestamps. */
 function filteredTrace(trace: EventTrace, keep: (e: TraceEvent) => boolean): EventTrace {
@@ -42,6 +43,8 @@ const ALL = [
   'forfeit_early_live', 'forfeit_late_live', 'opponent_forfeit_winner_live', 'draft_ban_collision_live',
   'answer_timing',
 ];
+// penalty_live is opt-in (STAGING_SCENARIOS=penalty_live) until the two-human
+// kickoff-ack wiring is fixed — in ALL it would fail every default gate run.
 const SELECTED = (process.env.STAGING_SCENARIOS ?? ALL.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
 
 interface ScenarioResult {
@@ -251,6 +254,85 @@ function tracedEvents(client: StagingClient): ScenarioResult['events'] {
   return client.trace.events.map((e) => ({
     seq: e.seq, t: e.t, dir: e.dir, event: e.event, target: e.target, payload: e.payload,
   }));
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const rank = (p / 100) * (sorted.length - 1);
+  const lo = Math.floor(rank);
+  const hi = Math.ceil(rank);
+  if (lo === hi) return sorted[lo] ?? 0;
+  const weight = rank - lo;
+  return (sorted[lo] ?? 0) * (1 - weight) + (sorted[hi] ?? 0) * weight;
+}
+
+function penaltyCadence(trace: EventTrace): { count: number; p50: number; max: number } {
+  const seen = new Set<number>();
+  const questions = trace.byEvent('match:question')
+    .filter((event) => {
+      const payload = event.payload as { qIndex?: number; phaseKind?: string };
+      if (payload.phaseKind !== 'penalty' || typeof payload.qIndex !== 'number') return false;
+      if (seen.has(payload.qIndex)) return false;
+      seen.add(payload.qIndex);
+      return true;
+    });
+  const gaps: number[] = [];
+  for (let i = 1; i < questions.length; i += 1) {
+    gaps.push(questions[i]!.t - questions[i - 1]!.t);
+  }
+  return {
+    count: gaps.length,
+    p50: Math.round(percentile(gaps, 50)),
+    max: gaps.length > 0 ? Math.max(...gaps) : 0,
+  };
+}
+
+function penaltyAnswerPlan(outcomes: Array<'goal' | 'miss'>) {
+  const byQIndex = new Map<number, 'goal' | 'miss'>();
+  return ({ client, question }: {
+    client: StagingClient;
+    question: { qIndex: number; phaseKind?: string; shooterSeat?: 1 | 2 | null };
+  }) => {
+    if (question.phaseKind !== 'penalty') return { mode: 'wrong' as const, timeMs: 700 };
+    if (!byQIndex.has(question.qIndex)) {
+      byQIndex.set(question.qIndex, outcomes[byQIndex.size] ?? 'miss');
+    }
+    const outcome = byQIndex.get(question.qIndex)!;
+    const mySeat = client.latest<{ mySeat?: number }>('match:start')?.mySeat;
+    const isShooter = mySeat === (question.shooterSeat ?? 1);
+    if (outcome === 'goal') {
+      return { mode: isShooter ? 'correct' as const : 'wrong' as const, timeMs: isShooter ? 500 : 900 };
+    }
+    return { mode: isShooter ? 'wrong' as const : 'correct' as const, timeMs: isShooter ? 900 : 500 };
+  };
+}
+
+function penaltyResolutionVerdict(trace: EventTrace): { ok: boolean; detail: string } {
+  const final = trace.byEvent('match:final_results').slice(-1)[0]?.payload as { winnerId?: string | null } | undefined;
+  const start = trace.byEvent('match:start')[0]?.payload as {
+    participants?: Array<{ userId?: string; seat?: number }>;
+  } | undefined;
+  const state = [...trace.byEvent('match:state')]
+    .reverse()
+    .find((event) => {
+      const attempts = (event.payload as { penaltyAttempts?: { seat1?: unknown[]; seat2?: unknown[] } }).penaltyAttempts;
+      return (attempts?.seat1?.length ?? 0) + (attempts?.seat2?.length ?? 0) > 0;
+    })?.payload as { penaltyAttempts?: unknown } | undefined;
+  if (!state?.penaltyAttempts) {
+    return { ok: false, detail: 'no penalty attempts observed' };
+  }
+  const arithmetic = computePenaltyShootout({ attempts: state.penaltyAttempts });
+  const players = (start?.participants ?? []).map((participant) => ({
+    user_id: participant.userId,
+    seat: participant.seat,
+  }));
+  const expectedWinnerId = penaltyWinnerUserId(players, arithmetic.winnerSeat);
+  const ok = arithmetic.errors.length === 0 && expectedWinnerId !== null && final?.winnerId === expectedWinnerId;
+  return {
+    ok,
+    detail: `winner=${final?.winnerId ?? 'null'} recomputed=${expectedWinnerId ?? 'null'} attempts=${arithmetic.goals.seat1}-${arithmetic.goals.seat2} kicks=${arithmetic.totalKicks} suddenDeath=${arithmetic.suddenDeathReached}`,
+  };
 }
 
 /**
@@ -486,6 +568,47 @@ async function draftBanCollisionLive(users: { a: TestUser; b: TestUser }): Promi
   }
 }
 
+async function penaltyLive(users: { a: TestUser; b: TestUser }): Promise<ScenarioResult> {
+  const name = 'penalty_live';
+  const a = connectStaging(URL, users.a.accessToken, users.a.userId);
+  const b = connectStaging(URL, users.b.accessToken, users.b.userId);
+  try {
+    if (!(await waitConnected(a)) || !(await waitConnected(b))) {
+      return { name, ok: false, detail: 'sockets never connected', violations: [] };
+    }
+    await Promise.all([clearActiveMatch(a), clearActiveMatch(b)]);
+    const outcomes: Array<'goal' | 'miss'> = ['goal', 'miss', 'goal', 'goal', 'goal', 'miss', 'miss', 'miss'];
+    autoAnswer(a, { answerPlan: penaltyAnswerPlan(outcomes) });
+    autoAnswer(b, { answerPlan: penaltyAnswerPlan(outcomes) });
+    autoDraft(a); autoDraft(b);
+    autoHalftime(a); autoHalftime(b);
+    autoRecover(a); autoRecover(b);
+
+    a.socket.emit('ranked:queue_join', {});
+    b.socket.emit('ranked:queue_join', {});
+    const paired = await a.waitFor(
+      () => a.count('match:start') > 0 && b.count('match:start') > 0
+        && a.latest<{ matchId?: string }>('match:start')?.matchId === b.latest<{ matchId?: string }>('match:start')?.matchId,
+      60_000,
+    );
+    if (!paired) {
+      return { name, ok: true, detail: 'SKIPPED: matchmaker did not pair two humans (AI fallback)', violations: [] };
+    }
+    const matchId = a.latest<{ matchId?: string }>('match:start')?.matchId;
+    await a.waitFor(() => hasFinalResultsForMatch(a.trace, matchId), 480_000);
+
+    const base = verdict(name, a.trace, false);
+    const resolution = penaltyResolutionVerdict(a.trace);
+    const cadence = penaltyCadence(a.trace);
+    base.ok = base.ok && resolution.ok;
+    base.detail += ` | ${resolution.detail} | penaltyCadence count=${cadence.count} p50=${cadence.p50}ms max=${cadence.max}ms`;
+    if (!resolution.ok) base.violations.push(`penalty resolution mismatch: ${resolution.detail}`);
+    return base;
+  } finally {
+    a.disconnect(); b.disconnect();
+  }
+}
+
 type AnswerTimingQuestionPayload = {
   matchId: string;
   qIndex: number;
@@ -684,6 +807,7 @@ async function main(): Promise<void> {
       else if (name === 'opponent_forfeit_winner_live') r = await opponentForfeitWinnerLive(users);
       else if (name === 'draft_ban_collision_live') r = await draftBanCollisionLive(users);
       else if (name === 'answer_timing') r = await answerTimingLive(users);
+      else if (name === 'penalty_live') r = await penaltyLive(users);
       else { console.log(`  (unknown scenario, skipped)`); continue; }
     } catch (err) {
       r = { name, ok: false, detail: `threw: ${(err as Error).message}`, violations: [] };

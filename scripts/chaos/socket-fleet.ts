@@ -69,11 +69,19 @@ export interface SocketFleetSummary {
     queueJoinToMatchStart: number[];
     answerToAck: number[];
     roundResultToNextQuestion: number[];
+    roundResultToNextQuestionByPhase: {
+      normal: number[];
+      penalty: number[];
+    };
   };
   percentiles: {
     queueJoinToMatchStart: LatencyReport;
     answerToAck: LatencyReport;
     roundResultToNextQuestion: LatencyReport;
+    roundResultToNextQuestionByPhase: {
+      normal: LatencyReport;
+      penalty: LatencyReport;
+    };
   };
   socketErrors: Record<string, number>;
   disconnectReasons: Record<string, number>;
@@ -105,6 +113,8 @@ interface FleetMetrics {
   queueJoinToMatchStartMs: number[];
   answerToAckMs: number[];
   roundResultToNextQuestionMs: number[];
+  roundResultToNextQuestionNormalMs: number[];
+  roundResultToNextQuestionPenaltyMs: number[];
   socketErrors: Record<string, number>;
   disconnectReasons: Record<string, number>;
 }
@@ -170,7 +180,7 @@ interface MatchAttempt {
   legacyDraftCompletedAt: number | null;
   legacyDraftStallReported: boolean;
   answerSentAt: Map<string, number>;
-  lastRoundResultAt: { matchId: string; qIndex: number; at: number } | null;
+  lastRoundResultAt: { matchId: string; qIndex: number; at: number; phase: 'normal' | 'penalty' } | null;
   timers: Set<NodeJS.Timeout>;
   closed: boolean;
 }
@@ -239,11 +249,19 @@ export async function runSocketFleet(cfg: SocketFleetConfig): Promise<SocketFlee
       queueJoinToMatchStart: metrics.queueJoinToMatchStartMs,
       answerToAck: metrics.answerToAckMs,
       roundResultToNextQuestion: metrics.roundResultToNextQuestionMs,
+      roundResultToNextQuestionByPhase: {
+        normal: metrics.roundResultToNextQuestionNormalMs,
+        penalty: metrics.roundResultToNextQuestionPenaltyMs,
+      },
     },
     percentiles: {
       queueJoinToMatchStart: latencyReport(metrics.queueJoinToMatchStartMs),
       answerToAck: latencyReport(metrics.answerToAckMs),
       roundResultToNextQuestion: latencyReport(metrics.roundResultToNextQuestionMs),
+      roundResultToNextQuestionByPhase: {
+        normal: latencyReport(metrics.roundResultToNextQuestionNormalMs),
+        penalty: latencyReport(metrics.roundResultToNextQuestionPenaltyMs),
+      },
     },
     socketErrors: metrics.socketErrors,
     disconnectReasons: metrics.disconnectReasons,
@@ -255,6 +273,8 @@ export function renderSocketFleetSummary(s: SocketFleetSummary): string {
     ['queueJoin->match:start', s.percentiles.queueJoinToMatchStart],
     ['answer->answer_ack', s.percentiles.answerToAck],
     ['round_result->question', s.percentiles.roundResultToNextQuestion],
+    ['round_result->question normal', s.percentiles.roundResultToNextQuestionByPhase.normal],
+    ['round_result->question penalty', s.percentiles.roundResultToNextQuestionByPhase.penalty],
   ].map(([name, report]) => {
     const r = report as LatencyReport;
     return [name as string, String(r.count), String(r.p50), String(r.p95), String(r.p99), String(r.max)];
@@ -485,7 +505,10 @@ function attachMetrics(
     }
     const last = attempt.lastRoundResultAt;
     if (last && last.matchId === payload.matchId && payload.qIndex > last.qIndex) {
-      metrics.roundResultToNextQuestionMs.push(Date.now() - last.at);
+      const elapsed = Date.now() - last.at;
+      metrics.roundResultToNextQuestionMs.push(elapsed);
+      if (last.phase === 'penalty') metrics.roundResultToNextQuestionPenaltyMs.push(elapsed);
+      else metrics.roundResultToNextQuestionNormalMs.push(elapsed);
       attempt.lastRoundResultAt = null;
     }
   });
@@ -499,10 +522,15 @@ function attachMetrics(
       attempt.answerSentAt.delete(key);
     }
   });
-  client.socket.on('match:round_result', (payload: { matchId?: string; qIndex?: number }) => {
+  client.socket.on('match:round_result', (payload: { matchId?: string; qIndex?: number; phaseKind?: string }) => {
     const attempt = state.current;
     if (!attempt || !payload.matchId || typeof payload.qIndex !== 'number') return;
-    attempt.lastRoundResultAt = { matchId: payload.matchId, qIndex: payload.qIndex, at: Date.now() };
+    attempt.lastRoundResultAt = {
+      matchId: payload.matchId,
+      qIndex: payload.qIndex,
+      at: Date.now(),
+      phase: payload.phaseKind === 'penalty' ? 'penalty' : 'normal',
+    };
   });
   client.socket.on('match:rejoin_available', (payload: { matchId?: string; remainingReconnects?: number }) => {
     const attempt = state.current;
@@ -934,6 +962,8 @@ function newMetrics(): FleetMetrics {
     queueJoinToMatchStartMs: [],
     answerToAckMs: [],
     roundResultToNextQuestionMs: [],
+    roundResultToNextQuestionNormalMs: [],
+    roundResultToNextQuestionPenaltyMs: [],
     socketErrors: {},
     disconnectReasons: {},
   };

@@ -361,16 +361,27 @@ function attachBotBehaviors(
     onDraftBanSent: ({ categoryId }) => {
       const attempt = state.current;
       if (!attempt || state.flapInFlight || !hasFlapStage(cfg, 'draft') || attempt.stageFlaps.has('draft')) return;
-      attempt.draftFlap = {
-        startedAt: Date.now(),
-        reconnectedAt: null,
-        committedCategoryId: categoryId,
-        replayStartedAt: null,
-        sawCommittedBan: false,
-        replayMetricRecorded: false,
-        reported: false,
+      // A sent ban is not a committed ban: flap only once the server ACKS it
+      // (draft:banned echo), else a ban racing our own disconnect gets counted
+      // as "committed" and the replay check false-positives.
+      const onAck = (payload: { categoryId?: string } | undefined) => {
+        if (payload?.categoryId !== categoryId) return;
+        client.socket.off('draft:banned', onAck);
+        const current = state.current;
+        if (!current || current !== attempt || state.flapInFlight || attempt.stageFlaps.has('draft')) return;
+        attempt.draftFlap = {
+          startedAt: Date.now(),
+          reconnectedAt: null,
+          committedCategoryId: categoryId,
+          replayStartedAt: null,
+          sawCommittedBan: false,
+          replayMetricRecorded: false,
+          reported: false,
+        };
+        void performDraftStageFlap(state, cfg, metrics, attempt);
       };
-      void performDraftStageFlap(state, cfg, metrics, attempt);
+      client.socket.on('draft:banned', onAck);
+      setTimeout(() => client.socket.off('draft:banned', onAck), 10_000);
     },
     onBeforeKickoffUiReady: (payload) => {
       const attempt = state.current;
@@ -694,7 +705,10 @@ function checkSearchFlap(metrics: FleetMetrics, attempt: MatchAttempt, reason: s
 function checkDraftRollback(metrics: FleetMetrics, attempt: MatchAttempt, reason: string): void {
   const draft = attempt.draftFlap;
   if (!draft || draft.reported || draft.sawCommittedBan) return;
-  if (draft.replayStartedAt === null && reason !== 'attempt_closed') return;
+  // A rollback claim needs an actual replay that omitted the acked ban. No
+  // replay means the draft died another way (e.g. grace-abort while the client
+  // reconnected slowly) — real outcome, but not a ban rollback.
+  if (draft.replayStartedAt === null) return;
   draft.reported = true;
   metrics.banRollback++;
   metrics.bootStageViolations.push({

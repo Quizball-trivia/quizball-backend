@@ -186,7 +186,11 @@ export const agentsRepo = {
         COALESCE(
           t.question_draft -> 'prompt' ->> 'en',
           t.question_draft -> 'display_answer' ->> 'en',
-          NULLIF(LEFT(s.input ->> 'userPrompt', 110), '')
+          NULLIF(
+            CASE WHEN s.input ->> 'userPrompt' LIKE '%=== QUESTION 2%'
+              THEN '[batch of ' || regexp_count(s.input ->> 'userPrompt', '=== QUESTION') || '] '
+              ELSE ''
+            END || LEFT(s.input ->> 'userPrompt', 95), '')
         ) AS question
       FROM agents.sessions s
       LEFT JOIN agents.tasks t ON t.id = s.task_id

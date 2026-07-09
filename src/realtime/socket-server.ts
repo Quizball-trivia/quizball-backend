@@ -280,8 +280,7 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
         payload.matchId,
         payload.qIndex,
         payload.plannedAnswerTimeMs,
-        payload.plannedClueIndex,
-        payload.plannedIsCorrect
+        payload.plannedClueIndex
       );
     },
     possession_halftime: async (server, payload: RealtimeTimerPayload) => {

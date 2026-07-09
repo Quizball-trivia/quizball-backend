@@ -38,136 +38,13 @@ type ResolveRoundFn = (io: QuizballServer, matchId: string, qIndex: number, isTi
 
 const AI_ANSWER_TIMEOUT_BUFFER_MS = 250;
 const AI_ANSWER_MIN_RESUME_DELAY_MS = 75;
-const AI_DELAY_MIN_MS = 800;
-const AI_DELAY_QUESTION_BUFFER_MS = 1500;
-const AI_DELAY_FALLBACK_MAX_MS = 9000;
-const DEFAULT_AI_DELAY_PROFILE = { minMs: 2000, maxMs: 7000 };
 
-export type AiDelayProfile = {
-  minMs: number;
-  maxMs: number;
-};
-
-type AiSettings = {
-  aiCorrectness: number;
-  aiDelayProfile: AiDelayProfile | null;
-};
-
-type QuestionDifficulty = 'easy' | 'medium' | 'hard';
-
-function normalizedDifficulty(difficulty?: string): QuestionDifficulty {
-  if (difficulty === 'easy' || difficulty === 'medium' || difficulty === 'hard') {
-    return difficulty;
-  }
-  return 'medium';
-}
-
-function difficultyCorrectnessMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 1.35;
-    case 'hard':
-      return 0.65;
-    case 'medium':
-      return 1;
-  }
-}
-
-function difficultyDelayMultiplier(difficulty?: string): number {
-  switch (normalizedDifficulty(difficulty)) {
-    case 'easy':
-      return 0.6;
-    case 'hard':
-      return 1.4;
-    case 'medium':
-      return 1;
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function parseAiDelayProfile(value: unknown): AiDelayProfile | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const minMs = record.minMs;
-  const maxMs = record.maxMs;
-  if (
-    typeof minMs !== 'number' ||
-    typeof maxMs !== 'number' ||
-    !Number.isFinite(minMs) ||
-    !Number.isFinite(maxMs) ||
-    minMs > maxMs
-  ) {
-    return null;
-  }
-  return {
-    minMs: Math.round(minMs),
-    maxMs: Math.round(maxMs),
-  };
-}
-
-function aiSettingsFromRankedContext(ctx: unknown): AiSettings {
-  const record = asRecord(ctx);
-  if (!record) {
-    return {
-      aiCorrectness: RANKED_AI_CORRECTNESS,
-      aiDelayProfile: null,
-    };
-  }
-
-  const aiCorrectness = typeof record.aiCorrectness === 'number'
-    ? record.aiCorrectness
-    : RANKED_AI_CORRECTNESS;
-  return {
-    aiCorrectness,
-    aiDelayProfile: parseAiDelayProfile(record.aiDelayProfile),
-  };
-}
-
-function normalizeAiDelayProfile(profile?: AiDelayProfile | null): AiDelayProfile {
-  if (!profile) return DEFAULT_AI_DELAY_PROFILE;
-  return {
-    minMs: Math.max(0, Math.min(profile.minMs, profile.maxMs)),
-    maxMs: Math.max(0, Math.max(profile.minMs, profile.maxMs)),
-  };
-}
-
-export function difficultyAdjustedCorrectness(base: number, difficulty?: string): number {
-  return clamp(base * difficultyCorrectnessMultiplier(difficulty), 0.10, 0.97);
-}
-
-export function getAiAnswerDelayMs(options: {
-  questionKind?: MatchQuestionKind;
-  difficulty?: string;
-  delayProfile?: AiDelayProfile | null;
-  isCorrect?: boolean;
-  questionTimeMs?: number | null;
-} = {}): number {
+function getAiAnswerDelayMs(questionKind?: string): number {
   // Countdown is open-ended typing, so the AI uses a much slower range than other kinds.
-  if (options.questionKind === 'countdown') {
+  if (questionKind === 'countdown') {
     return harnessDelayMs(Math.floor(getRandom() * 10000) + 12000);
   }
-
-  const profile = normalizeAiDelayProfile(options.delayProfile);
-  const rangeMs = Math.max(0, profile.maxMs - profile.minMs);
-  const baseMs = profile.minMs + Math.floor(getRandom() * (rangeMs + 1));
-  const hesitationMultiplier = options.isCorrect === false
-    ? 1.3 + getRandom() * 0.3
-    : 1;
-  const jitterMultiplier = 0.85 + getRandom() * 0.3;
-  const rawDelayMs =
-    baseMs *
-    difficultyDelayMultiplier(options.difficulty) *
-    hesitationMultiplier *
-    jitterMultiplier;
-  const maxDelayMs = typeof options.questionTimeMs === 'number' && Number.isFinite(options.questionTimeMs)
-    ? Math.max(AI_DELAY_MIN_MS, options.questionTimeMs - AI_DELAY_QUESTION_BUFFER_MS)
-    : AI_DELAY_FALLBACK_MAX_MS;
-  return harnessDelayMs(Math.round(clamp(rawDelayMs, AI_DELAY_MIN_MS, maxDelayMs)));
+  return harnessDelayMs(Math.floor(getRandom() * 5000) + 2000);
 }
 
 function pickIncorrectIndex(correctIndex: number, optionCount: number): number {
@@ -194,7 +71,7 @@ function getAiClueIndex(clueCount: number, aiCorrectness: number): number {
 
 export function createPossessionAi(resolveRound: ResolveRoundFn) {
   const aiUserIdByMatch = new Map<string, string | null>();
-  const aiSettingsForMatch = new Map<string, AiSettings>();
+  const aiCorrectnessForMatch = new Map<string, number>();
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
     fn().catch((error) => {
@@ -229,19 +106,22 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     return null;
   }
 
-  async function resolveAiSettingsForMatch(matchId: string): Promise<AiSettings> {
-    const cached = aiSettingsForMatch.get(matchId);
-    if (cached) return cached;
+  async function resolveAiCorrectnessForMatch(matchId: string): Promise<number> {
+    const cached = aiCorrectnessForMatch.get(matchId);
+    if (cached !== undefined) return cached;
 
     const match = await matchesRepo.getMatch(matchId);
-    const settings = aiSettingsFromRankedContext(match?.ranked_context);
-    aiSettingsForMatch.set(matchId, settings);
-    return settings;
-  }
+    const ctx = match?.ranked_context;
+    if (ctx && typeof ctx === 'object' && 'aiCorrectness' in ctx) {
+      const val = (ctx as { aiCorrectness?: unknown }).aiCorrectness;
+      if (typeof val === 'number') {
+        aiCorrectnessForMatch.set(matchId, val);
+        return val;
+      }
+    }
 
-  async function resolveAiCorrectnessForMatch(matchId: string): Promise<number> {
-    const settings = await resolveAiSettingsForMatch(matchId);
-    return settings.aiCorrectness;
+    aiCorrectnessForMatch.set(matchId, RANKED_AI_CORRECTNESS);
+    return RANKED_AI_CORRECTNESS;
   }
 
   function clearAiAnswerTimer(matchId: string, qIndex: number): void {
@@ -324,12 +204,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           qIndex,
           state: cache.statePayload,
         });
-    const aiSettings = await resolveAiSettingsForMatch(matchId);
-    const questionDifficulty = cache.currentQuestion.questionDTO.difficulty;
-    const aiCorrectness = difficultyAdjustedCorrectness(aiSettings.aiCorrectness, questionDifficulty);
-    const plannedIsCorrect = options.questionKind === 'countdown'
-      ? false
-      : getRandom() < aiCorrectness;
+    const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
+    const aiThinkTimeMs = getAiAnswerDelayMs(options.questionKind);
     const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
       ? options.evaluation.clues.length
       : undefined;
@@ -339,13 +215,6 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const questionTimeMsForDelay = hasAuthoritativeWindow
       ? Math.max(0, (deadlineAtMs as number) - (playableAtMs as number))
       : getQuestionDurationMs(options.questionKind, clueCountForDelay);
-    const aiThinkTimeMs = getAiAnswerDelayMs({
-      questionKind: options.questionKind,
-      difficulty: questionDifficulty,
-      delayProfile: aiSettings.aiDelayProfile,
-      isCorrect: plannedIsCorrect,
-      questionTimeMs: questionTimeMsForDelay,
-    });
     let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
       ? (() => {
           const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
@@ -370,7 +239,6 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       qIndex,
       plannedAnswerTimeMs,
       plannedClueIndex,
-      plannedIsCorrect,
     });
     logger.info(
       {
@@ -386,10 +254,8 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         preAnswerDelayMs,
         aiThinkTimeMs,
         aiCorrectness,
-        questionDifficulty,
         plannedAnswerTimeMs,
         plannedClueIndex,
-        plannedIsCorrect,
         playableAt: hasAuthoritativeWindow ? new Date(playableAtMs as number).toISOString() : null,
         dueAt: new Date(dueAtMs).toISOString(),
         deadlineAt: hasAuthoritativeWindow ? new Date(deadlineAtMs as number).toISOString() : null,
@@ -404,8 +270,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     matchId: string,
     qIndex: number,
     plannedAnswerTimeMs: number,
-    plannedClueIndex: number | null,
-    plannedIsCorrect?: boolean
+    plannedClueIndex: number | null
   ): Promise<void> {
     try {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
@@ -418,7 +283,6 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           aiUserId,
           plannedAnswerTimeMs,
           plannedClueIndex,
-          plannedIsCorrect,
         },
         'Possession AI answer timer fired'
       );
@@ -494,8 +358,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           return;
         }
 
-        const baseAiCorrectness = await resolveAiCorrectnessForMatch(matchId);
-        const aiCorrectness = difficultyAdjustedCorrectness(baseAiCorrectness, question.questionDTO.difficulty);
+        const aiCorrectness = await resolveAiCorrectnessForMatch(matchId);
         const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
           ? question.evaluation.clues.length
           : undefined;
@@ -513,7 +376,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           const optionCount = question.questionDTO.kind === 'multipleChoice'
             ? question.questionDTO.options.length
             : 4;
-          isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
+          isCorrect = getRandom() < aiCorrectness;
           selectedIndex = isCorrect
             ? question.evaluation.correctIndex
             : pickIncorrectIndex(question.evaluation.correctIndex, optionCount);
@@ -529,7 +392,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           const correctOrderIds = [...question.evaluation.items]
             .sort((left, right) => left.sortValue - right.sortValue)
             .map((item) => item.id);
-          isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
+          isCorrect = getRandom() < aiCorrectness;
           selectedIndex = null;
           // Wrong-answer scoring for put-in-order: scale `aiCorrectness`
           // by 0.55 so an AI that "would have" got the question right
@@ -551,7 +414,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           }
           pointsEarned = calculatePutInOrderScore(foundCount, correctOrderIds.length);
         } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
-          isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
+          isCorrect = getRandom() < aiCorrectness;
           clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
           selectedIndex = null;
           pointsEarned = calculateCluesScore(isCorrect, clueIndex);
@@ -750,7 +613,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
   function clearAiMaps(matchId: string): void {
     aiUserIdByMatch.delete(matchId);
-    aiSettingsForMatch.delete(matchId);
+    aiCorrectnessForMatch.delete(matchId);
   }
 
   return {

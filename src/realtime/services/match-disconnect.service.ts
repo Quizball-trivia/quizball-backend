@@ -108,6 +108,7 @@ const MATCH_DISCONNECT_GRACE_MS = 20000;
 // player forfeits (zombie / never-rejoined protection). Sized to the resume
 // UI-ready ceiling so a healthy client comfortably finishes its handshake.
 const MATCH_RECONNECT_PENDING_GRACE_MS = 8_000;
+const MATCH_GATE_RECONNECT_PENDING_GRACE_MS = 20_000;
 const GRACE_EXTENDED_TTL_SEC = 30;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
@@ -1483,6 +1484,24 @@ function socketConnectedAt(socket: unknown): number | null {
   return typeof value === 'number' ? value : null;
 }
 
+function socketAuthenticatedAs(socket: unknown, userId: string): boolean {
+  return (socket as { data?: { user?: { id?: unknown } } } | null)?.data?.user?.id === userId;
+}
+
+async function isPreQuestionKickoffStage(
+  match: MatchRow,
+  roster: PossessionTerminalPlayer[],
+  cacheSnapshot: MatchCache | null
+): Promise<boolean> {
+  if (match.current_q_index !== 0) return false;
+  if (cacheSnapshot?.currentQuestion) return false;
+  const statePayload = (cacheSnapshot?.statePayload ?? match.state_payload) as { currentQuestion?: unknown } | null;
+  if (statePayload?.currentQuestion) return false;
+  if (!roster.every((player) => (Number(player.correct_answers) || 0) === 0)) return false;
+  const activeQuestion = await matchQuestionsRepo.getMatchQuestion(match.id, 0);
+  return !activeQuestion;
+}
+
 /**
  * Of the players Redis still marks disconnected, which have a FRESH live socket
  * — one that connected AFTER their disconnect marker was written? That is a
@@ -1519,7 +1538,7 @@ async function findReconnectPendingUsers(
       if (!(markerMs > 0)) return;
       const hasFreshMatchSocket = matchRoomSockets.some(
         (socket) =>
-          (socket as { data?: { user?: { id?: unknown } } }).data?.user?.id === userId &&
+          socketAuthenticatedAs(socket, userId) &&
           (socketConnectedAt(socket) ?? 0) >= markerMs
       );
       if (hasFreshMatchSocket) {
@@ -1528,7 +1547,7 @@ async function findReconnectPendingUsers(
       }
       const userRoomSockets = await fetchUserRoomSockets(io, userId);
       const hasFreshUserSocket = userRoomSockets.some(
-        (socket) => (socketConnectedAt(socket) ?? 0) >= markerMs
+        (socket) => socketAuthenticatedAs(socket, userId) && (socketConnectedAt(socket) ?? 0) >= markerMs
       );
       if (hasFreshUserSocket) pending.add(userId);
     })
@@ -1564,6 +1583,10 @@ export async function resolveExpiredGraceWindow(
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
 
     const roster = await matchPlayersRepo.listMatchPlayers(matchId);
+    const cacheSnapshot = variant !== 'friendly_party_quiz' ? await getMatchCache(matchId) : null;
+    const isKickoffGateStage = variant !== 'friendly_party_quiz'
+      ? await isPreQuestionKickoffStage(activeMatch, roster, cacheSnapshot)
+      : false;
     // Read the marker VALUE (the disconnect timestamp), not just existence — the
     // reconnect-pending check below compares it against each fresh socket's
     // connectedAt to tell a genuine reconnect from a zombie socket.
@@ -1591,10 +1614,13 @@ export async function resolveExpiredGraceWindow(
         const reconnectPending = await findReconnectPendingUsers(io, matchId, markedDisconnected);
         if (reconnectPending.size > 0) {
           await redis.set(matchGraceExtendedKey(matchId), '1', { EX: GRACE_EXTENDED_TTL_SEC });
+          const reconnectPendingGraceMs = harnessDelayMs(
+            isKickoffGateStage ? MATCH_GATE_RECONNECT_PENDING_GRACE_MS : MATCH_RECONNECT_PENDING_GRACE_MS
+          );
           await scheduleRealtimeTimer(
             'match_disconnect_forfeit',
             matchId,
-            new Date(Date.now() + MATCH_RECONNECT_PENDING_GRACE_MS),
+            new Date(Date.now() + reconnectPendingGraceMs),
             { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: [...reconnectPending][0]! }
           );
           for (const userId of reconnectPending) {
@@ -1602,13 +1628,13 @@ export async function resolveExpiredGraceWindow(
               io,
               activeMatch,
               userId,
-              MATCH_RECONNECT_PENDING_GRACE_MS,
+              reconnectPendingGraceMs,
               toRemainingReconnects(await getDisconnectCount(matchId, userId))
             );
           }
           deferredForReconnect = true;
           logger.info(
-            { matchId, reconnectPendingUserIds: [...reconnectPending], windowMs: MATCH_RECONNECT_PENDING_GRACE_MS },
+            { matchId, reconnectPendingUserIds: [...reconnectPending], windowMs: reconnectPendingGraceMs },
             'Grace expiry deferred: player(s) reconnected within grace, awaiting rejoin handshake'
           );
         }
@@ -1684,12 +1710,11 @@ export async function resolveExpiredGraceWindow(
 
     // Forfeit finalization persists final totals from the cache snapshot;
     // without it the last answers before the disconnect could be lost.
-    const cacheSnapshot = await getMatchCache(matchId);
     await resolvePossessionTerminalAfterDisconnect({
       io,
       match: activeMatch,
       roster,
-      cacheSnapshot,
+      cacheSnapshot: (await getMatchCache(matchId)) ?? cacheSnapshot,
       disconnectedUserIds: disconnected,
       source: 'disconnect_grace_expired',
     });

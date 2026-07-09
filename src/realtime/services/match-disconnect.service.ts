@@ -97,8 +97,7 @@ import {
   markExcusedExitPending,
 } from './match-excused-exit.service.js';
 import {
-  hasMatchStagePresenceFromSocketIds,
-  type MatchStageKey,
+  hasAnyMatchStagePresenceFromSocketIds,
 } from './match-stage-presence.service.js';
 
 const MATCH_DISCONNECT_GRACE_MS = 30000;
@@ -169,47 +168,17 @@ async function resolveHumanReadyUserIds(matchId: string, userIds: string[]): Pro
   }
 }
 
-function getPausePresenceStageKeys(
-  match: MatchRow,
-  variant: ReturnType<typeof resolveMatchVariant>
-): MatchStageKey[] {
-  const state = match.state_payload ?? {};
-
-  if (variant === 'friendly_party_quiz') {
-    const currentQuestion = (state as { currentQuestion?: unknown }).currentQuestion;
-    return currentQuestion ? ['party_quiz'] : ['kickoff', 'party_quiz'];
-  }
-
-  const possessionState = state as Partial<PossessionStatePayload>;
-  if (possessionState.phase === 'HALFTIME') return ['category_ban'];
-  if (
-    possessionState.phase === 'PENALTY_SHOOTOUT' ||
-    possessionState.currentQuestion?.phaseKind === 'penalty'
-  ) {
-    return ['penalties'];
-  }
-  if (possessionState.currentQuestion) return ['question'];
-  return ['kickoff', 'question'];
-}
-
 async function hasReplacementMatchUiSocket(params: {
   match: MatchRow;
   variant: ReturnType<typeof resolveMatchVariant>;
   userId: string;
   socketIds: string[];
 }): Promise<boolean> {
-  const stageKeys = getPausePresenceStageKeys(params.match, params.variant);
-  const presenceResults = await Promise.all(
-    stageKeys.map((stageKey) =>
-      hasMatchStagePresenceFromSocketIds({
-        matchId: params.match.id,
-        userId: params.userId,
-        stageKey,
-        socketIds: params.socketIds,
-      })
-    )
-  );
-  return presenceResults.some(Boolean);
+  return hasAnyMatchStagePresenceFromSocketIds({
+    matchId: params.match.id,
+    userId: params.userId,
+    socketIds: params.socketIds,
+  });
 }
 
 function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTerminalPlayer[]): string[] {
@@ -305,23 +274,12 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
   cacheSnapshot?: MatchCache | null;
   disconnectedUserIds: string[];
   source: string;
-  // When the forfeiter is already DEFINITIVE (e.g. they exceeded the reconnect
-  // limit), pass their id here. The resolver then forfeits THAT player directly,
-  // skipping the presence-based fork. This is critical: a player who exceeded
-  // the limit must lose even if a racing reconnect makes them look "present"
-  // again, and even when the opponent is an AI (whose synthetic presence can
-  // leave the presence fork unable to isolate a single absent player) — that
-  // race let a winning, limit-breaking player WIN from progress instead of
-  // forfeiting (the ranked-vs-AI reconnect_limit bug).
+  // Only pass this after the caller has proved a present human opponent; the
+  // direct path intentionally bypasses the AI-only forfeit guard below.
   definiteForfeiterUserId?: string;
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
   const { io, match, roster, cacheSnapshot, disconnectedUserIds, source, definiteForfeiterUserId } = params;
 
-  // Definitive-forfeiter fast path: the caller already knows who must lose
-  // (e.g. reconnect-limit exceeded). Forfeit them directly — do NOT re-derive
-  // absence from presence, which is racy (a just-in-time reconnect clears the
-  // disconnect marker) and unreliable vs an AI opponent. The opponent (human or
-  // AI) is the winner.
   if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
     const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
     const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
@@ -1192,33 +1150,39 @@ export async function pauseMatchForDisconnectedPlayer(
   }
 
   const sockets = await io.in(`match:${matchId}`).fetchSockets();
-  const sameUserSockets = sockets.filter(
+  const sameUserSocketsFrom = (candidateSockets: typeof sockets) => candidateSockets.filter(
     (connectedSocket) =>
       connectedSocket.id !== options.ignoreSocketId &&
       connectedSocket.data.user.id === userId
   );
-  const replacementSocketIds = sameUserSockets.filter((connectedSocket) => {
-    if (typeof options.disconnectedConnectedAt !== 'number') return true;
-    const connectedAt = connectedSocket.data.connectedAt;
-    return typeof connectedAt === 'number' && connectedAt >= options.disconnectedConnectedAt;
-  }).map((connectedSocket) => connectedSocket.id);
+  const sameUserSocketIdsFrom = (candidateSockets: typeof sockets) =>
+    sameUserSocketsFrom(candidateSockets).map((connectedSocket) => connectedSocket.id);
+  const replacementSocketIdsFrom = (candidateSockets: typeof sockets) =>
+    sameUserSocketsFrom(candidateSockets)
+      .filter((connectedSocket) => {
+        if (typeof options.disconnectedConnectedAt !== 'number') return true;
+        const connectedAt = connectedSocket.data.connectedAt;
+        return typeof connectedAt === 'number' && connectedAt >= options.disconnectedConnectedAt;
+      })
+      .map((connectedSocket) => connectedSocket.id);
+  const stableLiveSocketIdsFrom = (candidateSockets: typeof sockets, referenceNowMs: number) =>
+    sameUserSocketsFrom(candidateSockets)
+      .filter((connectedSocket) => {
+        const connectedAt = connectedSocket.data.connectedAt;
+        return typeof connectedAt !== 'number' || referenceNowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
+      })
+      .map((connectedSocket) => connectedSocket.id);
+  const sameUserSockets = sameUserSocketsFrom(sockets);
+  const sameUserSocketIds = sameUserSocketIdsFrom(sockets);
+  const replacementSocketIds = replacementSocketIdsFrom(sockets);
   const replacementSocketPresent = replacementSocketIds.length > 0;
   const nowMs = Date.now();
-  const stableLiveSocketIds = sameUserSockets.filter((connectedSocket) => {
-    if (typeof options.disconnectedConnectedAt === 'number') {
-      const connectedAt = connectedSocket.data.connectedAt;
-      if (typeof connectedAt === 'number' && connectedAt < options.disconnectedConnectedAt) {
-        return false;
-      }
-    }
-    const connectedAt = connectedSocket.data.connectedAt;
-    return typeof connectedAt !== 'number' || nowMs - connectedAt >= LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS;
-  }).map((connectedSocket) => connectedSocket.id);
+  const stableLiveSocketIds = stableLiveSocketIdsFrom(sockets, nowMs);
   const matchUiReplacementSocketPresent = await hasReplacementMatchUiSocket({
     match,
     variant,
     userId,
-    socketIds: replacementSocketIds,
+    socketIds: sameUserSocketIds,
   });
   const stableMatchUiSocketPresent = await hasReplacementMatchUiSocket({
     match,
@@ -1275,11 +1239,11 @@ export async function pauseMatchForDisconnectedPlayer(
   //  (a) the match:disconnect marker is already set — a duplicate handler for the
   //      SAME episode (socket `disconnect` + `match:leave`), which previously
   //      double-counted and forfeited players after only 2 real disconnects; or
-  //  (b) a newer same-user socket is already present AND proving live match-UI
-  //      presence (matchUiReplacementSocketPresent) — a STALE disconnect for a
-  //      socket the user already replaced by reconnecting. A bare user/site
-  //      socket is not enough: it can be on the menu while the player is absent
-  //      from the actual match UI.
+  //  (b) a same-user socket in the match room is proving live match-UI presence
+  //      (matchUiReplacementSocketPresent) — a STALE disconnect for a socket
+  //      that is not the user's only active match UI. A bare user/site socket is
+  //      not enough: it can be on the menu while the player is absent from the
+  //      actual match UI; or
   // The marker is cleared on resume, so a genuinely new disconnect counts again.
   const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
   const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
@@ -1352,6 +1316,14 @@ export async function pauseMatchForDisconnectedPlayer(
       remainingReconnects,
     });
   });
+  const autoResumeReplacementMatchUiSocketPresent = options.autoResumeReplacementSocket
+    ? await hasReplacementMatchUiSocket({
+        match,
+        variant,
+        userId,
+        socketIds: replacementSocketIds,
+      })
+    : false;
   if (variant === 'friendly_party_quiz') {
     logger.info(
       {
@@ -1365,11 +1337,43 @@ export async function pauseMatchForDisconnectedPlayer(
       'Party quiz opponent disconnected emitted'
     );
   }
-  if (variant === 'friendly_party_quiz' && options.autoResumeReplacementSocket && matchUiReplacementSocketPresent) {
+  if (variant === 'friendly_party_quiz' && autoResumeReplacementMatchUiSocketPresent) {
     await emitRejoinAvailableToUser(io, match, userId, MATCH_DISCONNECT_GRACE_MS, remainingReconnects);
   }
 
   if (disconnectCount > MAX_MATCH_DISCONNECTS) {
+    if (variant !== 'friendly_party_quiz') {
+      let latestSockets = sockets;
+      try {
+        latestSockets = await io.in(`match:${matchId}`).fetchSockets();
+      } catch (error) {
+        logger.warn({ error, matchId, userId }, 'Failed to re-check match sockets before reconnect-limit forfeit');
+      }
+      const latestLiveSocketIds = sameUserSocketIdsFrom(latestSockets);
+      const latestMatchUiSocketPresent = await hasReplacementMatchUiSocket({
+        match,
+        variant,
+        userId,
+        socketIds: latestLiveSocketIds,
+      });
+      if (latestMatchUiSocketPresent) {
+        logger.info(
+          {
+            matchId,
+            userId,
+            disconnectCount,
+            maxDisconnects: MAX_MATCH_DISCONNECTS,
+            liveSocketCount: latestLiveSocketIds.length,
+          },
+          'Reconnect-limit forfeit skipped because user has live match UI presence'
+        );
+        return {
+          graceMs: MATCH_DISCONNECT_GRACE_MS,
+          remainingReconnects,
+          finalized: false,
+        };
+      }
+    }
     logger.warn(
       {
         matchId,
@@ -1414,6 +1418,7 @@ export async function pauseMatchForDisconnectedPlayer(
       source: 'reconnect_limit',
       // The reconnect limit was exceeded by `userId` — they MUST forfeit, even
       // if a racing reconnect makes them look present or the opponent is an AI.
+      // (The liveness re-check above already spared a provably-present player.)
       definiteForfeiterUserId: userId,
     });
     if (resolved.finalized) {
@@ -1440,9 +1445,9 @@ export async function pauseMatchForDisconnectedPlayer(
       acquired === 'OK' ? 'Party quiz shared grace window started' : 'Party quiz shared grace window already active'
     );
   }
-  if (variant !== 'friendly_party_quiz' && options.autoResumeReplacementSocket && matchUiReplacementSocketPresent) {
+  if (variant !== 'friendly_party_quiz' && autoResumeReplacementMatchUiSocketPresent) {
     logger.info(
-      { matchId, userId, socketCount: sameUserSockets.length },
+      { matchId, userId, socketCount: replacementSocketIds.length },
       'Auto-resuming match after fast socket replacement'
     );
     await resumePausedMatch(io, matchId, userId);

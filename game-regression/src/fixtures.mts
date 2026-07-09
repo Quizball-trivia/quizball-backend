@@ -61,11 +61,13 @@ async function withFixtureLock<T>(fn: () => Promise<T>): Promise<T> {
 
 export interface SeedOptions {
   categoryCount?: number; // ranked-eligible categories to create (default 3)
+  friendlyCategoryCount?: number; // NON-featured categories for the friendly/party pool (default 2)
   mcqPerCategory?: number; // MCQs per category (>= 3; default 5)
 }
 
 export interface SeededFixtures {
   categoryIds: string[];
+  friendlyCategoryIds: string[];
   /** All seeded question ids by category, for the score planner to reference. */
   questionIdsByCategory: Record<string, string[]>;
 }
@@ -164,20 +166,25 @@ const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 
 export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFixtures> {
   const categoryCount = options.categoryCount ?? 3;
+  // The friendly/party pool is NON-featured categories only
+  // (listAllValidCategories excludes featured_categories), so without these the
+  // friendly boot fails with INSUFFICIENT_CATEGORIES.
+  const friendlyCategoryCount = options.friendlyCategoryCount ?? 2;
   // A full possession match consumes ~10 normal MCQs (2 halves) and the engine
   // prefers a difficulty per round (easy early, harder later) with no repeats —
   // so seed a generous pool PER difficulty, not just 5 medium ones, or the match
   // runs out of valid candidates mid-game and stalls.
   const mcqPerDifficulty = Math.max(4, options.mcqPerCategory ?? 8);
 
-  const result: SeededFixtures = { categoryIds: [], questionIdsByCategory: {} };
+  const result: SeededFixtures = { categoryIds: [], friendlyCategoryIds: [], questionIdsByCategory: {} };
 
   // Serialize the whole clear+seed against any concurrent harness worker — the
   // truncates would deadlock and the fixed category slugs would collide otherwise.
   await withFixtureLock(async () => {
     await clearFixtures();
-    for (let c = 0; c < categoryCount; c++) {
-      const label = `cat${c}`;
+    for (let c = 0; c < categoryCount + friendlyCategoryCount; c++) {
+      const isFriendly = c >= categoryCount;
+      const label = isFriendly ? `friendly${c - categoryCount}` : `cat${c}`;
       const [category] = await sql<{ id: string }[]>`
         INSERT INTO categories (id, slug, name, icon, image_url, is_active)
         VALUES (gen_random_uuid(), ${`regression-${label}-${c}`},
@@ -186,14 +193,17 @@ export async function seedFixtures(options: SeedOptions = {}): Promise<SeededFix
       `;
       // The ranked draft pool is FEATURED categories only (featured_categories
       // join in listAllRankedEligibleCategories) — un-featured fixtures would
-      // leave the ranked harness with an empty pool. clearFixtures() already
-      // deletes these rows symmetrically.
-      await sql`
-        INSERT INTO featured_categories (category_id)
-        VALUES (${category.id})
-        ON CONFLICT (category_id) DO NOTHING
-      `;
-      result.categoryIds.push(category.id);
+      // leave the ranked harness with an empty pool. Friendly/party pool is the
+      // inverse (non-featured only), so friendly fixtures skip the insert.
+      // clearFixtures() already deletes these rows symmetrically.
+      if (!isFriendly) {
+        await sql`
+          INSERT INTO featured_categories (category_id)
+          VALUES (${category.id})
+          ON CONFLICT (category_id) DO NOTHING
+        `;
+      }
+      (isFriendly ? result.friendlyCategoryIds : result.categoryIds).push(category.id);
       result.questionIdsByCategory[category.id] = [];
 
       // Build the per-type question list: a generous MCQ pool across all three

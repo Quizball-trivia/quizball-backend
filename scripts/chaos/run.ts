@@ -21,6 +21,8 @@
 //   --db            override Postgres URL (for stats)
 //   --sockets       concurrent ranked socket clients (default 0 = off)
 //   --flap-rate     average reconnect flaps per socket match (default 0)
+//   --flap-stage    search | draft | gate | match; repeatable/comma list (default match)
+//   --legacy-protocol  socket clients skip old-mobile-missing UI-ready/reveal acks
 //   --ramp-s        seconds to stagger socket queue joins (default 10)
 //   --matches-per-client  socket matches per client; overrides duration stop when duration omitted
 
@@ -35,6 +37,7 @@ import {
   assertSocketTargetSafe,
   renderSocketFleetSummary,
   runSocketFleet,
+  type FlapStage,
   type SocketFleetSummary,
 } from './socket-fleet.js';
 import {
@@ -61,17 +64,29 @@ interface Args {
   db?: string;
   sockets: number;
   flapRate: number;
+  flapStages: FlapStage[];
+  legacyProtocol: boolean;
   rampSec: number;
   matchesPerClient?: number;
   durationWasExplicit: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
+  const getAll = (k: string): string[] => {
+    const values: string[] = [];
+    for (let i = 0; i < argv.length; i += 1) {
+      const arg = argv[i]!;
+      if (arg === `--${k}`) {
+        values.push(argv[i + 1] && !argv[i + 1]!.startsWith('--') ? argv[i + 1]! : 'true');
+      } else if (arg.startsWith(`--${k}=`)) {
+        values.push(arg.slice(k.length + 3));
+      }
+    }
+    return values;
+  };
   const get = (k: string): string | undefined => {
-    const hit = argv.find((a) => a === `--${k}` || a.startsWith(`--${k}=`));
-    if (!hit) return undefined;
-    const eq = hit.indexOf('=');
-    return eq === -1 ? 'true' : hit.slice(eq + 1);
+    const values = getAll(k);
+    return values[0];
   };
   const num = (k: string, fallback: number): number => {
     const raw = get(k);
@@ -91,6 +106,7 @@ function parseArgs(argv: string[]): Args {
     throw new Error('--matches-per-client must be a positive integer.');
   }
   const target = (get('target') ?? 'staging') as 'staging' | 'local';
+  const flapStages = parseFlapStages(getAll('flap-stage'));
   return {
     target,
     rps: num('rps', 100),
@@ -103,10 +119,25 @@ function parseArgs(argv: string[]): Args {
     db: get('db'),
     sockets,
     flapRate: Math.max(0, num('flap-rate', 0)),
+    flapStages,
+    legacyProtocol: get('legacy-protocol') === 'true',
     rampSec: Math.max(0, num('ramp-s', 10)),
     matchesPerClient: parsedMatchesPerClient,
     durationWasExplicit,
   };
+}
+
+function parseFlapStages(values: string[]): FlapStage[] {
+  const raw = values.length > 0 ? values : ['match'];
+  const parsed = raw.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean);
+  const valid = new Set<FlapStage>(['search', 'draft', 'gate', 'match']);
+  const out: FlapStage[] = [];
+  for (const value of parsed) {
+    if (!valid.has(value as FlapStage)) throw new Error(`--flap-stage must be one of search,draft,gate,match; got "${value}".`);
+    const stage = value as FlapStage;
+    if (!out.includes(stage)) out.push(stage);
+  }
+  return out.length > 0 ? out : ['match'];
 }
 
 function writeSocketReport(summary: SocketFleetSummary): string {
@@ -205,6 +236,8 @@ async function main() {
   if (args.sockets > 0) {
     console.log(`  sockets     : ${args.sockets}`);
     console.log(`  flap-rate   : ${args.flapRate}`);
+    console.log(`  flap-stage  : ${args.flapStages.join(',')}`);
+    console.log(`  legacy-protocol: ${args.legacyProtocol}`);
     console.log(`  ramp        : ${args.rampSec}s`);
     if (args.matchesPerClient !== undefined) console.log(`  matches/client: ${args.matchesPerClient}`);
   }
@@ -315,6 +348,8 @@ async function main() {
         durationWasExplicit: args.durationWasExplicit,
         sockets: args.sockets,
         flapRate: args.flapRate,
+        flapStages: args.flapStages,
+        legacyProtocol: args.legacyProtocol,
         rampSec: args.rampSec,
         matchesPerClient: args.matchesPerClient,
         users: users.slice(0, args.sockets),
@@ -388,7 +423,14 @@ async function main() {
   }
 
   console.log('\nDone.');
-  if (socketSummary && (socketSummary.wrongfulForfeits > 0 || socketSummary.matchesCompleted === 0)) {
+  if (socketSummary && (
+    socketSummary.wrongfulForfeits > 0 ||
+    socketSummary.deadSearch > 0 ||
+    socketSummary.banRollback > 0 ||
+    socketSummary.gateAbandon > 0 ||
+    socketSummary.legacyDraftStall > 0 ||
+    socketSummary.matchesCompleted === 0
+  )) {
     process.exitCode = 1;
   }
 }

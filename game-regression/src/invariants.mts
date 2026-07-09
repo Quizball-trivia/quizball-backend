@@ -371,6 +371,7 @@ const winnerMatchesResults: Invariant = (trace) => {
 
 interface MatchLifecycleDbMatch {
   id: string;
+  status: string;
   mode: string;
   winner_user_id: string | null;
   state_payload: unknown;
@@ -379,7 +380,7 @@ interface MatchLifecycleDbMatch {
 interface MatchLifecycleDbFacts {
   match: MatchLifecycleDbMatch | null;
   players: Array<{ user_id: string; is_ai: boolean | null }>;
-  answers: Array<{ q_index: number; user_id: string; time_ms: number; phase_kind: string | null }>;
+  answers: Array<{ q_index: number; user_id: string; time_ms: number; points_earned: number; phase_kind: string | null }>;
 }
 
 function payloadRecord(event: TraceEvent): Record<string, unknown> {
@@ -396,6 +397,14 @@ function payloadUserId(event: TraceEvent): string | null {
 function payloadQIndex(event: TraceEvent): number | null {
   const qIndex = payloadRecord(event).qIndex;
   return typeof qIndex === 'number' ? qIndex : null;
+}
+
+function planHasAction(plan: ChaosPlan | null | undefined, kind: string): boolean {
+  return Boolean(plan?.actions.some((action) => action.kind === kind));
+}
+
+function planHasPhase(plan: ChaosPlan | null | undefined, phase: string): boolean {
+  return Boolean(plan?.actions.some((action) => action.atPhase === phase));
 }
 
 function winnerDecisionMethodFromFacts(facts: MatchLifecycleDbFacts, trace: EventTrace): string | null {
@@ -436,6 +445,7 @@ function presentEvidenceAfterLastDisconnect(trace: EventTrace, userId: string): 
     'match:presence_heartbeat',
     'match:question_revealed',
     'match:answer',
+    'match:gate_reconnected',
     'match:stale_disconnect',
   ]);
   for (const event of trace.events) {
@@ -449,7 +459,7 @@ function presentEvidenceAfterLastDisconnect(trace: EventTrace, userId: string): 
 async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFacts> {
   const { sql } = await import('../../src/db/index.js');
   const [match] = await sql<MatchLifecycleDbMatch[]>
-    `SELECT id, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
+    `SELECT id, status, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
   const players = await sql<Array<{ user_id: string; is_ai: boolean | null }>>`
     SELECT mp.user_id, u.is_ai
     FROM match_players mp
@@ -457,7 +467,7 @@ async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFa
     WHERE mp.match_id = ${matchId}
   `;
   const answers = await sql<MatchLifecycleDbFacts['answers']>`
-    SELECT q_index, user_id, time_ms, phase_kind
+    SELECT q_index, user_id, time_ms, points_earned, phase_kind
     FROM match_answers
     WHERE match_id = ${matchId}
   `;
@@ -485,7 +495,9 @@ function realDisconnectEpisodesForChaosPlan(plan: ChaosPlan | null | undefined):
       action.kind === 'multiTab' ||
       action.kind === 'quitRejoin' ||
       action.kind === 'zombieReconnect' ||
-      action.kind === 'expireGraceAfterDisconnect'
+      action.kind === 'expireGraceAfterDisconnect' ||
+      action.kind === 'flapAtKickoffGate' ||
+      action.kind === 'engineRestart'
     ) {
       count += 1;
     }
@@ -565,6 +577,77 @@ async function noForfeitWinToAiOverLeadingPresentHuman(
   }];
 }
 
+function gateStateReemittedOnReconnect(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+): Violation[] {
+  return trace.events
+    .filter((event) =>
+      event.event === 'match:gate_reconnected' &&
+      payloadUserId(event) === context.botUserId &&
+      payloadRecord(event).withinGrace === true
+    )
+    .filter((reconnected) => {
+      const freshSocketId = payloadRecord(reconnected).freshSocketId;
+      const roomTarget = `match:${context.matchId}`;
+      return !trace.events.some((event) =>
+        event.seq > reconnected.seq &&
+        event.event === 'match:waiting_for_ready' &&
+        (event.payload as { phase?: unknown } | undefined)?.phase === 'kickoff' &&
+        (event.target === freshSocketId || event.target === roomTarget)
+      );
+    })
+    .map((reconnected) => ({
+      invariant: 'gateStateReemittedOnReconnect',
+      message: 'Reconnected socket at the kickoff ready gate never received a match:waiting_for_ready re-emit — the client has no server-initiated path back into the gate.',
+      seq: reconnected.seq,
+      detail: {
+        matchId: context.matchId,
+        botUserId: context.botUserId,
+        freshSocketId: payloadRecord(reconnected).freshSocketId ?? null,
+        mode: payloadRecord(reconnected).mode ?? null,
+        reconnectDelayMs: payloadRecord(reconnected).reconnectDelayMs ?? null,
+      },
+    }));
+}
+
+async function matchNeverAbandonedWithPresentPlayer(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  if (facts.match?.status !== 'abandoned') return [];
+  const gateAction = trace.events.find((event) =>
+    event.event === 'chaos:action' &&
+    payloadUserId(event) === context.botUserId &&
+    payloadRecord(event).kind === 'flapAtKickoffGate'
+  );
+  if (!gateAction) return [];
+  const reconnected = trace.events.find((event) =>
+    event.seq > gateAction.seq &&
+    event.event === 'match:gate_reconnected' &&
+    payloadUserId(event) === context.botUserId &&
+    payloadRecord(event).withinGrace === true &&
+    // A 'blind' bot deliberately never completes the rejoin handshake — the
+    // server abandoning it after the bounded window is CORRECT (S15b6). Only
+    // a bot that actually recovered may claim wrongful abandonment.
+    payloadRecord(event).mode !== 'blind'
+  );
+  if (!reconnected) return [];
+  return [{
+    invariant: 'matchNeverAbandonedWithPresentPlayer',
+    message: 'Match was abandoned after the bot reconnected inside the kickoff gate grace window.',
+    seq: reconnected.seq,
+    detail: {
+      matchId: context.matchId,
+      botUserId: context.botUserId,
+      evidenceEvent: reconnected.event,
+      evidenceSeq: reconnected.seq,
+      reconnectDelayMs: payloadRecord(reconnected).reconnectDelayMs ?? null,
+    },
+  }];
+}
+
 function storedAnswerTimingSane(
   trace: EventTrace,
   context: LifecycleInvariantContext,
@@ -572,8 +655,8 @@ function storedAnswerTimingSane(
 ): Violation[] {
   const out: Violation[] = [];
   const chaosQIndices = new Set((context.chaosPlan?.actions ?? [])
-    .filter((action) => action.kind !== 'withholdReadyAcks')
-    .map((action) => action.atQIndex));
+    .filter((action) => action.kind !== 'withholdReadyAcks' && typeof action.atQIndex === 'number')
+    .map((action) => action.atQIndex as number));
   const answersByQIndex = new Map<number, { time_ms: number; phase_kind: string | null }>();
   for (const row of facts.answers) {
     if (row.user_id !== context.botUserId) continue;
@@ -628,6 +711,165 @@ function storedAnswerTimingSane(
   return out;
 }
 
+async function matchNeverStuckActiveAfterRestart(
+  _trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  if (!planHasAction(context.chaosPlan, 'engineRestart')) return [];
+  if (facts.match?.status !== 'active') return [];
+  return [{
+    invariant: 'matchNeverStuckActive',
+    message: 'Match remained active after engineRestart chaos and bounded play window.',
+    detail: {
+      matchId: context.matchId,
+      status: facts.match.status,
+      chaosPlan: context.chaosPlan ?? null,
+    },
+  }];
+}
+
+async function restartGraceMarkersResolved(
+  _trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Promise<Violation[]> {
+  if (!planHasAction(context.chaosPlan, 'engineRestart')) return [];
+  if (facts.match?.status !== 'active') return [];
+  const [{ getRedisClient }, { matchGraceKey, matchPauseKey }] = await Promise.all([
+    import('../../src/realtime/redis.js'),
+    import('../../src/realtime/match-keys.js'),
+  ]);
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return [];
+  const [grace, pause] = await Promise.all([
+    redis.exists(matchGraceKey(context.matchId)),
+    redis.exists(matchPauseKey(context.matchId)),
+  ]);
+  if (grace !== 1 && pause !== 1) return [];
+  return [{
+    invariant: 'restartGraceMarkersResolved',
+    message: 'Restart left an active match with grace/pause markers still in Redis.',
+    detail: {
+      matchId: context.matchId,
+      graceMarker: grace === 1,
+      pauseMarker: pause === 1,
+    },
+  }];
+}
+
+async function duplicateEmitsIdempotent(
+  _trace: EventTrace,
+  context: LifecycleInvariantContext,
+): Promise<Violation[]> {
+  if (!planHasAction(context.chaosPlan, 'duplicateEmits')) return [];
+  const { sql } = await import('../../src/db/index.js');
+  const answerDuplicates = await sql<Array<{ user_id: string; q_index: number; count: number }>>`
+    SELECT user_id, q_index, COUNT(*)::int AS count
+    FROM match_answers
+    WHERE match_id = ${context.matchId}
+    GROUP BY user_id, q_index
+    HAVING COUNT(*) > 1
+  `;
+  const banDuplicates = await sql<Array<{ lobby_id: string; user_id: string; count: number }>>`
+    SELECT lcb.lobby_id, lcb.user_id, COUNT(*)::int AS count
+    FROM lobby_category_bans lcb
+    JOIN matches m ON m.lobby_id = lcb.lobby_id
+    WHERE m.id = ${context.matchId}
+    GROUP BY lcb.lobby_id, lcb.user_id
+    HAVING COUNT(*) > 1
+  `;
+  const rpDuplicates = await sql<Array<{ user_id: string; count: number }>>`
+    SELECT user_id, COUNT(*)::int AS count
+    FROM ranked_rp_changes
+    WHERE match_id = ${context.matchId}
+    GROUP BY user_id
+    HAVING COUNT(*) > 1
+  `;
+  const violations: Violation[] = [];
+  if (answerDuplicates.length > 0) {
+    violations.push({
+      invariant: 'duplicateEmitsIdempotent',
+      message: 'Duplicate emits produced duplicate match_answers rows.',
+      detail: { matchId: context.matchId, duplicates: answerDuplicates },
+    });
+  }
+  if (banDuplicates.length > 0) {
+    violations.push({
+      invariant: 'duplicateEmitsIdempotent',
+      message: 'Duplicate emits produced duplicate lobby_category_bans rows.',
+      detail: { matchId: context.matchId, duplicates: banDuplicates },
+    });
+  }
+  if (rpDuplicates.length > 0) {
+    violations.push({
+      invariant: 'duplicateEmitsIdempotent',
+      message: 'Duplicate emits produced duplicate ranked_rp_changes rows.',
+      detail: { matchId: context.matchId, duplicates: rpDuplicates },
+    });
+  }
+  return violations;
+}
+
+function halftimeBanStateNeverLost(trace: EventTrace, context: LifecycleInvariantContext): Violation[] {
+  if (!planHasPhase(context.chaosPlan, 'halftime')) return [];
+  let maxBanCount = 0;
+  const out: Violation[] = [];
+  for (const event of trace.byEvent('match:state')) {
+    const payload = event.payload as {
+      phase?: string;
+      halftime?: { bans?: { seat1?: string | null; seat2?: string | null } };
+    };
+    if (payload.phase !== 'HALFTIME') continue;
+    const bans = payload.halftime?.bans;
+    const count = Number(Boolean(bans?.seat1)) + Number(Boolean(bans?.seat2));
+    if (count < maxBanCount) {
+      out.push({
+        invariant: 'halftimeBanStateNeverLost',
+        message: `Halftime ban count regressed from ${maxBanCount} to ${count}.`,
+        seq: event.seq,
+        detail: { matchId: context.matchId, previousBanCount: maxBanCount, banCount: count, bans: bans ?? null },
+      });
+    }
+    maxBanCount = Math.max(maxBanCount, count);
+  }
+  return out;
+}
+
+function clueChainClockFreezeSane(
+  trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Violation[] {
+  if (!planHasPhase(context.chaosPlan, 'clue_chain')) return [];
+  const clueQIndices = new Set<number>();
+  for (const event of trace.byEvent('match:question')) {
+    const payload = event.payload as { qIndex?: number; question?: { kind?: string } };
+    if (payload.question?.kind === 'clues' && typeof payload.qIndex === 'number') {
+      clueQIndices.add(payload.qIndex);
+    }
+  }
+  const out: Violation[] = [];
+  for (const answer of facts.answers) {
+    if (answer.user_id !== context.botUserId || !clueQIndices.has(answer.q_index)) continue;
+    if (answer.time_ms > 50_000) {
+      out.push({
+        invariant: 'clueChainClockFreezeSane',
+        message: `Clue-chain stored time_ms ${answer.time_ms} exceeds the playable clue-chain window.`,
+        detail: { matchId: context.matchId, qIndex: answer.q_index, answer },
+      });
+    }
+    if (answer.points_earned > 100) {
+      out.push({
+        invariant: 'clueChainClockFreezeSane',
+        message: `Clue-chain answer awarded inflated points (${answer.points_earned}).`,
+        detail: { matchId: context.matchId, qIndex: answer.q_index, answer },
+      });
+    }
+  }
+  return out;
+}
+
 export const ALL_INVARIANTS: Array<{ name: string; check: Invariant }> = [
   { name: 'terminalStateReached', check: terminalStateReached },
   { name: 'scoreMatchesBars', check: scoreMatchesBars },
@@ -661,6 +903,13 @@ export async function checkLifecycleInvariants(
       ...await presentPlayerNeverForfeited(trace, context, facts),
       ...await disconnectCountBounded(trace, context),
       ...await noForfeitWinToAiOverLeadingPresentHuman(trace, context, facts),
+      ...await matchNeverAbandonedWithPresentPlayer(trace, context, facts),
+      ...gateStateReemittedOnReconnect(trace, context),
+      ...await matchNeverStuckActiveAfterRestart(trace, context, facts),
+      ...await restartGraceMarkersResolved(trace, context, facts),
+      ...await duplicateEmitsIdempotent(trace, context),
+      ...halftimeBanStateNeverLost(trace, context),
+      ...clueChainClockFreezeSane(trace, context, facts),
     );
   }
   return { ok: violations.length === 0, violations };

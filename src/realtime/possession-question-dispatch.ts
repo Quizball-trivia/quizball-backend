@@ -100,6 +100,10 @@ export function handlePossessionReadyForNextQuestion(
   pendingReadyGates.acknowledge(userId, matchId, qIndex);
 }
 
+export function resetPossessionReadyGates(): void {
+  pendingReadyGates.reset();
+}
+
 export function clearQuestionTimer(matchId: string, qIndex: number): void {
   const key = questionTimerKey(matchId, qIndex);
   void cancelRealtimeTimer('possession_question', key).catch((error) => {

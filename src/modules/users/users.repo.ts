@@ -559,4 +559,36 @@ export const usersRepo = {
     `;
     return user ?? null;
   },
+
+  /**
+   * Atomically bump the rolling 24h early-forfeit counter for a user and
+   * return the new count. The window opens on the first early forfeit and
+   * stays open for 24h; the next early forfeit after expiry resets the
+   * counter to 1 and opens a fresh window.
+   *
+   * Used by the ranked early-forfeit penalty: 4+ early-forfeits in the
+   * window trigger a 100 RP deduction and skip the ticket refund.
+   */
+  async bumpEarlyForfeitCount(userId: string): Promise<number> {
+    const [row] = await sql<{ early_forfeit_count: number }[]>`
+      UPDATE users
+      SET
+        early_forfeit_count = CASE
+          WHEN early_forfeit_window_started_at IS NULL
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+          THEN 1
+          ELSE early_forfeit_count + 1
+        END,
+        early_forfeit_window_started_at = CASE
+          WHEN early_forfeit_window_started_at IS NULL
+            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+          THEN NOW()
+          ELSE early_forfeit_window_started_at
+        END,
+        updated_at = NOW()
+      WHERE id = ${userId}
+      RETURNING early_forfeit_count
+    `;
+    return row?.early_forfeit_count ?? 0;
+  },
 };

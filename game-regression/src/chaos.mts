@@ -13,7 +13,7 @@ export type ChaosActionKind =
   | 'withholdReadyAcks'
   | 'timingSkew';
 
-export type ChaosPhaseTarget = 'halftime' | 'clue_chain' | 'countdown' | 'put_in_order';
+export type ChaosPhaseTarget = 'halftime' | 'clue_chain' | 'countdown' | 'put_in_order' | 'penalty';
 
 export interface ChaosAction {
   atQIndex?: number;
@@ -96,7 +96,7 @@ function kickoffGateFlapParams(rng: () => number): Record<string, unknown> {
 }
 
 function randomPhaseTarget(rng: () => number): ChaosPhaseTarget {
-  const phases: ChaosPhaseTarget[] = ['halftime', 'clue_chain', 'countdown', 'put_in_order'];
+  const phases: ChaosPhaseTarget[] = ['halftime', 'clue_chain', 'countdown', 'put_in_order', 'penalty'];
   return phases[Math.floor(rng() * phases.length)]!;
 }
 

@@ -13,6 +13,7 @@
  */
 import type { EventTrace, TraceEvent } from './adapter.mjs';
 import type { ChaosPlan } from './chaos.mjs';
+import { computePenaltyShootout, penaltyWinnerUserId } from './penalty-arithmetic.mjs';
 
 export interface Violation {
   invariant: string;
@@ -379,7 +380,7 @@ interface MatchLifecycleDbMatch {
 
 interface MatchLifecycleDbFacts {
   match: MatchLifecycleDbMatch | null;
-  players: Array<{ user_id: string; is_ai: boolean | null }>;
+  players: Array<{ user_id: string; seat: number; goals: number; penalty_goals: number; is_ai: boolean | null }>;
   answers: Array<{ q_index: number; user_id: string; time_ms: number; points_earned: number; phase_kind: string | null }>;
 }
 
@@ -387,6 +388,10 @@ function payloadRecord(event: TraceEvent): Record<string, unknown> {
   return event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
     ? event.payload as Record<string, unknown>
     : {};
+}
+
+function unknownRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function payloadUserId(event: TraceEvent): string | null {
@@ -460,8 +465,8 @@ async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFa
   const { sql } = await import('../../src/db/index.js');
   const [match] = await sql<MatchLifecycleDbMatch[]>
     `SELECT id, status, mode, winner_user_id, state_payload FROM matches WHERE id = ${matchId}`;
-  const players = await sql<Array<{ user_id: string; is_ai: boolean | null }>>`
-    SELECT mp.user_id, u.is_ai
+  const players = await sql<MatchLifecycleDbFacts['players']>`
+    SELECT mp.user_id, mp.seat, mp.goals, mp.penalty_goals, u.is_ai
     FROM match_players mp
     LEFT JOIN users u ON u.id = mp.user_id
     WHERE mp.match_id = ${matchId}
@@ -472,6 +477,129 @@ async function loadLifecycleDbFacts(matchId: string): Promise<MatchLifecycleDbFa
     WHERE match_id = ${matchId}
   `;
   return { match: match ?? null, players, answers };
+}
+
+function penaltyShootoutArithmetic(
+  _trace: EventTrace,
+  context: LifecycleInvariantContext,
+  facts: MatchLifecycleDbFacts,
+): Violation[] {
+  if (!facts.match) return [];
+  const state = unknownRecord(facts.match.state_payload);
+  const penalty = unknownRecord(state.penalty);
+  const kicksTaken = unknownRecord(penalty.kicksTaken);
+  const recordedKickCount = Number(kicksTaken.seat1 ?? 0) + Number(kicksTaken.seat2 ?? 0);
+  if (!Number.isFinite(recordedKickCount) || recordedKickCount <= 0) return [];
+
+  const arithmetic = computePenaltyShootout({
+    attempts: penalty.attempts,
+    kicksTaken: penalty.kicksTaken,
+    round: penalty.round,
+    suddenDeath: penalty.suddenDeath,
+  });
+  const out: Violation[] = [];
+  if (arithmetic.errors.length > 0) {
+    out.push({
+      invariant: 'penaltyShootoutArithmetic',
+      message: `Penalty shootout state is incoherent: ${arithmetic.errors.join('; ')}.`,
+      detail: {
+        matchId: context.matchId,
+        errors: arithmetic.errors,
+        kicksTaken: arithmetic.kicksTaken,
+        attempts: arithmetic.attempts,
+      },
+    });
+  }
+
+  const penaltyGoals = unknownRecord(state.penaltyGoals);
+  const regularGoals = unknownRecord(state.goals);
+  const seat1RegularGoals = Number(regularGoals.seat1 ?? 0);
+  const seat2RegularGoals = Number(regularGoals.seat2 ?? 0);
+  const seat1PenaltyGoals = Number(penaltyGoals.seat1 ?? 0);
+  const seat2PenaltyGoals = Number(penaltyGoals.seat2 ?? 0);
+  if (seat1RegularGoals !== seat2RegularGoals) {
+    out.push({
+      invariant: 'penaltyShootoutArithmetic',
+      message: 'Regular goals are not tied in a match that reached penalties.',
+      detail: {
+        matchId: context.matchId,
+        regularGoals: { seat1: seat1RegularGoals, seat2: seat2RegularGoals },
+      },
+    });
+  }
+  if (seat1PenaltyGoals !== arithmetic.goals.seat1 || seat2PenaltyGoals !== arithmetic.goals.seat2) {
+    out.push({
+      invariant: 'penaltyShootoutArithmetic',
+      message: 'Penalty goal totals do not match the recorded attempt arrays.',
+      detail: {
+        matchId: context.matchId,
+        penaltyGoals: { seat1: seat1PenaltyGoals, seat2: seat2PenaltyGoals },
+        attemptsGoals: arithmetic.goals,
+      },
+    });
+  }
+
+  for (const player of facts.players) {
+    const expectedRegular = player.seat === 1 ? seat1RegularGoals : player.seat === 2 ? seat2RegularGoals : null;
+    if (expectedRegular !== null && player.goals !== expectedRegular) {
+      out.push({
+        invariant: 'penaltyShootoutArithmetic',
+        message: `Player seat ${player.seat} goals ${player.goals} does not match regular goals ${expectedRegular}.`,
+        detail: {
+          matchId: context.matchId,
+          userId: player.user_id,
+          seat: player.seat,
+          playerGoals: player.goals,
+          regularGoals: expectedRegular,
+        },
+      });
+    }
+    const expected = player.seat === 1 ? arithmetic.goals.seat1 : player.seat === 2 ? arithmetic.goals.seat2 : null;
+    if (expected === null || player.penalty_goals === expected) continue;
+    out.push({
+      invariant: 'penaltyShootoutArithmetic',
+      message: `Player seat ${player.seat} penalty_goals ${player.penalty_goals} does not match attempts ${expected}.`,
+      detail: {
+        matchId: context.matchId,
+        userId: player.user_id,
+        seat: player.seat,
+        playerPenaltyGoals: player.penalty_goals,
+        attemptsPenaltyGoals: expected,
+      },
+    });
+  }
+
+  const method = winnerDecisionMethodFromFacts(facts, _trace);
+  if (facts.match.status === 'completed' && method !== 'forfeit') {
+    const expectedWinnerId = penaltyWinnerUserId(facts.players, arithmetic.winnerSeat);
+    if (!expectedWinnerId) {
+      out.push({
+        invariant: 'penaltyShootoutArithmetic',
+        message: 'Penalty shootout has no arithmetic winner for a non-forfeit completion.',
+        detail: {
+          matchId: context.matchId,
+          winnerDecisionMethod: method,
+          attempts: arithmetic.attempts,
+          goals: arithmetic.goals,
+        },
+      });
+    } else if (facts.match.winner_user_id !== expectedWinnerId) {
+      out.push({
+        invariant: 'penaltyShootoutArithmetic',
+        message: `Recorded winner ${facts.match.winner_user_id ?? 'null'} does not match penalty attempts winner ${expectedWinnerId}.`,
+        detail: {
+          matchId: context.matchId,
+          winnerDecisionMethod: method,
+          recordedWinnerId: facts.match.winner_user_id,
+          expectedWinnerId,
+          winnerSeat: arithmetic.winnerSeat,
+          attempts: arithmetic.attempts,
+        },
+      });
+    }
+  }
+
+  return out;
 }
 
 async function readReconnectCount(matchId: string, userId: string): Promise<number> {
@@ -894,6 +1022,7 @@ export async function checkLifecycleInvariants(
 ): Promise<InvariantResult> {
   const facts = await loadLifecycleDbFacts(context.matchId);
   const violations: Violation[] = [
+    ...penaltyShootoutArithmetic(trace, context, facts),
     ...storedAnswerTimingSane(trace, context, facts),
   ];
   const runChaosChecks =

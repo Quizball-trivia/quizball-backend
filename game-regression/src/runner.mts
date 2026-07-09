@@ -37,6 +37,8 @@ import { matchesRepo } from '../../src/modules/matches/matches.repo.js';
 import { matchRealtimeService } from '../../src/realtime/services/match-realtime.service.js';
 import {
   devSkipToPossessionPhase,
+  handlePossessionHalftimeBan,
+  handlePossessionHalftimeUiReady,
   handlePossessionReadyForNextQuestion,
   resetPossessionReadyGates,
   resetPossessionRuntimeState,
@@ -442,6 +444,10 @@ interface QuestionEventPayload {
   correctIndex?: number;
   playableAt?: string;
   deadlineAt?: string;
+  phaseKind?: string;
+  phaseRound?: number;
+  shooterSeat?: 1 | 2 | null;
+  attackerSeat?: 1 | 2 | null;
 }
 
 /** ms until a question becomes answerable (`playableAt`), clamped to >= 0. A real
@@ -466,6 +472,15 @@ export interface BotAnswerPlan {
   emitRevealAckAtMs?: number;
   answerAtMs?: number;
 }
+
+export interface LobbyAnswerPlanContext {
+  run: RunLobbyResult;
+  question: QuestionEventPayload;
+  seat: { userId: string; socket: FakeSocket };
+  seatIndex: number;
+}
+
+export type LobbyAnswerPlanner = (ctx: LobbyAnswerPlanContext) => AnswerMode | BotAnswerPlan | undefined;
 
 function msUntilQuestionOffset(q: QuestionEventPayload, offsetMs: number): number {
   if (!q.playableAt) return 0;
@@ -738,10 +753,15 @@ export async function playMatch(
         const action = opts.chaosPlan!.actions[i]!;
         if (action.kind === 'flapAtKickoffGate') continue;
         const matchesQIndex = typeof action.atQIndex === 'number' && action.atQIndex === latest.qIndex;
+        const penaltyKicksResolved = trace.byEvent('match:round_result')
+          .filter((event) => (event.payload as { phaseKind?: unknown }).phaseKind === 'penalty')
+          .length;
+        const minPenaltyKicks = Math.max(0, Math.trunc(Number(action.params?.afterPenaltyKicks ?? 0) || 0));
         const matchesPhase =
           (action.atPhase === 'clue_chain' && latest.question?.kind === 'clues') ||
           (action.atPhase === 'countdown' && latest.question?.kind === 'countdown') ||
-          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder');
+          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder') ||
+          (action.atPhase === 'penalty' && latest.phaseKind === 'penalty' && penaltyKicksResolved >= minPenaltyKicks);
         if (executedChaos.has(i) || (!matchesQIndex && !matchesPhase)) continue;
         executedChaos.add(i);
         const result = await executeChaosAction(run, action, latest);
@@ -814,6 +834,7 @@ function replaceLobbySocket(run: RunLobbyResult, index: number, socket: FakeSock
 async function lobbySeatReconnect(run: RunLobbyResult, index: number): Promise<void> {
   const seat = run.seats[index];
   if (!seat || !run.matchId) return;
+  const beforeResume = run.trace.byEvent('match:resume').length;
   run.io.removeSocket(seat.socket);
   const fresh = run.io.createSocket(`lobby-bot-rejoin-${index}-${Date.now()}`, {
     user: { id: seat.userId },
@@ -831,6 +852,13 @@ async function lobbySeatReconnect(run: RunLobbyResult, index: number): Promise<v
   }, fresh.id);
   await handleMatchRejoin(run.io as never, fresh as never, run.matchId);
   await matchRealtimeService.handleResumeUiReady(run.io as never, fresh as never, { matchId: run.matchId });
+  const resumeAcks = createBotClientAckState();
+  await waitUntil(
+    () => run.trace.byEvent('match:resume').length > beforeResume || run.trace.byEvent('match:final_results').length > 0,
+    8_000,
+    25,
+    () => ackResumeUiReadyFromTrace(run.io, run.trace, run.seats.map((s) => s.socket), resumeAcks, true),
+  );
 }
 
 async function engineRestartLobby(run: RunLobbyResult): Promise<void> {
@@ -912,6 +940,75 @@ async function executeLobbyChaosAction(run: RunLobbyResult, action: ChaosAction)
   }
 }
 
+function seatUserIdFromStart(run: RunLobbyResult, seat: 1 | 2): string | null {
+  const start = run.trace.byEvent('match:start')[0]?.payload as {
+    participants?: Array<{ userId?: string; seat?: number }>;
+  } | undefined;
+  return start?.participants?.find((participant) => participant.seat === seat)?.userId ?? null;
+}
+
+async function handleLobbyHalftimeFromTrace(
+  run: RunLobbyResult,
+  halftimeUiReady: Set<string>,
+  halftimeBans: Set<string>,
+): Promise<void> {
+  if (!run.matchId) return;
+  const latestState = run.trace.byEvent('match:state').slice(-1)[0]?.payload as {
+    matchId?: string;
+    phase?: string;
+    halftime?: {
+      deadlineAt?: string | null;
+      categoryOptions?: Array<{ id: string }>;
+      firstBanSeat?: 1 | 2 | null;
+      bans?: { seat1?: string | null; seat2?: string | null };
+    };
+  } | undefined;
+  if (latestState?.phase !== 'HALFTIME') return;
+  const matchId = latestState.matchId ?? run.matchId;
+  const options = latestState.halftime?.categoryOptions ?? [];
+  const optionKey = options.map((option) => option.id).join(',');
+  const readyKeySuffix = `${matchId}:${latestState.halftime?.deadlineAt ?? 'no-deadline'}:${optionKey}`;
+  for (const seat of run.seats) {
+    const key = `${seat.userId}:${readyKeySuffix}`;
+    if (halftimeUiReady.has(key)) continue;
+    run.trace.record('client->server', 'match:halftime_ui_ready', {
+      matchId,
+      userId: seat.userId,
+    }, seat.socket.id);
+    await handlePossessionHalftimeUiReady(run.io as never, seat.userId, matchId);
+    halftimeUiReady.add(key);
+  }
+  if (options.length === 0) return;
+
+  const firstBanSeat = latestState.halftime?.firstBanSeat ?? 1;
+  const secondBanSeat: 1 | 2 = firstBanSeat === 1 ? 2 : 1;
+  const bans = latestState.halftime?.bans ?? {};
+  const firstKey = firstBanSeat === 1 ? 'seat1' : 'seat2';
+  const secondKey = secondBanSeat === 1 ? 'seat1' : 'seat2';
+  const turnSeat: 1 | 2 | null = !bans[firstKey]
+    ? firstBanSeat
+    : !bans[secondKey]
+      ? secondBanSeat
+      : null;
+  if (!turnSeat) return;
+
+  const banned = new Set([bans.seat1, bans.seat2].filter((id): id is string => typeof id === 'string'));
+  const category = options.find((option) => !banned.has(option.id));
+  if (!category) return;
+  const userId = seatUserIdFromStart(run, turnSeat);
+  const seat = run.seats.find((candidate) => candidate.userId === userId) ?? run.seats[turnSeat - 1];
+  if (!seat) return;
+  const banKey = `${seat.userId}:${matchId}:${turnSeat}:${category.id}:${optionKey}`;
+  if (halftimeBans.has(banKey)) return;
+  run.trace.record('client->server', 'match:halftime_ban', {
+    matchId,
+    userId: seat.userId,
+    categoryId: category.id,
+  }, seat.socket.id);
+  await handlePossessionHalftimeBan(run.io as never, seat.socket as never, { matchId, categoryId: category.id });
+  halftimeBans.add(banKey);
+}
+
 /**
  * Drive a FRIENDLY (human-vs-human) match where EVERY seat answers each question.
  * For friendly_possession both seats answer the current question; for
@@ -920,7 +1017,13 @@ async function executeLobbyChaosAction(run: RunLobbyResult, action: ChaosAction)
  */
 export async function playLobbyMatch(
   run: RunLobbyResult,
-  opts: { maxMs?: number; answerEveryMs?: number; answerMode?: AnswerMode; chaosPlan?: ChaosPlan } = {},
+  opts: {
+    maxMs?: number;
+    answerEveryMs?: number;
+    answerMode?: AnswerMode;
+    answerPlan?: LobbyAnswerPlanner;
+    chaosPlan?: ChaosPlan;
+  } = {},
 ): Promise<void> {
   const { trace, seats } = run;
   const maxMs = opts.maxMs ?? 90_000;
@@ -932,10 +1035,17 @@ export async function playLobbyMatch(
   const ackedBySeat = new Map<string, Set<number>>(seats.map((s) => [s.userId, new Set<number>()]));
   const playAcks = createBotClientAckState();
   const executedChaos = new Set<number>();
+  const halftimeUiReady = new Set<string>();
+  const halftimeBans = new Set<string>();
   const deadline = Date.now() + maxMs;
 
   while (Date.now() < deadline) {
     if (trace.byEvent('match:final_results').length > 0) return;
+
+    if (run.variant === 'friendly_possession') {
+      await handleLobbyHalftimeFromTrace(run, halftimeUiReady, halftimeBans);
+      if (trace.byEvent('match:final_results').length > 0) return;
+    }
 
     const questions = trace.byEvent('match:question');
     const latest = questions[questions.length - 1]?.payload as QuestionEventPayload | undefined;
@@ -944,10 +1054,15 @@ export async function playLobbyMatch(
         const action = opts.chaosPlan!.actions[i]!;
         if (executedChaos.has(i)) continue;
         const matchesQIndex = typeof action.atQIndex === 'number' && action.atQIndex === latest.qIndex;
+        const penaltyKicksResolved = trace.byEvent('match:round_result')
+          .filter((event) => (event.payload as { phaseKind?: unknown }).phaseKind === 'penalty')
+          .length;
+        const minPenaltyKicks = Math.max(0, Math.trunc(Number(action.params?.afterPenaltyKicks ?? 0) || 0));
         const matchesPhase =
           (action.atPhase === 'clue_chain' && latest.question?.kind === 'clues') ||
           (action.atPhase === 'countdown' && latest.question?.kind === 'countdown') ||
-          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder');
+          (action.atPhase === 'put_in_order' && latest.question?.kind === 'putInOrder') ||
+          (action.atPhase === 'penalty' && latest.phaseKind === 'penalty' && penaltyKicksResolved >= minPenaltyKicks);
         if (!matchesQIndex && !matchesPhase) continue;
         if (action.kind !== 'flap' && action.kind !== 'quitRejoin' && action.kind !== 'engineRestart') continue;
         executedChaos.add(i);
@@ -960,16 +1075,23 @@ export async function playLobbyMatch(
         const done = answeredBySeat.get(seat.userId)!;
         if (done.has(latest.qIndex)) continue;
         done.add(latest.qIndex);
+        const planned = opts.answerPlan?.({ run, question: latest, seat, seatIndex: seats.indexOf(seat) });
+        const seatAnswerMode = typeof planned === 'string'
+          ? planned
+          : planned?.mode ?? answerMode;
+        const seatTimeMs = typeof planned === 'object' && typeof planned.timeMs === 'number'
+          ? planned.timeMs
+          : 300;
         try {
           if (run.variant === 'friendly_party_quiz') {
             // Party quiz is MCQ-only; route through the variant-aware entry.
             const correct = typeof latest.correctIndex === 'number' ? latest.correctIndex : 0;
             await handleAnswer(run.io as never, seat.socket as never, {
-              matchId: latest.matchId, qIndex: latest.qIndex, timeMs: 300,
-              selectedIndex: answerMode === 'wrong' ? (correct === 0 ? 1 : 0) : correct,
+              matchId: latest.matchId, qIndex: latest.qIndex, timeMs: seatTimeMs,
+              selectedIndex: seatAnswerMode === 'wrong' ? (correct === 0 ? 1 : 0) : correct,
             } as never);
           } else {
-            await answerQuestion(run.io, seat.socket, latest, answerMode);
+            await answerQuestion(run.io, seat.socket, latest, seatAnswerMode, seatTimeMs);
           }
         } catch {
           // late/duplicate/invalid — engine guards it; round still resolves.
@@ -1354,6 +1476,8 @@ export interface FriendlyLobbyOptions {
   variant?: 'friendly_possession' | 'friendly_party_quiz';
   /** extra joiners for party_quiz (3..6 players). Each gets a derived bot user. */
   extraPlayers?: number;
+  friendlyCategoryCount?: number;
+  mcqPerCategory?: number;
   startTimeoutMs?: number;
 }
 
@@ -1366,7 +1490,11 @@ export async function bootFriendlyLobbyMatch(opts: FriendlyLobbyOptions = {}): P
 
   // 1. Fixtures + the two (or more) ticketed bot users. Friendly doesn't spend a
   //    ranked ticket, but seedTestUserWithTicket also creates the users row.
-  const fixtures = await seedFixtures({ categoryCount: 3, mcqPerCategory: 5 });
+  const fixtures = await seedFixtures({
+    categoryCount: 3,
+    friendlyCategoryCount: opts.friendlyCategoryCount,
+    mcqPerCategory: opts.mcqPerCategory ?? 5,
+  });
   const extra = variant === 'friendly_party_quiz' ? Math.max(0, opts.extraPlayers ?? 0) : 0;
   const playerIds = [BOT_USER_ID, BOT2_USER_ID];
   for (let i = 0; i < extra; i++) {

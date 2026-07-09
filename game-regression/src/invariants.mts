@@ -255,11 +255,14 @@ const oneQuestionPerQIndex: Invariant = (trace) => {
       // client. Over the network (staging harness) that per-socket replay is
       // indistinguishable from a room emit, so without this boundary every
       // socket blip false-positives this invariant.
+      // ...and the rejoin state re-send can land one event BEFORE its
+      // match:resume (server hydrates the returning client, then fires the
+      // room resume), so accept a resume within a small window after too.
       const resumedSincePrev = trace.events.some(
         (e) =>
           (e.event === 'match:resume' || e.event === 'match:start') &&
           e.seq > prevSeq &&
-          e.seq <= evt.seq,
+          e.seq <= evt.seq + 3,
       );
       if (!resumedSincePrev) {
         out.push({

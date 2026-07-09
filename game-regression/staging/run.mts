@@ -203,7 +203,7 @@ async function reconnectSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
     // a manually-disconnected Socket.IO client can tear itself down again during
     // the resume window, causing the harness to miss match-room broadcasts.
     rejoined = connectStaging(URL, users.a.accessToken, users.a.userId, client.trace);
-    autoAnswer(rejoined); autoDraft(rejoined); autoHalftime(rejoined);
+    autoAnswer(rejoined); autoDraft(rejoined); autoHalftime(rejoined); autoRecover(rejoined);
     await waitConnected(rejoined, 20_000);
     if (matchId) rejoined.socket.emit('match:rejoin', { matchId });
 

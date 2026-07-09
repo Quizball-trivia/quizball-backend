@@ -37,9 +37,15 @@ const RANKED_LOSS_COINS = 100;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
 const MAX_RANKED_AI_ANCHOR_RP = 25000;
-const HIGH_BAND_TARGET_ANCHOR_RP = 6000;
-const HIGH_BAND_MAX_CORRECTNESS = 0.85;
-const HIGH_BAND_DELAY_PROFILE = { minMs: 500, maxMs: 2200 };
+// Measured from prod human match_answers, normal phase, 2026-07-05..09.
+const RANKED_AI_CALIBRATION: Array<{ anchorRp: number; correctness: number; delayMinMs: number; delayMaxMs: number }> = [
+  { anchorRp: 325, correctness: 0.387, delayMinMs: 1850, delayMaxMs: 6675 },
+  { anchorRp: 750, correctness: 0.464, delayMinMs: 1550, delayMaxMs: 5500 },
+  { anchorRp: 1500, correctness: 0.504, delayMinMs: 1400, delayMaxMs: 5000 },
+  { anchorRp: 3000, correctness: 0.562, delayMinMs: 1375, delayMaxMs: 5100 },
+  { anchorRp: 6000, correctness: 0.625, delayMinMs: 1200, delayMaxMs: 4725 },
+  { anchorRp: 10000, correctness: 0.741, delayMinMs: 1080, delayMaxMs: 4340 },
+];
 // ── Season 2026 RP formula ──────────────────────────────────────────────────
 // Transparent, margin-based scoring (replaces the old Elo-style delta). A win
 // is worth a flat base by how it was decided, plus a goal-margin bonus, plus a
@@ -171,48 +177,51 @@ function computeNextPlacementAnchor(profile: RankedProfileRow): number {
 }
 
 export function correctnessFromAnchor(anchorRp: number): number {
-  if (anchorRp <= MAX_PLACEMENT_ANCHOR_RP) {
-    return clamp(0.35 + ((anchorRp - 150) / 2550) * 0.40, 0.35, 0.75);
-  }
-  return clamp(
-    0.75 + ((anchorRp - MAX_PLACEMENT_ANCHOR_RP) / (HIGH_BAND_TARGET_ANCHOR_RP - MAX_PLACEMENT_ANCHOR_RP)) * 0.10,
-    0.75,
-    HIGH_BAND_MAX_CORRECTNESS
-  );
+  return rankedAiCalibrationFromAnchor(anchorRp).correctness;
 }
 
-function normalDelayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: number } {
-  const normalized = (anchorRp - MIN_PLACEMENT_ANCHOR_RP) / (MAX_PLACEMENT_ANCHOR_RP - MIN_PLACEMENT_ANCHOR_RP);
-  const minMs = Math.round(900 - (normalized * 400));
-  const maxMs = Math.round(5000 - (normalized * 1300));
-  return {
-    minMs: clamp(minMs, 350, 1000),
-    maxMs: clamp(maxMs, 2500, 5200),
-  };
+function rankedAiCalibrationFromAnchor(anchorRp: number): {
+  correctness: number;
+  delayMinMs: number;
+  delayMaxMs: number;
+} {
+  const first = RANKED_AI_CALIBRATION[0];
+  const last = RANKED_AI_CALIBRATION[RANKED_AI_CALIBRATION.length - 1];
+
+  if (anchorRp <= first.anchorRp) {
+    return first;
+  }
+  if (anchorRp >= last.anchorRp) {
+    return last;
+  }
+
+  for (let index = 1; index < RANKED_AI_CALIBRATION.length; index += 1) {
+    const upper = RANKED_AI_CALIBRATION[index];
+    if (anchorRp <= upper.anchorRp) {
+      const lower = RANKED_AI_CALIBRATION[index - 1];
+      const normalized = (anchorRp - lower.anchorRp) / (upper.anchorRp - lower.anchorRp);
+      return {
+        correctness: lower.correctness + ((upper.correctness - lower.correctness) * normalized),
+        delayMinMs: lower.delayMinMs + ((upper.delayMinMs - lower.delayMinMs) * normalized),
+        delayMaxMs: lower.delayMaxMs + ((upper.delayMaxMs - lower.delayMaxMs) * normalized),
+      };
+    }
+  }
+
+  return last;
 }
 
 export function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: number } {
-  if (anchorRp <= MAX_PLACEMENT_ANCHOR_RP) {
-    return normalDelayProfileFromAnchor(anchorRp);
-  }
-
-  const topBandProfile = normalDelayProfileFromAnchor(MAX_PLACEMENT_ANCHOR_RP);
-  const normalized = clamp(
-    (anchorRp - MAX_PLACEMENT_ANCHOR_RP) / (HIGH_BAND_TARGET_ANCHOR_RP - MAX_PLACEMENT_ANCHOR_RP),
-    0,
-    1
-  );
+  const calibration = rankedAiCalibrationFromAnchor(anchorRp);
   return {
-    minMs: Math.round(topBandProfile.minMs + ((HIGH_BAND_DELAY_PROFILE.minMs - topBandProfile.minMs) * normalized)),
-    maxMs: Math.round(topBandProfile.maxMs + ((HIGH_BAND_DELAY_PROFILE.maxMs - topBandProfile.maxMs) * normalized)),
+    minMs: Math.round(calibration.delayMinMs),
+    maxMs: Math.round(calibration.delayMaxMs),
   };
 }
 
 function computeRankedAiAnchor(profile: RankedProfileRow): number {
   const jitter = 0.9 + (getRandom() * 0.2);
-  const jittered = clamp(roundToNearest25(profile.rp * jitter), MIN_PLACEMENT_ANCHOR_RP, MAX_RANKED_AI_ANCHOR_RP);
-  // Jitter must not drop a high-band player back onto the low-band skill curve.
-  return profile.rp > MAX_PLACEMENT_ANCHOR_RP ? Math.max(jittered, MAX_PLACEMENT_ANCHOR_RP) : jittered;
+  return clamp(roundToNearest25(profile.rp * jitter), MIN_PLACEMENT_ANCHOR_RP, MAX_RANKED_AI_ANCHOR_RP);
 }
 
 export const rankedService = {

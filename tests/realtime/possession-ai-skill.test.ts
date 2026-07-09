@@ -13,38 +13,44 @@ describe('ranked possession AI skill scaling', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the normal-band base correctness curve unchanged', () => {
-    expect(correctnessFromAnchor(150)).toBe(0.35);
-    expect(correctnessFromAnchor(1900)).toBeCloseTo(0.6245098039215686);
-    expect(correctnessFromAnchor(2700)).toBe(0.75);
+  it('matches ranked AI calibration knots exactly', () => {
+    expect(correctnessFromAnchor(10000)).toBe(0.741);
+    expect(delayProfileFromAnchor(10000)).toEqual({ minMs: 1080, maxMs: 4340 });
+    expect(correctnessFromAnchor(325)).toBe(0.387);
+    expect(delayProfileFromAnchor(325)).toEqual({ minMs: 1850, maxMs: 6675 });
   });
 
-  it('extends base correctness through the high band and caps at 6000 RP', () => {
-    expect(correctnessFromAnchor(4350)).toBeCloseTo(0.80);
-    expect(correctnessFromAnchor(6000)).toBeCloseTo(0.85);
-    expect(correctnessFromAnchor(25000)).toBeCloseTo(0.85);
+  it('interpolates ranked AI calibration between knots', () => {
+    const delayProfile = delayProfileFromAnchor(8000);
+
+    expect(correctnessFromAnchor(8000)).toBeCloseTo(0.683, 3);
+    expect(delayProfile.minMs).toBe(1140);
+    expect(delayProfile.maxMs).toBe(4533);
+  });
+
+  it('clamps ranked AI calibration outside the measured anchor range', () => {
+    expect(correctnessFromAnchor(150)).toBe(0.387);
+    expect(delayProfileFromAnchor(150)).toEqual({ minMs: 1850, maxMs: 6675 });
+    expect(correctnessFromAnchor(25000)).toBe(0.741);
+    expect(delayProfileFromAnchor(25000)).toEqual({ minMs: 1080, maxMs: 4340 });
+  });
+
+  it('never exceeds the measured top human correctness cohort', () => {
+    const anchors = [150, 325, 800, 1900, 2700, 4350, 6000, 10000, 25000];
+
+    for (const anchor of anchors) {
+      expect(correctnessFromAnchor(anchor)).toBeLessThanOrEqual(0.741);
+    }
   });
 
   it('keeps base correctness monotonic across the ranked AI anchor range', () => {
-    const anchors = [150, 800, 1900, 2700, 4350, 6000, 25000];
+    const anchors = [150, 325, 800, 1900, 2700, 4350, 6000, 10000, 25000];
 
     for (let index = 1; index < anchors.length; index += 1) {
       expect(correctnessFromAnchor(anchors[index])).toBeGreaterThanOrEqual(
         correctnessFromAnchor(anchors[index - 1])
       );
     }
-  });
-
-  it('keeps the normal-band delay profile unchanged', () => {
-    expect(delayProfileFromAnchor(150)).toEqual({ minMs: 900, maxMs: 5000 });
-    expect(delayProfileFromAnchor(1900)).toEqual({ minMs: 625, maxMs: 4108 });
-    expect(delayProfileFromAnchor(2700)).toEqual({ minMs: 500, maxMs: 3700 });
-  });
-
-  it('tightens the high-band delay profile through 6000 RP', () => {
-    expect(delayProfileFromAnchor(4350)).toEqual({ minMs: 500, maxMs: 2950 });
-    expect(delayProfileFromAnchor(6000)).toEqual({ minMs: 500, maxMs: 2200 });
-    expect(delayProfileFromAnchor(25000)).toEqual({ minMs: 500, maxMs: 2200 });
   });
 
   it('orders adjusted correctness by question difficulty at a fixed rank', () => {

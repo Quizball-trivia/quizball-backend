@@ -240,8 +240,9 @@ describe('rankedService', () => {
     expect(harder.aiCorrectness).toBeGreaterThan(fresh.aiCorrectness);
     expect(easier.aiCorrectness).toBeLessThan(fresh.aiCorrectness);
     expect(harder.aiDelayProfile.minMs).toBeLessThanOrEqual(fresh.aiDelayProfile.minMs);
-    expect(harder.aiDelayProfile.maxMs).toBeLessThanOrEqual(fresh.aiDelayProfile.maxMs);
     expect(fresh.aiDelayProfile.minMs).toBeLessThanOrEqual(fresh.aiDelayProfile.maxMs);
+    expect(harder.aiDelayProfile.minMs).toBeLessThanOrEqual(harder.aiDelayProfile.maxMs);
+    expect(easier.aiDelayProfile.minMs).toBeLessThanOrEqual(easier.aiDelayProfile.maxMs);
   });
 
   it('builds a non-placement AI context around the player RP for placed players', () => {
@@ -261,15 +262,15 @@ describe('rankedService', () => {
       expect(context.isPlacement).toBe(false);
       expect(context.placementGameNo).toBeUndefined();
       expect(context.aiAnchorRp).toBe(525);
-      expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.35);
-      expect(context.aiCorrectness).toBeLessThanOrEqual(0.75);
+      expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.387);
+      expect(context.aiCorrectness).toBeLessThanOrEqual(0.741);
       expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
     } finally {
       randomSpy.mockRestore();
     }
   });
 
-  it('builds high-RP AI context with a jittered uncapped anchor', () => {
+  it('builds high-RP AI context with a jittered anchor and calibrated ceiling', () => {
     const placedProfile = createProfile({
       user_id: 'high-rp',
       rp: 20795,
@@ -292,8 +293,8 @@ describe('rankedService', () => {
     expect(first.aiAnchorRp).toBeGreaterThanOrEqual(Math.round(20795 * 0.9));
     expect(first.aiAnchorRp).toBeLessThanOrEqual(Math.round(20795 * 1.1));
     expect(first.aiAnchorRp % 25).toBe(0);
-    expect(first.aiCorrectness).toBe(0.85);
-    expect(first.aiDelayProfile).toEqual({ minMs: 500, maxMs: 2200 });
+    expect(first.aiCorrectness).toBe(0.741);
+    expect(first.aiDelayProfile).toEqual({ minMs: 1080, maxMs: 4340 });
   });
 
   it('clamps extreme anchors at the 25000 ceiling', () => {
@@ -308,24 +309,52 @@ describe('rankedService', () => {
 
     for (let i = 0; i < 25; i += 1) {
       const ctx = withSeed(`ranked-ai-anchor-ceiling-${i}`, () => rankedService.buildAiMatchContext(profile));
-      expect(ctx.aiAnchorRp).toBeLessThanOrEqual(25000);
-      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
+      expect(ctx.aiAnchorRp).toBe(25000);
     }
   });
 
-  it('never lets jitter drop a high-band player onto the low-band curve', () => {
+  it('does not floor high-band jitter at 2700 RP', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const profile = createProfile({
+        user_id: 'band-edge',
+        rp: 2800,
+        tier: 'World-Class',
+        placement_status: 'placed',
+        placement_played: 3,
+        placement_wins: 3,
+      });
+
+      const ctx = rankedService.buildAiMatchContext(profile);
+
+      expect(ctx.aiAnchorRp).toBe(2525);
+      expect(ctx.aiAnchorRp).toBeLessThan(2700);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('jitters a 3000-RP player across the ten percent range', () => {
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.999999);
     const profile = createProfile({
-      user_id: 'band-edge',
-      rp: 2800,
-      tier: 'GOAT',
+      user_id: 'jitter-range',
+      rp: 3000,
+      tier: 'Legend',
       placement_status: 'placed',
       placement_played: 3,
       placement_wins: 3,
     });
 
-    for (let i = 0; i < 25; i += 1) {
-      const ctx = withSeed(`ranked-ai-band-edge-${i}`, () => rankedService.buildAiMatchContext(profile));
-      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
+    try {
+      const low = rankedService.buildAiMatchContext(profile);
+      const high = rankedService.buildAiMatchContext(profile);
+
+      expect(low.aiAnchorRp).toBe(2700);
+      expect(high.aiAnchorRp).toBe(3300);
+    } finally {
+      randomSpy.mockRestore();
     }
   });
 

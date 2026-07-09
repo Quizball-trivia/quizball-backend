@@ -276,7 +276,26 @@ export const questionsController = {
    * Translate all existing questions that have English but no Georgian.
    * Returns immediately with counts, translation runs in background.
    */
-  async translateBackfill(_req: Request, res: Response): Promise<void> {
+  async translateBackfill(req: Request, res: Response): Promise<void> {
+    const scope = (req.body as { scope?: string } | undefined)?.scope === 'agents' ? 'agents' : 'all';
+    if (scope === 'agents') {
+      if (!translationService.isConfigured()) {
+        throw new ExternalServiceError('Translation is not configured. Set OPENROUTER_API_KEY.', {
+          missing: ['OPENROUTER_API_KEY'],
+        });
+      }
+      const ids = await translationService.agentUntranslatedIds();
+      if (ids.length === 0) {
+        res.json({ status: 'done', total: 0, remaining: 0, categories: 0 });
+        return;
+      }
+      translationService
+        .translateQuestions(ids)
+        .then((result) => logger.info(result, 'Agent-scoped translation completed'))
+        .catch((err) => logger.error({ error: err }, 'Agent-scoped translation failed'));
+      res.json({ status: 'started', total: ids.length, remaining: ids.length, categories: 0 });
+      return;
+    }
     if (!translationService.isConfigured()) {
       logger.warn('Translation backfill rejected: OpenRouter API key not configured');
       throw new ExternalServiceError('Translation is not configured. Set OPENROUTER_API_KEY in Railway and redeploy before using Translate All.', {
@@ -310,11 +329,40 @@ export const questionsController = {
   },
 
   /**
+   * POST /api/v1/questions/translate/redo-drafts
+   * Wipe Georgian on DRAFT questions, then re-translate them from scratch.
+   * Overwrites existing draft translations; live questions are untouched.
+   */
+  async translateRedoDrafts(_req: Request, res: Response): Promise<void> {
+    if (!translationService.isConfigured()) {
+      throw new ExternalServiceError('Translation is not configured. Set OPENROUTER_API_KEY.', {
+        missing: ['OPENROUTER_API_KEY'],
+      });
+    }
+    // Respond IMMEDIATELY — the wipe walks thousands of rows and used to run in
+    // the request path, timing out the client while the server kept going.
+    const counts = await translationService.getAgentBackfillCounts();
+    if (counts.agentTotal === 0) {
+      res.json({ status: 'done', total: 0, remaining: 0, categories: 0 });
+      return;
+    }
+    translationService
+      .clearDraftGeorgian()
+      .then((ids) => translationService.translateQuestions(ids))
+      .then((result) => logger.info(result, 'Agent re-translation completed'))
+      .catch((err) => logger.error({ error: err }, 'Agent re-translation failed'));
+    res.json({ status: 'started', total: counts.agentTotal, remaining: counts.agentTotal, categories: 0 });
+  },
+
+  /**
    * GET /api/v1/questions/translate/status
    * Check translation progress.
    */
-  async translateStatus(_req: Request, res: Response): Promise<void> {
-    const counts = await translationService.getBackfillCounts();
+  async translateStatus(req: Request, res: Response): Promise<void> {
+    const counts =
+      req.query.scope === 'agents'
+        ? await translationService.getAgentBackfillCounts()
+        : await translationService.getBackfillCounts();
     res.json(counts);
   },
 };

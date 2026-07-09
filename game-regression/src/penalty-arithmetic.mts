@@ -68,6 +68,23 @@ export function computePenaltyShootout(input: PenaltyShootoutInput): PenaltyShoo
     seat2: recordedKicks(asRecord(input.kicksTaken).seat2, attempts.seat2.length),
   };
   const errors: string[] = [];
+  // Malformed state must surface as errors, not silently normalize into a
+  // plausible recompute — invalid tokens dropped by seatAttempts or
+  // non-numeric counters would otherwise pass the consistency checks below.
+  const rawAttempts = asRecord(input.attempts);
+  for (const seat of ['seat1', 'seat2'] as const) {
+    const raw = rawAttempts[seat];
+    if (raw !== undefined && !Array.isArray(raw)) {
+      errors.push(`${seat} attempts is not an array`);
+    } else if (Array.isArray(raw)) {
+      const invalid = raw.filter((token) => !isAttempt(token)).length;
+      if (invalid > 0) errors.push(`${seat} attempts contains ${invalid} invalid token(s)`);
+    }
+    const rawKicks = asRecord(input.kicksTaken)[seat];
+    if (rawKicks !== undefined && (!Number.isFinite(Number(rawKicks)) || Number(rawKicks) < 0 || !Number.isInteger(Number(rawKicks)))) {
+      errors.push(`${seat} kicksTaken is malformed: ${String(rawKicks)}`);
+    }
+  }
   if (attempts.seat1.length !== kicksTaken.seat1) {
     errors.push(`seat1 attempts length ${attempts.seat1.length} != kicksTaken ${kicksTaken.seat1}`);
   }

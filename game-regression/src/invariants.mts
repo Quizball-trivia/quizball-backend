@@ -487,16 +487,22 @@ function penaltyShootoutArithmetic(
   if (!facts.match) return [];
   const state = unknownRecord(facts.match.state_payload);
   const penalty = unknownRecord(state.penalty);
-  const kicksTaken = unknownRecord(penalty.kicksTaken);
-  const recordedKickCount = Number(kicksTaken.seat1 ?? 0) + Number(kicksTaken.seat2 ?? 0);
-  if (!Number.isFinite(recordedKickCount) || recordedKickCount <= 0) return [];
-
+  // Normalize FIRST, skip only when the shootout genuinely never started
+  // (no attempts AND no counters) — malformed counters with real attempts
+  // must reach the checks, not silently skip them.
   const arithmetic = computePenaltyShootout({
     attempts: penalty.attempts,
     kicksTaken: penalty.kicksTaken,
     round: penalty.round,
     suddenDeath: penalty.suddenDeath,
   });
+  const kicksTaken = unknownRecord(penalty.kicksTaken);
+  const recordedKickCount = Number(kicksTaken.seat1 ?? 0) + Number(kicksTaken.seat2 ?? 0);
+  const neverStarted =
+    arithmetic.totalKicks === 0 &&
+    arithmetic.errors.length === 0 &&
+    (!Number.isFinite(recordedKickCount) || recordedKickCount <= 0);
+  if (neverStarted) return [];
   const out: Violation[] = [];
   if (arithmetic.errors.length > 0) {
     out.push({

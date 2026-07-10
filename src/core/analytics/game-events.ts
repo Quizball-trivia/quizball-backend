@@ -121,6 +121,23 @@ export function trackLobbyLeft(
 }
 
 // Ranked Queue Events
+function idPrefix(id?: string | null): string | null {
+  return id ? id.slice(0, 8) : null;
+}
+
+export function trackRankedQueueLeft(params: {
+  userId: string;
+  source: 'explicit_leave' | 'disconnect_cleanup' | 'server_abort';
+  searchFound: boolean;
+  searchId?: string | null;
+}): void {
+  trackEvent('ranked_queue_left', params.userId, {
+    source: params.source,
+    search_found: params.searchFound,
+    search_id_prefix: idPrefix(params.searchId),
+  });
+}
+
 export function trackRankedQueueJoined(userId: string, rankPoints: number): void {
   trackEvent('ranked_queue_joined', userId, {
     rank_points: rankPoints,

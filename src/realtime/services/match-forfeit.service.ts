@@ -9,7 +9,6 @@ import { objectivesService } from '../../modules/objectives/index.js';
 import { progressionService } from '../../modules/progression/progression.service.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import { rankedRepo } from '../../modules/ranked/ranked.repo.js';
-import { storeService } from '../../modules/store/store.service.js';
 import { cancelMatchQuestionTimer } from '../match-flow.js';
 import { cancelPossessionHalftimeTimer } from '../possession-match-flow.js';
 import { deleteMatchCache, type MatchCache } from '../match-cache.js';
@@ -40,6 +39,9 @@ import {
   findOpponentInDisconnectGrace,
   markExcusedExitPending,
 } from './match-excused-exit.service.js';
+import { finalizeRankedNoContest, matchForfeitKey } from './ranked-no-contest.service.js';
+
+export { matchForfeitKey };
 
 const FORFEIT_REPLAY_TTL_SEC = 600;
 const FORFEIT_PENDING_TTL_SEC = 60;
@@ -60,9 +62,6 @@ const RANKED_EARLY_FORFEIT_MIN_ROUNDS = 2;
 const EARLY_FORFEIT_FREE_LIMIT = 3;
 const EARLY_FORFEIT_PENALTY_RP = 100;
 
-export function matchForfeitKey(matchId: string): string {
-  return `match:forfeit:${matchId}`;
-}
 
 // ─── Forfeit-pending payload helpers ──────────────────────────────────────
 // These produce the "we're finalizing the match for you/your opponent"
@@ -209,15 +208,6 @@ export async function finalizeMatchAsForfeit(
       && roundsPlayed < RANKED_EARLY_FORFEIT_MIN_ROUNDS;
 
     if (isRankedEarlyForfeit) {
-      await matchesRepo.setMatchStatePayload(params.matchId, {
-        ...currentPayload,
-        winnerDecisionMethod: 'forfeit',
-        cancelledNoContest: true,
-        roundsPlayed,
-      });
-      await matchesService.abandonMatch(params.matchId);
-      await deleteMatchCache(params.matchId);
-
       // Bump the forfeiter's rolling 24h early-forfeit counter. Beyond the
       // free limit, the forfeiter is penalized: no ticket refund and a direct
       // 100 RP deduction. The opponent (victim) always gets their ticket back.
@@ -273,29 +263,20 @@ export async function finalizeMatchAsForfeit(
 
       // Refund the ranked ticket to every human participant EXCEPT the
       // penalized forfeiter (best-effort). The opponent always gets refunded.
-      const rosterUsers = await usersRepo.getByIds(roster.map((player) => player.user_id));
-      const humanUserIds = roster
-        .map((player) => rosterUsers.get(player.user_id))
-        .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
-        .filter((user) => !(penaltyApplied && user.id === params.forfeitingUserId))
-        .map((user) => user.id);
-      if (humanUserIds.length > 0) {
-        try {
-          await storeService.refundRankedTickets(humanUserIds);
-        } catch (error) {
-          logger.warn(
-            { error, matchId: params.matchId, humanUserIds },
-            'Failed to refund ranked tickets on early-forfeit cancel'
-          );
-        }
-      }
+      const resultVersion = await finalizeRankedNoContest({
+        matchId: params.matchId,
+        roster,
+        statePayload: currentPayload,
+        roundsPlayed,
+        cleanupRedisKeys: params.cleanupRedisKeys,
+        suppressRefundUserIds: penaltyApplied ? [params.forfeitingUserId] : [],
+      });
 
       logger.info(
         {
           matchId: params.matchId,
           roundsPlayed,
           forfeitingUserId: params.forfeitingUserId,
-          humanUserIds,
           penaltyApplied,
           earlyForfeitCount,
         },
@@ -303,27 +284,6 @@ export async function finalizeMatchAsForfeit(
           ? 'Ranked match cancelled as no-contest (early forfeit) — forfeiter penalized, opponent ticket refunded'
           : 'Ranked match cancelled as no-contest (early forfeit) — RP unchanged, tickets refunded'
       );
-
-      const resultVersion = Date.now();
-      const redis = getRedisClient();
-      if (redis) {
-        const cleanupKeys = params.cleanupRedisKeys?.filter(Boolean) ?? [];
-        if (cleanupKeys.length > 0) {
-          await redis.del(cleanupKeys);
-        }
-        await redis.set(matchForfeitKey(params.matchId), 'no_contest', {
-          EX: FORFEIT_REPLAY_TTL_SEC,
-        });
-        await Promise.all(
-          roster.map((player) =>
-            redis.set(
-              lastMatchKey(player.user_id),
-              JSON.stringify({ matchId: params.matchId, resultVersion }),
-              { EX: FORFEIT_REPLAY_TTL_SEC }
-            )
-          )
-        );
-      }
 
       return {
         matchId: params.matchId,

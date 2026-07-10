@@ -19,6 +19,17 @@ export type MatchStageKey =
   | 'party_quiz'
   | 'question';
 
+const MATCH_STAGE_KEYS: readonly MatchStageKey[] = [
+  'penalties',
+  'kickoff',
+  'draft_ban',
+  'category_ban',
+  'halftime',
+  'resume',
+  'party_quiz',
+  'question',
+];
+
 export type MatchStageReadyResult = {
   readyUserIds: string[];
   missingUserIds: string[];
@@ -109,6 +120,31 @@ export async function hasMatchStagePresenceFromSocketIds(params: {
     // UI. Do not use them for the disconnect skip guard.
     return false;
   }
+}
+
+export async function hasAnyMatchStagePresenceFromSocketIds(params: {
+  matchId: string;
+  userId: string;
+  socketIds: string[];
+}): Promise<boolean> {
+  if (params.socketIds.length === 0) return false;
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return false;
+
+  const socketIds = new Set(params.socketIds);
+  const rawValues = await redis.mGet(
+    MATCH_STAGE_KEYS.map((stageKey) => matchStagePresenceKey(params.matchId, stageKey, params.userId))
+  );
+
+  return rawValues.some((raw) => {
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw) as Partial<MatchStagePresenceValue>;
+      return typeof parsed.socketId === 'string' && socketIds.has(parsed.socketId);
+    } catch {
+      return false;
+    }
+  });
 }
 
 export async function waitForMatchStageReady(params: {

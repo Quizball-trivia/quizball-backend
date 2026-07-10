@@ -83,6 +83,35 @@ describe('redis watchdog tick', () => {
     expect(__watchdogTestHooks.getStalledRounds()).toBe(1);
   });
 
+  it('re-subscribes the adapter channels after reconnecting the sub client', async () => {
+    const client = {
+      isOpen: true,
+      disconnect: vi.fn(async () => {
+        client.isOpen = false;
+      }),
+      connect: vi.fn(async () => {
+        client.isOpen = true;
+        return client;
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      pSubscribe: vi.fn(async () => {}),
+      pUnsubscribe: vi.fn(async () => {}),
+    };
+    const listener = vi.fn();
+    const adapterClient = __watchdogTestHooks.trackSubClientSubscriptions(client as never);
+
+    await adapterClient.subscribe(['socket.io-request#/#', 'socket.io-response#/#'], listener, true);
+    await __watchdogTestHooks.forceReconnect({ name: 'sub', client: client as never });
+
+    expect(client.subscribe).toHaveBeenNthCalledWith(
+      2,
+      ['socket.io-request#/#', 'socket.io-response#/#'],
+      listener,
+      true
+    );
+  });
+
   it('does not reconnect when the watchdog is stopped while a tick is in flight', async () => {
     const dead = makeClient('command', () => 'hang');
     const onFatal = vi.fn();

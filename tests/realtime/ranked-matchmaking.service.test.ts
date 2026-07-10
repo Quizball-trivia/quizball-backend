@@ -443,6 +443,39 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
+  it('does not tell the present player their search started when the re-queue exec fails', async () => {
+    const service = await loadService();
+    absentUserIds.add('u2');
+    const io = createIoMock();
+
+    redisMock.eval.mockImplementationOnce(async (script: string) => {
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      return [];
+    });
+    redisMock.eval.mockImplementation(async () => []);
+
+    const failingMulti = {
+      hSet: vi.fn(() => failingMulti),
+      expire: vi.fn(() => failingMulti),
+      zAdd: vi.fn(() => failingMulti),
+      exec: vi.fn().mockResolvedValue(null),
+    };
+    redisMock.multi.mockReturnValue(failingMulti);
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(emit).not.toHaveBeenCalledWith(
+      'ranked:search_started',
+      expect.anything()
+    );
+    expect(emit).toHaveBeenCalledWith('error', {
+      code: 'RANKED_QUEUE_UNAVAILABLE',
+      message: 'Ranked queue is unavailable, please retry',
+    });
+  });
+
   it('rechecks live sockets immediately before lobby creation', async () => {
     const service = await loadService();
     const io = createIoMock();

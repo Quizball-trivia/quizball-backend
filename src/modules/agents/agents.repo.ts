@@ -249,32 +249,42 @@ export const agentsRepo = {
   // computed in two grouped CTEs then full-joined by day — avoids a correlated
   // subquery (which can't reference the outer GROUP BY).
   async dailyStats(days: number): Promise<
-    { day: string; approved: number; rejected: number; cost_cents: number }[]
+    { day: string; generated: number; approved: number; rejected: number; failed: number; pending: number; accept_pct: number; cost_cents: number }[]
   > {
+    // Days are Asia/Tbilisi (Georgia time) — the whole team reports in it.
     return sql`
       WITH task_days AS (
-        SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+        SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'Asia/Tbilisi'), 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS generated,
                COUNT(*) FILTER (WHERE decision = 'approved')::int AS approved,
-               COUNT(*) FILTER (WHERE decision = 'rejected')::int AS rejected
+               COUNT(*) FILTER (WHERE decision = 'rejected')::int AS rejected,
+               COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+               COUNT(*) FILTER (WHERE decision IS NULL AND status <> 'failed')::int AS pending
         FROM agents.tasks
         WHERE created_at >= (now() - make_interval(days => ${days}))
         GROUP BY 1
       ),
       cost_days AS (
-        SELECT to_char(date_trunc('day', started_at), 'YYYY-MM-DD') AS day,
+        SELECT to_char(date_trunc('day', started_at AT TIME ZONE 'Asia/Tbilisi'), 'YYYY-MM-DD') AS day,
                COALESCE(SUM(cost_cents),0)::int AS cost_cents
         FROM agents.sessions
         WHERE started_at >= (now() - make_interval(days => ${days}))
         GROUP BY 1
       )
       SELECT COALESCE(t.day, c.day) AS day,
+             COALESCE(t.generated, 0) AS generated,
              COALESCE(t.approved, 0) AS approved,
              COALESCE(t.rejected, 0) AS rejected,
+             COALESCE(t.failed, 0) AS failed,
+             COALESCE(t.pending, 0) AS pending,
+             CASE WHEN COALESCE(t.approved,0)+COALESCE(t.rejected,0) > 0
+                  THEN round(100.0 * t.approved / (t.approved + t.rejected), 1)
+                  ELSE 0 END AS accept_pct,
              COALESCE(c.cost_cents, 0) AS cost_cents
       FROM task_days t
       FULL OUTER JOIN cost_days c ON c.day = t.day
       ORDER BY 1 ASC
-    ` as Promise<{ day: string; approved: number; rejected: number; cost_cents: number }[]>;
+    ` as Promise<{ day: string; generated: number; approved: number; rejected: number; failed: number; pending: number; accept_pct: number; cost_cents: number }[]>;
   },
 
   // rejection reasons grouped by stage over the window (factcheck/dedupe/…)

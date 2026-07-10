@@ -4,10 +4,11 @@ import { storeRepo } from './store.repo.js';
 import type { StoreWalletResponse, WalletStateRow } from './store.types.js';
 
 export const MAX_TICKETS = 5;
-// Daily store purchase cap: up to this many TICKETS per rolling 24h window
-// (quantity-based — a 5-pack consumes the whole allowance). Lives here next to
-// MAX_TICKETS so wallet-shaping helpers can use it without importing
-// store.service (which imports this module).
+// Daily store purchase cap: up to this many TICKETS per FIXED daily window
+// (resets 00:00 Georgia time; quantity-based — a 5-pack consumes the whole
+// allowance, and the whole allowance frees together at reset so the 5-pack is
+// buyable). Lives here next to MAX_TICKETS so wallet-shaping helpers can use it
+// without importing store.service (which imports this module).
 export const TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW = 5;
 // CAS attempts before giving up. Each attempt re-reads fresh wallet state, so a
 // higher ceiling lets transient contention (refill hydration / presence

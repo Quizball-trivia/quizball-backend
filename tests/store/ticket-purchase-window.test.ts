@@ -12,9 +12,11 @@ const getProductBySlugInTxMock = vi.fn();
 const getWalletForUpdateInTxMock = vi.fn();
 const setWalletStateInTxMock = vi.fn();
 const getTicketPackPurchaseWindowInTxMock = vi.fn();
+const getTicketPackPurchaseWindowMock = vi.fn();
 const createCompletedPurchaseInTxMock = vi.fn();
 const insertTransactionLogInTxMock = vi.fn();
 const insertTransactionLogMock = vi.fn();
+const hydrateTicketsMock = vi.fn();
 
 vi.mock('../../src/db/index.js', () => ({
   sql: {
@@ -34,11 +36,23 @@ vi.mock('../../src/modules/store/store.repo.js', () => ({
     getWalletForUpdateInTx: (...a: unknown[]) => getWalletForUpdateInTxMock(...a),
     setWalletStateInTx: (...a: unknown[]) => setWalletStateInTxMock(...a),
     getTicketPackPurchaseWindowInTx: (...a: unknown[]) => getTicketPackPurchaseWindowInTxMock(...a),
+    getTicketPackPurchaseWindow: (...a: unknown[]) => getTicketPackPurchaseWindowMock(...a),
     createCompletedPurchaseInTx: (...a: unknown[]) => createCompletedPurchaseInTxMock(...a),
     insertTransactionLogInTx: (...a: unknown[]) => insertTransactionLogInTxMock(...a),
     insertTransactionLog: (...a: unknown[]) => insertTransactionLogMock(...a),
   },
 }));
+
+vi.mock('../../src/modules/store/ticket-refill.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/modules/store/ticket-refill.service.js')>();
+  return {
+    ...actual,
+    ticketRefillService: {
+      ...actual.ticketRefillService,
+      hydrateTickets: (...a: unknown[]) => hydrateTicketsMock(...a),
+    },
+  };
+});
 
 function makeTicketPack(slug: string, tickets: number, priceCoins: number) {
   return {
@@ -131,37 +145,60 @@ describe('storeService.purchaseWithCoins — quantity-based daily ticket cap', (
   });
 
   it('enforces the cap against a FIXED daily window (00:00 Georgia), not a rolling 24h boundary', async () => {
-    const { storeService } = await import('../../src/modules/store/store.service.js');
-    getProductBySlugInTxMock.mockResolvedValue(makeTicketPack('ticket_pack_1', 1, 2000));
-    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 0, oldest_purchased_at: null });
-
-    await storeService.purchaseWithCoins('user-1', 'ticket_pack_1');
-
-    // The `since` boundary passed to the repo must be the current Georgia-day
-    // start (00:00 Asia/Tbilisi = 20:00 UTC), NOT `now - 24h`.
-    const sinceArg = getTicketPackPurchaseWindowInTxMock.mock.calls[0]?.[2] as string;
-    const sinceMs = Date.parse(sinceArg);
+    // Freeze the clock at a fixed instant so the service's window computation and
+    // the expected boundary use the SAME `now` (otherwise a Georgia-day rollover
+    // between the two Date.now() reads could flake the assertion).
     const OFFSET = 4 * 60 * 60 * 1000;
     const DAY = 24 * 60 * 60 * 1000;
-    const expectedStart = Math.floor((Date.now() + OFFSET) / DAY) * DAY - OFFSET;
-    expect(sinceMs).toBe(expectedStart);
-    // Fixed window: it is NOT a rolling now-24h boundary (which would be ~24h before now).
-    expect(Date.now() - sinceMs).toBeLessThanOrEqual(DAY);
+    const frozen = Date.UTC(2026, 6, 10, 10, 0, 0); // arbitrary fixed instant
+    vi.useFakeTimers();
+    vi.setSystemTime(frozen);
+    try {
+      const { storeService } = await import('../../src/modules/store/store.service.js');
+      getProductBySlugInTxMock.mockResolvedValue(makeTicketPack('ticket_pack_1', 1, 2000));
+      getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 0, oldest_purchased_at: null });
+
+      await storeService.purchaseWithCoins('user-1', 'ticket_pack_1');
+
+      // The `since` boundary passed to the repo must be the current Georgia-day
+      // start (00:00 Asia/Tbilisi = 20:00 UTC), NOT `now - 24h`.
+      const sinceArg = getTicketPackPurchaseWindowInTxMock.mock.calls[0]?.[2] as string;
+      const sinceMs = Date.parse(sinceArg);
+      const expectedStart = Math.floor((frozen + OFFSET) / DAY) * DAY - OFFSET;
+      expect(sinceMs).toBe(expectedStart);
+      // Fixed window: within the current day, not a rolling now-24h boundary.
+      expect(frozen - sinceMs).toBeLessThanOrEqual(DAY);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('reports nextAvailableAt as the next Georgia daily reset when at the cap', async () => {
-    const { storeService } = await import('../../src/modules/store/store.service.js');
-    // getWallet path: at the cap (5 bought today) → cooldown points at next reset.
-    vi.doMock('../../src/modules/store/ticket-refill.service.js', async (orig) => orig());
-    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 5, oldest_purchased_at: null });
-
-    // Assert the cooldown math directly against the fixed window boundary.
+  it('getWallet reports nextAvailableAt as the next Georgia daily reset when at the cap', async () => {
     const OFFSET = 4 * 60 * 60 * 1000;
     const DAY = 24 * 60 * 60 * 1000;
-    const windowStart = Math.floor((Date.now() + OFFSET) / DAY) * DAY - OFFSET;
-    const expectedReset = new Date(windowStart + DAY).toISOString();
-    // The next reset must be in the future and exactly one day after the window start.
-    expect(new Date(expectedReset).getTime()).toBeGreaterThan(Date.now());
-    expect(new Date(expectedReset).getTime() - windowStart).toBe(DAY);
+    const frozen = Date.UTC(2026, 6, 10, 10, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(frozen);
+    try {
+      // Exercise the real getWallet() path: mock its non-tx deps (refill hydrate
+      // + the non-tx purchase-window query) so we assert the actual cooldown
+      // fields the service returns, not duplicated date math.
+      getTicketPackPurchaseWindowMock.mockResolvedValue({ ticketCount: 5, oldest_purchased_at: null });
+      hydrateTicketsMock.mockResolvedValue({ coins: 1000, tickets: 5 });
+
+      const { storeService } = await import('../../src/modules/store/store.service.js');
+      const wallet = await storeService.getWallet('user-1');
+
+      const windowStart = Math.floor((frozen + OFFSET) / DAY) * DAY - OFFSET;
+      const expectedReset = new Date(windowStart + DAY).toISOString();
+      expect(wallet.ticketPurchaseCooldown.canBuy).toBe(false);
+      expect(wallet.ticketPurchaseCooldown.nextAvailableAt).toBe(expectedReset);
+      expect(wallet.ticketPurchaseCooldown.remainingSeconds).toBe(
+        Math.ceil((windowStart + DAY - frozen) / 1000)
+      );
+      expect(wallet.ticketPurchaseCooldown.ticketsRemainingInWindow).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

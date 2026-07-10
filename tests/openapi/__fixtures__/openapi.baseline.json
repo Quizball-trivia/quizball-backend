@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -1113,7 +1113,9 @@
               "objective_reward_succeeded",
               "admin_progression_adjustment",
               "leaderboard_reset",
-              "admin_ticket_window_reset"
+              "admin_ticket_window_reset",
+              "admin_account_ban",
+              "admin_account_unban"
             ]
           },
           "outcome": {
@@ -1244,7 +1246,9 @@
                     "objective_reward_succeeded",
                     "admin_progression_adjustment",
                     "leaderboard_reset",
-                    "admin_ticket_window_reset"
+                    "admin_ticket_window_reset",
+                    "admin_account_ban",
+                    "admin_account_unban"
                   ]
                 },
                 "outcome": {
@@ -1917,6 +1921,9 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "is_banned": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -1932,7 +1939,8 @@
                 "placement_status",
                 "coins",
                 "tickets",
-                "created_at"
+                "created_at",
+                "is_banned"
               ]
             }
           },
@@ -7363,7 +7371,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 50,
+              "maximum": 10,
               "default": 10
             },
             "required": false,
@@ -9053,7 +9061,9 @@
                 "objective_reward_succeeded",
                 "admin_progression_adjustment",
                 "leaderboard_reset",
-                "admin_ticket_window_reset"
+                "admin_ticket_window_reset",
+                "admin_account_ban",
+                "admin_account_unban"
               ]
             },
             "required": false,
@@ -9143,7 +9153,9 @@
                               "objective_reward_succeeded",
                               "admin_progression_adjustment",
                               "leaderboard_reset",
-                              "admin_ticket_window_reset"
+                              "admin_ticket_window_reset",
+                              "admin_account_ban",
+                              "admin_account_unban"
                             ]
                           },
                           "outcome": {

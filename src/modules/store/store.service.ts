@@ -139,9 +139,12 @@ async function loadTicketPurchaseCooldownInTx(
   tx: TransactionSql,
   userId: string
 ): Promise<TicketPurchaseCooldown> {
-  const sinceIso = ticketPurchaseWindowSinceIso();
+  // Capture one instant so the query boundary and the cooldown calc agree even
+  // if the read straddles the daily reset boundary.
+  const now = new Date();
+  const sinceIso = ticketPurchaseWindowSinceIso(now);
   const window = await storeRepo.getTicketPackPurchaseWindowInTx(tx, userId, sinceIso);
-  return buildTicketPurchaseCooldown(window.ticketCount);
+  return buildTicketPurchaseCooldown(window.ticketCount, now);
 }
 
 function assertCanBuyTicketPack(
@@ -876,12 +879,13 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const sinceIso = ticketPurchaseWindowSinceIso();
+    const now = new Date();
+    const sinceIso = ticketPurchaseWindowSinceIso(now);
     const [wallet, purchaseWindow] = await Promise.all([
       ticketRefillService.hydrateTickets(userId),
       storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
     ]);
-    const cooldown = buildTicketPurchaseCooldown(purchaseWindow.ticketCount);
+    const cooldown = buildTicketPurchaseCooldown(purchaseWindow.ticketCount, now);
     return buildWalletResponse(wallet, cooldown);
   },
 
@@ -1190,7 +1194,8 @@ export const storeService = {
       wallet = await this.getWallet(userId);
     } catch (err) {
       logger.warn({ err, userId }, 'Ticket-window reset: wallet hydrate failed, using plain read');
-      const sinceIsoForCooldown = ticketPurchaseWindowSinceIso();
+      const cooldownNow = new Date();
+      const sinceIsoForCooldown = ticketPurchaseWindowSinceIso(cooldownNow);
       const [plainWallet, purchaseWindow] = await Promise.all([
         storeRepo.getWallet(userId),
         storeRepo.getTicketPackPurchaseWindow(userId, sinceIsoForCooldown),
@@ -1200,7 +1205,7 @@ export const storeService = {
       }
       wallet = buildWalletResponse(
         plainWallet,
-        buildTicketPurchaseCooldown(purchaseWindow.ticketCount)
+        buildTicketPurchaseCooldown(purchaseWindow.ticketCount, cooldownNow)
       );
     }
     logger.info({ userId, actorUserId, voided }, 'Admin ticket purchase window reset');

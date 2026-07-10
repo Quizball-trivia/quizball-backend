@@ -29,6 +29,24 @@ function parseI18nField(raw: Json | string | null | undefined): I18nField | null
   return null;
 }
 
+// Agent-generated payloads carry untranslated leaves as `ka: ""`, which fails
+// i18nFieldSchema's min(1) — so safeParse returned null for exactly the rows
+// the backfill exists to translate, and they were all "skipped". Drop empty
+// translation values before validating; a missing key already means "needs
+// translation" to the descriptor extraction below.
+function stripEmptyTranslations(node: Json): Json {
+  if (Array.isArray(node)) return node.map(stripEmptyTranslations) as Json;
+  if (node && typeof node === 'object') {
+    const out: Record<string, Json> = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (/^[a-z]{2}$/.test(k) && v === '') continue;
+      out[k] = stripEmptyTranslations(v as Json);
+    }
+    return out as Json;
+  }
+  return node;
+}
+
 function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
   if (typeof raw === 'string') {
     try {
@@ -38,7 +56,7 @@ function parseQuestionPayload(raw: Json | null): QuestionPayload | null {
     }
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const parsed = questionPayloadSchema.safeParse(raw);
+  const parsed = questionPayloadSchema.safeParse(stripEmptyTranslations(raw));
   return parsed.success ? parsed.data : null;
 }
 
@@ -449,42 +467,117 @@ export const translationService = {
   /**
    * Get counts of items needing translation (fast query, no translation).
    */
+  // ── Agent-scoped translation (the Agents tab button) ──
+  // "Agent-generated" = joined to the agents.tasks row that published it. Only
+  // these are touched; the rest of the question bank is left alone.
+  async agentUntranslatedIds(): Promise<string[]> {
+    const rows = await sql<{ id: string }[]>`
+      SELECT DISTINCT q.id
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status IN ('draft', 'published') -- don't waste spend on judge-archived rejects
+        AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
+    `;
+    return rows.map((r) => r.id);
+  },
+
+  async getAgentBackfillCounts(): Promise<{ questions: number; categories: number; agentTotal: number }> {
+    const [qr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status IN ('draft', 'published')
+        AND ((COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%'))
+    `;
+    // total agent questions the OVERWRITE mode would re-translate (draft + published)
+    const [tr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      WHERE q.status IN ('draft', 'published')
+    `;
+    return { questions: qr?.n ?? 0, categories: 0, agentTotal: tr?.n ?? 0 };
+  },
+
   async getBackfillCounts(): Promise<{ questions: number; categories: number }> {
-    const questionRows = await sql<{
-      id: string;
-      prompt: Json | null;
-      explanation: Json | null;
-      payload: Json | null;
-    }[]>`
-      SELECT q.id, q.prompt, q.explanation, qp.payload
+    // Counted in SQL — the old version loaded EVERY question row + payload into
+    // Node and filtered in JS, which timed out the start endpoint on staging.
+    // The payload LIKE matches an untranslated leaf ({"en": ..., "ka": ""}) in
+    // jsonb text form; TARGET_LOCALE is 'ka' (hardcoded here for SQL simplicity).
+    const [qr] = await sql<{ n: number }[]>`
+      SELECT COUNT(DISTINCT q.id)::int AS n
       FROM questions q
       LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE (COALESCE(q.prompt->>'en','') <> '' AND COALESCE(q.prompt->>'ka','') = '')
+         OR (COALESCE(q.explanation->>'en','') <> '' AND COALESCE(q.explanation->>'ka','') = '')
+         OR (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'object' AND qp.payload::text LIKE '%"ka": ""%')
     `;
-    const categoryRows = await sql<{ id: string; name: Json | null }[]>`
-      SELECT id, name FROM categories
+    const [cr] = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM categories c
+      WHERE COALESCE(c.name->>'en','') <> '' AND COALESCE(c.name->>'ka','') = ''
     `;
-    return {
-      questions: questionRows.filter((q) => {
-        const prompt = parseI18nField(q.prompt);
-        const explanation = parseI18nField(q.explanation);
-        const payload = parseQuestionPayload(q.payload);
-
-        return Boolean(
-          (prompt?.en && !prompt[TARGET_LOCALE])
-          || (explanation?.en && !explanation[TARGET_LOCALE])
-          || payloadNeedsTranslation(payload)
-        );
-      }).length,
-      categories: categoryRows.filter((c) => {
-        const name = parseI18nField(c.name);
-        return Boolean(name?.en && !name[TARGET_LOCALE]);
-      }).length,
-    };
+    return { questions: qr?.n ?? 0, categories: cr?.n ?? 0 };
   },
 
   /**
    * Backfill: translate ALL questions that have "en" but no "ka".
    */
+  // Strip every Georgian value from AGENT-GENERATED questions (drafts AND
+  // approved) so the standard backfill re-translates them from scratch. Scoped
+  // by the agents.tasks join — the wider question bank (hand-written Georgian)
+  // is untouchable. NOTE: published agent questions briefly lose their Georgian
+  // until the background run refills them — fine on staging; before prod
+  // go-live this should chunk (wipe+translate 50 at a time).
+  async clearDraftGeorgian(): Promise<string[]> {
+    const wipeKa = (node: unknown): unknown => {
+      if (Array.isArray(node)) return node.map(wipeKa);
+      if (node && typeof node === 'object') {
+        const obj = { ...(node as Record<string, unknown>) };
+        if (typeof obj.en === 'string' && 'ka' in obj) obj.ka = '';
+        for (const k of Object.keys(obj)) {
+          if (k !== 'en' && k !== 'ka') obj[k] = wipeKa(obj[k]);
+        }
+        return obj;
+      }
+      return node;
+    };
+
+    const rows = await sql<{ id: string; prompt: Json | null; explanation: Json | null; payload: Json | null; payload_is_string: boolean }[]>`
+      SELECT DISTINCT ON (q.id) q.id, q.prompt, q.explanation, qp.payload,
+             (qp.payload IS NOT NULL AND jsonb_typeof(qp.payload) = 'string') AS payload_is_string
+      FROM questions q
+      JOIN agents.tasks t ON t.published_question_id = q.id
+      LEFT JOIN question_payloads qp ON qp.question_id = q.id
+      WHERE q.status IN ('draft', 'published')
+    `;
+    const ids: string[] = [];
+    for (const row of rows) {
+      const prompt = wipeKa(parseI18nField(row.prompt));
+      const explanation = row.explanation ? wipeKa(parseI18nField(row.explanation)) : null;
+      await sql`UPDATE questions SET prompt = ${sql.json(prompt as Json)}, explanation = ${explanation ? sql.json(explanation as Json) : null}, updated_at = now() WHERE id = ${row.id}`;
+      if (row.payload != null) {
+        let payload = row.payload as unknown;
+        if (row.payload_is_string) {
+          try { payload = JSON.parse(payload as string); } catch { payload = null; }
+        }
+        if (payload) {
+          const wiped = wipeKa(payload);
+          // write back in the SAME encoding the row used (some June rows are double-encoded)
+          const out = row.payload_is_string ? JSON.stringify(wiped) : wiped;
+          await sql`UPDATE question_payloads SET payload = ${sql.json(out as Json)} WHERE question_id = ${row.id}`;
+        }
+      }
+      ids.push(row.id);
+    }
+    return ids;
+  },
+
   async backfillAll(): Promise<{
     translated: number;
     skipped: number;
@@ -757,8 +850,11 @@ async function applyTranslation(
            updated_at = NOW()
        WHERE id = $3`,
       [
-        JSON.stringify(newPrompt),
-        newExplanation ? JSON.stringify(newExplanation) : null,
+        // pass OBJECTS — the driver JSON-serializes params bound to jsonb once;
+        // pre-stringifying double-encodes and stores a jsonb STRING (the bug
+        // behind every double-encoded prompt/payload row)
+        newPrompt,
+        newExplanation ?? null,
         original.id,
       ]
     );
@@ -769,7 +865,7 @@ async function applyTranslation(
          SET payload = $1::jsonb,
              updated_at = NOW()
          WHERE question_id = $2`,
-        [JSON.stringify(newPayload), original.id]
+        [newPayload, original.id]
       );
     }
   });

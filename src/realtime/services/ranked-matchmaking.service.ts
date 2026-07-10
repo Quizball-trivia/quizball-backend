@@ -286,7 +286,7 @@ async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<
   if (socket?.data?.currentCountry) {
     searchFields.countryCode = socket.data.currentCountry;
   }
-  await redis
+  const multiResult = await redis
     .multi()
     .hSet(rankedSearchKey(newSearchId), searchFields)
     .expire(rankedSearchKey(newSearchId), SEARCH_KEY_TTL_SEC)
@@ -294,6 +294,16 @@ async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<
     .zAdd(RANKED_MM_TIMEOUTS_KEY, { score: deadlineAt, value: newSearchId })
     .hSet(RANKED_MM_USER_MAP_KEY, userId, newSearchId)
     .exec();
+
+  if (!multiResult) {
+    logger.error({ userId }, 'Ranked re-queue failed: Redis multi returned null');
+    io.to(`user:${userId}`).emit('error', {
+      code: 'RANKED_QUEUE_UNAVAILABLE',
+      message: 'Ranked queue is unavailable, please retry',
+    });
+    return;
+  }
+
   io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
   await userSessionGuardService.emitState(io, userId);
   logger.info({ userId, searchId: newSearchId }, 'Re-queued present player after ghost pairing');

@@ -5,6 +5,16 @@ import { logger } from '../core/logger.js';
 let commandClient: RedisClientType | null = null;
 let pubClient: RedisClientType | null = null;
 let subClient: RedisClientType | null = null;
+let adapterSubClient: RedisClientType | null = null;
+
+type TrackedSubscription = {
+  method: 'subscribe' | 'pSubscribe';
+  channels: string | string[];
+  listener: Parameters<RedisClientType['subscribe']>[1];
+  bufferMode: boolean | undefined;
+};
+
+const trackedSubClientSubscriptions: TrackedSubscription[] = [];
 
 // Named error handlers for Redis clients
 const handleCommandError = (err: Error) => {
@@ -71,6 +81,7 @@ export async function initRedisClients(): Promise<{
   }
   if (!subClient) {
     subClient = pubClient.duplicate();
+    adapterSubClient = trackSubClientSubscriptions(subClient);
   }
 
   // Attach error handlers (remove specific handler first to avoid duplicates on re-init)
@@ -93,7 +104,7 @@ export async function initRedisClients(): Promise<{
 
   startWatchdog();
 
-  return { pubClient, subClient };
+  return { pubClient, subClient: adapterSubClient ?? subClient };
 }
 
 export function getRedisClient(): RedisClientType | null {
@@ -111,6 +122,8 @@ export async function closeRedisClients(): Promise<void> {
     commandClient = null;
     pubClient = null;
     subClient = null;
+    adapterSubClient = null;
+    trackedSubClientSubscriptions.length = 0;
     return;
   }
 
@@ -129,6 +142,8 @@ export async function closeRedisClients(): Promise<void> {
   commandClient = null;
   pubClient = null;
   subClient = null;
+  adapterSubClient = null;
+  trackedSubClientSubscriptions.length = 0;
 
   logger.info('Redis clients disconnected');
 }
@@ -193,6 +208,112 @@ function pingWithTimeout(client: RedisClientType, timeoutMs: number): Promise<vo
   });
 }
 
+function trackSubClientSubscriptions(client: RedisClientType): RedisClientType {
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === 'subscribe' || property === 'pSubscribe') {
+        const subscribe = property === 'subscribe'
+          ? target.subscribe.bind(target)
+          : target.pSubscribe.bind(target);
+        return (
+          channels: string | string[],
+          listener: TrackedSubscription['listener'],
+          bufferMode?: boolean
+        ) => {
+          trackedSubClientSubscriptions.push({
+            method: property,
+            channels: Array.isArray(channels) ? [...channels] : channels,
+            listener,
+            bufferMode,
+          });
+          return subscribe(channels, listener as never, bufferMode as never);
+        };
+      }
+
+      if (property === 'unsubscribe' || property === 'pUnsubscribe') {
+        const unsubscribe = property === 'unsubscribe'
+          ? target.unsubscribe.bind(target)
+          : target.pUnsubscribe.bind(target);
+        const method = property === 'unsubscribe' ? 'subscribe' : 'pSubscribe';
+        return async (
+          channels?: string | string[],
+          listener?: TrackedSubscription['listener'],
+          bufferMode?: boolean
+        ) => {
+          await unsubscribe(channels, listener as never, bufferMode as never);
+          removeTrackedSubClientSubscriptions(method, channels, listener, bufferMode);
+        };
+      }
+
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as RedisClientType;
+}
+
+function removeTrackedSubClientSubscriptions(
+  method: TrackedSubscription['method'],
+  channels?: string | string[],
+  listener?: TrackedSubscription['listener'],
+  bufferMode?: boolean
+): void {
+  if (!channels) {
+    for (let index = trackedSubClientSubscriptions.length - 1; index >= 0; index -= 1) {
+      if (trackedSubClientSubscriptions[index].method === method) {
+        trackedSubClientSubscriptions.splice(index, 1);
+      }
+    }
+    return;
+  }
+
+  const removedChannels = new Set(Array.isArray(channels) ? channels : [channels]);
+  for (let index = trackedSubClientSubscriptions.length - 1; index >= 0; index -= 1) {
+    const subscription = trackedSubClientSubscriptions[index];
+    if (
+      subscription.method !== method
+      || (listener && subscription.listener !== listener)
+      || (bufferMode !== undefined && subscription.bufferMode !== bufferMode)
+    ) {
+      continue;
+    }
+
+    const remainingChannels = (Array.isArray(subscription.channels)
+      ? subscription.channels
+      : [subscription.channels]
+    ).filter((channel) => !removedChannels.has(channel));
+
+    if (remainingChannels.length === 0) {
+      trackedSubClientSubscriptions.splice(index, 1);
+    } else {
+      subscription.channels = remainingChannels.length === 1
+        ? remainingChannels[0]
+        : remainingChannels;
+    }
+  }
+}
+
+async function restoreSubClientSubscriptions(client: RedisClientType): Promise<void> {
+  for (const subscription of trackedSubClientSubscriptions) {
+    const unsubscribe = subscription.method === 'subscribe'
+      ? client.unsubscribe.bind(client)
+      : client.pUnsubscribe.bind(client);
+    const subscribe = subscription.method === 'subscribe'
+      ? client.subscribe.bind(client)
+      : client.pSubscribe.bind(client);
+
+    await unsubscribe(
+      subscription.channels,
+      subscription.listener as never,
+      subscription.bufferMode as never
+    );
+    await subscribe(
+      subscription.channels,
+      subscription.listener as never,
+      subscription.bufferMode as never
+    );
+  }
+}
+
 // Force a full reconnect cycle on a client whose socket is (probably) silently
 // dead. v4's disconnect() tears the socket down immediately with socket.destroy()
 // and flushes the command queue WITHOUT sending a QUIT (which would itself hang
@@ -208,6 +329,9 @@ async function forceReconnect(named: NamedClient): Promise<void> {
     logger.error({ err, client: name }, 'Redis watchdog disconnect failed');
   }
   await client.connect();
+  if (name === 'sub') {
+    await restoreSubClientSubscriptions(client);
+  }
 }
 
 export async function runWatchdogTick(
@@ -282,6 +406,9 @@ export const __watchdogTestHooks = {
     stalledRounds = 0;
     watchdogTickInFlight = false;
     watchdogGeneration = 0;
+    trackedSubClientSubscriptions.length = 0;
   },
   getStalledRounds: () => stalledRounds,
+  forceReconnect,
+  trackSubClientSubscriptions,
 };

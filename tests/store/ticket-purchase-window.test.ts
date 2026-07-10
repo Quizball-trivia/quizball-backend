@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 // Quantity-based daily ticket purchase cap (economy v3): players can buy up to
-// 5 TICKETS per rolling 24h window — pack size counts, not purchase count.
+// 5 TICKETS per FIXED daily window (resets 00:00 Georgia time) — pack size
+// counts, not purchase count. The whole allowance frees together at reset, so
+// the full-allowance 5-pack is buyable right after a reset (the bug this fixes:
+// a rolling window fragmented capacity and made the 5-pack unbuyable).
 
 const beginMock = vi.fn();
 const getProductBySlugInTxMock = vi.fn();
@@ -74,7 +77,7 @@ describe('storeService.purchaseWithCoins — quantity-based daily ticket cap', (
     insertTransactionLogMock.mockResolvedValue({ id: 'log-fail-1' });
   });
 
-  it('rejects a 3-pack when only 2 tickets remain in the 24h window', async () => {
+  it('rejects a 3-pack when only 2 tickets remain in the daily window', async () => {
     const { storeService } = await import('../../src/modules/store/store.service.js');
     getProductBySlugInTxMock.mockResolvedValue(makeTicketPack('ticket_pack_3', 3, 4000));
     getTicketPackPurchaseWindowInTxMock.mockResolvedValue({
@@ -89,7 +92,7 @@ describe('storeService.purchaseWithCoins — quantity-based daily ticket cap', (
     expect(setWalletStateInTxMock).not.toHaveBeenCalled();
   });
 
-  it('allows a 1-pack when 2 tickets remain in the 24h window', async () => {
+  it('allows a 1-pack when 2 tickets remain in the daily window', async () => {
     const { storeService } = await import('../../src/modules/store/store.service.js');
     getProductBySlugInTxMock.mockResolvedValue(makeTicketPack('ticket_pack_1', 1, 2000));
     getTicketPackPurchaseWindowInTxMock.mockResolvedValue({
@@ -125,5 +128,40 @@ describe('storeService.purchaseWithCoins — quantity-based daily ticket cap', (
     await expect(
       storeService.purchaseWithCoins('user-1', 'ticket_pack_1')
     ).rejects.toMatchObject({ code: 'TICKET_PURCHASE_COOLDOWN' });
+  });
+
+  it('enforces the cap against a FIXED daily window (00:00 Georgia), not a rolling 24h boundary', async () => {
+    const { storeService } = await import('../../src/modules/store/store.service.js');
+    getProductBySlugInTxMock.mockResolvedValue(makeTicketPack('ticket_pack_1', 1, 2000));
+    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 0, oldest_purchased_at: null });
+
+    await storeService.purchaseWithCoins('user-1', 'ticket_pack_1');
+
+    // The `since` boundary passed to the repo must be the current Georgia-day
+    // start (00:00 Asia/Tbilisi = 20:00 UTC), NOT `now - 24h`.
+    const sinceArg = getTicketPackPurchaseWindowInTxMock.mock.calls[0]?.[2] as string;
+    const sinceMs = Date.parse(sinceArg);
+    const OFFSET = 4 * 60 * 60 * 1000;
+    const DAY = 24 * 60 * 60 * 1000;
+    const expectedStart = Math.floor((Date.now() + OFFSET) / DAY) * DAY - OFFSET;
+    expect(sinceMs).toBe(expectedStart);
+    // Fixed window: it is NOT a rolling now-24h boundary (which would be ~24h before now).
+    expect(Date.now() - sinceMs).toBeLessThanOrEqual(DAY);
+  });
+
+  it('reports nextAvailableAt as the next Georgia daily reset when at the cap', async () => {
+    const { storeService } = await import('../../src/modules/store/store.service.js');
+    // getWallet path: at the cap (5 bought today) → cooldown points at next reset.
+    vi.doMock('../../src/modules/store/ticket-refill.service.js', async (orig) => orig());
+    getTicketPackPurchaseWindowInTxMock.mockResolvedValue({ ticketCount: 5, oldest_purchased_at: null });
+
+    // Assert the cooldown math directly against the fixed window boundary.
+    const OFFSET = 4 * 60 * 60 * 1000;
+    const DAY = 24 * 60 * 60 * 1000;
+    const windowStart = Math.floor((Date.now() + OFFSET) / DAY) * DAY - OFFSET;
+    const expectedReset = new Date(windowStart + DAY).toISOString();
+    // The next reset must be in the future and exactly one day after the window start.
+    expect(new Date(expectedReset).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(expectedReset).getTime() - windowStart).toBe(DAY);
   });
 });

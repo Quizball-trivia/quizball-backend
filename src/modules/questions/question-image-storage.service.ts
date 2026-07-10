@@ -84,6 +84,26 @@ function canUseExternalImageFallback(url: string): boolean {
   }
 }
 
+// Best-effort delete of a stored question image by its public URL. No-op for
+// external URLs (only cleans objects in our own bucket). Used when a draft
+// agent question is rejected/regenerated so its photo doesn't orphan.
+export async function deleteQuestionImageByUrl(url: string | null | undefined): Promise<void> {
+  if (!url) return;
+  const marker = `/storage/v1/object/public/${BUCKET}/`;
+  const idx = url.indexOf(marker);
+  if (idx === -1) return;
+  const objectPath = url.slice(idx + marker.length);
+  try {
+    const target = getPrimaryStorageTarget();
+    await fetch(`${normalizeSupabaseUrl(target.supabaseUrl)}/storage/v1/object/${BUCKET}/${objectPath}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${target.serviceRoleKey}` },
+    });
+  } catch (error) {
+    logger.warn({ err: error, url }, 'question image cleanup failed');
+  }
+}
+
 function getPrimaryStorageTarget(): QuestionImageStorageTarget {
   if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) {
     throw new ExternalServiceError('Supabase storage is not configured');

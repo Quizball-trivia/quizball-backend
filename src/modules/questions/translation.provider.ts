@@ -28,6 +28,20 @@ export interface CategoryTranslationOutput {
   name: string;
 }
 
+export interface ClueTranslationInput {
+  id: string;
+  clue_1: string;
+  clue_2: string;
+  clue_3: string;
+}
+
+export interface ClueTranslationOutput {
+  id: string;
+  clue_1: string;
+  clue_2: string;
+  clue_3: string;
+}
+
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -43,6 +57,22 @@ Transliterate ALL proper nouns (player names, team names, tournament names) into
 const CATEGORY_SYSTEM_PROMPT = `Translate these category names from English to Georgian.
 Return ONLY a valid JSON object with a single key "translations" containing an array of {id, name} objects.
 Transliterate proper nouns into Georgian script (e.g. "Premier League" → "პრემიერ ლიგა", "Bundesliga" → "ბუნდესლიგა").`;
+
+const DIFFICULTY_SYSTEM_PROMPT = `You rate how hard it is for a knowledgeable football fan to GUESS THE PLAYER from a card of three clues.
+Judge the player's overall fame and how identifying the clues are TAKEN TOGETHER — not the trickiness of a single clue.
+- easy: an all-time great or current superstar most fans name immediately.
+- medium: a well-known international or top-club player most engaged fans recognise, but not a household name.
+- hard: a competent or specialist player, or clues built from non-signature facts, that even many fans would struggle to pin down.
+Return ONLY JSON: {"difficulty":"easy|medium|hard"}. No prose.`;
+
+const CLUE_SYSTEM_PROMPT = `You are a professional English to Georgian translator for a football auction guessing game.
+Each item is a player's three first-person clues (clue_1, clue_2, clue_3) — the player describes their own career ("I am...", "I won...").
+Translate all three clues from English to Georgian.
+Return ONLY a valid JSON object with a single key "translations" containing an array of {id, clue_1, clue_2, clue_3} objects.
+Each item must keep the same "id" as the input.
+PRESERVE the first-person voice — the player is still speaking about themselves.
+Do NOT reveal or add the player's name; the clues are a guessing puzzle.
+Transliterate proper nouns (clubs, tournaments, countries) into Georgian script (e.g. "La Liga" → "ლა ლიგა", "Champions League" → "ჩემპიონთა ლიგა").`;
 
 class OpenRouterTranslationProvider {
   private readonly apiKey: string | undefined;
@@ -82,8 +112,52 @@ class OpenRouterTranslationProvider {
     }
 
     const userMessage = `Translate these to Georgian. Return JSON only:\n${JSON.stringify(categories)}`;
-    const content = await this.chatCompletion(CATEGORY_SYSTEM_PROMPT, userMessage);
-    return this.parseTranslationsArray<CategoryTranslationOutput>(content, categories.length);
+    const categoryContent = await this.chatCompletion(CATEGORY_SYSTEM_PROMPT, userMessage);
+    return this.parseTranslationsArray<CategoryTranslationOutput>(
+      categoryContent,
+      categories.length
+    );
+  }
+
+  async translateClues(batch: ClueTranslationInput[]): Promise<ClueTranslationOutput[]> {
+    if (!this.apiKey) {
+      throw new ExternalServiceError('OpenRouter API key not configured');
+    }
+
+    const payload = batch.map((c) => ({
+      id: c.id,
+      clue_1: c.clue_1,
+      clue_2: c.clue_2,
+      clue_3: c.clue_3,
+    }));
+
+    const userMessage = `Translate these clues to Georgian. Return JSON only:\n${JSON.stringify(payload)}`;
+    const content = await this.chatCompletion(CLUE_SYSTEM_PROMPT, userMessage);
+    return this.parseTranslationsArray<ClueTranslationOutput>(content, batch.length);
+  }
+
+  /**
+   * Rate how hard the PLAYER is to guess from their three clues taken together
+   * (player fame + how identifying the clues are), not the trickiness of one
+   * clue. Returns 'easy' | 'medium' | 'hard'; falls back to 'medium' on any
+   * parse/transport failure so import never blocks on the rater.
+   */
+  async rateDifficulty(clues: [string, string, string]): Promise<'easy' | 'medium' | 'hard'> {
+    if (!this.apiKey) return 'medium';
+    try {
+      const userMessage = `Rate the difficulty of guessing the player. Return JSON only:\n${JSON.stringify(
+        { clues }
+      )}`;
+      const content = await this.chatCompletion(DIFFICULTY_SYSTEM_PROMPT, userMessage);
+      const cleaned = content.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      const match = cleaned.match(/\b(easy|medium|hard)\b/i);
+      const value = match?.[1]?.toLowerCase();
+      if (value === 'easy' || value === 'medium' || value === 'hard') return value;
+      return 'medium';
+    } catch (error) {
+      logger.warn({ error }, 'Difficulty rating failed; defaulting to medium');
+      return 'medium';
+    }
   }
 
   // ─── Private ─────────────────────────────────────────────────────────────

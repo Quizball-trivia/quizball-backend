@@ -100,7 +100,7 @@ import {
   hasAnyMatchStagePresenceFromSocketIds,
 } from './match-stage-presence.service.js';
 
-const MATCH_DISCONNECT_GRACE_MS = 30000;
+const MATCH_DISCONNECT_GRACE_MS = 20000;
 // Bounded extra window granted at grace expiry to a player who RECONNECTED
 // (fresh socket, connected after their disconnect marker) but has not yet
 // completed the match:rejoin / match:ui_ready handshake. The marker clears only

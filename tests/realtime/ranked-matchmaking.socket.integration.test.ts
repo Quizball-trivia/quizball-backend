@@ -733,6 +733,26 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
   });
 
+  it('ignores a late queue_join that arrives immediately after ranked:queue_leave', async () => {
+    const user = createSocket('late-join-after-leave-user');
+    const searchStarted = waitForEvent(user, 'ranked:search_started', 2000);
+    const firstQueueLeft = waitForEvent(user, 'ranked:queue_left', 2000);
+
+    await user.trigger('ranked:queue_join', {});
+    await searchStarted;
+    await user.trigger('ranked:queue_leave');
+    await firstQueueLeft;
+
+    const lateJoinQueueLeft = waitForEvent(user, 'ranked:queue_left', 2000);
+    await user.trigger('ranked:queue_join', {});
+    await lateJoinQueueLeft;
+
+    expect(fakeRedis.getUserSearchId('late-join-after-leave-user')).toBeNull();
+    fakeRedis.forceAllTimeoutsDue(Date.now());
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
   it('blocks ranked search before queueing when the user has no tickets', async () => {
     mockGetWallet.mockResolvedValueOnce({ coins: 0, tickets: 0 });
     const user = createSocket('no-ticket-user');

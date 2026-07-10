@@ -118,12 +118,21 @@ describeLocal('regression: ranked forfeit economy (RP + tickets)', () => {
     const me = roster.find((p) => p.user_id === run.botUserId);
     const opp = roster.find((p) => p.user_id !== run.botUserId);
     const margin = (me?.goals ?? 0) - (opp?.goals ?? 0);
+    const frozenGoals = {
+      mine: me?.goals ?? 0,
+      opponent: opp?.goals ?? 0,
+    };
 
     const oppId = await opponentForfeit(run);
     expect(oppId, 'opponent forfeit resolved').toBeTruthy();
 
     const match = await matchesRepo.getMatch(run.matchId!);
     expect(['completed', 'abandoned']).toContain(match?.status);
+    const settledRoster = await matchPlayersRepo.listMatchPlayers(run.matchId!);
+    const settledMe = settledRoster.find((p) => p.user_id === run.botUserId);
+    const settledOpp = settledRoster.find((p) => p.user_id !== run.botUserId);
+    expect(settledMe?.goals, 'winner goals stay frozen through forfeit finalization').toBe(frozenGoals.mine);
+    expect(settledOpp?.goals, 'forfeiter goals stay frozen through forfeit finalization').toBe(frozenGoals.opponent);
 
     // The surviving WINNER (bot) gains RP: forfeit-win base, PLUS the margin
     // bonus iff it was ahead. (Placement runs can scale the magnitude, so assert

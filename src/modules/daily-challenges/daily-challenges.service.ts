@@ -37,11 +37,8 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 
-const GEORGIA_UTC_OFFSET_HOURS = 4;
-
 function getDailyChallengeDay(now = new Date()): string {
-  const georgiaTime = new Date(now.getTime() + GEORGIA_UTC_OFFSET_HOURS * 60 * 60 * 1000);
-  return georgiaTime.toISOString().slice(0, 10);
+  return now.toISOString().slice(0, 10);
 }
 
 const dailyChallengeSettingsSchemas = {

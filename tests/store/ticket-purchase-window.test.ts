@@ -201,4 +201,38 @@ describe('storeService.purchaseWithCoins — quantity-based daily ticket cap', (
       vi.useRealTimers();
     }
   });
+
+  it('uses one consistent instant for boundary + cooldown even if the reset passes mid-read', async () => {
+    const OFFSET = 4 * 60 * 60 * 1000;
+    const DAY = 24 * 60 * 60 * 1000;
+    // Start 1 second BEFORE a Georgia daily reset (20:00 UTC = 00:00 Tbilisi).
+    const justBeforeReset = Date.UTC(2026, 6, 10, 19, 59, 59);
+    vi.useFakeTimers();
+    vi.setSystemTime(justBeforeReset);
+    try {
+      // Advance the clock PAST the reset while the purchase-window query is
+      // resolving, so a naive impl that re-reads Date.now() for the cooldown
+      // would compute the boundary and nextAvailableAt against different days.
+      getTicketPackPurchaseWindowMock.mockImplementation(async () => {
+        vi.setSystemTime(justBeforeReset + 2000); // now just AFTER the reset
+        return { ticketCount: 5, oldest_purchased_at: null };
+      });
+      hydrateTicketsMock.mockResolvedValue({ coins: 1000, tickets: 5 });
+
+      const { storeService } = await import('../../src/modules/store/store.service.js');
+      const wallet = await storeService.getWallet('user-1');
+
+      // The single captured instant is `justBeforeReset`, so nextAvailableAt must
+      // be exactly this day's reset — the boundary and cooldown stay consistent.
+      const windowStart = Math.floor((justBeforeReset + OFFSET) / DAY) * DAY - OFFSET;
+      expect(wallet.ticketPurchaseCooldown.nextAvailableAt).toBe(
+        new Date(windowStart + DAY).toISOString()
+      );
+      // And that reset is exactly one DAY after the window start (not two).
+      const nextMs = Date.parse(wallet.ticketPurchaseCooldown.nextAvailableAt as string);
+      expect(nextMs - windowStart).toBe(DAY);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

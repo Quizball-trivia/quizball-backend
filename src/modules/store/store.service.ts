@@ -57,16 +57,42 @@ const manualAdjustmentLogMetadataSchema = z.object({
 });
 
 // Players can buy up to TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW *tickets* per
-// rolling 24h window (quantity-based: the 5-pack uses the whole allowance, a
-// 1-pack plus a 3-pack leaves room for one more single). Capacity frees up 24h
-// after the OLDEST purchase still inside the window rolls off.
-const TICKET_PURCHASE_WINDOW_MS = 24 * 60 * 60 * 1000;
+// FIXED daily window (quantity-based: the 5-pack uses the whole daily allowance,
+// a 1-pack plus a 3-pack leaves room for one more single). The whole allowance
+// RESETS TOGETHER at the start of each day, so the full-allowance 5-pack is
+// always buyable right after a reset.
+//
+// The window resets at 00:00 Georgia time (Asia/Tbilisi = fixed UTC+4, no DST —
+// see supabase/migrations/20260620000000_global_ticket_refill_cron.sql), i.e.
+// 20:00 UTC. This mirrors the global ticket-refill cron's fixed Georgia grid.
+//
+// Previously this was a ROLLING 24h window keyed off each purchase's timestamp,
+// which meant capacity trickled back in fragments (a 3+1+1 day never freed a
+// contiguous block of 5) so the 5-pack was effectively never buyable — forcing
+// players into pricier 3+1+1 (8,000 coins) instead of the 5-pack (5,000 coins).
+const GEORGIA_UTC_OFFSET_MS = 4 * 60 * 60 * 1000; // Asia/Tbilisi, fixed UTC+4
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Start of the current fixed daily window (most recent 00:00 Georgia time) and
+// the next reset instant, computed arithmetically (safe because Tbilisi has no DST).
+function getTicketPurchaseWindowBounds(now = new Date()): {
+  windowStartMs: number;
+  nextResetMs: number;
+} {
+  const nowMs = now.getTime();
+  const windowStartMs = Math.floor((nowMs + GEORGIA_UTC_OFFSET_MS) / DAY_MS) * DAY_MS - GEORGIA_UTC_OFFSET_MS;
+  return { windowStartMs, nextResetMs: windowStartMs + DAY_MS };
+}
+
+/** ISO timestamp of the current fixed daily window start (the `since` boundary). */
+function ticketPurchaseWindowSinceIso(now = new Date()): string {
+  return new Date(getTicketPurchaseWindowBounds(now).windowStartMs).toISOString();
+}
 
 type TicketPurchaseCooldown = StoreWalletResponse['ticketPurchaseCooldown'];
 
 function buildTicketPurchaseCooldown(
   windowTicketCount: number,
-  oldestPurchasedAt: string | null | undefined,
   now = new Date()
 ): TicketPurchaseCooldown {
   const ticketsRemainingInWindow = Math.max(
@@ -75,25 +101,20 @@ function buildTicketPurchaseCooldown(
   );
 
   // Under the per-window ticket cap → at least a single ticket is buyable now.
-  if (ticketsRemainingInWindow > 0 || !oldestPurchasedAt) {
+  if (ticketsRemainingInWindow > 0) {
     return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
   }
 
-  const oldestMs = Date.parse(oldestPurchasedAt);
-  if (!Number.isFinite(oldestMs)) {
-    return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
-  }
-
-  // At the cap: capacity frees when the oldest purchase exits the window.
-  const nextAvailableMs = oldestMs + TICKET_PURCHASE_WINDOW_MS;
-  const remainingMs = nextAvailableMs - now.getTime();
+  // At the cap: the whole allowance frees at the next fixed daily reset.
+  const { nextResetMs } = getTicketPurchaseWindowBounds(now);
+  const remainingMs = nextResetMs - now.getTime();
   if (remainingMs <= 0) {
     return { canBuy: true, nextAvailableAt: null, remainingSeconds: 0, ticketsRemainingInWindow };
   }
 
   return {
     canBuy: false,
-    nextAvailableAt: new Date(nextAvailableMs).toISOString(),
+    nextAvailableAt: new Date(nextResetMs).toISOString(),
     remainingSeconds: Math.ceil(remainingMs / 1000),
     ticketsRemainingInWindow,
   };
@@ -111,15 +132,19 @@ function buildWalletResponse(
 }
 
 // Loads the real ticket-purchase cooldown for a user so wallet responses never
-// default to "purchasable" regardless of purchase history. Enforces the rolling
-// per-24h ticket-quantity cap (up to TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW tickets).
+// default to "purchasable" regardless of purchase history. Enforces the fixed
+// daily ticket-quantity cap (up to TICKET_PURCHASE_MAX_TICKETS_PER_WINDOW tickets
+// per Georgia-time day).
 async function loadTicketPurchaseCooldownInTx(
   tx: TransactionSql,
   userId: string
 ): Promise<TicketPurchaseCooldown> {
-  const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+  // Capture one instant so the query boundary and the cooldown calc agree even
+  // if the read straddles the daily reset boundary.
+  const now = new Date();
+  const sinceIso = ticketPurchaseWindowSinceIso(now);
   const window = await storeRepo.getTicketPackPurchaseWindowInTx(tx, userId, sinceIso);
-  return buildTicketPurchaseCooldown(window.ticketCount, window.oldest_purchased_at);
+  return buildTicketPurchaseCooldown(window.ticketCount, now);
 }
 
 function assertCanBuyTicketPack(
@@ -854,15 +879,13 @@ export const storeService = {
   },
 
   async getWallet(userId: string): Promise<StoreWalletResponse> {
-    const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+    const now = new Date();
+    const sinceIso = ticketPurchaseWindowSinceIso(now);
     const [wallet, purchaseWindow] = await Promise.all([
       ticketRefillService.hydrateTickets(userId),
       storeRepo.getTicketPackPurchaseWindow(userId, sinceIso),
     ]);
-    const cooldown = buildTicketPurchaseCooldown(
-      purchaseWindow.ticketCount,
-      purchaseWindow.oldest_purchased_at
-    );
+    const cooldown = buildTicketPurchaseCooldown(purchaseWindow.ticketCount, now);
     return buildWalletResponse(wallet, cooldown);
   },
 
@@ -1146,7 +1169,7 @@ export const storeService = {
       throw new NotFoundError('User not found');
     }
 
-    const sinceIso = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+    const sinceIso = ticketPurchaseWindowSinceIso();
 
     const voided = await sql.begin(async (tx) => {
       const count = await storeRepo.refundRecentTicketPurchasesInTx(tx, userId, sinceIso);
@@ -1171,7 +1194,8 @@ export const storeService = {
       wallet = await this.getWallet(userId);
     } catch (err) {
       logger.warn({ err, userId }, 'Ticket-window reset: wallet hydrate failed, using plain read');
-      const sinceIsoForCooldown = new Date(Date.now() - TICKET_PURCHASE_WINDOW_MS).toISOString();
+      const cooldownNow = new Date();
+      const sinceIsoForCooldown = ticketPurchaseWindowSinceIso(cooldownNow);
       const [plainWallet, purchaseWindow] = await Promise.all([
         storeRepo.getWallet(userId),
         storeRepo.getTicketPackPurchaseWindow(userId, sinceIsoForCooldown),
@@ -1181,7 +1205,7 @@ export const storeService = {
       }
       wallet = buildWalletResponse(
         plainWallet,
-        buildTicketPurchaseCooldown(purchaseWindow.ticketCount, purchaseWindow.oldest_purchased_at)
+        buildTicketPurchaseCooldown(purchaseWindow.ticketCount, cooldownNow)
       );
     }
     logger.info({ userId, actorUserId, voided }, 'Admin ticket purchase window reset');

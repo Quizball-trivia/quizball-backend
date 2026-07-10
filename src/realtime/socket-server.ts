@@ -310,6 +310,8 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       await runDraftAutoBan(server, payload.lobbyId, {
         requireUiReady: payload.requireUiReady,
         forceAtMs: payload.forceAtMs,
+        turnUserId: payload.turnUserId,
+        banCount: payload.banCount,
       });
     },
     draft_grace_expiry: async (server, payload: RealtimeTimerPayload) => {

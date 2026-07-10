@@ -740,6 +740,8 @@ interface ScheduleDraftAutoBanOptions {
   delayMs?: number;
   requireUiReady?: boolean;
   forceAtMs?: number | null;
+  turnUserId?: string;
+  banCount?: number;
 }
 
 export function scheduleDraftAutoBan(
@@ -753,6 +755,8 @@ export function scheduleDraftAutoBan(
     lobbyId,
     requireUiReady: options.requireUiReady,
     forceAtMs: options.forceAtMs ?? null,
+    turnUserId: options.turnUserId,
+    banCount: options.banCount,
   }).catch((error) => {
     logger.error({ error, lobbyId, delayMs: autoBanMs }, 'Failed to schedule draft auto-ban timer');
   });
@@ -803,7 +807,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 
   const uiReady = isHarnessFastTimers() || await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
   if (uiReady) {
-    scheduleDraftAutoBan(io, lobbyId);
+    scheduleDraftAutoBan(io, lobbyId, { turnUserId: expectedUserId, banCount: bans.length });
     return;
   }
 
@@ -812,6 +816,8 @@ export async function scheduleDraftAutoBanForCurrentTurn(
     delayMs: Math.max(0, forceAtMs - Date.now()),
     requireUiReady: true,
     forceAtMs,
+    turnUserId: expectedUserId,
+    banCount: bans.length,
   });
   logger.info({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
 }
@@ -819,7 +825,12 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 export async function runDraftAutoBan(
   io: QuizballServer,
   lobbyId: string,
-  options: { requireUiReady?: boolean; forceAtMs?: number | null } = {}
+  options: {
+    requireUiReady?: boolean;
+    forceAtMs?: number | null;
+    turnUserId?: string;
+    banCount?: number;
+  } = {}
 ): Promise<void> {
   try {
     const redis = getRedisClient();
@@ -851,9 +862,20 @@ export async function runDraftAutoBan(
     const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
     const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (bans.some((ban) => ban.user_id === expectedUserId)) return;
+    if (
+      (options.turnUserId !== undefined && options.turnUserId !== expectedUserId)
+      || (options.banCount !== undefined && options.banCount !== bans.length)
+    ) {
+      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+      return;
+    }
     const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
     if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
       const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
+      if (options.requireUiReady && uiReady) {
+        await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+        return;
+      }
       if (!uiReady) {
         const forceAtMs = options.forceAtMs ?? null;
         if (forceAtMs === null) {

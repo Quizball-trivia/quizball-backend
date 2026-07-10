@@ -279,26 +279,28 @@ export const agentsService = {
   // ── Stats rollups ──
   async stats(days = 7): Promise<{
     days: number;
-    daily: { day: string; approved: number; rejected: number; costCents: number }[];
+    daily: { day: string; generated: number; approved: number; rejected: number; failed: number; pending: number; acceptPct: number; costCents: number }[];
     rejections: { stage: string; count: number }[];
     timings: { role: string; avgSeconds: number; runs: number }[];
-    totals: { approved: number; rejected: number; costCents: number; approvalRate: number };
+    totals: { generated: number; approved: number; rejected: number; failed: number; costCents: number; approvalRate: number };
   }> {
     const [daily, rejections, timings] = await Promise.all([
       agentsRepo.dailyStats(days),
       agentsRepo.rejectionReasons(days),
       agentsRepo.stageTimings(days),
     ]);
+    const generated = daily.reduce((s, d) => s + d.generated, 0);
     const approved = daily.reduce((s, d) => s + d.approved, 0);
     const rejected = daily.reduce((s, d) => s + d.rejected, 0);
+    const failed = daily.reduce((s, d) => s + d.failed, 0);
     const costCents = daily.reduce((s, d) => s + d.cost_cents, 0);
     const decided = approved + rejected;
     return {
       days,
-      daily: daily.map((d) => ({ day: d.day, approved: d.approved, rejected: d.rejected, costCents: d.cost_cents })),
+      daily: daily.map((d) => ({ day: d.day, generated: d.generated, approved: d.approved, rejected: d.rejected, failed: d.failed, pending: d.pending, acceptPct: d.accept_pct, costCents: d.cost_cents })),
       rejections: rejections.map((r) => ({ stage: r.stage, count: r.count })),
       timings: timings.map((t) => ({ role: t.role, avgSeconds: t.avg_seconds, runs: t.runs })),
-      totals: { approved, rejected, costCents, approvalRate: decided ? Math.round((approved / decided) * 100) : 0 },
+      totals: { generated, approved, rejected, failed, costCents, approvalRate: decided ? Math.round((approved / decided) * 100) : 0 },
     };
   },
 

@@ -1,6 +1,7 @@
 import { sql } from '../../db/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { tierFromRp } from './ranked.service.js';
 import type {
   PlacementStatus,
   RankedLeaderboardEntry,
@@ -484,9 +485,10 @@ export const rankedRepo = {
    * it in ranked_rp_changes. Unlike normal settlement, this is NOT match-
    * derived — it's a punitive deduction for serial early-forfeit abuse.
    *
-   * The deduction is uncapped (can take RP below 0 / below the tier floor)
-   * per the direct-subtraction policy. Returns null if the user has no
-   * ranked profile (nothing to deduct).
+   * The deduction is floored at 0 so it never violates the rp >= 0 CHECK on
+   * ranked_profiles; the ledger row records the actual amount removed, and the
+   * tier is recomputed to stay consistent with the new rp. Returns null if the
+   * user has no ranked profile (nothing to deduct).
    */
   async applyEarlyForfeitRpPenalty(
     userId: string,
@@ -501,7 +503,9 @@ export const rankedRepo = {
       if (!profileRows || profileRows.length === 0) return null;
 
       const oldRp = profileRows[0].rp;
-      const newRp = oldRp - penaltyRp;
+      const newRp = Math.max(0, oldRp - penaltyRp);
+      const actualDelta = newRp - oldRp;
+      const newTier = tierFromRp(newRp);
 
       // Insert the ledger row first and gate the profile update on whether it
       // actually inserted — mirrors applySettlement's idempotency pattern so a
@@ -516,7 +520,7 @@ export const rankedRepo = {
         VALUES ($1, $2, NULL, false, $3, $4, $5, 'loss', false, NULL, NULL, NULL, 'ranked_formula', 0)
         ON CONFLICT (match_id, user_id) DO NOTHING
         RETURNING 1`,
-        [matchId, userId, oldRp, -penaltyRp, newRp]
+        [matchId, userId, oldRp, actualDelta, newRp]
       );
 
       if (!inserted || inserted.length === 0) {
@@ -526,8 +530,8 @@ export const rankedRepo = {
       }
 
       await tx.unsafe(
-        `UPDATE ranked_profiles SET rp = $1, updated_at = NOW() WHERE user_id = $2`,
-        [newRp, userId]
+        `UPDATE ranked_profiles SET rp = $1, tier = $2, updated_at = NOW() WHERE user_id = $3`,
+        [newRp, newTier, userId]
       );
 
       return { oldRp, newRp };

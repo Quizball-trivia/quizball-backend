@@ -43,16 +43,18 @@ import {
   emitClosedLobbyStateForMode,
 } from './lobby-lifecycle.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
+import { createReadyGateRegistry } from '../ready-gate.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
-const DRAFT_AUTO_BAN_MS = 16000;
+const DRAFT_AUTO_BAN_MS = 15000;
+const DRAFT_READY_GATE_CEILING_MS = 10000;
 const DRAFT_UI_READY_TTL_SEC = 600;
 // If a client never sends draft:ui_ready (old client, lost socket, browser
 // killed mid-transition), keep the draft recoverable instead of wedging.
 export const DRAFT_UI_READY_FORCE_MS = 45000;
 const AI_LOBBY_KEY_TTL_SEC = 7200;
-const DRAFT_DISCONNECT_GRACE_MS = 60000;
+const DRAFT_DISCONNECT_GRACE_MS = 30000;
 // Disconnect/pause state TTL. Gates the grace-recovery "who is disconnected"
 // check, so it must persist until the durable grace timer actually runs — which
 // can be delayed by a redeploy / scheduler lag. Sized to match the grace marker.
@@ -65,13 +67,24 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
-const DRAFT_INITIAL_PRESENCE_TOLERANCE_MS = 6000;
 // How long after a disconnect to re-check whether the player still has a live
 // socket in the lobby room. Must exceed the socket.io ping timeout so a zombie
 // socket has provably died by the time the re-check runs — anything still
 // connected then is a real presence (the disconnect was a ghost socket).
 const DRAFT_PRESENCE_RECHECK_MS = 12_000;
 const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
+const draftReadyGates = createReadyGateRegistry<number>();
+const openDraftReadyGateTokens = new Map<string, number>();
+const begunDraftTurns = new Set<string>();
+const draftReadyGateStates = new Map<string, {
+  readyUserIds: Set<string>;
+  waitingUserIds: string[];
+  forceCancelAt: string;
+}>();
+
+function draftTurnKey(lobbyId: string, banCount: number): string {
+  return `${lobbyId}:${banCount}`;
+}
 
 function scheduleDraftPresenceRecheck(
   lobbyId: string,
@@ -99,6 +112,10 @@ export function resetDraftRuntimeState(): void {
     clearTimeout(timer);
   }
   draftPresenceRecheckTimers.clear();
+  draftReadyGates.reset();
+  openDraftReadyGateTokens.clear();
+  begunDraftTurns.clear();
+  draftReadyGateStates.clear();
 }
 
 // Mutual-exclusion lock around draft completion → match creation. Completion is
@@ -181,30 +198,6 @@ async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): P
   return sockets.some((socket) => socket?.data?.user?.id === userId);
 }
 
-function armDraftTurnPresenceCheck(
-  io: QuizballServer,
-  lobbyId: string,
-  expectedUserId: string
-): void {
-  scheduleDraftPresenceRecheck(
-    lobbyId,
-    expectedUserId,
-    DRAFT_INITIAL_PRESENCE_TOLERANCE_MS,
-    async () => {
-      if (await getCurrentDraftActorId(lobbyId) !== expectedUserId) return;
-      const redis = getRedisClient();
-      if (redis && await redis.exists(draftPauseKey(lobbyId))) return;
-      if (await isDraftUserUiReady(lobbyId, expectedUserId, (await lobbiesRepo.listLobbyCategoryBans(lobbyId)).length)) return;
-
-      logger.info(
-        { lobbyId, userId: expectedUserId, toleranceMs: DRAFT_INITIAL_PRESENCE_TOLERANCE_MS },
-        'Draft turn player absent after initial ui_ready tolerance'
-      );
-      await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, expectedUserId, { knownDisconnected: true });
-    }
-  );
-}
-
 async function getRankedDraftAbortSignals(
   lobbyId: string,
   humanUserIds: string[]
@@ -276,7 +269,8 @@ async function abortRankedDraftBeforeMatchCreation(
     aiUserId?: string | null;
     banCount?: number | null;
     forceAtMs?: number | null;
-  } = {}
+  } = {},
+  notifyUserIds: string[] = humanUserIds
 ): Promise<void> {
   await lobbiesRepo.deleteLobby(lobby.id);
   const redis = getRedisClient();
@@ -301,10 +295,12 @@ async function abortRankedDraftBeforeMatchCreation(
       banCount: details.banCount ?? null,
       forceAtMs: details.forceAtMs ?? null,
     });
-    io.to(`user:${userId}`).emit('ranked:queue_left');
-    await userSessionGuardService.emitState(io, userId).catch((error) => {
-      logger.warn({ error, userId, lobbyId: lobby.id }, 'Failed to emit state after ranked draft abort');
-    });
+    if (notifyUserIds.includes(userId)) {
+      io.to(`user:${userId}`).emit('ranked:queue_left');
+      await userSessionGuardService.emitState(io, userId).catch((error) => {
+        logger.warn({ error, userId, lobbyId: lobby.id }, 'Failed to emit state after ranked draft abort');
+      });
+    }
   }
   logger.warn(
     { lobbyId: lobby.id, humanUserIds, reason, signals, ...details },
@@ -654,6 +650,12 @@ async function clearPendingAutoBanTimer(lobbyId: string): Promise<void> {
 }
 
 async function clearDraftTimers(lobbyId: string): Promise<void> {
+  draftReadyGates.clear(lobbyId);
+  openDraftReadyGateTokens.delete(lobbyId);
+  draftReadyGateStates.delete(lobbyId);
+  for (const key of begunDraftTurns) {
+    if (key.startsWith(`${lobbyId}:`)) begunDraftTurns.delete(key);
+  }
   await Promise.all([
     clearPendingAiBanTimer(lobbyId),
     clearPendingAutoBanTimer(lobbyId),
@@ -843,6 +845,102 @@ export function scheduleDraftAutoBan(
   );
 }
 
+async function beginDraftTurn(io: QuizballServer, lobbyId: string, banCount: number): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') return;
+  const redis = getRedisClient();
+  if (redis && await redis.exists(draftPauseKey(lobbyId))) return;
+
+  const [bans, members] = await Promise.all([
+    lobbiesRepo.listLobbyCategoryBans(lobbyId),
+    lobbiesRepo.listMembersWithUser(lobbyId),
+  ]);
+  if (bans.length !== banCount || members.length !== 2 || bans.length >= 2) return;
+
+  const aiUserId = lobby.mode === 'ranked' ? await resolveRankedAiUserId(lobbyId, members) : null;
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  const turnUserId = getNextActorId(members, bans, firstActorUserId);
+  const forceAtMs = Date.now() + DRAFT_AUTO_BAN_MS;
+  begunDraftTurns.add(draftTurnKey(lobbyId, banCount));
+  io.to(`lobby:${lobbyId}`).emit('draft:begin', { turnUserId, forceAtMs });
+
+  if (aiUserId && turnUserId === aiUserId) {
+    scheduleRankedAiBan(io, lobbyId, aiUserId);
+    return;
+  }
+  scheduleDraftAutoBan(io, lobbyId, { turnUserId, banCount });
+}
+
+export async function openDraftReadyGate(io: QuizballServer, lobbyId: string): Promise<void> {
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') return;
+  const [categories, bans, members] = await Promise.all([
+    lobbiesService.getLobbyCategories(lobbyId),
+    lobbiesRepo.listLobbyCategoryBans(lobbyId),
+    lobbiesRepo.listMembersWithUser(lobbyId),
+  ]);
+  if (categories.length === 0 || members.length !== 2 || bans.length >= 2) return;
+
+  const aiUserId = lobby.mode === 'ranked' ? await resolveRankedAiUserId(lobbyId, members) : null;
+  const humanUserIds = members
+    .filter((member) => member.user_id !== aiUserId)
+    .map((member) => member.user_id);
+  const banCount = bans.length;
+  const turnKey = draftTurnKey(lobbyId, banCount);
+  begunDraftTurns.delete(turnKey);
+  openDraftReadyGateTokens.set(lobbyId, banCount);
+  const gateState = {
+    readyUserIds: new Set<string>(),
+    waitingUserIds: humanUserIds,
+    forceCancelAt: new Date(Date.now() + harnessDelayMs(DRAFT_READY_GATE_CEILING_MS)).toISOString(),
+  };
+  draftReadyGateStates.set(lobbyId, gateState);
+  let timedOutMissingUserIds: string[] | null = null;
+
+  draftReadyGates.open({
+    scopeId: lobbyId,
+    token: banCount,
+    waitingUserIds: humanUserIds,
+    ceilingMs: harnessDelayMs(DRAFT_READY_GATE_CEILING_MS),
+    onTimeout: (missingUserIds) => {
+      timedOutMissingUserIds = missingUserIds;
+    },
+    dispatch: () => {
+      openDraftReadyGateTokens.delete(lobbyId);
+      draftReadyGateStates.delete(lobbyId);
+      if (timedOutMissingUserIds?.length) {
+        const presentUserIds = humanUserIds.filter((userId) => !timedOutMissingUserIds?.includes(userId));
+        void abortRankedDraftBeforeMatchCreation(
+          io,
+          lobby,
+          humanUserIds,
+          'draft_ready_gate_expired',
+          humanUserIds.map((userId) => ({
+            userId,
+            cancelled: false,
+            absentAfterGrace: timedOutMissingUserIds?.includes(userId) ?? false,
+          })),
+          { aiUserId, banCount },
+          presentUserIds
+        )
+          .then(() => clearDraftTimers(lobbyId))
+          .catch((error) => {
+            logger.error({ error, lobbyId, missingUserIds: timedOutMissingUserIds }, 'Failed to abort expired draft ready gate');
+          });
+        return;
+      }
+      begunDraftTurns.add(turnKey);
+      void beginDraftTurn(io, lobbyId, banCount);
+    },
+  });
+  io.to(`lobby:${lobbyId}`).emit('draft:waiting_for_ready', {
+    lobbyId,
+    readyUserIds: [],
+    waitingUserIds: humanUserIds,
+    forceCancelAt: gateState.forceCancelAt,
+  });
+}
+
 export async function scheduleDraftAutoBanForCurrentTurn(
   io: QuizballServer,
   lobbyId: string,
@@ -875,10 +973,6 @@ export async function scheduleDraftAutoBanForCurrentTurn(
       scheduleRankedAiBan(io, lobbyId, aiUserId);
     }
     return;
-  }
-
-  if (!isHarnessFastTimers()) {
-    armDraftTurnPresenceCheck(io, lobbyId, expectedUserId);
   }
 
   const uiReady = isHarnessFastTimers() || await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
@@ -1318,6 +1412,13 @@ export async function resumeActiveDraftTimers(
     return;
   }
 
+  if (openDraftReadyGateTokens.get(lobbyId) === bans.length) return;
+
+  if (options.restartTimers) {
+    await openDraftReadyGate(io, lobbyId);
+    return;
+  }
+
   const aiUserId = lobby.mode === 'ranked' ? await resolveRankedAiUserId(lobbyId, members) : null;
   const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
   const expectedUserId = getNextActorId(members, bans, firstActorUserId);
@@ -1368,6 +1469,39 @@ export const draftRealtimeService = {
     const aiUserId = lobby.mode === 'ranked'
       ? await resolveRankedAiUserId(lobbyId, members)
       : null;
+    const gateToken = openDraftReadyGateTokens.get(lobbyId);
+    if (gateToken === bans.length) {
+      if (socket.data.user.id === aiUserId) return;
+      if (payload.banCount !== undefined && payload.banCount !== bans.length) return;
+      if (payload.turnUserId) {
+        const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+        if (payload.turnUserId !== getNextActorId(members, bans, firstActorUserId)) return;
+      }
+      const gateState = draftReadyGateStates.get(lobbyId);
+      if (!gateState || gateState.readyUserIds.has(socket.data.user.id)) return;
+      gateState.readyUserIds.add(socket.data.user.id);
+      io.to(`lobby:${lobbyId}`).emit('draft:waiting_for_ready', {
+        lobbyId,
+        readyUserIds: [...gateState.readyUserIds],
+        waitingUserIds: gateState.waitingUserIds,
+        forceCancelAt: gateState.forceCancelAt,
+      });
+      if (!draftReadyGates.acknowledge(socket.data.user.id, lobbyId, gateToken)) return;
+      await markDraftUiReady(lobbyId, socket.data.user.id, bans.length);
+      trackDraftUiReady({
+        userId: socket.data.user.id,
+        lobbyId,
+        mode: lobby.mode,
+        banCount: bans.length,
+        socketId: socket.id,
+      });
+      logger.info(
+        { lobbyId, userId: socket.data.user.id, banCount: bans.length, socketId: socket.id, mode: lobby.mode },
+        'Draft UI ready'
+      );
+      return;
+    }
+    if (begunDraftTurns.has(draftTurnKey(lobbyId, bans.length))) return;
     const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
     const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (socket.data.user.id !== expectedUserId) {
@@ -1412,6 +1546,10 @@ export const draftRealtimeService = {
   ): Promise<void> {
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby || lobby.status !== 'active') return;
+
+    draftReadyGates.clear(lobbyId);
+    openDraftReadyGateTokens.delete(lobbyId);
+    draftReadyGateStates.delete(lobbyId);
 
     const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
     const sameUserSockets = sockets.filter((socket) =>
@@ -1547,7 +1685,7 @@ export const draftRealtimeService = {
       // already makes a stray firing a noop, but cancelling avoids the wasted poll.
       await cancelRealtimeTimer('draft_grace_expiry', lobbyId);
       io.to(`lobby:${lobbyId}`).emit('draft:resume', { lobbyId });
-      await resumeActiveDraftTimers(io, lobbyId, { restartTimers: true });
+      await openDraftReadyGate(io, lobbyId);
       logger.info({ lobbyId, userId }, 'Draft resumed after player reconnected');
     }
   },
@@ -1594,6 +1732,10 @@ export const draftRealtimeService = {
     }
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (openDraftReadyGateTokens.get(lobbyId) === bans.length) {
+      socket.emit('error', { code: 'DRAFT_NOT_READY', message: 'Waiting for all players to load the draft' });
+      return;
+    }
     const members = await lobbiesRepo.listMembersWithUser(lobbyId);
     const aiUserId = lobby.mode === 'ranked'
       ? await resolveRankedAiUserId(lobbyId, members)

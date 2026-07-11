@@ -170,6 +170,7 @@ class OpenRouterTranslationProvider {
         { role: 'user', content: userMessage },
       ],
       temperature: 0.3,
+      max_tokens: 8000, // enough for a 20-item batch; without it the response truncated mid-JSON and the batch failed to parse
       response_format: { type: 'json_object' },
     };
 

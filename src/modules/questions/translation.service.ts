@@ -11,7 +11,7 @@ import {
 } from './translation.provider.js';
 import { questionPayloadSchema, type QuestionPayload } from './questions.schemas.js';
 
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 20; // was 100 — long clue_chain/imposter prompts truncated the JSON response mid-string, failing the whole batch to parse
 const TARGET_LOCALE = 'ka';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

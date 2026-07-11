@@ -96,11 +96,13 @@ export async function rejoinActiveDraftLobbyOnConnect(
       lobbyId: newestLobby.id,
       categories,
       turnUserId,
+      forceAtMs: null,
     });
     for (const ban of bans) {
       socket.emit('draft:banned', {
         actorId: ban.user_id,
         categoryId: ban.category_id,
+        forceAtMs: null,
       });
     }
 
@@ -175,6 +177,13 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
 
   if (lobby.status !== 'waiting') {
     return;
+  }
+
+  try {
+    const { markDraftPlayerDisconnected } = await import('./draft-realtime.service.js');
+    await markDraftPlayerDisconnected(lobbyId, userId);
+  } catch (error) {
+    logger.warn({ error, lobbyId, userId }, 'Failed to mark waiting-lobby draft disconnect');
   }
 
   setTimeout(async () => {

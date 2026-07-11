@@ -95,6 +95,7 @@ export interface DraftState {
   lobbyId: string;
   categories: DraftCategory[];
   turnUserId: string;
+  forceAtMs: number | null;
   /**
    * Info flag: the candidates were selected with recent-category filtering
    * (recently played categories of the matched players were excluded). The
@@ -1155,7 +1156,7 @@ export interface ServerToClientEvents {
   'lobby:challenge_received': (data: LobbyChallengeInvitePayload) => void;
   'lobby:challenge_status': (data: LobbyChallengeStatusPayload) => void;
   'draft:start': (data: DraftState) => void;
-  'draft:banned': (data: { actorId: string; categoryId: string }) => void;
+  'draft:banned': (data: { actorId: string; categoryId: string; forceAtMs: number | null }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;

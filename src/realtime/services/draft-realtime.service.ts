@@ -998,7 +998,10 @@ export async function runDraftAutoBan(
       logger.warn({ error, lobbyId, userId: expectedUserId }, 'Failed to insert automatic draft ban');
     }
 
-    const nextForceAtMs = inserted && bans.length + 1 < 2 ? Date.now() + DRAFT_UI_READY_FORCE_MS : null;
+    const nextTurnIsRankedAi = lobby.mode === 'ranked' && aiUserId !== null;
+    const nextForceAtMs = inserted && bans.length + 1 < 2 && !nextTurnIsRankedAi
+      ? Date.now() + DRAFT_UI_READY_FORCE_MS
+      : null;
     if (inserted) {
       io.to(`lobby:${lobbyId}`).emit('draft:banned', {
         actorId: expectedUserId,

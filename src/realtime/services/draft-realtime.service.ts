@@ -65,12 +65,34 @@ const DRAFT_GRACE_TTL_SEC = 600;
 // Auto-expires so a crashed handler can't wedge recovery; long enough to cover a
 // single recovery pass.
 const DRAFT_GRACE_LOCK_TTL_SEC = 30;
+const DRAFT_INITIAL_PRESENCE_TOLERANCE_MS = 2500;
 // How long after a disconnect to re-check whether the player still has a live
 // socket in the lobby room. Must exceed the socket.io ping timeout so a zombie
 // socket has provably died by the time the re-check runs — anything still
 // connected then is a real presence (the disconnect was a ghost socket).
 const DRAFT_PRESENCE_RECHECK_MS = 12_000;
 const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
+
+function scheduleDraftPresenceRecheck(
+  lobbyId: string,
+  userId: string,
+  delayMs: number,
+  recheckPresence: () => Promise<void>
+): void {
+  const timerKey = `${lobbyId}:${userId}`;
+  const existing = draftPresenceRecheckTimers.get(timerKey);
+  if (existing) clearTimeout(existing);
+
+  const recheck = setTimeout(() => {
+    if (draftPresenceRecheckTimers.get(timerKey) !== recheck) return;
+    draftPresenceRecheckTimers.delete(timerKey);
+    void recheckPresence().catch((error) => {
+      logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
+    });
+  }, harnessDelayMs(delayMs));
+  recheck.unref?.();
+  draftPresenceRecheckTimers.set(timerKey, recheck);
+}
 
 export function resetDraftRuntimeState(): void {
   for (const timer of draftPresenceRecheckTimers.values()) {
@@ -131,6 +153,35 @@ async function isDraftUserUiReady(lobbyId: string, userId: string, banCount: num
   const redis = getRedisClient();
   if (!redis?.isOpen) return true;
   return (await redis.exists(draftUiReadyKey(lobbyId, userId, banCount))) === 1;
+}
+
+async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): Promise<boolean> {
+  const sockets = await io.in(`user:${userId}`).fetchSockets();
+  return sockets.some((socket) => socket?.data?.user?.id === userId);
+}
+
+function armDraftTurnPresenceCheck(
+  io: QuizballServer,
+  lobbyId: string,
+  expectedUserId: string
+): void {
+  scheduleDraftPresenceRecheck(
+    lobbyId,
+    expectedUserId,
+    DRAFT_INITIAL_PRESENCE_TOLERANCE_MS,
+    async () => {
+      if (await getCurrentDraftActorId(lobbyId) !== expectedUserId) return;
+      const redis = getRedisClient();
+      if (redis && await redis.exists(draftPauseKey(lobbyId))) return;
+      if (await hasLiveAuthenticatedSocket(io, expectedUserId)) return;
+
+      logger.info(
+        { lobbyId, userId: expectedUserId, toleranceMs: DRAFT_INITIAL_PRESENCE_TOLERANCE_MS },
+        'Draft turn player absent after initial presence tolerance'
+      );
+      await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, expectedUserId);
+    }
+  );
 }
 
 async function getRankedDraftAbortSignals(
@@ -740,6 +791,8 @@ interface ScheduleDraftAutoBanOptions {
   delayMs?: number;
   requireUiReady?: boolean;
   forceAtMs?: number | null;
+  turnUserId?: string;
+  banCount?: number;
 }
 
 export function scheduleDraftAutoBan(
@@ -753,6 +806,8 @@ export function scheduleDraftAutoBan(
     lobbyId,
     requireUiReady: options.requireUiReady,
     forceAtMs: options.forceAtMs ?? null,
+    turnUserId: options.turnUserId,
+    banCount: options.banCount,
   }).catch((error) => {
     logger.error({ error, lobbyId, delayMs: autoBanMs }, 'Failed to schedule draft auto-ban timer');
   });
@@ -801,9 +856,11 @@ export async function scheduleDraftAutoBanForCurrentTurn(
     return;
   }
 
+  armDraftTurnPresenceCheck(io, lobbyId, expectedUserId);
+
   const uiReady = isHarnessFastTimers() || await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
   if (uiReady) {
-    scheduleDraftAutoBan(io, lobbyId);
+    scheduleDraftAutoBan(io, lobbyId, { turnUserId: expectedUserId, banCount: bans.length });
     return;
   }
 
@@ -812,6 +869,8 @@ export async function scheduleDraftAutoBanForCurrentTurn(
     delayMs: Math.max(0, forceAtMs - Date.now()),
     requireUiReady: true,
     forceAtMs,
+    turnUserId: expectedUserId,
+    banCount: bans.length,
   });
   logger.info({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
 }
@@ -819,7 +878,12 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 export async function runDraftAutoBan(
   io: QuizballServer,
   lobbyId: string,
-  options: { requireUiReady?: boolean; forceAtMs?: number | null } = {}
+  options: {
+    requireUiReady?: boolean;
+    forceAtMs?: number | null;
+    turnUserId?: string;
+    banCount?: number;
+  } = {}
 ): Promise<void> {
   try {
     const redis = getRedisClient();
@@ -851,9 +915,24 @@ export async function runDraftAutoBan(
     const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
     const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (bans.some((ban) => ban.user_id === expectedUserId)) return;
+    if (
+      (options.turnUserId !== undefined && options.turnUserId !== expectedUserId)
+      || (options.banCount !== undefined && options.banCount !== bans.length)
+    ) {
+      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+      return;
+    }
     const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
     if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
+      if (!await hasLiveAuthenticatedSocket(io, expectedUserId)) {
+        await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, expectedUserId);
+        return;
+      }
       const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
+      if (options.requireUiReady && uiReady) {
+        await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+        return;
+      }
       if (!uiReady) {
         const forceAtMs = options.forceAtMs ?? null;
         if (forceAtMs === null) {
@@ -1377,12 +1456,11 @@ export const draftRealtimeService = {
       // remains, the "disconnect" was a short-lived ghost socket dying next to
       // a healthy connection (page-transition duplicate), and the draft should
       // resume instead of freezing for the full grace and aborting.
-      const timerKey = `${lobbyId}:${userId}`;
-      const existing = draftPresenceRecheckTimers.get(timerKey);
-      if (existing) clearTimeout(existing);
-      const recheck = setTimeout(() => {
-        draftPresenceRecheckTimers.delete(timerKey);
-        void (async () => {
+      scheduleDraftPresenceRecheck(
+        lobbyId,
+        userId,
+        DRAFT_PRESENCE_RECHECK_MS,
+        async () => {
           const liveSockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
           const stillPresent = liveSockets.some((socket) => socket.data.user.id === userId);
           if (!stillPresent) {
@@ -1397,12 +1475,8 @@ export const draftRealtimeService = {
             'Draft presence re-check: live socket survived ping timeout; resuming draft'
           );
           await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
-        })().catch((error) => {
-          logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
-        });
-      }, harnessDelayMs(DRAFT_PRESENCE_RECHECK_MS));
-      recheck.unref?.();
-      draftPresenceRecheckTimers.set(timerKey, recheck);
+        }
+      );
       logger.info(
         {
           lobbyId,

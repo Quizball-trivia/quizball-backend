@@ -288,7 +288,7 @@ export async function completePossessionMatch(
           const resultVersion = await finalizeRankedNoContest({
             matchId,
             roster: decisionInput.map((player) => ({ user_id: player.user_id })),
-            statePayload: (cache?.statePayload ?? match.state_payload ?? {}) as Record<string, unknown>,
+            statePayload: completionState as unknown as Record<string, unknown>,
             roundsPlayed: cache?.currentQIndex ?? match.current_q_index,
           });
           logger.info(

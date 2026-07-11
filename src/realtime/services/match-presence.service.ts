@@ -65,12 +65,12 @@ function socketUserId(socket: unknown): string | null {
 export async function fetchUserRoomSockets(
   io: QuizballServer,
   userId: string
-): Promise<unknown[]> {
+): Promise<unknown[] | null> {
   try {
     return await io.in(`user:${userId}`).fetchSockets();
   } catch (error) {
     logger.warn({ error, userId }, 'Failed to inspect user room sockets for presence resolution');
-    return [];
+    return null;
   }
 }
 
@@ -155,7 +155,9 @@ export async function resolveMatchPresence<Player extends MatchPresencePlayer>(
       }))
     );
     for (const result of results) {
-      if (result.sockets.length > 0) userRoomSocketUserIds.add(result.userId);
+      if (result.sockets === null || result.sockets.length > 0) {
+        userRoomSocketUserIds.add(result.userId);
+      }
     }
   }
 

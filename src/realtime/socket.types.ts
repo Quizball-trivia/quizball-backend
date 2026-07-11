@@ -105,6 +105,18 @@ export interface DraftState {
   recentFilterApplied?: boolean;
 }
 
+export interface DraftBeginPayload {
+  turnUserId: string;
+  forceAtMs: number;
+}
+
+export interface DraftWaitingForReadyPayload {
+  lobbyId: string;
+  readyUserIds: string[];
+  waitingUserIds: string[];
+  forceCancelAt: string;
+}
+
 export interface DraftOpponentDisconnectedPayload {
   lobbyId: string;
   opponentId: string;

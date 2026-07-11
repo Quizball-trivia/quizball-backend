@@ -30,6 +30,7 @@ const pauseDraftForDisconnectedPlayerMock = vi.fn();
 const resumeDraftForReconnectedPlayerMock = vi.fn();
 const resumeActiveDraftTimersMock = vi.fn();
 const scheduleDraftAutoBanForCurrentTurnMock = vi.fn();
+const openDraftReadyGateMock = vi.fn();
 const isDraftPlayerMarkedDisconnectedMock = vi.fn();
 const pauseDraftForDisconnectedPlayerAtStartMock = vi.fn();
 const markDraftPlayerDisconnectedMock = vi.fn();
@@ -118,6 +119,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 vi.mock('../../src/realtime/services/draft-realtime.service.js', () => ({
   resumeActiveDraftTimers: (...args: unknown[]) => resumeActiveDraftTimersMock(...args),
   scheduleDraftAutoBanForCurrentTurn: (...args: unknown[]) => scheduleDraftAutoBanForCurrentTurnMock(...args),
+  openDraftReadyGate: (...args: unknown[]) => openDraftReadyGateMock(...args),
   isDraftPlayerMarkedDisconnected: (...args: unknown[]) => isDraftPlayerMarkedDisconnectedMock(...args),
   pauseDraftForDisconnectedPlayerAtStart: (...args: unknown[]) => pauseDraftForDisconnectedPlayerAtStartMock(...args),
   markDraftPlayerDisconnected: (...args: unknown[]) => markDraftPlayerDisconnectedMock(...args),
@@ -240,6 +242,9 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       forceAtMs: null,
       recentFilterApplied: true,
     }));
+    await vi.waitFor(() => {
+      expect(openDraftReadyGateMock).toHaveBeenCalledWith(io, 'lobby-1');
+    });
   });
 
   it('starts paused and emits the disconnect overlay when a member was already marked disconnected', async () => {

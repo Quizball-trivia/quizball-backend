@@ -182,7 +182,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         logger.warn({ err, lobbyId }, 'draft_started analytics failed');
       }
       void import('./draft-realtime.service.js')
-        .then(async ({ isDraftPlayerMarkedDisconnected, pauseDraftForDisconnectedPlayerAtStart, scheduleDraftAutoBanForCurrentTurn }) => {
+        .then(async ({ isDraftPlayerMarkedDisconnected, openDraftReadyGate, pauseDraftForDisconnectedPlayerAtStart }) => {
           const draftMembers = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
           const disconnectedMember = (await Promise.all(
             draftMembers.map(async (member) => ({
@@ -197,7 +197,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
         })
         .catch((error) => {
-          logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
+          logger.warn({ error, lobbyId }, 'Failed to open draft UI-ready gate');
         });
       logger.info(
         {

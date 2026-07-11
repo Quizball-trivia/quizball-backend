@@ -196,16 +196,15 @@ async function getDraftReadyState(
 async function getOrCreateDraftUiReadyDeadline(lobbyId: string, banCount: number): Promise<number> {
   const redis = getRedisClient();
   const key = draftUiReadyDeadlineKey(lobbyId, banCount);
+  const candidate = Date.now() + harnessDelayMs(DRAFT_UI_READY_FORCE_MS);
   if (redis?.isOpen) {
-    const existing = Number(await redis.get(key));
-    if (Number.isFinite(existing) && existing > Date.now()) return existing;
+    // SET NX GET makes deadline creation atomic across replicas: the first
+    // writer wins and every concurrent caller reads the same value.
+    const prior = await redis.set(key, String(candidate), { NX: true, GET: true, EX: DRAFT_UI_READY_TTL_SEC });
+    const existing = Number(prior);
+    if (prior !== null && Number.isFinite(existing) && existing > Date.now()) return existing;
   }
-
-  const deadline = Date.now() + harnessDelayMs(DRAFT_UI_READY_FORCE_MS);
-  if (redis?.isOpen) {
-    await redis.set(key, String(deadline), { EX: DRAFT_UI_READY_TTL_SEC });
-  }
-  return deadline;
+  return candidate;
 }
 
 async function getRankedDraftAbortSignals(

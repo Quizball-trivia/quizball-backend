@@ -54,3 +54,4 @@ game-regression/artifacts/
 # Staging harness — local secrets + report bundles (never commit)
 game-regression/staging/.env.staging
 game-regression/staging/reports/
+scripts/chaos/reports/

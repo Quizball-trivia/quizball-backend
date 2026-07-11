@@ -1,6 +1,6 @@
 import { logger } from '../core/logger.js';
-import type { QuizballServer } from './socket-server.js';
-import type { MatchUiReadyPhase } from './socket.types.js';
+import type { QuizballServer, QuizballSocket } from './socket-server.js';
+import type { MatchUiReadyPhase, MatchWaitingForReadyPayload } from './socket.types.js';
 
 export type MatchUiReadyDispatchReason = 'all_ready' | 'timeout' | 'empty';
 
@@ -20,8 +20,8 @@ function gateKey(matchId: string, phase: MatchUiReadyPhase): string {
   return `${phase}:${matchId}`;
 }
 
-function emitGateState(io: QuizballServer, gate: MatchUiReadyGate): void {
-  io.to(`match:${gate.matchId}`).emit('match:waiting_for_ready', {
+function buildGatePayload(gate: MatchUiReadyGate): MatchWaitingForReadyPayload {
+  return {
     matchId: gate.matchId,
     phase: gate.phase,
     readyCount: gate.readyUserIds.size,
@@ -30,7 +30,11 @@ function emitGateState(io: QuizballServer, gate: MatchUiReadyGate): void {
     waitingUserIds: [...gate.waitingUserIds],
     forceStartsAt: new Date(gate.forceStartsAtMs).toISOString(),
     serverNow: new Date().toISOString(),
-  });
+  };
+}
+
+function emitGateState(io: QuizballServer, gate: MatchUiReadyGate): void {
+  io.to(`match:${gate.matchId}`).emit('match:waiting_for_ready', buildGatePayload(gate));
 }
 
 function closeGate(
@@ -104,6 +108,17 @@ export function emitMatchUiReadyGateState(
   const gate = gates.get(gateKey(matchId, phase));
   if (!gate) return;
   emitGateState(io, gate);
+}
+
+export function emitMatchUiReadyGateStateToSocket(
+  socket: QuizballSocket,
+  matchId: string,
+  phase: MatchUiReadyPhase
+): boolean {
+  const gate = gates.get(gateKey(matchId, phase));
+  if (!gate) return false;
+  socket.emit('match:waiting_for_ready', buildGatePayload(gate));
+  return true;
 }
 
 export function acknowledgeMatchUiReady(

@@ -1546,6 +1546,10 @@ async function findReconnectPendingUsers(
         return;
       }
       const userRoomSockets = await fetchUserRoomSockets(io, userId);
+      if (userRoomSockets === null) {
+        pending.add(userId);
+        return;
+      }
       const hasFreshUserSocket = userRoomSockets.some(
         (socket) => socketAuthenticatedAs(socket, userId) && (socketConnectedAt(socket) ?? 0) >= markerMs
       );

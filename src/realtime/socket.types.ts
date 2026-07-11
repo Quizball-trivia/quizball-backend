@@ -105,9 +105,10 @@ export interface DraftState {
   recentFilterApplied?: boolean;
 }
 
-export interface DraftBeginPayload {
-  turnUserId: string;
-  forceAtMs: number;
+export interface DraftOpponentDisconnectedPayload {
+  lobbyId: string;
+  opponentId: string;
+  graceMs: number;
 }
 
 export interface DraftWaitingForReadyPayload {
@@ -117,10 +118,10 @@ export interface DraftWaitingForReadyPayload {
   forceCancelAt: string;
 }
 
-export interface DraftOpponentDisconnectedPayload {
+export interface DraftBeginPayload {
   lobbyId: string;
-  opponentId: string;
-  graceMs: number;
+  turnUserId: string;
+  forceAtMs: number;
 }
 
 export interface DraftResumePayload {

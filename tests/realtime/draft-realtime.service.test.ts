@@ -154,7 +154,7 @@ function createIoMock() {
     { id: 'socket-u2', data: { user: { id: 'u2' }, lobbyId: 'l1' }, leave: vi.fn() },
   ]);
   const inMock = vi.fn(() => ({ fetchSockets }));
-  return { io: { to, in: inMock } as unknown as QuizballServer, emit, fetchSockets, to };
+  return { io: { to, in: inMock } as unknown as QuizballServer, emit, fetchSockets };
 }
 
 function createSocketMock(userId: string, lobbyId: string): QuizballSocket {
@@ -266,7 +266,7 @@ describe('draftRealtimeService', () => {
     expect(emit).toHaveBeenCalledWith('draft:banned', expect.objectContaining({
       actorId: 'u1',
       categoryId: 'cat-a',
-      forceAtMs: expect.any(Number),
+      forceAtMs: null,
     }));
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
   });
@@ -470,12 +470,12 @@ describe('draftRealtimeService', () => {
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(145_000),
+        new Date(110_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
           requireUiReady: true,
-          forceAtMs: 145_000,
+          forceAtMs: 110_000,
           turnUserId: 'u1',
           banCount: 0,
         }
@@ -487,20 +487,10 @@ describe('draftRealtimeService', () => {
 
   it('arms the normal human auto-ban deadline after draft:ui_ready', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io } = createIoMock();
+    const { io, emit } = createIoMock();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(200_000);
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
-    redisClientMock = {
-      get: redisGetMock,
-      set: redisSetMock,
-      exists: redisExistsMock,
-      del: redisDelMock,
-      getDel: redisGetDelMock,
-      isOpen: true,
-    };
-    redisExistsMock.mockImplementation(async (key: string) => (
-      key === 'draft:ui_ready:l1:u1:0' ? 1 : 0
-    ));
+    wireStatefulRedis(['draft:ui_ready:l1:u2:0']);
 
     try {
       await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), {
@@ -513,16 +503,21 @@ describe('draftRealtimeService', () => {
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(215_000),
+        new Date(216_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
           requireUiReady: undefined,
-          forceAtMs: null,
+          forceAtMs: 216_000,
           turnUserId: 'u1',
           banCount: 0,
         }
       );
+      expect(emit).toHaveBeenCalledWith('draft:begin', {
+        lobbyId: 'l1',
+        turnUserId: 'u1',
+        forceAtMs: 216_000,
+      });
     } finally {
       nowSpy.mockRestore();
     }
@@ -533,17 +528,11 @@ describe('draftRealtimeService', () => {
     const { io } = createIoMock();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(144_000);
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
-    redisClientMock = {
-      get: redisGetMock,
-      set: redisSetMock,
-      exists: redisExistsMock,
-      del: redisDelMock,
-      getDel: redisGetDelMock,
-      isOpen: true,
-    };
-    redisExistsMock.mockImplementation(async (key: string) => (
-      key === 'draft:ui_ready:l1:u1:0' ? 1 : 0
-    ));
+    wireStatefulRedis([
+      'draft:ui_ready:l1:u1:0',
+      'draft:ui_ready:l1:u2:0',
+      'draft:ui_ready_deadline:l1:0',
+    ]);
 
     try {
       await runDraftAutoBan(io, 'l1', {
@@ -557,12 +546,12 @@ describe('draftRealtimeService', () => {
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(159_000),
+        new Date(160_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
           requireUiReady: undefined,
-          forceAtMs: null,
+          forceAtMs: 160_000,
           turnUserId: 'u1',
           banCount: 0,
         }
@@ -602,12 +591,12 @@ describe('draftRealtimeService', () => {
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(185_000),
+        new Date(150_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
           requireUiReady: true,
-          forceAtMs: 185_000,
+          forceAtMs: 150_000,
           turnUserId: 'u2',
           banCount: 1,
         }
@@ -617,9 +606,9 @@ describe('draftRealtimeService', () => {
     }
   });
 
-  it('re-gates the current turn when a paused draft resumes', async () => {
-    const { draftRealtimeService, resumeActiveDraftTimers } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io, emit } = createIoMock();
+  it('re-anchors the current turn force deadline when a paused draft resumes', async () => {
+    const { resumeActiveDraftTimers } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(500_000);
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
     cancelRealtimeTimerMock.mockResolvedValue(undefined);
@@ -637,25 +626,15 @@ describe('draftRealtimeService', () => {
       await resumeActiveDraftTimers(io, 'l1', { restartTimers: true });
 
       expect(cancelRealtimeTimerMock).toHaveBeenCalledWith('draft_auto_ban', 'l1');
-      expect(scheduleRealtimeTimerMock).not.toHaveBeenCalledWith('draft_auto_ban', expect.anything(), expect.anything(), expect.anything());
-      await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), {
-        lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
-      });
-      await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
-        lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
-      });
-      await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('draft:begin', {
-        turnUserId: 'u1', forceAtMs: 515_000,
-      }));
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(515_000),
+        new Date(510_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
-          requireUiReady: undefined,
-          forceAtMs: null,
+          requireUiReady: true,
+          forceAtMs: 510_000,
           turnUserId: 'u1',
           banCount: 0,
         }
@@ -665,19 +644,11 @@ describe('draftRealtimeService', () => {
     }
   });
 
-  it('ignores draft:ui_ready from a player who is not the current draft actor', async () => {
+  it('accepts draft:ui_ready from the non-actor because every human must pass the gate', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io } = createIoMock();
+    const { io, emit } = createIoMock();
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
-    redisClientMock = {
-      get: redisGetMock,
-      set: redisSetMock,
-      exists: redisExistsMock,
-      del: redisDelMock,
-      getDel: redisGetDelMock,
-      isOpen: true,
-    };
-    redisExistsMock.mockResolvedValue(0);
+    wireStatefulRedis();
 
     await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
       lobbyId: 'l1',
@@ -685,13 +656,12 @@ describe('draftRealtimeService', () => {
       banCount: 0,
     });
 
-    expect(redisSetMock).not.toHaveBeenCalledWith(expect.stringContaining('draft:ui_ready'), expect.anything(), expect.anything());
-    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalledWith(
-      'draft_auto_ban',
-      expect.anything(),
-      expect.anything(),
-      expect.anything()
-    );
+    expect(redisSetMock).toHaveBeenCalledWith('draft:ui_ready:l1:u2:0', expect.any(String), { EX: 600 });
+    expect(emit).toHaveBeenCalledWith('draft:waiting_for_ready', expect.objectContaining({
+      lobbyId: 'l1',
+      readyUserIds: ['u2'],
+      waitingUserIds: ['u1'],
+    }));
   });
 
   it('re-arms instead of auto-banning when a UI-ready gated timer fires before its force deadline', async () => {
@@ -765,12 +735,12 @@ describe('draftRealtimeService', () => {
       expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
         'draft_auto_ban',
         'l1',
-        new Date(345_000),
+        new Date(310_000),
         {
           kind: 'draft_auto_ban',
           lobbyId: 'l1',
           requireUiReady: true,
-          forceAtMs: 345_000,
+          forceAtMs: 310_000,
           turnUserId: 'u1',
           banCount: 0,
         }
@@ -905,7 +875,7 @@ describe('draftRealtimeService', () => {
         getDel: redisGetDelMock,
         isOpen: false,
       };
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(16_000);
 
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledTimes(1);
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', expect.any(String));
@@ -1057,99 +1027,106 @@ describe('draftRealtimeService', () => {
     });
   });
 
-  it('hard-cancels as no-contest when a human misses the draft ready-gate ceiling', async () => {
+  it('uses the UI-ready gate rather than socket liveness when a player has not arrived', async () => {
     vi.useFakeTimers();
-    const { draftRealtimeService, openDraftReadyGate } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io, emit, to } = createIoMock();
+    const { scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit, fetchSockets } = createIoMock();
     getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'ranked', status: 'active', host_user_id: 'u1' });
     wireStatefulRedis();
-    await openDraftReadyGate(io, 'l1');
-    await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
-      lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
-    });
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    fetchSockets.mockResolvedValue([
+      { id: 'socket-u2', data: { user: { id: 'u2' }, lobbyId: 'l1' }, leave: vi.fn() },
+    ]);
+
+    await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
     await vi.advanceTimersByTimeAsync(10_000);
 
-    await vi.waitFor(() => expect(deleteLobbyMock).toHaveBeenCalledWith('l1'));
-    expect(redisSetMock).not.toHaveBeenCalledWith('draft:pause:l1', expect.any(String), expect.anything());
-    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalledWith('draft_grace_expiry', expect.anything(), expect.anything(), expect.anything());
-    expect(emit).toHaveBeenCalledWith('ranked:queue_left');
-    expect(to).toHaveBeenCalledWith('user:u2');
-    expect(to).not.toHaveBeenCalledWith('user:u1');
-  });
-
-  it('begins only after all humans ack the initial ready gate', async () => {
-    vi.useFakeTimers();
-    const { draftRealtimeService, openDraftReadyGate } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io, emit } = createIoMock();
-    wireStatefulRedis();
-    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
-
-    await openDraftReadyGate(io, 'l1');
+    expect(redisSetMock).not.toHaveBeenCalledWith('draft:disconnect:l1:u1', expect.any(String), { EX: 600 });
+    expect(redisSetMock).not.toHaveBeenCalledWith('draft:pause:l1', expect.any(String), { EX: 600 });
     expect(emit).toHaveBeenCalledWith('draft:waiting_for_ready', {
       lobbyId: 'l1',
       readyUserIds: [],
       waitingUserIds: ['u1', 'u2'],
       forceCancelAt: expect.any(String),
     });
+    expect(emit).not.toHaveBeenCalledWith('draft:opponent_disconnected', expect.anything());
+  });
+
+  it('does not pause when the current player sends ui_ready within the initial tolerance', async () => {
+    vi.useFakeTimers();
+    const { draftRealtimeService, scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    wireStatefulRedis();
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+
+    await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+    await vi.advanceTimersByTimeAsync(2000);
     await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), {
       lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
     });
-    expect(emit).toHaveBeenCalledWith('draft:waiting_for_ready', {
-      lobbyId: 'l1',
-      readyUserIds: ['u1'],
-      waitingUserIds: ['u1', 'u2'],
-      forceCancelAt: expect.any(String),
-    });
-    expect(emit).not.toHaveBeenCalledWith('draft:begin', expect.anything());
-    await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
-      lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
-    });
-    expect(emit).toHaveBeenCalledWith('draft:waiting_for_ready', {
-      lobbyId: 'l1',
-      readyUserIds: ['u1', 'u2'],
-      waitingUserIds: ['u1', 'u2'],
-      forceCancelAt: expect.any(String),
-    });
+    await vi.advanceTimersByTimeAsync(4000);
 
     expect(redisSetMock).not.toHaveBeenCalledWith('draft:pause:l1', expect.any(String), expect.anything());
     expect(emit).not.toHaveBeenCalledWith('draft:opponent_disconnected', expect.anything());
-    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('draft:begin', {
-      turnUserId: 'u1', forceAtMs: expect.any(Number),
-    }));
   });
 
-  it('requires only the human ack for a ranked-vs-AI ready gate', async () => {
-    const { draftRealtimeService, openDraftReadyGate } = await import('../../src/realtime/services/draft-realtime.service.js');
+  it('starts a fresh full turn when the initially absent player acks within the gate', async () => {
+    vi.useFakeTimers();
+    const { draftRealtimeService, scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io, emit } = createIoMock();
     getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'ranked', status: 'active', host_user_id: 'u1' });
-    listMembersWithUserMock.mockResolvedValue([{ user_id: 'u1' }, { user_id: 'ai-1' }]);
-    redisClientMock = null;
+    wireStatefulRedis();
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    cancelRealtimeTimerMock.mockResolvedValue(undefined);
 
-    await openDraftReadyGate(io, 'l1');
+    await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+    await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), {
+      lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
+    });
+    await vi.advanceTimersByTimeAsync(7000);
+    const ackAtMs = Date.now();
     await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), {
       lobbyId: 'l1', turnUserId: 'u1', banCount: 0,
     });
 
-    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('draft:begin', {
-      turnUserId: 'u1', forceAtMs: expect.any(Number),
-    }));
+    expect(emit).toHaveBeenCalledWith('draft:begin', {
+      lobbyId: 'l1',
+      turnUserId: 'u1',
+      forceAtMs: ackAtMs + 16_000,
+    });
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+      'draft_auto_ban',
+      'l1',
+      new Date(ackAtMs + 16_000),
+      expect.objectContaining({
+        kind: 'draft_auto_ban',
+        lobbyId: 'l1',
+        turnUserId: 'u1',
+        banCount: 0,
+      })
+    );
   });
 
-  it('ignores late ready acks after draft:begin', async () => {
-    const { draftRealtimeService, openDraftReadyGate } = await import('../../src/realtime/services/draft-realtime.service.js');
-    const { io, emit } = createIoMock();
+  it('aborts a ranked draft as no-contest when the ready gate expires', async () => {
+    vi.useFakeTimers();
+    const { runDraftAutoBan, scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'ranked', status: 'active', host_user_id: 'u1' });
+    wireStatefulRedis();
     scheduleRealtimeTimerMock.mockResolvedValue(undefined);
 
-    await openDraftReadyGate(io, 'l1');
-    await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), { lobbyId: 'l1', banCount: 0 });
-    await draftRealtimeService.handleUiReady(io, createSocketMock('u2', 'l1'), { lobbyId: 'l1', banCount: 0 });
-    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('draft:begin', expect.anything()));
-    scheduleRealtimeTimerMock.mockClear();
+    await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+    await vi.advanceTimersByTimeAsync(10_000);
+    await runDraftAutoBan(io, 'l1', {
+      requireUiReady: true,
+      forceAtMs: Date.now() - 1,
+      turnUserId: 'u1',
+      banCount: 0,
+    });
 
-    await draftRealtimeService.handleUiReady(io, createSocketMock('u1', 'l1'), { lobbyId: 'l1', banCount: 0 });
-
-    expect(scheduleRealtimeTimerMock).not.toHaveBeenCalled();
-    expect(emit.mock.calls.filter(([event]) => event === 'draft:begin')).toHaveLength(1);
+    expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
+    expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
+    expect(deleteLobbyMock).toHaveBeenCalledWith('l1');
   });
 
   it('pauses draft when only an older same-user socket remains in the lobby room', async () => {

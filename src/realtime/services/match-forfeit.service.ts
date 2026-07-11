@@ -264,7 +264,10 @@ export async function finalizeMatchAsForfeit(
       let penaltyApplied = false;
       let earlyForfeitCount = 0;
       try {
-        earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(params.forfeitingUserId);
+        earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(
+          params.forfeitingUserId,
+          params.matchId
+        );
       } catch (error) {
         logger.warn(
           { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },

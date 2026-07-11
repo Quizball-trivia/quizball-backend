@@ -290,7 +290,7 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     });
 
     expect(result.cancelledNoContest).toBe(true);
-    expect(bumpEarlyForfeitCountMock).toHaveBeenCalledWith(FORFEITER_ID);
+    expect(bumpEarlyForfeitCountMock).toHaveBeenCalledWith(FORFEITER_ID, MATCH_ID);
     expect(applyEarlyForfeitRpPenaltyMock).not.toHaveBeenCalled();
     expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
@@ -411,4 +411,5 @@ describe('finalizeMatchAsForfeit — early-forfeit abuse penalty', () => {
     expect(refundRankedTicketsMock).toHaveBeenCalledTimes(1);
     expect(refundRankedTicketsMock).toHaveBeenCalledWith([FORFEITER_ID, OPPONENT_ID]);
   });
+
 });

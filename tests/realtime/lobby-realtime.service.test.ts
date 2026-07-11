@@ -237,7 +237,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
       turnUserId: 'u1',
-      forceAtMs: expect.any(Number),
+      forceAtMs: null,
       recentFilterApplied: true,
     }));
   });

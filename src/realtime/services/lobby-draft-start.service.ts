@@ -160,12 +160,13 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       }
 
       span.setAttribute('quizball.turn_user_id', turnUserId);
-      const forceAtMs = Date.now() + 45_000;
       io.to(`lobby:${lobbyId}`).emit('draft:start', {
         lobbyId,
         categories,
         turnUserId,
-        forceAtMs,
+        // `draft:start` only paints the board. The synchronized turn deadline
+        // is emitted separately in `draft:begin` after the UI-ready gate.
+        forceAtMs: null,
         // Info for the client: candidates were chosen with recent-category
         // filtering (no client-side filtering — display as-is).
         recentFilterApplied,
@@ -193,7 +194,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
             await pauseDraftForDisconnectedPlayerAtStart(io, lobbyId, disconnectedMember.userId);
             return;
           }
-          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
+          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
         })
         .catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');

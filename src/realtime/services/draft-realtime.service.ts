@@ -855,11 +855,14 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 
   if (lobby.mode === 'ranked' && aiUserId && expectedUserId === aiUserId) {
     if (!(await hasPendingRealtimeTimer('draft_ai_ban', lobbyId))) {
-      const forceAtMs = scheduleRankedAiBan(io, lobbyId, aiUserId);
+      scheduleRankedAiBan(io, lobbyId, aiUserId);
       io.to(`lobby:${lobbyId}`).emit('draft:begin', {
         lobbyId,
         turnUserId: expectedUserId,
-        forceAtMs,
+        // Clients render forceAtMs as the turn countdown. The AI's internal
+        // ban timer fires in ~1-2s, which flashed a 0 on screen — send the
+        // standard turn window instead; the ban lands long before it expires.
+        forceAtMs: Date.now() + harnessDelayMs(DRAFT_AUTO_BAN_MS),
       });
     }
     return;

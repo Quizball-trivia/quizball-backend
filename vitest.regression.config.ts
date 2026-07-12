@@ -47,6 +47,7 @@ export default defineConfig({
       'tests/regression/user-recent-categories.test.ts',
       'tests/regression/forfeit-economy.test.ts',
       'tests/regression/early-forfeit-boundary.test.ts',
+      'tests/regression/early-forfeit-final-results.test.ts',
       'tests/regression/party-tie-chaos.test.ts',
       'tests/regression/draft-ban-collision.test.ts',
       'tests/regression/question-history.test.ts',

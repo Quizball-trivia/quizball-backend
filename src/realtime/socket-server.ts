@@ -343,7 +343,12 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     },
     match_disconnect_forfeit: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_disconnect_forfeit') return;
-      await resolveExpiredGraceWindow(server, payload.matchId, payload.disconnectedUserId);
+      await resolveExpiredGraceWindow(
+        server,
+        payload.matchId,
+        payload.disconnectedUserId,
+        payload.disconnectMarkerMs
+      );
     },
     match_resume_countdown: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'match_resume_countdown') return;

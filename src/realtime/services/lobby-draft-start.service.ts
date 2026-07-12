@@ -10,6 +10,7 @@ import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { trackDraftStarted } from '../../core/analytics/game-events.js';
+import { persistInitialDraftTurnState } from '../draft-turn-state.js';
 import {
   detachAllSocketsFromLobby,
   emitClosedLobbyStateForMode,
@@ -149,15 +150,22 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
-      let turnUserId = lobby.host_user_id;
-      if (lobby.mode === 'ranked') {
-        const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
-        const aiUserId = rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members);
-        if (aiUserId) {
-          turnUserId =
-            members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
-        }
+      const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+      if (members.length !== 2) {
+        logger.warn({ lobbyId, memberCount: members.length }, 'Draft start aborted after status flip: lobby lacks 2 members');
+        return;
       }
+      const aiUserId = lobby.mode === 'ranked'
+        ? rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members)
+        : null;
+      const turnUserId = lobby.host_user_id;
+      await persistInitialDraftTurnState(lobbyId, {
+        firstActorUserId: turnUserId,
+        nextActorUserId: turnUserId,
+        aiUserId,
+        participantUserIds: [members[0].user_id, members[1].user_id],
+        banCount: 0,
+      });
 
       span.setAttribute('quizball.turn_user_id', turnUserId);
       io.to(`lobby:${lobbyId}`).emit('draft:start', {

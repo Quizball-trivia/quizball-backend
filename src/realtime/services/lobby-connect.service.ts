@@ -13,11 +13,9 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   autoLeaveAllWaitingLobbies,
   closeLobbyIfEmpty,
-  getFirstDraftActorId,
-  getNextDraftActorId,
+  ensureDraftTurnState,
   getRankedAiUserIdForLobby,
   isRankedAiLobby,
-  resolveRankedAiUserIdForDraft,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
@@ -86,16 +84,16 @@ export async function rejoinActiveDraftLobbyOnConnect(
   socket.emit('lobby:state', state);
 
   if (categories.length > 0 && members.length === 2) {
-    const aiUserId = newestLobby.mode === 'ranked'
-      ? await resolveRankedAiUserIdForDraft(newestLobby.id, members)
-      : null;
-    const firstActorUserId = getFirstDraftActorId(members, newestLobby.host_user_id, aiUserId);
-    const turnUserId = getNextDraftActorId(members, bans, firstActorUserId);
+    const turnState = await ensureDraftTurnState(newestLobby.id);
+    if (!turnState) {
+      logger.warn({ lobbyId: newestLobby.id }, 'Active draft rejoin skipped: turn state missing');
+      return;
+    }
 
     socket.emit('draft:start', {
       lobbyId: newestLobby.id,
       categories,
-      turnUserId,
+      turnUserId: turnState.nextActorUserId ?? turnState.firstActorUserId,
       forceAtMs: null,
     });
     const replayedBans: typeof bans = [];
@@ -104,9 +102,9 @@ export async function rejoinActiveDraftLobbyOnConnect(
       socket.emit('draft:banned', {
         actorId: ban.user_id,
         categoryId: ban.category_id,
-        turnUserId: replayedBans.length >= 2
-          ? null
-          : getNextDraftActorId(members, replayedBans, firstActorUserId),
+        turnUserId: replayedBans.length === bans.length
+          ? turnState.nextActorUserId
+          : turnState.participantUserIds.find((participantId) => participantId !== ban.user_id) ?? null,
         forceAtMs: null,
       });
     }

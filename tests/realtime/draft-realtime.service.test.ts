@@ -167,8 +167,80 @@ function createSocketMock(userId: string, lobbyId: string): QuizballSocket {
   } as unknown as QuizballSocket;
 }
 
+async function seedTurnState(options: {
+  firstActorUserId?: string;
+  nextActorUserId?: string | null;
+  aiUserId?: string | null;
+  participantUserIds?: [string, string];
+  banCount?: number;
+} = {}): Promise<void> {
+  const { persistInitialDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+  const firstActorUserId = options.firstActorUserId ?? 'u1';
+  await persistInitialDraftTurnState('l1', {
+    firstActorUserId,
+    nextActorUserId: options.nextActorUserId === undefined ? firstActorUserId : options.nextActorUserId,
+    aiUserId: options.aiUserId ?? null,
+    participantUserIds: options.participantUserIds ?? ['u1', 'u2'],
+    banCount: options.banCount ?? 0,
+  });
+}
+
+function wireDraftTurnRedis(
+  initialValues: Record<string, string> = {},
+  options: { missFirstEval?: boolean; loseFirstCas?: boolean } = {}
+): Map<string, string> {
+  const values = new Map(Object.entries(initialValues));
+  redisGetMock.mockImplementation(async (key: string) => values.get(key) ?? null);
+  redisSetMock.mockImplementation(async (
+    key: string,
+    value: string,
+    setOptions?: { NX?: boolean; GET?: boolean }
+  ) => {
+    const existing = values.get(key) ?? null;
+    if (!setOptions?.NX || existing === null) values.set(key, value);
+    return setOptions?.GET ? existing : 'OK';
+  });
+  let evalCount = 0;
+  redisEvalMock.mockImplementation(async (_script: string, evalOptions: { keys: string[]; arguments: string[] }) => {
+    evalCount += 1;
+    const key = evalOptions.keys[0];
+    if (options.missFirstEval && evalCount === 1) {
+      values.delete(key);
+      return '__MISSING__';
+    }
+    if (options.loseFirstCas && evalCount === 1) return null;
+    const raw = values.get(key);
+    if (!raw) return '__MISSING__';
+    const state = JSON.parse(raw) as {
+      nextActorUserId: string | null;
+      participantUserIds: [string, string];
+      banCount: number;
+    };
+    const [actorUserId, expectedBanCount, nextActorUserId] = evalOptions.arguments;
+    if (state.nextActorUserId !== actorUserId || state.banCount !== Number(expectedBanCount)) return null;
+    const advanced = {
+      ...state,
+      nextActorUserId: nextActorUserId || null,
+      banCount: state.banCount + 1,
+    };
+    const updated = JSON.stringify(advanced);
+    values.set(key, updated);
+    return updated;
+  });
+  redisClientMock = {
+    get: redisGetMock,
+    set: redisSetMock,
+    exists: redisExistsMock,
+    del: redisDelMock,
+    getDel: redisGetDelMock,
+    eval: redisEvalMock,
+    isOpen: true,
+  };
+  return values;
+}
+
 describe('draftRealtimeService', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     redisClientMock = null;
     redisGetMock.mockResolvedValue(null);
@@ -247,6 +319,7 @@ describe('draftRealtimeService', () => {
     });
     buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
     emitFinalResultsToMatchParticipantsMock.mockResolvedValue(undefined);
+    await seedTurnState();
   });
 
   afterEach(async () => {
@@ -270,6 +343,111 @@ describe('draftRealtimeService', () => {
       forceAtMs: null,
     }));
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+  });
+
+  it('reconstructs a missing one-ban turn for the other participant and persists the advance', async () => {
+    const { draftRealtimeService, resetDraftRuntimeState } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const bans = [{ user_id: 'u1', category_id: 'cat-a' }];
+    listLobbyCategoryBansMock.mockImplementation(async () => bans.slice());
+    insertLobbyCategoryBanMock.mockImplementation(async (lobbyId: string, userId: string, categoryId: string) => {
+      const ban = { lobby_id: lobbyId, user_id: userId, category_id: categoryId };
+      bans.push(ban);
+      return ban;
+    });
+    resetDraftRuntimeState();
+    const values = wireDraftTurnRedis();
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
+
+    expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u2', 'cat-b');
+    expect(emit).toHaveBeenCalledWith('draft:banned', expect.objectContaining({ actorId: 'u2' }));
+    expect(JSON.parse(values.get('draft:turn_state:l1') ?? '{}')).toMatchObject({
+      nextActorUserId: null,
+      banCount: 2,
+    });
+  });
+
+  it('reconstructs a missing zero-ban turn with the host as actor', async () => {
+    const { draftRealtimeService, resetDraftRuntimeState } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io } = createIoMock();
+    resetDraftRuntimeState();
+    wireDraftTurnRedis();
+
+    await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+
+    expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
+    expect(redisSetMock).toHaveBeenCalledWith(
+      'draft:turn_state:l1',
+      expect.stringContaining('"nextActorUserId":"u1"'),
+      { NX: true, GET: true, EX: 7200 }
+    );
+  });
+
+  it('writes a local turn through when Redis recovers', async () => {
+    const { persistInitialDraftTurnState, readDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    const state = {
+      firstActorUserId: 'u1',
+      nextActorUserId: 'u1',
+      aiUserId: null,
+      participantUserIds: ['u1', 'u2'] as [string, string],
+      banCount: 0,
+    };
+    redisClientMock = null;
+    await persistInitialDraftTurnState('write-through', state);
+    wireDraftTurnRedis();
+
+    expect(await readDraftTurnState('write-through')).toEqual(state);
+    expect(redisSetMock).toHaveBeenCalledWith(
+      'draft:turn_state:write-through',
+      JSON.stringify(state),
+      { NX: true, GET: true, EX: 7200 }
+    );
+  });
+
+  it('backfills a Redis key missing during advance and retries Lua once', async () => {
+    const { advanceDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    wireDraftTurnRedis({}, { missFirstEval: true });
+
+    const advanced = await advanceDraftTurnState('l1', 'u1', 0);
+
+    expect(advanced).toMatchObject({ nextActorUserId: 'u2', banCount: 1 });
+    expect(redisEvalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('still returns null when the draft turn CAS loses a race', async () => {
+    const { advanceDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    wireDraftTurnRedis({}, { loseFirstCas: true });
+
+    expect(await advanceDraftTurnState('l1', 'u1', 0)).toBeNull();
+    expect(redisEvalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts the ranked-vs-AI human ban when draft:begin names that human', async () => {
+    const { draftRealtimeService, scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const socket = createSocketMock('u1', 'l1');
+    getLobbyByIdMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'ai-1' },
+    ]);
+    await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
+
+    await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+    expect(emit).toHaveBeenCalledWith('draft:begin', expect.objectContaining({
+      lobbyId: 'l1',
+      turnUserId: 'u1',
+    }));
+
+    await draftRealtimeService.handleBan(io, socket, 'cat-a');
+    expect(socket.emit).not.toHaveBeenCalledWith('error', expect.objectContaining({ code: 'NOT_YOUR_TURN' }));
+    expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
   });
 
   it('emits the server-enforced next actor after automatic bans', async () => {
@@ -412,14 +590,10 @@ describe('draftRealtimeService', () => {
       status: 'active',
       host_user_id: 'u1',
     });
-    redisClientMock = {
-      get: vi.fn(async (key: string) => (key === 'ranked:mm:cancel:u1' ? '1' : null)),
-      set: redisSetMock,
-      exists: redisExistsMock,
-      del: redisDelMock,
-      getDel: redisGetDelMock,
-      isOpen: true,
-    };
+    const redisValues = wireDraftTurnRedis();
+    redisGetMock.mockImplementation(async (key: string) => (
+      key === 'ranked:mm:cancel:u1' ? '1' : redisValues.get(key) ?? null
+    ));
 
     await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
     await draftRealtimeService.handleBan(io, createSocketMock('u2', 'l1'), 'cat-b');
@@ -593,6 +767,7 @@ describe('draftRealtimeService', () => {
     listLobbyCategoryBansMock.mockResolvedValue([
       { user_id: 'u1', category_id: 'cat-a' },
     ]);
+    await seedTurnState({ nextActorUserId: 'u2', banCount: 1 });
     redisClientMock = {
       get: redisGetMock,
       set: redisSetMock,
@@ -749,6 +924,7 @@ describe('draftRealtimeService', () => {
       { user_id: 'u1' },
       { user_id: 'ai-1' },
     ]);
+    await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
 
     try {
       await runDraftAutoBan(io, 'l1');
@@ -797,6 +973,7 @@ describe('draftRealtimeService', () => {
       { user_id: 'u1' },
       { user_id: 'ai-1' },
     ]);
+    await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
 
     try {
       await runDraftAutoBan(io, 'l1', { requireUiReady: true, forceAtMs: 310_000 });
@@ -842,6 +1019,7 @@ describe('draftRealtimeService', () => {
         { user_id: 'u1' },
         { user_id: 'ai-1' },
       ]);
+      await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
 
       await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
       await vi.advanceTimersByTimeAsync(800);
@@ -889,6 +1067,7 @@ describe('draftRealtimeService', () => {
         { user_id: 'u1' },
         { user_id: 'ai-1' },
       ]);
+      await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
 
       scheduleDraftAutoBan(io, 'l1');
       redisClientMock = {
@@ -949,6 +1128,7 @@ describe('draftRealtimeService', () => {
         { user_id: 'u1' },
         { user_id: 'ai-1' },
       ]);
+      await seedTurnState({ aiUserId: 'ai-1', participantUserIds: ['u1', 'ai-1'] });
 
       // Simulate the broken state: AI ban runs but NO human ban exists yet.
       await runRankedAiDraftBan(io, 'l1', 'ai-1');
@@ -977,13 +1157,13 @@ describe('draftRealtimeService', () => {
     }
   });
 
-  it('enforces human first ban in ranked-vs-AI even when AI is host', async () => {
+  it('keeps an AI first actor consistent across begin, enforcement, and the AI timer', async () => {
     vi.useFakeTimers();
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
-      const { draftRealtimeService, runDraftAutoBan, runRankedAiDraftBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { draftRealtimeService, runDraftAutoBan, runRankedAiDraftBan, scheduleDraftAutoBanForCurrentTurn } = await import('../../src/realtime/services/draft-realtime.service.js');
       const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
-      const { io } = createIoMock();
+      const { io, emit } = createIoMock();
       stopRealtimeTimerScheduler();
       startRealtimeTimerScheduler(io, {
         draft_ai_ban: async (server, payload) => {
@@ -993,7 +1173,6 @@ describe('draftRealtimeService', () => {
           if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
         },
       });
-      const aiSocket = createSocketMock('ai-1', 'l1');
       const userSocket = createSocketMock('u1', 'l1');
 
       getLobbyByIdMock.mockResolvedValue({
@@ -1006,19 +1185,28 @@ describe('draftRealtimeService', () => {
         { user_id: 'u1' },
         { user_id: 'ai-1' },
       ]);
-
-      await draftRealtimeService.handleBan(io, aiSocket, 'cat-a');
-      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
-      expect(aiSocket.emit).toHaveBeenCalledWith('error', {
-        code: 'NOT_YOUR_TURN',
-        message: 'It is not your turn to ban',
+      await seedTurnState({
+        firstActorUserId: 'ai-1',
+        aiUserId: 'ai-1',
+        participantUserIds: ['u1', 'ai-1'],
       });
 
-      await draftRealtimeService.handleBan(io, userSocket, 'cat-a');
+      await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+      expect(emit).toHaveBeenCalledWith('draft:begin', {
+        lobbyId: 'l1',
+        turnUserId: 'ai-1',
+        forceAtMs: expect.any(Number),
+      });
       await vi.advanceTimersByTimeAsync(800);
 
-      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-a');
       expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(emit).toHaveBeenCalledWith('draft:banned', expect.objectContaining({
+        actorId: 'ai-1',
+        turnUserId: 'u1',
+      }));
+
+      await draftRealtimeService.handleBan(io, userSocket, 'cat-b');
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'u1', 'cat-b');
       expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
     } finally {
       const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
@@ -1378,6 +1566,7 @@ describe('draftRealtimeService', () => {
       // u1 already banned (seed the shared stateful bans array); u2 is the
       // disconnected actor whose turn it is.
       await insertLobbyCategoryBanMock('l1', 'u1', 'cat-a');
+      await seedTurnState({ nextActorUserId: 'u2', banCount: 1 });
       // Pending recovery: grace marker + u2's disconnect marker present.
       const keys = wireStatefulRedis(['draft:grace:l1', 'draft:disconnect:l1:u2']);
 
@@ -1455,6 +1644,7 @@ describe('draftRealtimeService', () => {
     try {
       getLobbyByIdMock.mockResolvedValue({ id: 'l1', mode: 'friendly', status: 'active', host_user_id: 'u1' });
       await insertLobbyCategoryBanMock('l1', 'u1', 'cat-a');
+      await seedTurnState({ nextActorUserId: 'u2', banCount: 1 });
       insertLobbyCategoryBanMock.mockClear(); // ignore the seed ban below
 
       wireStatefulRedis(['draft:grace:l1', 'draft:disconnect:l1:u2']);

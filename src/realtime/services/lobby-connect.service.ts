@@ -98,10 +98,15 @@ export async function rejoinActiveDraftLobbyOnConnect(
       turnUserId,
       forceAtMs: null,
     });
+    const replayedBans: typeof bans = [];
     for (const ban of bans) {
+      replayedBans.push(ban);
       socket.emit('draft:banned', {
         actorId: ban.user_id,
         categoryId: ban.category_id,
+        turnUserId: replayedBans.length >= 2
+          ? null
+          : getNextDraftActorId(members, replayedBans, firstActorUserId),
         forceAtMs: null,
       });
     }

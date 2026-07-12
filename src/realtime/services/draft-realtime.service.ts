@@ -1036,10 +1036,16 @@ export async function runDraftAutoBan(
     }
 
     const nextForceAtMs = null;
+    const updatedBans = inserted
+      ? await lobbiesRepo.listLobbyCategoryBans(lobbyId)
+      : bans;
     if (inserted) {
       io.to(`lobby:${lobbyId}`).emit('draft:banned', {
         actorId: expectedUserId,
         categoryId: autoChoice.id,
+        turnUserId: updatedBans.length >= 2
+          ? null
+          : getNextActorId(members, updatedBans, firstActorUserId),
         forceAtMs: nextForceAtMs,
       });
       logger.info(
@@ -1050,7 +1056,6 @@ export async function runDraftAutoBan(
 
     await completeDraftIfReady(io, lobbyId);
 
-    const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     if (updatedBans.length < 2) {
       await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, {
         forceAtMs: nextForceAtMs,
@@ -1305,6 +1310,7 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     io.to(`lobby:${lobbyId}`).emit('draft:banned', {
       actorId: aiUserId,
       categoryId: aiChoice.id,
+      turnUserId: null,
       forceAtMs: null,
     });
     logger.info(
@@ -1696,6 +1702,9 @@ export const draftRealtimeService = {
     io.to(`lobby:${lobbyId}`).emit('draft:banned', {
       actorId: socket.data.user.id,
       categoryId,
+      turnUserId: updatedBans.length >= 2
+        ? null
+        : getNextActorId(members, updatedBans, firstActorUserId),
       forceAtMs,
     });
     if (isRankedVsAi && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {

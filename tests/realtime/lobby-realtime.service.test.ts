@@ -356,14 +356,23 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { user_id: 'u1' },
       { user_id: 'u2' },
     ]);
+    listLobbyCategoryBansMock.mockResolvedValue([
+      { user_id: 'u1', category_id: 'cat-1' },
+    ]);
 
     await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never);
 
     expect(socket.emit).toHaveBeenCalledWith('lobby:state', expect.objectContaining({ lobbyId: 'lobby-1' }));
     expect(socket.emit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
-      turnUserId: 'u1',
+      turnUserId: 'u2',
     }));
+    expect(socket.emit).toHaveBeenCalledWith('draft:banned', {
+      actorId: 'u1',
+      categoryId: 'cat-1',
+      turnUserId: 'u2',
+      forceAtMs: null,
+    });
     expect(resumeDraftForReconnectedPlayerMock).not.toHaveBeenCalled();
     expect(resumeActiveDraftTimersMock).not.toHaveBeenCalled();
   });

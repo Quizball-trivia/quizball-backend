@@ -266,9 +266,33 @@ describe('draftRealtimeService', () => {
     expect(emit).toHaveBeenCalledWith('draft:banned', expect.objectContaining({
       actorId: 'u1',
       categoryId: 'cat-a',
+      turnUserId: 'u2',
       forceAtMs: null,
     }));
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+  });
+
+  it('emits the server-enforced next actor after automatic bans', async () => {
+    const { runDraftAutoBan } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+
+    await runDraftAutoBan(io, 'l1');
+
+    expect(emit).toHaveBeenCalledWith('draft:banned', {
+      actorId: 'u1',
+      categoryId: expect.any(String),
+      turnUserId: 'u2',
+      forceAtMs: null,
+    });
+
+    await runDraftAutoBan(io, 'l1');
+
+    expect(emit).toHaveBeenCalledWith('draft:banned', {
+      actorId: 'u2',
+      categoryId: expect.any(String),
+      turnUserId: null,
+      forceAtMs: null,
+    });
   });
 
   it('completes draft after two bans and creates match with one half category', async () => {

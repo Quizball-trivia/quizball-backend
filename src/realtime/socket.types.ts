@@ -1171,7 +1171,12 @@ export interface ServerToClientEvents {
   'draft:start': (data: DraftState) => void;
   'draft:waiting_for_ready': (data: DraftWaitingForReadyPayload) => void;
   'draft:begin': (data: DraftBeginPayload) => void;
-  'draft:banned': (data: { actorId: string; categoryId: string; forceAtMs: number | null }) => void;
+  'draft:banned': (data: {
+    actorId: string;
+    categoryId: string;
+    turnUserId: string | null;
+    forceAtMs: number | null;
+  }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;

@@ -57,25 +57,6 @@ export async function resolveRankedAiUserIdForDraft(
   return aiMember.userId;
 }
 
-export function getFirstDraftActorId(
-  members: Array<{ user_id: string }>,
-  hostUserId: string,
-  aiUserId: string | null
-): string {
-  if (!aiUserId) return hostUserId;
-  return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
-}
-
-export function getNextDraftActorId(
-  members: Array<{ user_id: string }>,
-  bans: Array<{ user_id: string }>,
-  firstActorUserId: string
-): string {
-  if (bans.length === 0) return firstActorUserId;
-  const lastActor = bans[bans.length - 1]?.user_id;
-  return members.find((member) => member.user_id !== lastActor)?.user_id ?? firstActorUserId;
-}
-
 export async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobbyId);
   if (members.length === 0) return;

@@ -38,6 +38,7 @@ let redisClientMock: {
   get: typeof redisGetMock;
   set: typeof redisSetMock;
   del: typeof redisDelMock;
+  isOpen?: boolean;
 } | null = null;
 
 vi.mock('../../src/core/logger.js', () => ({
@@ -162,7 +163,7 @@ function createIo() {
 }
 
 describe('lobbyRealtimeService.startDraft ranked tickets', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     isDraftPlayerMarkedDisconnectedMock.mockResolvedValue(false);
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
@@ -207,6 +208,8 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     redisSetMock.mockResolvedValue('OK');
     redisDelMock.mockResolvedValue(1);
     redisClientMock = null;
+    const { resetDraftTurnStateForTests } = await import('../../src/realtime/draft-turn-state.js');
+    resetDraftTurnStateForTests();
   });
 
   it('starts a human ranked draft without consuming tickets before match creation', async () => {
@@ -223,6 +226,12 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { user_id: 'u1' },
       { user_id: 'u2' },
     ]);
+    redisClientMock = {
+      get: redisGetMock,
+      set: redisSetMock,
+      del: redisDelMock,
+      isOpen: true,
+    };
 
     await startDraft(io, 'lobby-1');
 
@@ -240,6 +249,17 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       forceAtMs: null,
       recentFilterApplied: true,
     }));
+    expect(redisSetMock).toHaveBeenCalledWith(
+      'draft:turn_state:lobby-1',
+      JSON.stringify({
+        firstActorUserId: 'u1',
+        nextActorUserId: 'u1',
+        aiUserId: null,
+        participantUserIds: ['u1', 'u2'],
+        banCount: 0,
+      }),
+      { EX: 7200 }
+    );
   });
 
   it('starts paused and emits the disconnect overlay when a member was already marked disconnected', async () => {
@@ -287,6 +307,43 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     });
     expect(selectRandomCategoriesMock).not.toHaveBeenCalled();
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
+  });
+
+  it('persists an AI host as first actor before emitting draft:start', async () => {
+    const { io, roomEmit } = createIo();
+    const { startDraft } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const { readDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    getByIdMock.mockResolvedValue({
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'waiting',
+      host_user_id: 'ai-1',
+    });
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'u1' },
+      { user_id: 'ai-1' },
+    ]);
+    getUserByIdMock.mockImplementation(async (userId: string) => ({
+      id: userId,
+      is_ai: userId === 'ai-1',
+    }));
+
+    await startDraft(io, 'lobby-1');
+
+    expect(await readDraftTurnState('lobby-1')).toEqual({
+      firstActorUserId: 'ai-1',
+      nextActorUserId: 'ai-1',
+      aiUserId: 'ai-1',
+      participantUserIds: ['u1', 'ai-1'],
+      banCount: 0,
+    });
+    expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
+      turnUserId: 'ai-1',
+    }));
+
+    redisGetMock.mockResolvedValue('u1');
+    getUserByIdMock.mockResolvedValue({ id: 'u1', is_ai: true });
+    expect((await readDraftTurnState('lobby-1'))?.nextActorUserId).toBe('ai-1');
   });
 
   it('pauses an active draft on disconnect even when the socket lost its lobby id', async () => {
@@ -356,14 +413,31 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { user_id: 'u1' },
       { user_id: 'u2' },
     ]);
+    listLobbyCategoryBansMock.mockResolvedValue([
+      { user_id: 'u1', category_id: 'cat-1' },
+    ]);
+    const { persistInitialDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    await persistInitialDraftTurnState('lobby-1', {
+      firstActorUserId: 'u1',
+      nextActorUserId: 'u2',
+      aiUserId: null,
+      participantUserIds: ['u1', 'u2'],
+      banCount: 1,
+    });
 
     await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never);
 
     expect(socket.emit).toHaveBeenCalledWith('lobby:state', expect.objectContaining({ lobbyId: 'lobby-1' }));
     expect(socket.emit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
-      turnUserId: 'u1',
+      turnUserId: 'u2',
     }));
+    expect(socket.emit).toHaveBeenCalledWith('draft:banned', {
+      actorId: 'u1',
+      categoryId: 'cat-1',
+      turnUserId: 'u2',
+      forceAtMs: null,
+    });
     expect(resumeDraftForReconnectedPlayerMock).not.toHaveBeenCalled();
     expect(resumeActiveDraftTimersMock).not.toHaveBeenCalled();
   });
@@ -383,6 +457,14 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
       { user_id: 'u1' },
       { user_id: 'u2' },
     ]);
+    const { persistInitialDraftTurnState } = await import('../../src/realtime/draft-turn-state.js');
+    await persistInitialDraftTurnState('lobby-1', {
+      firstActorUserId: 'u1',
+      nextActorUserId: 'u1',
+      aiUserId: null,
+      participantUserIds: ['u1', 'u2'],
+      banCount: 0,
+    });
 
     await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket as never, {
       resume: true,

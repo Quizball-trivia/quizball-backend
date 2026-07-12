@@ -164,12 +164,34 @@ const finalStandingsWellFormed: PartyInvariant = (trace) => {
   return out;
 };
 
+const partyTieIsDraw: PartyInvariant = (trace) => {
+  const finals = trace.byEvent('match:final_results');
+  if (finals.length === 0) return [];
+  const payload = finals[0].payload as FinalPartyPayload;
+  const standings = payload.standings ?? [];
+  if (standings.length < 2) return [];
+  const maxPoints = Math.max(...standings.map((standing) => standing.totalPoints ?? 0));
+  const tiedAtTop = standings.filter((standing) => (standing.totalPoints ?? 0) === maxPoints);
+  if (tiedAtTop.length < 2 || payload.winnerId == null) return [];
+  return [{
+    invariant: 'partyTieIsDraw',
+    message: 'Party-quiz match ended with equal top scores but produced a winner instead of a draw.',
+    seq: finals[0].seq,
+    detail: {
+      winnerId: payload.winnerId,
+      maxPoints,
+      tiedUserIds: tiedAtTop.map((standing) => standing.userId),
+    },
+  }];
+};
+
 const ALL_PARTY_INVARIANTS: Array<{ name: string; check: PartyInvariant }> = [
   { name: 'scoresMonotonic', check: scoresMonotonic },
   { name: 'rankingCoherent', check: rankingCoherent },
   { name: 'oneQuestionPerQIndexParty', check: oneQuestionPerQIndexParty },
   { name: 'terminalReachedParty', check: terminalReachedParty },
   { name: 'finalStandingsWellFormed', check: finalStandingsWellFormed },
+  { name: 'partyTieIsDraw', check: partyTieIsDraw },
 ];
 
 /** Run all party-quiz invariants against a trace. */

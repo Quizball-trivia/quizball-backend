@@ -42,7 +42,7 @@ export type RealtimeTimerPayload =
   | { kind: 'draft_ai_ban'; lobbyId: string; aiUserId: string }
   | { kind: 'draft_auto_ban'; lobbyId: string; requireUiReady?: boolean; forceAtMs?: number | null; turnUserId?: string; banCount?: number }
   | { kind: 'draft_grace_expiry'; lobbyId: string; disconnectedUserId: string }
-  | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string }
+  | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string; disconnectMarkerMs?: number }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
   | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null; plannedIsCorrect?: boolean }

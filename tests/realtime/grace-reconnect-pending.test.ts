@@ -18,6 +18,7 @@ const getMatchCacheMock = vi.fn();
 const finalizeForfeitMock = vi.fn();
 const completeFromProgressMock = vi.fn();
 const scheduleTimerMock = vi.fn();
+const cancelTimerMock = vi.fn();
 const emitRejoinDepsOk = vi.fn();
 
 vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => getRedisClientMock() }));
@@ -71,7 +72,7 @@ vi.mock('../../src/realtime/realtime-timer-scheduler.js', async (i) => {
   return {
     ...actual,
     scheduleRealtimeTimer: (...a: unknown[]) => { scheduleTimerMock(...a); return Promise.resolve(); },
-    cancelRealtimeTimer: vi.fn(async () => undefined),
+    cancelRealtimeTimer: (...a: unknown[]) => { cancelTimerMock(...a); return Promise.resolve(); },
   };
 });
 
@@ -103,13 +104,16 @@ function zombieSocket(userId: string) {
   return { data: { user: { id: userId }, connectedAt: MARKER_MS - 100_000 } };
 }
 
-function makeIo(userRooms: Record<string, Array<{ data: unknown }>>) {
+function makeIo(
+  userRooms: Record<string, Array<{ data: unknown }>>,
+  matchRoomSockets: Array<{ data: unknown }> = []
+) {
   const emits: Record<string, ReturnType<typeof vi.fn>> = {};
   return {
     io: {
       in: (room: string) => ({
         fetchSockets: async () =>
-          room.startsWith('user:') ? userRooms[room.slice('user:'.length)] ?? [] : [],
+          room.startsWith('user:') ? userRooms[room.slice('user:'.length)] ?? [] : matchRoomSockets,
       }),
       to: (room: string) => {
         emits[room] ??= vi.fn();
@@ -214,5 +218,78 @@ describe('grace expiry — reconnect-pending deferral (root fix)', () => {
 
     // Already extended once → no second deferral; terminal forfeit proceeds.
     expect(finalizeForfeitMock).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a late timer after the disconnect episode marker was cleared', async () => {
+    const redis = makeRedis({
+      'match:grace:m1': String(MARKER_MS),
+      'match:pause:m1': String(MARKER_MS),
+    });
+    getRedisClientMock.mockReturnValue(redis);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'human-1', seat: 1 },
+      { user_id: 'human-2', seat: 2 },
+    ]);
+    const { io } = makeIo({}, [freshSocket('human-1'), freshSocket('human-2')]);
+
+    const { resolveExpiredGraceWindow } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    await resolveExpiredGraceWindow(io, 'm1', 'human-1');
+
+    expect(getMatchMock).not.toHaveBeenCalled();
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores an old episode timer when the same player has a newer disconnect marker', async () => {
+    const newerMarkerMs = MARKER_MS + 30_000;
+    const redis = seedRedis({
+      'match:disconnect:m1:human-1': String(newerMarkerMs),
+    });
+    getRedisClientMock.mockReturnValue(redis);
+    const { io } = makeIo({});
+
+    const { resolveExpiredGraceWindow } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    await resolveExpiredGraceWindow(io, 'm1', 'human-1', MARKER_MS);
+
+    expect(getMatchMock).not.toHaveBeenCalled();
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+    expect(redis._store.get('match:disconnect:m1:human-1')).toBe(String(newerMarkerMs));
+  });
+
+  it('clears stale disconnect state instead of abandoning when both players are live after recent round activity', async () => {
+    const redis = seedRedis({ 'match:grace_extended:m1': '1' });
+    getRedisClientMock.mockReturnValue(redis);
+    getMatchMock.mockResolvedValue({
+      id: 'm1', mode: 'ranked', status: 'active',
+      current_q_index: 5, total_questions: 12, lobby_id: 'l1',
+      updated_at: new Date().toISOString(),
+      state_payload: { variant: 'ranked_sim', winnerDecisionMethod: null },
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'human-1', seat: 1 },
+      { user_id: 'human-2', seat: 2 },
+    ]);
+    const liveSockets = [freshSocket('human-1'), freshSocket('human-2')];
+    const { io } = makeIo(
+      { 'human-1': [liveSockets[0]!], 'human-2': [liveSockets[1]!] },
+      liveSockets
+    );
+
+    const { resolveExpiredGraceWindow } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    await resolveExpiredGraceWindow(io, 'm1', 'human-1');
+
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+    expect(redis._store.has('match:disconnect:m1:human-1')).toBe(false);
+    expect(redis._store.has('match:grace:m1')).toBe(false);
+    expect(redis._store.has('match:pause:m1')).toBe(false);
+    expect(cancelTimerMock).toHaveBeenCalledWith('match_disconnect_forfeit', 'm1');
   });
 });

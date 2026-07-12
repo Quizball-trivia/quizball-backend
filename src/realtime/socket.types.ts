@@ -1,5 +1,12 @@
 import type { AvatarCustomization } from '../modules/users/avatar-customization.js';
 import type { I18nField } from '../db/types.js';
+import type {
+  PublicAuctionMatchState,
+  PublicAuctionPlayer,
+  PublicAuctionRoundState,
+  PublicAuctionSoloPickState,
+} from '../modules/auction/auction-match-state.js';
+import type { AuctionPlayerRanking, FormationName } from '../modules/auction/auction.types.js';
 
 export type MatchMode = 'friendly' | 'ranked';
 export type LobbyGameMode = 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
@@ -88,6 +95,7 @@ export interface DraftState {
   lobbyId: string;
   categories: DraftCategory[];
   turnUserId: string;
+  forceAtMs: number | null;
   /**
    * Info flag: the candidates were selected with recent-category filtering
    * (recently played categories of the matched players were excluded). The
@@ -101,6 +109,19 @@ export interface DraftOpponentDisconnectedPayload {
   lobbyId: string;
   opponentId: string;
   graceMs: number;
+}
+
+export interface DraftWaitingForReadyPayload {
+  lobbyId: string;
+  readyUserIds: string[];
+  waitingUserIds: string[];
+  forceCancelAt: string;
+}
+
+export interface DraftBeginPayload {
+  lobbyId: string;
+  turnUserId: string;
+  forceAtMs: number;
 }
 
 export interface DraftResumePayload {
@@ -624,6 +645,281 @@ export interface WarmupScoresPayload {
   pairBest: number;
 }
 
+export interface AuctionStartAiMatchPayload {
+  formation?: FormationName;
+  locale?: 'en' | 'ka';
+}
+
+export interface AuctionSearchStartPayload {
+  formation?: FormationName;
+  locale?: 'en' | 'ka';
+}
+
+export interface AuctionBidPayload {
+  matchId: string;
+  amount: number;
+}
+
+export interface AuctionFoldPayload {
+  matchId: string;
+}
+
+export interface AuctionSoloPickSelectPayload {
+  matchId: string;
+  option: 'A' | 'B';
+}
+
+export type AuctionUiReadyPhase = 'round' | 'bidding' | 'reveal';
+
+export interface AuctionUiReadyPayload {
+  matchId: string;
+  phase: AuctionUiReadyPhase;
+  roundId: string;
+  stateVersion: number;
+}
+
+export interface AuctionSearchStartedPayload {
+  searchId: string;
+  locale: 'en' | 'ka';
+  queuedUserCount: number;
+  seatsNeeded: number;
+  fallbackAt: string;
+}
+
+export interface AuctionSearchStatusPayload {
+  searchId: string;
+  locale: 'en' | 'ka';
+  queuedUserCount: number;
+  seatsNeeded: number;
+  fallbackAt: string;
+}
+
+export interface AuctionSearchCancelledPayload {
+  searchId: string | null;
+  reason: 'cancelled' | 'disconnect';
+}
+
+export interface AuctionMatchFoundPayload {
+  matchId: string;
+  humanUserIds: string[];
+  botCount: number;
+  locale: 'en' | 'ka';
+  formation: FormationName;
+  /** Absolute server time (ISO) the pre-match countdown ends — all clients
+   *  count down to this same instant so they start in sync. */
+  countdownEndsAt: string;
+}
+
+export interface AuctionMatchStartedPayload {
+  matchId: string;
+  locale: 'en' | 'ka';
+  state: PublicAuctionMatchState;
+  serverNow?: string;
+}
+
+export interface AuctionStatePayload {
+  matchId: string;
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionRoundStartedPayload {
+  matchId: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionWaitingForReadyPayload {
+  matchId: string;
+  phase: AuctionUiReadyPhase;
+  roundId: string;
+  stateVersion: number;
+  readyCount: number;
+  totalCount: number;
+  readyUserIds?: string[];
+  waitingUserIds?: string[];
+  forceStartsAt: string;
+  serverNow?: string;
+}
+
+export interface AuctionClueRevealedPayload {
+  matchId: string;
+  roundId: string;
+  clueIndex: number;
+  clue: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionBiddingStartedPayload {
+  matchId: string;
+  roundId: string;
+  round: PublicAuctionRoundState;
+  currentTurnSeatId: string | null;
+  turnEndsAt: string | null;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionTurnStartedPayload {
+  matchId: string;
+  roundId: string;
+  currentTurnSeatId: string;
+  minBid: number;
+  maxBid: number;
+  turnEndsAt: string | null;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionBidAcceptedPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  amount: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionFoldAcceptedPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionTurnTimeoutPayload {
+  matchId: string;
+  roundId: string;
+  seatId: string;
+  action: 'bid' | 'fold';
+  amount?: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionOpponentDisconnectedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  pauseUntil: string;
+  graceMs: number;
+  remainingReconnects: number;
+  reason: 'disconnect' | 'reconnect_limit';
+  serverNow?: string;
+}
+
+export interface AuctionPausedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  pauseUntil: string;
+  graceMs: number;
+  remainingReconnects: number;
+  reason: 'disconnect' | 'reconnect_limit';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionResumePayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  reason: 'reconnected';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+/**
+ * Sent to a reconnecting player who was disconnected from a still-paused match.
+ * The client shows a "rejoin" prompt and must emit `auction:rejoin` to come back
+ * (mirrors ranked's match:rejoin_available handshake).
+ */
+export interface AuctionRejoinAvailablePayload {
+  matchId: string;
+  seatId: string;
+  graceMs: number;
+  remainingReconnects: number;
+  serverNow: string;
+}
+
+/**
+ * Resume "get ready" countdown after a rejoin, before the match unpauses
+ * (mirrors ranked's match:countdown reason:'resume').
+ */
+export interface AuctionResumeCountdownPayload {
+  matchId: string;
+  countdownEndsAt: string;
+  serverNow: string;
+}
+
+export interface AuctionPlayerForfeitedPayload {
+  matchId: string;
+  seatId: string;
+  userId: string;
+  reason: 'disconnect_timeout' | 'reconnect_limit';
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  serverNow?: string;
+}
+
+export interface AuctionRoundRevealedPayload {
+  matchId: string;
+  roundId: string;
+  winnerSeatId: string | null;
+  winningBid: number;
+  round: PublicAuctionRoundState;
+  stateVersion: number;
+}
+
+export interface AuctionSquadUpdatedPayload {
+  matchId: string;
+  seatId: string;
+  player: PublicAuctionPlayer;
+  stateVersion: number;
+}
+
+export interface AuctionMatchFinishedPayload {
+  matchId: string;
+  rankings: AuctionPlayerRanking[];
+  winnerSeatId: string | null;
+  state: PublicAuctionMatchState;
+  stateVersion: number;
+  /**
+   * Coin reward granted per real-human userId for this match (win = 500, any
+   * other finish = 300). Empty for AI seats / forfeiters. Each client reads its
+   * own entry to show the reward animation.
+   */
+  coinsByUserId?: Record<string, number>;
+}
+
+export interface AuctionSoloPickStartedPayload {
+  matchId: string;
+  soloPick: PublicAuctionSoloPickState;
+  stateVersion: number;
+}
+
+export interface AuctionSoloPickSelectedPayload {
+  matchId: string;
+  seatId: string;
+  option: 'A' | 'B';
+  player: PublicAuctionPlayer;
+  stateVersion: number;
+}
+
+export interface AuctionErrorPayload {
+  code: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
 export interface PresenceOnlineCountPayload {
   onlineUsers: number;
 }
@@ -786,6 +1082,18 @@ export interface ClientToServerEvents {
   'lobby:start': (data?: { lobbyId?: string }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
+  'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
+  'auction:search_start': (data?: AuctionSearchStartPayload) => void;
+  'auction:search_cancel': () => void;
+  'auction:bid': (data: AuctionBidPayload) => void;
+  'auction:fold': (data: AuctionFoldPayload) => void;
+  'auction:solo_pick_select': (data: AuctionSoloPickSelectPayload) => void;
+  'auction:ui_ready': (data: AuctionUiReadyPayload) => void;
+  'auction:forfeit': (data: { matchId: string }) => void;
+  // Client opts in to rejoin a paused match it was disconnected from (after
+  // receiving auction:rejoin_available). This opt-in IS the readiness signal:
+  // the server re-attaches the socket and runs the resume "get ready" countdown.
+  'auction:rejoin': (data: { matchId: string }) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
   'draft:ban': (data: { categoryId: string }) => void;
@@ -861,7 +1169,9 @@ export interface ServerToClientEvents {
   'lobby:challenge_received': (data: LobbyChallengeInvitePayload) => void;
   'lobby:challenge_status': (data: LobbyChallengeStatusPayload) => void;
   'draft:start': (data: DraftState) => void;
-  'draft:banned': (data: { actorId: string; categoryId: string }) => void;
+  'draft:waiting_for_ready': (data: DraftWaitingForReadyPayload) => void;
+  'draft:begin': (data: DraftBeginPayload) => void;
+  'draft:banned': (data: { actorId: string; categoryId: string; forceAtMs: number | null }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;
@@ -886,6 +1196,32 @@ export interface ServerToClientEvents {
   'ranked:search_started': (data: RankedSearchStartedPayload) => void;
   'ranked:match_found': (data: RankedMatchFoundPayload) => void;
   'ranked:queue_left': () => void;
+  'auction:error': (data: AuctionErrorPayload) => void;
+  'auction:search_start': (data: AuctionSearchStartedPayload) => void;
+  'auction:search_status': (data: AuctionSearchStatusPayload) => void;
+  'auction:search_cancelled': (data: AuctionSearchCancelledPayload) => void;
+  'auction:match_found': (data: AuctionMatchFoundPayload) => void;
+  'auction:match_started': (data: AuctionMatchStartedPayload) => void;
+  'auction:state': (data: AuctionStatePayload) => void;
+  'auction:round_started': (data: AuctionRoundStartedPayload) => void;
+  'auction:waiting_for_ready': (data: AuctionWaitingForReadyPayload) => void;
+  'auction:clue_revealed': (data: AuctionClueRevealedPayload) => void;
+  'auction:bidding_started': (data: AuctionBiddingStartedPayload) => void;
+  'auction:turn_started': (data: AuctionTurnStartedPayload) => void;
+  'auction:bid_accepted': (data: AuctionBidAcceptedPayload) => void;
+  'auction:fold_accepted': (data: AuctionFoldAcceptedPayload) => void;
+  'auction:turn_timeout': (data: AuctionTurnTimeoutPayload) => void;
+  'auction:opponent_disconnected': (data: AuctionOpponentDisconnectedPayload) => void;
+  'auction:paused': (data: AuctionPausedPayload) => void;
+  'auction:resume': (data: AuctionResumePayload) => void;
+  'auction:rejoin_available': (data: AuctionRejoinAvailablePayload) => void;
+  'auction:resume_countdown': (data: AuctionResumeCountdownPayload) => void;
+  'auction:player_forfeited': (data: AuctionPlayerForfeitedPayload) => void;
+  'auction:round_revealed': (data: AuctionRoundRevealedPayload) => void;
+  'auction:squad_updated': (data: AuctionSquadUpdatedPayload) => void;
+  'auction:solo_pick_started': (data: AuctionSoloPickStartedPayload) => void;
+  'auction:solo_pick_selected': (data: AuctionSoloPickSelectedPayload) => void;
+  'auction:match_finished': (data: AuctionMatchFinishedPayload) => void;
   'warmup:state': (data: WarmupStatePayload) => void;
   'warmup:tapped': (data: WarmupTappedPayload) => void;
   'warmup:over': (data: WarmupOverPayload) => void;

@@ -85,7 +85,7 @@ describe('hasNoHumanInteraction', () => {
     expect(hasNoHumanInteraction(answers, humans)).toBe(true);
   });
 
-  it('is false when there are no answer rows at all only if no humans provided', () => {
+  it('is true when there are no answer rows, with or without human players', () => {
     expect(hasNoHumanInteraction([], humans)).toBe(true);
     expect(hasNoHumanInteraction([], new Set())).toBe(true);
   });

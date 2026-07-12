@@ -256,6 +256,7 @@ async function attachUserSocketsToLobby(
 
 async function hasLiveAuthenticatedSocket(io: QuizballServer, userId: string): Promise<boolean> {
   const sockets = await fetchUserRoomSockets(io, userId);
+  if (sockets === null) return true;
   return sockets.some((socket) => {
     const data = (socket as { data?: { user?: { id?: unknown } } } | null)?.data;
     return data?.user?.id === userId;
@@ -274,7 +275,7 @@ async function requeueRankedSearch(io: QuizballServer, userId: string): Promise<
   const now = Date.now();
   const deadlineAt = now + SEARCH_DURATION_MS;
   const newSearchId = randomUUID();
-  const socket = (await fetchUserRoomSockets(io, userId))[0] as
+  const socket = (await fetchUserRoomSockets(io, userId) ?? [])[0] as
     | { data?: { currentCountry?: string } }
     | undefined;
   const searchFields: Record<string, string> = {
@@ -410,12 +411,15 @@ export async function startHumanRankedMatch(
           userBPresent ? userBId : null,
         ].filter((id): id is string => Boolean(id));
         for (const absentId of absentUserIds) {
-          await bestEffortCancelRankedQueueSearch(absentId, 'ranked_human_pair_absent_socket');
+          const searchId = await bestEffortCancelRankedQueueSearch(
+            absentId,
+            'ranked_human_pair_absent_socket'
+          );
           trackRankedQueueLeft({
             userId: absentId,
             source: 'server_abort',
-            searchFound: false,
-            searchId: null,
+            searchFound: Boolean(searchId),
+            searchId,
           });
           io.to(`user:${absentId}`).emit('ranked:queue_left');
           await userSessionGuardService.emitState(io, absentId);

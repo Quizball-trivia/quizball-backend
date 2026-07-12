@@ -44,7 +44,7 @@ describeLocal('regression: ranked AI draft ui_ready withheld', () => {
     const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
     const { usersRepo } = await import('../../src/modules/users/users.repo.js');
 
-    const result = await bootMatch({ startTimeoutMs: 70_000 });
+    const result = await bootMatch({ startTimeoutMs: 70_000, autoClientReadyAcks: false });
     const eventNames = new Set(result.trace.events.map((event) => event.event));
 
     expect(result.matchId, 'withheld draft:ui_ready must not produce a match id').toBeNull();

@@ -495,6 +495,10 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(createLobbyMock).not.toHaveBeenCalled();
     expect(redisMock.multi).toHaveBeenCalled();
+    expect(io.in).toHaveBeenCalledWith('user:u1');
+    expect(io.in).toHaveBeenCalledWith('user:u2');
+    expect((io.in as ReturnType<typeof vi.fn>).mock.calls.filter(([room]) => room === 'user:u1')).toHaveLength(3);
+    expect((io.in as ReturnType<typeof vi.fn>).mock.calls.filter(([room]) => room === 'user:u2')).toHaveLength(2);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         userAId: 'u1',

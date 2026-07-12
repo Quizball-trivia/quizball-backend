@@ -16,6 +16,8 @@ export const ErrorCode = {
   TICKET_PURCHASE_COOLDOWN: 'TICKET_PURCHASE_COOLDOWN',
   DAILY_CHALLENGE_ALREADY_COMPLETED: 'DAILY_CHALLENGE_ALREADY_COMPLETED',
   DAILY_CHALLENGE_CONTENT_UNAVAILABLE: 'DAILY_CHALLENGE_CONTENT_UNAVAILABLE',
+  AUCTION_CONTENT_UNAVAILABLE: 'auction_content_unavailable',
+  AUCTION_STARTING_PRICE_UNAVAILABLE: 'auction_starting_price_unavailable',
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];

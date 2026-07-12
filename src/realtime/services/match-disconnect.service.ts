@@ -1468,7 +1468,7 @@ export async function pauseMatchForDisconnectedPlayer(
   await scheduleRealtimeTimer(
     'match_disconnect_forfeit',
     matchId,
-    new Date(Date.now() + MATCH_DISCONNECT_GRACE_MS),
+    new Date(Date.now() + harnessDelayMs(MATCH_DISCONNECT_GRACE_MS)),
     { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId }
   );
 
@@ -1546,6 +1546,10 @@ async function findReconnectPendingUsers(
         return;
       }
       const userRoomSockets = await fetchUserRoomSockets(io, userId);
+      if (userRoomSockets === null) {
+        pending.add(userId);
+        return;
+      }
       const hasFreshUserSocket = userRoomSockets.some(
         (socket) => socketAuthenticatedAs(socket, userId) && (socketConnectedAt(socket) ?? 0) >= markerMs
       );

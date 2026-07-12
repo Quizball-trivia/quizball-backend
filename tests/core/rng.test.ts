@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRandom, withSeed, seedFrom, isSeeded, seededShuffle } from '../../src/core/rng.js';
+import { getRandom, withSeed, seedFrom, isSeeded, seededShuffle, shuffle } from '../../src/core/rng.js';
 
 describe('rng seam', () => {
   it('returns a float in [0, 1) unseeded (prod path = Math.random behaviour)', () => {
@@ -103,5 +103,16 @@ describe('seededShuffle (MCQ option ordering)', () => {
     const idx = shuffled.findIndex((o) => o.is_correct);
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(shuffled[idx].text).toBe('b');
+  });
+});
+
+describe('shuffle', () => {
+  it('uses the provided random source and does not mutate input', () => {
+    const input = ['a', 'b', 'c', 'd'];
+    const randomValues = [0, 0, 0];
+    const random = () => randomValues.shift() ?? 0;
+
+    expect(shuffle(input, random)).toEqual(['b', 'c', 'd', 'a']);
+    expect(input).toEqual(['a', 'b', 'c', 'd']);
   });
 });

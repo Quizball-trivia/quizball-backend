@@ -77,6 +77,13 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     halftimeAiBanTimers.delete(matchId);
   }
 
+  function clearAllHalftimeAiBanTimers(): void {
+    for (const timer of halftimeAiBanTimers.values()) {
+      clearTimeout(timer);
+    }
+    halftimeAiBanTimers.clear();
+  }
+
   function clearHalftimeTimer(matchId: string): void {
     void cancelRealtimeTimer('possession_halftime', matchId).catch((error) => {
       logger.warn({ error, matchId }, 'Failed to cancel possession halftime timer');
@@ -852,6 +859,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
   return {
     clearHalftimeTimer,
     clearHalftimeAiBanTimer,
+    clearAllHalftimeAiBanTimers,
     getHalftimeTurnSeat,
     uniqueDraftCategories,
     ensureHalftimeCategories,

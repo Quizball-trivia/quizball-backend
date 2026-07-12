@@ -9,9 +9,19 @@ export interface HeadToHeadRow {
   last_played_at: string | null;
 }
 
+export interface RecentMatchOpponentJson {
+  id: string | null;
+  username: string | null;
+  avatarUrl: string | null;
+  avatarCustomization: Json | null;
+  isAi: boolean;
+  placement: number | null;
+  totalPoints: number | null;
+}
+
 export interface RecentMatchRow {
   match_id: string;
-  mode: 'friendly' | 'ranked';
+  mode: 'friendly' | 'ranked' | 'auction';
   status: 'completed' | 'abandoned';
   winner_user_id: string | null;
   ended_at: string | null;
@@ -33,6 +43,9 @@ export interface RecentMatchRow {
   opponent_is_ai: boolean;
   opponent_rp: number | null;
   opponent_placement_status: 'unplaced' | 'in_progress' | 'placed' | null;
+  player_placement: number | null;
+  player_count: number;
+  opponents: RecentMatchOpponentJson[] | null;
 }
 
 export interface UserModeMatchStatsRow {
@@ -131,7 +144,13 @@ export const statsRepo = {
         CASE
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp_ranked.placement_status
-        END AS opponent_placement_status
+        END AS opponent_placement_status,
+        -- Finishing place for multi-player modes (auction). NULL for 1v1.
+        mp_self.placement AS player_placement,
+        -- Count of players (auction = 3). Used to render "1st of N".
+        (SELECT COUNT(*)::int FROM match_players mpc WHERE mpc.match_id = m.id) AS player_count,
+        -- All other seats (auction shows BOTH opponents), as JSON.
+        opps.opponents AS opponents
       FROM matches m
       JOIN match_players mp_self
         ON mp_self.match_id = m.id
@@ -149,6 +168,23 @@ export const statsRepo = {
        AND rrc.user_id = mp_self.user_id
       LEFT JOIN users opp ON opp.id = mp_opp.user_id
       LEFT JOIN ranked_profiles opp_ranked ON opp_ranked.user_id = mp_opp.user_id
+      -- All other seats with name/avatar/placement (auction has 2 opponents).
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', ou.id,
+            'username', ou.nickname,
+            'avatarUrl', ou.avatar_url,
+            'avatarCustomization', ou.avatar_customization,
+            'isAi', COALESCE(ou.is_ai, false),
+            'placement', mpo.placement,
+            'totalPoints', mpo.total_points
+          ) ORDER BY mpo.placement NULLS LAST, mpo.seat
+        ) AS opponents
+        FROM match_players mpo
+        JOIN users ou ON ou.id = mpo.user_id
+        WHERE mpo.match_id = m.id AND mpo.user_id <> ${userId}
+      ) opps ON true
       WHERE m.status IN ('completed', 'abandoned')
         AND m.is_dev = false
       ORDER BY COALESCE(m.ended_at, m.started_at) DESC
@@ -193,11 +229,11 @@ export const statsRepo = {
         COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS event_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
-      JOIN LATERAL (
-        SELECT COUNT(*) AS player_count
-        FROM match_players mp_count
-        WHERE mp_count.match_id = m.id
-      ) pc ON TRUE
+      JOIN (
+        SELECT match_id, COUNT(*) AS player_count
+        FROM match_players
+        GROUP BY match_id
+      ) pc ON pc.match_id = m.id
       WHERE mp.user_id = ${userId}
         AND m.mode = 'ranked'
         AND m.status = 'completed'

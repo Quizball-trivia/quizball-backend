@@ -29,6 +29,10 @@ const getUserByIdMock = vi.fn();
 const pauseDraftForDisconnectedPlayerMock = vi.fn();
 const resumeDraftForReconnectedPlayerMock = vi.fn();
 const resumeActiveDraftTimersMock = vi.fn();
+const scheduleDraftAutoBanForCurrentTurnMock = vi.fn();
+const isDraftPlayerMarkedDisconnectedMock = vi.fn();
+const pauseDraftForDisconnectedPlayerAtStartMock = vi.fn();
+const markDraftPlayerDisconnectedMock = vi.fn();
 
 let redisClientMock: {
   get: typeof redisGetMock;
@@ -113,6 +117,10 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 
 vi.mock('../../src/realtime/services/draft-realtime.service.js', () => ({
   resumeActiveDraftTimers: (...args: unknown[]) => resumeActiveDraftTimersMock(...args),
+  scheduleDraftAutoBanForCurrentTurn: (...args: unknown[]) => scheduleDraftAutoBanForCurrentTurnMock(...args),
+  isDraftPlayerMarkedDisconnected: (...args: unknown[]) => isDraftPlayerMarkedDisconnectedMock(...args),
+  pauseDraftForDisconnectedPlayerAtStart: (...args: unknown[]) => pauseDraftForDisconnectedPlayerAtStartMock(...args),
+  markDraftPlayerDisconnected: (...args: unknown[]) => markDraftPlayerDisconnectedMock(...args),
   draftRealtimeService: {
     pauseDraftForDisconnectedPlayer: (...args: unknown[]) => pauseDraftForDisconnectedPlayerMock(...args),
     resumeDraftForReconnectedPlayer: (...args: unknown[]) => resumeDraftForReconnectedPlayerMock(...args),
@@ -156,6 +164,7 @@ function createIo() {
 describe('lobbyRealtimeService.startDraft ranked tickets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isDraftPlayerMarkedDisconnectedMock.mockResolvedValue(false);
     acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
     releaseLockMock.mockResolvedValue(true);
     selectRandomCategoriesMock.mockResolvedValue([
@@ -228,8 +237,26 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(roomEmit).toHaveBeenCalledWith('draft:start', expect.objectContaining({
       lobbyId: 'lobby-1',
       turnUserId: 'u1',
+      forceAtMs: null,
       recentFilterApplied: true,
     }));
+  });
+
+  it('starts paused and emits the disconnect overlay when a member was already marked disconnected', async () => {
+    const { io } = createIo();
+    const { startDraft } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    getByIdMock.mockResolvedValue({
+      id: 'lobby-1', mode: 'ranked', status: 'waiting', host_user_id: 'u1',
+    });
+    listMembersWithUserMock.mockResolvedValue([{ user_id: 'u1' }, { user_id: 'u2' }]);
+    isDraftPlayerMarkedDisconnectedMock.mockImplementation(async (_lobbyId: string, userId: string) => userId === 'u1');
+
+    await startDraft(io, 'lobby-1');
+
+    await vi.waitFor(() => {
+      expect(pauseDraftForDisconnectedPlayerAtStartMock).toHaveBeenCalledWith(io, 'lobby-1', 'u1');
+    });
+    expect(scheduleDraftAutoBanForCurrentTurnMock).not.toHaveBeenCalled();
   });
 
   it('starts a ranked-vs-AI draft without consuming the human ticket before match creation', async () => {

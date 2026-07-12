@@ -69,6 +69,15 @@ export function isSeeded(): boolean {
   return rngStorage.getStore() !== undefined;
 }
 
+export function shuffle<T>(items: readonly T[], random: () => number = getRandom): T[] {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /**
  * Deterministic Fisher–Yates shuffle keyed by `seed`. Same seed → same order,
  * every time and on every server/replica (so both players in a match, and any

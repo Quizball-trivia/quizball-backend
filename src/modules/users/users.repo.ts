@@ -569,26 +569,45 @@ export const usersRepo = {
    * Used by the ranked early-forfeit penalty: 4+ early-forfeits in the
    * window trigger a 100 RP deduction and skip the ticket refund.
    */
-  async bumpEarlyForfeitCount(userId: string): Promise<number> {
-    const [row] = await sql<{ early_forfeit_count: number }[]>`
-      UPDATE users
-      SET
-        early_forfeit_count = CASE
-          WHEN early_forfeit_window_started_at IS NULL
-            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
-          THEN 1
-          ELSE early_forfeit_count + 1
-        END,
-        early_forfeit_window_started_at = CASE
-          WHEN early_forfeit_window_started_at IS NULL
-            OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
-          THEN NOW()
-          ELSE early_forfeit_window_started_at
-        END,
-        updated_at = NOW()
-      WHERE id = ${userId}
-      RETURNING early_forfeit_count
-    `;
-    return row?.early_forfeit_count ?? 0;
+  async bumpEarlyForfeitCount(userId: string, matchId: string): Promise<number> {
+    return sql.begin(async (tx) => {
+      const inserted = await tx.unsafe<{ match_id: string }[]>(
+        `INSERT INTO ranked_early_forfeit_events (match_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (match_id, user_id) DO NOTHING
+         RETURNING match_id`,
+        [matchId, userId]
+      );
+
+      if (inserted.length > 0) {
+        const rows = await tx.unsafe<{ early_forfeit_count: number }[]>(
+          `UPDATE users
+           SET
+             early_forfeit_count = CASE
+               WHEN early_forfeit_window_started_at IS NULL
+                 OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+               THEN 1
+               ELSE early_forfeit_count + 1
+             END,
+             early_forfeit_window_started_at = CASE
+               WHEN early_forfeit_window_started_at IS NULL
+                 OR early_forfeit_window_started_at <= NOW() - INTERVAL '24 hours'
+               THEN NOW()
+               ELSE early_forfeit_window_started_at
+             END,
+             updated_at = NOW()
+           WHERE id = $1
+           RETURNING early_forfeit_count`,
+          [userId]
+        );
+        return rows[0]?.early_forfeit_count ?? 0;
+      }
+
+      const rows = await tx.unsafe<{ early_forfeit_count: number }[]>(
+        `SELECT early_forfeit_count FROM users WHERE id = $1`,
+        [userId]
+      );
+      return rows[0]?.early_forfeit_count ?? 0;
+    });
   },
 };

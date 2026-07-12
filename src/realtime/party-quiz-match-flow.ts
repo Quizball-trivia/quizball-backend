@@ -261,6 +261,10 @@ export function handlePartyQuizReadyForNextQuestion(
   );
 }
 
+export function resetPartyQuizReadyGates(): void {
+  pendingReadyGates.reset();
+}
+
 function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
   schedulePartyQuizTimeoutAt(io, matchId, qIndex, new Date(Date.now() + PARTY_QUESTION_TIME_MS));
 }

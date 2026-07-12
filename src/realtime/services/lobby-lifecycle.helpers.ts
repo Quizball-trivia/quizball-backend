@@ -10,6 +10,11 @@ import {
   syncFriendlyLobbyModeForMemberCount,
 } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
+import {
+  persistReconstructedDraftTurnState,
+  readDraftTurnState,
+  type DraftTurnState,
+} from '../draft-turn-state.js';
 
 export const LOBBY_LOCK_WAIT_MS = 1200;
 export const LOBBY_LOCK_RETRY_INTERVAL_MS = 75;
@@ -55,6 +60,38 @@ export async function resolveRankedAiUserIdForDraft(
     await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: RANKED_AI_KEY_TTL_SEC });
   }
   return aiMember.userId;
+}
+
+export async function ensureDraftTurnState(lobbyId: string): Promise<DraftTurnState | null> {
+  const existing = await readDraftTurnState(lobbyId);
+  if (existing) return existing;
+
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (!lobby || lobby.status !== 'active') return null;
+
+  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+  if (members.length !== 2) return null;
+
+  const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+  const aiUserId = lobby.mode === 'ranked'
+    ? await resolveRankedAiUserIdForDraft(lobbyId, members)
+    : null;
+  const banCount = bans.length;
+  const nextActorUserId = banCount === 0
+    ? lobby.host_user_id
+    : banCount >= 2
+      ? null
+      : members.find((member) => member.user_id !== bans[bans.length - 1].user_id)?.user_id ?? null;
+  const reconstructed: DraftTurnState = {
+    firstActorUserId: lobby.host_user_id,
+    nextActorUserId,
+    aiUserId,
+    participantUserIds: [members[0].user_id, members[1].user_id],
+    banCount,
+  };
+  const persisted = await persistReconstructedDraftTurnState(lobbyId, reconstructed);
+  logger.warn({ lobbyId, banCount }, 'Draft turn state reconstructed');
+  return persisted;
 }
 
 export async function transferHostIfNeeded(lobbyId: string, previousHostId: string): Promise<void> {

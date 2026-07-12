@@ -258,7 +258,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
         participantUserIds: ['u1', 'u2'],
         banCount: 0,
       }),
-      { EX: 600 }
+      { EX: 7200 }
     );
   });
 

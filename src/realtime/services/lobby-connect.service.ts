@@ -13,12 +13,12 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   autoLeaveAllWaitingLobbies,
   closeLobbyIfEmpty,
+  ensureDraftTurnState,
   getRankedAiUserIdForLobby,
   isRankedAiLobby,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
-import { readDraftTurnState } from '../draft-turn-state.js';
 
 const LOBBY_DISCONNECT_GRACE_MS = 15000;
 
@@ -84,7 +84,7 @@ export async function rejoinActiveDraftLobbyOnConnect(
   socket.emit('lobby:state', state);
 
   if (categories.length > 0 && members.length === 2) {
-    const turnState = await readDraftTurnState(newestLobby.id);
+    const turnState = await ensureDraftTurnState(newestLobby.id);
     if (!turnState) {
       logger.warn({ lobbyId: newestLobby.id }, 'Active draft rejoin skipped: turn state missing');
       return;

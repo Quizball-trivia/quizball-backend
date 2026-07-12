@@ -1,6 +1,6 @@
 import { getRedisClient } from './redis.js';
 
-const DRAFT_TURN_STATE_TTL_SEC = 600;
+const DRAFT_TURN_STATE_TTL_SEC = 7200;
 
 export interface DraftTurnState {
   firstActorUserId: string;
@@ -35,6 +35,26 @@ function parseDraftTurnState(value: string | null): DraftTurnState | null {
   }
 }
 
+async function backfillDraftTurnState(
+  lobbyId: string,
+  state: DraftTurnState
+): Promise<DraftTurnState> {
+  const redis = getRedisClient();
+  if (!redis?.isOpen) {
+    localStates.set(lobbyId, state);
+    return state;
+  }
+
+  const existing = await redis.set(draftTurnStateKey(lobbyId), JSON.stringify(state), {
+    NX: true,
+    GET: true,
+    EX: DRAFT_TURN_STATE_TTL_SEC,
+  });
+  const adopted = parseDraftTurnState(existing) ?? state;
+  localStates.set(lobbyId, adopted);
+  return adopted;
+}
+
 export async function persistInitialDraftTurnState(
   lobbyId: string,
   state: DraftTurnState
@@ -54,13 +74,22 @@ export async function readDraftTurnState(lobbyId: string): Promise<DraftTurnStat
       localStates.set(lobbyId, persisted);
       return persisted;
     }
+    const local = localStates.get(lobbyId);
+    if (local) return backfillDraftTurnState(lobbyId, local);
   }
   return localStates.get(lobbyId) ?? null;
 }
 
+export async function persistReconstructedDraftTurnState(
+  lobbyId: string,
+  state: DraftTurnState
+): Promise<DraftTurnState> {
+  return backfillDraftTurnState(lobbyId, state);
+}
+
 const ADVANCE_DRAFT_TURN_SCRIPT = `
 local raw = redis.call('GET', KEYS[1])
-if not raw then return nil end
+if not raw then return '__MISSING__' end
 local state = cjson.decode(raw)
 if state.nextActorUserId ~= ARGV[1] or state.banCount ~= tonumber(ARGV[2]) then return nil end
 state.banCount = state.banCount + 1
@@ -90,14 +119,16 @@ export async function advanceDraftTurnState(
     ? null
     : current.participantUserIds.find((userId) => userId !== actorUserId) ?? null;
   const redis = getRedisClient();
-  const hasPersistedRedisState = redis?.isOpen
-    ? parseDraftTurnState(await redis.get(draftTurnStateKey(lobbyId))) !== null
-    : false;
-  if (redis?.isOpen && hasPersistedRedisState && typeof redis.eval === 'function') {
-    const raw = await redis.eval(ADVANCE_DRAFT_TURN_SCRIPT, {
+  if (redis?.isOpen) {
+    const evalAdvance = () => redis.eval(ADVANCE_DRAFT_TURN_SCRIPT, {
       keys: [draftTurnStateKey(lobbyId)],
       arguments: [actorUserId, String(expectedBanCount), nextActorUserId ?? '', String(DRAFT_TURN_STATE_TTL_SEC)],
     });
+    let raw = await evalAdvance();
+    if (raw === '__MISSING__') {
+      await backfillDraftTurnState(lobbyId, current);
+      raw = await evalAdvance();
+    }
     const advanced = parseDraftTurnState(typeof raw === 'string' ? raw : null);
     if (!advanced) return null;
     localStates.set(lobbyId, advanced);

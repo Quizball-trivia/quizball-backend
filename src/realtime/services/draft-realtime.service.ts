@@ -41,11 +41,11 @@ import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import {
   detachAllSocketsFromLobby,
   emitClosedLobbyStateForMode,
+  ensureDraftTurnState,
 } from './lobby-lifecycle.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   advanceDraftTurnState,
-  readDraftTurnState,
   resetDraftTurnStateForTests,
 } from '../draft-turn-state.js';
 
@@ -845,7 +845,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
   ]);
   if (members.length !== 2 || categories.length === 0 || bans.length >= 2) return;
 
-  const turnState = await readDraftTurnState(lobbyId);
+  const turnState = await ensureDraftTurnState(lobbyId);
   if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
     logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
     return;
@@ -956,7 +956,7 @@ export async function runDraftAutoBan(
       return;
     }
 
-    const turnState = await readDraftTurnState(lobbyId);
+    const turnState = await ensureDraftTurnState(lobbyId);
     if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
       logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
       return;
@@ -1045,7 +1045,7 @@ export async function runDraftAutoBan(
     // Re-arm even when this run committed nothing (transient insert failure,
     // or a concurrent ban won the advance) — a still-open turn must never be
     // left without a watchdog.
-    const latestState = advancedState ?? await readDraftTurnState(lobbyId);
+    const latestState = advancedState ?? await ensureDraftTurnState(lobbyId);
     if (latestState?.nextActorUserId) {
       await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, {
         forceAtMs: nextForceAtMs,
@@ -1205,7 +1205,7 @@ export async function runDraftGraceExpiry(
 async function getCurrentDraftActorId(lobbyId: string): Promise<string | null> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') return null;
-  return (await readDraftTurnState(lobbyId))?.nextActorUserId ?? null;
+  return (await ensureDraftTurnState(lobbyId))?.nextActorUserId ?? null;
 }
 
 async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Promise<boolean> {
@@ -1250,7 +1250,7 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     if (!hasAiMember) return;
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const turnState = await readDraftTurnState(lobbyId);
+    const turnState = await ensureDraftTurnState(lobbyId);
     if (!turnState || turnState.aiUserId !== aiUserId || turnState.banCount !== bans.length) return;
     if (turnState.nextActorUserId !== aiUserId) {
       await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
@@ -1342,7 +1342,7 @@ export async function resumeActiveDraftTimers(
     return;
   }
 
-  const turnState = await readDraftTurnState(lobbyId);
+  const turnState = await ensureDraftTurnState(lobbyId);
   if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) return;
   const { aiUserId } = turnState;
   const expectedUserId = turnState.nextActorUserId;
@@ -1390,7 +1390,7 @@ export const draftRealtimeService = {
     }
     if (members.length !== 2 || bans.length >= 2) return;
 
-    const turnState = await readDraftTurnState(lobbyId);
+    const turnState = await ensureDraftTurnState(lobbyId);
     if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) return;
     const expectedUserId = turnState.nextActorUserId;
     if (payload.turnUserId && payload.turnUserId !== expectedUserId) {
@@ -1630,7 +1630,7 @@ export const draftRealtimeService = {
     }
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const turnState = await readDraftTurnState(lobbyId);
+    const turnState = await ensureDraftTurnState(lobbyId);
     if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
       logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
       socket.emit('error', { code: 'BAN_FAILED', message: 'Draft state is unavailable — retry shortly.' });

@@ -10,7 +10,6 @@ import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { trackDraftStarted } from '../../core/analytics/game-events.js';
-import { persistInitialDraftTurnState } from '../draft-turn-state.js';
 import {
   detachAllSocketsFromLobby,
   emitClosedLobbyStateForMode,
@@ -150,31 +149,21 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
       await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
-      const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
-      if (members.length !== 2) {
-        logger.warn({ lobbyId, memberCount: members.length }, 'Draft start aborted after status flip: lobby lacks 2 members');
-        return;
+      let turnUserId = lobby.host_user_id;
+      if (lobby.mode === 'ranked') {
+        const members = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
+        const aiUserId = rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members);
+        if (aiUserId) {
+          turnUserId =
+            members.find((member) => member.user_id !== aiUserId)?.user_id ?? lobby.host_user_id;
+        }
       }
-      const aiUserId = lobby.mode === 'ranked'
-        ? rankedAiUserId ?? await resolveRankedAiUserIdForDraft(lobbyId, members)
-        : null;
-      const turnUserId = lobby.host_user_id;
-      await persistInitialDraftTurnState(lobbyId, {
-        firstActorUserId: turnUserId,
-        nextActorUserId: turnUserId,
-        aiUserId,
-        participantUserIds: [members[0].user_id, members[1].user_id],
-        banCount: 0,
-      });
 
       span.setAttribute('quizball.turn_user_id', turnUserId);
       io.to(`lobby:${lobbyId}`).emit('draft:start', {
         lobbyId,
         categories,
         turnUserId,
-        // `draft:start` only paints the board. The synchronized turn deadline
-        // is emitted separately in `draft:begin` after the UI-ready gate.
-        forceAtMs: null,
         // Info for the client: candidates were chosen with recent-category
         // filtering (no client-side filtering — display as-is).
         recentFilterApplied,
@@ -190,20 +179,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         logger.warn({ err, lobbyId }, 'draft_started analytics failed');
       }
       void import('./draft-realtime.service.js')
-        .then(async ({ isDraftPlayerMarkedDisconnected, pauseDraftForDisconnectedPlayerAtStart, scheduleDraftAutoBanForCurrentTurn }) => {
-          const draftMembers = rankedMembers ?? await lobbiesRepo.listMembersWithUser(lobbyId);
-          const disconnectedMember = (await Promise.all(
-            draftMembers.map(async (member) => ({
-              userId: member.user_id,
-              disconnected: await isDraftPlayerMarkedDisconnected(lobbyId, member.user_id),
-            }))
-          )).find((member) => member.disconnected);
-          if (disconnectedMember) {
-            await pauseDraftForDisconnectedPlayerAtStart(io, lobbyId, disconnectedMember.userId);
-            return;
-          }
-          await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
-        })
+        .then(({ scheduleDraftAutoBanForCurrentTurn }) => scheduleDraftAutoBanForCurrentTurn(io, lobbyId))
         .catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
         });

@@ -95,7 +95,6 @@ export interface DraftState {
   lobbyId: string;
   categories: DraftCategory[];
   turnUserId: string;
-  forceAtMs: number | null;
   /**
    * Info flag: the candidates were selected with recent-category filtering
    * (recently played categories of the matched players were excluded). The
@@ -109,19 +108,6 @@ export interface DraftOpponentDisconnectedPayload {
   lobbyId: string;
   opponentId: string;
   graceMs: number;
-}
-
-export interface DraftWaitingForReadyPayload {
-  lobbyId: string;
-  readyUserIds: string[];
-  waitingUserIds: string[];
-  forceCancelAt: string;
-}
-
-export interface DraftBeginPayload {
-  lobbyId: string;
-  turnUserId: string;
-  forceAtMs: number;
 }
 
 export interface DraftResumePayload {
@@ -1169,14 +1155,7 @@ export interface ServerToClientEvents {
   'lobby:challenge_received': (data: LobbyChallengeInvitePayload) => void;
   'lobby:challenge_status': (data: LobbyChallengeStatusPayload) => void;
   'draft:start': (data: DraftState) => void;
-  'draft:waiting_for_ready': (data: DraftWaitingForReadyPayload) => void;
-  'draft:begin': (data: DraftBeginPayload) => void;
-  'draft:banned': (data: {
-    actorId: string;
-    categoryId: string;
-    turnUserId: string | null;
-    forceAtMs: number | null;
-  }) => void;
+  'draft:banned': (data: { actorId: string; categoryId: string }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;

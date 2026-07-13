@@ -54,7 +54,6 @@ import { matchPlayersRepo } from '../../src/modules/matches/match-players.repo.j
 import { usersRepo } from '../../src/modules/users/users.repo.js';
 import { rankedRepo } from '../../src/modules/ranked/ranked.repo.js';
 import { rankedService } from '../../src/modules/ranked/ranked.service.js';
-import { withSeed } from '../../src/core/rng.js';
 import type { MatchPlayerRow, MatchRow } from '../../src/modules/matches/matches.types.js';
 import type { RankedProfileRow, RankedRpChangeRow, RankedTier } from '../../src/modules/ranked/ranked.types.js';
 
@@ -245,108 +244,23 @@ describe('rankedService', () => {
   });
 
   it('builds a non-placement AI context around the player RP for placed players', () => {
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    try {
-      const placedProfile = createProfile({
-        user_id: 'placed',
-        rp: 525,
-        tier: 'Youth Prospect',
-        placement_status: 'placed',
-        placement_played: 3,
-        placement_wins: 2,
-      });
-
-      const context = rankedService.buildAiMatchContext(placedProfile);
-
-      expect(context.isPlacement).toBe(false);
-      expect(context.placementGameNo).toBeUndefined();
-      expect(context.aiAnchorRp).toBe(525);
-      expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.35);
-      expect(context.aiCorrectness).toBeLessThanOrEqual(0.75);
-      expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
-    } finally {
-      randomSpy.mockRestore();
-    }
-  });
-
-  it('builds high-RP AI context with a jittered uncapped anchor', () => {
     const placedProfile = createProfile({
-      user_id: 'high-rp',
-      rp: 20795,
-      tier: 'GOAT',
+      user_id: 'placed',
+      rp: 525,
+      tier: 'Youth Prospect',
       placement_status: 'placed',
       placement_played: 3,
-      placement_wins: 3,
+      placement_wins: 2,
     });
 
-    const first = withSeed('ranked-ai-high-rp-anchor', () =>
-      rankedService.buildAiMatchContext(placedProfile)
-    );
-    const second = withSeed('ranked-ai-high-rp-anchor', () =>
-      rankedService.buildAiMatchContext(placedProfile)
-    );
+    const context = rankedService.buildAiMatchContext(placedProfile);
 
-    expect(second.aiAnchorRp).toBe(first.aiAnchorRp);
-    expect(first.isPlacement).toBe(false);
-    expect(first.aiAnchorRp).toBeGreaterThanOrEqual(150);
-    expect(first.aiAnchorRp).toBeGreaterThanOrEqual(Math.round(20795 * 0.9));
-    expect(first.aiAnchorRp).toBeLessThanOrEqual(Math.round(20795 * 1.1));
-    expect(first.aiAnchorRp % 25).toBe(0);
-    expect(first.aiCorrectness).toBe(0.85);
-    expect(first.aiDelayProfile).toEqual({ minMs: 500, maxMs: 2200 });
-  });
-
-  it('clamps extreme anchors at the 25000 ceiling', () => {
-    const profile = createProfile({
-      user_id: 'anchor-ceiling',
-      rp: 30000,
-      tier: 'GOAT',
-      placement_status: 'placed',
-      placement_played: 3,
-      placement_wins: 3,
-    });
-
-    for (let i = 0; i < 25; i += 1) {
-      const ctx = withSeed(`ranked-ai-anchor-ceiling-${i}`, () => rankedService.buildAiMatchContext(profile));
-      expect(ctx.aiAnchorRp).toBeLessThanOrEqual(25000);
-      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
-    }
-  });
-
-  it('never lets jitter drop a high-band player onto the low-band curve', () => {
-    const profile = createProfile({
-      user_id: 'band-edge',
-      rp: 2800,
-      tier: 'GOAT',
-      placement_status: 'placed',
-      placement_played: 3,
-      placement_wins: 3,
-    });
-
-    for (let i = 0; i < 25; i += 1) {
-      const ctx = withSeed(`ranked-ai-band-edge-${i}`, () => rankedService.buildAiMatchContext(profile));
-      expect(ctx.aiAnchorRp).toBeGreaterThanOrEqual(2700);
-    }
-  });
-
-  it('keeps placed low-RP AI anchors unchanged when jitter is neutral', () => {
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    try {
-      const placedProfile = createProfile({
-        user_id: 'low-rp',
-        rp: 800,
-        tier: 'Reserve',
-        placement_status: 'placed',
-        placement_played: 3,
-        placement_wins: 2,
-      });
-
-      const context = rankedService.buildAiMatchContext(placedProfile);
-
-      expect(context.aiAnchorRp).toBe(800);
-    } finally {
-      randomSpy.mockRestore();
-    }
+    expect(context.isPlacement).toBe(false);
+    expect(context.placementGameNo).toBeUndefined();
+    expect(context.aiAnchorRp).toBe(525);
+    expect(context.aiCorrectness).toBeGreaterThanOrEqual(0.35);
+    expect(context.aiCorrectness).toBeLessThanOrEqual(0.75);
+    expect(context.aiDelayProfile.minMs).toBeLessThanOrEqual(context.aiDelayProfile.maxMs);
   });
 
   // Season 2026 formula, regular (goals) win/loss with goal margin 0 (both

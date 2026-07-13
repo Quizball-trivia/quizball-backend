@@ -90,6 +90,19 @@ export function autoRecover(client: StagingClient, options: BotBehaviorOptions =
   client.socket.on('match:rejoin_available', (p: { matchId?: string }) => {
     client.socket.emit('match:rejoin', p?.matchId ? { matchId: p.matchId } : {});
   });
+  // Mid-draft reconnect: the web client re-enters the lobby via draft:rejoin
+  // before acting; without it any post-reconnect draft:ban gets NOT_IN_LOBBY.
+  let inDraft = false;
+  let draftLobbyId: string | undefined;
+  client.socket.on('draft:start', (state: { lobbyId?: string }) => {
+    inDraft = true;
+    draftLobbyId = state?.lobbyId;
+  });
+  client.socket.on('draft:complete', () => { inDraft = false; });
+  client.socket.on('match:start', () => { inDraft = false; });
+  client.socket.on('connect', () => {
+    if (inDraft) client.socket.emit('draft:rejoin', draftLobbyId ? { lobbyId: draftLobbyId } : {});
+  });
   client.socket.on('match:waiting_for_ready', (p: { matchId?: string; phase?: string }) => {
     if (!p?.matchId) return;
     if (options.legacyProtocol) return;
@@ -147,7 +160,10 @@ export function autoHalftime(client: StagingClient): void {
 
 export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {}): void {
   let banCount = 0;
+  let lastAttemptedBanId: string | null = null;
+  let retryArmed = false;
   const emitBan = (categoryId: string) => {
+    lastAttemptedBanId = categoryId;
     const payload = { categoryId };
     client.socket.emit('draft:ban', payload);
     options.onDraftBanSent?.(payload);
@@ -167,7 +183,10 @@ export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {
   client.socket.on('draft:banned', (banned: { categoryId?: string } | undefined) => {
     const state = client.latest<{ lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
     banCount = Math.min(banCount + 1, 2);
-    if (banned?.categoryId) bannedCategoryIds.add(banned.categoryId);
+    if (banned?.categoryId) {
+      bannedCategoryIds.add(banned.categoryId);
+      if (banned.categoryId === lastAttemptedBanId) lastAttemptedBanId = null;
+    }
     if (!options.legacyProtocol) {
       client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     }
@@ -178,5 +197,21 @@ export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {
         emitBan(next.id);
       }
     }
+  });
+  // A ban sent while the draft is paused (our own reconnect racing the resume)
+  // is rejected with DRAFT_PAUSED — retry it once the server resumes the draft.
+  client.socket.on('error', (err: { code?: string } | undefined) => {
+    if (err?.code !== 'DRAFT_PAUSED' || !lastAttemptedBanId || retryArmed) return;
+    retryArmed = true;
+    const retry = () => {
+      retryArmed = false;
+      if (lastAttemptedBanId) emitBan(lastAttemptedBanId);
+    };
+    client.socket.once('draft:resume', retry);
+    setTimeout(() => {
+      if (!retryArmed) return;
+      client.socket.off('draft:resume', retry);
+      retry();
+    }, 4_000);
   });
 }

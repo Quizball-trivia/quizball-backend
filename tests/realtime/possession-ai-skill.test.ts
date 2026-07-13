@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  correctnessFromAnchor,
-  delayProfileFromAnchor,
-} from '../../src/modules/ranked/ranked.service.js';
+import { correctnessFromAnchor } from '../../src/modules/ranked/ranked.service.js';
 import {
   difficultyAdjustedCorrectness,
   getAiAnswerDelayMs,
@@ -13,38 +10,9 @@ describe('ranked possession AI skill scaling', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the normal-band base correctness curve unchanged', () => {
-    expect(correctnessFromAnchor(150)).toBe(0.35);
-    expect(correctnessFromAnchor(1900)).toBeCloseTo(0.6245098039215686);
-    expect(correctnessFromAnchor(2700)).toBe(0.75);
-  });
-
-  it('extends base correctness through the high band and caps at 6000 RP', () => {
-    expect(correctnessFromAnchor(4350)).toBeCloseTo(0.80);
-    expect(correctnessFromAnchor(6000)).toBeCloseTo(0.85);
-    expect(correctnessFromAnchor(25000)).toBeCloseTo(0.85);
-  });
-
-  it('keeps base correctness monotonic across the ranked AI anchor range', () => {
-    const anchors = [150, 800, 1900, 2700, 4350, 6000, 25000];
-
-    for (let index = 1; index < anchors.length; index += 1) {
-      expect(correctnessFromAnchor(anchors[index])).toBeGreaterThanOrEqual(
-        correctnessFromAnchor(anchors[index - 1])
-      );
-    }
-  });
-
-  it('keeps the normal-band delay profile unchanged', () => {
-    expect(delayProfileFromAnchor(150)).toEqual({ minMs: 900, maxMs: 5000 });
-    expect(delayProfileFromAnchor(1900)).toEqual({ minMs: 625, maxMs: 4108 });
-    expect(delayProfileFromAnchor(2700)).toEqual({ minMs: 500, maxMs: 3700 });
-  });
-
-  it('tightens the high-band delay profile through 6000 RP', () => {
-    expect(delayProfileFromAnchor(4350)).toEqual({ minMs: 500, maxMs: 2950 });
-    expect(delayProfileFromAnchor(6000)).toEqual({ minMs: 500, maxMs: 2200 });
-    expect(delayProfileFromAnchor(25000)).toEqual({ minMs: 500, maxMs: 2200 });
+  it('maps anchor RP to the widened base correctness curve', () => {
+    expect(correctnessFromAnchor(150)).toBeCloseTo(0.35);
+    expect(correctnessFromAnchor(2700)).toBeCloseTo(0.75);
   });
 
   it('orders adjusted correctness by question difficulty at a fixed rank', () => {

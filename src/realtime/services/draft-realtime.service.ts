@@ -41,13 +41,8 @@ import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
 import {
   detachAllSocketsFromLobby,
   emitClosedLobbyStateForMode,
-  ensureDraftTurnState,
 } from './lobby-lifecycle.helpers.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
-import {
-  advanceDraftTurnState,
-  resetDraftTurnStateForTests,
-} from '../draft-turn-state.js';
 
 const AI_BAN_DELAY_MIN_MS = 700;
 const AI_BAN_DELAY_MAX_MS = 1800;
@@ -55,9 +50,9 @@ const DRAFT_AUTO_BAN_MS = 16000;
 const DRAFT_UI_READY_TTL_SEC = 600;
 // If a client never sends draft:ui_ready (old client, lost socket, browser
 // killed mid-transition), keep the draft recoverable instead of wedging.
-export const DRAFT_UI_READY_FORCE_MS = 10000;
+const DRAFT_UI_READY_FORCE_MS = 45000;
 const AI_LOBBY_KEY_TTL_SEC = 7200;
-const DRAFT_DISCONNECT_GRACE_MS = 30000;
+const DRAFT_DISCONNECT_GRACE_MS = 60000;
 // Disconnect/pause state TTL. Gates the grace-recovery "who is disconnected"
 // check, so it must persist until the durable grace timer actually runs — which
 // can be delayed by a redeploy / scheduler lag. Sized to match the grace marker.
@@ -76,36 +71,6 @@ const DRAFT_GRACE_LOCK_TTL_SEC = 30;
 // connected then is a real presence (the disconnect was a ghost socket).
 const DRAFT_PRESENCE_RECHECK_MS = 12_000;
 const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
-
-function scheduleDraftPresenceRecheck(
-  lobbyId: string,
-  userId: string,
-  delayMs: number,
-  recheckPresence: () => Promise<void>
-): void {
-  const timerKey = `${lobbyId}:${userId}`;
-  const existing = draftPresenceRecheckTimers.get(timerKey);
-  if (existing) clearTimeout(existing);
-
-  const recheck = setTimeout(() => {
-    if (draftPresenceRecheckTimers.get(timerKey) !== recheck) return;
-    draftPresenceRecheckTimers.delete(timerKey);
-    void recheckPresence().catch((error) => {
-      logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
-    });
-  }, harnessDelayMs(delayMs));
-  recheck.unref?.();
-  draftPresenceRecheckTimers.set(timerKey, recheck);
-}
-
-export function resetDraftRuntimeState(): void {
-  for (const timer of draftPresenceRecheckTimers.values()) {
-    clearTimeout(timer);
-  }
-  draftPresenceRecheckTimers.clear();
-  resetDraftTurnStateForTests();
-}
-
 // Mutual-exclusion lock around draft completion → match creation. Completion is
 // reachable from several concurrent paths (human ban handler, scheduled AI ban,
 // auto-ban watchdog, reconnect/resume) and possibly from two instances during a
@@ -118,7 +83,6 @@ const DRAFT_COMPLETE_LOCK_TTL_MS = 30_000;
 interface DraftDisconnectPresenceOptions {
   ignoreSocketId?: string;
   disconnectedConnectedAt?: number;
-  knownDisconnected?: boolean;
 }
 
 function draftDisconnectKey(lobbyId: string, userId: string): string {
@@ -149,30 +113,6 @@ function draftUiReadyKey(lobbyId: string, userId: string, banCount: number): str
   return `draft:ui_ready:${lobbyId}:${userId}:${banCount}`;
 }
 
-function draftUiReadyDeadlineKey(lobbyId: string, banCount: number): string {
-  return `draft:ui_ready_deadline:${lobbyId}:${banCount}`;
-}
-
-export async function markDraftPlayerDisconnected(lobbyId: string, userId: string): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis?.isOpen) return;
-  await redis.set(draftDisconnectKey(lobbyId, userId), String(Date.now()), { EX: DRAFT_DISCONNECT_TTL_SEC });
-}
-
-export async function isDraftPlayerMarkedDisconnected(lobbyId: string, userId: string): Promise<boolean> {
-  const redis = getRedisClient();
-  if (!redis?.isOpen) return false;
-  return (await redis.exists(draftDisconnectKey(lobbyId, userId))) === 1;
-}
-
-export async function pauseDraftForDisconnectedPlayerAtStart(
-  io: QuizballServer,
-  lobbyId: string,
-  userId: string
-): Promise<void> {
-  await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId, { knownDisconnected: true });
-}
-
 async function markDraftUiReady(lobbyId: string, userId: string, banCount: number): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
@@ -183,34 +123,6 @@ async function isDraftUserUiReady(lobbyId: string, userId: string, banCount: num
   const redis = getRedisClient();
   if (!redis?.isOpen) return true;
   return (await redis.exists(draftUiReadyKey(lobbyId, userId, banCount))) === 1;
-}
-
-async function getDraftReadyState(
-  lobbyId: string,
-  humanUserIds: string[],
-  banCount: number
-): Promise<{ readyUserIds: string[]; waitingUserIds: string[] }> {
-  const ready = await Promise.all(
-    humanUserIds.map((userId) => isDraftUserUiReady(lobbyId, userId, banCount))
-  );
-  return {
-    readyUserIds: humanUserIds.filter((_, index) => ready[index]),
-    waitingUserIds: humanUserIds.filter((_, index) => !ready[index]),
-  };
-}
-
-async function getOrCreateDraftUiReadyDeadline(lobbyId: string, banCount: number): Promise<number> {
-  const redis = getRedisClient();
-  const key = draftUiReadyDeadlineKey(lobbyId, banCount);
-  const candidate = Date.now() + harnessDelayMs(DRAFT_UI_READY_FORCE_MS);
-  if (redis?.isOpen) {
-    // SET NX GET makes deadline creation atomic across replicas: the first
-    // writer wins and every concurrent caller reads the same value.
-    const prior = await redis.set(key, String(candidate), { NX: true, GET: true, EX: DRAFT_UI_READY_TTL_SEC });
-    const existing = Number(prior);
-    if (prior !== null && Number.isFinite(existing) && existing > Date.now()) return existing;
-  }
-  return candidate;
 }
 
 async function getRankedDraftAbortSignals(
@@ -623,6 +535,24 @@ async function startMatchFromDraft(
   return matchId;
 }
 
+/**
+ * Determine who should act next in the draft.
+ * Expects bans from listLobbyCategoryBans, ordered by banned_at ASC (oldest first).
+ * The most recent ban is at bans[bans.length - 1].
+ */
+function getNextActorId(
+  members: Array<{ user_id: string }>,
+  bans: Array<{ user_id: string }>,
+  firstActorUserId: string
+): string {
+  if (bans.length === 0) return firstActorUserId;
+
+  // Most recent ban is last in the array (ordered by banned_at ASC)
+  const lastActor = bans[bans.length - 1]?.user_id;
+  const other = members.find((member) => member.user_id !== lastActor)?.user_id;
+  return other ?? firstActorUserId;
+}
+
 function getAiBanDelayMs(): number {
   return Math.floor(getRandom() * (AI_BAN_DELAY_MAX_MS - AI_BAN_DELAY_MIN_MS + 1)) + AI_BAN_DELAY_MIN_MS;
 }
@@ -674,6 +604,15 @@ async function resolveRankedAiUserId(
     await redis.set(rankedAiLobbyKey(lobbyId), aiMember.userId, { EX: AI_LOBBY_KEY_TTL_SEC });
   }
   return aiMember.userId;
+}
+
+function getFirstDraftActorId(
+  members: Array<{ user_id: string }>,
+  hostUserId: string,
+  aiUserId: string | null
+): string {
+  if (!aiUserId) return hostUserId;
+  return members.find((member) => member.user_id !== aiUserId)?.user_id ?? hostUserId;
 }
 
 async function completeDraftIfReady(io: QuizballServer, lobbyId: string): Promise<string | null> {
@@ -793,8 +732,6 @@ interface ScheduleDraftAutoBanOptions {
   delayMs?: number;
   requireUiReady?: boolean;
   forceAtMs?: number | null;
-  turnUserId?: string;
-  banCount?: number;
 }
 
 export function scheduleDraftAutoBan(
@@ -808,8 +745,6 @@ export function scheduleDraftAutoBan(
     lobbyId,
     requireUiReady: options.requireUiReady,
     forceAtMs: options.forceAtMs ?? null,
-    turnUserId: options.turnUserId,
-    banCount: options.banCount,
   }).catch((error) => {
     logger.error({ error, lobbyId, delayMs: autoBanMs }, 'Failed to schedule draft auto-ban timer');
   });
@@ -845,82 +780,30 @@ export async function scheduleDraftAutoBanForCurrentTurn(
   ]);
   if (members.length !== 2 || categories.length === 0 || bans.length >= 2) return;
 
-  const turnState = await ensureDraftTurnState(lobbyId);
-  if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
-    logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
-    return;
-  }
-  const { aiUserId } = turnState;
-  const expectedUserId = turnState.nextActorUserId;
+  const aiUserId = lobby.mode === 'ranked'
+    ? await resolveRankedAiUserId(lobbyId, members)
+    : null;
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  const expectedUserId = getNextActorId(members, bans, firstActorUserId);
 
   if (lobby.mode === 'ranked' && aiUserId && expectedUserId === aiUserId) {
     if (!(await hasPendingRealtimeTimer('draft_ai_ban', lobbyId))) {
       scheduleRankedAiBan(io, lobbyId, aiUserId);
-      io.to(`lobby:${lobbyId}`).emit('draft:begin', {
-        lobbyId,
-        turnUserId: expectedUserId,
-        // Clients render forceAtMs as the turn countdown. The AI's internal
-        // ban timer fires in ~1-2s, which flashed a 0 on screen — send the
-        // standard turn window instead; the ban lands long before it expires.
-        forceAtMs: Date.now() + harnessDelayMs(DRAFT_AUTO_BAN_MS),
-      });
     }
     return;
   }
 
-  const humanUserIds = members
-    .filter((member) => member.user_id !== aiUserId)
-    .map((member) => member.user_id);
-  const readyState = isHarnessFastTimers()
-    ? { readyUserIds: humanUserIds, waitingUserIds: [] }
-    : await getDraftReadyState(lobbyId, humanUserIds, bans.length);
-  if (readyState.waitingUserIds.length === 0) {
-    const redis = getRedisClient();
-    const gateDeadlineExists = redis?.isOpen
-      ? (await redis.exists(draftUiReadyDeadlineKey(lobbyId, bans.length))) === 1
-      : false;
-    if (!gateDeadlineExists && await hasPendingRealtimeTimer('draft_auto_ban', lobbyId)) {
-      return;
-    }
-    // Replace the gate watchdog with a fresh turn watchdog. They deliberately
-    // share a timer kind/key, so leaving the gate timer in place would fire at
-    // the old cancellation deadline and instantly auto-ban a late-ready turn.
-    await clearPendingAutoBanTimer(lobbyId);
-    if (redis?.isOpen) {
-      await redis.del(draftUiReadyDeadlineKey(lobbyId, bans.length));
-    }
-    const forceAtMs = Date.now() + harnessDelayMs(DRAFT_AUTO_BAN_MS);
-    scheduleDraftAutoBan(io, lobbyId, {
-      delayMs: Math.max(0, forceAtMs - Date.now()),
-      forceAtMs,
-      turnUserId: expectedUserId,
-      banCount: bans.length,
-    });
-    io.to(`lobby:${lobbyId}`).emit('draft:begin', {
-      lobbyId,
-      turnUserId: expectedUserId,
-      forceAtMs,
-    });
-    logger.info(
-      { lobbyId, turnUserId: expectedUserId, banCount: bans.length, forceAtMs },
-      'Draft turn began after UI-ready gate'
-    );
+  const uiReady = isHarnessFastTimers() || await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
+  if (uiReady) {
+    scheduleDraftAutoBan(io, lobbyId);
     return;
   }
 
-  const forceAtMs = options.forceAtMs ?? await getOrCreateDraftUiReadyDeadline(lobbyId, bans.length);
-  io.to(`lobby:${lobbyId}`).emit('draft:waiting_for_ready', {
-    lobbyId,
-    readyUserIds: readyState.readyUserIds,
-    waitingUserIds: readyState.waitingUserIds,
-    forceCancelAt: new Date(forceAtMs).toISOString(),
-  });
+  const forceAtMs = options.forceAtMs ?? Date.now() + DRAFT_UI_READY_FORCE_MS;
   scheduleDraftAutoBan(io, lobbyId, {
     delayMs: Math.max(0, forceAtMs - Date.now()),
     requireUiReady: true,
     forceAtMs,
-    turnUserId: expectedUserId,
-    banCount: bans.length,
   });
   logger.info({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
 }
@@ -928,12 +811,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 export async function runDraftAutoBan(
   io: QuizballServer,
   lobbyId: string,
-  options: {
-    requireUiReady?: boolean;
-    forceAtMs?: number | null;
-    turnUserId?: string;
-    banCount?: number;
-  } = {}
+  options: { requireUiReady?: boolean; forceAtMs?: number | null } = {}
 ): Promise<void> {
   try {
     const redis = getRedisClient();
@@ -959,32 +837,16 @@ export async function runDraftAutoBan(
       return;
     }
 
-    const turnState = await ensureDraftTurnState(lobbyId);
-    if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
-      logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
-      return;
-    }
-    const { aiUserId } = turnState;
-    const expectedUserId = turnState.nextActorUserId;
+    const aiUserId = lobby.mode === 'ranked'
+      ? await resolveRankedAiUserId(lobbyId, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+    const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (bans.some((ban) => ban.user_id === expectedUserId)) return;
-    if (
-      (options.turnUserId !== undefined && options.turnUserId !== expectedUserId)
-      || (options.banCount !== undefined && options.banCount !== bans.length)
-    ) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
-      return;
-    }
     const expectedActorIsRankedHuman = lobby.mode === 'ranked' && expectedUserId !== aiUserId;
     if ((options.requireUiReady || expectedActorIsRankedHuman) && !isHarnessFastTimers()) {
-      const humanUserIds = members
-        .filter((member) => member.user_id !== aiUserId)
-        .map((member) => member.user_id);
-      const readyState = await getDraftReadyState(lobbyId, humanUserIds, bans.length);
-      if (options.requireUiReady && readyState.waitingUserIds.length === 0) {
-        await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
-        return;
-      }
-      if (readyState.waitingUserIds.length > 0) {
+      const uiReady = await isDraftUserUiReady(lobbyId, expectedUserId, bans.length);
+      if (!uiReady) {
         const forceAtMs = options.forceAtMs ?? null;
         if (forceAtMs === null) {
           await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
@@ -1018,41 +880,30 @@ export async function runDraftAutoBan(
     const autoChoice = candidates[Math.floor(getRandom() * candidates.length)];
     if (!autoChoice) return;
 
-    let committedBan: Awaited<ReturnType<typeof lobbiesRepo.insertLobbyCategoryBan>> | null = null;
+    let inserted = false;
     try {
-      const ban = await lobbiesRepo.insertLobbyCategoryBan(lobbyId, expectedUserId, autoChoice.id);
-      if (ban.user_id === expectedUserId) committedBan = ban;
+      await lobbiesRepo.insertLobbyCategoryBan(lobbyId, expectedUserId, autoChoice.id);
+      inserted = true;
     } catch (error) {
       logger.warn({ error, lobbyId, userId: expectedUserId }, 'Failed to insert automatic draft ban');
     }
 
-    const nextForceAtMs = null;
-    const advancedState = committedBan
-      ? await advanceDraftTurnState(lobbyId, expectedUserId, bans.length)
-      : null;
-    if (committedBan && advancedState) {
+    if (inserted) {
       io.to(`lobby:${lobbyId}`).emit('draft:banned', {
         actorId: expectedUserId,
-        categoryId: committedBan.category_id,
-        turnUserId: advancedState.nextActorUserId,
-        forceAtMs: nextForceAtMs,
+        categoryId: autoChoice.id,
       });
       logger.info(
-        { lobbyId, userId: expectedUserId, categoryId: committedBan.category_id, delayMs: DRAFT_AUTO_BAN_MS },
+        { lobbyId, userId: expectedUserId, categoryId: autoChoice.id, delayMs: DRAFT_AUTO_BAN_MS },
         'Draft ban applied automatically after timeout'
       );
     }
 
     await completeDraftIfReady(io, lobbyId);
 
-    // Re-arm even when this run committed nothing (transient insert failure,
-    // or a concurrent ban won the advance) — a still-open turn must never be
-    // left without a watchdog.
-    const latestState = advancedState ?? await ensureDraftTurnState(lobbyId);
-    if (latestState?.nextActorUserId) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, {
-        forceAtMs: nextForceAtMs,
-      });
+    const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    if (updatedBans.length < 2) {
+      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
     }
   } catch (error) {
     logger.error({ error, lobbyId, delayMs: DRAFT_AUTO_BAN_MS }, 'Scheduled automatic draft ban callback failed');
@@ -1208,7 +1059,18 @@ export async function runDraftGraceExpiry(
 async function getCurrentDraftActorId(lobbyId: string): Promise<string | null> {
   const lobby = await lobbiesRepo.getById(lobbyId);
   if (!lobby || lobby.status !== 'active') return null;
-  return (await ensureDraftTurnState(lobbyId))?.nextActorUserId ?? null;
+
+  const [bans, members] = await Promise.all([
+    lobbiesRepo.listLobbyCategoryBans(lobbyId),
+    lobbiesRepo.listMembersWithUser(lobbyId),
+  ]);
+  if (members.length !== 2 || bans.length >= 2) return null;
+
+  const aiUserId = lobby.mode === 'ranked'
+    ? await resolveRankedAiUserId(lobbyId, members)
+    : null;
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  return getNextActorId(members, bans, firstActorUserId);
 }
 
 async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Promise<boolean> {
@@ -1221,11 +1083,10 @@ async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Pro
   return existsResults.some((exists) => exists === 1);
 }
 
-function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): number {
+function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): void {
   const delayMs = getAiBanDelayMs();
-  const forceAtMs = Date.now() + delayMs;
 
-  void scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(forceAtMs), {
+  void scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(Date.now() + delayMs), {
     kind: 'draft_ai_ban',
     lobbyId,
     aiUserId,
@@ -1233,7 +1094,6 @@ function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: str
     logger.error({ error, lobbyId, aiUserId, delayMs }, 'Failed to schedule draft AI ban timer');
   });
   logger.debug({ lobbyId, aiUserId, delayMs }, 'Scheduled delayed AI draft ban');
-  return forceAtMs;
 }
 
 export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, aiUserId: string): Promise<void> {
@@ -1253,15 +1113,23 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     if (!hasAiMember) return;
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const turnState = await ensureDraftTurnState(lobbyId);
-    if (!turnState || turnState.aiUserId !== aiUserId || turnState.banCount !== bans.length) return;
-    if (turnState.nextActorUserId !== aiUserId) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
-      return;
-    }
 
     // The AI already banned — nothing to do.
     if (bans.some((ban) => ban.user_id === aiUserId)) return;
+
+    // The AI is expected to ban second. If the FIRST (human) ban hasn't landed
+    // yet — e.g. it failed to insert on a timer/click race — do NOT dead-end
+    // here (that's what left matches stuck on "preparing match"). Fall back to
+    // the generic auto-ban recovery, which force-applies the missing ban and
+    // reschedules the AI in turn so the draft always progresses.
+    if (bans.length !== 1) {
+      logger.warn(
+        { lobbyId, aiUserId, banCount: bans.length },
+        'AI draft ban expected exactly 1 prior ban; recovering via auto-ban'
+      );
+      scheduleDraftAutoBan(io, lobbyId);
+      return;
+    }
 
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
@@ -1273,9 +1141,8 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
       return;
     }
 
-    let ban: Awaited<ReturnType<typeof lobbiesRepo.insertLobbyCategoryBan>>;
     try {
-      ban = await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+      await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
     } catch (error) {
       // e.g. the picked category collided on the (lobby_id, category_id) UNIQUE
       // constraint due to a race. Don't dead-end — recover via auto-ban.
@@ -1283,29 +1150,17 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
       scheduleDraftAutoBan(io, lobbyId);
       return;
     }
-    if (ban.user_id !== aiUserId) {
-      scheduleDraftAutoBan(io, lobbyId);
-      return;
-    }
-
-    const advancedState = await advanceDraftTurnState(lobbyId, aiUserId, bans.length);
-    if (!advancedState) return;
 
     io.to(`lobby:${lobbyId}`).emit('draft:banned', {
       actorId: aiUserId,
-      categoryId: ban.category_id,
-      turnUserId: advancedState.nextActorUserId,
-      forceAtMs: null,
+      categoryId: aiChoice.id,
     });
     logger.info(
-      { lobbyId, userId: aiUserId, categoryId: ban.category_id, delayMs },
+      { lobbyId, userId: aiUserId, categoryId: aiChoice.id, delayMs },
       'Draft ban applied (AI)'
     );
 
     await completeDraftIfReady(io, lobbyId);
-    if (advancedState.nextActorUserId) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
-    }
   } catch (error) {
     logger.error({ error, lobbyId, aiUserId, delayMs }, 'Scheduled AI draft ban callback failed');
   }
@@ -1345,10 +1200,9 @@ export async function resumeActiveDraftTimers(
     return;
   }
 
-  const turnState = await ensureDraftTurnState(lobbyId);
-  if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) return;
-  const { aiUserId } = turnState;
-  const expectedUserId = turnState.nextActorUserId;
+  const aiUserId = lobby.mode === 'ranked' ? await resolveRankedAiUserId(lobbyId, members) : null;
+  const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+  const expectedUserId = getNextActorId(members, bans, firstActorUserId);
   const needsAiTimer = Boolean(
     aiUserId
       && expectedUserId === aiUserId
@@ -1393,9 +1247,15 @@ export const draftRealtimeService = {
     }
     if (members.length !== 2 || bans.length >= 2) return;
 
-    const turnState = await ensureDraftTurnState(lobbyId);
-    if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) return;
-    const expectedUserId = turnState.nextActorUserId;
+    const aiUserId = lobby.mode === 'ranked'
+      ? await resolveRankedAiUserId(lobbyId, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+    const expectedUserId = getNextActorId(members, bans, firstActorUserId);
+    if (socket.data.user.id !== expectedUserId) {
+      logger.debug({ lobbyId, userId: socket.data.user.id, expectedUserId }, 'Draft ui_ready ignored: not current actor');
+      return;
+    }
     if (payload.turnUserId && payload.turnUserId !== expectedUserId) {
       logger.debug({ lobbyId, payloadTurnUserId: payload.turnUserId, expectedUserId }, 'Draft ui_ready ignored: stale actor');
       return;
@@ -1405,22 +1265,7 @@ export const draftRealtimeService = {
       return;
     }
 
-    const alreadyReady = await isDraftUserUiReady(lobbyId, socket.data.user.id, bans.length);
-    if (alreadyReady) {
-      logger.debug(
-        { lobbyId, userId: socket.data.user.id, banCount: bans.length, socketId: socket.id },
-        'Duplicate draft ui_ready ignored'
-      );
-      return;
-    }
-
     await markDraftUiReady(lobbyId, socket.data.user.id, bans.length);
-    const presenceTimerKey = `${lobbyId}:${socket.data.user.id}`;
-    const presenceTimer = draftPresenceRecheckTimers.get(presenceTimerKey);
-    if (presenceTimer) {
-      clearTimeout(presenceTimer);
-      draftPresenceRecheckTimers.delete(presenceTimerKey);
-    }
     trackDraftUiReady({
       userId: socket.data.user.id,
       lobbyId,
@@ -1449,7 +1294,7 @@ export const draftRealtimeService = {
       socket.id !== options.ignoreSocketId &&
       socket.data.user.id === userId
     );
-    const replacementSocketPresent = !options.knownDisconnected && sameUserSockets.some((socket) => {
+    const replacementSocketPresent = sameUserSockets.some((socket) => {
       if (typeof options.disconnectedConnectedAt !== 'number') return true;
       const connectedAt = socket.data.connectedAt;
       return typeof connectedAt !== 'number' || connectedAt >= options.disconnectedConnectedAt;
@@ -1516,7 +1361,7 @@ export const draftRealtimeService = {
         'Draft auto-resuming after fast socket replacement'
       );
       await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
-    } else if (!options.knownDisconnected && sameUserSockets.length > 0) {
+    } else if (sameUserSockets.length > 0) {
       // The user still has OLDER live socket(s) in the lobby room. They can't
       // instantly prove presence — an in-flight zombie looks identical (the
       // S15 incident, see #60) — but a genuine zombie cannot outlive the
@@ -1524,11 +1369,12 @@ export const draftRealtimeService = {
       // remains, the "disconnect" was a short-lived ghost socket dying next to
       // a healthy connection (page-transition duplicate), and the draft should
       // resume instead of freezing for the full grace and aborting.
-      scheduleDraftPresenceRecheck(
-        lobbyId,
-        userId,
-        DRAFT_PRESENCE_RECHECK_MS,
-        async () => {
+      const timerKey = `${lobbyId}:${userId}`;
+      const existing = draftPresenceRecheckTimers.get(timerKey);
+      if (existing) clearTimeout(existing);
+      const recheck = setTimeout(() => {
+        draftPresenceRecheckTimers.delete(timerKey);
+        void (async () => {
           const liveSockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
           const stillPresent = liveSockets.some((socket) => socket.data.user.id === userId);
           if (!stillPresent) {
@@ -1543,8 +1389,12 @@ export const draftRealtimeService = {
             'Draft presence re-check: live socket survived ping timeout; resuming draft'
           );
           await draftRealtimeService.resumeDraftForReconnectedPlayer(io, lobbyId, userId);
-        }
-      );
+        })().catch((error) => {
+          logger.warn({ error, lobbyId, userId }, 'Draft presence re-check failed');
+        });
+      }, harnessDelayMs(DRAFT_PRESENCE_RECHECK_MS));
+      recheck.unref?.();
+      draftPresenceRecheckTimers.set(timerKey, recheck);
       logger.info(
         {
           lobbyId,
@@ -1573,15 +1423,7 @@ export const draftRealtimeService = {
     const members = await lobbiesRepo.listMembersWithUser(lobbyId);
     const memberIds = members.map((member) => member.user_id);
     if (!(await anyDraftDisconnectExists(lobbyId, memberIds))) {
-      const banCount = (await lobbiesRepo.listLobbyCategoryBans(lobbyId)).length;
       await redis.del([draftPauseKey(lobbyId), draftGraceKey(lobbyId)]);
-      // A reconnect is a new proof-of-presence round. Old acknowledgements are
-      // intentionally invalidated so both visible clients must confirm the
-      // board again before a fresh, full turn deadline is armed.
-      await redis.del([
-        draftUiReadyDeadlineKey(lobbyId, banCount),
-        ...memberIds.map((memberId) => draftUiReadyKey(lobbyId, memberId, banCount)),
-      ]);
       // Cancel the pending durable grace-expiry timer; clearing the grace key
       // already makes a stray firing a noop, but cancelling avoids the wasted poll.
       await cancelRealtimeTimer('draft_grace_expiry', lobbyId);
@@ -1633,14 +1475,13 @@ export const draftRealtimeService = {
     }
 
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const turnState = await ensureDraftTurnState(lobbyId);
-    if (!turnState || turnState.banCount !== bans.length || !turnState.nextActorUserId) {
-      logger.warn({ lobbyId, banCount: bans.length }, 'Draft turn state missing or out of sync');
-      socket.emit('error', { code: 'BAN_FAILED', message: 'Draft state is unavailable — retry shortly.' });
-      return;
-    }
-    const { aiUserId } = turnState;
-    const expectedUserId = turnState.nextActorUserId;
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const aiUserId = lobby.mode === 'ranked'
+      ? await resolveRankedAiUserId(lobbyId, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, lobby.host_user_id, aiUserId);
+
+    const expectedUserId = getNextActorId(members, bans, firstActorUserId);
     if (socket.data.user.id !== expectedUserId) {
       logger.warn(
         { lobbyId, userId: socket.data.user.id, expectedUserId },
@@ -1676,33 +1517,23 @@ export const draftRealtimeService = {
       return;
     }
     logger.info(
-      { lobbyId, userId: socket.data.user.id, categoryId: ban.category_id },
+      { lobbyId, userId: socket.data.user.id, categoryId },
       'Draft ban applied'
     );
 
-    const advancedState = await advanceDraftTurnState(lobbyId, socket.data.user.id, bans.length);
-    if (!advancedState) {
-      logger.warn({ lobbyId, userId: socket.data.user.id, banCount: bans.length }, 'Draft turn advance lost a concurrent race');
-      return;
-    }
-    const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const isRankedVsAi = lobby.mode === 'ranked' && aiUserId !== null;
-    // A committed ban closes the active turn. The next human turn only gets a
-    // deadline after the UI-ready gate completes (`draft:begin`); AI turns
-    // intentionally carry no countdown.
-    const forceAtMs = null;
     io.to(`lobby:${lobbyId}`).emit('draft:banned', {
       actorId: socket.data.user.id,
-      categoryId: ban.category_id,
-      turnUserId: advancedState.nextActorUserId,
-      forceAtMs,
+      categoryId,
     });
+
+    const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
+    const isRankedVsAi = lobby.mode === 'ranked' && aiUserId !== null;
     if (isRankedVsAi && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+      scheduleRankedAiBan(io, lobbyId, aiUserId);
       return;
     }
     if (updatedBans.length < 2) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId, { forceAtMs });
+      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
       return;
     }
 

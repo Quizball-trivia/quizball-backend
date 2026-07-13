@@ -113,6 +113,7 @@ const GRACE_EXTENDED_TTL_SEC = 30;
 const MAX_MATCH_DISCONNECTS = 3;
 const MATCH_RESUME_COUNTDOWN_MS = 5000;
 const MATCH_RESUME_UI_READY_CEILING_MS = 8_000;
+const RECENT_ROUND_ACTIVITY_MS = 15_000;
 const LIVE_SOCKET_SKIP_PAUSE_MIN_AGE_MS = 5000;
 const PRESENCE_TTL_SEC = 75;
 const DISCONNECT_TTL_SEC = 75;
@@ -281,28 +282,6 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
 }): Promise<{ finalized: boolean; abandoned: boolean }> {
   const { io, match, roster, cacheSnapshot, disconnectedUserIds, source, definiteForfeiterUserId } = params;
 
-  if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
-    const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
-    const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
-    for (const player of presentForPending) {
-      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
-    }
-    const finalized = await finalizeMatchAsForfeit({
-      matchId: match.id,
-      forfeitingUserId: definiteForfeiterUserId,
-      activeMatch: match,
-      cacheSnapshot,
-      cleanupRedisKeys: possessionTerminalCleanupKeys(match.id, roster),
-    });
-    if (!finalized.completed) return { finalized: false, abandoned: false };
-    await emitForfeitFinalResults(io, match.id, finalized.resultVersion);
-    logger.info(
-      { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
-      'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
-    );
-    return { finalized: true, abandoned: false };
-  }
-
   // Forfeit-first: a player who disconnected and never came back must always
   // lose by forfeit, no matter what the score/progress says. The player who
   // stayed must never be penalized for the opponent's disconnect (previously a
@@ -353,6 +332,62 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
         presentUserIds: presence.presentPlayers.map((player) => player.user_id),
       },
       'Disconnect terminal resolver finalized match as forfeit'
+    );
+    return { finalized: true, abandoned: false };
+  }
+
+  const matchRoomUserIds = new Set(presence.roomSocketUserIds);
+  const allPlayersHaveLiveSockets = roster.length > 0
+    && roster.every((player) => matchRoomUserIds.has(player.user_id));
+  const updatedAtMs = Date.parse(match.updated_at);
+  const hasRecentRoundActivity = match.current_q_index > 0
+    && Number.isFinite(updatedAtMs)
+    && Date.now() - updatedAtMs <= RECENT_ROUND_ACTIVITY_MS;
+  const hasQuestionInFlight = cacheSnapshot?.status === 'active'
+    && cacheSnapshot.currentQuestion !== null;
+  if (allPlayersHaveLiveSockets && (hasRecentRoundActivity || hasQuestionInFlight)) {
+    const redis = getRedisClient();
+    if (redis?.isOpen) {
+      await redis.del([
+        matchGraceKey(match.id),
+        matchGraceExtendedKey(match.id),
+        matchPauseKey(match.id),
+        ...disconnectedUserIds.map((userId) => matchDisconnectKey(match.id, userId)),
+      ]);
+    }
+    await cancelRealtimeTimer('match_disconnect_forfeit', match.id);
+    await ensurePossessionActiveTimers(io, match.id);
+    logger.info(
+      {
+        matchId: match.id,
+        source,
+        hasRecentRoundActivity,
+        hasQuestionInFlight,
+        liveSocketUserIds: [...matchRoomUserIds],
+      },
+      'Disconnect terminal resolution skipped because live match activity superseded the disconnect episode'
+    );
+    return { finalized: false, abandoned: false };
+  }
+
+  if (definiteForfeiterUserId && roster.some((player) => player.user_id === definiteForfeiterUserId)) {
+    const presentForPending = roster.filter((player) => player.user_id !== definiteForfeiterUserId);
+    const opponentPendingPayload = buildOpponentForfeitPendingPayload(match.id, 'opponent_reconnect_limit');
+    for (const player of presentForPending) {
+      io.to(`user:${player.user_id}`).emit('match:forfeit_pending', opponentPendingPayload);
+    }
+    const finalized = await finalizeMatchAsForfeit({
+      matchId: match.id,
+      forfeitingUserId: definiteForfeiterUserId,
+      activeMatch: match,
+      cacheSnapshot,
+      cleanupRedisKeys: possessionTerminalCleanupKeys(match.id, roster),
+    });
+    if (!finalized.completed) return { finalized: false, abandoned: false };
+    await emitForfeitFinalResults(io, match.id, finalized.resultVersion);
+    logger.info(
+      { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
+      'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
     );
     return { finalized: true, abandoned: false };
   }
@@ -858,6 +893,23 @@ export async function resumePausedMatch(
     const disconnectedOpponentId = otherDisconnected[0];
     if (!disconnectedOpponentId) return;
     const graceMs = await getRemainingDisconnectGraceMs(matchId);
+    const disconnectedOpponentMarkerRaw = await redis.get(
+      matchDisconnectKey(matchId, disconnectedOpponentId)
+    );
+    const disconnectedOpponentMarkerMs = Number(disconnectedOpponentMarkerRaw);
+    await scheduleRealtimeTimer(
+      'match_disconnect_forfeit',
+      matchId,
+      new Date(Date.now() + graceMs),
+      {
+        kind: 'match_disconnect_forfeit',
+        matchId,
+        disconnectedUserId: disconnectedOpponentId,
+        ...(Number.isFinite(disconnectedOpponentMarkerMs) && disconnectedOpponentMarkerMs > 0
+          ? { disconnectMarkerMs: disconnectedOpponentMarkerMs }
+          : {}),
+      }
+    );
     const remainingReconnects = toRemainingReconnects(
       await getDisconnectCount(matchId, disconnectedOpponentId)
     );
@@ -879,6 +931,7 @@ export async function resumePausedMatch(
     .filter((player, index) => player.user_id !== userId && exitPendingExists[index] === 1)
     .map((player) => player.user_id);
   if (exitPendingUserIds.length > 0) {
+    await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
     await redis.del(matchGraceKey(matchId));
     if (disconnectedBeforeResume.includes(userId)) {
       await redis.del(matchDisconnectKey(matchId, userId));
@@ -955,6 +1008,25 @@ export async function resumePausedMatch(
         for (const recoveredUserId of reconnectingDisconnectedUserIds) {
           await redis.del(matchDisconnectKey(matchId, recoveredUserId));
         }
+        const blockingDisconnectedUserId = blockingDisconnectedUserIds[0]!;
+        const blockingMarkerRaw = await redis.get(
+          matchDisconnectKey(matchId, blockingDisconnectedUserId)
+        );
+        const blockingMarkerMs = Number(blockingMarkerRaw);
+        const remainingGraceMs = await getRemainingDisconnectGraceMs(matchId);
+        await scheduleRealtimeTimer(
+          'match_disconnect_forfeit',
+          matchId,
+          new Date(Date.now() + remainingGraceMs),
+          {
+            kind: 'match_disconnect_forfeit',
+            matchId,
+            disconnectedUserId: blockingDisconnectedUserId,
+            ...(Number.isFinite(blockingMarkerMs) && blockingMarkerMs > 0
+              ? { disconnectMarkerMs: blockingMarkerMs }
+              : {}),
+          }
+        );
         logger.info(
           { matchId, blockingDisconnectedUserIds, readyReason: params.reason },
           'Match resume UI-ready gate kept grace active because disconnect markers remain'
@@ -1054,6 +1126,7 @@ export async function completeResumeCountdown(
     }
 
     await redis.del([matchPauseKey(matchId), matchGraceKey(matchId), matchGraceExtendedKey(matchId), countdownKey]);
+    await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
 
     const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
     if (variant !== 'friendly_party_quiz'
@@ -1468,8 +1541,8 @@ export async function pauseMatchForDisconnectedPlayer(
   await scheduleRealtimeTimer(
     'match_disconnect_forfeit',
     matchId,
-    new Date(Date.now() + MATCH_DISCONNECT_GRACE_MS),
-    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId }
+    new Date(Date.now() + harnessDelayMs(MATCH_DISCONNECT_GRACE_MS)),
+    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId, disconnectMarkerMs: disconnectedAtMs }
   );
 
   return {
@@ -1546,6 +1619,10 @@ async function findReconnectPendingUsers(
         return;
       }
       const userRoomSockets = await fetchUserRoomSockets(io, userId);
+      if (userRoomSockets === null) {
+        pending.add(userId);
+        return;
+      }
       const hasFreshUserSocket = userRoomSockets.some(
         (socket) => socketAuthenticatedAs(socket, userId) && (socketConnectedAt(socket) ?? 0) >= markerMs
       );
@@ -1566,10 +1643,29 @@ async function findReconnectPendingUsers(
 export async function resolveExpiredGraceWindow(
   io: QuizballServer,
   matchId: string,
-  _disconnectedUserId: string
+  disconnectedUserId: string,
+  armedDisconnectMarkerMs?: number
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
+  const currentDisconnectMarker = await redis.get(matchDisconnectKey(matchId, disconnectedUserId));
+  const markerMatchesArmedEpisode = currentDisconnectMarker !== null
+    && (
+      armedDisconnectMarkerMs === undefined
+      || Number(currentDisconnectMarker) === armedDisconnectMarkerMs
+    );
+  if (!markerMatchesArmedEpisode) {
+    logger.info(
+      {
+        matchId,
+        disconnectedUserId,
+        armedDisconnectMarkerMs: armedDisconnectMarkerMs ?? null,
+        currentDisconnectMarkerMs: currentDisconnectMarker === null ? null : Number(currentDisconnectMarker),
+      },
+      'Disconnect grace expiry ignored because its armed disconnect marker no longer matches'
+    );
+    return;
+  }
   // Hoisted so the finally can preserve the grace/pause keys when we defer for a
   // reconnect-pending player (the re-armed timer needs the grace window alive).
   let deferredForReconnect = false;
@@ -1617,11 +1713,20 @@ export async function resolveExpiredGraceWindow(
           const reconnectPendingGraceMs = harnessDelayMs(
             isKickoffGateStage ? MATCH_GATE_RECONNECT_PENDING_GRACE_MS : MATCH_RECONNECT_PENDING_GRACE_MS
           );
+          const reconnectPendingUserId = [...reconnectPending][0]!;
+          const reconnectPendingMarkerMs = markedDisconnected.find(
+            (entry) => entry.userId === reconnectPendingUserId
+          )?.markerMs;
           await scheduleRealtimeTimer(
             'match_disconnect_forfeit',
             matchId,
             new Date(Date.now() + reconnectPendingGraceMs),
-            { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: [...reconnectPending][0]! }
+            {
+              kind: 'match_disconnect_forfeit',
+              matchId,
+              disconnectedUserId: reconnectPendingUserId,
+              ...(reconnectPendingMarkerMs !== undefined ? { disconnectMarkerMs: reconnectPendingMarkerMs } : {}),
+            }
           );
           for (const userId of reconnectPending) {
             await emitRejoinAvailableToUser(
@@ -1657,6 +1762,7 @@ export async function resolveExpiredGraceWindow(
         await redis.del(matchGraceKey(matchId));
         await redis.del(matchGraceExtendedKey(matchId));
         await redis.del(matchPauseKey(matchId));
+        await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
         const ensured = await ensurePossessionActiveTimers(io, matchId);
         logger.info(
           { matchId, ensured, disconnectedUserIds: disconnected },

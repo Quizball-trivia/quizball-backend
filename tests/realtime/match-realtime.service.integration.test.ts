@@ -626,7 +626,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );
@@ -906,7 +906,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       const result = await pauseMatchForDisconnectedPlayer(io, 'm1', 'u1', { ignoreSocketId: 'old' });
 
       expect(result).toEqual({
-        graceMs: 20_000,
+        graceMs: 30_000,
         remainingReconnects: 3,
         finalized: false,
       });
@@ -954,7 +954,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           opponentId: 'u1',
-          graceMs: 20_000,
+          graceMs: 30_000,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1066,7 +1066,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
         expect.objectContaining({
           matchId: 'm1',
           variant: 'friendly_party_quiz',
-          graceMs: 20000,
+          graceMs: 30000,
         })
       );
       expect(emit).not.toHaveBeenCalledWith('match:countdown', expect.anything());
@@ -1136,7 +1136,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
       })
     );
   });
@@ -1518,7 +1518,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     }
   });
 
-  it('S15b2: grace expiry with everyone reconnected re-arms possession timers instead of silently unpausing', async () => {
+  it('S15b2: a late grace timer no-ops after its disconnect marker was cleared', async () => {
     const io = createIoMock();
     const nowIso = new Date().toISOString();
 
@@ -1538,22 +1538,15 @@ describe('match-realtime.service high-risk integration behavior', () => {
       { user_id: 'u2', seat: 2, total_points: 80, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: null },
     ]);
 
-    // A disconnect paused the match (cancelling the durable question timer)
-    // and armed the grace window. Both players reconnected before expiry, so
-    // their disconnect keys are gone — but the resume flow lost the race
-    // (e.g. reconnect flapping), leaving the pause key set and NO timer armed.
+    // The durable callback may already be dequeued when reconnect cleanup clears
+    // its marker, so the handler itself must reject the resolved episode.
     fakeRedisStore.values.set('match:grace:m1', String(Date.now() - 60_000));
     fakeRedisStore.values.set('match:pause:m1', String(Date.now() - 60_000));
 
     const { resolveExpiredGraceWindow } = await import('../../src/realtime/services/match-disconnect.service.js');
-    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     await resolveExpiredGraceWindow(io, 'm1', 'u1');
 
-    // The match must come back to life: pause cleared AND timers re-ensured
-    // (which re-arms a live deadline or immediately resolves an expired one).
-    expect(ensurePossessionActiveTimersMock).toHaveBeenCalledWith(io, 'm1');
-    expect(fakeRedisStore.values.has('match:pause:m1')).toBe(false);
-    expect(fakeRedisStore.values.has('match:grace:m1')).toBe(false);
+    expect(ensurePossessionActiveTimersMock).not.toHaveBeenCalled();
     expect(completeMatchMock).not.toHaveBeenCalled();
     expect(abandonMatchMock).not.toHaveBeenCalled();
   });
@@ -2614,7 +2607,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(roomEvents).toContainEqual({
       room: 'user:u1',
       event: 'match:rejoin_available',
-      payload: expect.objectContaining({ matchId: 'm1', graceMs: 20_000 }),
+      payload: expect.objectContaining({ matchId: 'm1', graceMs: 30_000 }),
     });
     expect(roomEvents).toContainEqual({
       room: 'user:u2',
@@ -2719,7 +2712,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );
@@ -2753,7 +2746,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       'match:rejoin_available',
       expect.objectContaining({
         matchId: 'm1',
-        graceMs: 20000,
+        graceMs: 30000,
         remainingReconnects: 2,
       })
     );
@@ -3044,7 +3037,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(completeMatchMock).not.toHaveBeenCalled();
   });
 
-  it('S21: match:forfeit returns MATCH_NOT_ACTIVE when no active match exists', async () => {
+  it('S21: match:forfeit replays final results when the requested match already completed', async () => {
     const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
     const io = createIoMock();
     const socket = createSocketMock('u1', 'm1');
@@ -3059,14 +3052,44 @@ describe('match-realtime.service high-risk integration behavior', () => {
       ended_at: new Date().toISOString(),
       winner_user_id: 'u2',
       lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession', winnerDecisionMethod: 'goals' },
+      ranked_context: null,
     });
 
     await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
 
     expect(socket.emit).toHaveBeenCalledWith(
-      'error',
-      expect.objectContaining({ code: 'MATCH_NOT_ACTIVE' })
+      'match:final_results',
+      expect.objectContaining({ matchId: 'm1', winnerId: 'u2' })
     );
+    expect(completeMatchMock).not.toHaveBeenCalled();
+  });
+
+  it('match:forfeit returns a terminal abandoned reply when the requested match already died', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1', 'm1');
+
+    getMatchMock.mockResolvedValue({
+      id: 'm1',
+      mode: 'friendly',
+      status: 'abandoned',
+      current_q_index: 5,
+      total_questions: 10,
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      winner_user_id: null,
+      lobby_id: 'l1',
+      state_payload: { variant: 'friendly_possession' },
+      ranked_context: null,
+    });
+
+    await matchRealtimeService.handleMatchForfeit(io, socket, 'm1');
+
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      code: 'MATCH_ABANDONED',
+      message: 'Match was abandoned due to disconnects.',
+    });
     expect(completeMatchMock).not.toHaveBeenCalled();
   });
 

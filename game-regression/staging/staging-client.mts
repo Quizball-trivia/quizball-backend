@@ -15,9 +15,10 @@ const RECORDED_EVENTS = [
   'match:start', 'match:countdown', 'match:question', 'match:round_result',
   'match:final_results', 'match:state', 'match:party_state', 'match:resume',
   'match:rejoin_available', 'match:opponent_disconnected', 'match:halftime_ban',
-  'match:answer_ack', 'match:opponent_answered',
-  'draft:start', 'draft:banned', 'ranked:search_started', 'ranked:match_found',
-  'lobby:state', 'error',
+  'match:answer_ack', 'match:opponent_answered', 'match:waiting_for_ready',
+  'draft:start', 'draft:banned', 'draft:complete', 'draft:resume',
+  'ranked:search_started', 'ranked:match_found', 'ranked:queue_left',
+  'lobby:state', 'session:state', 'session:blocked', 'error',
 ] as const;
 
 export interface StagingClient {

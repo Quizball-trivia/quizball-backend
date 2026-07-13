@@ -55,6 +55,7 @@ export {
   ensurePossessionActiveTimers,
   handlePossessionReadyForNextQuestion,
   resumePossessionMatchQuestion,
+  resetPossessionReadyGates,
   scheduleNextPossessionQuestion,
   sendPossessionMatchQuestion,
 } from './possession-question-dispatch.js';
@@ -78,6 +79,7 @@ const {
   schedulePossessionAiAnswer,
   clearAiAnswerTimer,
   clearAiMaps,
+  clearAllAiMaps,
 } = possessionAi;
 
 // ── Initialize Halftime sub-module ──
@@ -87,6 +89,7 @@ const possessionHalftime = createPossessionHalftime({
 });
 const {
   clearHalftimeTimer,
+  clearAllHalftimeAiBanTimers,
   getHalftimeTurnSeat,
   ensureHalftimeCategories,
   resolveHalftimeResult,
@@ -159,6 +162,11 @@ export function deferPossessionQuestionTimerForPause(
 export function cancelPossessionHalftimeTimer(matchId: string): void {
   clearHalftimeTimer(matchId);
   clearAiMaps(matchId);
+}
+
+export function resetPossessionRuntimeState(): void {
+  clearAllHalftimeAiBanTimers();
+  clearAllAiMaps();
 }
 
 export const __possessionInternals = {

@@ -351,7 +351,12 @@ class TestSocket {
 
 class TestIo {
   private readonly roomMap = new Map<string, Set<TestSocket>>();
+  private fetchSocketFailuresRemaining = 0;
   constructor(private readonly sockets: TestSocket[]) {}
+
+  failNextFetchSockets(count: number): void {
+    this.fetchSocketFailuresRemaining = count;
+  }
 
   to(room: string): { emit: (event: string, payload?: unknown) => void } {
     return {
@@ -374,6 +379,10 @@ class TestIo {
         sockets.forEach((socket) => socket.join(targetRoom));
       },
       fetchSockets: async () => {
+        if (this.fetchSocketFailuresRemaining > 0) {
+          this.fetchSocketFailuresRemaining -= 1;
+          throw new Error('adapter unavailable');
+        }
         return [...(this.roomMap.get(room) ?? new Set<TestSocket>())];
       },
     };
@@ -663,6 +672,21 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(aMatch.opponent.id).toBe('u2');
     expect(bMatch.opponent.id).toBe('u1');
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
+  it('treats adapter lookup errors as inconclusive and keeps a healthy pairing', async () => {
+    const userA = createSocket('u1');
+    const userB = createSocket('u2');
+    io.failNextFetchSockets(2);
+    const userAMatch = waitForEvent<{ opponent: { id: string } }>(userA, 'ranked:match_found');
+    const userBMatch = waitForEvent<{ opponent: { id: string } }>(userB, 'ranked:match_found');
+
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    const [aMatch, bMatch] = await Promise.all([userAMatch, userBMatch]);
+    expect(aMatch.opponent.id).toBe('u2');
+    expect(bMatch.opponent.id).toBe('u1');
   });
 
   it('matches four queued players without AI fallback', async () => {

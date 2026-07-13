@@ -185,7 +185,9 @@ describe('possession AI timer scheduling', () => {
         'realtime:timers',
         [expect.objectContaining({ value: 'possession_ai_answer:m1:0' })]
       );
-      expect(redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0')).toContain('"plannedAnswerTimeMs":2000');
+      const payload = redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0');
+      expect(payload).toContain('"plannedAnswerTimeMs":1700');
+      expect(payload).toContain('"plannedIsCorrect":true');
     } finally {
       randomSpy.mockRestore();
     }
@@ -215,7 +217,7 @@ describe('possession AI timer scheduling', () => {
       const scheduledAt = redis.zsets.get('realtime:timers')?.get('possession_ai_answer:m1:0');
       expect(scheduledAt).toBeLessThanOrEqual(deadlineAt.getTime() - 250);
       const payload = redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0');
-      expect(payload).toContain('"plannedAnswerTimeMs":1250');
+      expect(payload).toContain('"plannedAnswerTimeMs":800');
     } finally {
       randomSpy.mockRestore();
       vi.useRealTimers();

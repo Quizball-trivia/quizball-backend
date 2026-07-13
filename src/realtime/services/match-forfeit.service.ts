@@ -32,6 +32,7 @@ import { getParticipantSnapshot } from './match-participants.helpers.js';
 import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
+  parseLastMatchReplay,
 } from './match-final-results.service.js';
 import { resolveMatchReplayEvidence } from './match-entry.service.js';
 import { applyPartyQuizDropouts } from './party-quiz-dropout.service.js';
@@ -264,7 +265,10 @@ export async function finalizeMatchAsForfeit(
       let penaltyApplied = false;
       let earlyForfeitCount = 0;
       try {
-        earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(params.forfeitingUserId);
+        earlyForfeitCount = await usersRepo.bumpEarlyForfeitCount(
+          params.forfeitingUserId,
+          params.matchId
+        );
       } catch (error) {
         logger.warn(
           { error, matchId: params.matchId, forfeitingUserId: params.forfeitingUserId },
@@ -448,11 +452,46 @@ export async function handleMatchForfeit(
         (socket.data.matchId ? await matchesRepo.getMatch(socket.data.matchId) : null) ??
         (await matchesRepo.getActiveMatchForUser(userId));
 
-      if (!activeMatch || activeMatch.status !== 'active') {
+      if (!activeMatch) {
         socket.emit('error', {
           code: 'MATCH_NOT_ACTIVE',
           message: 'No active match to forfeit',
         });
+        return;
+      }
+
+      if (activeMatch.status !== 'active') {
+        const roster = await matchPlayersRepo.listMatchPlayers(activeMatch.id);
+        if (!roster.some((player) => player.user_id === userId)) {
+          socket.emit('error', {
+            code: 'MATCH_NOT_ALLOWED',
+            message: 'You are not a participant in this match',
+          });
+          return;
+        }
+
+        let resultVersion = Date.now();
+        const redis = getRedisClient();
+        const rawReplay = redis ? await redis.get(lastMatchKey(userId)) : null;
+        if (rawReplay) {
+          const replay = parseLastMatchReplay(rawReplay);
+          if (replay.matchId === activeMatch.id) resultVersion = replay.resultVersion;
+        }
+        const finalPayload = await buildFinalResultsPayload(activeMatch.id, resultVersion);
+        if (finalPayload) {
+          socket.emit('match:final_results', finalPayload);
+          return;
+        }
+
+        socket.emit('error', activeMatch.status === 'abandoned'
+          ? {
+              code: 'MATCH_ABANDONED',
+              message: 'Match was abandoned due to disconnects.',
+            }
+          : {
+              code: 'MATCH_NOT_ACTIVE',
+              message: 'No active match to forfeit',
+            });
         return;
       }
 

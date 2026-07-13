@@ -135,7 +135,14 @@ export async function buildFinalResultsPayload(matchId: string, resultVersion: n
   const standings = buildStandings(players);
   const participants = await buildParticipantPayloads(players, match.mode, match.ranked_context);
   const variant = resolveMatchVariant(match.state_payload, match.mode);
-  const unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
+  // Best-effort enrichment: a failure here must never block result delivery —
+  // a swallowed emit leaves the client on "Updating rank…" forever.
+  let unlockedAchievements: Awaited<ReturnType<typeof achievementsService.listUnlockedForMatch>> = {};
+  try {
+    unlockedAchievements = await achievementsService.listUnlockedForMatch(matchId);
+  } catch (err) {
+    logger.warn({ err, matchId }, 'Failed to load unlocked achievements for final results');
+  }
   let questionResults: MatchFinalResultsPayload['questionResults'];
   if (variant !== 'friendly_party_quiz') {
     try {

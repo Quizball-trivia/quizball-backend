@@ -298,6 +298,9 @@ async function abortRankedDraftBeforeMatchCreation(
   await detachAllSocketsFromLobby(io, lobby.id);
   for (const userId of humanUserIds) {
     const signal = signals.find((candidate) => candidate.userId === userId);
+    // Tell the client WHY the draft died — without this the only signal is a
+    // generic closed-lobby state and the player is left staring at the gate.
+    io.to(`user:${userId}`).emit('draft:cancelled', { lobbyId: lobby.id, reason });
     trackRankedDraftAborted({
       userId,
       lobbyId: lobby.id,
@@ -855,15 +858,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
 
   if (lobby.mode === 'ranked' && aiUserId && expectedUserId === aiUserId) {
     if (!(await hasPendingRealtimeTimer('draft_ai_ban', lobbyId))) {
-      scheduleRankedAiBan(io, lobbyId, aiUserId);
-      io.to(`lobby:${lobbyId}`).emit('draft:begin', {
-        lobbyId,
-        turnUserId: expectedUserId,
-        // Clients render forceAtMs as the turn countdown. The AI's internal
-        // ban timer fires in ~1-2s, which flashed a 0 on screen — send the
-        // standard turn window instead; the ban lands long before it expires.
-        forceAtMs: Date.now() + harnessDelayMs(DRAFT_AUTO_BAN_MS),
-      });
+      await beginRankedAiDraftTurn(io, lobbyId, aiUserId);
     }
     return;
   }
@@ -1221,19 +1216,33 @@ async function anyDraftDisconnectExists(lobbyId: string, userIds: string[]): Pro
   return existsResults.some((exists) => exists === 1);
 }
 
-function scheduleRankedAiBan(_io: QuizballServer, lobbyId: string, aiUserId: string): number {
+async function scheduleRankedAiBan(lobbyId: string, aiUserId: string): Promise<boolean> {
   const delayMs = getAiBanDelayMs();
-  const forceAtMs = Date.now() + delayMs;
-
-  void scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(forceAtMs), {
-    kind: 'draft_ai_ban',
-    lobbyId,
-    aiUserId,
-  }).catch((error) => {
+  try {
+    await scheduleRealtimeTimer('draft_ai_ban', lobbyId, new Date(Date.now() + delayMs), {
+      kind: 'draft_ai_ban',
+      lobbyId,
+      aiUserId,
+    });
+    logger.debug({ lobbyId, aiUserId, delayMs }, 'Scheduled delayed AI draft ban');
+    return true;
+  } catch (error) {
     logger.error({ error, lobbyId, aiUserId, delayMs }, 'Failed to schedule draft AI ban timer');
+    return false;
+  }
+}
+
+async function beginRankedAiDraftTurn(
+  io: QuizballServer,
+  lobbyId: string,
+  aiUserId: string
+): Promise<void> {
+  if (!(await scheduleRankedAiBan(lobbyId, aiUserId))) return;
+  io.to(`lobby:${lobbyId}`).emit('draft:begin', {
+    lobbyId,
+    turnUserId: aiUserId,
+    forceAtMs: Date.now() + harnessDelayMs(DRAFT_AUTO_BAN_MS),
   });
-  logger.debug({ lobbyId, aiUserId, delayMs }, 'Scheduled delayed AI draft ban');
-  return forceAtMs;
 }
 
 export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, aiUserId: string): Promise<void> {
@@ -1248,20 +1257,21 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
     const lobby = await lobbiesRepo.getById(lobbyId);
     if (!lobby || lobby.status !== 'active' || lobby.mode !== 'ranked') return;
 
-    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-    const hasAiMember = members.some((member) => member.user_id === aiUserId);
-    if (!hasAiMember) return;
-
     const bans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
     const turnState = await ensureDraftTurnState(lobbyId);
-    if (!turnState || turnState.aiUserId !== aiUserId || turnState.banCount !== bans.length) return;
-    if (turnState.nextActorUserId !== aiUserId) {
+    if (!turnState || turnState.banCount !== bans.length) return;
+    const currentAiUserId = turnState.aiUserId;
+    if (!currentAiUserId || turnState.nextActorUserId !== currentAiUserId) {
       await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
       return;
     }
 
+    const members = await lobbiesRepo.listMembersWithUser(lobbyId);
+    const hasAiMember = members.some((member) => member.user_id === currentAiUserId);
+    if (!hasAiMember) return;
+
     // The AI already banned — nothing to do.
-    if (bans.some((ban) => ban.user_id === aiUserId)) return;
+    if (bans.some((ban) => ban.user_id === currentAiUserId)) return;
 
     const categories = await lobbiesService.getLobbyCategories(lobbyId);
     const bannedIds = new Set(bans.map((ban) => ban.category_id));
@@ -1275,30 +1285,30 @@ export async function runRankedAiDraftBan(io: QuizballServer, lobbyId: string, a
 
     let ban: Awaited<ReturnType<typeof lobbiesRepo.insertLobbyCategoryBan>>;
     try {
-      ban = await lobbiesRepo.insertLobbyCategoryBan(lobbyId, aiUserId, aiChoice.id);
+      ban = await lobbiesRepo.insertLobbyCategoryBan(lobbyId, currentAiUserId, aiChoice.id);
     } catch (error) {
       // e.g. the picked category collided on the (lobby_id, category_id) UNIQUE
       // constraint due to a race. Don't dead-end — recover via auto-ban.
-      logger.warn({ error, lobbyId, aiUserId }, 'Failed to insert delayed AI draft ban; recovering via auto-ban');
+      logger.warn({ error, lobbyId, aiUserId: currentAiUserId }, 'Failed to insert delayed AI draft ban; recovering via auto-ban');
       scheduleDraftAutoBan(io, lobbyId);
       return;
     }
-    if (ban.user_id !== aiUserId) {
+    if (ban.user_id !== currentAiUserId) {
       scheduleDraftAutoBan(io, lobbyId);
       return;
     }
 
-    const advancedState = await advanceDraftTurnState(lobbyId, aiUserId, bans.length);
+    const advancedState = await advanceDraftTurnState(lobbyId, currentAiUserId, bans.length);
     if (!advancedState) return;
 
     io.to(`lobby:${lobbyId}`).emit('draft:banned', {
-      actorId: aiUserId,
+      actorId: currentAiUserId,
       categoryId: ban.category_id,
       turnUserId: advancedState.nextActorUserId,
       forceAtMs: null,
     });
     logger.info(
-      { lobbyId, userId: aiUserId, categoryId: ban.category_id, delayMs },
+      { lobbyId, userId: currentAiUserId, categoryId: ban.category_id, delayMs },
       'Draft ban applied (AI)'
     );
 
@@ -1639,7 +1649,6 @@ export const draftRealtimeService = {
       socket.emit('error', { code: 'BAN_FAILED', message: 'Draft state is unavailable — retry shortly.' });
       return;
     }
-    const { aiUserId } = turnState;
     const expectedUserId = turnState.nextActorUserId;
     if (socket.data.user.id !== expectedUserId) {
       logger.warn(
@@ -1686,7 +1695,6 @@ export const draftRealtimeService = {
       return;
     }
     const updatedBans = await lobbiesRepo.listLobbyCategoryBans(lobbyId);
-    const isRankedVsAi = lobby.mode === 'ranked' && aiUserId !== null;
     // A committed ban closes the active turn. The next human turn only gets a
     // deadline after the UI-ready gate completes (`draft:begin`); AI turns
     // intentionally carry no countdown.
@@ -1697,8 +1705,13 @@ export const draftRealtimeService = {
       turnUserId: advancedState.nextActorUserId,
       forceAtMs,
     });
-    if (isRankedVsAi && updatedBans.length === 1 && socket.data.user.id !== aiUserId) {
-      await scheduleDraftAutoBanForCurrentTurn(io, lobbyId);
+    if (
+      lobby.mode === 'ranked'
+      && updatedBans.length === 1
+      && advancedState.aiUserId
+      && advancedState.nextActorUserId === advancedState.aiUserId
+    ) {
+      await beginRankedAiDraftTurn(io, lobbyId, advancedState.aiUserId);
       return;
     }
     if (updatedBans.length < 2) {

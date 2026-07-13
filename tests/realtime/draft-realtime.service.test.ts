@@ -1216,6 +1216,66 @@ describe('draftRealtimeService', () => {
     }
   });
 
+  it('uses the fast AI timer after a human first ban instead of the turn watchdog', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const {
+        draftRealtimeService,
+        runDraftAutoBan,
+        runRankedAiDraftBan,
+        scheduleDraftAutoBanForCurrentTurn,
+      } = await import('../../src/realtime/services/draft-realtime.service.js');
+      const { startRealtimeTimerScheduler, stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      const { io, emit } = createIoMock();
+      stopRealtimeTimerScheduler();
+      startRealtimeTimerScheduler(io, {
+        draft_ai_ban: async (server, payload) => {
+          if (payload.kind === 'draft_ai_ban') await runRankedAiDraftBan(server, payload.lobbyId, payload.aiUserId);
+        },
+        draft_auto_ban: async (server, payload) => {
+          if (payload.kind === 'draft_auto_ban') await runDraftAutoBan(server, payload.lobbyId);
+        },
+      });
+
+      getLobbyByIdMock.mockResolvedValue({
+        id: 'l1',
+        mode: 'ranked',
+        status: 'active',
+        host_user_id: 'u1',
+      });
+      listMembersWithUserMock.mockResolvedValue([
+        { user_id: 'u1' },
+        { user_id: 'ai-1' },
+      ]);
+      await seedTurnState({
+        aiUserId: 'ai-1',
+        participantUserIds: ['u1', 'ai-1'],
+      });
+
+      const turnStartedAt = Date.now();
+      await scheduleDraftAutoBanForCurrentTurn(io, 'l1');
+      await draftRealtimeService.handleBan(io, createSocketMock('u1', 'l1'), 'cat-a');
+
+      expect(emit).toHaveBeenCalledWith('draft:begin', {
+        lobbyId: 'l1',
+        turnUserId: 'ai-1',
+        forceAtMs: turnStartedAt + 16_000,
+      });
+      await vi.advanceTimersByTimeAsync(699);
+      expect(insertLobbyCategoryBanMock).not.toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(insertLobbyCategoryBanMock).toHaveBeenCalledWith('l1', 'ai-1', expect.any(String));
+      expect(createMatchFromLobbyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      const { stopRealtimeTimerScheduler } = await import('../../src/realtime/realtime-timer-scheduler.js');
+      stopRealtimeTimerScheduler();
+      randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('pauses active draft and notifies opponent when a draft player disconnects', async () => {
     const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
     const { io, emit, fetchSockets } = createIoMock();

@@ -1178,6 +1178,7 @@ export interface ServerToClientEvents {
     forceAtMs: number | null;
   }) => void;
   'draft:complete': (data: { halfOneCategoryId: string }) => void;
+  'draft:cancelled': (data: { lobbyId: string; reason: string }) => void;
   'draft:opponent_disconnected': (data: DraftOpponentDisconnectedPayload) => void;
   'draft:resume': (data: DraftResumePayload) => void;
   'match:start': (data: MatchStartPayload) => void;

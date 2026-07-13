@@ -13,9 +13,11 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   autoLeaveAllWaitingLobbies,
   closeLobbyIfEmpty,
-  ensureDraftTurnState,
+  getFirstDraftActorId,
+  getNextDraftActorId,
   getRankedAiUserIdForLobby,
   isRankedAiLobby,
+  resolveRankedAiUserIdForDraft,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
@@ -84,28 +86,21 @@ export async function rejoinActiveDraftLobbyOnConnect(
   socket.emit('lobby:state', state);
 
   if (categories.length > 0 && members.length === 2) {
-    const turnState = await ensureDraftTurnState(newestLobby.id);
-    if (!turnState) {
-      logger.warn({ lobbyId: newestLobby.id }, 'Active draft rejoin skipped: turn state missing');
-      return;
-    }
+    const aiUserId = newestLobby.mode === 'ranked'
+      ? await resolveRankedAiUserIdForDraft(newestLobby.id, members)
+      : null;
+    const firstActorUserId = getFirstDraftActorId(members, newestLobby.host_user_id, aiUserId);
+    const turnUserId = getNextDraftActorId(members, bans, firstActorUserId);
 
     socket.emit('draft:start', {
       lobbyId: newestLobby.id,
       categories,
-      turnUserId: turnState.nextActorUserId ?? turnState.firstActorUserId,
-      forceAtMs: null,
+      turnUserId,
     });
-    const replayedBans: typeof bans = [];
     for (const ban of bans) {
-      replayedBans.push(ban);
       socket.emit('draft:banned', {
         actorId: ban.user_id,
         categoryId: ban.category_id,
-        turnUserId: replayedBans.length === bans.length
-          ? turnState.nextActorUserId
-          : turnState.participantUserIds.find((participantId) => participantId !== ban.user_id) ?? null,
-        forceAtMs: null,
       });
     }
 
@@ -180,13 +175,6 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
 
   if (lobby.status !== 'waiting') {
     return;
-  }
-
-  try {
-    const { markDraftPlayerDisconnected } = await import('./draft-realtime.service.js');
-    await markDraftPlayerDisconnected(lobbyId, userId);
-  } catch (error) {
-    logger.warn({ error, lobbyId, userId }, 'Failed to mark waiting-lobby draft disconnect');
   }
 
   setTimeout(async () => {

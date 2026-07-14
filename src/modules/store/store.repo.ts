@@ -56,6 +56,21 @@ interface CompareAndSetTicketsStateInput {
   ticketsRefillStartedAt: string | null;
 }
 
+const WALLET_LOCK_TIMEOUT_SQL = "SET LOCAL lock_timeout = '2s'";
+
+function isLockTimeout(error: unknown): error is { code: string } {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error as { code: unknown }).code === '55P03';
+}
+
+async function withWalletLockTimeout<T>(
+  tx: TransactionSql,
+  operation: (savepoint: TransactionSql) => Promise<T>
+): Promise<T> {
+  await tx.unsafe(WALLET_LOCK_TIMEOUT_SQL);
+  return tx.savepoint(operation) as Promise<T>;
+}
+
 const baseLogsWhereClause = (
   query: ListStoreTransactionsQuery
 ) => sql`
@@ -261,15 +276,17 @@ export const storeRepo = {
   },
 
   async getWalletForUpdateInTx(tx: TransactionSql, userId: string): Promise<WalletStateRow | null> {
-    const [row] = await tx.unsafe<WalletStateRow[]>(
-      `
-      SELECT coins, tickets, tickets_refill_started_at
-      FROM users
-      WHERE id = $1
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [userId]
+    const [row] = await withWalletLockTimeout(tx, (savepoint) =>
+      savepoint.unsafe<WalletStateRow[]>(
+        `
+        SELECT coins, tickets, tickets_refill_started_at
+        FROM users
+        WHERE id = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [userId]
+      )
     );
     return row ?? null;
   },
@@ -278,27 +295,37 @@ export const storeRepo = {
     tx: TransactionSql,
     input: CompareAndSetTicketsStateInput
   ): Promise<WalletStateRow | null> {
-    const [row] = await tx.unsafe<WalletStateRow[]>(
-      `
-      UPDATE users
-      SET
-        tickets = $4,
-        tickets_refill_started_at = $5::timestamptz,
-        updated_at = NOW()
-      WHERE id = $1
-        AND tickets = $2
-        AND tickets_refill_started_at IS NOT DISTINCT FROM $3::timestamptz
-      RETURNING coins, tickets, tickets_refill_started_at
-      `,
-      [
-        input.userId,
-        input.observedTickets,
-        input.observedTicketsRefillStartedAt,
-        input.tickets,
-        input.ticketsRefillStartedAt,
-      ]
-    );
-    return row ?? null;
+    try {
+      const [row] = await withWalletLockTimeout(tx, (savepoint) =>
+        savepoint.unsafe<WalletStateRow[]>(
+          `
+          UPDATE users
+          SET
+            tickets = $4,
+            tickets_refill_started_at = $5::timestamptz,
+            updated_at = NOW()
+          WHERE id = $1
+            AND tickets = $2
+            AND tickets_refill_started_at IS NOT DISTINCT FROM $3::timestamptz
+          RETURNING coins, tickets, tickets_refill_started_at
+          `,
+          [
+            input.userId,
+            input.observedTickets,
+            input.observedTicketsRefillStartedAt,
+            input.tickets,
+            input.ticketsRefillStartedAt,
+          ]
+        )
+      );
+      return row ?? null;
+    } catch (error) {
+      // The savepoint rollback keeps the surrounding transaction usable. Treat
+      // a lock timeout like an ordinary CAS miss so the existing six-attempt
+      // read/backoff/retry loop can converge instead of occupying a pool slot.
+      if (isLockTimeout(error)) return null;
+      throw error;
+    }
   },
 
   async adjustWalletInTx(

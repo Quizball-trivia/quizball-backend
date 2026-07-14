@@ -19,6 +19,21 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
+  // Per-process budget. With two Railway replicas the default permits at most
+  // 24 app connections, leaving headroom below the small-tier Postgres limit
+  // for Auth, Storage, PostgREST, Realtime, observability, and administration.
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),
+  DB_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(12),
+  DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(100).default(12),
+  DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
+  DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
+  DB_WATCHDOG_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  DB_WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
+  DB_WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(4_000),
+  DB_WATCHDOG_FAILURES: z.coerce.number().int().min(1).max(10).default(3),
 
   // Redis
   REDIS_URL: z.string().url().optional(),

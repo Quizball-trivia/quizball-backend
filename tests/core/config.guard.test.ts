@@ -52,3 +52,20 @@ describe('config guard: REGRESSION_* flags are local-only', () => {
     }))).not.toThrow();
   });
 });
+
+describe('database resilience configuration', () => {
+  it('uses a conservative per-replica connection and queue budget', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.DB_POOL_MAX).toBe(12);
+    expect(parsed.DB_INFLIGHT_LIMIT).toBe(12);
+    expect(parsed.DB_QUEUE_LIMIT).toBe(12);
+    expect(parsed.DB_ACQUIRE_TIMEOUT_MS).toBe(1500);
+    expect(parsed.DB_MAX_LIFETIME_SECONDS).toBe(1800);
+  });
+
+  it('rejects unsafe or nonsensical database limits', () => {
+    expect(() => parseConfig(baseEnv({ DB_POOL_MAX: '0' }))).toThrow(/DB_POOL_MAX/);
+    expect(() => parseConfig(baseEnv({ DB_POOL_MAX: '31' }))).toThrow(/DB_POOL_MAX/);
+    expect(() => parseConfig(baseEnv({ DB_ACQUIRE_TIMEOUT_MS: '50' }))).toThrow(/DB_ACQUIRE_TIMEOUT_MS/);
+  });
+});

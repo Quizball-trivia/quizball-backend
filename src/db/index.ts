@@ -1,19 +1,33 @@
 import postgres from 'postgres';
 import { config } from '../core/config.js';
 import { logger } from '../core/logger.js';
+import {
+  DbAdmissionController,
+  DbOverloadedError,
+  type DbAdmissionStats,
+} from './admission.js';
 
-export const DB_POOL_MAX = 30;
+// Runtime fallbacks also keep unit tests with intentionally partial config
+// mocks safe; the real parsed config always supplies these values.
+export const DB_POOL_MAX = config.DB_POOL_MAX ?? 12;
+const DB_INFLIGHT_LIMIT = Math.min(config.DB_INFLIGHT_LIMIT ?? DB_POOL_MAX, DB_POOL_MAX);
+const admission = new DbAdmissionController(
+  DB_INFLIGHT_LIMIT,
+  config.DB_QUEUE_LIMIT ?? DB_INFLIGHT_LIMIT,
+  config.DB_ACQUIRE_TIMEOUT_MS ?? 1_500
+);
 
 // Create postgres connection pool
-export const sql = postgres(config.DATABASE_URL ?? '', {
-  max: DB_POOL_MAX, // connection pool size (under the Supabase pooler size of 40)
+const rawSql = postgres(config.DATABASE_URL ?? '', {
+  // This is a PER-REPLICA budget. It must be sized against Postgres
+  // max_connections after reserving capacity for every Supabase service, not
+  // merely kept below Supavisor's backend pool size.
+  max: DB_POOL_MAX,
   idle_timeout: 20,
   connect_timeout: 10,
-  // Recycle connections every 2 minutes. A short lifetime means that after a
-  // Supabase DB restart (e.g. compute upgrade / maintenance), any connection
-  // left pointing at the old instance is dropped and re-established quickly,
-  // instead of lingering and causing requests to hang on a dead connection.
-  max_lifetime: 60 * 2, // 2 minutes
+  // Avoid synchronised two-minute reconnect churn during a traffic spike. Dead
+  // pools are handled by bounded acquisition + the process watchdog below.
+  max_lifetime: config.DB_MAX_LIFETIME_SECONDS ?? 1_800,
   // NOTE on `fetch_types` (db-optimize.md #3): do NOT disable it. It was tried
   // (2026-06-10) to kill the per-connection pg_catalog.pg_type introspection
   // query, but postgres.js needs the fetched OID map to serialize ARRAY
@@ -30,6 +44,7 @@ export const sql = postgres(config.DATABASE_URL ?? '', {
   // withStatementTimeout) and on the `postgres` role GUC. Kept here only so a
   // session-mode (5432) connection still benefits; do NOT rely on it for 6543.
   connection: {
+    application_name: 'quizball-api',
     statement_timeout: 30_000,
     idle_in_transaction_session_timeout: 15_000,
   },
@@ -38,28 +53,24 @@ export const sql = postgres(config.DATABASE_URL ?? '', {
   debug: false,
 });
 
-// ── DB in-flight circuit breaker ─────────────────────────────────────────────
-// Prevents the pool-exhaustion snowball (2026-06-09 incident): when too many DB
-// operations are already checked out / queued, new work fails FAST with a 503
-// instead of queueing behind an exhausted pool for 30-135s ("site down"). This
-// does NOT cancel in-flight queries (postgres.js wouldn't truly cancel them) —
-// it only refuses to *schedule* new DB work past a safe ceiling.
-const DB_INFLIGHT_LIMIT = Math.round(DB_POOL_MAX * 1.5); // pool + a small queue (45)
-let dbInflight = 0;
-let dbRejections = 0;
-
-export class DbOverloadedError extends Error {
-  readonly statusCode = 503;
-  readonly code = 'DB_OVERLOADED';
-  constructor() {
-    super('Database is busy, please retry shortly');
-    this.name = 'DbOverloadedError';
+async function runWithAdmission<T>(operation: () => PromiseLike<T> | T): Promise<T> {
+  try {
+    return await admission.run(operation);
+  } catch (error) {
+    if (error instanceof DbOverloadedError) {
+      const stats = admission.stats();
+      if (stats.rejections % 50 === 1) {
+        logger.warn({ ...stats, reason: error.reason }, 'DB admission gate shedding load');
+      }
+    }
+    throw error;
   }
 }
 
 /** Current in-flight DB operations (for /health/db + metrics). */
-export function dbPoolStats(): { inflight: number; limit: number; max: number; rejections: number } {
-  return { inflight: dbInflight, limit: DB_INFLIGHT_LIMIT, max: DB_POOL_MAX, rejections: dbRejections };
+export function dbPoolStats(): DbAdmissionStats & { inflight: number; max: number } {
+  const stats = admission.stats();
+  return { ...stats, inflight: stats.active, max: DB_POOL_MAX };
 }
 
 /**
@@ -67,20 +78,8 @@ export function dbPoolStats(): { inflight: number; limit: number; max: number; r
  * tripped (too many concurrent DB ops), throws DbOverloadedError (503) so the
  * request fails fast instead of queueing behind an exhausted pool.
  */
-export async function withDbBreaker<T>(op: () => Promise<T>): Promise<T> {
-  if (dbInflight >= DB_INFLIGHT_LIMIT) {
-    dbRejections++;
-    if (dbRejections % 50 === 1) {
-      logger.warn({ inflight: dbInflight, limit: DB_INFLIGHT_LIMIT, rejections: dbRejections }, 'DB circuit breaker tripped — shedding load');
-    }
-    throw new DbOverloadedError();
-  }
-  dbInflight++;
-  try {
-    return await op();
-  } finally {
-    dbInflight--;
-  }
+export async function withDbBreaker<T>(op: () => PromiseLike<T> | T): Promise<T> {
+  return runWithAdmission(op);
 }
 
 // ── Per-transaction server-side timeouts (the ONLY reliable reaper on 6543) ───
@@ -106,18 +105,89 @@ function setLocalTimeouts(tx: postgres.TransactionSql, statementMs: number, idle
   ]);
 }
 
-const rawBegin = sql.begin.bind(sql);
-// Override sql.begin so every transaction gets the reaper automatically, with
-// zero changes at the ~21 call sites. Preserves the original signature/overloads.
-(sql as { begin: unknown }).begin = ((...args: unknown[]) => {
+const rawBegin = rawSql.begin.bind(rawSql);
+
+function gatedBegin(...args: unknown[]): Promise<unknown> {
   const fn = args.pop() as (tx: postgres.TransactionSql) => unknown;
   const options = args; // optional isolation-level string, passed through
   const wrapped = async (tx: postgres.TransactionSql) => {
     await setLocalTimeouts(tx, STATEMENT_TIMEOUT_MS, IDLE_IN_TX_MS);
     return fn(tx);
   };
-  return (rawBegin as (...a: unknown[]) => unknown)(...options, wrapped);
-}) as typeof sql.begin;
+  return runWithAdmission(
+    () => (rawBegin as (...a: unknown[]) => Promise<unknown>)(...options, wrapped)
+  );
+}
+
+/**
+ * Delay execution of a postgres.js PendingQuery until the admission controller
+ * grants a slot. The Proxy preserves query-fragment identity, so fragments can
+ * still be interpolated into larger tagged-template queries without executing.
+ */
+function gatePendingQuery<T extends object>(query: T): T {
+  let execution: Promise<unknown> | undefined;
+  const start = () => {
+    execution ??= runWithAdmission(() => query as unknown as PromiseLike<unknown>);
+    return execution;
+  };
+  let proxy: T;
+  proxy = new Proxy(query, {
+    get(target, property) {
+      if (property === 'then') {
+        return (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
+          start().then(onFulfilled, onRejected);
+      }
+      if (property === 'catch') {
+        return (onRejected: (reason: unknown) => unknown) => start().catch(onRejected);
+      }
+      if (property === 'finally') {
+        return (onFinally: () => void) => start().finally(onFinally);
+      }
+      if (property === 'execute') {
+        return () => {
+          void start();
+          return proxy;
+        };
+      }
+
+      const value = Reflect.get(target, property, target);
+      if (typeof value !== 'function') return value;
+      // These modifiers return another PendingQuery view over the same query.
+      if (property === 'simple' || property === 'values' || property === 'raw') {
+        return (...args: unknown[]) => gatePendingQuery(Reflect.apply(value, target, args) as object);
+      }
+      if (property === 'describe') {
+        return (...args: unknown[]) =>
+          runWithAdmission(() => Reflect.apply(value, target, args) as PromiseLike<unknown>);
+      }
+      return value.bind(target);
+    },
+  });
+  return proxy;
+}
+
+const sqlProxy = new Proxy(rawSql, {
+  apply(target, thisArg, args: unknown[]) {
+    const result = Reflect.apply(target, thisArg, args);
+    const first = args[0] as { raw?: unknown } | undefined;
+    // Only tagged-template calls create a query. Helper calls such as sql.array,
+    // sql.json, and sql(object) must remain synchronous query fragments.
+    return Array.isArray(first) && Array.isArray(first.raw)
+      ? gatePendingQuery(result as object)
+      : result;
+  },
+  get(target, property) {
+    if (property === 'begin') return gatedBegin;
+    if (property === 'unsafe' || property === 'file') {
+      const method = Reflect.get(target, property, target) as (...args: unknown[]) => object;
+      return (...args: unknown[]) => gatePendingQuery(Reflect.apply(method, target, args));
+    }
+    const value = Reflect.get(target, property, target);
+    return typeof value === 'function' ? value.bind(target) : value;
+  },
+});
+
+export const sql = sqlProxy as typeof rawSql;
 
 /**
  * Run critical/at-risk DB work in a transaction with a CUSTOM statement timeout
@@ -128,10 +198,12 @@ export async function withStatementTimeout<T>(
   fn: (tx: postgres.TransactionSql) => Promise<T>,
   statementMs = STATEMENT_TIMEOUT_MS,
 ): Promise<T> {
-  return rawBegin<T>(async (tx) => {
-    await setLocalTimeouts(tx, statementMs, IDLE_IN_TX_MS);
-    return fn(tx);
-  }) as Promise<T>;
+  return runWithAdmission(
+    () => rawBegin<T>(async (tx) => {
+      await setLocalTimeouts(tx, statementMs, IDLE_IN_TX_MS);
+      return fn(tx);
+    }) as Promise<T>
+  );
 }
 
 // Re-export postgres types for use in repos
@@ -139,5 +211,7 @@ export type { TransactionSql } from 'postgres';
 
 // Graceful shutdown helper
 export async function disconnectDb(): Promise<void> {
-  await sql.end();
+  await rawSql.end();
 }
+
+export { DbOverloadedError } from './admission.js';

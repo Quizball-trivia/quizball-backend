@@ -1,0 +1,138 @@
+import type { ActivitySnapshot } from './db-stats.js';
+import type { RouteReport } from './metrics.js';
+import type { SocketFleetSummary } from './socket-fleet.js';
+import type { AppStatsSummary } from './app-stats.js';
+
+export interface ChaosSloThresholds {
+  maxHttpErrorPct: number;
+  maxUnexpectedClientErrorPct: number;
+  maxRouteP95Ms: number;
+  maxRouteP99Ms: number;
+  maxDbConnectionUtilizationPct: number;
+  maxQueueJoinP95Ms: number;
+  maxAppDbWaitMs: number;
+  maxEventLoopP99Ms: number;
+  maxCpuPct: number;
+}
+
+export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
+  maxHttpErrorPct: 1,
+  maxUnexpectedClientErrorPct: 0.1,
+  maxRouteP95Ms: 1_500,
+  maxRouteP99Ms: 3_000,
+  maxDbConnectionUtilizationPct: 75,
+  maxQueueJoinP95Ms: 120_000,
+  maxAppDbWaitMs: 1_000,
+  maxEventLoopP99Ms: 100,
+  maxCpuPct: 90,
+};
+
+export interface ChaosVerdict {
+  ok: boolean;
+  violations: string[];
+  thresholds: ChaosSloThresholds;
+}
+
+export function evaluateChaosRun(
+  routes: RouteReport[],
+  socket: SocketFleetSummary | null,
+  dbPeak: ActivitySnapshot | null,
+  app: AppStatsSummary | null = null,
+  thresholds: ChaosSloThresholds = DEFAULT_CHAOS_SLOS
+): ChaosVerdict {
+  const violations: string[] = [];
+  const totalSent = routes.reduce((sum, route) => sum + route.sent, 0);
+  const approximateErrors = routes.reduce(
+    (sum, route) => sum + route.sent * route.errorRatePct / 100,
+    0
+  );
+  const totalErrorPct = totalSent > 0 ? approximateErrors * 100 / totalSent : 0;
+  if (totalErrorPct > thresholds.maxHttpErrorPct) {
+    violations.push(`HTTP error rate ${totalErrorPct.toFixed(2)}% > ${thresholds.maxHttpErrorPct}%`);
+  }
+  const approximateClientErrors = routes.reduce(
+    (sum, route) => sum + route.sent * route.clientErrPct / 100,
+    0
+  );
+  const totalClientErrorPct = totalSent > 0 ? approximateClientErrors * 100 / totalSent : 0;
+  if (totalClientErrorPct > thresholds.maxUnexpectedClientErrorPct) {
+    violations.push(
+      `unexpected HTTP 4xx rate ${totalClientErrorPct.toFixed(2)}% > ${thresholds.maxUnexpectedClientErrorPct}%`
+    );
+  }
+
+  for (const route of routes.filter((candidate) => candidate.sent >= 10)) {
+    if (route.p95 > thresholds.maxRouteP95Ms) {
+      violations.push(`${route.name} p95 ${route.p95}ms > ${thresholds.maxRouteP95Ms}ms`);
+    }
+    if (route.p99 > thresholds.maxRouteP99Ms) {
+      violations.push(`${route.name} p99 ${route.p99}ms > ${thresholds.maxRouteP99Ms}ms`);
+    }
+  }
+
+  if (dbPeak && dbPeak.utilizationPct > thresholds.maxDbConnectionUtilizationPct) {
+    violations.push(
+      `DB connections ${dbPeak.utilizationPct.toFixed(1)}% (${dbPeak.total}/${dbPeak.maxConnections}) > ${thresholds.maxDbConnectionUtilizationPct}%`
+    );
+  }
+
+  if (socket) {
+    if (socket.matchesStarted === 0) violations.push('socket fleet started no matches');
+    if (socket.matchesCompleted === 0) violations.push('socket fleet completed no matches');
+    if (socket.matchesCompleted < socket.matchesStarted) {
+      violations.push(`incomplete socket matches: ${socket.matchesCompleted}/${socket.matchesStarted}`);
+    }
+    if (socket.matchesStarted > 0 && socket.latenciesMs.answerToAck.length === 0) {
+      violations.push('socket fleet observed no gameplay answer acknowledgements');
+    }
+    if (socket.matchesStarted > 0 && socket.latenciesMs.roundResultToNextQuestion.length === 0) {
+      violations.push('socket fleet observed no completed gameplay rounds');
+    }
+    if (socket.wrongfulForfeits > 0) violations.push(`wrongful forfeits: ${socket.wrongfulForfeits}`);
+    if (socket.deadSearch > 0) violations.push(`dead matchmaking searches: ${socket.deadSearch}`);
+    if (socket.banRollback > 0) violations.push(`draft ban rollbacks: ${socket.banRollback}`);
+    if (socket.gateAbandon > 0) violations.push(`kickoff gate abandons: ${socket.gateAbandon}`);
+    if (socket.legacyDraftStall > 0) violations.push(`legacy draft stalls: ${socket.legacyDraftStall}`);
+    const unexpectedSocketErrors = Object.entries(socket.socketErrors)
+      .filter(([name]) => !name.startsWith('stage_deadline_'))
+      .reduce((sum, [, count]) => sum + count, 0);
+    if (unexpectedSocketErrors > 0) {
+      violations.push(`unexpected socket errors: ${unexpectedSocketErrors}`);
+    }
+    const queueP95 = socket.percentiles.queueJoinToMatchStart.p95;
+    if (queueP95 > thresholds.maxQueueJoinP95Ms) {
+      violations.push(`matchmaking p95 ${queueP95}ms > ${thresholds.maxQueueJoinP95Ms}ms`);
+    }
+  }
+
+  if (app) {
+    if (app.requestFailures > 0) violations.push(`app telemetry request failures: ${app.requestFailures}`);
+    const knownInstances = Object.entries(app.instances).filter(([name]) => name !== 'unknown');
+    if (knownInstances.length > 0 && knownInstances.length < 2) {
+      violations.push(`per-replica telemetry observed only ${knownInstances.length} instance`);
+    }
+    for (const [name, instance] of knownInstances) {
+      if (instance.healthFailures > 0) {
+        violations.push(`${name} DB readiness failures: ${instance.healthFailures}`);
+      }
+      if (instance.pool.newRejections > 0 || instance.pool.newTimeouts > 0) {
+        violations.push(
+          `${name} DB admission shed ${instance.pool.newRejections} requests (${instance.pool.newTimeouts} acquisition timeouts)`
+        );
+      }
+      if (instance.pool.maxWaitMs > thresholds.maxAppDbWaitMs) {
+        violations.push(`${name} DB pool max wait ${instance.pool.maxWaitMs}ms > ${thresholds.maxAppDbWaitMs}ms`);
+      }
+      if (instance.runtime.eventLoopP99Ms > thresholds.maxEventLoopP99Ms) {
+        violations.push(
+          `${name} event-loop p99 ${instance.runtime.eventLoopP99Ms}ms > ${thresholds.maxEventLoopP99Ms}ms`
+        );
+      }
+      if (instance.runtime.cpuPct > thresholds.maxCpuPct) {
+        violations.push(`${name} CPU ${instance.runtime.cpuPct}% > ${thresholds.maxCpuPct}%`);
+      }
+    }
+  }
+
+  return { ok: violations.length === 0, violations, thresholds };
+}

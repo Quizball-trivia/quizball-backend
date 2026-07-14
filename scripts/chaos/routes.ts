@@ -35,7 +35,6 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
   { name: 'questions.list', method: 'GET', path: '/api/v1/questions', query: 'limit=50&page=1', auth: 'none', mutates: false, weight: 5, group: 'public-read' },
   { name: 'featured.list', method: 'GET', path: '/api/v1/featured-categories', auth: 'none', mutates: false, weight: 3, group: 'public-read' },
   { name: 'store.products', method: 'GET', path: '/api/v1/store/products', auth: 'none', mutates: false, weight: 3, group: 'public-read' },
-  { name: 'presence.online', method: 'GET', path: '/api/v1/presence/online', auth: 'none', mutates: false, weight: 2, group: 'public-read' },
 
   // ── Authenticated reads — the hot client polling set during play/menus ────
   { name: 'users.me', method: 'GET', path: '/api/v1/users/me', auth: 'bearer', mutates: false, weight: 6, group: 'auth-read' },
@@ -45,7 +44,7 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
   { name: 'ranked.leaderboard.country', method: 'GET', path: '/api/v1/ranked/leaderboard', query: 'scope=country&limit=50&offset=0', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
   { name: 'ranked.leaderboard.me', method: 'GET', path: '/api/v1/ranked/leaderboard/me', query: 'scope=global', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
   { name: 'stats.summary', method: 'GET', path: '/api/v1/stats/summary', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
-  { name: 'stats.recent', method: 'GET', path: '/api/v1/stats/recent-matches', query: 'limit=20', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
+  { name: 'stats.recent', method: 'GET', path: '/api/v1/stats/recent-matches', query: 'limit=10', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
   { name: 'store.wallet', method: 'GET', path: '/api/v1/store/wallet', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
   { name: 'store.inventory', method: 'GET', path: '/api/v1/store/inventory', auth: 'bearer', mutates: false, weight: 3, group: 'auth-read' },
   { name: 'daily.list', method: 'GET', path: '/api/v1/daily-challenges', auth: 'bearer', mutates: false, weight: 4, group: 'auth-read' },
@@ -55,7 +54,6 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
   { name: 'friends.requests', method: 'GET', path: '/api/v1/friends/requests', auth: 'bearer', mutates: false, weight: 2, group: 'auth-read' },
 
   // ── Mutations (non-prod only) — economy / session / presence writes ───────
-  { name: 'presence.ping', method: 'POST', path: '/api/v1/presence/ping', auth: 'none', mutates: true, weight: 5, group: 'session-write' },
   {
     name: 'daily.session',
     method: 'POST',

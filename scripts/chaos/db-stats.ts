@@ -19,6 +19,8 @@ export interface ActivitySnapshot {
   idleInTxn: number;
   waitingOnLock: number;
   longestActiveSec: number;
+  maxConnections: number;
+  utilizationPct: number;
 }
 
 export function makeStatsClient(databaseUrl: string) {
@@ -81,8 +83,15 @@ export async function snapshotActivity(
       idle_in_txn: number;
       waiting_on_lock: number;
       longest_active_sec: number;
+      max_connections: number;
+      utilization_pct: number;
     }[]
   >`
+    WITH limits AS (
+      SELECT setting::int AS max_connections
+      FROM pg_settings
+      WHERE name = 'max_connections'
+    )
     SELECT
       count(*)::int AS total,
       count(*) FILTER (WHERE state = 'active')::int AS active,
@@ -92,8 +101,12 @@ export async function snapshotActivity(
       COALESCE(round(max(extract(epoch FROM (now() - query_start)))
         FILTER (WHERE state = 'active'
           AND query NOT ILIKE '%pg_stat_activity%')::numeric, 1), 0)::float8
-        AS longest_active_sec
-    FROM pg_stat_activity`;
+        AS longest_active_sec,
+      limits.max_connections,
+      round(count(*)::numeric * 100 / limits.max_connections, 1)::float8 AS utilization_pct
+    FROM pg_stat_activity
+    CROSS JOIN limits
+    GROUP BY limits.max_connections`;
   const r = rows[0];
   return {
     total: r.total,
@@ -102,6 +115,8 @@ export async function snapshotActivity(
     idleInTxn: r.idle_in_txn,
     waitingOnLock: r.waiting_on_lock,
     longestActiveSec: r.longest_active_sec,
+    maxConnections: r.max_connections,
+    utilizationPct: r.utilization_pct,
   };
 }
 

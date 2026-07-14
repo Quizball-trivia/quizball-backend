@@ -2,7 +2,7 @@ import type { StagingClient } from './staging-client.mjs';
 
 export interface BotBehaviorOptions {
   legacyProtocol?: boolean;
-  onDraftBanSent?: (payload: { categoryId: string }) => void;
+  onDraftBanSent?: (payload: { categoryId: string; lobbyId?: string }) => void;
   onBeforeKickoffUiReady?: (payload: { matchId?: string; phase?: string }) => boolean;
   answerPlan?: (ctx: {
     client: StagingClient;
@@ -15,6 +15,8 @@ export type AnswerMode = 'correct' | 'wrong';
 export type BotAnswerInstruction = {
   mode?: AnswerMode;
   timeMs?: number;
+  /** Wall-clock think time before emitting the answer (load-test realism). */
+  delayMs?: number;
 };
 
 export type QuestionPayload = {
@@ -32,11 +34,14 @@ export function autoAnswer(client: StagingClient, options: BotBehaviorOptions = 
     const key = keyFor(q.matchId, q.qIndex);
     if (completed.has(key)) return;
     const waitMs = q.playableAt ? Math.max(0, new Date(q.playableAt).getTime() - Date.now()) : 0;
+    const planned = options.answerPlan?.({ client, question: q });
+    const delayMs = typeof planned === 'object' && typeof planned.delayMs === 'number'
+      ? Math.max(0, planned.delayMs)
+      : 0;
     setTimeout(() => {
       if (completed.has(key)) return;
       const kind = q.question?.kind ?? 'multipleChoice';
       const base = { matchId: q.matchId, qIndex: q.qIndex };
-      const planned = options.answerPlan?.({ client, question: q });
       const mode = typeof planned === 'string' ? planned : planned?.mode ?? 'correct';
       const timeMs = typeof planned === 'object' && typeof planned.timeMs === 'number' ? planned.timeMs : 500;
       if (kind === 'countdown') {
@@ -58,7 +63,7 @@ export function autoAnswer(client: StagingClient, options: BotBehaviorOptions = 
           timeMs,
         });
       }
-    }, waitMs + retryDelayMs);
+    }, waitMs + retryDelayMs + delayMs);
   };
 
   client.socket.on('match:question', (q: QuestionPayload) => {
@@ -160,17 +165,19 @@ export function autoHalftime(client: StagingClient): void {
 
 export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {}): void {
   let banCount = 0;
+  let draftLobbyId: string | undefined;
   let lastAttemptedBanId: string | null = null;
   let retryArmed = false;
   const emitBan = (categoryId: string) => {
     lastAttemptedBanId = categoryId;
-    const payload = { categoryId };
+    const payload = { categoryId, ...(draftLobbyId ? { lobbyId: draftLobbyId } : {}) };
     client.socket.emit('draft:ban', payload);
     options.onDraftBanSent?.(payload);
   };
   const bannedCategoryIds = new Set<string>();
   client.socket.on('draft:start', (state: { lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }) => {
     banCount = 0;
+    draftLobbyId = state.lobbyId;
     bannedCategoryIds.clear();
     if (!options.legacyProtocol) {
       client.socket.emit('draft:ui_ready', { ...(state.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
@@ -180,17 +187,20 @@ export function autoDraft(client: StagingClient, options: BotBehaviorOptions = {
       emitBan(state.categories[0].id);
     }
   });
-  client.socket.on('draft:banned', (banned: { categoryId?: string } | undefined) => {
+  client.socket.on('draft:banned', (banned: { actorId?: string; categoryId?: string } | undefined) => {
     const state = client.latest<{ lobbyId?: string; categories: Array<{ id: string }>; turnUserId: string }>('draft:start');
     banCount = Math.min(banCount + 1, 2);
     if (banned?.categoryId) {
       bannedCategoryIds.add(banned.categoryId);
       if (banned.categoryId === lastAttemptedBanId) lastAttemptedBanId = null;
     }
-    if (!options.legacyProtocol) {
+    if (!options.legacyProtocol && banCount < 2) {
       client.socket.emit('draft:ui_ready', { ...(state?.lobbyId ? { lobbyId: state.lobbyId } : {}), banCount });
     }
-    if (state && state.turnUserId === client.userId) {
+    // After a ban, the other member owns the next turn. `draft:start.turnUserId`
+    // is only the initial actor and must not be reused for every subsequent
+    // event (doing that made the bot emit extra bans after the lobby closed).
+    if (banCount < 2 && state && banned?.actorId && banned.actorId !== client.userId) {
       const next = state.categories.find((c) => !bannedCategoryIds.has(c.id));
       if (next) {
         bannedCategoryIds.add(next.id);

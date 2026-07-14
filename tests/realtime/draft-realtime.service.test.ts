@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
 
 const getLobbyByIdMock = vi.fn();
+const findOpenLobbyForUserMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const listLobbyCategoryBansMock = vi.fn();
 const insertLobbyCategoryBanMock = vi.fn();
@@ -43,6 +44,7 @@ const cancelRealtimeTimerMock = vi.fn();
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     getById: (...args: unknown[]) => getLobbyByIdMock(...args),
+    findOpenLobbyForUser: (...args: unknown[]) => findOpenLobbyForUserMock(...args),
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     listLobbyCategoryBans: (...args: unknown[]) => listLobbyCategoryBansMock(...args),
     insertLobbyCategoryBan: (...args: unknown[]) => insertLobbyCategoryBanMock(...args),
@@ -188,6 +190,7 @@ describe('draftRealtimeService', () => {
       status: 'active',
       host_user_id: 'u1',
     });
+    findOpenLobbyForUserMock.mockResolvedValue(null);
 
     listMembersWithUserMock.mockResolvedValue([
       { user_id: 'u1' },
@@ -259,6 +262,34 @@ describe('draftRealtimeService', () => {
       categoryId: 'cat-a',
     });
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
+  });
+
+  it('recovers a missing socket lobby binding after cross-replica matchmaking', async () => {
+    const { draftRealtimeService } = await import('../../src/realtime/services/draft-realtime.service.js');
+    const { io, emit } = createIoMock();
+    const join = vi.fn(async () => undefined);
+    const socket = {
+      id: 'socket-on-other-replica',
+      data: { user: { id: 'u1' }, lobbyId: null },
+      emit: vi.fn(),
+      join,
+    } as unknown as QuizballSocket;
+    findOpenLobbyForUserMock.mockResolvedValue({
+      id: 'l1',
+      mode: 'friendly',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+
+    await draftRealtimeService.handleBan(io, socket, 'cat-a');
+
+    expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
+    expect(join).toHaveBeenCalledWith('lobby:l1');
+    expect(socket.data.lobbyId).toBe('l1');
+    expect(emit).toHaveBeenCalledWith('draft:banned', {
+      actorId: 'u1',
+      categoryId: 'cat-a',
+    });
   });
 
   it('completes draft after two bans and creates match with one half category', async () => {

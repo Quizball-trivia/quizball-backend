@@ -1082,7 +1082,7 @@ export interface ClientToServerEvents {
   'auction:rejoin': (data: { matchId: string }) => void;
   'draft:rejoin': (data?: { lobbyId?: string }) => void;
   'draft:ui_ready': (data?: { lobbyId?: string; turnUserId?: string; banCount?: number }) => void;
-  'draft:ban': (data: { categoryId: string }) => void;
+  'draft:ban': (data: { categoryId: string; lobbyId?: string }) => void;
   'match:answer': (data: { matchId: string; qIndex: number; selectedIndex: number | null; timeMs: number }) => void;
   'match:countdown_guess': (data: { matchId: string; qIndex: number; guess: string }) => void;
   'match:put_in_order_answer': (data: { matchId: string; qIndex: number; orderedItemIds: string[]; timeMs: number }) => void;

@@ -21,6 +21,7 @@ export interface ProvisionConfig {
   emailPrefix: string; // e.g. "chaos" → chaos+u0@quizball.io
   emailDomain: string; // e.g. quizball.io
   concurrency: number;
+  bypassToken?: string;
 }
 
 export interface TicketTopUpConfig {
@@ -53,12 +54,14 @@ async function adminCreateConfirmedUser(
 }
 
 export async function loginChaosUser(
-  cfg: Pick<ProvisionConfig, 'apiBase' | 'password'>,
+  cfg: Pick<ProvisionConfig, 'apiBase' | 'password' | 'bypassToken'>,
   email: string
 ): Promise<{ token: string; userId: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cfg.bypassToken) headers['x-chaos-bypass'] = cfg.bypassToken;
   const res = await fetch(`${cfg.apiBase}/api/v1/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ email, password: cfg.password }),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -71,7 +74,10 @@ export async function loginChaosUser(
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
   const meRes = await fetch(`${cfg.apiBase}/api/v1/users/me`, {
-    headers: { Authorization: `Bearer ${body.access_token}` },
+    headers: {
+      Authorization: `Bearer ${body.access_token}`,
+      ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
+    },
   });
   const me = (await meRes.json().catch(() => ({}))) as { id?: string };
   return { token: body.access_token, userId: me.id ?? '' };
@@ -135,6 +141,22 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]> {
+  const emails = await ensureChaosUsers(cfg);
+
+  const users = await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
+    const { token, userId } = await loginChaosUser(cfg, email);
+    return { email, password: cfg.password, token, userId } satisfies ChaosUser;
+  });
+
+  return users.filter((u) => u.token && u.userId);
+}
+
+/**
+ * Idempotently create confirmed non-production load users without logging them
+ * in. Large k6 runs call this once ahead of time so provisioning traffic is not
+ * mixed into the measured login/refresh/API workload.
+ */
+export async function ensureChaosUsers(cfg: ProvisionConfig): Promise<string[]> {
   const emails = Array.from(
     { length: cfg.count },
     (_, i) => `${cfg.emailPrefix}+u${i}@${cfg.emailDomain}`
@@ -144,11 +166,5 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
   await mapWithConcurrency(emails, cfg.concurrency, (email) =>
     adminCreateConfirmedUser(cfg, email)
   );
-
-  const users = await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
-    const { token, userId } = await loginChaosUser(cfg, email);
-    return { email, password: cfg.password, token, userId } satisfies ChaosUser;
-  });
-
-  return users.filter((u) => u.token && u.userId);
+  return emails;
 }

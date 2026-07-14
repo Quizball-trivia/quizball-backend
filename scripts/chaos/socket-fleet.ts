@@ -29,6 +29,8 @@ export type FlapStage = 'search' | 'draft' | 'gate' | 'match';
 export interface SocketFleetConfig {
   apiBase: string;
   durationSec: number;
+  /** Maximum time to let an in-progress match drain after offered load stops. */
+  drainSec: number;
   durationWasExplicit: boolean;
   sockets: number;
   flapRate: number;
@@ -58,6 +60,7 @@ export interface SocketFleetSummary {
   banRollback: number;
   gateAbandon: number;
   legacyDraftStall: number;
+  staleFinalResultsIgnored: number;
   flapsPerformed: number;
   disconnectCountInflation: number;
   draftReplay: {
@@ -105,6 +108,7 @@ interface FleetMetrics {
   banRollback: number;
   gateAbandon: number;
   legacyDraftStall: number;
+  staleFinalResultsIgnored: number;
   flapsPerformed: number;
   disconnectCountInflation: number;
   draftResetThenReplay: number;
@@ -173,6 +177,7 @@ interface MatchAttempt {
   performedFlaps: number;
   maxDisconnectCountInflation: number;
   stageFlaps: Set<FlapStage>;
+  plannedFlaps: Set<FlapStage>;
   searchFlap: SearchFlapState | null;
   draftFlap: DraftFlapState | null;
   gateFlap: GateFlapState | null;
@@ -210,9 +215,10 @@ export async function runSocketFleet(cfg: SocketFleetConfig): Promise<SocketFlee
   const stopStartingAt = cfg.matchesPerClient !== undefined && !cfg.durationWasExplicit
     ? null
     : startedAtMs + cfg.durationSec * 1000;
+  const hardStopAt = stopStartingAt === null ? null : stopStartingAt + cfg.drainSec * 1000;
 
   const workers = cfg.users.slice(0, cfg.sockets).map((user, index) =>
-    runClient(index, user, cfg, metrics, stopStartingAt).catch((err: unknown) => {
+    runClient(index, user, cfg, metrics, stopStartingAt, hardStopAt).catch((err: unknown) => {
       addHist(metrics.socketErrors, `client_exception:${errorMessage(err)}`);
     })
   );
@@ -238,6 +244,7 @@ export async function runSocketFleet(cfg: SocketFleetConfig): Promise<SocketFlee
     banRollback: metrics.banRollback,
     gateAbandon: metrics.gateAbandon,
     legacyDraftStall: metrics.legacyDraftStall,
+    staleFinalResultsIgnored: metrics.staleFinalResultsIgnored,
     flapsPerformed: metrics.flapsPerformed,
     disconnectCountInflation: metrics.disconnectCountInflation,
     draftReplay: {
@@ -286,6 +293,7 @@ export function renderSocketFleetSummary(s: SocketFleetSummary): string {
     `matchesStarted=${s.matchesStarted}  matchesCompleted=${s.matchesCompleted}  forfeits=${s.forfeits}  abandons=${s.abandons}`,
     `WRONGFUL-FORFEIT COUNT=${s.wrongfulForfeits}  flaps=${s.flapsPerformed}  disconnectCountInflation=${s.disconnectCountInflation}`,
     `BOOT-STAGE DETECTORS deadSearch=${s.deadSearch}  banRollback=${s.banRollback}  gateAbandon=${s.gateAbandon}  legacyDraftStall=${s.legacyDraftStall}`,
+    `stale final-results ignored=${s.staleFinalResultsIgnored}`,
     `draftReplay resetThenReplay=${s.draftReplay.resetThenReplay}  merged=${s.draftReplay.merged}`,
   ];
   if (s.gateAbandon > 0) {
@@ -306,55 +314,71 @@ async function runClient(
   user: ChaosUser,
   cfg: SocketFleetConfig,
   metrics: FleetMetrics,
-  stopStartingAt: number | null
+  stopStartingAt: number | null,
+  hardStopAt: number | null
 ): Promise<void> {
   const state: ClientState = { index, user: { ...user }, client: null, current: null, flapInFlight: false };
-  const rampDelayMs = cfg.sockets > 1 ? Math.round((cfg.rampSec * 1000 * index) / cfg.sockets) : 0;
-  if (rampDelayMs > 0) await sleep(rampDelayMs);
-  state.client = createClient(state, cfg, metrics, null, false);
-  if (!(await waitConnected(state.client, 20_000))) {
-    addHist(metrics.socketErrors, 'connect_timeout');
-    state.client.disconnect();
-    return;
-  }
-  await clearActiveMatch(state.client);
-  attachBotBehaviors(state, state.client, cfg, metrics);
+  try {
+    const rampDelayMs = cfg.sockets > 1 ? Math.round((cfg.rampSec * 1000 * index) / cfg.sockets) : 0;
+    if (rampDelayMs > 0) await sleep(rampDelayMs);
+    if (hardStopAt !== null && Date.now() >= hardStopAt) return;
+    state.client = createClient(state, cfg, metrics, null, false);
+    if (!(await waitConnected(state.client, boundedWaitMs(20_000, hardStopAt)))) {
+      addHist(metrics.socketErrors, 'connect_timeout');
+      return;
+    }
+    await clearActiveMatch(state.client);
+    attachBotBehaviors(state, state.client, cfg, metrics);
 
-  let seq = 0;
-  while (shouldStart(seq, cfg, stopStartingAt)) {
-    const attempt = newAttempt(index, seq);
-    state.current = attempt;
-    state.client.trace.reset();
-    attempt.queueJoinedAt = Date.now();
-    state.client.socket.emit('ranked:queue_join', {});
-    if (hasFlapStage(cfg, 'search')) void performSearchStageFlap(state, cfg, metrics, attempt);
+    let seq = 0;
+    while (shouldStart(seq, cfg, stopStartingAt)) {
+      const attempt = newAttempt(index, seq, cfg);
+      state.current = attempt;
+      state.client.trace.reset();
+      attempt.queueJoinedAt = Date.now();
+      state.client.socket.emit('ranked:queue_join', {});
 
-    const started = await waitFor(() => attempt.startedAt !== null, MATCH_START_TIMEOUT_MS);
-    if (!started) {
-      addHist(metrics.socketErrors, 'match_start_timeout');
+      const started = await waitFor(
+        () => attempt.startedAt !== null,
+        boundedWaitMs(MATCH_START_TIMEOUT_MS, hardStopAt)
+      );
+      if (!started) {
+        addHist(metrics.socketErrors, hardStopAt !== null && Date.now() >= hardStopAt
+          ? 'stage_deadline_before_match_start'
+          : 'match_start_timeout');
+        closeAttempt(metrics, attempt, false);
+        state.current = null;
+        seq++;
+        if (!shouldStart(seq, cfg, stopStartingAt)) break;
+        await recycleClient(state, cfg, metrics);
+        continue;
+      }
+
+      const finished = await waitFor(
+        () => attempt.completedAt !== null,
+        boundedWaitMs(MATCH_FINISH_TIMEOUT_MS, hardStopAt)
+      );
+      if (!finished) {
+        addHist(metrics.socketErrors, hardStopAt !== null && Date.now() >= hardStopAt
+          ? 'stage_deadline_during_match'
+          : 'match_finish_timeout');
+        closeAttempt(metrics, attempt, true);
+        state.current = null;
+        seq++;
+        if (!shouldStart(seq, cfg, stopStartingAt)) break;
+        await recycleClient(state, cfg, metrics);
+        continue;
+      }
+
       closeAttempt(metrics, attempt, false);
       state.current = null;
       seq++;
-      await recycleClient(state, cfg, metrics);
-      continue;
+      if (shouldStart(seq, cfg, stopStartingAt)) await sleep(1_500 + Math.random() * 2_500);
     }
-
-    const finished = await waitFor(() => attempt.completedAt !== null, MATCH_FINISH_TIMEOUT_MS);
-    if (!finished) {
-      closeAttempt(metrics, attempt, true);
-      state.current = null;
-      seq++;
-      await recycleClient(state, cfg, metrics);
-      continue;
-    }
-
-    closeAttempt(metrics, attempt, false);
-    state.current = null;
-    seq++;
-    if (shouldStart(seq, cfg, stopStartingAt)) await sleep(1_500 + Math.random() * 2_500);
+  } finally {
+    if (state.current && !state.current.closed) closeAttempt(metrics, state.current, true);
+    state.client?.disconnect();
   }
-
-  state.client?.disconnect();
 }
 
 function createClient(
@@ -378,9 +402,23 @@ function attachBotBehaviors(
 ): void {
   const options: BotBehaviorOptions = {
     legacyProtocol: cfg.legacyProtocol,
+    // A real player reads/thinks before answering. Keeping this delay in the
+    // socket journey is essential: immediate bots create an unrealistically
+    // dense write burst and greatly overstate per-player load.
+    answerPlan: () => {
+      const delayMs = 1_000 + Math.round(Math.random() * 7_000);
+      return {
+        // Always-correct humans systematically tie the AI and turn every match
+        // into a long penalty shootout. A realistic accuracy distribution also
+        // gives the DB/game engine a representative mix of outcomes.
+        mode: Math.random() < 0.68 ? 'correct' : 'wrong',
+        timeMs: delayMs,
+        delayMs,
+      };
+    },
     onDraftBanSent: ({ categoryId }) => {
       const attempt = state.current;
-      if (!attempt || state.flapInFlight || !hasFlapStage(cfg, 'draft') || attempt.stageFlaps.has('draft')) return;
+      if (!attempt || state.flapInFlight || !attempt.plannedFlaps.has('draft') || attempt.stageFlaps.has('draft')) return;
       // A sent ban is not a committed ban: flap only once the server ACKS it
       // (draft:banned echo), else a ban racing our own disconnect gets counted
       // as "committed" and the replay check false-positives.
@@ -405,7 +443,7 @@ function attachBotBehaviors(
     },
     onBeforeKickoffUiReady: (payload) => {
       const attempt = state.current;
-      if (!attempt || state.flapInFlight || !hasFlapStage(cfg, 'gate') || attempt.stageFlaps.has('gate')) return false;
+      if (!attempt || state.flapInFlight || !attempt.plannedFlaps.has('gate') || attempt.stageFlaps.has('gate')) return false;
       attempt.gateFlap = {
         startedAt: Date.now(),
         reconnectedAt: null,
@@ -438,7 +476,17 @@ function attachMetrics(
     addHist(metrics.socketErrors, errorTag(payload));
     noteGateError(state, client, metrics, payload);
   });
-  client.socket.on('ranked:search_started', () => resolveSearchFlap(state.current, 'ranked:search_started'));
+  client.socket.on('ranked:search_started', () => {
+    const attempt = state.current;
+    if (attempt?.plannedFlaps.has('search') && !attempt.stageFlaps.has('search') && !state.flapInFlight) {
+      // Flap only after the server acknowledges the queue join. Disconnecting
+      // immediately after emit races delivery and tests a dropped client event,
+      // not matchmaking recovery.
+      void performSearchStageFlap(state, cfg, metrics, attempt);
+      return;
+    }
+    resolveSearchFlap(attempt, 'ranked:search_started');
+  });
   client.socket.on('ranked:match_found', () => resolveSearchFlap(state.current, 'ranked:match_found'));
   client.socket.on('ranked:queue_left', () => resolveSearchFlap(state.current, 'ranked:queue_left'));
   client.socket.on('session:state', (payload: { state?: string }) => {
@@ -558,7 +606,10 @@ function attachMetrics(
   client.socket.on('match:final_results', (payload: FinalResultsPayload) => {
     const attempt = state.current;
     if (!attempt) return;
-    if (payload.matchId && attempt.matchId && payload.matchId !== attempt.matchId) return;
+    if (!payload.matchId || !attempt.matchId || payload.matchId !== attempt.matchId) {
+      metrics.staleFinalResultsIgnored++;
+      return;
+    }
     if (attempt.completedAt !== null) return;
     attempt.completedAt = Date.now();
     metrics.matchesCompleted++;
@@ -846,7 +897,12 @@ function scheduleFlaps(
   }
 }
 
-function newAttempt(clientIndex: number, seq: number): MatchAttempt {
+function newAttempt(clientIndex: number, seq: number, cfg: SocketFleetConfig): MatchAttempt {
+  const plannedFlaps = new Set<FlapStage>();
+  const probability = Math.min(1, Math.max(0, cfg.flapRate));
+  for (const stage of ['search', 'draft', 'gate'] as const) {
+    if (hasFlapStage(cfg, stage) && Math.random() < probability) plannedFlaps.add(stage);
+  }
   return {
     clientIndex,
     seq,
@@ -857,6 +913,7 @@ function newAttempt(clientIndex: number, seq: number): MatchAttempt {
     performedFlaps: 0,
     maxDisconnectCountInflation: 0,
     stageFlaps: new Set(),
+    plannedFlaps,
     searchFlap: null,
     draftFlap: null,
     gateFlap: null,
@@ -890,23 +947,34 @@ function shouldStart(seq: number, cfg: SocketFleetConfig, stopStartingAt: number
 }
 
 async function waitConnected(client: StagingClient, ms: number): Promise<boolean> {
+  if (ms <= 0) return false;
   if (client.socket.connected) return true;
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), ms);
-    client.socket.once('connect', () => {
+    const onConnect = () => {
       clearTimeout(timer);
       resolve(true);
-    });
+    };
+    const timer = setTimeout(() => {
+      client.socket.off('connect', onConnect);
+      resolve(false);
+    }, ms);
+    client.socket.once('connect', onConnect);
   });
 }
 
 async function waitFor(predicate: () => boolean, ms: number): Promise<boolean> {
+  if (ms <= 0) return predicate();
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (predicate()) return true;
     await sleep(100);
   }
   return predicate();
+}
+
+function boundedWaitMs(maxMs: number, hardStopAt: number | null): number {
+  if (hardStopAt === null) return maxMs;
+  return Math.max(0, Math.min(maxMs, hardStopAt - Date.now()));
 }
 
 function poisson(mean: number): number {
@@ -968,6 +1036,7 @@ function newMetrics(): FleetMetrics {
     banRollback: 0,
     gateAbandon: 0,
     legacyDraftStall: 0,
+    staleFinalResultsIgnored: 0,
     flapsPerformed: 0,
     disconnectCountInflation: 0,
     draftResetThenReplay: 0,

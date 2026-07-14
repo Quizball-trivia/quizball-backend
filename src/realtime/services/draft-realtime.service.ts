@@ -1436,9 +1436,27 @@ export const draftRealtimeService = {
   async handleBan(
     io: QuizballServer,
     socket: QuizballSocket,
-    categoryId: string
+    categoryId: string,
+    payloadLobbyId?: string
   ): Promise<void> {
-    const lobbyId = socket.data.lobbyId;
+    // A human pair may be claimed on replica B while one player's socket lives
+    // on replica A. Socket.IO can remotely join that socket to the lobby room,
+    // but mutation of `socket.data.lobbyId` is process-local. Prefer the lobbyId
+    // echoed by new clients and fall back to the DB for older clients so their
+    // first manual ban does not fail with NOT_IN_LOBBY across replicas.
+    let lobbyId = payloadLobbyId ?? socket.data.lobbyId;
+    if (!lobbyId) {
+      const openLobby = await lobbiesRepo.findOpenLobbyForUser(socket.data.user.id);
+      if (openLobby?.status === 'active') {
+        lobbyId = openLobby.id;
+        socket.data.lobbyId = lobbyId;
+        await socket.join(`lobby:${lobbyId}`);
+        logger.info(
+          { lobbyId, userId: socket.data.user.id, socketId: socket.id },
+          'Draft ban recovered missing cross-replica socket lobby binding'
+        );
+      }
+    }
     if (!lobbyId) {
       logger.warn({ userId: socket.data.user.id }, 'Draft ban failed: no lobbyId on socket');
       socket.emit('error', { code: 'NOT_IN_LOBBY', message: 'You are not in a lobby' });

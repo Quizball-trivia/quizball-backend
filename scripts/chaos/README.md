@@ -71,7 +71,7 @@ npm run chaos:capacity -- --target=staging \
 | `--rps` | `100` | target requests/sec **per route** |
 | `--total-rps` | unset | total weighted HTTP requests/sec across all selected routes; enables production-shaped mode |
 | `--duration` | `30` (`300` with sockets) | run length in seconds |
-| `--drain-s` | `180` | hard maximum for matches already in progress after offered load stops |
+| `--drain-s` | `360` | hard maximum for matches already in progress after offered load stops |
 | `--users` | `25` | size of provisioned test-user fleet |
 | `--include-spend` | off | also hit ticket/coin-draining routes |
 | `--only` | all | comma list of route names |

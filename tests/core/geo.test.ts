@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { detectCountryFromHeaders } from '../../src/core/geo.js';
+import { __geoTestHooks, detectCountryFromHeaders } from '../../src/core/geo.js';
 
 describe('detectCountryFromHeaders', () => {
   afterEach(() => {
+    __geoTestHooks.reset();
     vi.restoreAllMocks();
   });
 
@@ -28,5 +29,31 @@ describe('detectCountryFromHeaders', () => {
       'http://ip-api.com/json/198.51.100.10?fields=status,country,countryCode',
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it('coalesces concurrent lookups and caches a successful country', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'success', country: 'Georgia', countryCode: 'GE' }),
+    } as Response);
+
+    await expect(Promise.all([
+      detectCountryFromHeaders({}, '198.51.100.20'),
+      detectCountryFromHeaders({}, '198.51.100.20'),
+    ])).resolves.toEqual(['GE', 'GE']);
+    await expect(detectCountryFromHeaders({}, '198.51.100.20')).resolves.toBe('GE');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('negative-caches failed lookups instead of retrying every auth request', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+    } as Response);
+
+    await expect(detectCountryFromHeaders({}, '198.51.100.30')).resolves.toBeNull();
+    await expect(detectCountryFromHeaders({}, '198.51.100.30')).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,7 +7,7 @@ import {
   type BotBehaviorOptions,
 } from '../../game-regression/staging/bot-behaviors.mjs';
 import { clearActiveMatch, connectStaging, type StagingClient } from '../../game-regression/staging/staging-client.mjs';
-import { loginChaosUser, type ChaosUser } from './auth.js';
+import type { ChaosUser } from './auth.js';
 
 const MATCH_START_TIMEOUT_MS = 170_000;
 // A full possession match that reaches penalties can legitimately exceed seven
@@ -719,9 +719,9 @@ async function flapSocket(
     return false;
   }
   try {
-    const fresh = await loginChaosUser({ apiBase: cfg.apiBase, password: state.user.password }, state.user.email);
-    state.user.token = fresh.token;
-    state.user.userId = fresh.userId || state.user.userId;
+    // A normal socket reconnect does not require a new Supabase /token call.
+    // Reuse the still-valid access token so reconnect chaos measures Socket.IO
+    // recovery instead of one load generator's per-IP Auth token bucket.
     const next = createClient(state, cfg, metrics, oldClient.trace, true);
     state.client = next;
     if (!(await waitConnected(next, 20_000))) {
@@ -741,13 +741,10 @@ async function flapSocket(
 async function recycleClient(state: ClientState, cfg: SocketFleetConfig, metrics: FleetMetrics): Promise<void> {
   const oldTrace = state.client?.trace ?? null;
   state.client?.disconnect();
-  try {
-    const fresh = await loginChaosUser({ apiBase: cfg.apiBase, password: state.user.password }, state.user.email);
-    state.user.token = fresh.token;
-    state.user.userId = fresh.userId || state.user.userId;
-  } catch (err) {
-    addHist(metrics.socketErrors, `recycle_login_failed:${errorMessage(err)}`);
-  }
+  // Access tokens are valid across matches. Logging in again on every recycle
+  // created an artificial /token storm (and 429s) that real clients do not
+  // generate. Auth login/refresh capacity is covered by the distributed k6
+  // suite; this fleet isolates gameplay and socket lifecycle capacity.
   state.client = createClient(state, cfg, metrics, oldTrace, false);
   if (await waitConnected(state.client, 20_000)) {
     await clearActiveMatch(state.client);

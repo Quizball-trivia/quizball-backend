@@ -320,6 +320,9 @@ async function main() {
     }
     const userCount = Math.max(args.users, args.sockets);
     console.log(`Provisioning ${userCount} confirmed test users…`);
+    if (args.target === 'staging') {
+      console.log('  → pacing session bootstrap for this load generator\'s single source IP…');
+    }
     users = await provisionUsers({
       apiBase: target.apiBase,
       supabaseUrl: target.supabaseUrl,
@@ -329,6 +332,10 @@ async function main() {
       emailPrefix: 'chaos',
       emailDomain: target.emailDomain,
       concurrency: 10,
+      // Supabase's /token bucket refills at 1 request per 2 seconds per source
+      // IP. Use a little margin so preparation does not fail merely because
+      // this fleet comes from one Mac.
+      loginIntervalMs: args.target === 'staging' ? 2_200 : 0,
       bypassToken: target.bypassToken,
     });
     console.log(`  → ${users.length} users authenticated.\n`);

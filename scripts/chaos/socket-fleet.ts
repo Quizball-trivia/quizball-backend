@@ -10,7 +10,13 @@ import { clearActiveMatch, connectStaging, type StagingClient } from '../../game
 import { loginChaosUser, type ChaosUser } from './auth.js';
 
 const MATCH_START_TIMEOUT_MS = 170_000;
-const MATCH_FINISH_TIMEOUT_MS = 420_000;
+// A full possession match that reaches penalties can legitimately exceed seven
+// minutes once ready gates, answer windows, reveal UI acknowledgements and
+// penalty rounds are included. The old 420s cap disconnected healthy clients
+// while the final penalty question was still active, manufacturing a forfeit
+// exactly one disconnect-grace window later. Keep a finite ceiling, but make it
+// longer than the protocol's real worst case.
+const MATCH_FINISH_TIMEOUT_MS = 600_000;
 const MAX_MATCH_DISCONNECTS = 3;
 const SEARCH_STAGE_TIMEOUT_MS = 60_000;
 const GATE_STAGE_GRACE_MS = 20_000;

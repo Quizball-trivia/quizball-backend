@@ -143,7 +143,10 @@ function parseArgs(argv: string[]): Args {
     rampSec: Math.max(0, num('ramp-s', 10)),
     matchesPerClient: parsedMatchesPerClient,
     durationWasExplicit,
-    drainSec: Math.max(0, num('drain-s', 180)),
+    // Real penalty matches can run beyond the five-minute HTTP window. Give
+    // them time to finish so the load generator does not create false
+    // disconnect forfeits while still keeping the run bounded.
+    drainSec: Math.max(0, num('drain-s', 360)),
     totalRps,
     loginStorm: get('login-storm') === 'true',
     loginRampSec: Math.max(0, num('login-ramp-s', 60)),

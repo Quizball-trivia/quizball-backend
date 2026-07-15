@@ -25,9 +25,11 @@ import { routes } from './http/routes/index.js';
 export function createApp(): Express {
   const app = express();
 
-  // Trust proxy - required for Railway/Railway behind reverse proxy
-  // Allows rate limiting to work correctly with X-Forwarded-For headers
-  app.set('trust proxy', true);
+  // Trust exactly the ingress hop in front of the app. `true` trusts arbitrary
+  // caller-supplied X-Forwarded-For chains and lets attackers rotate req.ip,
+  // bypassing our per-IP rate limit. Supabase forwarding separately uses only
+  // Railway's documented X-Real-IP header (see http/client-ip.ts).
+  app.set('trust proxy', 1);
 
   // Security headers
   app.use(helmet());
@@ -119,8 +121,6 @@ export function createApp(): Express {
       max: 300, // 300 requests per window per IP
       standardHeaders: true,
       legacyHeaders: false,
-      // Skip validation - we intentionally trust Railway's proxy
-      validate: false,
       skip: skipForChaos,
       message: {
         code: 'RATE_LIMIT_EXCEEDED',
@@ -137,8 +137,6 @@ export function createApp(): Express {
       max: 100, // 100 requests per window per IP
       standardHeaders: true,
       legacyHeaders: false,
-      // Skip validation - we intentionally trust Railway's proxy
-      validate: false,
       skip: skipForChaos,
       message: {
         code: 'RATE_LIMIT_EXCEEDED',
@@ -156,7 +154,6 @@ export function createApp(): Express {
       max: 5, // 5 submissions per window per IP
       standardHeaders: true,
       legacyHeaders: false,
-      validate: false,
       skip: skipForChaos,
       message: {
         code: 'RATE_LIMIT_EXCEEDED',

@@ -33,24 +33,71 @@ export interface TicketTopUpConfig {
   tickets: number;
 }
 
+function adminHeaders(cfg: Pick<ProvisionConfig, 'serviceRoleKey'>): Record<string, string> {
+  return {
+    apikey: cfg.serviceRoleKey,
+    Authorization: `Bearer ${cfg.serviceRoleKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
 async function adminCreateConfirmedUser(
   cfg: ProvisionConfig,
   email: string
 ): Promise<void> {
   const res = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users`, {
     method: 'POST',
-    headers: {
-      apikey: cfg.serviceRoleKey,
-      Authorization: `Bearer ${cfg.serviceRoleKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: adminHeaders(cfg),
     body: JSON.stringify({ email, password: cfg.password, email_confirm: true }),
   });
   if (res.status === 200 || res.status === 201) return;
-  // 422 = already registered → reuse it (idempotent).
-  if (res.status === 422) return;
   const text = await res.text();
   throw new Error(`admin create user ${email} failed: ${res.status} ${text.slice(0, 200)}`);
+}
+
+async function listAdminUserIdsByEmail(
+  cfg: ProvisionConfig,
+  wantedEmails: Set<string>
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const perPage = 1_000;
+  // The Auth admin endpoint is paginated. Bound the scan so a broken upstream
+  // response cannot make a load-test preparation command loop forever.
+  for (let page = 1; page <= 100 && found.size < wantedEmails.size; page += 1) {
+    const response = await fetch(
+      `${cfg.supabaseUrl}/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
+      { headers: adminHeaders(cfg) }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`admin list users failed: ${response.status} ${text.slice(0, 200)}`);
+    }
+    const payload = await response.json() as {
+      users?: Array<{ id?: string; email?: string }>;
+    };
+    const users = payload.users ?? [];
+    for (const user of users) {
+      const email = user.email?.toLowerCase();
+      if (email && user.id && wantedEmails.has(email)) found.set(email, user.id);
+    }
+    if (users.length < perPage) break;
+  }
+  return found;
+}
+
+async function adminResetConfirmedUser(
+  cfg: ProvisionConfig,
+  userId: string,
+  email: string
+): Promise<void> {
+  const response = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users/${userId}`, {
+    method: 'PUT',
+    headers: adminHeaders(cfg),
+    body: JSON.stringify({ password: cfg.password, email_confirm: true }),
+  });
+  if (response.ok) return;
+  const text = await response.text();
+  throw new Error(`admin reset user ${email} failed: ${response.status} ${text.slice(0, 200)}`);
 }
 
 export async function loginChaosUser(
@@ -162,9 +209,19 @@ export async function ensureChaosUsers(cfg: ProvisionConfig): Promise<string[]> 
     (_, i) => `${cfg.emailPrefix}+u${i}@${cfg.emailDomain}`
   );
 
-  // Create (idempotent) then log in, both bounded by concurrency.
-  await mapWithConcurrency(emails, cfg.concurrency, (email) =>
-    adminCreateConfirmedUser(cfg, email)
-  );
+  // Existing test accounts may have been created by an older harness with a
+  // different password. Merely accepting Auth's 422 "already registered"
+  // response makes the next login fail nondeterministically, so make the
+  // desired credentials genuinely idempotent before measuring any traffic.
+  const wanted = new Set(emails.map((email) => email.toLowerCase()));
+  const existing = await listAdminUserIdsByEmail(cfg, wanted);
+  await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
+    const existingId = existing.get(email.toLowerCase());
+    if (existingId) {
+      await adminResetConfirmedUser(cfg, existingId, email);
+      return;
+    }
+    await adminCreateConfirmedUser(cfg, email);
+  });
   return emails;
 }

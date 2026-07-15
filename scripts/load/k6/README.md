@@ -101,3 +101,11 @@ The script fails when unexpected responses reach 1%, checks fall below 99%,
 application p95 exceeds 1.5 seconds, application p99 exceeds 3 seconds, or k6
 drops iterations. Correlate each result with Railway replica telemetry,
 Supabase connections/queries, and Redis metrics from the chaos report.
+
+Reports include explicit counters for all `429` responses and separate login,
+refresh, and signup rate-limit counts. This prevents a managed Auth quota from
+being mistaken for an application or database crash.
+
+The backend now tags proxied Supabase Auth limits as
+`details.source=supabase_auth`; k6 splits those from application-limiter and
+unknown 429s. A large Auth run is invalid if those sources are conflated.

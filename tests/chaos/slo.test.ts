@@ -47,4 +47,49 @@ describe('chaos SLO verdict', () => {
     expect(verdict.ok).toBe(false);
     expect(verdict.violations.join(' ')).toContain('unexpected HTTP 4xx');
   });
+
+  it('accepts one healthy application instance for an explicitly local run', () => {
+    const verdict = evaluateChaosRun([], null, null, {
+      requestFailures: 0,
+      instances: {
+        'local-1': {
+          samples: 1,
+          healthFailures: 0,
+          pool: { newRejections: 0, newTimeouts: 0, maxWaitMs: 0 },
+          runtime: { eventLoopP99Ms: 10, cpuPct: 10 },
+        },
+      },
+    }, undefined, 1);
+
+    expect(verdict).toMatchObject({ ok: true, violations: [] });
+  });
+
+  it('fails a count-based gameplay run when clients expire before starting their requested matches', () => {
+    const socket = {
+      clients: 100,
+      matchesPerClient: 1,
+      matchesStarted: 20,
+      matchesCompleted: 20,
+      matchesExpectedToComplete: 20,
+      deadlineCutoffs: { beforeMatchStart: 80, duringMatch: 0 },
+      wrongfulForfeits: 0,
+      deadSearch: 0,
+      banRollback: 0,
+      gateAbandon: 0,
+      legacyDraftStall: 0,
+      socketErrors: { stage_deadline_before_match_start: 80 },
+      latenciesMs: {
+        answerToAck: [10],
+        roundResultToNextQuestion: [20],
+      },
+      percentiles: {
+        queueJoinToMatchStart: { p95: 1_500 },
+      },
+    } as unknown as NonNullable<Parameters<typeof evaluateChaosRun>[1]>;
+
+    const verdict = evaluateChaosRun([], socket, null, null, undefined, 1);
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations.join(' ')).toContain('socket match starts: 20/100 expected');
+  });
 });

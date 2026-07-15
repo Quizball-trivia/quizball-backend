@@ -42,7 +42,7 @@ function positiveNumber(argv: string[], key: string, fallback: number): number {
 export function parseCapacityArgs(argv: string[]): CapacityArgs {
   const target = (value(argv, 'target') ?? 'staging') as CapacityArgs['target'];
   if (target !== 'staging' && target !== 'local') throw new Error('--target must be staging or local');
-  const levels = (value(argv, 'levels') ?? '25,50,100,200,350,500,750')
+  const levels = (value(argv, 'levels') ?? '25,100,250,500,750,1000,2000,5000')
     .split(',')
     .map(Number)
     .filter((level) => Number.isInteger(level) && level > 0);
@@ -107,6 +107,7 @@ async function main(): Promise<void> {
       `--target=${args.target}`,
       `--users=${Math.max(players, sockets)}`,
       `--sockets=${sockets}`,
+      '--matches-per-client=1',
       `--total-rps=${totalRps}`,
       `--duration=${args.durationSec}`,
       `--ramp-s=${Math.min(args.rampSec, args.durationSec / 2)}`,

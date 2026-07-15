@@ -30,6 +30,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { CHAOS_ROUTES, SPEND_ROUTES, type ChaosRoute } from './routes.js';
+import { discoverRouteFixtures } from './fixtures.js';
 import { ensureTickets, provisionUsers } from './auth.js';
 import { runAllRoutes, runMixedRoutes } from './engine.js';
 import { summarize, renderTable } from './metrics.js';
@@ -114,7 +115,11 @@ function parseArgs(argv: string[]): Args {
   ) {
     throw new Error('--matches-per-client must be a positive integer.');
   }
-  const target = (get('target') ?? 'staging') as 'staging' | 'local';
+  const targetRaw = get('target') ?? 'staging';
+  if (targetRaw !== 'staging' && targetRaw !== 'local') {
+    throw new Error('--target must be staging or local. Production is not supported.');
+  }
+  const target = targetRaw;
   const flapStages = parseFlapStages(getAll('flap-stage'));
   const totalRpsRaw = get('total-rps');
   const totalRps = totalRpsRaw === undefined ? undefined : Number(totalRpsRaw);
@@ -212,6 +217,15 @@ interface TargetConfig {
   bypassToken?: string;
 }
 
+function assertNoProductionTarget(cfg: TargetConfig): void {
+  const blob = `${cfg.apiBase} ${cfg.supabaseUrl} ${cfg.databaseUrl}`;
+  if (blob.includes('lfbwhxvwubzeqkztghok') || blob.includes('api.quizball.io')) {
+    throw new Error(
+      'PROD GUARD: target resolves to production. The chaos harness refuses to run against prod.'
+    );
+  }
+}
+
 function resolveTarget(args: Args): TargetConfig {
   if (args.target === 'staging') {
     const env = readEnvFile(resolve(REPO_ROOT, '.env'));
@@ -223,15 +237,7 @@ function resolveTarget(args: Args): TargetConfig {
       emailDomain: 'quizball.io',
       bypassToken: process.env.CHAOS_BYPASS_TOKEN ?? env.CHAOS_BYPASS_TOKEN,
     };
-    // HARD PROD GUARD: refuse to run if anything points at the prod project.
-    const PROD_PROJECT = 'lfbwhxvwubzeqkztghok';
-    const blob = `${cfg.apiBase} ${cfg.supabaseUrl} ${cfg.databaseUrl}`;
-    if (blob.includes(PROD_PROJECT) || blob.includes('api.quizball.io')) {
-      throw new Error(
-        'PROD GUARD: target resolves to production. The chaos harness refuses to run against prod. ' +
-          'Point --api/--db at staging.'
-      );
-    }
+    assertNoProductionTarget(cfg);
     if (!cfg.supabaseUrl.includes('nsdfiprfmhdqhbfxfwpv')) {
       throw new Error(
         `PROD GUARD: staging SUPABASE_URL expected to be the staging project, got "${cfg.supabaseUrl}". Aborting.`
@@ -241,17 +247,30 @@ function resolveTarget(args: Args): TargetConfig {
   }
   // local
   const env = readEnvFile(resolve(REPO_ROOT, '.env.local'));
-  return {
-    apiBase: args.api ?? 'http://localhost:3000',
-    supabaseUrl: env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
-    serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-    databaseUrl: args.db ?? env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:54322/postgres',
+  const localPort = process.env.PORT ?? env.PORT ?? '8000';
+  const cfg: TargetConfig = {
+    apiBase: args.api ?? process.env.API_BASE_URL ?? env.API_BASE_URL ?? `http://localhost:${localPort}`,
+    supabaseUrl: process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+    databaseUrl:
+      args.db
+      ?? process.env.DATABASE_URL
+      ?? env.DATABASE_URL
+      ?? 'postgresql://postgres:postgres@localhost:54322/postgres',
     emailDomain: 'example.com',
     bypassToken: process.env.CHAOS_BYPASS_TOKEN ?? env.CHAOS_BYPASS_TOKEN,
   };
+  // `--target=local --api=<prod>` must not bypass the production guard.
+  assertNoProductionTarget(cfg);
+  return cfg;
 }
 
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log('Usage: tsx scripts/chaos/run.ts --target=local|staging [--total-rps=N|--rps=N] [--duration=S] [--users=N] [--sockets=N]');
+    console.log('Production API, database, and Supabase targets are always blocked.');
+    return;
+  }
   const runStartedAt = new Date().toISOString();
   const args = parseArgs(process.argv.slice(2));
   const target = resolveTarget(args);
@@ -330,6 +349,13 @@ async function main() {
     console.log('  → tickets ready.\n');
   }
 
+  if (users.length < 2 && routes.some((route) => route.name === 'stats.head-to-head')) {
+    throw new Error('stats.head-to-head requires at least two distinct load users.');
+  }
+  console.log('Discovering stable read fixtures…');
+  const fixtures = await discoverRouteFixtures(target.apiBase, users[0]!, target.bypassToken);
+  console.log('  → category/question/featured fixtures ready.\n');
+
   // 3) DB stats: reset before.
   const sql = args.dbStats && target.databaseUrl ? makeStatsClient(target.databaseUrl) : null;
   let pgss = false;
@@ -391,6 +417,7 @@ async function main() {
     maxInflight: 2000,
     timeoutMs: 15_000,
     bypassToken: target.bypassToken,
+    fixtures,
   };
   const httpRun = args.totalRps !== undefined
     ? runMixedRoutes(routes, {
@@ -512,7 +539,15 @@ async function main() {
     }
   }
 
-  const verdict = evaluateChaosRun(reports, socketSummary, activityPeak, appStats);
+  const expectedAppInstances = args.target === 'staging' ? 2 : 1;
+  const verdict = evaluateChaosRun(
+    reports,
+    socketSummary,
+    activityPeak,
+    appStats,
+    undefined,
+    expectedAppInstances
+  );
   console.log('\n' + '═'.repeat(72));
   console.log(verdict.ok ? 'SLO VERDICT: PASS' : 'SLO VERDICT: FAIL');
   for (const violation of verdict.violations) console.log(`  - ${violation}`);

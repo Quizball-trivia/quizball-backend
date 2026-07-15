@@ -29,6 +29,7 @@ import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
   RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_STALE_RESULT,
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 import {
@@ -793,6 +794,10 @@ async function processPairs(io: QuizballServer): Promise<void> {
         arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
       });
       const result = toStringArray(resultRaw);
+      // The Lua script removed an expired/mismapped queue member. Keep scanning
+      // in this same tick instead of letting one orphan throttle matchmaking to
+      // one cleanup per 100ms.
+      if (result[0] === RANKED_MM_STALE_RESULT) continue;
       if (result.length < 4) break;
 
       const searchIdA = result[0];

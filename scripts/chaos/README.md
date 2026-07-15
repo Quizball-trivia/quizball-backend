@@ -60,7 +60,7 @@ npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
 
 # Find the sustained ceiling. Stops at the first failed SLO level.
 npm run chaos:capacity -- --target=staging \
-  --levels=25,50,100,200,350,500,750 --duration=300 --cooldown=30
+  --levels=25,100,250,500,750,1000,2000,5000 --duration=300 --cooldown=30
 ```
 
 ### Flags

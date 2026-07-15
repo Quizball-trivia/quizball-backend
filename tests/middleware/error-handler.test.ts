@@ -46,6 +46,19 @@ describe('Error Handler Middleware', () => {
       throw new Error('Unexpected error');
     });
 
+    app.get('/database-error', (_req: Request, _res: Response) => {
+      throw Object.assign(new Error('write CONNECTION_CLOSED 127.0.0.1:5432'), {
+        code: 'CONNECTION_CLOSED',
+      });
+    });
+
+    app.get('/wrapped-database-error', (_req: Request, _res: Response) => {
+      throw new AppError('Failed to insert match answer', 500, ErrorCode.INTERNAL_ERROR, {
+        code: ErrorCode.DB_OVERLOADED,
+        reason: 'queue_full',
+      });
+    });
+
     // Test route with Zod validation
     const testSchema = z.object({
       email: z.string().email(),
@@ -130,6 +143,37 @@ describe('Error Handler Middleware', () => {
       });
       // Should NOT leak the actual error message
       expect(response.body.message).not.toBe('Unexpected error');
+    });
+
+    it('returns retryable 503 for transient database connection errors', async () => {
+      const response = await request(app)
+        .get('/database-error')
+        .set('X-Request-ID', 'db-closed-1');
+
+      expect(response.status).toBe(503);
+      expect(response.headers['retry-after']).toBe('1');
+      expect(response.body).toEqual({
+        code: 'DB_OVERLOADED',
+        message: 'Database temporarily unavailable',
+        details: null,
+        request_id: 'db-closed-1',
+      });
+      expect(response.text).not.toContain('127.0.0.1');
+    });
+
+    it('returns retryable 503 when a repository wraps a database availability error', async () => {
+      const response = await request(app)
+        .get('/wrapped-database-error')
+        .set('X-Request-ID', 'db-wrapped-1');
+
+      expect(response.status).toBe(503);
+      expect(response.headers['retry-after']).toBe('1');
+      expect(response.body).toEqual({
+        code: 'DB_OVERLOADED',
+        message: 'Database temporarily unavailable',
+        details: null,
+        request_id: 'db-wrapped-1',
+      });
     });
   });
 

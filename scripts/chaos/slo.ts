@@ -38,7 +38,8 @@ export function evaluateChaosRun(
   socket: SocketFleetSummary | null,
   dbPeak: ActivitySnapshot | null,
   app: AppStatsSummary | null = null,
-  thresholds: ChaosSloThresholds = DEFAULT_CHAOS_SLOS
+  thresholds: ChaosSloThresholds = DEFAULT_CHAOS_SLOS,
+  expectedAppInstances = 2
 ): ChaosVerdict {
   const violations: string[] = [];
   const totalSent = routes.reduce((sum, route) => sum + route.sent, 0);
@@ -77,10 +78,22 @@ export function evaluateChaosRun(
   }
 
   if (socket) {
+    if (socket.matchesPerClient !== undefined) {
+      const expectedStarts = socket.clients * socket.matchesPerClient;
+      if (socket.matchesStarted < expectedStarts) {
+        violations.push(
+          `socket match starts: ${socket.matchesStarted}/${expectedStarts} expected `
+          + `(${socket.deadlineCutoffs.beforeMatchStart} cut off before match start)`
+        );
+      }
+    }
     if (socket.matchesStarted === 0) violations.push('socket fleet started no matches');
     if (socket.matchesCompleted === 0) violations.push('socket fleet completed no matches');
-    if (socket.matchesCompleted < socket.matchesStarted) {
-      violations.push(`incomplete socket matches: ${socket.matchesCompleted}/${socket.matchesStarted}`);
+    if (socket.matchesCompleted < socket.matchesExpectedToComplete) {
+      violations.push(
+        `incomplete socket matches: ${socket.matchesCompleted}/${socket.matchesExpectedToComplete} eligible `
+        + `(${socket.deadlineCutoffs.duringMatch} cut off by test deadline)`
+      );
     }
     if (socket.matchesStarted > 0 && socket.latenciesMs.answerToAck.length === 0) {
       violations.push('socket fleet observed no gameplay answer acknowledgements');
@@ -108,8 +121,10 @@ export function evaluateChaosRun(
   if (app) {
     if (app.requestFailures > 0) violations.push(`app telemetry request failures: ${app.requestFailures}`);
     const knownInstances = Object.entries(app.instances).filter(([name]) => name !== 'unknown');
-    if (knownInstances.length > 0 && knownInstances.length < 2) {
-      violations.push(`per-replica telemetry observed only ${knownInstances.length} instance`);
+    if (knownInstances.length > 0 && knownInstances.length < expectedAppInstances) {
+      violations.push(
+        `per-replica telemetry observed only ${knownInstances.length}/${expectedAppInstances} instances`
+      );
     }
     for (const [name, instance] of knownInstances) {
       if (instance.healthFailures > 0) {

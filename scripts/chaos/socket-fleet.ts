@@ -23,6 +23,7 @@ const ANSWER_EVENTS = new Set([
   'match:put_in_order_answer',
   'match:clues_answer',
 ]);
+const MAX_FAILURE_DETAILS = 500;
 
 export type FlapStage = 'search' | 'draft' | 'gate' | 'match';
 
@@ -53,6 +54,12 @@ export interface SocketFleetSummary {
   matchesPerClient?: number;
   matchesStarted: number;
   matchesCompleted: number;
+  matchesExpectedToComplete: number;
+  deadlineCutoffs: {
+    beforeMatchStart: number;
+    duringMatch: number;
+  };
+  failures: MatchFailureDetail[];
   forfeits: number;
   abandons: number;
   wrongfulForfeits: number;
@@ -101,6 +108,9 @@ interface LatencyReport {
 interface FleetMetrics {
   matchesStarted: number;
   matchesCompleted: number;
+  deadlineBeforeMatchStart: number;
+  deadlineDuringMatch: number;
+  failures: MatchFailureDetail[];
   forfeits: number;
   abandons: number;
   wrongfulForfeits: number;
@@ -186,8 +196,27 @@ interface MatchAttempt {
   legacyDraftStallReported: boolean;
   answerSentAt: Map<string, number>;
   lastRoundResultAt: { matchId: string; qIndex: number; at: number; phase: 'normal' | 'penalty' } | null;
+  lastEvent: string;
+  lastEventAt: number;
+  lastQuestionIndex: number | null;
+  lastPhase: string | null;
   timers: Set<NodeJS.Timeout>;
   closed: boolean;
+}
+
+export interface MatchFailureDetail {
+  at: string;
+  reason: string;
+  clientIndex: number;
+  seq: number;
+  matchId: string | null;
+  queueElapsedMs: number;
+  matchElapsedMs: number | null;
+  lastEvent: string;
+  lastEventAgeMs: number;
+  lastQuestionIndex: number | null;
+  lastPhase: string | null;
+  socketConnected: boolean;
 }
 
 type PatchedSocket = StagingClient['socket'] & { __chaosEmitProbe?: true };
@@ -237,6 +266,12 @@ export async function runSocketFleet(cfg: SocketFleetConfig): Promise<SocketFlee
     ...(cfg.matchesPerClient !== undefined ? { matchesPerClient: cfg.matchesPerClient } : {}),
     matchesStarted: metrics.matchesStarted,
     matchesCompleted: metrics.matchesCompleted,
+    matchesExpectedToComplete: Math.max(0, metrics.matchesStarted - metrics.deadlineDuringMatch),
+    deadlineCutoffs: {
+      beforeMatchStart: metrics.deadlineBeforeMatchStart,
+      duringMatch: metrics.deadlineDuringMatch,
+    },
+    failures: metrics.failures,
     forfeits: metrics.forfeits,
     abandons: metrics.abandons,
     wrongfulForfeits: metrics.wrongfulForfeits,
@@ -290,7 +325,8 @@ export function renderSocketFleetSummary(s: SocketFleetSummary): string {
   const lines = [
     'SOCKET FLEET RESULTS',
     `clients=${s.clients}  flapRate=${s.flapRate}  flapStages=${s.flapStages.join(',')}  legacy=${s.legacyProtocol}  ramp=${s.rampSec}s  elapsed=${s.elapsedSec.toFixed(1)}s`,
-    `matchesStarted=${s.matchesStarted}  matchesCompleted=${s.matchesCompleted}  forfeits=${s.forfeits}  abandons=${s.abandons}`,
+    `matchesStarted=${s.matchesStarted}  matchesExpectedToComplete=${s.matchesExpectedToComplete}  matchesCompleted=${s.matchesCompleted}  forfeits=${s.forfeits}  abandons=${s.abandons}`,
+    `deadline cutoffs beforeStart=${s.deadlineCutoffs.beforeMatchStart}  duringMatch=${s.deadlineCutoffs.duringMatch}  capturedFailures=${s.failures.length}`,
     `WRONGFUL-FORFEIT COUNT=${s.wrongfulForfeits}  flaps=${s.flapsPerformed}  disconnectCountInflation=${s.disconnectCountInflation}`,
     `BOOT-STAGE DETECTORS deadSearch=${s.deadSearch}  banRollback=${s.banRollback}  gateAbandon=${s.gateAbandon}  legacyDraftStall=${s.legacyDraftStall}`,
     `stale final-results ignored=${s.staleFinalResultsIgnored}`,
@@ -343,9 +379,12 @@ async function runClient(
         boundedWaitMs(MATCH_START_TIMEOUT_MS, hardStopAt)
       );
       if (!started) {
-        addHist(metrics.socketErrors, hardStopAt !== null && Date.now() >= hardStopAt
+        const reason = hardStopAt !== null && Date.now() >= hardStopAt
           ? 'stage_deadline_before_match_start'
-          : 'match_start_timeout');
+          : 'match_start_timeout';
+        addHist(metrics.socketErrors, reason);
+        if (reason === 'stage_deadline_before_match_start') metrics.deadlineBeforeMatchStart++;
+        recordMatchFailure(metrics, attempt, reason, state.client.socket.connected);
         closeAttempt(metrics, attempt, false);
         state.current = null;
         seq++;
@@ -359,9 +398,12 @@ async function runClient(
         boundedWaitMs(MATCH_FINISH_TIMEOUT_MS, hardStopAt)
       );
       if (!finished) {
-        addHist(metrics.socketErrors, hardStopAt !== null && Date.now() >= hardStopAt
+        const reason = hardStopAt !== null && Date.now() >= hardStopAt
           ? 'stage_deadline_during_match'
-          : 'match_finish_timeout');
+          : 'match_finish_timeout';
+        addHist(metrics.socketErrors, reason);
+        if (reason === 'stage_deadline_during_match') metrics.deadlineDuringMatch++;
+        recordMatchFailure(metrics, attempt, reason, state.client.socket.connected);
         closeAttempt(metrics, attempt, true);
         state.current = null;
         seq++;
@@ -474,10 +516,12 @@ function attachMetrics(
   client.socket.on('disconnect', (reason: string) => addHist(metrics.disconnectReasons, reason));
   client.socket.on('error', (payload: unknown) => {
     addHist(metrics.socketErrors, errorTag(payload));
+    noteAttemptEvent(state.current, errorTag(payload));
     noteGateError(state, client, metrics, payload);
   });
   client.socket.on('ranked:search_started', () => {
     const attempt = state.current;
+    noteAttemptEvent(attempt, 'ranked:search_started');
     if (attempt?.plannedFlaps.has('search') && !attempt.stageFlaps.has('search') && !state.flapInFlight) {
       // Flap only after the server acknowledges the queue join. Disconnecting
       // immediately after emit races delivery and tests a dropped client event,
@@ -487,7 +531,10 @@ function attachMetrics(
     }
     resolveSearchFlap(attempt, 'ranked:search_started');
   });
-  client.socket.on('ranked:match_found', () => resolveSearchFlap(state.current, 'ranked:match_found'));
+  client.socket.on('ranked:match_found', () => {
+    noteAttemptEvent(state.current, 'ranked:match_found');
+    resolveSearchFlap(state.current, 'ranked:match_found');
+  });
   client.socket.on('ranked:queue_left', () => resolveSearchFlap(state.current, 'ranked:queue_left'));
   client.socket.on('session:state', (payload: { state?: string }) => {
     if (payload.state && payload.state !== 'IN_QUEUE') resolveSearchFlap(state.current, `session:${payload.state}`);
@@ -550,6 +597,7 @@ function attachMetrics(
     if (attempt.startedAt !== null) return;
     attempt.startedAt = Date.now();
     attempt.matchId = payload.matchId ?? null;
+    noteAttemptEvent(attempt, 'match:start');
     metrics.matchesStarted++;
     metrics.queueJoinToMatchStartMs.push(attempt.startedAt - attempt.queueJoinedAt);
     scheduleFlaps(state, cfg, metrics, attempt);
@@ -557,6 +605,7 @@ function attachMetrics(
   client.socket.on('match:question', (payload: { matchId?: string; qIndex?: number }) => {
     const attempt = state.current;
     if (!attempt || !payload.matchId || typeof payload.qIndex !== 'number') return;
+    noteAttemptEvent(attempt, 'match:question', payload.qIndex);
     const gate = attempt.gateFlap;
     if (gate && payload.qIndex === 0 && (!gate.matchId || gate.matchId === payload.matchId)) {
       gate.q0At = Date.now();
@@ -574,6 +623,7 @@ function attachMetrics(
   client.socket.on('match:answer_ack', (payload: { matchId?: string; qIndex?: number }) => {
     const attempt = state.current;
     if (!attempt || !payload.matchId || typeof payload.qIndex !== 'number') return;
+    noteAttemptEvent(attempt, 'match:answer_ack', payload.qIndex);
     const key = answerKey(payload.matchId, payload.qIndex);
     const sentAt = attempt.answerSentAt.get(key);
     if (sentAt !== undefined) {
@@ -584,6 +634,7 @@ function attachMetrics(
   client.socket.on('match:round_result', (payload: { matchId?: string; qIndex?: number; phaseKind?: string }) => {
     const attempt = state.current;
     if (!attempt || !payload.matchId || typeof payload.qIndex !== 'number') return;
+    noteAttemptEvent(attempt, 'match:round_result', payload.qIndex, payload.phaseKind ?? null);
     attempt.lastRoundResultAt = {
       matchId: payload.matchId,
       qIndex: payload.qIndex,
@@ -594,6 +645,7 @@ function attachMetrics(
   client.socket.on('match:rejoin_available', (payload: { matchId?: string; remainingReconnects?: number }) => {
     const attempt = state.current;
     if (!attempt || typeof payload.remainingReconnects !== 'number') return;
+    noteAttemptEvent(attempt, 'match:rejoin_available');
     if (payload.matchId && attempt.matchId && payload.matchId !== attempt.matchId) return;
     const gate = attempt.gateFlap;
     if (gate && (!payload.matchId || !gate.matchId || payload.matchId === gate.matchId)) {
@@ -611,6 +663,7 @@ function attachMetrics(
       return;
     }
     if (attempt.completedAt !== null) return;
+    noteAttemptEvent(attempt, 'match:final_results');
     attempt.completedAt = Date.now();
     metrics.matchesCompleted++;
     if (payload.winnerDecisionMethod === 'forfeit') metrics.forfeits++;
@@ -632,6 +685,7 @@ function installEmitProbe(state: ClientState, client: StagingClient): void {
     const attempt = state.current;
     const payload = args[0] as { matchId?: string; qIndex?: number } | undefined;
     if (attempt && ANSWER_EVENTS.has(event) && payload?.matchId && typeof payload.qIndex === 'number') {
+      noteAttemptEvent(attempt, `emit:${event}`, payload.qIndex);
       attempt.answerSentAt.set(answerKey(payload.matchId, payload.qIndex), Date.now());
     }
     return originalEmit(event, ...args);
@@ -922,6 +976,10 @@ function newAttempt(clientIndex: number, seq: number, cfg: SocketFleetConfig): M
     legacyDraftStallReported: false,
     answerSentAt: new Map(),
     lastRoundResultAt: null,
+    lastEvent: 'ranked:queue_join',
+    lastEventAt: Date.now(),
+    lastQuestionIndex: null,
+    lastPhase: null,
     timers: new Set(),
     closed: false,
   };
@@ -938,6 +996,43 @@ function closeAttempt(metrics: FleetMetrics, attempt: MatchAttempt, abandoned: b
   if (abandoned && attempt.startedAt !== null && attempt.completedAt === null) metrics.abandons++;
   metrics.disconnectCountInflation += attempt.maxDisconnectCountInflation;
   attempt.closed = true;
+}
+
+function noteAttemptEvent(
+  attempt: MatchAttempt | null,
+  event: string,
+  qIndex?: number,
+  phase?: string | null,
+): void {
+  if (!attempt) return;
+  attempt.lastEvent = event;
+  attempt.lastEventAt = Date.now();
+  if (typeof qIndex === 'number') attempt.lastQuestionIndex = qIndex;
+  if (phase !== undefined) attempt.lastPhase = phase;
+}
+
+function recordMatchFailure(
+  metrics: FleetMetrics,
+  attempt: MatchAttempt,
+  reason: string,
+  socketConnected: boolean,
+): void {
+  if (metrics.failures.length >= MAX_FAILURE_DETAILS) return;
+  const now = Date.now();
+  metrics.failures.push({
+    at: new Date(now).toISOString(),
+    reason,
+    clientIndex: attempt.clientIndex,
+    seq: attempt.seq,
+    matchId: attempt.matchId,
+    queueElapsedMs: now - attempt.queueJoinedAt,
+    matchElapsedMs: attempt.startedAt === null ? null : now - attempt.startedAt,
+    lastEvent: attempt.lastEvent,
+    lastEventAgeMs: now - attempt.lastEventAt,
+    lastQuestionIndex: attempt.lastQuestionIndex,
+    lastPhase: attempt.lastPhase,
+    socketConnected,
+  });
 }
 
 function shouldStart(seq: number, cfg: SocketFleetConfig, stopStartingAt: number | null): boolean {
@@ -1029,6 +1124,9 @@ function newMetrics(): FleetMetrics {
   return {
     matchesStarted: 0,
     matchesCompleted: 0,
+    deadlineBeforeMatchStart: 0,
+    deadlineDuringMatch: 0,
+    failures: [],
     forfeits: 0,
     abandons: 0,
     wrongfulForfeits: 0,

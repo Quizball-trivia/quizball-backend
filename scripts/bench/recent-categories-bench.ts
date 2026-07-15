@@ -246,8 +246,26 @@ async function seed(sql: (typeof import('../../src/db/index.js'))['sql']): Promi
             jsonb_build_object('id', 'd', 'text', jsonb_build_object('en', 'D'), 'is_correct', false)
           )
         )
-        WHEN 'put_in_order' THEN jsonb_build_object('type', 'put_in_order', 'items', '[]'::jsonb)
-        ELSE jsonb_build_object('type', 'clue_chain', 'clues', '[]'::jsonb)
+        WHEN 'put_in_order' THEN jsonb_build_object(
+          'type', 'put_in_order',
+          'prompt', jsonb_build_object('en', 'Put the items in order'),
+          'direction', 'asc',
+          'items', jsonb_build_array(
+            jsonb_build_object('id', 'first', 'label', jsonb_build_object('en', 'First'), 'sort_value', 1),
+            jsonb_build_object('id', 'second', 'label', jsonb_build_object('en', 'Second'), 'sort_value', 2),
+            jsonb_build_object('id', 'third', 'label', jsonb_build_object('en', 'Third'), 'sort_value', 3)
+          )
+        )
+        ELSE jsonb_build_object(
+          'type', 'clue_chain',
+          'display_answer', jsonb_build_object('en', 'The Answer'),
+          'accepted_answers', jsonb_build_array('answer'),
+          'clues', jsonb_build_array(
+            jsonb_build_object('type', 'text', 'content', jsonb_build_object('en', 'Clue one')),
+            jsonb_build_object('type', 'text', 'content', jsonb_build_object('en', 'Clue two')),
+            jsonb_build_object('type', 'text', 'content', jsonb_build_object('en', 'Clue three'))
+          )
+        )
       END
     FROM q
   `);

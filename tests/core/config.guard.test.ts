@@ -69,3 +69,29 @@ describe('database resilience configuration', () => {
     expect(() => parseConfig(baseEnv({ DB_ACQUIRE_TIMEOUT_MS: '50' }))).toThrow(/DB_ACQUIRE_TIMEOUT_MS/);
   });
 });
+
+describe('Supabase Auth IP forwarding configuration', () => {
+  it('is disabled by default and keeps the anon-key path available', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.SUPABASE_AUTH_IP_FORWARDING_ENABLED).toBe(false);
+  });
+
+  it('requires a modern server-only Supabase secret key when enabled', () => {
+    expect(() => parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+    }))).toThrow(/SUPABASE_SECRET_KEY/);
+
+    expect(() => parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+      SUPABASE_SECRET_KEY: 'legacy-service-role-key',
+    }))).toThrow(/sb_secret_/);
+  });
+
+  it('accepts an explicit modern secret key when enabled', () => {
+    const parsed = parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+      SUPABASE_SECRET_KEY: 'sb_secret_test-only',
+    }));
+    expect(parsed.SUPABASE_AUTH_IP_FORWARDING_ENABLED).toBe(true);
+  });
+});

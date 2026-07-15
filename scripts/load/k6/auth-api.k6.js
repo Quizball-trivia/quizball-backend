@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { check, sleep } from 'k6';
-import { Rate, Trend } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 
 const MODE = (__ENV.MODE || 'smoke').toLowerCase();
 const TARGET = (__ENV.TARGET || 'local').toLowerCase();
@@ -28,6 +28,14 @@ const EMAIL_DOMAIN = __ENV.EMAIL_DOMAIN || (TARGET === 'staging' ? 'quizball.io'
 const BYPASS_TOKEN = __ENV.CHAOS_BYPASS_TOKEN || '';
 
 const unexpectedFailures = new Rate('unexpected_failures');
+const rateLimitedResponses = new Counter('rate_limited_responses');
+const loginRateLimited = new Counter('auth_login_rate_limited');
+const refreshRateLimited = new Counter('auth_refresh_rate_limited');
+const signupRateLimited = new Counter('auth_signup_rate_limited');
+const serverErrorResponses = new Counter('server_error_responses');
+const supabaseAuthRateLimited = new Counter('supabase_auth_rate_limited');
+const applicationRateLimited = new Counter('application_rate_limited');
+const unknownRateLimited = new Counter('unknown_rate_limited');
 const appRequestDuration = new Trend('app_request_duration', true);
 const loginDuration = new Trend('auth_login_duration', true);
 const refreshDuration = new Trend('auth_refresh_duration', true);
@@ -59,6 +67,10 @@ const SAFE_API_ROUTES = [
   { name: 'lobbies.public', path: '/api/v1/lobbies/public', weight: 3, auth: true },
   { name: 'friends.list', path: '/api/v1/friends', weight: 2, auth: true },
   { name: 'friends.requests', path: '/api/v1/friends/requests', weight: 2, auth: true },
+  { name: 'announcements.list', path: '/api/v1/announcements', weight: 2, auth: true },
+  { name: 'notifications.list', path: '/api/v1/notifications?limit=20', weight: 2, auth: true },
+  { name: 'notifications.unread', path: '/api/v1/notifications/unread-count', weight: 2, auth: true },
+  { name: 'users.search', path: '/api/v1/users/search?q=chaos&limit=20', weight: 2, auth: true },
 ];
 
 let apiSession = null;
@@ -196,9 +208,31 @@ function getAuthenticated(path, accessToken, endpoint) {
 function record(response, expectedStatuses, label, trend) {
   trend.add(response.timings.duration);
   const ok = expectedStatuses.includes(response.status);
+  if (response.status === 429) {
+    rateLimitedResponses.add(1);
+    if (label === 'auth.login') loginRateLimited.add(1);
+    else if (label === 'auth.refresh') refreshRateLimited.add(1);
+    else if (label === 'auth.signup') signupRateLimited.add(1);
+    const source = rateLimitSource(response);
+    if (source === 'supabase_auth') supabaseAuthRateLimited.add(1);
+    else if (source === 'application') applicationRateLimited.add(1);
+    else unknownRateLimited.add(1);
+  }
+  if (response.status >= 500 || response.status === 0) serverErrorResponses.add(1);
   unexpectedFailures.add(!ok);
   check(response, { [`${label} returned expected status`]: () => ok });
   return ok;
+}
+
+function rateLimitSource(response) {
+  try {
+    const body = response.json();
+    if (body?.details?.source === 'supabase_auth') return 'supabase_auth';
+    if (body?.code === 'RATE_LIMIT_EXCEEDED') return 'application';
+  } catch (_) {
+    // A non-JSON proxy response remains visible in the unknown counter.
+  }
+  return 'unknown';
 }
 
 function failCheck(label, ok) {
@@ -257,6 +291,7 @@ function buildOptions() {
     auth_refresh_duration: ['p(95)<2000', 'p(99)<4000'],
     auth_signup_duration: ['p(95)<3000', 'p(99)<5000'],
     wallet_duration: ['p(95)<1500', 'p(99)<3000'],
+    server_error_responses: ['count==0'],
     dropped_iterations: ['count==0'],
   };
 

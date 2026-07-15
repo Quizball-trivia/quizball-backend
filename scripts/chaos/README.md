@@ -27,8 +27,9 @@ There are two load shapes:
   non-prod database before DB stats are reset.
 - Every run enforces SLOs before the database's hard ceiling: HTTP errors ≤1%,
   route p95 ≤1.5s, route p99 ≤3s, Postgres connections ≤75%, DB admission
-  max wait ≤1s with no shedding, event-loop p99 ≤100ms, CPU ≤90%, no gameplay
-  boot violations/wrongful forfeits, and matchmaking p95 ≤120s.
+  max wait ≤1s with no shedding, event-loop p99 ≤100ms, allocated CPU capacity
+  ≤90%, no gameplay boot violations/wrongful forfeits, and matchmaking p95
+  ≤120s.
 
 ## Run
 

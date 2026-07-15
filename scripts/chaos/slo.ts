@@ -144,7 +144,9 @@ export function evaluateChaosRun(
         );
       }
       if (instance.runtime.cpuPct > thresholds.maxCpuPct) {
-        violations.push(`${name} CPU ${instance.runtime.cpuPct}% > ${thresholds.maxCpuPct}%`);
+        violations.push(
+          `${name} CPU capacity ${instance.runtime.cpuPct}% > ${thresholds.maxCpuPct}%`
+        );
       }
     }
   }

@@ -17,6 +17,8 @@ export interface ProvisionConfig {
   supabaseUrl: string; // e.g. https://nsdfiprfmhdqhbfxfwpv.supabase.co
   serviceRoleKey: string;
   count: number;
+  /** First numeric user suffix, used to give distributed workers disjoint shards. */
+  startIndex?: number;
   password: string;
   emailPrefix: string; // e.g. "chaos" → chaos+u0@quizball.io
   emailDomain: string; // e.g. quizball.io
@@ -249,7 +251,7 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
 export async function ensureChaosUsers(cfg: ProvisionConfig): Promise<string[]> {
   const emails = Array.from(
     { length: cfg.count },
-    (_, i) => `${cfg.emailPrefix}+u${i}@${cfg.emailDomain}`
+    (_, i) => `${cfg.emailPrefix}+u${(cfg.startIndex ?? 0) + i}@${cfg.emailDomain}`
   );
 
   // Existing test accounts may have been created by an older harness with a

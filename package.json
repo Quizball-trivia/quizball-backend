@@ -18,6 +18,7 @@
     "test:regression:live": "REGRESSION_DB_URL=${REGRESSION_DB_URL:-postgresql://postgres:postgres@127.0.0.1:5432/quizball_regression} REGRESSION_REDIS_URL=${REGRESSION_REDIS_URL:-redis://localhost:6379/15} REGRESSION_LOG_LEVEL=${REGRESSION_LOG_LEVEL:-info} vitest run --config vitest.regression.config.ts 2>&1 | tee game-regression/last-run.log",
     "staging:gate": "tsx game-regression/staging/run.mts",
     "chaos:capacity": "tsx scripts/chaos/capacity.ts",
+    "chaos:matchmaking": "tsx scripts/chaos/matchmaking.ts",
     "load:k6:inspect": "k6 inspect scripts/load/k6/auth-api.k6.js",
     "load:k6:smoke": "TARGET=staging MODE=smoke USERS=2 VUS=2 k6 run scripts/load/k6/auth-api.k6.js",
     "load:k6": "k6 run scripts/load/k6/auth-api.k6.js",

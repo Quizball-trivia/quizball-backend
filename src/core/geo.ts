@@ -7,6 +7,19 @@ interface IpApiResponse {
   countryCode: string;
 }
 
+const GEO_LOOKUP_TIMEOUT_MS = 500;
+const GEO_POSITIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const GEO_NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+const GEO_CACHE_MAX_ENTRIES = 10_000;
+
+interface GeoCacheEntry {
+  country: string | null;
+  expiresAt: number;
+}
+
+const geoCache = new Map<string, GeoCacheEntry>();
+const geoLookupsInFlight = new Map<string, Promise<string | null>>();
+
 type HeaderBag = Record<string, string | string[] | undefined>;
 
 function getHeader(headers: HeaderBag, name: string): string | undefined {
@@ -39,6 +52,65 @@ function isLocalIp(ip: string): boolean {
   return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
 }
 
+function pruneGeoCache(now: number): void {
+  for (const [ip, entry] of geoCache) {
+    if (entry.expiresAt <= now) geoCache.delete(ip);
+  }
+  while (geoCache.size >= GEO_CACHE_MAX_ENTRIES) {
+    const oldest = geoCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    geoCache.delete(oldest);
+  }
+}
+
+async function fetchCountryByIp(clientIp: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GEO_LOOKUP_TIMEOUT_MS);
+  try {
+    // ip-api.com free tier only supports HTTP; HTTPS requires a paid plan.
+    const res = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,country,countryCode`, {
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as IpApiResponse;
+    if (data.status === 'success' && data.countryCode) {
+      return data.countryCode.toUpperCase();
+    }
+  } catch (err) {
+    logger.debug({ err }, 'Geo detection failed — skipping');
+  } finally {
+    clearTimeout(timeout);
+  }
+  return null;
+}
+
+async function cachedCountryByIp(clientIp: string): Promise<string | null> {
+  const now = Date.now();
+  const cached = geoCache.get(clientIp);
+  if (cached && cached.expiresAt > now) return cached.country;
+  if (cached) geoCache.delete(clientIp);
+
+  const existing = geoLookupsInFlight.get(clientIp);
+  if (existing) return existing;
+
+  const lookup = fetchCountryByIp(clientIp)
+    .then((country) => {
+      if (geoCache.size >= GEO_CACHE_MAX_ENTRIES) pruneGeoCache(Date.now());
+      geoCache.set(clientIp, {
+        country,
+        expiresAt: Date.now() + (country ? GEO_POSITIVE_CACHE_TTL_MS : GEO_NEGATIVE_CACHE_TTL_MS),
+      });
+      return country;
+    })
+    .finally(() => {
+      geoLookupsInFlight.delete(clientIp);
+    });
+  geoLookupsInFlight.set(clientIp, lookup);
+  return lookup;
+}
+
 export async function detectCountryFromHeaders(
   headers: HeaderBag,
   ip: string | null | undefined,
@@ -62,27 +134,11 @@ export async function detectCountryFromHeaders(
     return null;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-  try {
-    // ip-api.com free tier only supports HTTP; HTTPS requires a paid plan
-    const res = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,country,countryCode`, {
-      signal: controller.signal,
-    });
-
-    if (!res.ok) return null;
-
-    const data = (await res.json()) as IpApiResponse;
-    if (data.status === 'success' && data.countryCode) {
-      return data.countryCode.toUpperCase();
-    }
-  } catch (err) {
-    logger.debug({ err }, 'Geo detection failed — skipping');
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  return null;
+  // Auth middleware can call this on every authenticated request for users who
+  // do not yet have a country. Coalesce concurrent lookups and negative-cache
+  // failures so an unavailable third-party geo service cannot pin p95 at its
+  // timeout or create an outbound retry storm.
+  return cachedCountryByIp(clientIp);
 }
 
 /**
@@ -97,3 +153,10 @@ export async function detectCountryFromHeaders(
 export async function detectCountryFromRequest(req: Request): Promise<string | null> {
   return detectCountryFromHeaders(req.headers, req.ip);
 }
+
+export const __geoTestHooks = {
+  reset(): void {
+    geoCache.clear();
+    geoLookupsInFlight.clear();
+  },
+};

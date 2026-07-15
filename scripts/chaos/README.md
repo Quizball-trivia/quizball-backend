@@ -20,7 +20,9 @@ There are two load shapes:
 - Spend routes (ticket/coin drains like `daily/complete`) are **off by default**;
   enable with `--include-spend`.
 - Test users are provisioned as `chaos+uN@quizball.io`, pre-confirmed via the
-  Supabase admin API (service-role key from `.env`). Re-runs reuse them.
+  Supabase admin API (service-role key from `.env`). Re-runs reuse them. Staging
+  session bootstrap is paced because one load generator has one source IP;
+  password-login capacity is measured separately from distributed IPs.
 - Socket fleet users are topped back up to 5 ranked tickets via the configured
   non-prod database before DB stats are reset.
 - Every run enforces SLOs before the database's hard ceiling: HTTP errors ≤1%,
@@ -53,7 +55,7 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=3 --matches-per-client=1
 # Old mobile protocol profile: no draft/kickoff/resume UI-ready acks
 npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1 --legacy-protocol
 
-# Production-shaped 100-player raid: login burst + weighted HTTP + real matches
+# Production-shaped 100-player raid from distributed source IPs
 npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
   --total-rps=50 --duration=300 --ramp-s=60 --login-storm \
   --login-ramp-s=60
@@ -62,6 +64,11 @@ npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
 npm run chaos:capacity -- --target=staging \
   --levels=25,100,250,500,750,1000,2000,5000 --duration=300 --cooldown=30
 ```
+
+Do not include `--login-storm` in a single-machine gameplay ceiling run above
+30 users. Supabase Auth deliberately allows a burst of 30 `/token` requests per
+source IP. Use the distributed k6 suite for login/refresh capacity, and use the
+paced bootstrap plus this harness for backend/database/gameplay capacity.
 
 ### Flags
 
@@ -111,7 +118,7 @@ rate. A global in-flight cap (2000) sheds load if the target stalls completely.
 
 1. Deploy the candidate code to **two staging replicas** with the same Railway
    CPU/memory and Supabase compute size as production.
-2. Configure `DB_POOL_MAX=12`, `DB_INFLIGHT_LIMIT=12`, `DB_QUEUE_LIMIT=12`, and
+2. Configure `DB_POOL_MAX=12`, `DB_INFLIGHT_LIMIT=12`, `DB_QUEUE_LIMIT=48`, and
    a non-production `CHAOS_BYPASS_TOKEN` on staging.
 3. Run a 25-player smoke level. Confirm the JSON report sees the expected
    Postgres `max_connections` value and both replicas in Railway logs.

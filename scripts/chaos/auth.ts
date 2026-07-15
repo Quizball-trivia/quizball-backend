@@ -21,7 +21,23 @@ export interface ProvisionConfig {
   emailPrefix: string; // e.g. "chaos" → chaos+u0@quizball.io
   emailDomain: string; // e.g. quizball.io
   concurrency: number;
+  /**
+   * Minimum spacing between password-login requests made by this generator.
+   * Supabase Auth limits /token by source IP, so a single staging load runner
+   * must pace session bootstrap even though real users arrive from many IPs.
+   */
+  loginIntervalMs?: number;
   bypassToken?: string;
+}
+
+export class ChaosLoginError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = 'ChaosLoginError';
+  }
 }
 
 export interface TicketTopUpConfig {
@@ -116,7 +132,7 @@ export async function loginChaosUser(
     user?: { provider_sub?: string };
   };
   if (!res.ok || !body.access_token) {
-    throw new Error(`login ${email} failed: ${res.status}`);
+    throw new ChaosLoginError(`login ${email} failed: ${res.status}`, res.status);
   }
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
@@ -128,6 +144,19 @@ export async function loginChaosUser(
   });
   const me = (await meRes.json().catch(() => ({}))) as { id?: string };
   return { token: body.access_token, userId: me.id ?? '' };
+}
+
+function createLoginPacer(intervalMs: number): () => Promise<void> {
+  if (intervalMs <= 0) return async () => {};
+
+  let nextAllowedAt = Date.now();
+  return async () => {
+    const now = Date.now();
+    const slot = Math.max(now, nextAllowedAt);
+    nextAllowedAt = slot + intervalMs;
+    const waitMs = slot - now;
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  };
 }
 
 function assertTicketTopUpTarget(cfg: TicketTopUpConfig): void {
@@ -189,10 +218,24 @@ async function mapWithConcurrency<T, R>(
 
 export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]> {
   const emails = await ensureChaosUsers(cfg);
+  const waitForLoginSlot = createLoginPacer(cfg.loginIntervalMs ?? 0);
 
   const users = await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
-    const { token, userId } = await loginChaosUser(cfg, email);
-    return { email, password: cfg.password, token, userId } satisfies ChaosUser;
+    // A previous run may have consumed the source-IP token bucket. Keep 429s
+    // in preparation traffic out of the measured run by retrying through the
+    // same global pacer. Other auth failures remain immediate hard failures.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await waitForLoginSlot();
+      try {
+        const { token, userId } = await loginChaosUser(cfg, email);
+        return { email, password: cfg.password, token, userId } satisfies ChaosUser;
+      } catch (error) {
+        if (!(error instanceof ChaosLoginError) || error.status !== 429 || attempt === 4) {
+          throw error;
+        }
+      }
+    }
+    throw new Error(`login ${email} exhausted retries`);
   });
 
   return users.filter((u) => u.token && u.userId);

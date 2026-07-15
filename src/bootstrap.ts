@@ -1,14 +1,33 @@
-// Last-resort process guards, registered before anything else loads. A single
-// unhandled promise rejection must NOT kill a realtime server holding live
-// sockets and in-memory match/draft timers — observed on prod (2026-06-11):
-// a DB statement timeout escaped a fire-and-forget draft-start path and
-// crash-restarted the process three times in 90 seconds, dropping every
-// connected player each time.
+// Last-resort process guards, registered before anything else loads. One
+// rejection is logged so realtime recovery can absorb a lost detached task, but
+// a burst means the replica's state/pool can no longer be trusted. Continuing
+// indefinitely caused one Railway replica to remain wedged during the
+// 2026-07-13 database incident until it was manually redeployed.
+const UNHANDLED_REJECTION_WINDOW_MS = 60_000;
+const UNHANDLED_REJECTION_RESTART_THRESHOLD = 3;
+const recentUnhandledRejections: number[] = [];
+let fatalRestartScheduled = false;
+
 process.on('unhandledRejection', (reason) => {
-  // Log loudly and keep serving. The rejected promise's work is lost, but the
-  // realtime recovery layers (watchdogs, durable timers, reconnect resume)
-  // are designed to absorb exactly this kind of partial failure.
-  console.error('[FATAL-GUARD] Unhandled promise rejection (continuing):', reason);
+  const now = Date.now();
+  recentUnhandledRejections.push(now);
+  while (
+    recentUnhandledRejections.length > 0
+    && recentUnhandledRejections[0]! < now - UNHANDLED_REJECTION_WINDOW_MS
+  ) {
+    recentUnhandledRejections.shift();
+  }
+
+  const count = recentUnhandledRejections.length;
+  console.error(
+    `[FATAL-GUARD] Unhandled promise rejection (${count}/${UNHANDLED_REJECTION_RESTART_THRESHOLD} in 60s):`,
+    reason
+  );
+  if (count >= UNHANDLED_REJECTION_RESTART_THRESHOLD && !fatalRestartScheduled) {
+    fatalRestartScheduled = true;
+    console.error('[FATAL-GUARD] Rejection burst detected; exiting for clean replica replacement.');
+    setTimeout(() => process.exit(1), 100).unref?.();
+  }
 });
 
 process.on('uncaughtException', (error) => {

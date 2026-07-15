@@ -28,11 +28,15 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { CHAOS_ROUTES, SPEND_ROUTES, type ChaosRoute } from './routes.js';
+import { discoverRouteFixtures } from './fixtures.js';
 import { ensureTickets, provisionUsers } from './auth.js';
-import { runAllRoutes } from './engine.js';
+import { runAllRoutes, runMixedRoutes } from './engine.js';
 import { summarize, renderTable } from './metrics.js';
+import { runLoginStorm } from './login-storm.js';
+import { startAppStatsCollector, type AppStatsSummary } from './app-stats.js';
+import { evaluateChaosRun } from './slo.js';
 import {
   assertSocketTargetSafe,
   renderSocketFleetSummary,
@@ -47,6 +51,7 @@ import {
   topStatements,
   snapshotActivity,
   explainQuery,
+  type ActivitySnapshot,
 } from './db-stats.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +74,11 @@ interface Args {
   rampSec: number;
   matchesPerClient?: number;
   durationWasExplicit: boolean;
+  drainSec: number;
+  totalRps?: number;
+  loginStorm: boolean;
+  loginRampSec: number;
+  reportPath?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -105,8 +115,17 @@ function parseArgs(argv: string[]): Args {
   ) {
     throw new Error('--matches-per-client must be a positive integer.');
   }
-  const target = (get('target') ?? 'staging') as 'staging' | 'local';
+  const targetRaw = get('target') ?? 'staging';
+  if (targetRaw !== 'staging' && targetRaw !== 'local') {
+    throw new Error('--target must be staging or local. Production is not supported.');
+  }
+  const target = targetRaw;
   const flapStages = parseFlapStages(getAll('flap-stage'));
+  const totalRpsRaw = get('total-rps');
+  const totalRps = totalRpsRaw === undefined ? undefined : Number(totalRpsRaw);
+  if (totalRps !== undefined && (!Number.isFinite(totalRps) || totalRps <= 0)) {
+    throw new Error('--total-rps must be a positive number.');
+  }
   return {
     target,
     rps: num('rps', 100),
@@ -124,6 +143,11 @@ function parseArgs(argv: string[]): Args {
     rampSec: Math.max(0, num('ramp-s', 10)),
     matchesPerClient: parsedMatchesPerClient,
     durationWasExplicit,
+    drainSec: Math.max(0, num('drain-s', 180)),
+    totalRps,
+    loginStorm: get('login-storm') === 'true',
+    loginRampSec: Math.max(0, num('login-ramp-s', 60)),
+    reportPath: get('report'),
   };
 }
 
@@ -146,6 +170,17 @@ function writeSocketReport(summary: SocketFleetSummary): string {
   const stamp = summary.startedAt.replace(/[:.]/g, '-');
   const path = resolve(dir, `socket-fleet-${stamp}.json`);
   writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`);
+  return path;
+}
+
+function writeRunReport(pathOverride: string | undefined, report: unknown): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const defaultPath = resolve(REPO_ROOT, 'scripts/chaos/reports', `chaos-run-${stamp}.json`);
+  const path = pathOverride
+    ? (isAbsolute(pathOverride) ? pathOverride : resolve(REPO_ROOT, pathOverride))
+    : defaultPath;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
   return path;
 }
 
@@ -182,6 +217,15 @@ interface TargetConfig {
   bypassToken?: string;
 }
 
+function assertNoProductionTarget(cfg: TargetConfig): void {
+  const blob = `${cfg.apiBase} ${cfg.supabaseUrl} ${cfg.databaseUrl}`;
+  if (blob.includes('lfbwhxvwubzeqkztghok') || blob.includes('api.quizball.io')) {
+    throw new Error(
+      'PROD GUARD: target resolves to production. The chaos harness refuses to run against prod.'
+    );
+  }
+}
+
 function resolveTarget(args: Args): TargetConfig {
   if (args.target === 'staging') {
     const env = readEnvFile(resolve(REPO_ROOT, '.env'));
@@ -193,15 +237,7 @@ function resolveTarget(args: Args): TargetConfig {
       emailDomain: 'quizball.io',
       bypassToken: process.env.CHAOS_BYPASS_TOKEN ?? env.CHAOS_BYPASS_TOKEN,
     };
-    // HARD PROD GUARD: refuse to run if anything points at the prod project.
-    const PROD_PROJECT = 'lfbwhxvwubzeqkztghok';
-    const blob = `${cfg.apiBase} ${cfg.supabaseUrl} ${cfg.databaseUrl}`;
-    if (blob.includes(PROD_PROJECT) || blob.includes('api.quizball.io')) {
-      throw new Error(
-        'PROD GUARD: target resolves to production. The chaos harness refuses to run against prod. ' +
-          'Point --api/--db at staging.'
-      );
-    }
+    assertNoProductionTarget(cfg);
     if (!cfg.supabaseUrl.includes('nsdfiprfmhdqhbfxfwpv')) {
       throw new Error(
         `PROD GUARD: staging SUPABASE_URL expected to be the staging project, got "${cfg.supabaseUrl}". Aborting.`
@@ -211,17 +247,31 @@ function resolveTarget(args: Args): TargetConfig {
   }
   // local
   const env = readEnvFile(resolve(REPO_ROOT, '.env.local'));
-  return {
-    apiBase: args.api ?? 'http://localhost:3000',
-    supabaseUrl: env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
-    serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-    databaseUrl: args.db ?? env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:54322/postgres',
+  const localPort = process.env.PORT ?? env.PORT ?? '8000';
+  const cfg: TargetConfig = {
+    apiBase: args.api ?? process.env.API_BASE_URL ?? env.API_BASE_URL ?? `http://localhost:${localPort}`,
+    supabaseUrl: process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+    databaseUrl:
+      args.db
+      ?? process.env.DATABASE_URL
+      ?? env.DATABASE_URL
+      ?? 'postgresql://postgres:postgres@localhost:54322/postgres',
     emailDomain: 'example.com',
     bypassToken: process.env.CHAOS_BYPASS_TOKEN ?? env.CHAOS_BYPASS_TOKEN,
   };
+  // `--target=local --api=<prod>` must not bypass the production guard.
+  assertNoProductionTarget(cfg);
+  return cfg;
 }
 
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log('Usage: tsx scripts/chaos/run.ts --target=local|staging [--total-rps=N|--rps=N] [--duration=S] [--users=N] [--sockets=N]');
+    console.log('Production API, database, and Supabase targets are always blocked.');
+    return;
+  }
+  const runStartedAt = new Date().toISOString();
   const args = parseArgs(process.argv.slice(2));
   const target = resolveTarget(args);
   if (args.sockets > 0) assertSocketTargetSafe(target.apiBase);
@@ -229,16 +279,19 @@ async function main() {
   console.log('━'.repeat(72));
   console.log('CHAOS HARNESS');
   console.log(`  target      : ${args.target}  (${target.apiBase})`);
-  console.log(`  rps/route   : ${args.rps}`);
+  if (args.totalRps !== undefined) console.log(`  total HTTP rps: ${args.totalRps} (weighted mix)`);
+  else console.log(`  rps/route   : ${args.rps}`);
   console.log(`  duration    : ${args.duration}s`);
   console.log(`  users       : ${args.users}`);
   console.log(`  include-spend: ${args.includeSpend}`);
+  console.log(`  login-storm : ${args.loginStorm}${args.loginStorm ? ` (${args.loginRampSec}s ramp)` : ''}`);
   if (args.sockets > 0) {
     console.log(`  sockets     : ${args.sockets}`);
     console.log(`  flap-rate   : ${args.flapRate}`);
     console.log(`  flap-stage  : ${args.flapStages.join(',')}`);
     console.log(`  legacy-protocol: ${args.legacyProtocol}`);
     console.log(`  ramp        : ${args.rampSec}s`);
+    console.log(`  drain       : ${args.drainSec}s max`);
     if (args.matchesPerClient !== undefined) console.log(`  matches/client: ${args.matchesPerClient}`);
   }
   console.log('━'.repeat(72));
@@ -249,7 +302,10 @@ async function main() {
   if (args.only) routes = routes.filter((r) => args.only!.includes(r.name));
   if (routes.length === 0) throw new Error('No routes selected.');
   console.log(`Routes under test: ${routes.length}`);
-  console.log(`Offered load (peak): ${args.rps * routes.length} req/s total\n`);
+  console.log(
+    `Offered load (peak): ${args.totalRps ?? args.rps * routes.length} req/s total` +
+    `${args.totalRps !== undefined ? ' (weighted production mix)' : ''}\n`
+  );
 
   // 2) Provision the user fleet (needed for any bearer route).
   const socketEnabled = args.sockets > 0;
@@ -270,6 +326,7 @@ async function main() {
       emailPrefix: 'chaos',
       emailDomain: target.emailDomain,
       concurrency: 10,
+      bypassToken: target.bypassToken,
     });
     console.log(`  → ${users.length} users authenticated.\n`);
     if (users.length === 0) throw new Error('Provisioning produced 0 usable users.');
@@ -292,29 +349,49 @@ async function main() {
     console.log('  → tickets ready.\n');
   }
 
+  if (users.length < 2 && routes.some((route) => route.name === 'stats.head-to-head')) {
+    throw new Error('stats.head-to-head requires at least two distinct load users.');
+  }
+  console.log('Discovering stable read fixtures…');
+  const fixtures = await discoverRouteFixtures(target.apiBase, users[0]!, target.bypassToken);
+  console.log('  → category/question/featured fixtures ready.\n');
+
   // 3) DB stats: reset before.
   const sql = args.dbStats && target.databaseUrl ? makeStatsClient(target.databaseUrl) : null;
   let pgss = false;
-  let activityBefore = null;
+  let activityBefore: ActivitySnapshot | null = null;
+  const dbStatErrors: string[] = [];
+  const activitySamples: Array<{ at: string; snapshot: ActivitySnapshot }> = [];
   if (sql) {
-    pgss = await hasPgStatStatements(sql);
-    activityBefore = await snapshotActivity(sql);
-    if (pgss) {
-      await resetStatStatements(sql);
-      console.log('pg_stat_statements reset. Live activity before:', activityBefore, '\n');
-    } else {
-      console.log('pg_stat_statements not available — DB-side stats limited to pg_stat_activity.\n');
+    try {
+      pgss = await hasPgStatStatements(sql);
+      activityBefore = await snapshotActivity(sql);
+      activitySamples.push({ at: new Date().toISOString(), snapshot: activityBefore });
+      if (pgss) {
+        await resetStatStatements(sql);
+        console.log('pg_stat_statements reset. Live activity before:', activityBefore, '\n');
+      } else {
+        console.log('pg_stat_statements not available — DB-side stats limited to pg_stat_activity.\n');
+      }
+    } catch (error) {
+      const message = `before: ${errorMessage(error)}`;
+      dbStatErrors.push(message);
+      console.warn(`DB stats unavailable before run (${message}); load will continue.`);
     }
   }
 
   // 4) Sample activity mid-run (peak pressure snapshot).
   let activityPeak = activityBefore;
   let peakTimer: NodeJS.Timeout | null = null;
+  let dbSampleInFlight = false;
   if (sql) {
     peakTimer = setInterval(async () => {
+      if (dbSampleInFlight) return;
+      dbSampleInFlight = true;
       try {
         const snap = await snapshotActivity(sql);
-        if (!activityPeak || snap.active > activityPeak.active) activityPeak = snap;
+        activitySamples.push({ at: new Date().toISOString(), snapshot: snap });
+        activityPeak = mergeActivityPeak(activityPeak, snap);
         if (snap.waitingOnLock > 0 || snap.idleInTxn > 2) {
           console.log(
             `  [db] active=${snap.active} idle_in_txn=${snap.idleInTxn} lock_waits=${snap.waitingOnLock} longest=${snap.longestActiveSec}s`
@@ -322,6 +399,8 @@ async function main() {
         }
       } catch {
         /* ignore mid-run stat errors */
+      } finally {
+        dbSampleInFlight = false;
       }
     }, 1000);
   }
@@ -329,22 +408,42 @@ async function main() {
   // 5) Run.
   console.log(socketEnabled ? 'Firing HTTP load + socket fleet…\n' : 'Firing load…\n');
   const httpStart = Date.now();
-  const httpPromise = runAllRoutes(routes, {
+  const appStatsCollector = startAppStatsCollector(target.apiBase, target.bypassToken);
+  const commonEngineConfig = {
     apiBase: target.apiBase,
     rps: args.rps,
     durationSec: args.duration,
     users,
     maxInflight: 2000,
-    timeoutMs: 15000,
+    timeoutMs: 15_000,
     bypassToken: target.bypassToken,
-  }).then((results) => ({
+    fixtures,
+  };
+  const httpRun = args.totalRps !== undefined
+    ? runMixedRoutes(routes, {
+        ...commonEngineConfig,
+        totalRps: args.totalRps,
+        rampSec: args.rampSec,
+      })
+    : runAllRoutes(routes, commonEngineConfig);
+  const httpPromise = httpRun.then((results) => ({
     results,
     elapsedSec: (Date.now() - httpStart) / 1000,
   }));
+  const loginPromise = args.loginStorm
+    ? runLoginStorm({
+        apiBase: target.apiBase,
+        users,
+        rampSec: args.loginRampSec,
+        timeoutMs: 15_000,
+        bypassToken: target.bypassToken,
+      })
+    : Promise.resolve([]);
   const socketPromise = socketEnabled
     ? runSocketFleet({
         apiBase: target.apiBase,
         durationSec: args.duration,
+        drainSec: args.drainSec,
         durationWasExplicit: args.durationWasExplicit,
         sockets: args.sockets,
         flapRate: args.flapRate,
@@ -355,11 +454,16 @@ async function main() {
         users: users.slice(0, args.sockets),
       })
     : Promise.resolve<SocketFleetSummary | null>(null);
-  const [{ results, elapsedSec }, socketSummary] = await Promise.all([httpPromise, socketPromise]);
+  const [{ results, elapsedSec }, socketSummary, arrivalMetrics] = await Promise.all([
+    httpPromise,
+    socketPromise,
+    loginPromise,
+  ]);
   if (peakTimer) clearInterval(peakTimer);
+  const appStats: AppStatsSummary = await appStatsCollector.stop();
 
   // 6) Report.
-  const reports = results
+  const reports = [...results, ...arrivalMetrics]
     .map((m) => summarize(m, elapsedSec))
     .sort((a, b) => b.p95 - a.p95);
   console.log('\n' + '═'.repeat(72));
@@ -369,7 +473,7 @@ async function main() {
 
   const totalSent = reports.reduce((s, r) => s + r.sent, 0);
   const totalOk = reports.reduce((s, r) => s + r.completed, 0);
-  const totalErr = reports.reduce((s, r) => s + (r.errorRatePct / 100) * r.completed, 0);
+  const totalErr = reports.reduce((s, r) => s + (r.errorRatePct / 100) * r.sent, 0);
   console.log('\nTotals:');
   console.log(`  sent=${totalSent}  completed=${totalOk}  effective=${(totalOk / elapsedSec).toFixed(0)} req/s  server-errors≈${Math.round(totalErr)}`);
 
@@ -381,16 +485,21 @@ async function main() {
   }
 
   // 7) DB stats after.
+  let activityAfter: ActivitySnapshot | null = null;
+  let topQueries: Awaited<ReturnType<typeof topStatements>> = [];
   if (sql) {
-    const activityAfter = await snapshotActivity(sql);
-    console.log('\nDB activity — peak during run:', activityPeak);
-    console.log('DB activity — after run     :', activityAfter);
-    if (pgss) {
-      const top = await topStatements(sql, 20);
+    try {
+      activityAfter = await snapshotActivity(sql);
+      activitySamples.push({ at: new Date().toISOString(), snapshot: activityAfter });
+      activityPeak = mergeActivityPeak(activityPeak, activityAfter);
+      console.log('\nDB activity — peak during run:', activityPeak);
+      console.log('DB activity — after run     :', activityAfter);
+      if (pgss) {
+        topQueries = await topStatements(sql, 20);
       console.log('\n' + '═'.repeat(72));
       console.log('TOP QUERIES BY TOTAL DB TIME (this run)');
       console.log('═'.repeat(72));
-      for (const s of top) {
+      for (const s of topQueries) {
         const q = s.query.replace(/\s+/g, ' ').slice(0, 110);
         console.log(
           `  ${String(s.totalMs).padStart(9)}ms total · ${String(s.calls).padStart(6)} calls · ${String(s.meanMs).padStart(7)}ms mean · ${q}`
@@ -401,7 +510,7 @@ async function main() {
       console.log('SEQ-SCAN / MISSING-INDEX CANDIDATES (EXPLAIN on slowest reads)');
       console.log('═'.repeat(72));
       let flagged = 0;
-      for (const s of top.slice(0, 12)) {
+      for (const s of topQueries.slice(0, 12)) {
         const ex = await explainQuery(sql, s.query);
         if (ex?.hasSeqScan) {
           flagged++;
@@ -418,19 +527,72 @@ async function main() {
       if (flagged === 0) {
         console.log('  No seq scans found among EXPLAIN-able slowest reads (parameterized queries skipped).');
       }
+      }
+    } catch (error) {
+      const message = `after: ${errorMessage(error)}`;
+      dbStatErrors.push(message);
+      console.warn(`DB stats unavailable after run (${message}); report will still be written.`);
+    } finally {
+      await sql.end().catch((error: unknown) => {
+        dbStatErrors.push(`close: ${errorMessage(error)}`);
+      });
     }
-    await sql.end();
   }
 
+  const expectedAppInstances = args.target === 'staging' ? 2 : 1;
+  const verdict = evaluateChaosRun(
+    reports,
+    socketSummary,
+    activityPeak,
+    appStats,
+    undefined,
+    expectedAppInstances
+  );
+  console.log('\n' + '═'.repeat(72));
+  console.log(verdict.ok ? 'SLO VERDICT: PASS' : 'SLO VERDICT: FAIL');
+  for (const violation of verdict.violations) console.log(`  - ${violation}`);
+
+  const fullReportPath = writeRunReport(args.reportPath, {
+    schemaVersion: 1,
+    startedAt: runStartedAt,
+    endedAt: new Date().toISOString(),
+    target: args.target,
+    config: {
+      users: args.users,
+      durationSec: args.duration,
+      totalRps: args.totalRps ?? null,
+      rpsPerRoute: args.totalRps === undefined ? args.rps : null,
+      sockets: args.sockets,
+      rampSec: args.rampSec,
+      drainSec: args.drainSec,
+      loginStorm: args.loginStorm,
+      loginRampSec: args.loginRampSec,
+      includeSpend: args.includeSpend,
+      flapRate: args.flapRate,
+      flapStages: args.flapStages,
+    },
+    http: {
+      elapsedSec,
+      totalSent,
+      totalCompleted: totalOk,
+      approximateServerErrors: Math.round(totalErr),
+      routes: reports,
+    },
+    sockets: socketSummary,
+    application: appStats,
+    database: {
+      before: activityBefore,
+      peak: activityPeak,
+      after: activityAfter,
+      samples: activitySamples,
+      topQueries,
+      errors: dbStatErrors,
+    },
+    verdict,
+  });
+  console.log(`Full JSON report: ${fullReportPath}`);
   console.log('\nDone.');
-  if (socketSummary && (
-    socketSummary.wrongfulForfeits > 0 ||
-    socketSummary.deadSearch > 0 ||
-    socketSummary.banRollback > 0 ||
-    socketSummary.gateAbandon > 0 ||
-    socketSummary.legacyDraftStall > 0 ||
-    socketSummary.matchesCompleted === 0
-  )) {
+  if (!verdict.ok) {
     process.exitCode = 1;
   }
 }
@@ -439,3 +601,22 @@ main().catch((err) => {
   console.error('\nCHAOS RUN FAILED:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
+
+function mergeActivityPeak(current: ActivitySnapshot | null, next: ActivitySnapshot): ActivitySnapshot {
+  if (!current) return next;
+  const maxTotal = next.total > current.total ? next : current;
+  return {
+    total: maxTotal.total,
+    maxConnections: maxTotal.maxConnections,
+    utilizationPct: maxTotal.utilizationPct,
+    active: Math.max(current.active, next.active),
+    idle: Math.max(current.idle, next.idle),
+    idleInTxn: Math.max(current.idleInTxn, next.idleInTxn),
+    waitingOnLock: Math.max(current.waitingOnLock, next.waitingOnLock),
+    longestActiveSec: Math.max(current.longestActiveSec, next.longestActiveSec),
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

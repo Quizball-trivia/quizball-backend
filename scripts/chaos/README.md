@@ -4,6 +4,12 @@ Drives every game/API route at a configurable RPS to find where the backend +
 Postgres degrade under pressure, and surfaces missing-index hot spots via
 `pg_stat_statements` + `EXPLAIN`.
 
+There are two load shapes:
+
+- `--rps=N` is the original worst-case mode: **N per route**.
+- `--total-rps=N` is the production-shaped mode: one total open-loop budget is
+  distributed using each route's weight while sockets play complete matches.
+
 ## Safety
 
 - **Prod is hard-blocked.** `run.ts` aborts if the resolved API/DB points at the
@@ -17,6 +23,10 @@ Postgres degrade under pressure, and surfaces missing-index hot spots via
   Supabase admin API (service-role key from `.env`). Re-runs reuse them.
 - Socket fleet users are topped back up to 5 ranked tickets via the configured
   non-prod database before DB stats are reset.
+- Every run enforces SLOs before the database's hard ceiling: HTTP errors ≤1%,
+  route p95 ≤1.5s, route p99 ≤3s, Postgres connections ≤75%, DB admission
+  max wait ≤1s with no shedding, event-loop p99 ≤100ms, CPU ≤90%, no gameplay
+  boot violations/wrongful forfeits, and matchmaking p95 ≤120s.
 
 ## Run
 
@@ -36,11 +46,21 @@ npx tsx scripts/chaos/run.ts --target=local --rps=200 --duration=15
 # HTTP pressure plus 5 ranked socket clients for 5 minutes, staggered over 10s
 npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=300 --sockets=5 --flap-rate=0.5
 
-# Boot-stage flap coverage: search, draft, and kickoff gate once per socket match
-npx tsx scripts/chaos/run.ts --target=staging --sockets=3 --matches-per-client=1 --flap-stage=search,draft,gate
+# Boot-stage chaos: independently flap ~50% of eligible stages per match
+npx tsx scripts/chaos/run.ts --target=staging --sockets=3 --matches-per-client=1 \
+  --flap-rate=0.5 --flap-stage=search,draft,gate
 
 # Old mobile protocol profile: no draft/kickoff/resume UI-ready acks
 npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1 --legacy-protocol
+
+# Production-shaped 100-player raid: login burst + weighted HTTP + real matches
+npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
+  --total-rps=50 --duration=300 --ramp-s=60 --login-storm \
+  --login-ramp-s=60
+
+# Find the sustained ceiling. Stops at the first failed SLO level.
+npm run chaos:capacity -- --target=staging \
+  --levels=25,100,250,500,750,1000,2000,5000 --duration=300 --cooldown=30
 ```
 
 ### Flags
@@ -49,7 +69,9 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 |---|---|---|
 | `--target` | `staging` | `staging` or `local` (prod blocked) |
 | `--rps` | `100` | target requests/sec **per route** |
+| `--total-rps` | unset | total weighted HTTP requests/sec across all selected routes; enables production-shaped mode |
 | `--duration` | `30` (`300` with sockets) | run length in seconds |
+| `--drain-s` | `180` | hard maximum for matches already in progress after offered load stops |
 | `--users` | `25` | size of provisioned test-user fleet |
 | `--include-spend` | off | also hit ticket/coin-draining routes |
 | `--only` | all | comma list of route names |
@@ -61,12 +83,16 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 | `--legacy-protocol` | off | emulate the old React Native protocol by skipping `draft:ui_ready`, kickoff/resume UI-ready, and reveal acks |
 | `--ramp-s` | `10` | seconds to stagger initial socket queue joins |
 | `--matches-per-client` | unset | stop each socket client after this many matches; if set without `--duration`, socket clients run until this count |
+| `--login-storm` | off | re-login every provisioned user once during the run |
+| `--login-ramp-s` | `60` | time over which login arrivals are spread |
+| `--report` | generated path | full JSON report path for automation/capacity ladders |
 
 ## Output
 
 1. Per-route table sorted by p95: sent / ok / rps / p50 / p95 / p99 / max /
    err% (5xx) / 4xx% / status histogram.
-2. Live DB activity (peak + after): active, idle-in-txn, lock waits, longest query.
+2. Live DB activity (peak + after): total/max connection utilization, active,
+   idle-in-txn, lock waits, and longest query.
 3. Top queries by total DB time during the run.
 4. Seq-scan / missing-index candidates (EXPLAIN on the slowest reads).
 5. With `--sockets > 0`: socket fleet totals, wrongful-forfeit count,
@@ -74,7 +100,33 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
    `legacyDraftStall`), draft replay style metrics, reconnect inflation, latency
    percentiles, socket error histograms, and a JSON report under
    `scripts/chaos/reports/`.
+6. Machine-readable SLO verdict plus a complete JSON report. The command exits
+   non-zero when an SLO fails.
 
 The engine is **open-loop**: it fires at the target rate regardless of response
 time, so a slow backend shows up as growing latency, not a self-throttled lower
 rate. A global in-flight cap (2000) sheds load if the target stalls completely.
+
+## Capacity-test procedure
+
+1. Deploy the candidate code to **two staging replicas** with the same Railway
+   CPU/memory and Supabase compute size as production.
+2. Configure `DB_POOL_MAX=12`, `DB_INFLIGHT_LIMIT=12`, `DB_QUEUE_LIMIT=12`, and
+   a non-production `CHAOS_BYPASS_TOKEN` on staging.
+3. Run a 25-player smoke level. Confirm the JSON report sees the expected
+   Postgres `max_connections` value and both replicas in Railway logs.
+4. Run the clean capacity ladder first. It increases players, real Socket.IO
+   clients, login arrivals, weighted REST traffic, matchmaking, and full
+   gameplay together. It does not inject disconnects or repeatedly spend
+   limited economy resources.
+5. Treat the last passing level as the sustained capacity **for this traffic
+   model**, not a marketing maximum. Operate at no more than roughly 50–60% of
+   that level until a second run confirms it.
+6. After the normal ladder, restart one staging replica during a passing level.
+   The other replica must continue serving, the restarted replica must recover,
+   and no request may hang beyond the 15s harness timeout. This validates the
+   incident recovery path without terminating production database connections.
+
+After finding a passing level, rerun that one level with `--flap-rate=0.5` and
+`--flap-stage=search,draft,gate,match` as a separate chaos proof. Keep the
+generated report directory with the release evidence.

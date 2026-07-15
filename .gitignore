@@ -42,6 +42,8 @@ scripts/*
 # Chaos engineering harness — code only, reads secrets from .env at runtime.
 !scripts/chaos/
 !scripts/chaos/**
+!scripts/load/
+!scripts/load/**
 
 # Local agent instructions (not shared)
 CLAUDE.md
@@ -55,3 +57,4 @@ game-regression/artifacts/
 game-regression/staging/.env.staging
 game-regression/staging/reports/
 scripts/chaos/reports/
+scripts/load/k6/reports/

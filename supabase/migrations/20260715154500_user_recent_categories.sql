@@ -1,5 +1,6 @@
 -- =============================================================================
--- Migration: user_recent_categories
+-- Migration: user_recent_categories (re-versioned after a duplicate timestamp
+-- collision with 20260610150000_placement_seed_cap_reserve.sql)
 -- Description: Tracks the categories a user ACTUALLY PLAYED in ranked matches
 --              (saved when a drafted category is finalized, not merely shown),
 --              so the ranked draft can avoid re-offering recently played
@@ -33,6 +34,12 @@ CREATE TABLE IF NOT EXISTS user_recent_categories (
   CONSTRAINT user_recent_categories_user_mode_category_key
     UNIQUE (user_id, mode, category_id)
 );
+
+-- `CREATE TABLE IF NOT EXISTS` does not repair a pre-existing partial table.
+-- Ensure the ON CONFLICT(user_id, mode, category_id) anchor exists even on a
+-- project where this table was created before the migration registry was fixed.
+CREATE UNIQUE INDEX IF NOT EXISTS user_recent_categories_user_mode_category_key
+  ON user_recent_categories (user_id, mode, category_id);
 
 -- Newest-first reads + overflow trimming per (user, mode).
 CREATE INDEX IF NOT EXISTS idx_user_recent_categories_user_mode_played

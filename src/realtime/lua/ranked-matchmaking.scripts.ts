@@ -1,3 +1,5 @@
+export const RANKED_MM_STALE_RESULT = '__ranked_mm_stale__';
+
 export const RANKED_MM_PAIR_TWO_RANDOM_SCRIPT = `
 local queueKey = KEYS[1]
 local timeoutKey = KEYS[2]
@@ -24,12 +26,12 @@ local statusB = redis.call('HGET', searchKeyB, 'status')
 if statusA ~= 'queued' then
   redis.call('ZREM', queueKey, searchIdA)
   redis.call('ZREM', timeoutKey, searchIdA)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 if statusB ~= 'queued' then
   redis.call('ZREM', queueKey, searchIdB)
   redis.call('ZREM', timeoutKey, searchIdB)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 
 local userIdA = redis.call('HGET', searchKeyA, 'userId')
@@ -37,7 +39,7 @@ local userIdB = redis.call('HGET', searchKeyB, 'userId')
 if (not userIdA) or (not userIdB) then
   redis.call('ZREM', queueKey, searchIdA, searchIdB)
   redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 local mappedSearchIdA = redis.call('HGET', userMapKey, userIdA)
 local mappedSearchIdB = redis.call('HGET', userMapKey, userIdB)
@@ -45,13 +47,13 @@ if mappedSearchIdA ~= searchIdA then
   redis.call('HSET', searchKeyA, 'status', 'stale', 'staleAt', matchedAt)
   redis.call('ZREM', queueKey, searchIdA)
   redis.call('ZREM', timeoutKey, searchIdA)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 if mappedSearchIdB ~= searchIdB then
   redis.call('HSET', searchKeyB, 'status', 'stale', 'staleAt', matchedAt)
   redis.call('ZREM', queueKey, searchIdB)
   redis.call('ZREM', timeoutKey, searchIdB)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 local countryCodeA = redis.call('HGET', searchKeyA, 'countryCode') or ''
 local countryCodeB = redis.call('HGET', searchKeyB, 'countryCode') or ''
@@ -76,6 +78,11 @@ local fallbackAt = ARGV[3]
 
 local status = redis.call('HGET', searchKey, 'status')
 if status ~= 'queued' then
+  -- Hashes have a TTL but sorted-set members do not. A replica crash can leave
+  -- this orphan behind after the hash expires; remove it here so the first 50
+  -- dead timeout entries cannot permanently starve every real fallback.
+  redis.call('ZREM', queueKey, searchId)
+  redis.call('ZREM', timeoutKey, searchId)
   return {}
 end
 

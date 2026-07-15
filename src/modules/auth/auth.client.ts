@@ -1,5 +1,10 @@
 import type { AuthSession } from './auth.schemas.js';
 
+export interface AuthRequestContext {
+  /** Trusted end-user address selected by our ingress, never raw caller XFF. */
+  clientIp?: string;
+}
+
 /**
  * Auth client interface.
  * Defines operations for interacting with an auth provider (e.g., Supabase).
@@ -16,33 +21,34 @@ export interface AuthClient {
     password: string,
     redirectTo?: string,
     locale?: string,
+    context?: AuthRequestContext,
   ): Promise<AuthSession>;
 
   /**
    * Sign in with email and password.
    */
-  signIn(email: string, password: string): Promise<AuthSession>;
+  signIn(email: string, password: string, context?: AuthRequestContext): Promise<AuthSession>;
 
   /**
    * Refresh access token using refresh token.
    */
-  refresh(refreshToken: string): Promise<AuthSession>;
+  refresh(refreshToken: string, context?: AuthRequestContext): Promise<AuthSession>;
 
   /**
    * Send password reset email.
    */
-  forgotPassword(email: string, redirectTo?: string): Promise<void>;
+  forgotPassword(email: string, redirectTo?: string, context?: AuthRequestContext): Promise<void>;
 
   /**
    * Reset password using access token.
    */
-  resetPassword(accessToken: string, newPassword: string): Promise<void>;
+  resetPassword(accessToken: string, newPassword: string, context?: AuthRequestContext): Promise<void>;
 
   /**
    * Start a phone-change flow for the currently authenticated Supabase user.
    * Supabase sends the OTP through the configured Send SMS hook.
    */
-  updateUserPhone(accessToken: string, phone: string): Promise<void>;
+  updateUserPhone(accessToken: string, phone: string, context?: AuthRequestContext): Promise<void>;
 
   /**
    * Generate OAuth authorization URL.
@@ -69,21 +75,27 @@ export interface AuthClient {
     provider: string,
     idToken: string,
     nonce?: string,
+    context?: AuthRequestContext,
   ): Promise<AuthSession>;
 
   /**
    * Start Supabase phone OTP flow. SMS delivery is handled by Supabase's
    * configured Send SMS hook.
    */
-  sendPhoneOtp(phone: string): Promise<void>;
+  sendPhoneOtp(phone: string, context?: AuthRequestContext): Promise<void>;
 
   /**
    * Verify a Supabase phone OTP and return a normal Supabase session.
    */
-  verifyPhoneOtp(phone: string, token: string): Promise<AuthSession>;
+  verifyPhoneOtp(phone: string, token: string, context?: AuthRequestContext): Promise<AuthSession>;
 
   /**
    * Verify a phone-change OTP for the currently authenticated Supabase user.
    */
-  verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession>;
+  verifyPhoneChange(
+    accessToken: string,
+    phone: string,
+    token: string,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession>;
 }

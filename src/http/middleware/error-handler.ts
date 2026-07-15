@@ -15,6 +15,42 @@ function redactValues(obj: Record<string, unknown> | undefined): string[] {
   return Object.keys(obj);
 }
 
+const TRANSIENT_DATABASE_ERROR_CODES = new Set([
+  'DB_OVERLOADED',
+  'CONNECTION_CLOSED',
+  'CONNECTION_DESTROYED',
+  'CONNECT_TIMEOUT',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+]);
+
+/** Network/pool failures are availability failures, not application bugs. */
+export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
+  if (!error || depth > 3 || typeof error !== 'object') return false;
+  const candidate = error as {
+    code?: unknown;
+    cause?: unknown;
+    details?: unknown;
+    errors?: unknown;
+  };
+  if (
+    typeof candidate.code === 'string'
+    && TRANSIENT_DATABASE_ERROR_CODES.has(candidate.code.toUpperCase())
+  ) {
+    return true;
+  }
+  if (isTransientDatabaseError(candidate.cause, depth + 1)) return true;
+  // Repository adapters often preserve a driver/admission failure as details
+  // on a generic AppError. Keep that retryable instead of leaking a false 500.
+  if (isTransientDatabaseError(candidate.details, depth + 1)) return true;
+  return Array.isArray(candidate.errors)
+    && candidate.errors.some((nested) => isTransientDatabaseError(nested, depth + 1));
+}
+
 /**
  * Central error handler middleware.
  * Converts all errors to standard ErrorResponse format.
@@ -27,6 +63,29 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const requestId = getRequestId();
+
+  // Availability failures must win over the generic AppError branch because
+  // repository adapters can wrap the original error under AppError.details.
+  if (isTransientDatabaseError(err)) {
+    logger.warn(
+      {
+        err,
+        method: req.method,
+        path: req.path,
+        userId: req.user?.id ?? null,
+        userRole: req.user?.role ?? null,
+      },
+      'Transient database connection failure'
+    );
+    res.setHeader('Retry-After', '1');
+    res.status(503).json({
+      code: ErrorCode.DB_OVERLOADED,
+      message: 'Database temporarily unavailable',
+      details: null,
+      request_id: requestId,
+    } satisfies ErrorResponse);
+    return;
+  }
 
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {

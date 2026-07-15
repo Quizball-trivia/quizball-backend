@@ -80,6 +80,33 @@ export const SOCKET_HEARTBEAT_CONFIG = {
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
+const detachedSocketFailureCounts = new Map<string, number>();
+
+/**
+ * Socket.IO does not observe promises returned by event listeners. Every
+ * background task launched from a connection/disconnect callback therefore
+ * needs its own rejection boundary. Admission-gate rejections during a mass
+ * disconnect are expected load shedding, not unhandled process corruption.
+ */
+function runSocketTask(
+  operation: string,
+  userId: string,
+  task: () => Promise<unknown>
+): void {
+  void Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      const failures = (detachedSocketFailureCounts.get(operation) ?? 0) + 1;
+      detachedSocketFailureCounts.set(operation, failures);
+      // Preserve evidence without producing one log line per socket in a burst.
+      if (failures % 50 === 1) {
+        logger.warn(
+          { error, operation, userId, failures },
+          'Detached socket task failed'
+        );
+      }
+    });
+}
 
 async function trackUserOnline(userId: string): Promise<void> {
   const redis = getRedisClient();
@@ -487,12 +514,12 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
-      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
-      void matchRealtimeService.handleMatchDisconnect(io, socket);
-      void rankedMatchmakingService.handleSocketDisconnect(io, socket);
-      void auctionMatchmakingService.handleSocketDisconnect(io, socket);
-      void auctionLifecycleService.handleAuctionSocketDisconnect(io, socket);
-      void trackUserOffline(io, user.id);
+      runSocketTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
+      runSocketTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
+      runSocketTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
+      runSocketTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
+      runSocketTask('presence_offline', user.id, () => trackUserOffline(io, user.id));
       scheduleOnlineCountBroadcast(io);
     });
 
@@ -505,10 +532,10 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       socket: socket.id,
       transport: socket.conn.transport.name,
     });
-    void trackUserOnline(user.id);
-    void emitOnlineCount(io, socket);
+    runSocketTask('presence_online', user.id, () => trackUserOnline(user.id));
+    runSocketTask('presence_count', user.id, () => emitOnlineCount(io, socket));
     scheduleOnlineCountBroadcast(io);
-    void runPostConnectHydration(io, socket);
+    runSocketTask('post_connect_hydration', user.id, () => runPostConnectHydration(io, socket));
   });
 
   return io;

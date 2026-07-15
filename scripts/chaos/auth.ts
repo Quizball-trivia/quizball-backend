@@ -21,6 +21,7 @@ export interface ProvisionConfig {
   emailPrefix: string; // e.g. "chaos" → chaos+u0@quizball.io
   emailDomain: string; // e.g. quizball.io
   concurrency: number;
+  bypassToken?: string;
 }
 
 export interface TicketTopUpConfig {
@@ -32,33 +33,82 @@ export interface TicketTopUpConfig {
   tickets: number;
 }
 
+function adminHeaders(cfg: Pick<ProvisionConfig, 'serviceRoleKey'>): Record<string, string> {
+  return {
+    apikey: cfg.serviceRoleKey,
+    Authorization: `Bearer ${cfg.serviceRoleKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
 async function adminCreateConfirmedUser(
   cfg: ProvisionConfig,
   email: string
 ): Promise<void> {
   const res = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users`, {
     method: 'POST',
-    headers: {
-      apikey: cfg.serviceRoleKey,
-      Authorization: `Bearer ${cfg.serviceRoleKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: adminHeaders(cfg),
     body: JSON.stringify({ email, password: cfg.password, email_confirm: true }),
   });
   if (res.status === 200 || res.status === 201) return;
-  // 422 = already registered → reuse it (idempotent).
-  if (res.status === 422) return;
   const text = await res.text();
   throw new Error(`admin create user ${email} failed: ${res.status} ${text.slice(0, 200)}`);
 }
 
+async function listAdminUserIdsByEmail(
+  cfg: ProvisionConfig,
+  wantedEmails: Set<string>
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const perPage = 1_000;
+  // The Auth admin endpoint is paginated. Bound the scan so a broken upstream
+  // response cannot make a load-test preparation command loop forever.
+  for (let page = 1; page <= 100 && found.size < wantedEmails.size; page += 1) {
+    const response = await fetch(
+      `${cfg.supabaseUrl}/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
+      { headers: adminHeaders(cfg) }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`admin list users failed: ${response.status} ${text.slice(0, 200)}`);
+    }
+    const payload = await response.json() as {
+      users?: Array<{ id?: string; email?: string }>;
+    };
+    const users = payload.users ?? [];
+    for (const user of users) {
+      const email = user.email?.toLowerCase();
+      if (email && user.id && wantedEmails.has(email)) found.set(email, user.id);
+    }
+    if (users.length < perPage) break;
+  }
+  return found;
+}
+
+async function adminResetConfirmedUser(
+  cfg: ProvisionConfig,
+  userId: string,
+  email: string
+): Promise<void> {
+  const response = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users/${userId}`, {
+    method: 'PUT',
+    headers: adminHeaders(cfg),
+    body: JSON.stringify({ password: cfg.password, email_confirm: true }),
+  });
+  if (response.ok) return;
+  const text = await response.text();
+  throw new Error(`admin reset user ${email} failed: ${response.status} ${text.slice(0, 200)}`);
+}
+
 export async function loginChaosUser(
-  cfg: Pick<ProvisionConfig, 'apiBase' | 'password'>,
+  cfg: Pick<ProvisionConfig, 'apiBase' | 'password' | 'bypassToken'>,
   email: string
 ): Promise<{ token: string; userId: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (cfg.bypassToken) headers['x-chaos-bypass'] = cfg.bypassToken;
   const res = await fetch(`${cfg.apiBase}/api/v1/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ email, password: cfg.password }),
   });
   const body = (await res.json().catch(() => ({}))) as {
@@ -71,7 +121,10 @@ export async function loginChaosUser(
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
   const meRes = await fetch(`${cfg.apiBase}/api/v1/users/me`, {
-    headers: { Authorization: `Bearer ${body.access_token}` },
+    headers: {
+      Authorization: `Bearer ${body.access_token}`,
+      ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
+    },
   });
   const me = (await meRes.json().catch(() => ({}))) as { id?: string };
   return { token: body.access_token, userId: me.id ?? '' };
@@ -135,15 +188,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]> {
-  const emails = Array.from(
-    { length: cfg.count },
-    (_, i) => `${cfg.emailPrefix}+u${i}@${cfg.emailDomain}`
-  );
-
-  // Create (idempotent) then log in, both bounded by concurrency.
-  await mapWithConcurrency(emails, cfg.concurrency, (email) =>
-    adminCreateConfirmedUser(cfg, email)
-  );
+  const emails = await ensureChaosUsers(cfg);
 
   const users = await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
     const { token, userId } = await loginChaosUser(cfg, email);
@@ -151,4 +196,32 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
   });
 
   return users.filter((u) => u.token && u.userId);
+}
+
+/**
+ * Idempotently create confirmed non-production load users without logging them
+ * in. Large k6 runs call this once ahead of time so provisioning traffic is not
+ * mixed into the measured login/refresh/API workload.
+ */
+export async function ensureChaosUsers(cfg: ProvisionConfig): Promise<string[]> {
+  const emails = Array.from(
+    { length: cfg.count },
+    (_, i) => `${cfg.emailPrefix}+u${i}@${cfg.emailDomain}`
+  );
+
+  // Existing test accounts may have been created by an older harness with a
+  // different password. Merely accepting Auth's 422 "already registered"
+  // response makes the next login fail nondeterministically, so make the
+  // desired credentials genuinely idempotent before measuring any traffic.
+  const wanted = new Set(emails.map((email) => email.toLowerCase()));
+  const existing = await listAdminUserIdsByEmail(cfg, wanted);
+  await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
+    const existingId = existing.get(email.toLowerCase());
+    if (existingId) {
+      await adminResetConfirmedUser(cfg, existingId, email);
+      return;
+    }
+    await adminCreateConfirmedUser(cfg, email);
+  });
+  return emails;
 }

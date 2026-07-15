@@ -6,6 +6,7 @@ import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
   RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_STALE_RESULT,
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
 import '../setup.js';
 
@@ -162,6 +163,21 @@ class FakeRedis {
     return this.hashes.get('ranked:mm:user')?.get(userId) ?? null;
   }
 
+  seedExpiredSearch(searchId: string, score = Date.now() - 60_000): void {
+    this.getOrCreateZset('ranked:mm:queue').set(searchId, score);
+    this.getOrCreateZset('ranked:mm:timeouts').set(searchId, score);
+    // Deliberately omit ranked:mm:search:<id>, exactly as Redis looks after the
+    // hash TTL expires while its sorted-set members survive.
+  }
+
+  hasQueueMember(searchId: string): boolean {
+    return this.zsets.get('ranked:mm:queue')?.has(searchId) ?? false;
+  }
+
+  hasTimeoutMember(searchId: string): boolean {
+    return this.zsets.get('ranked:mm:timeouts')?.has(searchId) ?? false;
+  }
+
   async eval(
     script: string,
     data: {
@@ -190,11 +206,26 @@ class FakeRedis {
       const searchKeyB = `${searchPrefix}${searchIdB}`;
       const statusA = await this.hGet(searchKeyA, 'status');
       const statusB = await this.hGet(searchKeyB, 'status');
-      if (statusA !== 'queued' || statusB !== 'queued') return [];
+      if (statusA !== 'queued') {
+        queue.delete(searchIdA);
+        this.zsets.get(timeoutKey)?.delete(searchIdA);
+        return [RANKED_MM_STALE_RESULT];
+      }
+      if (statusB !== 'queued') {
+        queue.delete(searchIdB);
+        this.zsets.get(timeoutKey)?.delete(searchIdB);
+        return [RANKED_MM_STALE_RESULT];
+      }
 
       const userIdA = await this.hGet(searchKeyA, 'userId');
       const userIdB = await this.hGet(searchKeyB, 'userId');
-      if (!userIdA || !userIdB) return [];
+      if (!userIdA || !userIdB) {
+        queue.delete(searchIdA);
+        queue.delete(searchIdB);
+        this.zsets.get(timeoutKey)?.delete(searchIdA);
+        this.zsets.get(timeoutKey)?.delete(searchIdB);
+        return [RANKED_MM_STALE_RESULT];
+      }
 
       await this.hSet(searchKeyA, { status: 'matched', matchedAt });
       await this.hSet(searchKeyB, { status: 'matched', matchedAt });
@@ -216,7 +247,11 @@ class FakeRedis {
       const fallbackAt = data.arguments[2] ?? String(Date.now());
 
       const status = await this.hGet(searchKey, 'status');
-      if (status !== 'queued') return [];
+      if (status !== 'queued') {
+        this.zsets.get(queueKey)?.delete(searchId);
+        this.zsets.get(timeoutKey)?.delete(searchId);
+        return [];
+      }
       const deadlineAt = Number(await this.hGet(searchKey, 'deadlineAt'));
       if (!Number.isFinite(deadlineAt) || deadlineAt > nowMs) return [];
 
@@ -705,6 +740,27 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
   });
 
+  it('cleans expired queue hashes without letting them block fresh human pairs', async () => {
+    for (let index = 0; index < 20; index += 1) {
+      fakeRedis.seedExpiredSearch(`expired-${index}`);
+    }
+    const userA = createSocket('fresh-a');
+    const userB = createSocket('fresh-b');
+    const userAMatch = waitForEvent<{ opponent: { id: string } }>(userA, 'ranked:match_found', 1_000);
+    const userBMatch = waitForEvent<{ opponent: { id: string } }>(userB, 'ranked:match_found', 1_000);
+
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    const [aMatch, bMatch] = await Promise.all([userAMatch, userBMatch]);
+    expect(aMatch.opponent.id).toBe('fresh-b');
+    expect(bMatch.opponent.id).toBe('fresh-a');
+    for (let index = 0; index < 20; index += 1) {
+      expect(fakeRedis.hasQueueMember(`expired-${index}`)).toBe(false);
+      expect(fakeRedis.hasTimeoutMember(`expired-${index}`)).toBe(false);
+    }
+  });
+
   it('matches four and falls back remaining fifth user to AI', async () => {
     const users = ['u1', 'u2', 'u3', 'u4', 'u5'].map((id) => createSocket(id));
     const matchEvents = users.map((socket) =>
@@ -739,6 +795,23 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     const result = await matchFound;
     expect(result.opponent.id).toBe('ai-solo');
     expect(mockStartRankedAiForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans more than one fallback batch of expired hashes and reaches a fresh due user', async () => {
+    for (let index = 0; index < 60; index += 1) {
+      fakeRedis.seedExpiredSearch(`expired-timeout-${index}`, index);
+    }
+    const user = createSocket('fresh-solo');
+    const matchFound = waitForEvent<{ opponent: { id: string } }>(user, 'ranked:match_found', 1_500);
+    await user.trigger('ranked:queue_join', {});
+    fakeRedis.forceAllTimeoutsDue(Date.now());
+
+    const result = await matchFound;
+    expect(result.opponent.id).toBe('ai-fresh-solo');
+    for (let index = 0; index < 60; index += 1) {
+      expect(fakeRedis.hasQueueMember(`expired-timeout-${index}`)).toBe(false);
+      expect(fakeRedis.hasTimeoutMember(`expired-timeout-${index}`)).toBe(false);
+    }
   });
 
   it('removes user from queue on ranked:queue_leave', async () => {

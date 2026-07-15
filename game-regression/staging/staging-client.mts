@@ -87,17 +87,38 @@ export function connectStaging(url: string, token: string, userId: string, share
  * error carrying the activeMatchId — forfeit+leave it so the next scenario starts clean.
  */
 export async function clearActiveMatch(client: StagingClient): Promise<string | null> {
-  // Give the server a moment to emit rejoin_available / any blocked-state error.
+  // Give the server a moment to emit rejoin/state/session information. A live
+  // match is often auto-rejoined as `match:state` (not `rejoin_available`), so
+  // looking only for the latter silently reused dirty test accounts.
   await new Promise((r) => setTimeout(r, 2_000));
   const rejoin = client.latest<{ matchId?: string }>('match:rejoin_available');
+  const matchState = client.latest<{ matchId?: string }>('match:state');
+  const sessionState = client.latest<{ activeMatchId?: string | null }>('session:state');
   const fromError = client.trace.byEvent('error')
     .map((e) => (e.payload as { meta?: { stateSnapshot?: { activeMatchId?: string } } }).meta?.stateSnapshot?.activeMatchId)
     .find(Boolean);
-  const activeMatchId = rejoin?.matchId ?? fromError ?? null;
+  const activeMatchId = rejoin?.matchId
+    ?? matchState?.matchId
+    ?? sessionState?.activeMatchId
+    ?? fromError
+    ?? null;
   if (activeMatchId) {
     client.socket.emit('match:forfeit', { matchId: activeMatchId });
     client.socket.emit('match:leave', { matchId: activeMatchId });
-    await new Promise((r) => setTimeout(r, 2_500));
+    // Do not start the measured queue join while cleanup is still racing in the
+    // background. Final results or a session snapshot without the active match
+    // both prove the user is reusable; retain a bounded fallback for older
+    // staging builds that do not emit the session transition.
+    await client.waitFor(() => {
+      const latestSession = client.latest<{
+        activeMatchId?: string | null;
+        state?: string;
+      }>('session:state');
+      const finalResultForMatch = client.trace.byEvent('match:final_results')
+        .some((event) => (event.payload as { matchId?: string }).matchId === activeMatchId);
+      return finalResultForMatch
+        || Boolean(latestSession && latestSession.activeMatchId !== activeMatchId);
+    }, 10_000);
   }
   // Discard all setup/cleanup events so the scenario trace contains ONLY the real
   // match that follows (otherwise a self-heal forfeit's final_results would be

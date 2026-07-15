@@ -19,6 +19,21 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
+  // Per-process budget. With two Railway replicas the default permits at most
+  // 24 app connections, leaving headroom below the small-tier Postgres limit
+  // for Auth, Storage, PostgREST, Realtime, observability, and administration.
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),
+  DB_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(12),
+  DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(100).default(12),
+  DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
+  DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
+  DB_WATCHDOG_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
+  DB_WATCHDOG_INTERVAL_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
+  DB_WATCHDOG_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(4_000),
+  DB_WATCHDOG_FAILURES: z.coerce.number().int().min(1).max(10).default(3),
 
   // Redis
   REDIS_URL: z.string().url().optional(),
@@ -44,7 +59,14 @@ const configSchema = z.object({
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
+  // Modern server-only API key (sb_secret_...). Required only when hosted
+  // Supabase Auth IP forwarding is explicitly enabled.
+  SUPABASE_SECRET_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SUPABASE_AUTH_IP_FORWARDING_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   SMSOFFICE_API_KEY: z.string().optional(),
   SMSOFFICE_SENDER: z.string().default("QuizBall"),
   SMSOFFICE_DRY_RUN: z
@@ -174,6 +196,19 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       "Invalid configuration: SUPABASE_SMS_HOOK_SECRET is required outside local environment.",
       { nodeEnv: result.data.NODE_ENV },
     );
+  }
+
+  if (result.data.SUPABASE_AUTH_IP_FORWARDING_ENABLED) {
+    const secretKey = result.data.SUPABASE_SECRET_KEY?.trim();
+    if (!secretKey?.startsWith("sb_secret_")) {
+      throw new ConfigError(
+        "Invalid configuration: SUPABASE_AUTH_IP_FORWARDING_ENABLED requires a modern SUPABASE_SECRET_KEY beginning with sb_secret_.",
+        {
+          nodeEnv: result.data.NODE_ENV,
+          hasSecretKey: Boolean(secretKey),
+        },
+      );
+    }
   }
 
   const hasAnyStripeConfig = Boolean(

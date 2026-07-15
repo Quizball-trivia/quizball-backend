@@ -52,7 +52,8 @@ Translate the following quiz questions from English to Georgian.
 Return ONLY a valid JSON object with a single key "translations" containing an array of translated items.
 Each item must have the same "id" as the input. Maintain array order for any translated string lists.
 Use natural Georgian language appropriate for a quiz/trivia context.
-Transliterate ALL proper nouns (player names, team names, tournament names) into Georgian script (e.g. "Liverpool" → "ლივერპული", "Messi" → "მესი", "Champions League" → "ჩემპიონთა ლიგა").`;
+Transliterate ALL proper nouns (player names, team names, tournament names) into Georgian script (e.g. "Liverpool" → "ლივერპული", "Messi" → "მესი", "Champions League" → "ჩემპიონთა ლიგა").
+TRANSLATE FAITHFULLY — DO NOT ADD, EXPLAIN, OR REVEAL ANYTHING. Translate ONLY what the English says. NEVER add a name, fact, or detail not in the English. CRITICAL for "Who am I?" clues: if an English clue does NOT name the player/answer, the Georgian MUST NOT name them either — inserting the answer ("I was Nabil Fekir, who…" when the English only says "I was an attacking midfielder who…") RUINS the question by giving it away. Keep vague clues vague; never clarify who the subject is.`;
 
 const CATEGORY_SYSTEM_PROMPT = `Translate these category names from English to Georgian.
 Return ONLY a valid JSON object with a single key "translations" containing an array of {id, name} objects.

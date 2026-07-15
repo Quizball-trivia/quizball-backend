@@ -37,6 +37,15 @@ There are two load shapes:
 # Standard pressure run: 100 rps per route, 30s, 25-user fleet, against staging
 npx tsx scripts/chaos/run.ts --target=staging --rps=100 --duration=30 --users=25
 
+# Dedicated human matchmaking queue storm. Every user must pair reciprocally
+# with another test user; AI fallback, duplicate/self-pairs, and ghost cleanup fail.
+npm run chaos:matchmaking -- --target=local --clients=100
+npm run chaos:matchmaking -- --target=staging --clients=500 --offset=0
+
+# Distributed workers use disjoint shards (example: five 1k workers for 5k).
+# Connections are prepared first, then each worker compresses joins into 1s.
+# worker 1: --clients=1000 --offset=0; worker 2: --clients=1000 --offset=1000; etc.
+
 # Include ticket/coin-draining writes
 npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=20 --include-spend
 

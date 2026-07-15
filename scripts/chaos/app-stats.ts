@@ -10,6 +10,8 @@ export interface AppInstancePeak {
   };
   runtime: {
     cpuPct: number;
+    cpuCorePct: number;
+    cpuCapacityCores: number;
     eventLoopP99Ms: number;
     eventLoopMaxMs: number;
     rssMb: number;
@@ -35,6 +37,8 @@ interface HealthPayload {
   runtime?: {
     instance?: string;
     cpuPct?: number;
+    cpuCorePct?: number;
+    cpuCapacityCores?: number;
     eventLoopDelayMs?: { p99?: number; max?: number };
     memoryMb?: { rss?: number; heapUsed?: number };
   };
@@ -91,7 +95,15 @@ export function startAppStatsCollector(
             samples: 0,
             healthFailures: 0,
             pool: { active: 0, queued: 0, maxWaitMs: 0, newRejections: 0, newTimeouts: 0 },
-            runtime: { cpuPct: 0, eventLoopP99Ms: 0, eventLoopMaxMs: 0, rssMb: 0, heapUsedMb: 0 },
+            runtime: {
+              cpuPct: 0,
+              cpuCorePct: 0,
+              cpuCapacityCores: 0,
+              eventLoopP99Ms: 0,
+              eventLoopMaxMs: 0,
+              rssMb: 0,
+              heapUsedMb: 0,
+            },
           },
         };
         instances.set(key, accumulator);
@@ -106,6 +118,14 @@ export function startAppStatsCollector(
       accumulator.peak.runtime.cpuPct = Math.max(
         accumulator.peak.runtime.cpuPct,
         payload.runtime?.cpuPct ?? 0
+      );
+      accumulator.peak.runtime.cpuCorePct = Math.max(
+        accumulator.peak.runtime.cpuCorePct,
+        payload.runtime?.cpuCorePct ?? 0
+      );
+      accumulator.peak.runtime.cpuCapacityCores = Math.max(
+        accumulator.peak.runtime.cpuCapacityCores,
+        payload.runtime?.cpuCapacityCores ?? 0
       );
       accumulator.peak.runtime.eventLoopP99Ms = Math.max(
         accumulator.peak.runtime.eventLoopP99Ms,

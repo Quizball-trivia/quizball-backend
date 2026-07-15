@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { hostname } from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
+import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 
 const router = Router();
@@ -9,6 +10,7 @@ const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelay.enable();
 let previousCpuUsage = process.cpuUsage();
 let previousCpuAt = performance.now();
+const allocatedCpuCores = cpuCapacityCores();
 
 function runtimeStats() {
   const memory = process.memoryUsage();
@@ -17,7 +19,8 @@ function runtimeStats() {
   const cpuMicros = currentCpuUsage.user - previousCpuUsage.user
     + currentCpuUsage.system - previousCpuUsage.system;
   const elapsedMs = Math.max(1, now - previousCpuAt);
-  const cpuPct = Math.round((cpuMicros / (elapsedMs * 1_000)) * 1_000) / 10;
+  const cpuCorePct = (cpuMicros / (elapsedMs * 1_000)) * 100;
+  const cpuPct = Math.round((cpuCorePct / allocatedCpuCores) * 10) / 10;
   previousCpuUsage = currentCpuUsage;
   previousCpuAt = now;
   const nsToMs = (value: number) => Number.isFinite(value)
@@ -27,6 +30,8 @@ function runtimeStats() {
     instance: process.env.RAILWAY_REPLICA_ID ?? process.env.HOSTNAME ?? hostname(),
     uptimeSec: Math.round(process.uptime()),
     cpuPct,
+    cpuCorePct: Math.round(cpuCorePct * 10) / 10,
+    cpuCapacityCores: Math.round(allocatedCpuCores * 100) / 100,
     eventLoopDelayMs: {
       mean: nsToMs(eventLoopDelay.mean),
       p95: nsToMs(eventLoopDelay.percentile(95)),

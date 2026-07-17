@@ -302,7 +302,7 @@ async function disconnectEarlyAiNoContest(users: { a: TestUser }): Promise<Scena
     const ok = replayed
       && final?.cancelledNoContest === true
       && final?.winnerId == null
-      && (delta == null || delta >= 0)
+      && (delta == null || delta === 0)
       && ticketsAfterTerminal === ticketsBeforeQueue;
     const detail = replayed
       ? `cancelledNoContest=${final?.cancelledNoContest ?? false} winner=${final?.winnerId ?? 'null'} delta=${delta ?? 'none'} tickets=${ticketsBeforeQueue}->${ticketsAfterTerminal}`

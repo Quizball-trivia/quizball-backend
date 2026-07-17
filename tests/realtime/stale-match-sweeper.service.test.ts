@@ -17,6 +17,7 @@ const completePossessionMatchFromProgressMock = vi.fn();
 const resolveMatchPresenceMock = vi.fn();
 const abandonMatchWithCompleteLockMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
+const isRankedEarlyForfeitMatchMock = vi.fn();
 const buildFinalResultsPayloadMock = vi.fn();
 const emitFinalResultsMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
@@ -66,6 +67,7 @@ vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
 
 vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
   finalizeMatchAsForfeit: (...a: unknown[]) => finalizeMatchAsForfeitMock(...a),
+  isRankedEarlyForfeitMatch: (...a: unknown[]) => isRankedEarlyForfeitMatchMock(...a),
 }));
 
 vi.mock('../../src/realtime/services/match-final-results.service.js', () => ({
@@ -191,6 +193,9 @@ beforeEach(() => {
   });
   resolveMatchPresenceMock.mockResolvedValue(presenceFor([], []));
   finalizeMatchAsForfeitMock.mockResolvedValue({ matchId: 'match-1', winnerId: 'ai-1', resultVersion: 1, completed: true });
+  isRankedEarlyForfeitMatchMock.mockImplementation(
+    (activeMatch: MatchRow) => activeMatch.mode === 'ranked' && activeMatch.current_q_index < 2
+  );
   buildFinalResultsPayloadMock.mockResolvedValue({ some: 'payload' });
   emitFinalResultsMock.mockResolvedValue(undefined);
 });
@@ -278,7 +283,7 @@ describe('stale-match-sweeper', () => {
     // The bot is synthetically "present" but cannot win by forfeit over a human
     // who merely dropped. Resolve from progress (the human's lead) instead of
     // gifting the bot the match. Regression: Thenotorious vs qartlosii 2026-06-19.
-    const stale = match();
+    const stale = match({ current_q_index: 5 });
     listStaleActiveMatchesMock.mockResolvedValue([stale]);
     getMatchMock.mockResolvedValue(stale);
     listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
@@ -297,6 +302,31 @@ describe('stale-match-sweeper', () => {
 
     expect(finalizeMatchAsForfeitMock).not.toHaveBeenCalled();
     expect(completePossessionMatchFromProgressMock).toHaveBeenCalledTimes(1);
+    expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
+  });
+
+  it('cancels an early ranked human-vs-AI disconnect as a no-contest', async () => {
+    const stale = match({ current_q_index: 1 });
+    listStaleActiveMatchesMock.mockResolvedValue([stale]);
+    getMatchMock.mockResolvedValue(stale);
+    listMatchPlayersMock.mockResolvedValue([player('human-1', 1), player('ai-1', 2)]);
+    resolveMatchPresenceMock.mockResolvedValue(
+      presenceFor([player('ai-1', 2)], [player('human-1', 1)], ['ai-1'])
+    );
+    finalizeMatchAsForfeitMock.mockResolvedValue({
+      matchId: 'match-1',
+      winnerId: null,
+      resultVersion: 1,
+      completed: true,
+      cancelledNoContest: true,
+    });
+
+    await runSweep(io);
+
+    expect(finalizeMatchAsForfeitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ matchId: 'match-1', forfeitingUserId: 'human-1' })
+    );
+    expect(completePossessionMatchFromProgressMock).not.toHaveBeenCalled();
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
   });
 

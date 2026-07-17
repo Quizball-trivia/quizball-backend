@@ -71,6 +71,14 @@ const DRAFT_GRACE_LOCK_TTL_SEC = 30;
 // connected then is a real presence (the disconnect was a ghost socket).
 const DRAFT_PRESENCE_RECHECK_MS = 12_000;
 const draftPresenceRecheckTimers = new Map<string, NodeJS.Timeout>();
+
+/** Clear in-process draft timers between local harness runs. */
+export function resetDraftRuntimeState(): void {
+  for (const timer of draftPresenceRecheckTimers.values()) {
+    clearTimeout(timer);
+  }
+  draftPresenceRecheckTimers.clear();
+}
 // Mutual-exclusion lock around draft completion → match creation. Completion is
 // reachable from several concurrent paths (human ban handler, scheduled AI ban,
 // auto-ban watchdog, reconnect/resume) and possibly from two instances during a

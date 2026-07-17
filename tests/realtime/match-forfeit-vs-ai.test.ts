@@ -16,6 +16,11 @@ import {
 const resolveMatchPresenceMock = vi.fn();
 const completeFromProgressMock = vi.fn();
 const finalizeForfeitMock = vi.fn();
+const isRankedEarlyForfeitMatchMock = vi.fn(
+  (activeMatch: MatchRow, cacheSnapshot?: { currentQIndex?: number } | null) =>
+    activeMatch.mode === 'ranked'
+    && (cacheSnapshot?.currentQIndex ?? activeMatch.current_q_index) < 2
+);
 const abandonWithLockMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
 const getByIdsMock = vi.fn();
@@ -28,14 +33,17 @@ vi.mock('../../src/realtime/possession-completion.js', async (importOriginal) =>
   const actual = await importOriginal<typeof import('../../src/realtime/possession-completion.js')>();
   return { ...actual, completePossessionMatchFromProgress: (...a: unknown[]) => completeFromProgressMock(...a) };
 });
-vi.mock('../../src/realtime/services/match-forfeit.service.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/realtime/services/match-forfeit.service.js')>();
-  return {
-    ...actual,
-    finalizeMatchAsForfeit: (...a: unknown[]) => finalizeForfeitMock(...a),
-    buildOpponentForfeitPendingPayload: vi.fn(() => ({})),
-  };
-});
+vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
+  finalizeMatchAsForfeit: (...a: unknown[]) => finalizeForfeitMock(...a),
+  isRankedEarlyForfeitMatch: (...a: unknown[]) => isRankedEarlyForfeitMatchMock(...a),
+  buildOpponentForfeitPendingPayload: vi.fn(() => ({})),
+  buildReconnectLimitForfeitPendingPayload: vi.fn(() => ({})),
+  setForfeitPendingForUser: vi.fn(),
+  parseForfeitPendingPayload: vi.fn(() => null),
+  handleMatchForfeit: vi.fn(),
+  emitPendingForfeitIfAny: vi.fn(),
+  matchForfeitKey: vi.fn((matchId: string) => `match:${matchId}:forfeit`),
+}));
 vi.mock('../../src/realtime/services/match-terminal.service.js', () => ({
   abandonMatchWithCompleteLock: (...a: unknown[]) => abandonWithLockMock(...a),
 }));
@@ -127,6 +135,42 @@ describe('resolvePossessionTerminalAfterDisconnect — never forfeit a human to 
     expect(result).toEqual({ finalized: true, abandoned: false });
   });
 
+  it('AI-present + human dropped before 2 rounds -> cancels as an early no-contest', async () => {
+    const { resolvePossessionTerminalAfterDisconnect } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    const earlyMatch = { ...match, current_q_index: 1 } as MatchRow;
+    resolveMatchPresenceMock.mockResolvedValue(presence([
+      { id: HUMAN, present: false, reasons: ['disconnect_key'] },
+      { id: BOT, present: true, reasons: ['ai'] },
+    ]));
+    // Reproduce the production state: the bot led after round one, so the
+    // progress fallback would wrongly settle a normal ranked loss.
+    completeFromProgressMock.mockResolvedValue({
+      completed: true,
+      winnerId: BOT,
+      decisionBasis: 'goals',
+    });
+    finalizeForfeitMock.mockResolvedValue({
+      completed: true,
+      winnerId: null,
+      resultVersion: 1,
+      cancelledNoContest: true,
+    });
+
+    const result = await resolvePossessionTerminalAfterDisconnect({
+      io: createIo(), match: earlyMatch, roster, cacheSnapshot: null,
+      disconnectedUserIds: [HUMAN], source: 'disconnect_grace_expired',
+    });
+
+    expect(finalizeForfeitMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: 'm1',
+      forfeitingUserId: HUMAN,
+    }));
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ finalized: true, abandoned: true });
+  });
+
   it('human opponent present -> forfeit-first still protects the human who stayed', async () => {
     const { resolvePossessionTerminalAfterDisconnect } = await import(
       '../../src/realtime/services/match-disconnect.service.js'
@@ -174,6 +218,39 @@ describe('resolveOrphanPossessionMatchTerminal — same guard on the stale/orpha
     expect(finalizeForfeitMock).not.toHaveBeenCalled();
     expect(completeFromProgressMock).toHaveBeenCalledOnce();
     expect(result.outcome).toBe('completed_from_progress');
+  });
+
+  it('AI-present + human stale-absent before 2 rounds -> cancels as an early no-contest', async () => {
+    const { resolveOrphanPossessionMatchTerminal } = await import(
+      '../../src/realtime/services/match-orphan-resolver.service.js'
+    );
+    const earlyMatch = { ...match, current_q_index: 1 } as MatchRow;
+    resolveMatchPresenceMock.mockResolvedValue(presence([
+      { id: HUMAN, present: false, reasons: ['stale_missing_signal'] },
+      { id: BOT, present: true, reasons: ['ai'] },
+    ]));
+    completeFromProgressMock.mockResolvedValue({
+      completed: true,
+      winnerId: BOT,
+      decisionBasis: 'goals',
+    });
+    finalizeForfeitMock.mockResolvedValue({
+      completed: true,
+      winnerId: null,
+      resultVersion: 1,
+      cancelledNoContest: true,
+    });
+
+    const result = await resolveOrphanPossessionMatchTerminal({
+      io: createIo(), match: earlyMatch, roster, source: 'session_guard_orphan',
+    });
+
+    expect(finalizeForfeitMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: 'm1',
+      forfeitingUserId: HUMAN,
+    }));
+    expect(completeFromProgressMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ outcome: 'abandoned' });
   });
 
   it('AI-present + undecidable progress -> abandons AND refunds the human ranked ticket', async () => {

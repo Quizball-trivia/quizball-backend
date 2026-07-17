@@ -63,6 +63,24 @@ const RANKED_EARLY_FORFEIT_MIN_ROUNDS = 2;
 const EARLY_FORFEIT_FREE_LIMIT = 3;
 const EARLY_FORFEIT_PENALTY_RP = 100;
 
+/**
+ * Whether a ranked possession match is still inside the early-forfeit
+ * no-contest window. Terminal resolvers use this before choosing between the
+ * forfeit/no-contest finalizer and progress-based completion; keeping the
+ * predicate here prevents the AI-disconnect path from drifting from the
+ * economy rule enforced by finalizeMatchAsForfeit.
+ */
+export function isRankedEarlyForfeitMatch(
+  activeMatch: MatchRow,
+  cacheSnapshot?: MatchCache | null
+): boolean {
+  const variant = resolveMatchVariant(activeMatch.state_payload, activeMatch.mode);
+  const roundsPlayed = cacheSnapshot?.currentQIndex ?? activeMatch.current_q_index;
+  return activeMatch.mode === 'ranked'
+    && variant !== 'friendly_party_quiz'
+    && roundsPlayed < RANKED_EARLY_FORFEIT_MIN_ROUNDS;
+}
+
 
 // ─── Forfeit-pending payload helpers ──────────────────────────────────────
 // These produce the "we're finalizing the match for you/your opponent"
@@ -250,10 +268,10 @@ export async function finalizeMatchAsForfeit(
     // refund both human players' consumed ranked tickets. This prevents a
     // network drop in the first round or two from costing RP + a ticket.
     const roundsPlayed = params.cacheSnapshot?.currentQIndex ?? activeMatch.current_q_index;
-    const isRankedEarlyForfeit =
-      activeMatch.mode === 'ranked'
-      && variant !== 'friendly_party_quiz'
-      && roundsPlayed < RANKED_EARLY_FORFEIT_MIN_ROUNDS;
+    const isRankedEarlyForfeit = isRankedEarlyForfeitMatch(
+      activeMatch,
+      params.cacheSnapshot
+    );
 
     if (isRankedEarlyForfeit) {
       // Bump the forfeiter's rolling 24h early-forfeit counter. Beyond the

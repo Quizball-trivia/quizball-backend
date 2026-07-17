@@ -1134,6 +1134,10 @@ export async function botDisconnect(run: RunMatchResult): Promise<void> {
     socketId: run.botSocket.id,
     connectedAt: run.botSocket.data.connectedAt ?? null,
   }, run.botSocket.id);
+  // Socket.IO has removed a transport from adapter rooms by the time its
+  // `disconnect` event fires. Mirror that ordering so presence checks cannot
+  // mistake the dropped fake socket for a live in-match client.
+  run.io.removeSocket(run.botSocket);
   await handleMatchDisconnect(run.io as never, run.botSocket as never);
 }
 

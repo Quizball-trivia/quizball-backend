@@ -51,6 +51,101 @@ describeLocal('regression: disconnect lifecycle scenarios', () => {
     expect(result.ok).toBe(true);
   }, 120_000);
 
+  it('ranked AI lead + human disconnect before 2 rounds → no-contest refund', async () => {
+    const { bootMatch, botDisconnect } =
+      await import('../../game-regression/src/runner.mjs');
+    const { sql } = await import('../../src/db/index.js');
+    const { getMatchCache, setMatchCache } = await import('../../src/realtime/match-cache.js');
+    const { matchesRepo } = await import('../../src/modules/matches/matches.repo.js');
+    const { matchPlayersRepo } = await import('../../src/modules/matches/match-players.repo.js');
+    const { rankedRepo } = await import('../../src/modules/ranked/ranked.repo.js');
+    const { storeRepo } = await import('../../src/modules/store/store.repo.js');
+    const { stopRealtimeTimerScheduler } = await import(
+      '../../src/realtime/realtime-timer-scheduler.js'
+    );
+    const { cancelMatchQuestionTimer } = await import('../../src/realtime/match-flow.js');
+    const { clearAiMaps } = await import('../../src/realtime/possession-match-flow.js');
+    const {
+      resolvePossessionTerminalAfterDisconnect,
+    } = await import('../../src/realtime/services/match-disconnect.service.js');
+    const { isRankedEarlyForfeitMatch } = await import(
+      '../../src/realtime/services/match-forfeit.service.js'
+    );
+
+    const run = await bootMatch({ startTimeoutMs: 25_000 });
+    expect(run.matchId).toBeTruthy();
+
+    // Reproduce the production terminal snapshot deterministically: question 1
+    // has resolved, question 2 is active, and the AI leads 1-0. Without the fix,
+    // grace expiry falls through to progress completion and settles an ordinary
+    // ranked loss instead of applying the <2-round no-contest rule.
+    const cache = await getMatchCache(run.matchId!);
+    expect(cache).toBeTruthy();
+    stopRealtimeTimerScheduler();
+    cancelMatchQuestionTimer(run.matchId!, cache!.currentQuestion?.qIndex ?? 0);
+    clearAiMaps(run.matchId!);
+    const human = cache!.players.find((player) => player.userId === run.botUserId)!;
+    const ai = cache!.players.find((player) => player.userId !== run.botUserId)!;
+    human.totalPoints = 0;
+    human.correctAnswers = 0;
+    human.goals = 0;
+    ai.totalPoints = 1_200;
+    ai.correctAnswers = 1;
+    ai.goals = 1;
+    cache!.currentQIndex = 1;
+    cache!.statePayload.goals = {
+      seat1: ai.seat === 1 ? 1 : 0,
+      seat2: ai.seat === 2 ? 1 : 0,
+    };
+    await setMatchCache(cache!);
+    await matchesRepo.setMatchStatePayload(run.matchId!, cache!.statePayload, 1);
+    await sql`
+      UPDATE users
+      SET early_forfeit_count = 0,
+          early_forfeit_window_started_at = NULL
+      WHERE id = ${run.botUserId}
+    `;
+
+    const stagedMatch = await matchesRepo.getMatch(run.matchId!);
+    expect(stagedMatch).toBeTruthy();
+    expect(
+      isRankedEarlyForfeitMatch(stagedMatch!, cache),
+      'the staged terminal snapshot is inside the shared <2-round rule'
+    ).toBe(true);
+
+    const walletAfterQueueJoin = await storeRepo.getWallet(run.botUserId);
+    // Keep the durable timer from auto-firing on the harness' compressed clock;
+    // this test invokes the same terminal resolver synchronously below, which
+    // makes the production second-question snapshot deterministic.
+    await botDisconnect(run);
+    const pausedMatch = await matchesRepo.getMatch(run.matchId!);
+    const pausedCache = await getMatchCache(run.matchId!);
+    const roster = await matchPlayersRepo.listMatchPlayers(run.matchId!);
+    expect(pausedMatch?.status, 'disconnect pause must leave the match active').toBe('active');
+    const terminal = await resolvePossessionTerminalAfterDisconnect({
+      io: run.io as never,
+      match: pausedMatch!,
+      roster,
+      cacheSnapshot: pausedCache,
+      disconnectedUserIds: [run.botUserId],
+      source: 'regression_disconnect_grace_expired',
+    });
+    expect(terminal).toEqual({ finalized: true, abandoned: true });
+
+    const match = await matchesRepo.getMatch(run.matchId!);
+    const payload = match?.state_payload as { cancelledNoContest?: boolean } | null;
+    expect(match?.status, 'early AI disconnect must abandon as no-contest').toBe('abandoned');
+    expect(match?.winner_user_id, 'no-contest has no winner').toBeNull();
+    expect(payload?.cancelledNoContest, 'terminal payload marks the cancellation').toBe(true);
+
+    const rpChanges = await rankedRepo.getRpChangesForMatch(run.matchId!);
+    expect(rpChanges, 'no-contest must not settle RP').toHaveLength(0);
+    const walletAfter = await storeRepo.getWallet(run.botUserId);
+    expect(walletAfter!.tickets, 'consumed ranked ticket is refunded').toBe(
+      walletAfterQueueJoin!.tickets + 1
+    );
+  }, 120_000);
+
   it('explicit forfeit → match reaches a terminal state', async () => {
     const { bootMatch, playMatch, botForfeit } = await import('../../game-regression/src/runner.mjs');
     const { checkInvariants, formatViolation } = await import('../../game-regression/src/invariants.mjs');

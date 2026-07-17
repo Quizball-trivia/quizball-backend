@@ -11,6 +11,7 @@
  *   friendly_possession_smoke   2 users: lobby -> draft -> possession match
  *   friendly_party_smoke    2 users: lobby (party mode) -> party match
  *   reconnect_smoke         ranked-AI match, drop+reconnect mid-match, assert resume
+ *   disconnect_early_ai_no_contest  ranked-AI q1 drop -> no-contest + refund contract
  *
  * Env:
  *   STAGING_URL                       default https://api-staging.quizball.io
@@ -40,6 +41,7 @@ function filteredTrace(trace: EventTrace, keep: (e: TraceEvent) => boolean): Eve
 const URL = process.env.STAGING_URL ?? 'https://api-staging.quizball.io';
 const ALL = [
   'ranked_ai_smoke', 'friendly_possession_smoke', 'friendly_party_smoke', 'reconnect_smoke',
+  'disconnect_early_ai_no_contest',
   'forfeit_early_live', 'forfeit_late_live', 'opponent_forfeit_winner_live', 'draft_ban_collision_live',
   'answer_timing',
 ];
@@ -67,6 +69,20 @@ async function waitConnected(client: StagingClient, ms = 15_000): Promise<boolea
     const t = setTimeout(() => resolve(false), ms);
     client.socket.once('connect', () => { clearTimeout(t); resolve(true); });
   });
+}
+
+async function readWalletTickets(user: TestUser): Promise<number> {
+  const response = await fetch(`${URL.replace(/\/$/, '')}/api/v1/store/wallet`, {
+    headers: { Authorization: `Bearer ${user.accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`wallet read failed: ${response.status}`);
+  }
+  const wallet = await response.json() as { tickets?: number };
+  if (!Number.isInteger(wallet.tickets)) {
+    throw new Error('wallet read returned no integer ticket balance');
+  }
+  return wallet.tickets!;
 }
 
 function verdict(name: string, trace: EventTrace, isParty: boolean): ScenarioResult {
@@ -218,6 +234,93 @@ async function reconnectSmoke(users: { a: TestUser }): Promise<ScenarioResult> {
     return v;
   } finally {
     rejoined?.disconnect();
+    client.disconnect();
+  }
+}
+
+/**
+ * Production incident regression: after one resolved ranked-AI round, the
+ * human transport disappears while question 2 is active. Grace expiry must
+ * cancel the match under the <2-round rule, even though progress could select
+ * a winner. A fresh socket connects only after grace to collect terminal replay.
+ */
+async function disconnectEarlyAiNoContest(users: { a: TestUser }): Promise<ScenarioResult> {
+  const name = 'disconnect_early_ai_no_contest';
+  const client = connectStaging(URL, users.a.accessToken, users.a.userId);
+  let replayClient: StagingClient | null = null;
+  let matchId: string | undefined;
+  try {
+    if (!await waitConnected(client)) {
+      return { name, ok: false, detail: 'socket never connected', violations: [] };
+    }
+    await clearActiveMatch(client);
+    autoDraft(client); autoHalftime(client); autoRecover(client);
+    const ticketsBeforeQueue = await readWalletTickets(users.a);
+
+    // Register before autoAnswer: on q1 this listener disconnects first, so the
+    // auto-answer listener cannot submit the second answer on the dead socket.
+    let disconnectedAtQuestionOne = false;
+    client.socket.on('match:question', (question: { qIndex?: number }) => {
+      if (question.qIndex !== 1 || disconnectedAtQuestionOne) return;
+      disconnectedAtQuestionOne = true;
+      client.socket.disconnect();
+    });
+    autoAnswer(client, { answerPlan: () => ({ mode: 'correct', timeMs: 500 }) });
+
+    client.socket.emit('ranked:queue_join', {});
+    const reachedSecondQuestion = await client.waitFor(
+      () => disconnectedAtQuestionOne,
+      180_000,
+    );
+    matchId = client.latest<{ matchId?: string }>('match:start')?.matchId;
+    if (!reachedSecondQuestion || !matchId) {
+      return {
+        name,
+        ok: false,
+        detail: 'did not reach and disconnect on question index 1',
+        violations: [],
+        events: tracedEvents(client),
+      };
+    }
+
+    // Staging uses the real 20s grace. Stay fully offline until terminal
+    // resolution, then use a fresh app/socket instance to collect last-match
+    // replay without rejoining the active match.
+    await new Promise((resolve) => setTimeout(resolve, 25_000));
+    replayClient = connectStaging(URL, users.a.accessToken, users.a.userId, client.trace);
+    await waitConnected(replayClient, 20_000);
+    const replayed = await replayClient.waitFor(
+      () => hasFinalResultsForMatch(client.trace, matchId),
+      30_000,
+    );
+    const final = finalForMatch(client, matchId) as {
+      cancelledNoContest?: boolean;
+      winnerId?: string | null;
+    } | undefined;
+    const delta = myDeltaRp(final, users.a.userId);
+    const ticketsAfterTerminal = await readWalletTickets(users.a);
+    const ok = replayed
+      && final?.cancelledNoContest === true
+      && final?.winnerId == null
+      && (delta == null || delta === 0)
+      && ticketsAfterTerminal === ticketsBeforeQueue;
+    const detail = replayed
+      ? `cancelledNoContest=${final?.cancelledNoContest ?? false} winner=${final?.winnerId ?? 'null'} delta=${delta ?? 'none'} tickets=${ticketsBeforeQueue}->${ticketsAfterTerminal}`
+      : 'no terminal replay after disconnect grace';
+    return {
+      name,
+      ok,
+      detail,
+      violations: ok ? [] : [`expected early AI disconnect no-contest; ${detail}`],
+      events: tracedEvents(client),
+      startedAt: client.trace.events[0]?.t,
+      endedAt: client.trace.events[client.trace.events.length - 1]?.t,
+    };
+  } finally {
+    if (matchId && replayClient?.socket.connected) {
+      replayClient.socket.emit('match:forfeit', { matchId });
+    }
+    replayClient?.disconnect();
     client.disconnect();
   }
 }
@@ -802,6 +905,7 @@ async function main(): Promise<void> {
       else if (name === 'friendly_possession_smoke') r = await friendlySmoke(name, false, users);
       else if (name === 'friendly_party_smoke') r = await friendlySmoke(name, true, users);
       else if (name === 'reconnect_smoke') r = await reconnectSmoke(users);
+      else if (name === 'disconnect_early_ai_no_contest') r = await disconnectEarlyAiNoContest(users);
       else if (name === 'forfeit_early_live') r = await forfeitEarlyLive(users);
       else if (name === 'forfeit_late_live') r = await forfeitLateLive(users);
       else if (name === 'opponent_forfeit_winner_live') r = await opponentForfeitWinnerLive(users);

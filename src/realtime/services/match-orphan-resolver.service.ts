@@ -19,7 +19,10 @@ import {
   buildFinalResultsPayload,
   emitFinalResultsToMatchParticipants,
 } from './match-final-results.service.js';
-import { finalizeMatchAsForfeit } from './match-forfeit.service.js';
+import {
+  finalizeMatchAsForfeit,
+  isRankedEarlyForfeitMatch,
+} from './match-forfeit.service.js';
 import { canForfeitToPresentPlayers, resolveMatchPresence } from './match-presence.service.js';
 import { abandonMatchWithCompleteLock } from './match-terminal.service.js';
 
@@ -88,10 +91,16 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
   });
 
   // Same guard as the live disconnect path: an AI-only "present" set must not
-  // be handed a forfeit win over an absent human (the AI is synthetically
-  // present and cannot leave). Fall through to progress / abandon instead.
+  // receive a normal forfeit win. Inside the ranked <2-round window, route the
+  // absent human through the shared finalizer so it cancels as a no-contest;
+  // later matches still fall through to progress and preserve the earned score.
+  const canAwardForfeitWin = canForfeitToPresentPlayers(presence);
+  const shouldFinalizeEarlyNoContest =
+    !canAwardForfeitWin
+    && presence.presentPlayers.length > 0
+    && isRankedEarlyForfeitMatch(match);
   if (
-    canForfeitToPresentPlayers(presence) &&
+    (canAwardForfeitWin || shouldFinalizeEarlyNoContest) &&
     presence.absentPlayers.length === 1 &&
     presence.presentPlayers.length > 0
   ) {
@@ -110,6 +119,13 @@ export async function resolveOrphanPossessionMatchTerminal(params: {
       const finalPayload = await buildFinalResultsPayload(match.id, finalized.resultVersion);
       if (finalPayload) {
         await emitFinalResultsToMatchParticipants(io, match.id, finalPayload);
+      }
+      if (finalized.cancelledNoContest) {
+        logger.info(
+          { matchId: match.id, mode: match.mode, source, forfeitingUserId },
+          'Orphan resolver cancelled early AI match as no-contest'
+        );
+        return { outcome: 'abandoned' };
       }
       logger.info(
         {

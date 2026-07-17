@@ -234,9 +234,10 @@ function resolveTarget(args: Args): TargetConfig {
     const env = readEnvFile(resolve(REPO_ROOT, '.env'));
     const cfg: TargetConfig = {
       apiBase: args.api ?? 'https://api-staging.quizball.io',
-      supabaseUrl: env.SUPABASE_URL ?? '',
-      serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-      databaseUrl: args.db ?? env.DATABASE_URL ?? '',
+      supabaseUrl: process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? '',
+      serviceRoleKey:
+        process.env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+      databaseUrl: args.db ?? process.env.DATABASE_URL ?? env.DATABASE_URL ?? '',
       emailDomain: 'quizball.io',
       bypassToken: process.env.CHAOS_BYPASS_TOKEN ?? env.CHAOS_BYPASS_TOKEN,
     };

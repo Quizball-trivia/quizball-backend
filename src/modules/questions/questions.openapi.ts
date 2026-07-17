@@ -232,7 +232,9 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
       status: z.enum(['draft', 'published', 'archived']).optional(),
       difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
       type: questionTypeEnum.optional(),
-      search: z.string().min(3).max(200).optional(),
+      search: z.string().max(200).optional().openapi({
+        description: 'Admin-only substring search. Terms shorter than 3 characters are accepted but ignored.',
+      }),
       page: z.coerce.number().int().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
     }),

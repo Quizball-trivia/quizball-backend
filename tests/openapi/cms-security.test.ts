@@ -18,7 +18,7 @@ describe('CMS OpenAPI security contract', () => {
     }
   });
 
-  it('documents the three-character question search floor', () => {
+  it('accepts short search terms while retaining the 200-character ceiling', () => {
     const operation = spec.paths?.['/api/v1/questions']?.get;
     const search = operation?.parameters?.find(
       (parameter) => 'name' in parameter && parameter.name === 'search'
@@ -26,7 +26,8 @@ describe('CMS OpenAPI security contract', () => {
 
     expect(search).toMatchObject({
       in: 'query',
-      schema: expect.objectContaining({ minLength: 3, maxLength: 200 }),
+      schema: expect.objectContaining({ maxLength: 200 }),
     });
+    expect('schema' in (search ?? {}) && search?.schema).not.toHaveProperty('minLength');
   });
 });

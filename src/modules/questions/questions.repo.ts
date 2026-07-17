@@ -115,17 +115,25 @@ export const questionsRepo = {
         ? sql`AND q.type = 'mcq_single' AND NOT (${mcqHasImageCondition})`
         : sql``;
     const searchTerm = filter?.search?.trim();
-    const searchPattern = searchTerm ? `%${searchTerm}%` : null;
+    // pg_trgm cannot extract a trigram from one- or two-character terms. The
+    // HTTP schema normalizes those transient CMS keystrokes away; keep the same
+    // guard here for non-HTTP callers so they cannot trigger a full scan.
+    const searchPattern = searchTerm && searchTerm.length >= 3 ? `%${searchTerm}%` : null;
     const searchFilter = searchPattern
-      ? sql`AND (
-          COALESCE(q.prompt->>'en', '') ILIKE ${searchPattern}
-          OR COALESCE(q.prompt->>'ka', '') ILIKE ${searchPattern}
-          OR COALESCE(q.prompt::text, '') ILIKE ${searchPattern}
-          OR COALESCE(q.explanation->>'en', '') ILIKE ${searchPattern}
-          OR COALESCE(q.explanation->>'ka', '') ILIKE ${searchPattern}
-          OR COALESCE(q.explanation::text, '') ILIKE ${searchPattern}
-          OR COALESCE(q.type, '') ILIKE ${searchPattern}
-          OR COALESCE(qp.payload::text, '') ILIKE ${searchPattern}
+      ? sql`AND q.id IN (
+          SELECT sq.id
+          FROM questions sq
+          WHERE (
+            COALESCE(sq.prompt::text, '') || ' ' ||
+            COALESCE(sq.explanation::text, '') || ' ' ||
+            COALESCE(sq.type, '')
+          ) ILIKE ${searchPattern}
+
+          UNION
+
+          SELECT sqp.question_id
+          FROM question_payloads sqp
+          WHERE COALESCE(sqp.payload::text, '') ILIKE ${searchPattern}
         )`
       : sql``;
 
@@ -135,7 +143,9 @@ export const questionsRepo = {
     // The page query alone uses the created_at index and stops at `limit`
     // (~3.5ms); the count runs separately and only joins payloads when a filter
     // actually references them. (chaos load test, 2026-06-09; see scripts/chaos)
-    const filtersTouchPayload = Boolean(filter?.mcqImage || searchPattern);
+    // Search reads payloads inside its indexed subquery; only mcq_image needs
+    // the outer count query to join the payload table.
+    const filtersTouchPayload = Boolean(filter?.mcqImage);
 
     const pageQuery = sql<QuestionWithPayload[]>`
       SELECT q.*, qp.payload

@@ -95,7 +95,6 @@ function key(method: string, endpointPath: string): string {
 
 const functionRouteAliases: Record<string, string> = {
   'categories.detail': '/api/v1/categories/:id',
-  'categories.dependencies': '/api/v1/categories/:id/dependencies',
   'questions.detail': '/api/v1/questions/:id',
   'featured.detail': '/api/v1/featured-categories/:id',
 };
@@ -131,7 +130,10 @@ function treatment(method: Method, endpointPath: string): Treatment {
     || /\/image-mcq\//.test(endpointPath)) return 'stubbed';
   if (endpointPath.startsWith('/api/v1/admin/') || endpointPath.includes('/dev/')
     || endpointPath.includes('/sync-staging') || endpointPath === '/api/v1/users/me/deletion'
-    || endpointPath === '/api/v1/questions/duplicates'
+    || (endpointPath.startsWith('/api/v1/questions')
+      && !(method === 'GET'
+        && (endpointPath === '/api/v1/questions' || endpointPath === '/api/v1/questions/:id')))
+    || endpointPath.endsWith('/dependencies')
     || endpointPath.startsWith('/api/v1/store/admin/')) return 'controlled';
   if (method === 'GET') return 'scale';
   if (/^\/api\/v1\/(daily-challenges|friends|notifications|store\/purchase-coins|users\/me)/.test(endpointPath)) {

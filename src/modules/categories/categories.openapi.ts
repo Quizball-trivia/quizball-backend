@@ -92,11 +92,14 @@ export function registerCategoriesOpenApi(registry: OpenAPIRegistry): void {
     method: 'get',
     path: '/api/v1/categories/{id}/dependencies',
     summary: 'Get category dependencies',
-    description: 'Returns child categories, associated questions, and featured status',
+    description: 'Returns child categories, associated questions, and featured status. Requires admin role.',
     tags: ['Categories'],
+    security: [{ bearerAuth: [] }],
     pathParams: categoryIdParamSchema,
     responses: {
       200: { description: 'Category dependencies', schema: categoryDependenciesResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Insufficient permissions (admin role required)', schema: errorResponseSchema },
       404: { description: 'Category not found', schema: errorResponseSchema },
     },
   });

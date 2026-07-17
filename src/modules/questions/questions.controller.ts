@@ -3,7 +3,7 @@ import { questionsService } from './questions.service.js';
 import { imageMcqService } from './image-mcq.service.js';
 import { translationService } from './translation.service.js';
 import { stagingSyncService } from './staging-sync.service.js';
-import { AppError, ExternalServiceError } from '../../core/errors.js';
+import { AppError, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import {
   toQuestionResponse,
   toPaginatedResponse,
@@ -36,15 +36,19 @@ export const questionsController = {
    */
   async list(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as ListQuestionsQuery;
+    const isAdmin = req.user?.role === 'admin';
 
     const { questions, total } = await questionsService.list(
       {
         categoryId: query.category_id,
-        status: query.status,
+        // The player clients need published payloads for the existing solo
+        // game, but must never use this CMS route to enumerate drafts or run
+        // the expensive admin-only search/image filters.
+        status: isAdmin ? query.status : 'published',
         difficulty: query.difficulty,
         type: query.type,
-        mcqImage: query.mcq_image,
-        search: query.search,
+        mcqImage: isAdmin ? query.mcq_image : undefined,
+        search: isAdmin ? query.search : undefined,
       },
       query.page,
       query.limit
@@ -68,6 +72,11 @@ export const questionsController = {
     const { id } = req.validated.params as UuidParam;
 
     const question = await questionsService.getById(id);
+
+    // Return 404 rather than revealing that a draft/archived question exists.
+    if (req.user?.role !== 'admin' && question.status !== 'published') {
+      throw new NotFoundError('Question not found');
+    }
 
     const payloadSummary =
       typeof question.payload === 'string'

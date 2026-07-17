@@ -224,18 +224,23 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
     method: 'get',
     path: '/api/v1/questions',
     summary: 'List questions with pagination and filters',
+    description: 'Requires authentication. Players are restricted to published questions; full filters and search require admin role. Search terms shorter than 3 characters are ignored.',
     tags: ['Questions'],
+    security: [{ bearerAuth: [] }],
     query: z.object({
       category_id: z.string().uuid().optional(),
       status: z.enum(['draft', 'published', 'archived']).optional(),
       difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
       type: questionTypeEnum.optional(),
-      search: z.string().optional(),
+      search: z.string().max(200).optional().openapi({
+        description: 'Admin-only substring search. Terms shorter than 3 characters are accepted but ignored.',
+      }),
       page: z.coerce.number().int().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
     responses: {
       200: { description: 'Paginated list of questions', schema: paginatedQuestionsResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
     },
   });
 
@@ -243,10 +248,13 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
     method: 'get',
     path: '/api/v1/questions/{id}',
     summary: 'Get question by ID with payload',
+    description: 'Requires authentication. Players can retrieve published questions only; admins can retrieve any status.',
     tags: ['Questions'],
+    security: [{ bearerAuth: [] }],
     pathParams: questionIdParamSchema,
     responses: {
       200: { description: 'Question found', schema: questionResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
       404: { description: 'Question not found', schema: errorResponseSchema },
     },
   });

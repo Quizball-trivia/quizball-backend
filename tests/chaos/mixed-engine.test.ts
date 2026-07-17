@@ -25,7 +25,7 @@ describe('weighted mixed traffic engine', () => {
       users: [user],
       maxInflight: 100,
       timeoutMs: 1_000,
-      fixtures: { categoryId: 'c1', questionId: 'q1', featuredCategoryId: 'f1' },
+      fixtures: { categoryId: 'c1', featuredCategoryId: 'f1' },
     });
 
     const byName = Object.fromEntries(metrics.map((metric) => [metric.name, metric.sent]));
@@ -55,7 +55,7 @@ describe('weighted mixed traffic engine', () => {
       users: [user],
       maxInflight: 100,
       timeoutMs: 1_000,
-      fixtures: { categoryId: 'c1', questionId: 'q1', featuredCategoryId: 'f1' },
+      fixtures: { categoryId: 'c1', featuredCategoryId: 'f1' },
     });
 
     expect(metrics.statusHist['409']).toBeGreaterThan(0);

@@ -39,7 +39,7 @@ export async function discoverRouteFixtures(
 ): Promise<ChaosRouteFixtures> {
   const [categories, questions, featured] = await Promise.all([
     fetchFixture(apiBase, '/api/v1/categories?limit=1&is_active=true&page=1', user, bypassToken),
-    fetchFixture(apiBase, '/api/v1/questions?limit=1&page=1', user, bypassToken),
+    fetchFixture(apiBase, '/api/v1/questions?limit=1&page=1&status=published', user, bypassToken),
     fetchFixture(apiBase, '/api/v1/featured-categories', user, bypassToken),
   ]);
   const categoryId = firstId(categories);

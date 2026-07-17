@@ -426,7 +426,15 @@ export const listQuestionsQuerySchema = z.object({
   difficulty: difficultyEnum.optional(),
   type: questionTypeEnum.optional(),
   mcq_image: z.enum(['with', 'without']).optional(),
-  search: z.string().optional(),
+  // The CMS debounces every keystroke. Trigram indexes need at least three
+  // characters, so treat shorter transient values as "no search" rather than
+  // issuing an expensive full-table substring scan.
+  search: z
+    .string()
+    .trim()
+    .max(200)
+    .transform((value) => (value.length >= 3 ? value : undefined))
+    .optional(),
   page: z
     .string()
     .transform((val) => parseInt(val, 10))

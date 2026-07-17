@@ -70,6 +70,7 @@ import {
   buildOpponentForfeitPendingPayload,
   buildReconnectLimitForfeitPendingPayload,
   finalizeMatchAsForfeit,
+  isRankedEarlyForfeitMatch,
   setForfeitPendingForUser,
 } from './match-forfeit.service.js';
 import {
@@ -297,12 +298,33 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
     disconnectedUserIds,
     includeUserRoomSockets: true,
   });
-  // Guard: an AI-only "present" set must NOT collect a forfeit win from a
-  // human's drop (the AI is synthetically present and cannot disconnect). Skip
-  // forfeit-first and fall through to progress / no-contest. See
-  // canForfeitToPresentPlayers.
+  // Guard: an AI-only "present" set must NOT collect a normal forfeit win from
+  // a human's drop (the AI is synthetically present and cannot disconnect).
+  // During the ranked <2-round window, however, the absent human must still go
+  // through finalizeMatchAsForfeit so the match becomes a no-contest and the
+  // ticket/RP rule is applied. Outside that window we preserve the existing
+  // score-based fallback so a leading human is not gifted as a loss to the AI.
+  const canAwardForfeitWin = canForfeitToPresentPlayers(presence);
+  const shouldFinalizeEarlyNoContest =
+    !canAwardForfeitWin
+    && presence.presentPlayers.length > 0
+    && isRankedEarlyForfeitMatch(match, cacheSnapshot);
+  logger.info(
+    {
+      matchId: match.id,
+      source,
+      mode: match.mode,
+      currentQIndex: match.current_q_index,
+      cacheCurrentQIndex: cacheSnapshot?.currentQIndex ?? null,
+      canAwardForfeitWin,
+      shouldFinalizeEarlyNoContest,
+      presentUserIds: presence.presentPlayers.map((player) => player.user_id),
+      absentUserIds: presence.absentPlayers.map((player) => player.user_id),
+    },
+    'Disconnect terminal resolver selected attribution path'
+  );
   if (
-    canForfeitToPresentPlayers(presence) &&
+    (canAwardForfeitWin || shouldFinalizeEarlyNoContest) &&
     presence.absentPlayers.length === 1 &&
     presence.presentPlayers.length > 0
   ) {
@@ -333,7 +355,7 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
       },
       'Disconnect terminal resolver finalized match as forfeit'
     );
-    return { finalized: true, abandoned: false };
+    return { finalized: true, abandoned: finalized.cancelledNoContest === true };
   }
 
   const matchRoomUserIds = new Set(presence.roomSocketUserIds);
@@ -389,7 +411,7 @@ export async function resolvePossessionTerminalAfterDisconnect(params: {
       { matchId: match.id, source, forfeitingUserId: definiteForfeiterUserId, winnerId: finalized.winnerId },
       'Disconnect terminal resolver finalized match as forfeit (definitive forfeiter)'
     );
-    return { finalized: true, abandoned: false };
+    return { finalized: true, abandoned: finalized.cancelledNoContest === true };
   }
 
   const progressResult = await completePossessionMatchFromProgress(io, match.id, source);

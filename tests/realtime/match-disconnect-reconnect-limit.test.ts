@@ -144,6 +144,7 @@ vi.mock('../../src/realtime/services/match-forfeit.service.js', () => ({
   buildOpponentForfeitPendingPayload: vi.fn(() => ({ type: 'opponent' })),
   buildReconnectLimitForfeitPendingPayload: vi.fn(() => ({ type: 'limit' })),
   finalizeMatchAsForfeit: (...args: unknown[]) => finalizeForfeitMock(...args),
+  isRankedEarlyForfeitMatch: vi.fn(() => false),
   setForfeitPendingForUser: vi.fn(),
 }));
 

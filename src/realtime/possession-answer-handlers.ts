@@ -926,7 +926,14 @@ export async function handlePossessionCluesAnswer(
     const authoritativeTimeMs = answerTiming.elapsedMs;
     const timedClueIndex = clueIndexForTimeMs(question.evaluation.clues.length, authoritativeTimeMs, questionDurationMs);
     const clueIndex = timedClueIndex;
-    const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, question.evaluation.acceptedAnswers);
+    // Localized display answers are valid guesses even when older/imported
+    // content omitted them from accepted_answers. This also lets the existing
+    // whole-word matcher accept a localized surname from a localized full name.
+    const acceptedAnswers = [
+      ...question.evaluation.acceptedAnswers,
+      ...Object.values(question.evaluation.displayAnswer),
+    ];
+    const isCorrect = !giveUp && fuzzyMatchesAnswer(guess, acceptedAnswers);
     const expectedCount = getExpectedUserIds(cache).length;
     const pointsEarned = calculateCluesScore(isCorrect, clueIndex);
 

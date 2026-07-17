@@ -1134,12 +1134,11 @@ export async function botDisconnect(run: RunMatchResult): Promise<void> {
     socketId: run.botSocket.id,
     connectedAt: run.botSocket.data.connectedAt ?? null,
   }, run.botSocket.id);
-  await handleMatchDisconnect(run.io as never, run.botSocket as never);
-  // Socket.IO invokes the disconnect handler while the socket identity is
-  // still available, then removes that transport from adapter rooms. Mirror
-  // that ordering so terminal presence cannot mistake the dropped fake socket
-  // for a live in-match client.
+  // Socket.IO has removed a transport from adapter rooms by the time its
+  // `disconnect` event fires. Mirror that ordering so presence checks cannot
+  // mistake the dropped fake socket for a live in-match client.
   run.io.removeSocket(run.botSocket);
+  await handleMatchDisconnect(run.io as never, run.botSocket as never);
 }
 
 export async function flap(run: RunMatchResult, n: number): Promise<void> {

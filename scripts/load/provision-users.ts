@@ -64,8 +64,9 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const envPath = resolve(process.cwd(), args.target === 'staging' ? '.env' : '.env.local');
   const env = readEnv(envPath);
-  const supabaseUrl = env.SUPABASE_URL ?? '';
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  const supabaseUrl = process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? '';
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY ?? '';
   const apiBase = args.target === 'staging' ? 'https://api-staging.quizball.io' : 'http://127.0.0.1:3000';
 
   if (supabaseUrl.includes('lfbwhxvwubzeqkztghok') || apiBase.includes('api.quizball.io')) {

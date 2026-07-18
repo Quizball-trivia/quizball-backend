@@ -98,27 +98,15 @@ async function main() {
   });
 
   try {
-    // The tracking table is created by Supabase; ensure it exists so a fresh DB
-    // (or one never touched by the CLI) still works.
-    await migrationSql.unsafe(`
-      CREATE SCHEMA IF NOT EXISTS supabase_migrations;
-      CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
-        version text PRIMARY KEY,
-        statements text[],
-        name text
-      );
-    `);
-
     const files = (await readdir(MIGRATIONS_DIR))
       .filter((f) => f.endsWith('.sql'))
       .sort();
 
     // Validate up front. A missing numeric version is a hard error — such a file
-    // would never be tracked and would re-run on every deploy. A duplicate
-    // version is only a warning: two files sharing a version is messy, but it
-    // doesn't break the apply (both files run; schema_migrations records the
-    // version once via ON CONFLICT), and a few such collisions already exist in
-    // history — failing here would block all deploys over a pre-existing issue.
+    // would never be tracked and would re-run on every deploy. Duplicate
+    // versions are rejected: schema_migrations uses version as its primary key,
+    // so accepting two files under one version could permanently skip the
+    // second file if it failed after the first was recorded.
     const seen = new Map();
     for (const f of files) {
       const v = versionOf(f);
@@ -126,12 +114,11 @@ async function main() {
         throw new Error(`Migration filename has no numeric version prefix: ${f}`);
       }
       if (seen.has(v)) {
-        console.warn(
-          `[migrate] WARNING: duplicate migration version ${v}: ${seen.get(v)} and ${f}`,
+        throw new Error(
+          `Duplicate migration version ${v}: ${seen.get(v)} and ${f}`,
         );
-      } else {
-        seen.set(v, f);
       }
+      seen.set(v, f);
     }
 
     // The coordinator transaction owns only the advisory lock. Migrations run
@@ -141,6 +128,19 @@ async function main() {
       await lockTx.unsafe('SET LOCAL statement_timeout = 0');
       await lockTx.unsafe('SET LOCAL idle_in_transaction_session_timeout = 0');
       await lockTx`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`;
+
+      // The tracking table is created by Supabase; ensure it exists so a fresh
+      // DB (or one never touched by the CLI) still works. This must happen only
+      // after the advisory lock because concurrent IF NOT EXISTS DDL can still
+      // race while inserting system-catalog rows.
+      await migrationSql.unsafe(`
+        CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+        CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+          version text PRIMARY KEY,
+          statements text[],
+          name text
+        );
+      `);
 
       const applied = new Set(
         (await migrationSql`SELECT version FROM supabase_migrations.schema_migrations`).map(

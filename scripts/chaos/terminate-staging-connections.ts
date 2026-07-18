@@ -2,7 +2,6 @@
 import postgres from 'postgres';
 
 const STAGING_PROJECT_REF = 'nsdfiprfmhdqhbfxfwpv';
-const PROD_PROJECT_REF = 'lfbwhxvwubzeqkztghok';
 const EXPECTED_STAGING_MAX_CONNECTIONS = 60;
 
 function value(argv: string[], key: string): string | undefined {
@@ -15,11 +14,12 @@ function value(argv: string[], key: string): string | undefined {
 function assertStagingDatabase(databaseUrl: string): void {
   const parsed = new URL(databaseUrl);
   const username = decodeURIComponent(parsed.username);
-  const pointsAtStaging = username.endsWith(`.${STAGING_PROJECT_REF}`)
-    || parsed.hostname.includes(STAGING_PROJECT_REF);
-  const pointsAtProd = username.endsWith(`.${PROD_PROJECT_REF}`)
-    || parsed.hostname.includes(PROD_PROJECT_REF);
-  if (!pointsAtStaging || pointsAtProd) {
+  const expectedUsername = `postgres.${STAGING_PROJECT_REF}`;
+  const poolerHostname = /^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/;
+  if (
+    username !== expectedUsername
+    || !poolerHostname.test(parsed.hostname)
+  ) {
     throw new Error('Refusing connection termination: DATABASE_URL is not the staging Supabase project.');
   }
   if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') {
@@ -109,7 +109,14 @@ async function main(): Promise<void> {
         count(*) FILTER (WHERE ok)::int AS terminated
       FROM terminated
     `;
-    console.log(JSON.stringify({ result: result[0] ?? { attempted: 0, terminated: 0 } }, null, 2));
+    const summary = result[0] ?? { attempted: 0, terminated: 0 };
+    if (summary.attempted === 0 || summary.terminated !== summary.attempted) {
+      throw new Error(
+        `Connection injection incomplete: attempted ${summary.attempted}, `
+        + `terminated ${summary.terminated}.`
+      );
+    }
+    console.log(JSON.stringify({ result: summary }, null, 2));
   } finally {
     await sql.end().catch(() => undefined);
   }

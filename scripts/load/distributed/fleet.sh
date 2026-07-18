@@ -243,9 +243,14 @@ provision() {
   ensure_ssh_key
   ensure_firewall
 
-  local index name
-  for ((index = existing_role; index < count; index += 1)); do
+  local occupied_names index=0 created=0 name
+  occupied_names="$(servers_json "$role" | jq -r '.[] | select(.status != "deleting") | .name')"
+  while (( created < needed )); do
     name="qb-load-${role}-$(printf '%02d' "$index")"
+    if grep -Fxq "$name" <<< "$occupied_names"; then
+      index=$((index + 1))
+      continue
+    fi
     printf 'Creating %s (%s, %s)…\n' "$name" "$type" "$LOCATION"
     "${HCLOUD[@]}" server create \
       --name "$name" \
@@ -261,6 +266,10 @@ provision() {
       --label "fleet=$role" \
       --label 'target=staging' \
       --label "expires-hours=$MAX_LIFETIME_HOURS" >/dev/null
+    [[ -z "$occupied_names" ]] || occupied_names+=$'\n'
+    occupied_names+="$name"
+    created=$((created + 1))
+    index=$((index + 1))
   done
   servers_json "$role" | jq -r '.[] | [.name,.server_type.name,.public_net.ipv4.ip,.status] | @tsv'
 }

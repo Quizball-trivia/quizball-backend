@@ -55,6 +55,9 @@ export function aggregateMatchmakingReports(
   if (expectedClients <= 0 || expectedClients % 2 !== 0) {
     throw new Error('expectedClients must be a positive even integer.');
   }
+  if (!Number.isFinite(maxMatchFoundP95Ms) || maxMatchFoundP95Ms <= 0) {
+    throw new Error('maxMatchFoundP95Ms must be a positive finite number.');
+  }
   if (reports.length < 2) violations.push(`worker reports ${reports.length}/2 minimum`);
 
   const observations: MatchmakingPairObservation[] = [];

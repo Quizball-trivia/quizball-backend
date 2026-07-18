@@ -72,8 +72,7 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 
 # Production-shaped 100-player raid from distributed source IPs
 npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
-  --offset=0 --total-rps=50 --duration=300 --ramp-s=60 --login-storm \
-  --login-ramp-s=60
+  --offset=0 --total-rps=50 --duration=300 --ramp-s=60
 
 # Distributed workers must use disjoint user shards. For ten 500-player workers,
 # use offsets 0,500,1000,...,4500. Reusing an offset makes multiple sockets act

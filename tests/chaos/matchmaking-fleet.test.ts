@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeMatchmakingPairs,
   evaluateMatchmakingFleet,
+  latencyReport,
+  selectCleanupLeaderUserIds,
   type MatchmakingFleetSummary,
 } from '../../scripts/chaos/matchmaking-fleet.js';
 
@@ -83,5 +85,22 @@ describe('matchmaking queue-storm verdict', () => {
       selfMatchedClients: 0,
     });
     expect(analysis.invalidUserIds.size).toBe(0);
+  });
+
+  it('elects one cleanup sender per reciprocal lobby and covers malformed matches', () => {
+    const leaders = selectCleanupLeaderUserIds([
+      { userId: 'a', lobbyId: 'valid', opponentId: 'b' },
+      { userId: 'b', lobbyId: 'valid', opponentId: 'a' },
+      { userId: 'self', lobbyId: 'self-lobby', opponentId: 'self' },
+      { userId: 'z', lobbyId: 'external', opponentId: 'external-smaller-id' },
+      { userId: 'unmatched', lobbyId: null, opponentId: null },
+    ]);
+
+    expect([...leaders].sort()).toEqual(['a', 'self', 'unmatched', 'z']);
+  });
+
+  it('uses nearest-rank percentiles at exact sample boundaries', () => {
+    const report = latencyReport(Array.from({ length: 100 }, (_, index) => index + 1));
+    expect(report).toMatchObject({ p50: 50, p95: 95, p99: 99, max: 100 });
   });
 });

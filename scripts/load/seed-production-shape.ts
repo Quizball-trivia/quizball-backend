@@ -218,8 +218,12 @@ async function seedLocalContent(
 ): Promise<void> {
   const categories = plan.categories.desiredSeed;
   const questions = plan.questions.desiredSeed;
-  if (categories < 2) {
-    throw new Error('Local content seed requires room for at least two synthetic categories.');
+  if (categories < 0 || questions < 0) {
+    throw new Error('Local content seed counts cannot be negative.');
+  }
+  if (categories === 0 && questions === 0) return;
+  if (questions > 0 && categories === 0) {
+    throw new Error('Local question seeding requires at least one synthetic category.');
   }
   await sql.unsafe(`
     INSERT INTO public.categories (id,slug,name,description,icon,is_active)
@@ -505,6 +509,19 @@ async function main(): Promise<void> {
     await seed(sql, before);
     const contentAfter = args.target === 'local' ? await localContentPlan(sql) : null;
     const after = await plans(sql);
+    const shortfalls = Object.entries(after)
+      .filter(([, entry]) => entry.current < entry.target)
+      .map(([table, entry]) => `${table}: ${entry.current}/${entry.target}`);
+    if (contentAfter) {
+      for (const [table, entry] of Object.entries(contentAfter)) {
+        if (entry.current < entry.target) {
+          shortfalls.push(`${table}: ${entry.current}/${entry.target}`);
+        }
+      }
+    }
+    if (shortfalls.length > 0) {
+      throw new Error(`Production-shape targets were not reached: ${shortfalls.join(', ')}`);
+    }
     const report = {
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),

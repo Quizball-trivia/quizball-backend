@@ -84,7 +84,7 @@ export interface MatchmakingPairAnalysis {
   invalidUserIds: Set<string>;
 }
 
-interface LatencyReport {
+export interface LatencyReport {
   count: number;
   p50: number;
   p95: number;
@@ -292,18 +292,29 @@ function sendCleanup(observation: ClientObservation): void {
   observation.client.socket.emit('ranked:queue_leave');
 }
 
-function isCleanupLeader(observation: ClientObservation): boolean {
+function isCleanupLeader(observation: MatchmakingPairObservation): boolean {
   return observation.opponentId === null
     || observation.userId.localeCompare(observation.opponentId) < 0;
 }
 
 function selectCleanupLeaders(observations: ClientObservation[]): ClientObservation[] {
-  const leaders = new Map<string, ClientObservation>();
-  const withoutLobby: ClientObservation[] = [];
+  const selectedUserIds = selectCleanupLeaderUserIds(observations);
+  return observations.filter((observation) => selectedUserIds.has(observation.userId));
+}
+
+/**
+ * Elect one cleanup sender for a reciprocal lobby, while retaining malformed
+ * observations as fallbacks so a bad match cannot leave a queue entry behind.
+ */
+export function selectCleanupLeaderUserIds(
+  observations: MatchmakingPairObservation[]
+): Set<string> {
+  const leaders = new Map<string, MatchmakingPairObservation>();
+  const fallbackUserIds = new Set<string>();
   for (const observation of observations) {
     if (!isCleanupLeader(observation)) continue;
     if (!observation.lobbyId) {
-      withoutLobby.push(observation);
+      fallbackUserIds.add(observation.userId);
       continue;
     }
     const current = leaders.get(observation.lobbyId);
@@ -311,7 +322,25 @@ function selectCleanupLeaders(observations: ClientObservation[]): ClientObservat
       leaders.set(observation.lobbyId, observation);
     }
   }
-  return [...leaders.values(), ...withoutLobby];
+
+  for (const observation of observations) {
+    if (fallbackUserIds.has(observation.userId)) continue;
+    const leader = observation.lobbyId ? leaders.get(observation.lobbyId) : undefined;
+    const isReciprocalFollower = Boolean(
+      leader
+      && leader.userId !== observation.userId
+      && leader.opponentId === observation.userId
+      && observation.opponentId === leader.userId
+    );
+    if (!leader || (!isCleanupLeader(observation) && !isReciprocalFollower)) {
+      fallbackUserIds.add(observation.userId);
+    }
+  }
+
+  return new Set([
+    ...[...leaders.values()].map((leader) => leader.userId),
+    ...fallbackUserIds,
+  ]);
 }
 
 function summarizeMatchmakingFleet(
@@ -445,11 +474,11 @@ async function waitConnected(client: StagingClient, timeoutMs: number): Promise<
   });
 }
 
-function latencyReport(samples: number[]): LatencyReport {
+export function latencyReport(samples: number[]): LatencyReport {
   const sorted = [...samples].sort((a, b) => a - b);
   const pick = (percent: number) => sorted.length === 0
     ? 0
-    : Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * percent / 100))]!);
+    : Math.round(sorted[Math.max(0, Math.ceil(sorted.length * percent / 100) - 1)]!);
   return {
     count: sorted.length,
     p50: pick(50),

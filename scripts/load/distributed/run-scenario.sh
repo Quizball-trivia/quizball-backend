@@ -71,8 +71,10 @@ run_gameplay() {
   (( players % workers == 0 )) || die "players must divide evenly across $workers workers"
   local per_players=$((players / workers))
   (( per_players % 2 == 0 )) || die 'players per worker must be even for human matchmaking'
-  local per_rps=$((total_rps / workers))
-  (( per_rps > 0 )) || per_rps=1
+  (( total_rps >= workers )) \
+    || die "total-http-rps must be at least the $workers-worker count for gameplay"
+  local base_rps=$((total_rps / workers))
+  local rps_remainder=$((total_rps % workers))
   local lead=$((per_players * 23 / 10 + 180))
   (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
@@ -80,18 +82,21 @@ run_gameplay() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-gameplay-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d players/worker=%d rps/worker=%d synchronized=%s\n' \
-    "$workers" "$per_players" "$per_rps" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'workers=%d players/worker=%d global-http-rps=%d base-rps/worker=%d remainder=%d synchronized=%s\n' \
+    "$workers" "$per_players" "$total_rps" "$base_rps" "$rps_remainder" \
+    "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
 
   local index=0 ip offset remote_report log pids=() reports=() ips=()
   while IFS= read -r ip; do
     offset=$((index * per_players))
+    local worker_rps=$base_rps
+    (( index < rps_remainder )) && worker_rps=$((worker_rps + 1))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$per_players --offset=$offset --sockets=$per_players --matches-per-client=1 --total-rps=$per_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$per_players --offset=$offset --sockets=$per_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
@@ -170,13 +175,8 @@ run_k6() {
   positive_int global-rps "$rate"
   local workers
   workers="$(require_worker_count "$role" 2)"
-  local per_rate=$((rate / workers))
-  local time_unit='1s'
-  if (( per_rate == 0 )); then
-    per_rate=1
-    local seconds_per_arrival=$(( (workers + rate - 1) / rate ))
-    time_unit="${seconds_per_arrival}s"
-  fi
+  local base_rate=$((rate / workers))
+  local rate_remainder=$((rate % workers))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-k6-${mode}-${rate}rps"
   local local_dir="$REPORT_ROOT/$stamp"
@@ -184,12 +184,18 @@ run_k6() {
 
   local index=0 ip offset remote_report log pids=() reports=() ips=()
   while IFS= read -r ip; do
+    local worker_rate=$base_rate
+    (( index < rate_remainder )) && worker_rate=$((worker_rate + 1))
+    if (( worker_rate == 0 )); then
+      index=$((index + 1))
+      continue
+    fi
     offset=$((index * 1000))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local k6_mode="$mode"
     local command
-    command="$(remote_prefix)TARGET=staging MODE=$k6_mode USERS=1000 SHARD_START=$offset RATE=$per_rate START_RATE=1 TIME_UNIT=$time_unit RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((per_rate * 2)) MAX_VUS=$((per_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
+    command="$(remote_prefix)TARGET=staging MODE=$k6_mode USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")

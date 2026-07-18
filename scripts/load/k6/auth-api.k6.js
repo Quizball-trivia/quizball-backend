@@ -33,6 +33,8 @@ const BYPASS_TOKEN = __ENV.CHAOS_BYPASS_TOKEN || '';
 // default shared session performs exactly one setup login; use per-vu only when
 // intentionally testing a realistic spread of user identities at a safe rate.
 const API_SESSION_MODE = (__ENV.API_SESSION_MODE || 'shared').toLowerCase();
+const SHARED_SESSION_TTL_SECONDS = 3_600;
+const SHARED_SESSION_SAFETY_SECONDS = 60;
 
 const unexpectedFailures = new Rate('unexpected_failures');
 const rateLimitedResponses = new Counter('rate_limited_responses');
@@ -398,6 +400,16 @@ function assertSafeConfiguration() {
   if (!['shared', 'per-vu'].includes(API_SESSION_MODE)) {
     throw new Error(`API_SESSION_MODE must be shared or per-vu, got ${API_SESSION_MODE}.`);
   }
+  if (API_SESSION_MODE === 'shared' && ['api', 'auth-mix'].includes(MODE)) {
+    const plannedSeconds = durationSeconds(RAMP_DURATION) + durationSeconds(DURATION) + 45;
+    if (plannedSeconds > SHARED_SESSION_TTL_SECONDS - SHARED_SESSION_SAFETY_SECONDS) {
+      throw new Error(
+        `Shared API session would outlive its JWT: planned ${plannedSeconds}s exceeds `
+        + `${SHARED_SESSION_TTL_SECONDS - SHARED_SESSION_SAFETY_SECONDS}s. `
+        + 'Shorten the run or use API_SESSION_MODE=per-vu.'
+      );
+    }
+  }
   if (MODE === 'signup') {
     if (__ENV.ALLOW_SIGNUP_LOAD !== 'STAGING_EMAIL_SINK_CONFIGURED') {
       throw new Error('Signup load is blocked. Set ALLOW_SIGNUP_LOAD=STAGING_EMAIL_SINK_CONFIGURED only on a dedicated Auth project with an email sink.');
@@ -428,4 +440,21 @@ function positiveNumber(name, fallback) {
   const value = __ENV[name] === undefined ? fallback : Number(__ENV[name]);
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number.`);
   return value;
+}
+
+function durationSeconds(raw) {
+  const source = String(raw).trim();
+  const unitSeconds = { ms: 0.001, s: 1, m: 60, h: 3_600 };
+  const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
+  let total = 0;
+  let consumed = '';
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    total += Number(match[1]) * unitSeconds[match[2]];
+    consumed += match[0];
+  }
+  if (!Number.isFinite(total) || total <= 0 || consumed !== source) {
+    throw new Error(`Invalid k6 duration: ${source}`);
+  }
+  return total;
 }

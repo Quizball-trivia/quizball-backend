@@ -10,6 +10,8 @@ LOCATION="${HCLOUD_LOCATION:-nbg1}"
 IMAGE="${HCLOUD_IMAGE:-ubuntu-24.04}"
 SSH_KEY_NAME="${HCLOUD_SSH_KEY_NAME:-quizball-staging-load}"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
+FIREWALL_NAME="${HCLOUD_FIREWALL_NAME:-quizball-staging-load}"
+SSH_ALLOWED_CIDRS="${HCLOUD_SSH_ALLOWED_CIDRS:-}"
 MAX_TOTAL_SERVERS="${MAX_TOTAL_SERVERS:-21}"
 MAX_LIFETIME_HOURS="${MAX_LIFETIME_HOURS:-24}"
 SERVER_BUDGET_EUR="${SERVER_BUDGET_EUR:-15}"
@@ -128,7 +130,84 @@ ensure_ssh_key() {
       --public-key-from-file "$SSH_KEY_PATH.pub" \
       --label 'quizball-load=true' \
       --label "campaign=$CAMPAIGN_ID" >/dev/null
+    return
   fi
+  local remote_json remote_key local_key
+  remote_json="$("${HCLOUD[@]}" ssh-key describe "$SSH_KEY_NAME" -o json)"
+  remote_key="$(jq -r '.public_key // empty' <<< "$remote_json" | awk '{print $1 " " $2}')"
+  local_key="$(awk '{print $1 " " $2}' "$SSH_KEY_PATH.pub")"
+  [[ -n "$remote_key" && "$remote_key" == "$local_key" ]] \
+    || die "Hetzner SSH key '$SSH_KEY_NAME' does not match $SSH_KEY_PATH.pub"
+}
+
+ssh_allowed_cidrs() {
+  local raw="$SSH_ALLOWED_CIDRS"
+  if [[ -z "$raw" ]]; then
+    local operator_ip
+    operator_ip="$(curl -4 -fsS --connect-timeout 5 --max-time 10 https://api.ipify.org)" \
+      || die 'could not determine operator IPv4; set HCLOUD_SSH_ALLOWED_CIDRS explicitly'
+    raw="$operator_ip/32"
+  fi
+  local cidr
+  while IFS= read -r cidr; do
+    cidr="$(xargs <<< "$cidr")"
+    [[ "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
+      || die "invalid IPv4 CIDR in HCLOUD_SSH_ALLOWED_CIDRS: '$cidr'"
+    printf '%s\n' "$cidr"
+  done < <(tr ',' '\n' <<< "$raw")
+}
+
+ensure_firewall() {
+  local cidrs desired_json
+  cidrs="$(ssh_allowed_cidrs | sort -u)"
+  desired_json="$(jq -Rsc 'split("\n") | map(select(length > 0)) | sort' <<< "$cidrs")"
+  if ! "${HCLOUD[@]}" firewall describe "$FIREWALL_NAME" >/dev/null 2>&1; then
+    jq -n --argjson sources "$desired_json" '[{
+      direction: "in",
+      protocol: "tcp",
+      port: "22",
+      source_ips: $sources,
+      destination_ips: [],
+      description: "QuizBall load control-plane SSH"
+    }]' | "${HCLOUD[@]}" firewall create \
+      --name "$FIREWALL_NAME" \
+      --rules-file - \
+      --label 'quizball-load=true' \
+      --label "campaign=$CAMPAIGN_ID" >/dev/null
+    return
+  fi
+
+  local firewall_json actual_json unexpected_rules
+  firewall_json="$("${HCLOUD[@]}" firewall describe "$FIREWALL_NAME" -o json)"
+  [[ "$(jq -r '.labels["quizball-load"] // ""' <<< "$firewall_json")" == 'true' ]] \
+    || die "firewall '$FIREWALL_NAME' is not owned by the load-test campaign"
+  [[ "$(jq -r '.labels.campaign // ""' <<< "$firewall_json")" == "$CAMPAIGN_ID" ]] \
+    || die "firewall '$FIREWALL_NAME' belongs to a different campaign"
+  actual_json="$(jq -c '[.rules[] | select(.direction == "in" and .protocol == "tcp" and .port == "22") | .source_ips[]] | unique | sort' <<< "$firewall_json")"
+  unexpected_rules="$(jq '[.rules[] | select(.direction == "in" and (.protocol != "tcp" or .port != "22"))] | length' <<< "$firewall_json")"
+  [[ "$unexpected_rules" == '0' && "$actual_json" == "$desired_json" ]] \
+    || die "firewall '$FIREWALL_NAME' does not exactly restrict SSH to the requested operator CIDRs"
+}
+
+enforce_campaign_budget() {
+  local existing_json="$1"
+  local needed="$2"
+  local new_type="$3"
+  local existing_hourly='0' existing_type price
+  while IFS= read -r existing_type; do
+    validate_type "$existing_type"
+    price="$(hourly_eur "$existing_type")"
+    existing_hourly="$(awk -v total="$existing_hourly" -v add="$price" 'BEGIN { print total + add }')"
+  done < <(jq -r '.[] | select(.status != "deleting") | .server_type.name' <<< "$existing_json")
+  local new_hourly projected
+  new_hourly="$(hourly_eur "$new_type")"
+  projected="$(awk -v existing="$existing_hourly" -v needed="$needed" -v add="$new_hourly" -v lifetime="$MAX_LIFETIME_HOURS" \
+    'BEGIN { print (existing + needed * add) * lifetime }')"
+  awk -v projected="$projected" -v cap="$SERVER_BUDGET_EUR" \
+    'BEGIN { if (projected > cap) exit 1 }' \
+    || die "campaign-wide projected server cost €$projected exceeds cap €$SERVER_BUDGET_EUR"
+  printf 'Campaign-wide max-lifetime server projection: €%.2f / €%.2f (ex VAT)\n' \
+    "$projected" "$SERVER_BUDGET_EUR"
 }
 
 preflight() {
@@ -146,18 +225,23 @@ provision() {
   local count="$2"
   local type="$3"
   validate_role "$role"
-  estimate "$count" "$type"
+  [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 && count <= MAX_TOTAL_SERVERS )) \
+    || die "count must be 1..$MAX_TOTAL_SERVERS"
+  validate_type "$type"
   preflight
-  ensure_ssh_key
 
-  local existing_total
-  existing_total="$(servers_json all | jq 'length')"
+  local existing_json existing_total
+  existing_json="$(servers_json all)"
+  existing_total="$(jq '[.[] | select(.status != "deleting")] | length' <<< "$existing_json")"
   local existing_role
-  existing_role="$(servers_json "$role" | jq 'length')"
+  existing_role="$(servers_json "$role" | jq '[.[] | select(.status != "deleting")] | length')"
   local needed=$((count - existing_role))
   (( needed >= 0 )) || die "$role fleet already has $existing_role servers; refusing implicit shrink"
   (( existing_total + needed <= MAX_TOTAL_SERVERS )) \
     || die "would exceed campaign server cap $MAX_TOTAL_SERVERS"
+  enforce_campaign_budget "$existing_json" "$needed" "$type"
+  ensure_ssh_key
+  ensure_firewall
 
   local index name
   for ((index = existing_role; index < count; index += 1)); do
@@ -169,6 +253,7 @@ provision() {
       --image "$IMAGE" \
       --location "$LOCATION" \
       --ssh-key "$SSH_KEY_NAME" \
+      --firewall "$FIREWALL_NAME" \
       --without-ipv6 \
       --user-data-from-file "$SCRIPT_DIR/cloud-init.yaml" \
       --label 'quizball-load=true' \
@@ -215,8 +300,8 @@ upload_one() {
 upload() {
   local role="$1"
   validate_role "$role"
-  git -C "$REPO_ROOT" diff --quiet || die 'worktree has uncommitted changes; commit the exact tested source before upload'
-  git -C "$REPO_ROOT" diff --cached --quiet || die 'worktree has staged but uncommitted changes'
+  [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" ]] \
+    || die 'worktree has uncommitted or untracked changes; commit the exact tested source before upload'
   local archive
   archive="$(mktemp -t quizball-load.XXXXXX.tar.gz)"
   trap "rm -f '$archive'" EXIT

@@ -71,4 +71,12 @@ describe('distributed matchmaking aggregate', () => {
     expect(aggregate.verdict.violations.join(' ')).toContain('duplicate user ids');
     expect(aggregate.verdict.violations.join(' ')).toContain('unique clients');
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1])(
+    'rejects an invalid p95 threshold (%s)',
+    (threshold) => {
+      expect(() => aggregateMatchmakingReports([worker(0, 2), worker(2, 2)], 4, threshold))
+        .toThrow('maxMatchFoundP95Ms must be a positive finite number');
+    }
+  );
 });

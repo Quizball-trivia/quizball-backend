@@ -145,8 +145,15 @@ export async function loginChaosUser(
       ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
     },
   });
-  const me = (await meRes.json().catch(() => ({}))) as { id?: string };
-  if (!meRes.ok || !me.id) {
+  const me: unknown = await meRes.json().catch(() => null);
+  const userId = typeof me === 'object'
+    && me !== null
+    && 'id' in me
+    && typeof me.id === 'string'
+    && me.id.trim().length > 0
+    ? me.id
+    : null;
+  if (!meRes.ok || !userId) {
     // A freshly issued token can still hit a transient Auth introspection 5xx
     // (surfaced by the API as 401). Treat that preparation-only condition as
     // retryable; the next attempt obtains a fresh token and verifies it again.
@@ -156,7 +163,7 @@ export async function loginChaosUser(
       meRes.status === 401 || meRes.status === 429 || meRes.status >= 500
     );
   }
-  return { token: body.access_token, userId: me.id };
+  return { token: body.access_token, userId };
 }
 
 function createLoginPacer(intervalMs: number): () => Promise<void> {

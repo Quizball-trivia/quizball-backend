@@ -14,13 +14,19 @@ function value(argv: string[], key: string): string | undefined {
 
 function assertStagingDatabase(databaseUrl: string): void {
   const parsed = new URL(databaseUrl);
-  const pointsAtStaging = databaseUrl.includes(STAGING_PROJECT_REF);
-  const pointsAtProd = databaseUrl.includes(PROD_PROJECT_REF);
+  const username = decodeURIComponent(parsed.username);
+  const pointsAtStaging = username.endsWith(`.${STAGING_PROJECT_REF}`)
+    || parsed.hostname.includes(STAGING_PROJECT_REF);
+  const pointsAtProd = username.endsWith(`.${PROD_PROJECT_REF}`)
+    || parsed.hostname.includes(PROD_PROJECT_REF);
   if (!pointsAtStaging || pointsAtProd) {
     throw new Error('Refusing connection termination: DATABASE_URL is not the staging Supabase project.');
   }
   if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') {
     throw new Error('Refusing connection termination: DATABASE_URL must use Postgres.');
+  }
+  if (!parsed.hostname.endsWith('.pooler.supabase.com') || parsed.port !== '6543') {
+    throw new Error('Refusing connection termination: expected the staging Supavisor transaction-pooler URL.');
   }
 }
 

@@ -229,11 +229,16 @@ export const statsRepo = {
         COUNT(*) FILTER (WHERE m.ended_at >= ${eventStartIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS event_draws
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
-      JOIN (
-        SELECT match_id, COUNT(*) AS player_count
-        FROM match_players
-        GROUP BY match_id
-      ) pc ON pc.match_id = m.id
+      -- Count peers only for this user's already-selected matches. The former
+      -- global GROUP BY scanned all match_players rows on every stats request,
+      -- so its cost grew with the entire match-history table rather than with
+      -- the caller's history. The match_players PK starts with match_id, making
+      -- this lateral count a small index-only lookup per selected match.
+      JOIN LATERAL (
+        SELECT COUNT(*) AS player_count
+        FROM match_players peers
+        WHERE peers.match_id = m.id
+      ) pc ON true
       WHERE mp.user_id = ${userId}
         AND m.mode = 'ranked'
         AND m.status = 'completed'

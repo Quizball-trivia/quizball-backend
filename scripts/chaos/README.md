@@ -37,6 +37,20 @@ There are two load shapes:
 # Standard pressure run: 100 rps per route, 30s, 25-user fleet, against staging
 npx tsx scripts/chaos/run.ts --target=staging --rps=100 --duration=30 --users=25
 
+# Dedicated human matchmaking queue storm. Every user must pair reciprocally
+# with another test user; AI fallback, duplicate/self-pairs, and ghost cleanup fail.
+npm run chaos:matchmaking -- --target=local --clients=100
+npm run chaos:matchmaking -- --target=staging --clients=500 --offset=0
+
+# Distributed workers use disjoint shards (example: five 1k workers for 5k).
+# Connections are prepared first, then each worker compresses joins into 1s.
+# worker 1: --clients=1000 --offset=0; worker 2: --clients=1000 --offset=1000; etc.
+# Only one distributed worker should collect direct DB stats; pass
+# `--no-db-stats` to the others so monitoring does not become test traffic.
+# Queue-storm cleanup sends one cancellation per matched lobby, ramps those
+# cancellations within the match-found modal, and ramps ordinary disconnects.
+# A simultaneous disconnect storm is measured as a separate chaos scenario.
+
 # Include ticket/coin-draining writes
 npx tsx scripts/chaos/run.ts --target=staging --rps=50 --duration=20 --include-spend
 
@@ -58,8 +72,11 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 
 # Production-shaped 100-player raid from distributed source IPs
 npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
-  --total-rps=50 --duration=300 --ramp-s=60 --login-storm \
-  --login-ramp-s=60
+  --offset=0 --total-rps=50 --duration=300 --ramp-s=60
+
+# Distributed workers must use disjoint user shards. For ten 500-player workers,
+# use offsets 0,500,1000,...,4500. Reusing an offset makes multiple sockets act
+# as the same account and invalidates matchmaking/correctness results.
 
 # Find the sustained ceiling. Stops at the first failed SLO level.
 npm run chaos:capacity -- --target=staging \
@@ -81,6 +98,7 @@ paced bootstrap plus this harness for backend/database/gameplay capacity.
 | `--duration` | `30` (`300` with sockets) | run length in seconds |
 | `--drain-s` | `360` | hard maximum for matches already in progress after offered load stops |
 | `--users` | `25` | size of provisioned test-user fleet |
+| `--offset` | `0` | first numeric user suffix; must be disjoint across distributed workers |
 | `--include-spend` | off | also hit ticket/coin-draining routes |
 | `--only` | all | comma list of route names |
 | `--no-db-stats` | off | skip the pg_stat_statements capture |
@@ -91,6 +109,7 @@ paced bootstrap plus this harness for backend/database/gameplay capacity.
 | `--legacy-protocol` | off | emulate the old React Native protocol by skipping `draft:ui_ready`, kickoff/resume UI-ready, and reveal acks |
 | `--ramp-s` | `10` | seconds to stagger initial socket queue joins |
 | `--matches-per-client` | unset | stop each socket client after this many matches; if set without `--duration`, socket clients run until this count |
+| `--start-at` | unset | future ISO/Unix timestamp used to synchronize distributed workers after preparation |
 | `--login-storm` | off | re-login every provisioned user once during the run |
 | `--login-ramp-s` | `60` | time over which login arrivals are spread |
 | `--report` | generated path | full JSON report path for automation/capacity ladders |

@@ -21,11 +21,20 @@ const START_RATE = nonNegativeInt('START_RATE', Math.min(1, RATE));
 const SHARD_START = nonNegativeInt('SHARD_START', 0);
 const RAMP_DURATION = __ENV.RAMP_DURATION || '30s';
 const DURATION = __ENV.DURATION || '2m';
+const TIME_UNIT = __ENV.TIME_UNIT || '1s';
 const REFRESH_PAUSE_SECONDS = positiveNumber('REFRESH_PAUSE_SECONDS', 5);
 const PASSWORD = __ENV.TEST_PASSWORD || 'ChaosTest12345!';
 const EMAIL_PREFIX = __ENV.EMAIL_PREFIX || 'chaos';
 const EMAIL_DOMAIN = __ENV.EMAIL_DOMAIN || (TARGET === 'staging' ? 'quizball.io' : 'example.com');
 const BYPASS_TOKEN = __ENV.CHAOS_BYPASS_TOKEN || '';
+// API capacity and Auth capacity are separate tests. Arrival-rate executors may
+// schedule work across every preallocated VU, so a "login once per VU" design
+// can create a hidden login storm before the API load reaches its target. The
+// default shared session performs exactly one setup login; use per-vu only when
+// intentionally testing a realistic spread of user identities at a safe rate.
+const API_SESSION_MODE = (__ENV.API_SESSION_MODE || 'shared').toLowerCase();
+const SHARED_SESSION_TTL_SECONDS = 3_600;
+const SHARED_SESSION_SAFETY_SECONDS = 60;
 
 const unexpectedFailures = new Rate('unexpected_failures');
 const rateLimitedResponses = new Counter('rate_limited_responses');
@@ -49,7 +58,7 @@ export const options = buildOptions();
 const SAFE_API_ROUTES = [
   { name: 'categories.list', path: '/api/v1/categories?limit=100&is_active=true&page=1', weight: 6, auth: false },
   { name: 'categories.list.minq', path: '/api/v1/categories?limit=100&is_active=true&min_questions=5', weight: 4, auth: false },
-  { name: 'questions.list', path: '/api/v1/questions?limit=50&page=1&status=published', weight: 5, auth: true },
+  { name: 'questions.list', path: '/api/v1/questions?limit=50&page=1', weight: 5, auth: false },
   { name: 'featured.list', path: '/api/v1/featured-categories', weight: 3, auth: false },
   { name: 'store.products', path: '/api/v1/store/products', weight: 3, auth: false },
   { name: 'users.me', path: '/api/v1/users/me', weight: 6, auth: true },
@@ -76,6 +85,16 @@ const SAFE_API_ROUTES = [
 let apiSession = null;
 let refreshSession = null;
 let walletSession = null;
+
+export function setup() {
+  if (!['api', 'auth-mix'].includes(MODE) || API_SESSION_MODE !== 'shared') return {};
+
+  const session = login(SHARD_START);
+  if (!session) {
+    throw new Error('API shared-session setup failed; refusing to run an unauthenticated capacity test.');
+  }
+  return { apiSession: session };
+}
 
 export function smokeJourney() {
   const session = login(userIndexForVu());
@@ -120,14 +139,22 @@ export function walletRequest() {
   getWallet(walletSession.accessToken);
 }
 
-export function weightedApiRequest() {
+export function weightedApiRequest(setupData) {
   const route = weightedRoute(exec.scenario.iterationInTest);
-  if (route.auth && !apiSession) {
-    apiSession = login(userIndexForVu());
-    if (!apiSession) return;
+  let session = null;
+  if (route.auth) {
+    if (API_SESSION_MODE === 'shared') {
+      session = setupData?.apiSession || null;
+    } else {
+      if (!apiSession) apiSession = login(userIndexForVu());
+      session = apiSession;
+    }
+    if (!session) {
+      throw new Error('Authenticated API request has no session.');
+    }
   }
 
-  const headers = route.auth ? authHeaders(apiSession.accessToken) : baseHeaders();
+  const headers = route.auth ? authHeaders(session.accessToken) : baseHeaders();
   const response = http.get(`${API_BASE}${route.path}`, {
     headers,
     tags: { endpoint: route.name, kind: 'app' },
@@ -298,7 +325,7 @@ function buildOptions() {
   const commonArrival = {
     executor: 'ramping-arrival-rate',
     startRate: START_RATE,
-    timeUnit: '1s',
+    timeUnit: TIME_UNIT,
     preAllocatedVUs: PREALLOCATED_VUS,
     maxVUs: MAX_VUS,
     stages: [
@@ -370,6 +397,19 @@ function assertSafeConfiguration() {
   if (MAX_VUS < PREALLOCATED_VUS) {
     throw new Error(`MAX_VUS (${MAX_VUS}) cannot be lower than PREALLOCATED_VUS (${PREALLOCATED_VUS}).`);
   }
+  if (!['shared', 'per-vu'].includes(API_SESSION_MODE)) {
+    throw new Error(`API_SESSION_MODE must be shared or per-vu, got ${API_SESSION_MODE}.`);
+  }
+  if (API_SESSION_MODE === 'shared' && ['api', 'auth-mix'].includes(MODE)) {
+    const plannedSeconds = durationSeconds(RAMP_DURATION, true) + durationSeconds(DURATION) + 45;
+    if (plannedSeconds > SHARED_SESSION_TTL_SECONDS - SHARED_SESSION_SAFETY_SECONDS) {
+      throw new Error(
+        `Shared API session would outlive its JWT: planned ${plannedSeconds}s exceeds `
+        + `${SHARED_SESSION_TTL_SECONDS - SHARED_SESSION_SAFETY_SECONDS}s. `
+        + 'Shorten the run or use API_SESSION_MODE=per-vu.'
+      );
+    }
+  }
   if (MODE === 'signup') {
     if (__ENV.ALLOW_SIGNUP_LOAD !== 'STAGING_EMAIL_SINK_CONFIGURED') {
       throw new Error('Signup load is blocked. Set ALLOW_SIGNUP_LOAD=STAGING_EMAIL_SINK_CONFIGURED only on a dedicated Auth project with an email sink.');
@@ -400,4 +440,26 @@ function positiveNumber(name, fallback) {
   const value = __ENV[name] === undefined ? fallback : Number(__ENV[name]);
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number.`);
   return value;
+}
+
+function durationSeconds(raw, allowZero = false) {
+  const source = String(raw).trim();
+  const unitSeconds = { ms: 0.001, s: 1, m: 60, h: 3_600 };
+  const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
+  let total = 0;
+  let consumed = '';
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    total += Number(match[1]) * unitSeconds[match[2]];
+    consumed += match[0];
+  }
+  if (
+    !Number.isFinite(total)
+    || total < 0
+    || (!allowZero && total === 0)
+    || consumed !== source
+  ) {
+    throw new Error(`Invalid k6 duration: ${source}`);
+  }
+  return total;
 }

@@ -1,0 +1,53 @@
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - rsync
+  - tar
+  - unzip
+
+write_files:
+  - path: /usr/local/sbin/quizball-load-bootstrap
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y nodejs
+
+      curl -fsSL https://dl.k6.io/key.gpg \
+        | gpg --dearmor --yes -o /usr/share/keyrings/k6-archive-keyring.gpg
+      echo 'deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main' \
+        > /etc/apt/sources.list.d/k6.list
+      apt-get update
+      apt-get install -y k6
+
+      id loadtest >/dev/null 2>&1 || useradd --create-home --shell /bin/bash loadtest
+      mkdir -p /opt/quizball-load/app /opt/quizball-load/reports
+      chown -R loadtest:loadtest /opt/quizball-load
+
+      cat > /etc/sysctl.d/90-quizball-load.conf <<'EOF'
+      fs.file-max = 1000000
+      net.ipv4.ip_local_port_range = 1024 65535
+      net.ipv4.tcp_fin_timeout = 15
+      EOF
+      sysctl --system
+
+      cat > /etc/security/limits.d/90-quizball-load.conf <<'EOF'
+      loadtest soft nofile 262144
+      loadtest hard nofile 262144
+      EOF
+
+      node --version
+      npm --version
+      k6 version
+      touch /var/lib/quizball-load-ready
+
+runcmd:
+  - /usr/local/sbin/quizball-load-bootstrap > /var/log/quizball-load-bootstrap.log 2>&1

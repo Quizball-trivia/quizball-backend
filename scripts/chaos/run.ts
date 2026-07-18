@@ -27,6 +27,7 @@
 //   --ramp-s        seconds to stagger socket queue joins (default 10)
 //   --matches-per-client  socket matches per client; overrides duration stop when duration omitted
 //   --start-at      synchronized UTC time/epoch for distributed workers (optional)
+//   --expect-socket-error  socket error prefix expected from an injected fault; repeatable/comma list
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +84,7 @@ interface Args {
   loginRampSec: number;
   reportPath?: string;
   startAtMs?: number;
+  expectedSocketErrorPrefixes: string[];
 }
 
 function parseStartAt(raw: string | undefined): number | undefined {
@@ -173,6 +175,10 @@ function parseArgs(argv: string[]): Args {
     loginRampSec: Math.max(0, num('login-ramp-s', 60)),
     reportPath: get('report'),
     startAtMs: parseStartAt(get('start-at')),
+    expectedSocketErrorPrefixes: getAll('expect-socket-error')
+      .flatMap((value) => value.split(','))
+      .map((value) => value.trim())
+      .filter(Boolean),
   };
 }
 
@@ -605,7 +611,8 @@ async function main() {
     activityPeak,
     appStats,
     undefined,
-    expectedAppInstances
+    expectedAppInstances,
+    args.expectedSocketErrorPrefixes
   );
   console.log('\n' + '═'.repeat(72));
   console.log(verdict.ok ? 'SLO VERDICT: PASS' : 'SLO VERDICT: FAIL');
@@ -628,6 +635,7 @@ async function main() {
       loginStorm: args.loginStorm,
       loginRampSec: args.loginRampSec,
       startAt: args.startAtMs ? new Date(args.startAtMs).toISOString() : null,
+      expectedSocketErrorPrefixes: args.expectedSocketErrorPrefixes,
       includeSpend: args.includeSpend,
       flapRate: args.flapRate,
       flapStages: args.flapStages,

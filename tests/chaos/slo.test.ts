@@ -52,7 +52,7 @@ describe('chaos SLO verdict', () => {
     expect(verdict.violations.join(' ')).toContain('DB longest active query');
   });
 
-  it('fails when one Node.js CPU core is saturated despite spare machine capacity', () => {
+  it('fails when a single-core container is CPU saturated', () => {
     const verdict = evaluateChaosRun([], null, null, {
       requestFailures: 0,
       instances: {
@@ -67,9 +67,9 @@ describe('chaos SLO verdict', () => {
             newTimeouts: 0,
           },
           runtime: {
-            cpuPct: 12,
+            cpuPct: 96,
             cpuCorePct: 96,
-            cpuCapacityCores: 8,
+            cpuCapacityCores: 1,
             eventLoopP99Ms: 20,
             eventLoopMaxMs: 30,
             rssMb: 200,
@@ -80,7 +80,38 @@ describe('chaos SLO verdict', () => {
     }, undefined, 1);
 
     expect(verdict.ok).toBe(false);
+    expect(verdict.violations.join(' ')).toContain('CPU capacity 96%');
     expect(verdict.violations.join(' ')).toContain('CPU core 96%');
+  });
+
+  it('does not mistake multi-thread process CPU for event-loop saturation', () => {
+    const verdict = evaluateChaosRun([], null, null, {
+      requestFailures: 0,
+      instances: {
+        'staging-1': {
+          samples: 10,
+          healthFailures: 0,
+          pool: {
+            active: 2,
+            queued: 0,
+            maxWaitMs: 0,
+            newRejections: 0,
+            newTimeouts: 0,
+          },
+          runtime: {
+            cpuPct: 15.9,
+            cpuCorePct: 127,
+            cpuCapacityCores: 8,
+            eventLoopP99Ms: 24.3,
+            eventLoopMaxMs: 50.9,
+            rssMb: 224,
+            heapUsedMb: 123,
+          },
+        },
+      },
+    }, undefined, 1);
+
+    expect(verdict).toMatchObject({ ok: true, violations: [] });
   });
 
   it('fails when a supposedly valid route returns client errors', () => {
@@ -139,5 +170,42 @@ describe('chaos SLO verdict', () => {
 
     expect(verdict.ok).toBe(false);
     expect(verdict.violations.join(' ')).toContain('socket match starts: 20/100 expected');
+  });
+
+  it('allows only explicitly expected socket errors for a fault scenario', () => {
+    const socket = {
+      clients: 2,
+      matchesStarted: 1,
+      matchesCompleted: 1,
+      matchesExpectedToComplete: 1,
+      deadlineCutoffs: { beforeMatchStart: 0, duringMatch: 0 },
+      wrongfulForfeits: 0,
+      deadSearch: 0,
+      banRollback: 0,
+      gateAbandon: 0,
+      legacyDraftStall: 0,
+      socketErrors: { 'server:MATCH_PAUSED': 2 },
+      latenciesMs: {
+        answerToAck: [10],
+        roundResultToNextQuestion: [20],
+      },
+      percentiles: {
+        queueJoinToMatchStart: { p95: 1_500 },
+      },
+    } as unknown as NonNullable<Parameters<typeof evaluateChaosRun>[1]>;
+
+    const strictVerdict = evaluateChaosRun([], socket, null, null, undefined, 1);
+    const faultVerdict = evaluateChaosRun(
+      [],
+      socket,
+      null,
+      null,
+      undefined,
+      1,
+      ['server:MATCH_PAUSED']
+    );
+
+    expect(strictVerdict.violations).toContain('unexpected socket errors: 2');
+    expect(faultVerdict).toMatchObject({ ok: true, violations: [] });
   });
 });

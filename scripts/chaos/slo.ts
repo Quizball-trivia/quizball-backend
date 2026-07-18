@@ -45,7 +45,8 @@ export function evaluateChaosRun(
   dbPeak: ActivitySnapshot | null,
   app: AppStatsSummary | null = null,
   thresholds: ChaosSloThresholds = DEFAULT_CHAOS_SLOS,
-  expectedAppInstances = 2
+  expectedAppInstances = 2,
+  expectedSocketErrorPrefixes: readonly string[] = []
 ): ChaosVerdict {
   const violations: string[] = [];
   const totalSent = routes.reduce((sum, route) => sum + route.sent, 0);
@@ -123,7 +124,10 @@ export function evaluateChaosRun(
     if (socket.gateAbandon > 0) violations.push(`kickoff gate abandons: ${socket.gateAbandon}`);
     if (socket.legacyDraftStall > 0) violations.push(`legacy draft stalls: ${socket.legacyDraftStall}`);
     const unexpectedSocketErrors = Object.entries(socket.socketErrors)
-      .filter(([name]) => !name.startsWith('stage_deadline_'))
+      .filter(([name]) => (
+        !name.startsWith('stage_deadline_')
+        && !expectedSocketErrorPrefixes.some((prefix) => name.startsWith(prefix))
+      ))
       .reduce((sum, [, count]) => sum + count, 0);
     if (unexpectedSocketErrors > 0) {
       violations.push(`unexpected socket errors: ${unexpectedSocketErrors}`);
@@ -164,7 +168,14 @@ export function evaluateChaosRun(
           `${name} CPU capacity ${instance.runtime.cpuPct}% > ${thresholds.maxCpuPct}%`
         );
       }
-      if ((instance.runtime.cpuCorePct ?? 0) > thresholds.maxCpuCorePct) {
+      // process.cpuUsage() includes libuv/worker-thread CPU, so this value can
+      // legitimately exceed 100% on a multi-core container without saturating
+      // the JavaScript event loop. On multi-core instances the capacity-wide
+      // cpuPct and event-loop delay gates above are the authoritative signals.
+      if (
+        (instance.runtime.cpuCapacityCores ?? 1) <= 1
+        && (instance.runtime.cpuCorePct ?? 0) > thresholds.maxCpuCorePct
+      ) {
         violations.push(
           `${name} CPU core ${instance.runtime.cpuCorePct}% > ${thresholds.maxCpuCorePct}%`
         );

@@ -300,6 +300,7 @@ function resolveTarget(args: Args): TargetConfig {
 async function main() {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log('Usage: tsx scripts/chaos/run.ts --target=local|staging [--total-rps=N|--rps=N] [--duration=S] [--users=N] [--sockets=N]');
+    console.log('  --expect-socket-error=PREFIX  expected injected-fault socket error prefix; repeat or comma-separate');
     console.log('Production API, database, and Supabase targets are always blocked.');
     return;
   }

@@ -172,6 +172,12 @@ session-level `pg_advisory_lock` is unsafe through Supavisor transaction mode:
 lock and unlock queries can land on different backend sessions, and an
 interrupted deploy can strand the lock in the pool.
 
+The Railway service uses the `ALWAYS` restart policy because the API is
+stateless. `ON_FAILURE` does not replace a replica that exits cleanly (for
+example after `SIGTERM`), which can leave a two-replica service indefinitely at
+half capacity. Planned deployment teardown is still controlled by Railway's
+orchestrator.
+
 After finding a passing level, rerun that one level with `--flap-rate=0.5` and
 `--flap-stage=search,draft,gate,match` as a separate chaos proof. Keep the
 generated report directory with the release evidence.

@@ -59,6 +59,13 @@ npm run load:k6:inspect
 # Two-user staging journey. Does not bypass the normal rate limiter.
 npm run load:k6:smoke
 
+# Weighted application API capacity. API mode performs one setup login and
+# shares that session across arrival-rate workers by default.
+TARGET=staging MODE=api USERS=100 RATE=100 START_RATE=25 \
+  RAMP_DURATION=2m DURATION=5m PREALLOCATED_VUS=200 MAX_VUS=400 \
+  k6 run --summary-export scripts/load/k6/reports/api-100.json \
+  scripts/load/k6/auth-api.k6.js
+
 # 25 → 100 login arrivals/sec, then hold 100/sec for five minutes
 TARGET=staging MODE=login USERS=500 RATE=100 START_RATE=25 \
   RAMP_DURATION=2m DURATION=5m MAX_VUS=600 \
@@ -81,6 +88,13 @@ TARGET=staging MODE=auth-mix USERS=500 VUS=100 RATE=250 MAX_VUS=800 \
   k6 run --summary-export scripts/load/k6/reports/auth-mix-500.json \
   scripts/load/k6/auth-api.k6.js
 ```
+
+`MODE=api` keeps application-API and Auth capacity separate: it authenticates
+one staging user during `setup()` and shares that session across the
+arrival-rate workers. This prevents the preallocated VU pool from accidentally
+creating a Supabase Auth login storm. Set `API_SESSION_MODE=per-vu` only when
+distinct HTTP identities are required and their login rate is budgeted. Use
+`MODE=login`, `MODE=signup`, and `MODE=refresh` to measure Auth limits directly.
 
 For manual distributed workers, give each runner a disjoint user range with
 `SHARD_START`. For example, five workers can use starts `0`, `1000`, `2000`,

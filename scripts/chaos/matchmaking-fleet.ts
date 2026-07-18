@@ -14,6 +14,10 @@ export interface MatchmakingFleetConfig {
   joinRampSec: number;
   matchTimeoutSec: number;
   cleanupWaitSec: number;
+  cleanupRampSec: number;
+  disconnectRampSec: number;
+  /** Shared join timestamp used to synchronize independently prepared workers. */
+  joinAtMs?: number;
 }
 
 interface ClientObservation {
@@ -48,6 +52,7 @@ export interface MatchmakingFleetSummary {
   invalidPairClients: number;
   cleanupUnconfirmedClients: number;
   matchFoundLatencyMs: number[];
+  pairObservations: MatchmakingPairObservation[];
   percentiles: LatencyReport;
   errorHistogram: Record<string, number>;
   failures: Array<{
@@ -115,6 +120,17 @@ export async function runMatchmakingFleet(
     cleanupConfirmedAt: null,
     errors: [],
   }));
+  const cleanupDelayCapMs = Math.min(cfg.cleanupRampSec * 1_000, 900);
+  const schedulePairCleanup = (observation: ClientObservation) => {
+    if (!observation.lobbyId || !isCleanupLeader(observation)) return;
+    // The server starts the draft 1.2s after match_found. Jitter one cleanup
+    // request per lobby across at most 900ms to avoid a second synchronized
+    // write spike while still cancelling before draft work begins. Comparing
+    // the two user ids elects the same single leader even when the opponents
+    // are running on different distributed load generators.
+    const delayMs = deterministicDelay(observation.lobbyId, cleanupDelayCapMs);
+    setTimeout(() => sendCleanup(observation), delayMs);
+  };
 
   await Promise.all(observations.map(async (observation, index) => {
     const delayMs = cfg.clients > 1
@@ -130,10 +146,17 @@ export async function runMatchmakingFleet(
     }
     observation.connected = true;
     await clearActiveMatch(client);
-    installObservers(observation);
+    installObservers(observation, schedulePairCleanup);
   }));
 
   const connected = observations.filter((observation) => observation.connected);
+  if (cfg.joinAtMs) {
+    const waitMs = cfg.joinAtMs - Date.now();
+    if (waitMs < -5_000) {
+      throw new Error(`Matchmaking worker missed synchronized join time ${new Date(cfg.joinAtMs).toISOString()}.`);
+    }
+    if (waitMs > 0) await sleep(waitMs);
+  }
   const joinStartedAt = Date.now();
   await Promise.all(connected.map(async (observation, index) => {
     const delayMs = connected.length > 1
@@ -154,16 +177,29 @@ export async function runMatchmakingFleet(
     await sleep(100);
   }
 
-  for (const observation of connected) sendCleanup(observation);
+  // Let scheduled per-lobby cancellations fire before the catch-all below.
+  // Otherwise a fast successful run would collapse them back into one burst.
+  if (cleanupDelayCapMs > 0) await sleep(cleanupDelayCapMs + 25);
+  // Catch unmatched/partial observations and any cleanup timer that has not
+  // fired yet. sendCleanup is idempotent, so scheduled timers can safely race.
+  const cleanupLeaders = selectCleanupLeaders(connected);
+  for (const observation of cleanupLeaders) sendCleanup(observation);
   await sleep(cfg.cleanupWaitSec * 1_000);
-  for (const observation of observations) observation.client?.disconnect();
+  await Promise.all(observations.map(async (observation, index) => {
+    const delayMs = observations.length > 1
+      ? Math.round(cfg.disconnectRampSec * 1_000 * index / observations.length)
+      : 0;
+    if (delayMs > 0) await sleep(delayMs);
+    observation.client?.disconnect();
+  }));
 
   return summarizeMatchmakingFleet(observations, startedAtMs, Date.now());
 }
 
 export function evaluateMatchmakingFleet(
   summary: MatchmakingFleetSummary,
-  maxMatchFoundP95Ms = 8_000
+  maxMatchFoundP95Ms = 8_000,
+  deferGlobalPairValidation = false
 ): MatchmakingVerdict {
   const violations: string[] = [];
   if (summary.connectedClients !== summary.clients) {
@@ -172,14 +208,16 @@ export function evaluateMatchmakingFleet(
   if (summary.searchStartedClients !== summary.clients) {
     violations.push(`queue acknowledgements ${summary.searchStartedClients}/${summary.clients}`);
   }
-  if (summary.humanMatchedClients !== summary.clients) {
-    violations.push(`human matches ${summary.humanMatchedClients}/${summary.clients}`);
-  }
-  if (summary.humanPairs !== summary.clients / 2) {
-    violations.push(`valid human pairs ${summary.humanPairs}/${summary.clients / 2}`);
-  }
-  if (summary.aiFallbackClients > 0) {
-    violations.push(`AI fallbacks during human queue storm: ${summary.aiFallbackClients}`);
+  if (!deferGlobalPairValidation) {
+    if (summary.humanMatchedClients !== summary.clients) {
+      violations.push(`human matches ${summary.humanMatchedClients}/${summary.clients}`);
+    }
+    if (summary.humanPairs !== summary.clients / 2) {
+      violations.push(`valid human pairs ${summary.humanPairs}/${summary.clients / 2}`);
+    }
+    if (summary.aiFallbackClients > 0) {
+      violations.push(`AI fallbacks during human queue storm: ${summary.aiFallbackClients}`);
+    }
   }
   if (summary.unmatchedClients > 0) violations.push(`unmatched clients: ${summary.unmatchedClients}`);
   if (summary.duplicateMatchFoundClients > 0) {
@@ -188,7 +226,7 @@ export function evaluateMatchmakingFleet(
   if (summary.selfMatchedClients > 0) {
     violations.push(`self-matched clients: ${summary.selfMatchedClients}`);
   }
-  if (summary.invalidPairClients > 0) {
+  if (!deferGlobalPairValidation && summary.invalidPairClients > 0) {
     violations.push(`asymmetric/invalid pair clients: ${summary.invalidPairClients}`);
   }
   if (summary.cleanupUnconfirmedClients > 0) {
@@ -215,7 +253,10 @@ export function renderMatchmakingFleet(summary: MatchmakingFleetSummary): string
   ].join('\n');
 }
 
-function installObservers(observation: ClientObservation): void {
+function installObservers(
+  observation: ClientObservation,
+  onMatchFound: (observation: ClientObservation) => void
+): void {
   const socket = observation.client!.socket;
   socket.on('ranked:search_started', () => {
     observation.searchStartedAt ??= Date.now();
@@ -227,10 +268,7 @@ function installObservers(observation: ClientObservation): void {
     observation.matchFoundAt = Date.now();
     observation.lobbyId = typeof parsed.lobbyId === 'string' ? parsed.lobbyId : null;
     observation.opponentId = typeof parsed.opponent?.id === 'string' ? parsed.opponent.id : null;
-    // Human-match draft starts 1.2s after match_found. Cancel the pre-match
-    // lobby promptly so a queue-only test does not accidentally play thousands
-    // of matches, while leaving enough time for both emitted events to arrive.
-    setTimeout(() => sendCleanup(observation), 250).unref?.();
+    onMatchFound(observation);
   });
   socket.on('ranked:queue_left', () => {
     observation.cleanupConfirmedAt ??= Date.now();
@@ -239,10 +277,41 @@ function installObservers(observation: ClientObservation): void {
   socket.on('error', (payload: unknown) => observation.errors.push(errorTag(payload)));
 }
 
+function deterministicDelay(value: string, maxDelayMs: number): number {
+  if (maxDelayMs <= 0) return 0;
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (Math.imul(hash, 31) + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) % (maxDelayMs + 1);
+}
+
 function sendCleanup(observation: ClientObservation): void {
   if (observation.cleanupSent || !observation.client?.socket.connected) return;
   observation.cleanupSent = true;
   observation.client.socket.emit('ranked:queue_leave');
+}
+
+function isCleanupLeader(observation: ClientObservation): boolean {
+  return observation.opponentId === null
+    || observation.userId.localeCompare(observation.opponentId) < 0;
+}
+
+function selectCleanupLeaders(observations: ClientObservation[]): ClientObservation[] {
+  const leaders = new Map<string, ClientObservation>();
+  const withoutLobby: ClientObservation[] = [];
+  for (const observation of observations) {
+    if (!isCleanupLeader(observation)) continue;
+    if (!observation.lobbyId) {
+      withoutLobby.push(observation);
+      continue;
+    }
+    const current = leaders.get(observation.lobbyId);
+    if (!current || observation.userId.localeCompare(current.userId) < 0) {
+      leaders.set(observation.lobbyId, observation);
+    }
+  }
+  return [...leaders.values(), ...withoutLobby];
 }
 
 function summarizeMatchmakingFleet(
@@ -299,6 +368,11 @@ function summarizeMatchmakingFleet(
       (observation) => observation.cleanupSent && observation.cleanupConfirmedAt === null
     ).length,
     matchFoundLatencyMs: latencies,
+    pairObservations: observations.map((observation) => ({
+      userId: observation.userId,
+      lobbyId: observation.lobbyId,
+      opponentId: observation.opponentId,
+    })),
     percentiles: latencyReport(latencies),
     errorHistogram,
     failures: failures.slice(0, 500),

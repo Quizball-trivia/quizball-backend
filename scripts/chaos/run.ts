@@ -14,6 +14,7 @@
 //   --rps           target requests/sec PER route (default 100)
 //   --duration      seconds (default 30; 300 when --sockets > 0)
 //   --users         size of the test-user fleet to provision (default 25)
+//   --offset        first numeric test-user suffix for distributed shards (default 0)
 //   --include-spend also hit ticket/coin-draining routes (daily/complete)
 //   --only          comma list of route names to restrict to
 //   --no-db-stats   skip the pg_stat_statements capture
@@ -25,6 +26,7 @@
 //   --legacy-protocol  socket clients skip old-mobile-missing UI-ready/reveal acks
 //   --ramp-s        seconds to stagger socket queue joins (default 10)
 //   --matches-per-client  socket matches per client; overrides duration stop when duration omitted
+//   --start-at      synchronized UTC time/epoch for distributed workers (optional)
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +64,7 @@ interface Args {
   rps: number;
   duration: number;
   users: number;
+  offset: number;
   includeSpend: boolean;
   only: string[] | null;
   dbStats: boolean;
@@ -79,6 +82,19 @@ interface Args {
   loginStorm: boolean;
   loginRampSec: number;
   reportPath?: string;
+  startAtMs?: number;
+}
+
+function parseStartAt(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const numeric = Number(raw);
+  const parsed = Number.isFinite(numeric)
+    ? (numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
+    : Date.parse(raw);
+  if (!Number.isFinite(parsed) || parsed <= Date.now()) {
+    throw new Error('--start-at must be a future ISO timestamp or Unix epoch.');
+  }
+  return parsed;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -126,11 +142,16 @@ function parseArgs(argv: string[]): Args {
   if (totalRps !== undefined && (!Number.isFinite(totalRps) || totalRps <= 0)) {
     throw new Error('--total-rps must be a positive number.');
   }
+  const offset = num('offset', 0);
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error('--offset must be a non-negative integer.');
+  }
   return {
     target,
     rps: num('rps', 100),
     duration: num('duration', sockets > 0 ? 300 : 30),
     users: Math.max(0, Math.floor(num('users', 25))),
+    offset,
     includeSpend: get('include-spend') === 'true',
     only: get('only') ? get('only')!.split(',').map((s) => s.trim()) : null,
     dbStats: get('no-db-stats') !== 'true',
@@ -151,6 +172,7 @@ function parseArgs(argv: string[]): Args {
     loginStorm: get('login-storm') === 'true',
     loginRampSec: Math.max(0, num('login-ramp-s', 60)),
     reportPath: get('report'),
+    startAtMs: parseStartAt(get('start-at')),
   };
 }
 
@@ -287,7 +309,9 @@ async function main() {
   else console.log(`  rps/route   : ${args.rps}`);
   console.log(`  duration    : ${args.duration}s`);
   console.log(`  users       : ${args.users}`);
+  console.log(`  user shard  : ${args.offset}..${args.offset + Math.max(args.users, args.sockets) - 1}`);
   console.log(`  include-spend: ${args.includeSpend}`);
+  if (args.startAtMs) console.log(`  synchronized start: ${new Date(args.startAtMs).toISOString()}`);
   console.log(`  login-storm : ${args.loginStorm}${args.loginStorm ? ` (${args.loginRampSec}s ramp)` : ''}`);
   if (args.sockets > 0) {
     console.log(`  sockets     : ${args.sockets}`);
@@ -329,6 +353,7 @@ async function main() {
       supabaseUrl: target.supabaseUrl,
       serviceRoleKey: target.serviceRoleKey,
       count: userCount,
+      startIndex: args.offset,
       password: 'ChaosTest12345!',
       emailPrefix: 'chaos',
       emailDomain: target.emailDomain,
@@ -367,6 +392,21 @@ async function main() {
   const fixtures = await discoverRouteFixtures(target.apiBase, users[0]!, target.bypassToken);
   console.log('  → category/question/featured fixtures ready.\n');
 
+  // Distributed workers authenticate independently and finish preparation at
+  // slightly different times. Park early workers until a shared timestamp so
+  // the measured traffic overlaps instead of becoming ten smaller serial runs.
+  if (args.startAtMs) {
+    const prepareStatsAt = args.startAtMs - 5_000;
+    if (Date.now() > args.startAtMs + 5_000) {
+      throw new Error(`Missed synchronized start ${new Date(args.startAtMs).toISOString()}.`);
+    }
+    const waitMs = prepareStatsAt - Date.now();
+    if (waitMs > 0) {
+      console.log(`Waiting ${(waitMs / 1000).toFixed(1)}s for the distributed start window…`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, waitMs));
+    }
+  }
+
   // 3) DB stats: reset before.
   const sql = args.dbStats && target.databaseUrl ? makeStatsClient(target.databaseUrl) : null;
   let pgss = false;
@@ -389,6 +429,14 @@ async function main() {
       dbStatErrors.push(message);
       console.warn(`DB stats unavailable before run (${message}); load will continue.`);
     }
+  }
+
+  if (args.startAtMs) {
+    const waitMs = args.startAtMs - Date.now();
+    if (waitMs < -5_000) {
+      throw new Error(`Missed synchronized start ${new Date(args.startAtMs).toISOString()} during DB preparation.`);
+    }
+    if (waitMs > 0) await new Promise((resolveWait) => setTimeout(resolveWait, waitMs));
   }
 
   // 4) Sample activity mid-run (peak pressure snapshot).
@@ -570,6 +618,7 @@ async function main() {
     target: args.target,
     config: {
       users: args.users,
+      offset: args.offset,
       durationSec: args.duration,
       totalRps: args.totalRps ?? null,
       rpsPerRoute: args.totalRps === undefined ? args.rps : null,
@@ -578,6 +627,7 @@ async function main() {
       drainSec: args.drainSec,
       loginStorm: args.loginStorm,
       loginRampSec: args.loginRampSec,
+      startAt: args.startAtMs ? new Date(args.startAtMs).toISOString() : null,
       includeSpend: args.includeSpend,
       flapRate: args.flapRate,
       flapStages: args.flapStages,

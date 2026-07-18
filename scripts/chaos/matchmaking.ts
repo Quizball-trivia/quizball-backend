@@ -22,9 +22,27 @@ interface Args {
   joinRampSec: number;
   timeoutSec: number;
   cleanupWaitSec: number;
+  cleanupRampSec: number;
+  disconnectRampSec: number;
   maxP95Ms: number;
   api?: string;
   report?: string;
+  startAtMs?: number;
+  dbStats: boolean;
+  deferGlobalPairValidation: boolean;
+}
+
+function startAt(argv: string[]): number | undefined {
+  const raw = value(argv, 'start-at');
+  if (raw === undefined) return undefined;
+  const numeric = Number(raw);
+  const parsed = Number.isFinite(numeric)
+    ? (numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
+    : Date.parse(raw);
+  if (!Number.isFinite(parsed) || parsed <= Date.now()) {
+    throw new Error('--start-at must be a future ISO timestamp or Unix epoch.');
+  }
+  return parsed;
 }
 
 interface TargetConfig {
@@ -69,9 +87,15 @@ function parseArgs(argv: string[]): Args {
     joinRampSec: integer(argv, 'join-ramp-s', 1, 0),
     timeoutSec: integer(argv, 'timeout-s', 30, 1),
     cleanupWaitSec: integer(argv, 'cleanup-wait-s', 5, 1),
+    cleanupRampSec: integer(argv, 'cleanup-ramp-s', 1, 0),
+    disconnectRampSec: integer(argv, 'disconnect-ramp-s', 5, 0),
     maxP95Ms: integer(argv, 'max-p95-ms', 8_000, 1),
     api: value(argv, 'api'),
     report: value(argv, 'report'),
+    startAtMs: startAt(argv),
+    dbStats: !(argv.includes('--no-db-stats') || value(argv, 'no-db-stats') === 'true'),
+    deferGlobalPairValidation:
+      argv.includes('--defer-pair-validation') || value(argv, 'defer-pair-validation') === 'true',
   };
 }
 
@@ -139,6 +163,7 @@ async function main(): Promise<void> {
   console.log('MATCHMAKING QUEUE-STORM (PRODUCTION BLOCKED)');
   console.log(`target=${args.target} clients=${args.clients} shard=${args.offset}..${args.offset + args.clients - 1}`);
   console.log(`connectRamp=${args.connectRampSec}s joinRamp=${args.joinRampSec}s timeout=${args.timeoutSec}s`);
+  if (args.startAtMs) console.log(`synchronizedJoin=${new Date(args.startAtMs).toISOString()}`);
   console.log('═'.repeat(72));
 
   console.log(`Provisioning/authenticating ${args.clients} non-production queue users…`);
@@ -164,18 +189,18 @@ async function main(): Promise<void> {
     tickets: 5,
   });
 
-  const sql = makeStatsClient(target.databaseUrl);
-  const before = await snapshotActivity(sql);
+  const sql = args.dbStats ? makeStatsClient(target.databaseUrl) : null;
+  const before = sql ? await snapshotActivity(sql) : null;
   let peak: ActivitySnapshot | null = before;
   let sampleInFlight = false;
-  const sampler = setInterval(() => {
+  const sampler = sql ? setInterval(() => {
     if (sampleInFlight) return;
     sampleInFlight = true;
     void snapshotActivity(sql)
       .then((snapshot) => { peak = mergeActivityPeak(peak, snapshot); })
       .catch(() => {})
       .finally(() => { sampleInFlight = false; });
-  }, 1_000);
+  }, 1_000) : null;
   const appCollector = startAppStatsCollector(target.apiBase, target.bypassToken, 1_000);
 
   const fleet = await runMatchmakingFleet({
@@ -186,15 +211,22 @@ async function main(): Promise<void> {
     joinRampSec: args.joinRampSec,
     matchTimeoutSec: args.timeoutSec,
     cleanupWaitSec: args.cleanupWaitSec,
+    cleanupRampSec: args.cleanupRampSec,
+    disconnectRampSec: args.disconnectRampSec,
+    joinAtMs: args.startAtMs,
   });
-  clearInterval(sampler);
+  if (sampler) clearInterval(sampler);
   while (sampleInFlight) await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-  const after = await snapshotActivity(sql);
-  peak = mergeActivityPeak(peak, after);
+  const after = sql ? await snapshotActivity(sql) : null;
+  if (after) peak = mergeActivityPeak(peak, after);
   const app = await appCollector.stop();
-  await sql.end({ timeout: 5 });
+  if (sql) await sql.end({ timeout: 5 });
 
-  const fleetVerdict = evaluateMatchmakingFleet(fleet, args.maxP95Ms);
+  const fleetVerdict = evaluateMatchmakingFleet(
+    fleet,
+    args.maxP95Ms,
+    args.deferGlobalPairValidation
+  );
   const infraViolations = evaluateInfrastructure(peak, app, args.target === 'staging' ? 2 : 1);
   const verdict = {
     ok: fleetVerdict.ok && infraViolations.length === 0,
@@ -205,6 +237,7 @@ async function main(): Promise<void> {
     schemaVersion: 1,
     target: args.target,
     config: args,
+    pairValidation: args.deferGlobalPairValidation ? 'deferred_to_aggregate' : 'complete',
     fleet,
     database: { before, peak, after },
     application: app,

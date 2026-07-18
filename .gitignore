@@ -58,3 +58,5 @@ game-regression/staging/.env.staging
 game-regression/staging/reports/
 scripts/chaos/reports/
 scripts/load/k6/reports/
+scripts/load/distributed/reports/
+scripts/load/distributed/runtime/

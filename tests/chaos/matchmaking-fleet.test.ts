@@ -22,6 +22,7 @@ function healthySummary(): MatchmakingFleetSummary {
     invalidPairClients: 0,
     cleanupUnconfirmedClients: 0,
     matchFoundLatencyMs: [100, 200],
+    pairObservations: [],
     percentiles: { count: 100, p50: 200, p95: 500, p99: 700, max: 800 },
     errorHistogram: {},
     failures: [],
@@ -50,6 +51,17 @@ describe('matchmaking queue-storm verdict', () => {
     const summary = healthySummary();
     summary.percentiles.p95 = 8_500;
     expect(evaluateMatchmakingFleet(summary).violations.join(' ')).toContain('p95');
+  });
+
+  it('defers cross-worker reciprocity to the aggregate report', () => {
+    const summary = healthySummary();
+    summary.humanMatchedClients = 0;
+    summary.humanPairs = 0;
+    summary.aiFallbackClients = 100;
+    expect(evaluateMatchmakingFleet(summary, 8_000, true)).toMatchObject({
+      ok: true,
+      violations: [],
+    });
   });
 
   it('validates 5,000 reciprocal clients as 2,500 unique human pairs', () => {

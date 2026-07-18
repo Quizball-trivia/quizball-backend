@@ -9,10 +9,13 @@ export interface ChaosSloThresholds {
   maxRouteP95Ms: number;
   maxRouteP99Ms: number;
   maxDbConnectionUtilizationPct: number;
+  maxDbLockWaiters: number;
+  maxDbLongestActiveSec: number;
   maxQueueJoinP95Ms: number;
   maxAppDbWaitMs: number;
   maxEventLoopP99Ms: number;
   maxCpuPct: number;
+  maxCpuCorePct: number;
 }
 
 export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
@@ -21,10 +24,13 @@ export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
   maxRouteP95Ms: 1_500,
   maxRouteP99Ms: 3_000,
   maxDbConnectionUtilizationPct: 75,
+  maxDbLockWaiters: 0,
+  maxDbLongestActiveSec: 30,
   maxQueueJoinP95Ms: 120_000,
   maxAppDbWaitMs: 1_000,
   maxEventLoopP99Ms: 100,
   maxCpuPct: 90,
+  maxCpuCorePct: 90,
 };
 
 export interface ChaosVerdict {
@@ -74,6 +80,16 @@ export function evaluateChaosRun(
   if (dbPeak && dbPeak.utilizationPct > thresholds.maxDbConnectionUtilizationPct) {
     violations.push(
       `DB connections ${dbPeak.utilizationPct.toFixed(1)}% (${dbPeak.total}/${dbPeak.maxConnections}) > ${thresholds.maxDbConnectionUtilizationPct}%`
+    );
+  }
+  if (dbPeak && dbPeak.waitingOnLock > thresholds.maxDbLockWaiters) {
+    violations.push(
+      `DB lock waiters ${dbPeak.waitingOnLock} > ${thresholds.maxDbLockWaiters}`
+    );
+  }
+  if (dbPeak && dbPeak.longestActiveSec > thresholds.maxDbLongestActiveSec) {
+    violations.push(
+      `DB longest active query ${dbPeak.longestActiveSec.toFixed(1)}s > ${thresholds.maxDbLongestActiveSec}s`
     );
   }
 
@@ -146,6 +162,11 @@ export function evaluateChaosRun(
       if (instance.runtime.cpuPct > thresholds.maxCpuPct) {
         violations.push(
           `${name} CPU capacity ${instance.runtime.cpuPct}% > ${thresholds.maxCpuPct}%`
+        );
+      }
+      if ((instance.runtime.cpuCorePct ?? 0) > thresholds.maxCpuCorePct) {
+        violations.push(
+          `${name} CPU core ${instance.runtime.cpuCorePct}% > ${thresholds.maxCpuCorePct}%`
         );
       }
     }

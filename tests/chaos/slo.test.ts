@@ -35,6 +35,54 @@ describe('chaos SLO verdict', () => {
     expect(verdict).toMatchObject({ ok: true, violations: [] });
   });
 
+  it('fails when Postgres has a lock waiter or long-running query', () => {
+    const verdict = evaluateChaosRun([], null, {
+      total: 10,
+      active: 2,
+      idle: 8,
+      idleInTxn: 0,
+      waitingOnLock: 1,
+      longestActiveSec: 31,
+      maxConnections: 60,
+      utilizationPct: 16.7,
+    });
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations.join(' ')).toContain('DB lock waiters');
+    expect(verdict.violations.join(' ')).toContain('DB longest active query');
+  });
+
+  it('fails when one Node.js CPU core is saturated despite spare machine capacity', () => {
+    const verdict = evaluateChaosRun([], null, null, {
+      requestFailures: 0,
+      instances: {
+        'staging-1': {
+          samples: 10,
+          healthFailures: 0,
+          pool: {
+            active: 2,
+            queued: 0,
+            maxWaitMs: 0,
+            newRejections: 0,
+            newTimeouts: 0,
+          },
+          runtime: {
+            cpuPct: 12,
+            cpuCorePct: 96,
+            cpuCapacityCores: 8,
+            eventLoopP99Ms: 20,
+            eventLoopMaxMs: 30,
+            rssMb: 200,
+            heapUsedMb: 100,
+          },
+        },
+      },
+    }, undefined, 1);
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations.join(' ')).toContain('CPU core 96%');
+  });
+
   it('fails when a supposedly valid route returns client errors', () => {
     const verdict = evaluateChaosRun([
       {

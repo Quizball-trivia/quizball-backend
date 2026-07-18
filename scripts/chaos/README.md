@@ -74,6 +74,12 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
   --offset=0 --total-rps=50 --duration=300 --ramp-s=60
 
+# Preview and then inject a staging-only Supavisor connection-closure burst.
+# The script hard-blocks every project except staging, requires max_connections=60,
+# targets only the postgres/Supavisor pooler backends, and requires explicit --apply.
+railway run -- npx tsx scripts/chaos/terminate-staging-connections.ts
+railway run -- npx tsx scripts/chaos/terminate-staging-connections.ts --apply
+
 # Distributed workers must use disjoint user shards. For ten 500-player workers,
 # use offsets 0,500,1000,...,4500. Reusing an offset makes multiple sockets act
 # as the same account and invalidates matchmaking/correctness results.
@@ -153,6 +159,18 @@ rate. A global in-flight cap (2000) sheds load if the target stalls completely.
    The other replica must continue serving, the restarted replica must recover,
    and no request may hang beyond the 15s harness timeout. This validates the
    incident recovery path without terminating production database connections.
+
+For a true single-replica failure, target one Railway deployment instance (for
+example with `railway ssh --deployment-instance <id>`) and terminate that
+container. Do **not** use `railway scale` as the replica-loss injector: Railway
+applies a topology change as a deployment rollout, which can replace every
+WebSocket-owning instance and measures full-rollout recovery instead.
+
+The migration runner must keep its deployment mutex as
+`pg_advisory_xact_lock` inside a dedicated coordinator transaction. A
+session-level `pg_advisory_lock` is unsafe through Supavisor transaction mode:
+lock and unlock queries can land on different backend sessions, and an
+interrupted deploy can strand the lock in the pool.
 
 After finding a passing level, rerun that one level with `--flap-rate=0.5` and
 `--flap-stage=search,draft,gate,match` as a separate chaos proof. Keep the

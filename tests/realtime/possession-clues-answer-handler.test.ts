@@ -297,6 +297,42 @@ describe('handlePossessionCluesAnswer', () => {
     });
   });
 
+  it('accepts a localized surname when only the localized full display name is available', async () => {
+    const cache = makeCache();
+    if (!cache.currentQuestion || cache.currentQuestion.evaluation.kind !== 'clues') {
+      throw new Error('Expected a clues question');
+    }
+    cache.currentQuestion.evaluation.acceptedAnswers = ['Miroslav Klose', 'Klose'];
+    cache.currentQuestion.evaluation.displayAnswer = {
+      en: 'Miroslav Klose',
+      ka: 'მიროსლავ კლოზე',
+    };
+    cache.currentQuestion.reveal = {
+      kind: 'clues',
+      displayAnswer: cache.currentQuestion.evaluation.displayAnswer,
+    };
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const { socket, emitted } = createSocketMock('u1');
+
+    await handlePossessionCluesAnswer(createIoMock(), socket, {
+      kind: 'guess',
+      matchId: 'match-1',
+      qIndex: 4,
+      guess: 'კლოზე',
+      timeMs: 12000,
+    });
+
+    expect(findPayload<MatchAnswerAckPayload>(emitted, 'match:answer_ack')).toMatchObject({
+      isCorrect: true,
+      pointsEarned: 80,
+      cluesDisplayAnswer: {
+        en: 'Miroslav Klose',
+        ka: 'მიროსლავ კლოზე',
+      },
+    });
+    expect(cache.answers.u1).toMatchObject({ isCorrect: true, pointsEarned: 80 });
+  });
+
   it('replays an existing clues answer ack with the display answer and does not score twice', async () => {
     const cache = makeCache({
       answers: {

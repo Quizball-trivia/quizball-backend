@@ -74,42 +74,39 @@ function isNonTransactional(body) {
 const MIGRATION_LOCK_KEY = 472636120260629n;
 
 async function main() {
-  const sql = postgres(DATABASE_URL, {
+  // DATABASE_URL points at Supavisor's transaction pooler in Railway. A
+  // session-level advisory lock is unsafe there: the lock and unlock queries
+  // may run on different Postgres backends, and an interrupted deploy can leave
+  // the lock attached to a pooled backend indefinitely. Keep serialization in
+  // a dedicated transaction instead. Transaction pooling pins that transaction
+  // to one backend, and Postgres releases pg_advisory_xact_lock automatically
+  // on commit, rollback, disconnect, or process death.
+  const migrationSql = postgres(DATABASE_URL, {
     max: 1,
     idle_timeout: 5,
     connect_timeout: 15,
     // A migration may run long; don't let the client time it out.
     statement_timeout: 0,
+    prepare: false,
+  });
+  const lockSql = postgres(DATABASE_URL, {
+    max: 1,
+    idle_timeout: 0,
+    connect_timeout: 15,
+    statement_timeout: 0,
+    prepare: false,
   });
 
   try {
-    // The tracking table is created by Supabase; ensure it exists so a fresh DB
-    // (or one never touched by the CLI) still works.
-    await sql.unsafe(`
-      CREATE SCHEMA IF NOT EXISTS supabase_migrations;
-      CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
-        version text PRIMARY KEY,
-        statements text[],
-        name text
-      );
-    `);
-
-    // Serialize across concurrent deploys: only the holder of this session-level
-    // advisory lock applies migrations; others block here until it's released,
-    // then find nothing pending. Acquired AFTER the table exists, BEFORE we read
-    // the applied set.
-    await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
-
     const files = (await readdir(MIGRATIONS_DIR))
       .filter((f) => f.endsWith('.sql'))
       .sort();
 
     // Validate up front. A missing numeric version is a hard error — such a file
-    // would never be tracked and would re-run on every deploy. A duplicate
-    // version is only a warning: two files sharing a version is messy, but it
-    // doesn't break the apply (both files run; schema_migrations records the
-    // version once via ON CONFLICT), and a few such collisions already exist in
-    // history — failing here would block all deploys over a pre-existing issue.
+    // would never be tracked and would re-run on every deploy. Duplicate
+    // versions are rejected: schema_migrations uses version as its primary key,
+    // so accepting two files under one version could permanently skip the
+    // second file if it failed after the first was recorded.
     const seen = new Map();
     for (const f of files) {
       const v = versionOf(f);
@@ -117,69 +114,86 @@ async function main() {
         throw new Error(`Migration filename has no numeric version prefix: ${f}`);
       }
       if (seen.has(v)) {
-        console.warn(
-          `[migrate] WARNING: duplicate migration version ${v}: ${seen.get(v)} and ${f}`,
+        throw new Error(
+          `Duplicate migration version ${v}: ${seen.get(v)} and ${f}`,
         );
-      } else {
-        seen.set(v, f);
       }
+      seen.set(v, f);
     }
 
-    const applied = new Set(
-      (await sql`SELECT version FROM supabase_migrations.schema_migrations`).map(
-        (r) => r.version,
-      ),
-    );
+    // The coordinator transaction owns only the advisory lock. Migrations run
+    // through a separate connection so non-transactional SQL such as CREATE
+    // INDEX CONCURRENTLY remains valid while concurrent deploys still serialize.
+    await lockSql.begin(async (lockTx) => {
+      await lockTx.unsafe('SET LOCAL statement_timeout = 0');
+      await lockTx.unsafe('SET LOCAL idle_in_transaction_session_timeout = 0');
+      await lockTx`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`;
 
-    const pending = files.filter((f) => !applied.has(versionOf(f)));
+      // The tracking table is created by Supabase; ensure it exists so a fresh
+      // DB (or one never touched by the CLI) still works. This must happen only
+      // after the advisory lock because concurrent IF NOT EXISTS DDL can still
+      // race while inserting system-catalog rows.
+      await migrationSql.unsafe(`
+        CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+        CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+          version text PRIMARY KEY,
+          statements text[],
+          name text
+        );
+      `);
 
-    if (pending.length === 0) {
-      console.log('[migrate] No pending migrations. Schema is up to date.');
-      return;
-    }
+      const applied = new Set(
+        (await migrationSql`SELECT version FROM supabase_migrations.schema_migrations`).map(
+          (r) => r.version,
+        ),
+      );
 
-    console.log(`[migrate] ${pending.length} pending migration(s): ${pending.join(', ')}`);
+      const pending = files.filter((f) => !applied.has(versionOf(f)));
 
-    for (const file of pending) {
-      const version = versionOf(file);
-      const name = file.replace(/^\d+_?/, '').replace(/\.sql$/, '');
-      const body = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
+      if (pending.length === 0) {
+        console.log('[migrate] No pending migrations. Schema is up to date.');
+        return;
+      }
 
-      console.log(`[migrate] Applying ${file} ...`);
-      if (isNonTransactional(body)) {
-        // Can't wrap in a transaction (e.g. CREATE INDEX CONCURRENTLY). Run as-is
-        // with autocommit, then record the version in a separate statement. These
-        // files must be idempotent (IF NOT EXISTS) since they aren't atomic.
-        console.log(`[migrate]   (non-transactional — running without BEGIN/COMMIT)`);
-        await sql.unsafe(body);
-        await sql`
-          INSERT INTO supabase_migrations.schema_migrations (version, name)
-          VALUES (${version}, ${name})
-          ON CONFLICT (version) DO NOTHING
-        `;
-      } else {
-        await sql.begin(async (tx) => {
-          await tx.unsafe(body);
-          await tx`
+      console.log(`[migrate] ${pending.length} pending migration(s): ${pending.join(', ')}`);
+
+      for (const file of pending) {
+        const version = versionOf(file);
+        const name = file.replace(/^\d+_?/, '').replace(/\.sql$/, '');
+        const body = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
+
+        console.log(`[migrate] Applying ${file} ...`);
+        if (isNonTransactional(body)) {
+          // Can't wrap in a transaction (e.g. CREATE INDEX CONCURRENTLY). Run as-is
+          // with autocommit, then record the version in a separate statement. These
+          // files must be idempotent (IF NOT EXISTS) since they aren't atomic.
+          console.log(`[migrate]   (non-transactional — running without BEGIN/COMMIT)`);
+          await migrationSql.unsafe(body);
+          await migrationSql`
             INSERT INTO supabase_migrations.schema_migrations (version, name)
             VALUES (${version}, ${name})
             ON CONFLICT (version) DO NOTHING
           `;
-        });
+        } else {
+          await migrationSql.begin(async (tx) => {
+            await tx.unsafe(body);
+            await tx`
+              INSERT INTO supabase_migrations.schema_migrations (version, name)
+              VALUES (${version}, ${name})
+              ON CONFLICT (version) DO NOTHING
+            `;
+          });
+        }
+        console.log(`[migrate] ✓ ${file}`);
       }
-      console.log(`[migrate] ✓ ${file}`);
-    }
 
-    console.log('[migrate] All pending migrations applied.');
+      console.log('[migrate] All pending migrations applied.');
+    });
   } finally {
-    // Best-effort unlock; the session-level lock is also released when sql.end()
-    // closes the connection.
-    try {
-      await sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`;
-    } catch {
-      /* connection may already be closing */
-    }
-    await sql.end({ timeout: 5 });
+    await Promise.allSettled([
+      migrationSql.end({ timeout: 5 }),
+      lockSql.end({ timeout: 5 }),
+    ]);
   }
 }
 

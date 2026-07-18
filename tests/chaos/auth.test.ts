@@ -1,0 +1,87 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  ChaosLoginError,
+  loginChaosUser,
+  provisionUsers,
+  type ProvisionConfig,
+} from '../../scripts/chaos/auth.js';
+
+const config = {
+  apiBase: 'http://127.0.0.1:8001',
+  password: 'local-test-password',
+};
+
+const provisionConfig: ProvisionConfig = {
+  ...config,
+  supabaseUrl: 'http://127.0.0.1:54321',
+  serviceRoleKey: 'local-service-role-key',
+  count: 1,
+  password: config.password,
+  emailPrefix: 'load',
+  emailDomain: 'example.com',
+  concurrency: 1,
+  loginIntervalMs: 0,
+};
+
+function existingUserResponses(fetchMock: ReturnType<typeof vi.fn>): void {
+  fetchMock
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      users: [{ id: 'auth-user-id', email: 'load+u0@example.com' }],
+    }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('chaos user login validation', () => {
+  it('returns only a token whose /users/me identity resolves', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'internal-user-id' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(loginChaosUser(config, 'user@example.com')).resolves.toEqual({
+      token: 'token',
+      userId: 'internal-user-id',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries transient login 5xx and /users/me 401 before provisioning succeeds', async () => {
+    const fetchMock = vi.fn();
+    existingUserResponses(fetchMock);
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'auth unavailable' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token-2' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'introspection unavailable' }), { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token-3' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'internal-user-id' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(provisionUsers(provisionConfig)).resolves.toEqual([expect.objectContaining({
+      token: 'token-3',
+      userId: 'internal-user-id',
+    })]);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.endsWith('/api/v1/auth/login'))).toHaveLength(3);
+    expect(urls.filter((url) => url.endsWith('/api/v1/users/me'))).toHaveLength(2);
+  });
+
+  it('does not retry a successful /users/me response with a missing identity', async () => {
+    const fetchMock = vi.fn();
+    existingUserResponses(fetchMock);
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('null', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await provisionUsers(provisionConfig).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ChaosLoginError);
+    expect(error).toMatchObject({ status: 200, retryable: false });
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.endsWith('/api/v1/auth/login'))).toHaveLength(1);
+    expect(urls.filter((url) => url.endsWith('/api/v1/users/me'))).toHaveLength(1);
+  });
+});

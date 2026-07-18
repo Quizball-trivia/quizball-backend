@@ -166,7 +166,9 @@ async function main(): Promise<void> {
   if (args.startAtMs) console.log(`synchronizedJoin=${new Date(args.startAtMs).toISOString()}`);
   console.log('═'.repeat(72));
 
+  const authConcurrency = args.target === 'local' && args.clients >= 1_000 ? 2 : 10;
   console.log(`Provisioning/authenticating ${args.clients} non-production queue users…`);
+  console.log(`Auth preparation concurrency=${authConcurrency} (outside measured queue window)`);
   const users = await provisionUsers({
     apiBase: target.apiBase,
     supabaseUrl: target.supabaseUrl,
@@ -176,7 +178,7 @@ async function main(): Promise<void> {
     password: 'ChaosTest12345!',
     emailPrefix: 'matchmaking',
     emailDomain: target.emailDomain,
-    concurrency: 10,
+    concurrency: authConcurrency,
     loginIntervalMs: args.target === 'staging' ? 2_200 : 0,
     bypassToken: target.bypassToken,
   });

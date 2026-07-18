@@ -401,7 +401,7 @@ function assertSafeConfiguration() {
     throw new Error(`API_SESSION_MODE must be shared or per-vu, got ${API_SESSION_MODE}.`);
   }
   if (API_SESSION_MODE === 'shared' && ['api', 'auth-mix'].includes(MODE)) {
-    const plannedSeconds = durationSeconds(RAMP_DURATION) + durationSeconds(DURATION) + 45;
+    const plannedSeconds = durationSeconds(RAMP_DURATION, true) + durationSeconds(DURATION) + 45;
     if (plannedSeconds > SHARED_SESSION_TTL_SECONDS - SHARED_SESSION_SAFETY_SECONDS) {
       throw new Error(
         `Shared API session would outlive its JWT: planned ${plannedSeconds}s exceeds `
@@ -442,7 +442,7 @@ function positiveNumber(name, fallback) {
   return value;
 }
 
-function durationSeconds(raw) {
+function durationSeconds(raw, allowZero = false) {
   const source = String(raw).trim();
   const unitSeconds = { ms: 0.001, s: 1, m: 60, h: 3_600 };
   const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
@@ -453,7 +453,12 @@ function durationSeconds(raw) {
     total += Number(match[1]) * unitSeconds[match[2]];
     consumed += match[0];
   }
-  if (!Number.isFinite(total) || total <= 0 || consumed !== source) {
+  if (
+    !Number.isFinite(total)
+    || total < 0
+    || (!allowZero && total === 0)
+    || consumed !== source
+  ) {
     throw new Error(`Invalid k6 duration: ${source}`);
   }
   return total;

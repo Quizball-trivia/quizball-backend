@@ -74,6 +74,11 @@ npx tsx scripts/chaos/run.ts --target=staging --sockets=2 --matches-per-client=1
 npx tsx scripts/chaos/run.ts --target=staging --users=100 --sockets=100 \
   --offset=0 --total-rps=50 --duration=300 --ramp-s=60
 
+# Only while intentionally terminating one staging replica: MATCH_PAUSED is the
+# expected bounded reconnect signal. Ordinary load tests must omit this flag.
+npx tsx scripts/chaos/run.ts --target=staging --users=20 --sockets=20 \
+  --total-rps=30 --duration=240 --expect-socket-error=server:MATCH_PAUSED
+
 # Preview and then inject a staging-only Supavisor connection-closure burst.
 # The script hard-blocks every project except staging, requires max_connections=60,
 # targets only the postgres/Supavisor pooler backends, and requires explicit --apply.
@@ -116,6 +121,7 @@ paced bootstrap plus this harness for backend/database/gameplay capacity.
 | `--ramp-s` | `10` | seconds to stagger initial socket queue joins |
 | `--matches-per-client` | unset | stop each socket client after this many matches; if set without `--duration`, socket clients run until this count |
 | `--start-at` | unset | future ISO/Unix timestamp used to synchronize distributed workers after preparation |
+| `--expect-socket-error` | unset | repeatable/comma-separated socket error prefixes expected from an intentional fault; ordinary load tests should leave this unset |
 | `--login-storm` | off | re-login every provisioned user once during the run |
 | `--login-ramp-s` | `60` | time over which login arrivals are spread |
 | `--report` | generated path | full JSON report path for automation/capacity ladders |

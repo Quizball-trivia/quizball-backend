@@ -100,8 +100,10 @@ export function createApp(): Express {
     app.use(createStoreWebhookRouter(storeStripe));
   }
 
-  // Rate Limiting (disabled in development)
-  if (process.env.NODE_ENV !== 'development') {
+  // Rate limiting is disabled only for the loopback/local development stack.
+  // NODE_ENV is intentionally constrained to local|staging|prod, so checking
+  // for the conventional but invalid "development" value never disabled it.
+  if (config.NODE_ENV !== 'local') {
     // Load-test bypass: skip the limiter only when a NON-PROD env secret is set
     // and the request presents the matching header. Prod can never bypass — the
     // token is ignored when NODE_ENV==='prod', so a leaked header is inert there.

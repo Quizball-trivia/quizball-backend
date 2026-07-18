@@ -35,7 +35,8 @@ export interface ProvisionConfig {
 export class ChaosLoginError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly retryable = status === 429 || status >= 500
   ) {
     super(message);
     this.name = 'ChaosLoginError';
@@ -145,7 +146,17 @@ export async function loginChaosUser(
     },
   });
   const me = (await meRes.json().catch(() => ({}))) as { id?: string };
-  return { token: body.access_token, userId: me.id ?? '' };
+  if (!meRes.ok || !me.id) {
+    // A freshly issued token can still hit a transient Auth introspection 5xx
+    // (surfaced by the API as 401). Treat that preparation-only condition as
+    // retryable; the next attempt obtains a fresh token and verifies it again.
+    throw new ChaosLoginError(
+      `resolve /users/me for ${email} failed: ${meRes.status}`,
+      meRes.status,
+      meRes.status === 401 || meRes.status === 429 || meRes.status >= 500
+    );
+  }
+  return { token: body.access_token, userId: me.id };
 }
 
 function createLoginPacer(intervalMs: number): () => Promise<void> {
@@ -223,18 +234,20 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
   const waitForLoginSlot = createLoginPacer(cfg.loginIntervalMs ?? 0);
 
   const users = await mapWithConcurrency(emails, cfg.concurrency, async (email) => {
-    // A previous run may have consumed the source-IP token bucket. Keep 429s
-    // in preparation traffic out of the measured run by retrying through the
-    // same global pacer. Other auth failures remain immediate hard failures.
+    // Keep source-IP throttling and transient Auth 5xx/introspection failures
+    // in preparation traffic out of the measured run. Credential/schema
+    // failures remain immediate hard failures.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await waitForLoginSlot();
       try {
         const { token, userId } = await loginChaosUser(cfg, email);
         return { email, password: cfg.password, token, userId } satisfies ChaosUser;
       } catch (error) {
-        if (!(error instanceof ChaosLoginError) || error.status !== 429 || attempt === 4) {
+        if (!(error instanceof ChaosLoginError) || !error.retryable || attempt === 4) {
           throw error;
         }
+        const backoffMs = 100 * (2 ** attempt) + Math.floor(Math.random() * 100);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
     throw new Error(`login ${email} exhausted retries`);

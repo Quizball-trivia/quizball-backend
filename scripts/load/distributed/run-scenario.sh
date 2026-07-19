@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FLEET="$SCRIPT_DIR/fleet.sh"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
 REPORT_ROOT="$SCRIPT_DIR/reports/${CAMPAIGN_ID:-quizball-staging-5k}"
-SSH=(ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 
 die() {
@@ -22,7 +22,7 @@ Usage:
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
   run-scenario.sh auth-login <global-rps> <duration> [ramp-duration]
 
-gameplay and matchmaking use the ten-worker mixed fleet. auth-login uses every
+gameplay and matchmaking use the mixed fleet. auth-login uses every
 mixed+auth worker so Supabase sees distributed source IPs. All commands source
 only the staging environment installed by sync-env.ts.
 EOF

@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 Usage:
   run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec]
-  run-scenario.sh matchmaking <players> [join-timeout-sec]
+  run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
   run-scenario.sh auth-login <global-rps> <duration> [ramp-duration]
 
@@ -30,6 +30,10 @@ EOF
 
 positive_int() {
   [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || die "$1 must be a positive integer"
+}
+
+non_negative_int() {
+  [[ "${2:-}" =~ ^[0-9]+$ ]] || die "$1 must be a non-negative integer"
 }
 
 format_epoch_utc() {
@@ -177,8 +181,10 @@ run_gameplay() {
 run_matchmaking() {
   local players="$1"
   local timeout="${2:-30}"
+  local join_ramp="${3:-1}"
   positive_int players "$players"
   positive_int join-timeout "$timeout"
+  non_negative_int join-ramp "$join_ramp"
   local workers
   workers="$(require_worker_count mixed 2)"
   (( players % 2 == 0 )) || die 'players must be even'
@@ -194,8 +200,8 @@ run_matchmaking() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-matchmaking-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d max-clients/worker=%d pair-remainder=%d synchronized=%s\n' \
-    "$workers" "$max_per_players" "$pair_remainder" "$(format_epoch_utc "$start_at")"
+  printf 'workers=%d max-clients/worker=%d pair-remainder=%d join-ramp=%ds synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$join_ramp" "$(format_epoch_utc "$start_at")"
 
   local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
   local pids=() reports=() markers=() ips=()
@@ -208,7 +214,7 @@ run_matchmaking() {
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
+    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=$join_ramp --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
@@ -294,7 +300,7 @@ main() {
   local scenario="${1:-}"
   case "$scenario" in
     gameplay) [[ $# -ge 4 && $# -le 5 ]] || die 'gameplay requires players duration total-rps [ramp]'; run_gameplay "$2" "$3" "$4" "${5:-60}" ;;
-    matchmaking) [[ $# -ge 2 && $# -le 3 ]] || die 'matchmaking requires players [timeout]'; run_matchmaking "$2" "${3:-30}" ;;
+    matchmaking) [[ $# -ge 2 && $# -le 4 ]] || die 'matchmaking requires players [timeout] [join-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;
     auth-login) [[ $# -ge 3 && $# -le 4 ]] || die 'auth-login requires rps duration [ramp]'; run_k6 login all "$2" "$3" "${4:-2m}" ;;
     *) usage; [[ -z "$scenario" ]] || exit 1 ;;

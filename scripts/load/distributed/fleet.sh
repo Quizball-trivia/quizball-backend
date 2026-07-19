@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 HCLOUD_CONTEXT="${HCLOUD_CONTEXT:-quizball-load}"
 CAMPAIGN_ID="${CAMPAIGN_ID:-quizball-staging-5k}"
-LOCATION="${HCLOUD_LOCATION:-nbg1}"
+LOCATION="${HCLOUD_LOCATION:-hel1}"
 IMAGE="${HCLOUD_IMAGE:-ubuntu-24.04}"
 SSH_KEY_NAME="${HCLOUD_SSH_KEY_NAME:-quizball-staging-load}"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
@@ -14,7 +14,11 @@ FIREWALL_NAME="${HCLOUD_FIREWALL_NAME:-quizball-staging-load}"
 SSH_ALLOWED_CIDRS="${HCLOUD_SSH_ALLOWED_CIDRS:-}"
 MAX_TOTAL_SERVERS="${MAX_TOTAL_SERVERS:-21}"
 MAX_LIFETIME_HOURS="${MAX_LIFETIME_HOURS:-24}"
-SERVER_BUDGET_EUR="${SERVER_BUDGET_EUR:-15}"
+SERVER_BUDGET_USD="${SERVER_BUDGET_USD:-15}"
+# Hetzner bills the Primary IPv4 separately from the server. Keep this
+# overrideable, but include the current project-currency price in every guard.
+PRIMARY_IPV4_HOURLY_USD="${PRIMARY_IPV4_HOURLY_USD:-0.0010}"
+HCLOUD_SPEND_APPROVAL="${HCLOUD_SPEND_APPROVAL:-}"
 
 HCLOUD=(hcloud --context "$HCLOUD_CONTEXT")
 SSH=(ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
@@ -75,13 +79,16 @@ validate_type() {
   esac
 }
 
-hourly_eur() {
-  case "$1" in
-    cx23) printf '0.0096' ;;
-    cx33) printf '0.0144' ;;
-    cx43) printf '0.0264' ;;
-    cx53) printf '0.0481' ;;
-  esac
+hourly_usd() {
+  local type="$1" type_json available
+  type_json="$("${HCLOUD[@]}" server-type describe "$type" -o json)"
+  available="$(jq -r --arg location "$LOCATION" \
+    'any(.locations[]; .name == $location and .available == true)' <<< "$type_json")"
+  [[ "$available" == 'true' ]] \
+    || die "server type '$type' is not currently available in '$LOCATION'"
+  jq -er --arg location "$LOCATION" \
+    '.prices[] | select(.location == $location) | .price_hourly.gross' <<< "$type_json" \
+    || die "no live hourly price for '$type' in '$LOCATION'"
 }
 
 estimate() {
@@ -91,14 +98,16 @@ estimate() {
     || die "count must be 1..$MAX_TOTAL_SERVERS"
   validate_type "$type"
   local hourly
-  hourly="$(hourly_eur "$type")"
-  awk -v n="$count" -v h="$hourly" -v lifetime="$MAX_LIFETIME_HOURS" -v type="$type" \
-    'BEGIN { printf "servers=%d type=%s hourly=€%.4f 12h=€%.2f max_lifetime_%dh=€%.2f (ex VAT)\n", n, type, n*h, n*h*12, lifetime, n*h*lifetime }'
+  hourly="$(hourly_usd "$type")"
+  awk -v n="$count" -v h="$hourly" -v ip="$PRIMARY_IPV4_HOURLY_USD" \
+    -v lifetime="$MAX_LIFETIME_HOURS" -v type="$type" \
+    'BEGIN { printf "servers=%d type=%s plus_primary_ipv4 hourly=$%.4f 12h=$%.2f max_lifetime_%dh=$%.2f\n", n, type, n*(h+ip), n*(h+ip)*12, lifetime, n*(h+ip)*lifetime }'
   local projected
-  projected="$(awk -v n="$count" -v h="$hourly" -v lifetime="$MAX_LIFETIME_HOURS" 'BEGIN { print n*h*lifetime }')"
-  awk -v projected="$projected" -v cap="$SERVER_BUDGET_EUR" \
+  projected="$(awk -v n="$count" -v h="$hourly" -v ip="$PRIMARY_IPV4_HOURLY_USD" \
+    -v lifetime="$MAX_LIFETIME_HOURS" 'BEGIN { print n*(h+ip)*lifetime }')"
+  awk -v projected="$projected" -v cap="$SERVER_BUDGET_USD" \
     'BEGIN { if (projected > cap) exit 1 }' \
-    || die "projected server cost €$projected exceeds fleet cap €$SERVER_BUDGET_EUR"
+    || die "projected server + IPv4 cost \$$projected exceeds fleet cap \$$SERVER_BUDGET_USD"
 }
 
 selector() {
@@ -196,18 +205,28 @@ enforce_campaign_budget() {
   local existing_hourly='0' existing_type price
   while IFS= read -r existing_type; do
     validate_type "$existing_type"
-    price="$(hourly_eur "$existing_type")"
-    existing_hourly="$(awk -v total="$existing_hourly" -v add="$price" 'BEGIN { print total + add }')"
+    price="$(hourly_usd "$existing_type")"
+    existing_hourly="$(awk -v total="$existing_hourly" -v add="$price" \
+      -v ip="$PRIMARY_IPV4_HOURLY_USD" 'BEGIN { print total + add + ip }')"
   done < <(jq -r '.[] | select(.status != "deleting") | .server_type.name' <<< "$existing_json")
   local new_hourly projected
-  new_hourly="$(hourly_eur "$new_type")"
+  new_hourly="$(hourly_usd "$new_type")"
   projected="$(awk -v existing="$existing_hourly" -v needed="$needed" -v add="$new_hourly" -v lifetime="$MAX_LIFETIME_HOURS" \
-    'BEGIN { print (existing + needed * add) * lifetime }')"
-  awk -v projected="$projected" -v cap="$SERVER_BUDGET_EUR" \
+    -v ip="$PRIMARY_IPV4_HOURLY_USD" 'BEGIN { print (existing + needed * (add + ip)) * lifetime }')"
+  awk -v projected="$projected" -v cap="$SERVER_BUDGET_USD" \
     'BEGIN { if (projected > cap) exit 1 }' \
-    || die "campaign-wide projected server cost €$projected exceeds cap €$SERVER_BUDGET_EUR"
-  printf 'Campaign-wide max-lifetime server projection: €%.2f / €%.2f (ex VAT)\n' \
-    "$projected" "$SERVER_BUDGET_EUR"
+    || die "campaign-wide projected server + IPv4 cost \$$projected exceeds cap \$$SERVER_BUDGET_USD"
+  printf 'Campaign-wide max-lifetime server + IPv4 projection: $%.2f / $%.2f\n' \
+    "$projected" "$SERVER_BUDGET_USD"
+}
+
+require_spend_approval() {
+  local role="$1"
+  local count="$2"
+  local type="$3"
+  local expected="$CAMPAIGN_ID:$role:$count:$type"
+  [[ "$HCLOUD_SPEND_APPROVAL" == "$expected" ]] \
+    || die "billable provisioning is locked; after explicit approval set HCLOUD_SPEND_APPROVAL='$expected' for this exact fleet"
 }
 
 preflight() {
@@ -240,6 +259,7 @@ provision() {
   (( existing_total + needed <= MAX_TOTAL_SERVERS )) \
     || die "would exceed campaign server cap $MAX_TOTAL_SERVERS"
   enforce_campaign_budget "$existing_json" "$needed" "$type"
+  require_spend_approval "$role" "$count" "$type"
   ensure_ssh_key
   ensure_firewall
 

@@ -22,9 +22,12 @@ Socket.IO, matchmaking, or k6 harnesses.
    scripts/load/distributed/fleet.sh estimate 10 cx33
    ```
 
-The default server-spend guard is €15 for a maximum modeled lifetime of 24
-hours, well below the campaign's overall $90 cap. Platform compute and egress
-remain separately monitored in Railway and Supabase.
+The default server-spend guard is $15 for a maximum modeled lifetime of 24
+hours. It queries the active Hetzner project's live hourly server price and
+includes the separately billed Primary IPv4 for every worker. Platform compute
+and egress remain separately monitored in Railway and Supabase. Provisioning is
+also locked unless `HCLOUD_SPEND_APPROVAL` exactly identifies the approved
+campaign, fleet role, count, and server type.
 
 ## Production-shaped non-production data
 
@@ -53,7 +56,8 @@ release capacity verdict.
 ## Mixed gameplay/API fleet
 
 ```bash
-scripts/load/distributed/fleet.sh provision mixed 10 cx33
+HCLOUD_SPEND_APPROVAL=quizball-staging-5k:mixed:10:cx33 \
+  scripts/load/distributed/fleet.sh provision mixed 10 cx33
 scripts/load/distributed/fleet.sh wait-ready mixed
 scripts/load/distributed/fleet.sh upload mixed
 scripts/load/distributed/fleet.sh health mixed
@@ -107,7 +111,8 @@ The ten mixed workers provide ten source IPs. Add ten smaller workers only for
 the login/signup distribution test:
 
 ```bash
-scripts/load/distributed/fleet.sh provision auth 10 cx23
+HCLOUD_SPEND_APPROVAL=quizball-staging-5k:auth:10:cx23 \
+  scripts/load/distributed/fleet.sh provision auth 10 cx23
 scripts/load/distributed/fleet.sh wait-ready auth
 scripts/load/distributed/fleet.sh upload auth
 

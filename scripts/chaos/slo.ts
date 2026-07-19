@@ -155,6 +155,15 @@ export function evaluateChaosRun(
           `${name} DB admission shed ${instance.pool.newRejections} requests (${instance.pool.newTimeouts} acquisition timeouts)`
         );
       }
+      if (
+        instance.socketDbTasks &&
+        (instance.socketDbTasks.newRejections > 0 || instance.socketDbTasks.newTimeouts > 0)
+      ) {
+        violations.push(
+          `${name} socket DB task queue shed ${instance.socketDbTasks.newRejections} workflows ` +
+          `(${instance.socketDbTasks.newTimeouts} wait timeouts)`
+        );
+      }
       if (instance.pool.maxWaitMs > thresholds.maxAppDbWaitMs) {
         violations.push(`${name} DB pool max wait ${instance.pool.maxWaitMs}ms > ${thresholds.maxAppDbWaitMs}ms`);
       }

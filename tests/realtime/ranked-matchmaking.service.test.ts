@@ -862,6 +862,30 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
   });
 
+  it('defers expired fallbacks while an available human pair remains queued', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+
+    redisMock.zCard.mockResolvedValue(2);
+    redisMock.zRangeByScore.mockResolvedValue(['expired-search']);
+    let pairClaims = 0;
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) {
+        pairClaims += 1;
+        if (pairClaims === 1) return ['s1', 'u1', '', 's2', 'u2', ''];
+        return [];
+      }
+      return [];
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+
+    expect(createLobbyMock).toHaveBeenCalledTimes(1);
+    expect(redisMock.zRangeByScore).not.toHaveBeenCalled();
+    expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+  });
+
   it('continues pair loop after one human pair fails', async () => {
     const service = await loadService();
     const io = createIoMock();

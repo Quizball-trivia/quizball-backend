@@ -1913,6 +1913,18 @@ describe('match-realtime.service high-risk integration behavior', () => {
     expect(fakeRedisStore.values.has('match:pause:m1')).toBe(true);
   });
 
+  it('skips the active-match DB fallback for a socket still bound to a lobby', async () => {
+    const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    socket.data.lobbyId = 'lobby-1';
+
+    await matchRealtimeService.handleMatchDisconnect(io, socket);
+
+    expect(getActiveMatchForUserMock).not.toHaveBeenCalled();
+    expect(getMatchMock).not.toHaveBeenCalled();
+  });
+
   it('S15i3: disconnect without a match binding never pauses a party-quiz match', async () => {
     // Party quiz has no stable-live-socket pause guard — a binding-less
     // menu/re-auth socket disconnect must not arm pause/grace for a live

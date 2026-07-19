@@ -293,6 +293,32 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(findOpenLobbyForUserMock).toHaveBeenCalledWith('u1');
   });
 
+  it('keeps the disconnect workflow active until draft pause work completes', async () => {
+    const { io } = createIo();
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1');
+    getByIdMock.mockResolvedValue({
+      id: 'lobby-1',
+      mode: 'ranked',
+      status: 'active',
+      host_user_id: 'u1',
+    });
+    let releasePause!: () => void;
+    pauseDraftForDisconnectedPlayerMock.mockReturnValueOnce(new Promise<void>((resolve) => {
+      releasePause = resolve;
+    }));
+
+    let completed = false;
+    const disconnect = lobbyRealtimeService.handleLobbyDisconnect(io, socket as never)
+      .then(() => { completed = true; });
+    await vi.waitFor(() => expect(pauseDraftForDisconnectedPlayerMock).toHaveBeenCalledTimes(1));
+
+    expect(completed).toBe(false);
+    releasePause();
+    await disconnect;
+    expect(completed).toBe(true);
+  });
+
   it('skips the draft pause when an unbound socket disconnects but the user still has a live socket in the draft room', async () => {
     const { io } = createIo(); // default mock: u1 still has a socket in lobby:lobby-1
     const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');

@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
-import { SOCKET_HEARTBEAT_CONFIG } from '../../src/realtime/socket-server.js';
+import {
+  buildRealtimeTimerHandlers,
+  SOCKET_HEARTBEAT_CONFIG,
+  type QuizballServer,
+} from '../../src/realtime/socket-server.js';
+import { runPossessionAiAnswer } from '../../src/realtime/possession-match-flow.js';
+
+vi.mock('../../src/realtime/possession-match-flow.js', () => ({
+  finalizeHalftime: vi.fn(),
+  resolvePossessionRound: vi.fn(),
+  runPossessionAiAnswer: vi.fn(),
+}));
 
 describe('socket heartbeat config', () => {
   it('tolerates routine mobile network hiccups while keeping detection bounded', () => {
@@ -18,5 +29,30 @@ describe('socket heartbeat config', () => {
     expect(
       SOCKET_HEARTBEAT_CONFIG.pingInterval + SOCKET_HEARTBEAT_CONFIG.pingTimeout
     ).toBeLessThanOrEqual(15000);
+  });
+});
+
+describe('realtime timer handler wiring', () => {
+  it('preserves an explicitly planned incorrect AI answer', async () => {
+    const handler = buildRealtimeTimerHandlers().possession_ai_answer;
+    const server = {} as QuizballServer;
+
+    await handler?.(server, {
+      kind: 'possession_ai_answer',
+      matchId: 'match-1',
+      qIndex: 11,
+      plannedAnswerTimeMs: 12_103,
+      plannedClueIndex: 1,
+      plannedIsCorrect: false,
+    });
+
+    expect(runPossessionAiAnswer).toHaveBeenCalledWith(
+      server,
+      'match-1',
+      11,
+      12_103,
+      1,
+      false
+    );
   });
 });

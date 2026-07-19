@@ -259,6 +259,7 @@ vi.mock('../../src/modules/categories/categories.repo.js', () => ({
 }));
 
 vi.mock('../../src/modules/matches/matches.service.js', () => ({
+  PARTY_QUIZ_TOTAL_QUESTIONS: 10,
   matchesService: {
     createMatchFromLobby: vi.fn(),
   },
@@ -1379,6 +1380,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10);
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
@@ -1420,6 +1422,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 5);
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
@@ -1464,6 +1467,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10);
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),

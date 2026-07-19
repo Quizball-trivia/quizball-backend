@@ -15,6 +15,7 @@ const listAnswersForQuestionMock = vi.fn();
 const completeMatchMock = vi.fn();
 const updatePlayerAvgTimeMock = vi.fn();
 const setQuestionTimingMock = vi.fn();
+const getMatchQuestionMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
@@ -90,6 +91,7 @@ vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
 vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
   matchQuestionsRepo: {
     setQuestionTiming: (...args: unknown[]) => setQuestionTimingMock(...args),
+    getMatchQuestion: (...args: unknown[]) => getMatchQuestionMock(...args),
     getRandomQuestionForMatch: vi.fn(),
     insertMatchQuestionIfMissing: vi.fn(),
   },
@@ -268,6 +270,7 @@ describe('party quiz realtime flow', () => {
     completeMatchMock.mockResolvedValue(undefined);
     updatePlayerAvgTimeMock.mockResolvedValue(undefined);
     setQuestionTimingMock.mockResolvedValue(undefined);
+    getMatchQuestionMock.mockResolvedValue({ correct_index: 2 });
     deleteMatchCacheMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     evaluateAchievementsForMatchMock.mockResolvedValue({
@@ -631,6 +634,41 @@ describe('party quiz realtime flow', () => {
     });
     expect(events.some((entry) => entry.event === 'match:party_state')).toBe(true);
     expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+  });
+
+  it('idempotently acknowledges a duplicate answer after the round advanced', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    const { socket, emitted } = createSocketMock('u1');
+    partyState = { ...partyState, currentQuestion: { qIndex: 1 } };
+    getAnswerForUserMock.mockResolvedValue({
+      user_id: 'u1',
+      selected_index: 2,
+      is_correct: true,
+      points_earned: 100,
+      time_ms: 1000,
+    });
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 0,
+      selectedIndex: 2,
+      timeMs: 1000,
+    });
+
+    expect(emitted).toContainEqual({
+      event: 'match:answer_ack',
+      payload: expect.objectContaining({
+        matchId: 'match-1',
+        qIndex: 0,
+        selectedIndex: 2,
+        isCorrect: true,
+        correctIndex: 2,
+        myTotalPoints: 120,
+      }),
+    });
+    expect(emitted.some((entry) => entry.event === 'error')).toBe(false);
+    expect(recordPartyQuizAnswerIfMissingMock).not.toHaveBeenCalled();
   });
 
   it('handles six concurrent party answers without losing answered state', async () => {

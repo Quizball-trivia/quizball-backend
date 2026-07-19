@@ -1193,6 +1193,49 @@ export async function handlePartyQuizAnswer(
       return;
     }
     if (!state.currentQuestion || state.currentQuestion.qIndex !== payload.qIndex) {
+      // Socket delivery is intentionally at-least-once. A reconnect/hydration
+      // can schedule the same client answer twice; if the first answer already
+      // committed and advanced the round, acknowledge the stored result again
+      // instead of surfacing a misleading MATCH_NOT_ACTIVE error.
+      const existingAnswer = await matchAnswersRepo.getAnswerForUser(
+        payload.matchId,
+        payload.qIndex,
+        socket.data.user.id
+      );
+      if (existingAnswer) {
+        const [question, participants] = await Promise.all([
+          matchQuestionsRepo.getMatchQuestion(payload.matchId, payload.qIndex),
+          matchPlayersRepo.listMatchPlayers(payload.matchId),
+        ]);
+        const player = participants.find((candidate) => candidate.user_id === socket.data.user.id);
+        const correctIndex = question?.correct_index;
+        if (typeof correctIndex === 'number') {
+          socket.emit(
+            'match:answer_ack',
+            buildAnswerAckPayload({
+              matchId: payload.matchId,
+              qIndex: payload.qIndex,
+              selectedIndex: existingAnswer.selected_index,
+              isCorrect: existingAnswer.is_correct,
+              correctIndex,
+              myTotalPoints: player?.total_points ?? existingAnswer.points_earned,
+              pointsEarned: existingAnswer.points_earned,
+            })
+          );
+          logger.info(
+            {
+              eventName: 'match:answer_ack',
+              matchId: payload.matchId,
+              qIndex: payload.qIndex,
+              userId: socket.data.user.id,
+              source: 'stale_duplicate',
+              inserted: false,
+            },
+            'Party quiz duplicate answer ack emitted'
+          );
+          return;
+        }
+      }
       logger.info(
         {
           eventName: 'match:answer_rejected',

@@ -10,7 +10,10 @@ import {
   MIN_QUESTIONS_PER_CATEGORY,
 } from '../../modules/lobbies/lobbies.service.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
-import { matchesService } from '../../modules/matches/matches.service.js';
+import {
+  matchesService,
+  PARTY_QUIZ_TOTAL_QUESTIONS,
+} from '../../modules/matches/matches.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -637,7 +640,10 @@ export async function startFriendlyMatch(
     let categoryBId: string | null;
 
     if (lobby.friendly_random) {
-      const categories = await lobbiesService.selectRandomCategories(1);
+      const minimumQuestions = friendlyMode === 'friendly_party_quiz'
+        ? PARTY_QUIZ_TOTAL_QUESTIONS
+        : MIN_QUESTIONS_PER_CATEGORY;
+      const categories = await lobbiesService.selectRandomCategories(1, minimumQuestions);
       if (categories.length < 1) {
         logger.warn(
           { lobbyId, categoryCount: categories.length },
@@ -674,7 +680,9 @@ export async function startFriendlyMatch(
 
       const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
         [categoryA],
-        MIN_QUESTIONS_PER_CATEGORY
+        friendlyMode === 'friendly_party_quiz'
+          ? PARTY_QUIZ_TOTAL_QUESTIONS
+          : MIN_QUESTIONS_PER_CATEGORY
       );
       if (validCategoryIds.length !== 1) {
         socket.emit('error', {

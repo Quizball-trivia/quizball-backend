@@ -90,7 +90,12 @@ const API_ROUTES = API_PROFILE === 'hot-db'
 
 assertSafeConfiguration();
 
-export const options = buildOptions();
+export const options = {
+  ...buildOptions(),
+  // k6's default JSON summary omits p99 even when a p99 threshold exists.
+  // Preserve it explicitly so distributed aggregation can enforce both SLOs.
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
+};
 
 let apiSession = null;
 let refreshSession = null;

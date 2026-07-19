@@ -10,7 +10,8 @@ describe('distributed k6 summary aggregation', () => {
         checks: { passes: 99, fails: 1 },
         unexpected_failures: { passes: 1, fails: 98, value: 0.01 },
         http_req_failed: { passes: 1, fails: 99, value: 0.01 },
-        http_req_duration: { 'p(95)': 100, 'p(99)': 200, max: 300 },
+        app_request_duration: { 'p(95)': 100, 'p(99)': 200, max: 300 },
+        http_req_duration: { 'p(95)': 150, 'p(99)': 250, max: 350 },
         'http_req_duration{endpoint:users.me}': { 'p(95)': 90, 'p(99)': 180, max: 250 },
       } },
       { metrics: {
@@ -21,7 +22,8 @@ describe('distributed k6 summary aggregation', () => {
         checks: { passes: 200, fails: 0 },
         unexpected_failures: { passes: 0, fails: 200, value: 0 },
         http_req_failed: { passes: 0, fails: 200, value: 0 },
-        http_req_duration: { 'p(95)': 120, 'p(99)': 240, max: 400 },
+        app_request_duration: { 'p(95)': 120, 'p(99)': 240, max: 400 },
+        http_req_duration: { 'p(95)': 170, 'p(99)': 270, max: 450 },
         'http_req_duration{endpoint:users.me}': { 'p(95)': 110, 'p(99)': 220, max: 350 },
       } },
     ]);
@@ -39,7 +41,12 @@ describe('distributed k6 summary aggregation', () => {
         unexpectedFailures: 1,
         httpFailures: 1,
       },
-      latencyMs: { worstWorkerP95: 120, worstWorkerP99: 240, max: 400 },
+      latencyMs: {
+        metric: 'app_request_duration',
+        worstWorkerP95: 120,
+        worstWorkerP99: 240,
+        max: 400,
+      },
       endpoints: [{
         endpoint: 'users.me',
         workers: 2,

@@ -36,6 +36,7 @@ export interface DistributedK6Aggregate {
   };
   throughputRps: number;
   latencyMs: {
+    metric: string;
     worstWorkerP95: number;
     worstWorkerP99: number;
     max: number;
@@ -100,13 +101,22 @@ export function aggregateK6Summaries(summaries: K6Summary[]): DistributedK6Aggre
     };
   });
 
+  const latencyMetric = [
+    'app_request_duration',
+    'auth_login_duration',
+    'auth_refresh_duration',
+    'wallet_duration',
+    'http_req_duration',
+  ].find((name) => summaries.some((summary) => Number.isFinite(metric(summary, name)['p(95)'])))
+    ?? 'http_req_duration';
   const latencyMs = {
+    metric: latencyMetric,
     // k6 summary exports do not contain raw samples, so distributed
     // percentiles cannot be recomputed exactly. The worst worker percentile is
     // deliberately conservative and is labeled as such in the report.
-    worstWorkerP95: max(summaries, 'http_req_duration', 'p(95)'),
-    worstWorkerP99: max(summaries, 'http_req_duration', 'p(99)'),
-    max: max(summaries, 'http_req_duration', 'max'),
+    worstWorkerP95: max(summaries, latencyMetric, 'p(95)'),
+    worstWorkerP99: max(summaries, latencyMetric, 'p(99)'),
+    max: max(summaries, latencyMetric, 'max'),
   };
   const violations: string[] = [];
   for (const [name, value] of Object.entries(totals)) {

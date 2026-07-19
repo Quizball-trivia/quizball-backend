@@ -120,18 +120,6 @@ export async function runMatchmakingFleet(
     cleanupConfirmedAt: null,
     errors: [],
   }));
-  const cleanupDelayCapMs = Math.min(cfg.cleanupRampSec * 1_000, 900);
-  const schedulePairCleanup = (observation: ClientObservation) => {
-    if (!observation.lobbyId || !isCleanupLeader(observation)) return;
-    // The server starts the draft 1.2s after match_found. Jitter one cleanup
-    // request per lobby across at most 900ms to avoid a second synchronized
-    // write spike while still cancelling before draft work begins. Comparing
-    // the two user ids elects the same single leader even when the opponents
-    // are running on different distributed load generators.
-    const delayMs = deterministicDelay(observation.lobbyId, cleanupDelayCapMs);
-    setTimeout(() => sendCleanup(observation), delayMs);
-  };
-
   await Promise.all(observations.map(async (observation, index) => {
     const delayMs = cfg.clients > 1
       ? Math.round(cfg.connectRampSec * 1_000 * index / cfg.clients)
@@ -146,7 +134,7 @@ export async function runMatchmakingFleet(
     }
     observation.connected = true;
     await clearActiveMatch(client);
-    installObservers(observation, schedulePairCleanup);
+    installObservers(observation);
   }));
 
   const connected = observations.filter((observation) => observation.connected);
@@ -177,13 +165,18 @@ export async function runMatchmakingFleet(
     await sleep(100);
   }
 
-  // Let scheduled per-lobby cancellations fire before the catch-all below.
-  // Otherwise a fast successful run would collapse them back into one burst.
-  if (cleanupDelayCapMs > 0) await sleep(cleanupDelayCapMs + 25);
-  // Catch unmatched/partial observations and any cleanup timer that has not
-  // fired yet. sendCleanup is idempotent, so scheduled timers can safely race.
-  const cleanupLeaders = selectCleanupLeaders(connected);
-  for (const observation of cleanupLeaders) sendCleanup(observation);
+  // A matched client is no longer in the queue. Its authoritative cleanup
+  // proof is session:state with queueSearchId=null, not a late queue_leave
+  // (which would be an invalid attempt to cancel an already-committed lobby).
+  // Only unmatched clients still need an explicit queue cancellation.
+  const unmatched = connected.filter((observation) => observation.matchFoundAt === null);
+  await Promise.all(unmatched.map(async (observation, index) => {
+    const delayMs = unmatched.length > 1
+      ? Math.round(cfg.cleanupRampSec * 1_000 * index / unmatched.length)
+      : 0;
+    if (delayMs > 0) await sleep(delayMs);
+    sendCleanup(observation);
+  }));
   await sleep(cfg.cleanupWaitSec * 1_000);
   await Promise.all(observations.map(async (observation, index) => {
     const delayMs = observations.length > 1
@@ -253,10 +246,7 @@ export function renderMatchmakingFleet(summary: MatchmakingFleetSummary): string
   ].join('\n');
 }
 
-function installObservers(
-  observation: ClientObservation,
-  onMatchFound: (observation: ClientObservation) => void
-): void {
+function installObservers(observation: ClientObservation): void {
   const socket = observation.client!.socket;
   socket.on('ranked:search_started', () => {
     observation.searchStartedAt ??= Date.now();
@@ -268,79 +258,38 @@ function installObservers(
     observation.matchFoundAt = Date.now();
     observation.lobbyId = typeof parsed.lobbyId === 'string' ? parsed.lobbyId : null;
     observation.opponentId = typeof parsed.opponent?.id === 'string' ? parsed.opponent.id : null;
-    onMatchFound(observation);
   });
   socket.on('ranked:queue_left', () => {
     observation.cleanupConfirmedAt ??= Date.now();
+  });
+  socket.on('session:state', (payload: unknown) => {
+    if (observation.searchStartedAt === null) return;
+    const parsed = payload as { state?: unknown; queueSearchId?: unknown };
+    if (
+      typeof parsed.state === 'string'
+      && parsed.state !== 'IN_QUEUE'
+      && parsed.queueSearchId === null
+    ) {
+      observation.cleanupConfirmedAt ??= Date.now();
+    }
   });
   socket.on('connect_error', (error: Error) => observation.errors.push(`connect_error:${error.message}`));
   socket.on('error', (payload: unknown) => observation.errors.push(errorTag(payload)));
 }
 
-function deterministicDelay(value: string, maxDelayMs: number): number {
-  if (maxDelayMs <= 0) return 0;
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (Math.imul(hash, 31) + value.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash) % (maxDelayMs + 1);
-}
-
 function sendCleanup(observation: ClientObservation): void {
-  if (observation.cleanupSent || !observation.client?.socket.connected) return;
+  if (
+    observation.matchFoundAt !== null
+    || observation.cleanupSent
+    || !observation.client?.socket.connected
+  ) return;
   observation.cleanupSent = true;
   observation.client.socket.emit('ranked:queue_leave');
 }
 
-function isCleanupLeader(observation: MatchmakingPairObservation): boolean {
-  return observation.opponentId === null
-    || observation.userId.localeCompare(observation.opponentId) < 0;
-}
-
-function selectCleanupLeaders(observations: ClientObservation[]): ClientObservation[] {
-  const selectedUserIds = selectCleanupLeaderUserIds(observations);
-  return observations.filter((observation) => selectedUserIds.has(observation.userId));
-}
-
-/**
- * Elect one cleanup sender for a reciprocal lobby, while retaining malformed
- * observations as fallbacks so a bad match cannot leave a queue entry behind.
- */
-export function selectCleanupLeaderUserIds(
-  observations: MatchmakingPairObservation[]
-): Set<string> {
-  const leaders = new Map<string, MatchmakingPairObservation>();
-  const fallbackUserIds = new Set<string>();
-  for (const observation of observations) {
-    if (!isCleanupLeader(observation)) continue;
-    if (!observation.lobbyId) {
-      fallbackUserIds.add(observation.userId);
-      continue;
-    }
-    const current = leaders.get(observation.lobbyId);
-    if (!current || observation.userId.localeCompare(current.userId) < 0) {
-      leaders.set(observation.lobbyId, observation);
-    }
-  }
-
-  for (const observation of observations) {
-    if (fallbackUserIds.has(observation.userId)) continue;
-    const leader = observation.lobbyId ? leaders.get(observation.lobbyId) : undefined;
-    const isReciprocalFollower = Boolean(
-      leader
-      && leader.userId !== observation.userId
-      && leader.opponentId === observation.userId
-      && observation.opponentId === leader.userId
-    );
-    if (!leader || (!isCleanupLeader(observation) && !isReciprocalFollower)) {
-      fallbackUserIds.add(observation.userId);
-    }
-  }
-
-  return new Set([
-    ...[...leaders.values()].map((leader) => leader.userId),
-    ...fallbackUserIds,
-  ]);
+function queueExitUnconfirmed(observation: ClientObservation): boolean {
+  const confirmationRequired = observation.matchFoundAt !== null || observation.cleanupSent;
+  return confirmationRequired && observation.cleanupConfirmedAt === null;
 }
 
 function summarizeMatchmakingFleet(
@@ -358,7 +307,7 @@ function summarizeMatchmakingFleet(
     if (observation.matchFoundCount > 1) reasons.push('duplicate_match_found');
     if (observation.opponentId === observation.userId) reasons.push('self_match');
     if (pairAnalysis.invalidUserIds.has(observation.userId)) reasons.push('invalid_pair');
-    if (observation.cleanupSent && !observation.cleanupConfirmedAt) reasons.push('cleanup_unconfirmed');
+    if (queueExitUnconfirmed(observation)) reasons.push('cleanup_unconfirmed');
     for (const reason of reasons) {
       failures.push({
         clientIndex: observation.index,
@@ -394,7 +343,7 @@ function summarizeMatchmakingFleet(
     selfMatchedClients: pairAnalysis.selfMatchedClients,
     invalidPairClients: pairAnalysis.invalidUserIds.size,
     cleanupUnconfirmedClients: observations.filter(
-      (observation) => observation.cleanupSent && observation.cleanupConfirmedAt === null
+      queueExitUnconfirmed
     ).length,
     matchFoundLatencyMs: latencies,
     pairObservations: observations.map((observation) => ({

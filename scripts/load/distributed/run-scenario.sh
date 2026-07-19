@@ -32,6 +32,14 @@ positive_int() {
   [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || die "$1 must be a positive integer"
 }
 
+format_epoch_utc() {
+  local epoch="$1"
+  if date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; then
+    return
+  fi
+  date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ
+}
+
 worker_ips() {
   local role="$1"
   "$FLEET" list "$role" | awk 'NF >= 3 { print $3 }'
@@ -127,7 +135,7 @@ run_gameplay() {
   mkdir -p "$local_dir"
   printf 'workers=%d max-players/worker=%d pair-remainder=%d global-http-rps=%d base-rps/worker=%d rps-remainder=%d synchronized=%s\n' \
     "$workers" "$max_per_players" "$pair_remainder" "$total_rps" "$base_rps" "$rps_remainder" \
-    "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+    "$(format_epoch_utc "$start_at")"
 
   local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
   local pids=() reports=() markers=() ips=()
@@ -180,13 +188,14 @@ run_matchmaking() {
   local pair_remainder=$((total_pairs % workers))
   local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
   local lead=$((max_per_players * 23 / 10 + 240))
+  (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-matchmaking-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
   printf 'workers=%d max-clients/worker=%d pair-remainder=%d synchronized=%s\n' \
-    "$workers" "$max_per_players" "$pair_remainder" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+    "$workers" "$max_per_players" "$pair_remainder" "$(format_epoch_utc "$start_at")"
 
   local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
   local pids=() reports=() markers=() ips=()

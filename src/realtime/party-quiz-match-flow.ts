@@ -534,13 +534,41 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
   });
 }
 
-function schedulePartyQuizPostRoundAdvance(
+async function schedulePartyQuizPostRoundAdvance(
+  io: QuizballServer,
   matchId: string,
   resolvedQIndex: number,
+  nextQIndex: number,
   participantUserIds: string[],
-  dispatch: () => void,
   ceilingMs = PARTY_ROUND_READY_ACK_CEILING_MS
-): void {
+): Promise<void> {
+  const timerKey = partyRoundTransitionTimerKey(matchId, resolvedQIndex);
+  const dispatch = () => {
+    void runPartyQuizRoundTransition(io, matchId, resolvedQIndex, nextQIndex).catch((error) => {
+      logger.error(
+        { error, matchId, resolvedQIndex, nextQIndex },
+        'Failed to advance party quiz round from ready gate'
+      );
+    });
+  };
+
+  try {
+    await scheduleRealtimeTimer(
+      'party_round_transition',
+      timerKey,
+      new Date(Date.now() + ceilingMs),
+      { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
+    );
+  } catch (error) {
+    // Keep the local ready-gate ceiling as a degraded fallback if Redis has
+    // a transient write failure. A durable retry is preferred, but dropping
+    // both mechanisms here would recreate the frozen-between-rounds bug.
+    logger.warn(
+      { error, matchId, resolvedQIndex, nextQIndex },
+      'Failed to persist party round transition timer; using local ceiling'
+    );
+  }
+
   pendingReadyGates.open({
     scopeId: matchId,
     token: resolvedQIndex,
@@ -570,6 +598,76 @@ function schedulePartyQuizPostRoundAdvance(
     },
     'Party quiz post-round ready gate opened'
   );
+}
+
+function partyRoundTransitionTimerKey(matchId: string, resolvedQIndex: number): string {
+  return `${matchId}:${resolvedQIndex}`;
+}
+
+/**
+ * Idempotently drive the transition after a party-quiz round.
+ *
+ * The ready-ack gate is process-local so it can provide a fast path when all
+ * sockets happen to land on one replica. The ceiling is a Redis-backed durable
+ * timer, and this lock/state check makes the fast path and timer safe to race
+ * across replicas without emitting a duplicate question.
+ */
+export async function runPartyQuizRoundTransition(
+  io: QuizballServer,
+  matchId: string,
+  resolvedQIndex: number,
+  nextQIndex: number
+): Promise<void> {
+  const timerKey = partyRoundTransitionTimerKey(matchId, resolvedQIndex);
+  const lockKey = `lock:match:${matchId}:party_transition:${resolvedQIndex}`;
+  const lock = await acquireLock(lockKey, 10_000);
+  if (!lock.acquired || !lock.token) {
+    throw new Error(`Party transition lock unavailable for ${matchId}:${resolvedQIndex}`);
+  }
+
+  try {
+    const match = await matchesRepo.getMatch(matchId);
+    if (!match || match.status !== 'active') {
+      await cancelRealtimeTimer('party_round_transition', timerKey);
+      return;
+    }
+    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+      await cancelRealtimeTimer('party_round_transition', timerKey);
+      return;
+    }
+
+    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    if (state.currentQuestion) {
+      if (state.currentQuestion.qIndex >= nextQIndex) {
+        await cancelRealtimeTimer('party_round_transition', timerKey);
+        return;
+      }
+      throw new Error(
+        `Party transition ${matchId}:${resolvedQIndex} found question `
+        + `${state.currentQuestion.qIndex}, expected ${nextQIndex}`
+      );
+    }
+    if (match.current_q_index !== nextQIndex) {
+      throw new Error(
+        `Party transition ${matchId}:${resolvedQIndex} persisted index `
+        + `${match.current_q_index}, expected ${nextQIndex}`
+      );
+    }
+
+    if (nextQIndex >= match.total_questions) {
+      await completePartyQuizMatch(io, matchId);
+      await cancelRealtimeTimer('party_round_transition', timerKey);
+      return;
+    }
+
+    const sent = await sendPartyQuizQuestion(io, matchId, nextQIndex);
+    if (!sent) {
+      throw new Error(`Party quiz question ${nextQIndex} was not dispatched for ${matchId}`);
+    }
+    await cancelRealtimeTimer('party_round_transition', timerKey);
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
 }
 
 export async function sendPartyQuizQuestion(
@@ -991,19 +1089,24 @@ export async function resolvePartyQuizRound(
           },
           'Party quiz completion scheduled after final round'
         );
-        schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
-          void completePartyQuizMatch(io, matchId).catch((error) => {
-            logger.error({ error, matchId }, 'Failed to complete party quiz match');
-          });
-        }, PARTY_FINAL_READY_ACK_CEILING_MS);
+        await schedulePartyQuizPostRoundAdvance(
+          io,
+          matchId,
+          qIndex,
+          nextIndex,
+          participantUserIds,
+          PARTY_FINAL_READY_ACK_CEILING_MS
+        );
         return;
       }
 
-      schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
-        void sendPartyQuizQuestion(io, matchId, nextIndex).catch((error) => {
-          logger.error({ error, matchId, nextIndex, fromTimeout }, 'Failed to send next party quiz question');
-        });
-      });
+      await schedulePartyQuizPostRoundAdvance(
+        io,
+        matchId,
+        qIndex,
+        nextIndex,
+        participantUserIds
+      );
       logger.info(
         {
           eventName: 'party_next_question_scheduled',

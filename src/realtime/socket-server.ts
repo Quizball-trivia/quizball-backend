@@ -24,7 +24,7 @@ import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
 import { acquireLock, releaseLock } from './locks.js';
-import { resolvePartyQuizRound } from './party-quiz-match-flow.js';
+import { resolvePartyQuizRound, runPartyQuizRoundTransition } from './party-quiz-match-flow.js';
 import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from './possession-match-flow.js';
 import {
   startRealtimeTimerScheduler,
@@ -355,6 +355,15 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     party_question: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'party_question') return;
       await resolvePartyQuizRound(server, payload.matchId, payload.qIndex, true);
+    },
+    party_round_transition: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'party_round_transition') return;
+      await runPartyQuizRoundTransition(
+        server,
+        payload.matchId,
+        payload.resolvedQIndex,
+        payload.nextQIndex
+      );
     },
     possession_ai_answer: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'possession_ai_answer') return;

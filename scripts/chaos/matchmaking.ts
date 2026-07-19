@@ -291,6 +291,15 @@ function evaluateInfrastructure(
       violations.push(`${name} DB sheds=${instance.pool.newRejections} timeouts=${instance.pool.newTimeouts}`);
     }
     if (
+      instance.authAdmission &&
+      (instance.authAdmission.newRejections > 0 || instance.authAdmission.newTimeouts > 0)
+    ) {
+      violations.push(
+        `${name} Auth sheds=${instance.authAdmission.newRejections} ` +
+        `timeouts=${instance.authAdmission.newTimeouts}`
+      );
+    }
+    if (
       instance.socketDbTasks &&
       (instance.socketDbTasks.newRejections > 0 || instance.socketDbTasks.newTimeouts > 0)
     ) {

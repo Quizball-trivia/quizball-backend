@@ -860,7 +860,7 @@ export const matchesService = {
             phase_round,
             shooter_seat
           )
-          VALUES (
+          SELECT
             ${data.matchId},
             ${data.qIndex},
             ${data.userId},
@@ -872,6 +872,11 @@ export const matchesService = {
             ${data.phaseKind ?? 'normal'},
             ${data.phaseRound ?? null},
             ${data.shooterSeat ?? null}
+          WHERE EXISTS (
+            SELECT 1
+            FROM match_players
+            WHERE match_id = ${data.matchId}
+              AND user_id = ${data.userId}
           )
           ON CONFLICT (match_id, q_index, user_id) DO NOTHING
           RETURNING *

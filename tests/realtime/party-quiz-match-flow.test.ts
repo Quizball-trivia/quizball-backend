@@ -24,6 +24,7 @@ const listUnlockedForMatchMock = vi.fn();
 const redisMockState = vi.hoisted(() => ({
   pausedMatches: new Set<string>(),
   open: false,
+  failCommands: false,
   sets: new Map<string, Set<string>>(),
   strings: new Map<string, string>(),
 }));
@@ -52,6 +53,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
       isOpen: redisMockState.open,
       exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
       sAdd: async (key: string, values: string | string[]) => {
+        if (redisMockState.failCommands) throw new Error('redis unavailable');
         const set = redisMockState.sets.get(key) ?? new Set<string>();
         const before = set.size;
         for (const value of Array.isArray(values) ? values : [values]) set.add(value);
@@ -68,6 +70,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
         return removed;
       },
       eval: async (_script: string, params: { keys: string[] }) => {
+        if (redisMockState.failCommands) throw new Error('redis unavailable');
         const [expectedKey, ackKey, dispatchKey] = params.keys;
         const expected = redisMockState.sets.get(expectedKey ?? '') ?? new Set<string>();
         const acks = redisMockState.sets.get(ackKey ?? '') ?? new Set<string>();
@@ -242,6 +245,7 @@ describe('party quiz realtime flow', () => {
     };
     redisMockState.pausedMatches.clear();
     redisMockState.open = false;
+    redisMockState.failCommands = false;
     redisMockState.sets.clear();
     redisMockState.strings.clear();
     players = [
@@ -529,6 +533,8 @@ describe('party quiz realtime flow', () => {
       handlePartyQuizReadyForNextQuestion,
     } = await import('../../src/realtime/party-quiz-match-flow.js');
     const { io, events } = createIoMock();
+    redisMockState.open = true;
+    redisMockState.failCommands = true;
     realtimeTimerMocks.schedule.mockRejectedValueOnce(new Error('redis write failed'));
     partyState = {
       ...partyState,
@@ -556,12 +562,8 @@ describe('party quiz realtime flow', () => {
       category_a_id: 'cat-1',
     }));
 
-    await handlePartyQuizReadyForNextQuestion(io, 'u1', 'match-1', 0);
-    await handlePartyQuizReadyForNextQuestion(io, 'u2', 'match-1', 0);
-    await handlePartyQuizReadyForNextQuestion(io, 'u3', 'match-1', 0);
-    await vi.waitFor(() => {
-      expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
-    });
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
   });
 
   it('advances immediately when a shared Redis ready gate receives every ack', async () => {

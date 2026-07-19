@@ -630,6 +630,7 @@ async function schedulePartyQuizPostRoundAdvance(
     });
   };
 
+  let durableTimerScheduled = false;
   try {
     await scheduleRealtimeTimer(
       'party_round_transition',
@@ -637,6 +638,7 @@ async function schedulePartyQuizPostRoundAdvance(
       new Date(Date.now() + ceilingMs),
       { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
     );
+    durableTimerScheduled = true;
   } catch (error) {
     // Keep the local ready-gate ceiling as a degraded fallback if Redis has
     // a transient write failure. A durable retry is preferred, but dropping
@@ -666,7 +668,12 @@ async function schedulePartyQuizPostRoundAdvance(
         'Failed to open shared party ready gate; durable ceiling remains armed'
       );
     }
-  } else {
+  }
+
+  // If Redis is unavailable, or it claimed to be open but rejected the
+  // durable write, retain the process-local ceiling. A shared ack may still
+  // win first; the DB transition guard makes the later ceiling idempotent.
+  if (!redis?.isOpen || !durableTimerScheduled) {
     pendingReadyGates.open({
       scopeId: matchId,
       token: resolvedQIndex,
@@ -740,6 +747,7 @@ export async function runPartyQuizRoundTransition(
         cancelRealtimeTimer('party_round_transition', timerKey),
         clearSharedPartyReadyGate(matchId, resolvedQIndex),
       ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
@@ -747,6 +755,7 @@ export async function runPartyQuizRoundTransition(
         cancelRealtimeTimer('party_round_transition', timerKey),
         clearSharedPartyReadyGate(matchId, resolvedQIndex),
       ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
 
@@ -757,6 +766,7 @@ export async function runPartyQuizRoundTransition(
           cancelRealtimeTimer('party_round_transition', timerKey),
           clearSharedPartyReadyGate(matchId, resolvedQIndex),
         ]);
+        pendingReadyGates.clear(matchId);
         return;
       }
       throw new Error(
@@ -777,6 +787,7 @@ export async function runPartyQuizRoundTransition(
         cancelRealtimeTimer('party_round_transition', timerKey),
         clearSharedPartyReadyGate(matchId, resolvedQIndex),
       ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
 
@@ -788,6 +799,7 @@ export async function runPartyQuizRoundTransition(
       cancelRealtimeTimer('party_round_transition', timerKey),
       clearSharedPartyReadyGate(matchId, resolvedQIndex),
     ]);
+    pendingReadyGates.clear(matchId);
   } finally {
     await releaseLock(lockKey, lock.token);
   }

@@ -100,6 +100,9 @@ function makeRedis(initial: Record<string, string>) {
 function freshSocket(userId: string) {
   return { data: { user: { id: userId }, connectedAt: MARKER_MS + 5_000 } };
 }
+function handoffSocket(userId: string) {
+  return { data: { user: { id: userId }, connectedAt: MARKER_MS - 7_000 } };
+}
 function zombieSocket(userId: string) {
   return { data: { user: { id: userId }, connectedAt: MARKER_MS - 100_000 } };
 }
@@ -179,6 +182,34 @@ describe('grace expiry — reconnect-pending deferral (root fix)', () => {
       );
     });
   }
+
+  it('defers when a replacement socket connected just before the new marker', async () => {
+    const redis = seedRedis();
+    getRedisClientMock.mockReturnValue(redis);
+    listMatchPlayersMock.mockResolvedValue([
+      { user_id: 'human-1', seat: 1 },
+      { user_id: 'human-2', seat: 2 },
+    ]);
+    // Production sequence: the replacement connected seven seconds before the
+    // older socket ping-timed out and wrote the second disconnect marker.
+    const { io, emits } = makeIo({
+      'human-1': [handoffSocket('human-1')],
+      'human-2': [freshSocket('human-2')],
+    });
+
+    const { resolveExpiredGraceWindow } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    await resolveExpiredGraceWindow(io, 'm1', 'human-1');
+
+    expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(redis._store.has('match:grace:m1')).toBe(true);
+    expect(redis._store.has('match:pause:m1')).toBe(true);
+    expect(redis._store.has('match:grace_extended:m1')).toBe(true);
+    expect(emits['user:human-1']).toHaveBeenCalledWith(
+      'match:rejoin_available', expect.objectContaining({ matchId: 'm1' })
+    );
+  });
 
   it('does NOT defer a zombie socket (connected before the marker) — forfeits immediately', async () => {
     const redis = seedRedis();

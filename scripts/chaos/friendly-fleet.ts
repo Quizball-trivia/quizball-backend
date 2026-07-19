@@ -170,13 +170,16 @@ async function runPair(
     let settingsSent = false;
     let settingsApplied = false;
     let joinedCounted = false;
+    let allMembersReady = false;
     const lobbyCreatedAt = Date.now();
     host.socket.on('lobby:state', (state: {
       inviteCode?: string | null;
-      members?: unknown[];
+      members?: Array<{ isReady?: boolean }>;
       settings?: { gameMode?: string };
     }) => {
       memberCount = state.members?.length ?? 0;
+      allMembersReady = memberCount >= 2
+        && Boolean(state.members?.every((member) => member.isReady === true));
       if (!inviteCode && state.inviteCode) {
         inviteCode = state.inviteCode;
         metrics.lobbiesCreated++;
@@ -205,7 +208,11 @@ async function runPair(
     metrics.connectToLobbyReadyMs.push(Date.now() - connectedAt);
     host.socket.emit('lobby:ready', { ready: true });
     guest.socket.emit('lobby:ready', { ready: true });
-    await sleep(250);
+    const readyConfirmed = await host.waitFor(() => allMembersReady, 30_000);
+    if (!readyConfirmed) {
+      fail(metrics, pairIndex, 'members_ready', `members=${memberCount} allReady=${allMembersReady}`);
+      return;
+    }
     host.socket.emit('lobby:start', {});
 
     const matchStarted = await host.waitFor(

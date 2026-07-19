@@ -58,7 +58,7 @@ export const options = buildOptions();
 const SAFE_API_ROUTES = [
   { name: 'categories.list', path: '/api/v1/categories?limit=100&is_active=true&page=1', weight: 6, auth: false },
   { name: 'categories.list.minq', path: '/api/v1/categories?limit=100&is_active=true&min_questions=5', weight: 4, auth: false },
-  { name: 'questions.list', path: '/api/v1/questions?limit=50&page=1', weight: 5, auth: false },
+  { name: 'questions.list', path: '/api/v1/questions?limit=50&page=1&status=published', weight: 5, auth: true },
   { name: 'featured.list', path: '/api/v1/featured-categories', weight: 3, auth: false },
   { name: 'store.products', path: '/api/v1/store/products', weight: 3, auth: false },
   { name: 'users.me', path: '/api/v1/users/me', weight: 6, auth: true },

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
-import type { SessionStatePayload } from '../socket.types.js';
+import type { LobbyState, SessionStatePayload } from '../socket.types.js';
+import type { User } from '../../db/types.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { config } from '../../core/config.js';
 import { countryPayload } from '../../core/country.js';
@@ -9,8 +10,9 @@ import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import type { LobbyRow } from '../../modules/lobbies/lobbies.types.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import type { RankedProfileRow } from '../../modules/ranked/ranked.types.js';
 import { statsService } from '../../modules/stats/stats.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
@@ -53,11 +55,11 @@ const TICK_INTERVAL_MS = 100;
 const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
-// A real match start performs several database/network round trips. Keep eight
+// A real match start performs several database/network round trips. Keep four
 // workflows moving as a streaming pool so one slow lobby does not stall the
 // other slots. The independent DB admission gate still enforces its 12-query
 // cap; this bound prevents the matcher itself from spawning unlimited work.
-const MAX_CONCURRENT_PAIR_STARTS = 8;
+const MAX_CONCURRENT_PAIR_STARTS = 4;
 const FOUND_MODAL_MS = 1200;
 
 const CANCEL_KEY_TTL_SEC = 30;
@@ -196,13 +198,6 @@ async function getRankedMatchmakingSessionBlock(
   };
 }
 
-async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
-  const state = await lobbiesService.buildLobbyState(lobby);
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
-}
-
 function emitInsufficientTickets(
   io: QuizballServer,
   userId: string,
@@ -234,6 +229,71 @@ async function getRankedTicketWallets(userIds: string[]): Promise<Record<string,
     })
   );
   return Object.fromEntries(entries);
+}
+
+function emitCreatedRankedLobbyState(
+  io: QuizballServer,
+  lobby: LobbyRow,
+  userA: User,
+  userB: User,
+  profileA: RankedProfileRow,
+  profileB: RankedProfileRow,
+): void {
+  const state: LobbyState = {
+    lobbyId: lobby.id,
+    mode: 'ranked',
+    status: lobby.status,
+    inviteCode: lobby.invite_code,
+    displayName: lobby.display_name ?? 'Friendly Lobby',
+    isPublic: lobby.is_public ?? false,
+    hostUserId: lobby.host_user_id,
+    settings: {
+      gameMode: lobby.game_mode ?? 'ranked_sim',
+      friendlyRandom: lobby.friendly_random ?? true,
+      friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
+      friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
+    },
+    members: [
+      {
+        userId: userA.id,
+        username: userA.nickname ?? 'Player',
+        avatarUrl: userA.avatar_url,
+        avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+        isReady: true,
+        isHost: userA.id === lobby.host_user_id,
+        ...{ rankPoints: profileA.rp },
+      },
+      {
+        userId: userB.id,
+        username: userB.nickname ?? 'Player',
+        avatarUrl: userB.avatar_url,
+        avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+        isReady: true,
+        isHost: userB.id === lobby.host_user_id,
+        ...{ rankPoints: profileB.rp },
+      },
+    ],
+  };
+  io.to(`lobby:${lobby.id}`).emit('lobby:state', state);
+}
+
+function emitCreatedRankedSessionStates(
+  io: QuizballServer,
+  lobbyId: string,
+  userIds: string[],
+): void {
+  const resolvedAt = new Date().toISOString();
+  for (const userId of userIds) {
+    const snapshot: SessionStatePayload = {
+      state: 'IN_WAITING_LOBBY',
+      activeMatchId: null,
+      waitingLobbyId: lobbyId,
+      queueSearchId: null,
+      openLobbyIds: [lobbyId],
+      resolvedAt,
+    };
+    io.to(`user:${userId}`).emit('session:state', snapshot);
+  }
 }
 
 async function hasTicketForRankedQueue(io: QuizballServer, userId: string, source: string): Promise<boolean> {
@@ -478,10 +538,12 @@ export async function startHumanRankedMatch(
         return;
       }
 
-      const [profileA, profileB] = await Promise.all([
-        rankedService.ensureProfile(userAId),
-        rankedService.ensureProfile(userBId),
-      ]);
+      const profilesByUserId = await rankedService.ensureProfiles([userAId, userBId]);
+      const profileA = profilesByUserId.get(userAId);
+      const profileB = profilesByUserId.get(userBId);
+      if (!profileA || !profileB) {
+        throw new Error('Ranked profile batch did not return both paired users');
+      }
       const wallets = await getRankedTicketWallets([userAId, userBId]);
       const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
       if (insufficientUserIds.length > 0) {
@@ -570,11 +632,12 @@ export async function startHumanRankedMatch(
         attachUserSocketsToLobby(io, userBId, lobby.id),
       ]);
 
-      await emitLobbyState(io, lobby.id);
-      await Promise.all([
-        userSessionGuardService.emitState(io, userAId),
-        userSessionGuardService.emitState(io, userBId),
-      ]);
+      // The lobby row, both committed members, user display data and rank
+      // profiles are already in memory. Re-reading them here used to add four
+      // sequential database stages (roughly eight queries) per pair and let the
+      // matcher starve queue joins.
+      emitCreatedRankedLobbyState(io, lobby, userA, userB, profileA, profileB);
+      emitCreatedRankedSessionStates(io, lobby.id, [userAId, userBId]);
 
       const [formA, formB] = await Promise.all([
         statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),

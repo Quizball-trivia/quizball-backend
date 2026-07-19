@@ -31,6 +31,7 @@ const listOpenLobbiesForUserMock = vi.fn();
 const getActiveMatchForUserMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const ensureProfileMock = vi.fn();
+const ensureProfilesMock = vi.fn();
 const startDraftMock = vi.fn();
 const startRankedAiForUserMock = vi.fn();
 const acquireLockMock = vi.fn();
@@ -101,6 +102,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
 vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
   rankedService: {
     ensureProfile: (...args: unknown[]) => ensureProfileMock(...args),
+    ensureProfiles: (...args: unknown[]) => ensureProfilesMock(...args),
   },
 }));
 
@@ -268,6 +270,13 @@ describe('ranked-matchmaking.service queue behavior', () => {
       placement_points_against_sum: 0,
       current_win_streak: 0,
     }));
+    ensureProfilesMock.mockImplementation(async (userIds: string[]) => {
+      const entries = await Promise.all(userIds.map(async (userId) => [
+        userId,
+        await ensureProfileMock(userId),
+      ] as const));
+      return new Map(entries);
+    });
     getWalletMock.mockResolvedValue({ coins: 0, tickets: 1 });
     startDraftMock.mockResolvedValue(undefined);
     startRankedAiForUserMock.mockResolvedValue(undefined);
@@ -414,6 +423,27 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     expect(createLobbyMock).toHaveBeenCalledTimes(1);
     expect(startRankedAiForUserMock).not.toHaveBeenCalled();
+    expect(getLobbyByIdMock).not.toHaveBeenCalled();
+    expect(buildLobbyStateMock).not.toHaveBeenCalled();
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(emit).toHaveBeenCalledWith(
+      'lobby:state',
+      expect.objectContaining({
+        lobbyId: 'lobby-u1',
+        members: expect.arrayContaining([
+          expect.objectContaining({ userId: 'u1', rankPoints: 1111, isReady: true }),
+          expect.objectContaining({ userId: 'u2', rankPoints: 2222, isReady: true }),
+        ]),
+      })
+    );
+    expect(emit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({
+        state: 'IN_WAITING_LOBBY',
+        waitingLobbyId: 'lobby-u1',
+        openLobbyIds: ['lobby-u1'],
+      })
+    );
   });
 
   it('does not start a match when a paired player has no live socket (ghost search)', async () => {
@@ -862,17 +892,17 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     service.start(io);
     await vi.advanceTimersByTimeAsync(120);
-    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 8; i += 1) {
+    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 4; i += 1) {
       await Promise.resolve();
     }
 
-    // Eight users pairs are atomically reserved and admitted. The remaining
+    // Four user pairs are atomically reserved and admitted. The remaining
     // pairs stay recoverable in the live queue until a worker slot is free.
-    expect(pairScriptCalls).toBe(8);
-    expect(createLobbyMock).toHaveBeenCalledTimes(8);
+    expect(pairScriptCalls).toBe(4);
+    expect(createLobbyMock).toHaveBeenCalledTimes(4);
 
     releaseLobbyStarts();
-    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 10; i += 1) {
+    for (let i = 0; i < 1_000 && createLobbyMock.mock.calls.length < 10; i += 1) {
       await Promise.resolve();
     }
     expect(pairScriptCalls).toBe(11);

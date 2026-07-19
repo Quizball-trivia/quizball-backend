@@ -202,6 +202,40 @@ describe('rankedService', () => {
     expect(rankedService.isPlacementRequired(placedComplete)).toBe(false);
   });
 
+  it('batch-loads existing ranked profiles without per-user ensure queries', async () => {
+    const profileA = createProfile({ user_id: 'u-1', rp: 1200, tier: 'Rotation' });
+    const profileB = createProfile({ user_id: 'u-2', rp: 1500, tier: 'Starting11' });
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([profileA, profileB]);
+
+    const profiles = await rankedService.ensureProfiles(['u-1', 'u-2', 'u-1']);
+
+    expect(rankedRepo.getProfilesByUserIds).toHaveBeenCalledOnce();
+    expect(rankedRepo.getProfilesByUserIds).toHaveBeenCalledWith(['u-1', 'u-2']);
+    expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(profiles.get('u-1')).toBe(profileA);
+    expect(profiles.get('u-2')).toBe(profileB);
+  });
+
+  it('ensures only missing or stale ranked profiles after the batch read', async () => {
+    const current = createProfile({ user_id: 'u-1', rp: 1200, tier: 'Rotation' });
+    const stale = createProfile({ user_id: 'u-2', rp: 1500, tier: 'Rotation' });
+    const normalized = createProfile({ user_id: 'u-2', rp: 1500, tier: 'Starting11' });
+    const created = createProfile({ user_id: 'u-3', rp: 1200, tier: 'Rotation' });
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([current, stale]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) => (
+      userId === 'u-2' ? normalized : created
+    ));
+
+    const profiles = await rankedService.ensureProfiles(['u-1', 'u-2', 'u-3']);
+
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledTimes(2);
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledWith('u-2');
+    expect(rankedRepo.ensureProfile).toHaveBeenCalledWith('u-3');
+    expect(profiles.get('u-1')).toBe(current);
+    expect(profiles.get('u-2')).toBe(normalized);
+    expect(profiles.get('u-3')).toBe(created);
+  });
+
   it('builds progressive placement AI context (harder after wins, easier after losses)', () => {
     const freshProfile = createProfile({
       user_id: 'fresh',

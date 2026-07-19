@@ -568,6 +568,15 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
       placement_played: 3,
       placement_wins: 2,
     })),
+    ensureProfiles: vi.fn(async (userIds: string[]) => new Map(userIds.map((userId) => [userId, {
+      user_id: userId,
+      rp: 1200,
+      tier: 'Rotation',
+      placement_status: 'placed',
+      placement_required: 3,
+      placement_played: 3,
+      placement_wins: 2,
+    }]))),
   },
 }));
 

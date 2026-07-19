@@ -5,10 +5,8 @@ import type { User } from '../../db/types.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { config } from '../../core/config.js';
 import { countryPayload } from '../../core/country.js';
-import { NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
-import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import type { LobbyRow } from '../../modules/lobbies/lobbies.types.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
@@ -41,6 +39,7 @@ import {
   RANKED_MM_SEARCH_KEY_PREFIX,
   RANKED_MM_TIMEOUTS_KEY,
   RANKED_MM_USER_MAP_KEY,
+  rankedAssignedLobbyKey,
   rankedCancelKey,
   rankedJoinDebounceKey,
   rankedLeaveGuardKey,
@@ -51,8 +50,6 @@ import {
 const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
-// Keep lock alive across worst-case tick I/O so parallel ticks cannot overlap.
-const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
 // A real match start performs several database/network round trips. Keep four
@@ -91,10 +88,10 @@ function emitQueuedSessionState(
 }
 const JOIN_DEBOUNCE_TTL_SEC = 2;
 const PAIRING_IN_FLIGHT_TTL_SEC = 30;
-const TICK_LOCK_KEY = 'ranked:mm:tick-lock';
-
+const ASSIGNED_LOBBY_TTL_SEC = 5 * 60;
 let loopTimer: NodeJS.Timeout | null = null;
 let loopIo: QuizballServer | null = null;
+let tickInFlight = false;
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -115,10 +112,6 @@ async function clearPairingInFlight(userIds: string[]): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
   await redis.del(userIds.map((userId) => rankedPairingInFlightKey(userId)));
-}
-
-function isMissingUserWalletError(error: unknown): error is NotFoundError {
-  return error instanceof NotFoundError && error.message === 'User not found';
 }
 
 async function bestEffortCancelRankedQueueSearch(userId: string, source: string): Promise<string | null> {
@@ -153,49 +146,53 @@ async function handleStaleRankedQueueUser(
   io.to(`user:${userId}`).emit('ranked:queue_left');
 }
 
-async function getRankedMatchmakingSessionBlock(userId: string): Promise<{
+type RankedMatchmakingSessionBlock = {
   activeMatchId: string | null;
   waitingLobbyId: string | null;
   queueSearchId: string | null;
   state: string;
-} | null>;
-async function getRankedMatchmakingSessionBlock(
-  userId: string,
-  options: { ignorePairingInFlight?: boolean }
-): Promise<{
-  activeMatchId: string | null;
-  waitingLobbyId: string | null;
-  queueSearchId: string | null;
-  state: string;
-} | null>;
+};
+
+async function getRankedMatchmakingSessionBlocks(
+  userIds: string[],
+  options: { ignorePairingInFlight?: boolean } = {}
+): Promise<Map<string, RankedMatchmakingSessionBlock | null>> {
+  const uniqueUserIds = [...new Set(userIds)];
+  const snapshots = await userSessionGuardService.resolveStates(uniqueUserIds);
+  const redis = getRedisClient();
+  const pairingStates = !options.ignorePairingInFlight && redis
+    ? await Promise.all(uniqueUserIds.map(async (userId) => (
+      (await redis.exists(rankedPairingInFlightKey(userId))) === 1
+    )))
+    : uniqueUserIds.map(() => false);
+
+  return new Map(uniqueUserIds.map((userId, index) => {
+    const snapshot = snapshots.get(userId);
+    if (!snapshot) return [userId, null];
+    const pairingInFlight = pairingStates[index] ?? false;
+    const blocked = Boolean(
+      snapshot.activeMatchId ||
+      snapshot.waitingLobbyId ||
+      snapshot.queueSearchId ||
+      snapshot.state === 'CORRUPT_MULTI_STATE' ||
+      pairingInFlight
+    );
+    if (!blocked) return [userId, null];
+    return [userId, {
+      activeMatchId: snapshot.activeMatchId,
+      waitingLobbyId: snapshot.waitingLobbyId,
+      queueSearchId: snapshot.queueSearchId,
+      state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
+    }];
+  }));
+}
+
 async function getRankedMatchmakingSessionBlock(
   userId: string,
   options: { ignorePairingInFlight?: boolean } = {}
-): Promise<{
-  activeMatchId: string | null;
-  waitingLobbyId: string | null;
-  queueSearchId: string | null;
-  state: string;
-} | null> {
-  const snapshot = await userSessionGuardService.resolveState(userId);
-  const redis = getRedisClient();
-  const pairingInFlight = !options.ignorePairingInFlight && redis
-    ? (await redis.exists(rankedPairingInFlightKey(userId))) === 1
-    : false;
-  const blocked = Boolean(
-    snapshot.activeMatchId ||
-    snapshot.waitingLobbyId ||
-    snapshot.queueSearchId ||
-    snapshot.state === 'CORRUPT_MULTI_STATE' ||
-    pairingInFlight
-  );
-  if (!blocked) return null;
-  return {
-    activeMatchId: snapshot.activeMatchId,
-    waitingLobbyId: snapshot.waitingLobbyId,
-    queueSearchId: snapshot.queueSearchId,
-    state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
-  };
+): Promise<RankedMatchmakingSessionBlock | null> {
+  const blocks = await getRankedMatchmakingSessionBlocks([userId], options);
+  return blocks.get(userId) ?? null;
 }
 
 function emitInsufficientTickets(
@@ -222,13 +219,8 @@ function emitInsufficientTickets(
 }
 
 async function getRankedTicketWallets(userIds: string[]): Promise<Record<string, { coins: number; tickets: number }>> {
-  const entries = await Promise.all(
-    [...new Set(userIds)].map(async (userId) => {
-      const wallet = await storeService.getWallet(userId);
-      return [userId, wallet] as const;
-    })
-  );
-  return Object.fromEntries(entries);
+  const wallets = await storeService.getRankedTicketWallets(userIds);
+  return Object.fromEntries(wallets);
 }
 
 function emitCreatedRankedLobbyState(
@@ -297,19 +289,15 @@ function emitCreatedRankedSessionStates(
 }
 
 async function hasTicketForRankedQueue(io: QuizballServer, userId: string, source: string): Promise<boolean> {
-  let wallet: { coins: number; tickets: number };
-  try {
-    wallet = await storeService.getWallet(userId);
-  } catch (error) {
-    if (isMissingUserWalletError(error)) {
-      await handleStaleRankedQueueUser(io, userId, source);
-      return false;
-    }
-    throw error;
+  const wallets = await storeService.getRankedTicketWallets([userId]);
+  const wallet = wallets.get(userId);
+  if (!wallet) {
+    await handleStaleRankedQueueUser(io, userId, source);
+    return false;
   }
 
   if (wallet.tickets >= 1) {
-    logger.info({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
+    logger.debug({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
     rankedDebug('ticket_preflight_passed', {
       user: rankedDebugUser(userId),
       source,
@@ -591,10 +579,12 @@ export async function startHumanRankedMatch(
         }
       }
 
-      const [sessionBlockA, sessionBlockB] = await Promise.all([
-        getRankedMatchmakingSessionBlock(userAId, { ignorePairingInFlight: true }),
-        getRankedMatchmakingSessionBlock(userBId, { ignorePairingInFlight: true }),
-      ]);
+      const sessionBlocks = await getRankedMatchmakingSessionBlocks(
+        [userAId, userBId],
+        { ignorePairingInFlight: true }
+      );
+      const sessionBlockA = sessionBlocks.get(userAId) ?? null;
+      const sessionBlockB = sessionBlocks.get(userBId) ?? null;
       if (sessionBlockA || sessionBlockB) {
         logger.warn(
           {
@@ -631,6 +621,20 @@ export async function startHumanRankedMatch(
         attachUserSocketsToLobby(io, userAId, lobby.id),
         attachUserSocketsToLobby(io, userBId, lobby.id),
       ]);
+
+      const redis = getRedisClient();
+      if (redis) {
+        try {
+          await Promise.all([
+            redis.set(rankedAssignedLobbyKey(userAId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+            redis.set(rankedAssignedLobbyKey(userBId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+          ]);
+        } catch (error) {
+          // The lobby and both members have committed; marker telemetry must
+          // not turn that successful handoff into a failed pair.
+          logger.warn({ error, lobbyId: lobby.id, userAId, userBId }, 'Failed to mark ranked lobby assignment');
+        }
+      }
 
       // The lobby row, both committed members, user display data and rank
       // profiles are already in memory. Re-reading them here used to add four
@@ -673,7 +677,7 @@ export async function startHumanRankedMatch(
         },
       });
 
-      logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
+      logger.debug({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
       rankedDebug('human_match_found', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),
@@ -984,40 +988,29 @@ async function rankedTick(): Promise<void> {
         return;
       }
 
-      const lock = await acquireLock(TICK_LOCK_KEY, TICK_LOCK_TTL_MS);
-      if (!lock.acquired || !lock.token) {
-        span.setAttribute('quizball.tick_lock_acquired', false);
-        return;
-      }
+      // Each replica runs one local tick. Cross-replica exclusion is
+      // intentionally delegated to the atomic Redis claim scripts: a global
+      // tick lock made one Railway replica build every lobby while the other
+      // sat idle, halving throughput and concentrating DB admission pressure.
 
-      span.setAttribute('quizball.tick_lock_acquired', true);
       let phaseFailureCount = 0;
       try {
-        try {
-          await processFallbacks(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.fallback_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking fallback phase failed');
-        }
-
-        try {
-          await processPairs(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.pair_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking pair phase failed');
-        }
-
-        span.setAttribute('quizball.phase_failure_count', phaseFailureCount);
-      } finally {
-        try {
-          await releaseLock(TICK_LOCK_KEY, lock.token);
-        } catch (error) {
-          span.setAttribute('quizball.tick_lock_release_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking tick lock release failed');
-        }
+        await processFallbacks(io);
+      } catch (error) {
+        phaseFailureCount += 1;
+        span.setAttribute('quizball.fallback_phase_failed', true);
+        logger.error({ err: error }, 'Ranked matchmaking fallback phase failed');
       }
+
+      try {
+        await processPairs(io);
+      } catch (error) {
+        phaseFailureCount += 1;
+        span.setAttribute('quizball.pair_phase_failed', true);
+        logger.error({ err: error }, 'Ranked matchmaking pair phase failed');
+      }
+
+      span.setAttribute('quizball.phase_failure_count', phaseFailureCount);
     });
   } catch (error) {
     logger.error({ err: error }, 'Ranked matchmaking tick failed outside guarded section');
@@ -1029,9 +1022,15 @@ export const rankedMatchmakingService = {
     if (loopTimer || !config.RANKED_HUMAN_QUEUE_ENABLED) return;
     loopIo = io;
     loopTimer = setInterval(() => {
-      void rankedTick().catch((error) => {
-        logger.error({ err: error }, 'Ranked matchmaking tick rejected unexpectedly');
-      });
+      if (tickInFlight) return;
+      tickInFlight = true;
+      void rankedTick()
+        .catch((error) => {
+          logger.error({ err: error }, 'Ranked matchmaking tick rejected unexpectedly');
+        })
+        .finally(() => {
+          tickInFlight = false;
+        });
     }, TICK_INTERVAL_MS);
     logger.info('Ranked matchmaking loop started');
   },
@@ -1067,7 +1066,7 @@ export const rankedMatchmakingService = {
       'quizball.client_reason': queueClientContext.clientReason,
       'quizball.client_request_id': queueClientContext.clientRequestId ?? '',
     }, async (span) => {
-      logger.info(
+      logger.debug(
         { userId, ...queueClientContext, searchMode: payload?.searchMode ?? 'human_first' },
         'Ranked queue join requested'
       );
@@ -1134,6 +1133,12 @@ export const rankedMatchmakingService = {
       }
 
       const redis = getRedisClient();
+      if (redis) {
+        // Reaching a fresh queue join proves any previous assignment is no
+        // longer the user's authoritative session. Clear the disconnect guard
+        // so a later disconnect from this new search is cleaned normally.
+        await redis.del(rankedAssignedLobbyKey(userId));
+      }
       const ignoreRecentLeave = async (): Promise<void> => {
         logger.info(
           { userId, ...queueClientContext, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },
@@ -1399,7 +1404,7 @@ export const rankedMatchmakingService = {
             // never turn a successful queue join into a client-visible error.
             logger.warn({ err: error, userId, searchId: newSearchId }, 'Failed to read ranked queue size after join');
           }
-          logger.info(
+          logger.debug(
             { userId, searchId: newSearchId, queueSize, ...queueClientContext },
             'User joined ranked queue'
           );
@@ -1415,7 +1420,7 @@ export const rankedMatchmakingService = {
             durationMs: SEARCH_DURATION_MS,
           });
           const snapshot = emitQueuedSessionState(io, userId, prepared.snapshot, newSearchId);
-          logger.info(
+          logger.debug(
             {
               userId,
               state: snapshot.state,
@@ -1458,6 +1463,14 @@ export const rankedMatchmakingService = {
       const redis = getRedisClient();
       if (!redis) {
         span.setAttribute('quizball.redis_available', false);
+        return;
+      }
+
+      // A late explicit queue-leave after match_found must not cancel a lobby
+      // that has already been committed on another replica.
+      const assignedLobbyId = await redis.get(rankedAssignedLobbyKey(userId));
+      if (assignedLobbyId) {
+        span.setAttribute('quizball.skipped_due_to_assigned_lobby', true);
         return;
       }
 
@@ -1547,6 +1560,16 @@ export const rankedMatchmakingService = {
         return;
       }
 
+      // Cross-replica Socket.IO room joins do not persistently mutate the
+      // owning replica's socket.data. The committed Redis marker prevents the
+      // remote socket's later disconnect from being mistaken for an active
+      // queue search and triggering two session queries during mass cleanup.
+      const assignedLobbyId = await redis.get(rankedAssignedLobbyKey(userId));
+      if (assignedLobbyId) {
+        span.setAttribute('quizball.skipped_due_to_assigned_lobby', true);
+        return;
+      }
+
       // Set the cancel marker BEFORE attempting the transition lock (it is
       // idempotent and re-set under the lock below). Previously the marker
       // was only written inside the lock callback — if the lock was busy at
@@ -1616,7 +1639,7 @@ export const rankedMatchmakingService = {
         return;
       }
       const snapshot = await userSessionGuardService.emitState(io, userId);
-      logger.info(
+      logger.debug(
         {
           userId,
           state: snapshot.state,

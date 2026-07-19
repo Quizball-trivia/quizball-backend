@@ -17,12 +17,20 @@ class FakeRedis {
   private kvExpiresAt = new Map<string, number>();
   private hashes = new Map<string, Map<string, string>>();
   private zsets = new Map<string, Map<string, number>>();
+  private failAssignedLobbyWrites = false;
+
+  rejectAssignedLobbyWrites(): void {
+    this.failAssignedLobbyWrites = true;
+  }
 
   async set(
     key: string,
     value: string,
     options?: { NX?: boolean; EX?: number; PX?: number }
   ): Promise<'OK' | null> {
+    if (this.failAssignedLobbyWrites && key.startsWith('ranked:mm:assigned-lobby:')) {
+      throw new Error('assigned-lobby marker unavailable');
+    }
     this.expireKvIfDue(key);
     if (options?.NX && this.kv.has(key)) return null;
     this.kv.set(key, value);
@@ -517,6 +525,17 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
         resolvedAt: new Date().toISOString(),
       };
     }),
+    resolveStates: vi.fn(async (userIds: string[]) => new Map(userIds.map((userId) => {
+      const queueSearchId = fakeRedis?.getUserSearchId(userId) ?? null;
+      return [userId, {
+        state: queueSearchId ? 'IN_QUEUE' : 'IDLE',
+        activeMatchId: null,
+        waitingLobbyId: null,
+        queueSearchId,
+        openLobbyIds: [],
+        resolvedAt: new Date().toISOString(),
+      }];
+    }))),
     runWithUserTransitionLock: vi.fn(async (_io: QuizballServer, _socket: QuizballSocket, work: () => Promise<void>) => {
       await work();
       return true;
@@ -583,6 +602,9 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
 vi.mock('../../src/modules/store/store.service.js', () => ({
   storeService: {
     getWallet: (...args: unknown[]) => mockGetWallet(...args),
+    getRankedTicketWallets: async (userIds: string[]) => new Map(
+      await Promise.all(userIds.map(async (userId) => [userId, await mockGetWallet(userId)] as const))
+    ),
   },
 }));
 
@@ -740,6 +762,30 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(aMatch.opponent.id).toBe('u2');
     expect(bMatch.opponent.id).toBe('u1');
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
+  it('keeps a committed human match when the assigned-lobby marker write fails', async () => {
+    const userA = createSocket('marker-a');
+    const userB = createSocket('marker-b');
+    fakeRedis.rejectAssignedLobbyWrites();
+
+    const userAMatch = waitForEvent<{ lobbyId: string; opponent: { id: string } }>(
+      userA,
+      'ranked:match_found'
+    );
+    const userBMatch = waitForEvent<{ lobbyId: string; opponent: { id: string } }>(
+      userB,
+      'ranked:match_found'
+    );
+
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    const [aMatch, bMatch] = await Promise.all([userAMatch, userBMatch]);
+    expect(aMatch.lobbyId).toBe(bMatch.lobbyId);
+    expect(aMatch.opponent.id).toBe('marker-b');
+    expect(bMatch.opponent.id).toBe('marker-a');
+    expect(lobbyMembers.get(aMatch.lobbyId)).toEqual(['marker-a', 'marker-b']);
   });
 
   it('expires atomic pairing reservations using the Lua-provided TTL', async () => {

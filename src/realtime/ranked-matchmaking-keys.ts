@@ -3,6 +3,7 @@ export const RANKED_MM_TIMEOUTS_KEY = 'ranked:mm:timeouts';
 export const RANKED_MM_USER_MAP_KEY = 'ranked:mm:user';
 export const RANKED_MM_SEARCH_KEY_PREFIX = 'ranked:mm:search:';
 export const RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX = 'ranked:mm:pairing:';
+export const RANKED_MM_ASSIGNED_LOBBY_KEY_PREFIX = 'ranked:mm:assigned-lobby:';
 
 export function rankedSearchKey(searchId: string): string {
   return `${RANKED_MM_SEARCH_KEY_PREFIX}${searchId}`;
@@ -22,4 +23,8 @@ export function rankedLeaveGuardKey(userId: string): string {
 
 export function rankedPairingInFlightKey(userId: string): string {
   return `${RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX}${userId}`;
+}
+
+export function rankedAssignedLobbyKey(userId: string): string {
+  return `${RANKED_MM_ASSIGNED_LOBBY_KEY_PREFIX}${userId}`;
 }

@@ -30,7 +30,7 @@ import {
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
-  RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_PAIR_TWO_OLDEST_SCRIPT,
   RANKED_MM_STALE_RESULT,
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
@@ -53,12 +53,18 @@ const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
-// A real match start performs several database/network round trips. Keep four
+// A real match start performs several database/network round trips. Keep six
 // workflows moving as a streaming pool so one slow lobby does not stall the
-// other slots. The independent DB admission gate still enforces its 12-query
-// cap; this bound prevents the matcher itself from spawning unlimited work.
-const MAX_CONCURRENT_PAIR_STARTS = 4;
+// other slots. Six leaves room for durable timer work while the independent DB
+// admission gate remains the hard 12-query cap; this bound prevents the
+// matcher itself from spawning unlimited work.
+const MAX_CONCURRENT_PAIR_STARTS = 6;
 const FOUND_MODAL_MS = 1200;
+// Match already-queued players before starting more DB-heavy draft workflows.
+// This feedback threshold keeps the ranked queue tail bounded during a flash
+// crowd while still allowing drafts to start whenever pairing is keeping up.
+const DRAFT_DEFER_QUEUE_THRESHOLD = 50;
+const DRAFT_DEFER_MS = 500;
 
 const CANCEL_KEY_TTL_SEC = 30;
 const LEAVE_GUARD_TTL_SEC = 2;
@@ -749,6 +755,21 @@ export async function runRankedDraftStart(
       );
       return;
     }
+
+    const queuedSearches = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    if (queuedSearches >= DRAFT_DEFER_QUEUE_THRESHOLD) {
+      await scheduleRealtimeTimer(
+        'ranked_draft_start',
+        lobbyId,
+        new Date(Date.now() + DRAFT_DEFER_MS),
+        { kind: 'ranked_draft_start', lobbyId, userAId, userBId }
+      );
+      logger.debug(
+        { lobbyId, queuedSearches },
+        'Deferred ranked draft start behind matchmaking backlog'
+      );
+      return;
+    }
   }
   const latest = await lobbiesRepo.getById(lobbyId);
   if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
@@ -944,7 +965,7 @@ async function processPairs(io: QuizballServer): Promise<void> {
         if (activeStarts.size >= MAX_CONCURRENT_PAIR_STARTS) {
           await Promise.race(activeStarts);
         }
-        const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+        const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT, {
           keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
           arguments: [
             RANKED_MM_SEARCH_KEY_PREFIX,

@@ -16,6 +16,7 @@ export interface MatchmakingFleetConfig {
   cleanupWaitSec: number;
   cleanupRampSec: number;
   disconnectRampSec: number;
+  disconnectSettleWaitSec: number;
   /** Shared join timestamp used to synchronize independently prepared workers. */
   joinAtMs?: number;
 }
@@ -185,6 +186,11 @@ export async function runMatchmakingFleet(
     if (delayMs > 0) await sleep(delayMs);
     observation.client?.disconnect();
   }));
+  // Disconnect handlers are deliberately detached from Socket.IO and run
+  // through a bounded server-side workflow queue. Keep infrastructure
+  // collectors alive long enough to observe the 5k teardown, including any
+  // late queue rejection/timeout that a short report tail would miss.
+  await sleep(cfg.disconnectSettleWaitSec * 1_000);
 
   return summarizeMatchmakingFleet(observations, startedAtMs, Date.now());
 }

@@ -6,7 +6,7 @@ import type { QuizballServer } from '../../src/realtime/socket-server.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
-  RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_PAIR_TWO_OLDEST_SCRIPT,
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
 
 type FakeRedis = {
@@ -34,6 +34,7 @@ const ensureProfileMock = vi.fn();
 const ensureProfilesMock = vi.fn();
 const startDraftMock = vi.fn();
 const startRankedAiForUserMock = vi.fn();
+const scheduleRealtimeTimerMock = vi.fn();
 const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getWalletMock = vi.fn();
@@ -149,6 +150,10 @@ vi.mock('../../src/modules/stats/stats.service.js', () => ({
 vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
   startDraft: (...args: unknown[]) => startDraftMock(...args),
   startRankedAiForUser: (...args: unknown[]) => startRankedAiForUserMock(...args),
+}));
+
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
+  scheduleRealtimeTimer: (...args: unknown[]) => scheduleRealtimeTimerMock(...args),
 }));
 
 // Users treated as having NO live socket (ghost searches). Anyone not listed is
@@ -308,6 +313,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     getWalletMock.mockResolvedValue({ coins: 0, tickets: 1 });
     startDraftMock.mockResolvedValue(undefined);
     startRankedAiForUserMock.mockResolvedValue(undefined);
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -324,6 +330,11 @@ describe('ranked-matchmaking.service queue behavior', () => {
       emit: vi.fn(),
     };
   }
+
+  it('claims the oldest queued searches instead of random users', () => {
+    expect(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT).toContain("redis.call('ZRANGE', queueKey, 0, 1)");
+    expect(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT).not.toContain('ZRANDMEMBER');
+  });
 
   it('ignores a queue join while the user is mid-draft instead of emitting INSUFFICIENT_TICKETS', async () => {
     // Reload-mid-draft regression (staging 2026-06-10): the client restores
@@ -422,7 +433,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -461,7 +472,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -508,7 +519,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -526,7 +537,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     const io = createIoMock();
 
     redisMock.eval.mockImplementationOnce(async (script: string) => {
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
       return [];
     });
     redisMock.eval.mockImplementation(async () => []);
@@ -559,7 +570,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     const io = createIoMock();
 
     redisMock.eval.mockImplementationOnce(async (script: string) => {
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
       return [];
     });
     redisMock.eval.mockImplementation(async () => []);
@@ -591,7 +602,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     const io = createIoMock();
 
     redisMock.eval.mockImplementationOnce(async (script: string) => {
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
       return [];
     });
     redisMock.eval.mockImplementation(async () => []);
@@ -632,11 +643,11 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s3', 'u3', 's4', 'u4'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s3', 'u3', 's4', 'u4'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -654,7 +665,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     let pairScriptCalls = 0;
 
     redisMock.eval.mockImplementation(async (script: string) => {
-      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       pairScriptCalls += 1;
       if (pairScriptCalls === 1) return ['s1', 'u1', 's2', 'u2'];
       if (pairScriptCalls === 2) return ['s3', 'u3', 's4', 'u4'];
@@ -677,7 +688,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockResolvedValue(['search-1']);
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback'];
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
 
@@ -697,7 +708,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockResolvedValue(['search-1']);
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback', 'MA'];
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
 
@@ -718,7 +729,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockResolvedValue(['search-1']);
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback'];
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
 
@@ -746,7 +757,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockResolvedValue(['search-1']);
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script === RANKED_MM_CLAIM_FALLBACK_SCRIPT) return ['u-fallback'];
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
     listOpenLobbiesForUserMock.mockImplementation(async (userId: string) => (
@@ -778,7 +789,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
         if (searchId === 'search-good') return ['good-user'];
       }
       if (script === RANKED_MM_CANCEL_SEARCH_SCRIPT) return [];
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
     getWalletMock.mockImplementation(async (userId: string) => {
@@ -816,7 +827,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
         if (searchId === 'search-bad') return ['bad-user'];
         if (searchId === 'search-good') return ['good-user'];
       }
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       return [];
     });
     startRankedAiForUserMock.mockImplementation(async (_io: QuizballServer, userId: string) => {
@@ -847,7 +858,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockRejectedValueOnce(fallbackPhaseError);
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -870,7 +881,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.zRangeByScore.mockResolvedValue(['expired-search']);
     let pairClaims = 0;
     redisMock.eval.mockImplementation(async (script: string) => {
-      if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) {
+      if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) {
         pairClaims += 1;
         if (pairClaims === 1) return ['s1', 'u1', '', 's2', 'u2', ''];
         return [];
@@ -893,7 +904,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     let pairScriptCalls = 0;
 
     redisMock.eval.mockImplementation(async (script: string) => {
-      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       pairScriptCalls += 1;
       if (pairScriptCalls === 1) return ['s1', 'u1', 's2', 'u2'];
       if (pairScriptCalls === 2) return ['s3', 'u3', 's4', 'u4'];
@@ -942,7 +953,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     });
 
     redisMock.eval.mockImplementation(async (script: string) => {
-      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       pairScriptCalls += 1;
       if (pairScriptCalls > 10) return [];
       const userNumber = (pairScriptCalls - 1) * 2 + 1;
@@ -974,14 +985,14 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     service.start(io);
     await vi.advanceTimersByTimeAsync(120);
-    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 4; i += 1) {
+    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 6; i += 1) {
       await Promise.resolve();
     }
 
-    // Four user pairs are atomically reserved and admitted. The remaining
+    // Six user pairs are atomically reserved and admitted. The remaining
     // pairs stay recoverable in the live queue until a worker slot is free.
-    expect(pairScriptCalls).toBe(4);
-    expect(createLobbyMock).toHaveBeenCalledTimes(4);
+    expect(pairScriptCalls).toBe(6);
+    expect(createLobbyMock).toHaveBeenCalledTimes(6);
 
     releaseLobbyStarts();
     for (let i = 0; i < 1_000 && createLobbyMock.mock.calls.length < 10; i += 1) {
@@ -997,7 +1008,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -1028,7 +1039,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
       releasePairClaim = resolve;
     });
     redisMock.eval.mockImplementation(async (script: string) => {
-      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       pairScriptCalls += 1;
       await pairClaimGate;
       return [];
@@ -1049,7 +1060,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 's2', 'u2'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -1087,7 +1098,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     }));
     redisMock.eval
       .mockImplementationOnce(async (script: string) => {
-        if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return ['s1', 'u1', 'MA', 's2', 'u2', 'GE'];
+        if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return ['s1', 'u1', 'MA', 's2', 'u2', 'GE'];
         return [];
       })
       .mockImplementation(async () => []);
@@ -1123,6 +1134,27 @@ describe('ranked-matchmaking.service queue behavior', () => {
     await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
 
     expect(startDraftMock).toHaveBeenCalledWith(io, 'lobby-1');
+  });
+
+  it('runRankedDraftStart defers DB-heavy draft work while the ranked queue is backlogged', async () => {
+    const io = createIoMock();
+    redisMock.get.mockResolvedValue(null);
+    redisMock.zCard.mockResolvedValue(50);
+
+    const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
+    const before = Date.now();
+    await mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2');
+
+    expect(getLobbyByIdMock).not.toHaveBeenCalled();
+    expect(startDraftMock).not.toHaveBeenCalled();
+    expect(scheduleRealtimeTimerMock).toHaveBeenCalledWith(
+      'ranked_draft_start',
+      'lobby-1',
+      expect.any(Date),
+      { kind: 'ranked_draft_start', lobbyId: 'lobby-1', userAId: 'u1', userBId: 'u2' }
+    );
+    const dueAt = scheduleRealtimeTimerMock.mock.calls[0]?.[2] as Date;
+    expect(dueAt.getTime() - before).toBe(500);
   });
 
   it('runRankedDraftStart rethrows DB admission pressure for durable retry', async () => {

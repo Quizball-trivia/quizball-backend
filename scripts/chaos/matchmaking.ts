@@ -24,6 +24,7 @@ interface Args {
   cleanupWaitSec: number;
   cleanupRampSec: number;
   disconnectRampSec: number;
+  disconnectSettleWaitSec: number;
   maxP95Ms: number;
   api?: string;
   report?: string;
@@ -89,6 +90,7 @@ function parseArgs(argv: string[]): Args {
     cleanupWaitSec: integer(argv, 'cleanup-wait-s', 5, 1),
     cleanupRampSec: integer(argv, 'cleanup-ramp-s', 1, 0),
     disconnectRampSec: integer(argv, 'disconnect-ramp-s', 5, 0),
+    disconnectSettleWaitSec: integer(argv, 'disconnect-settle-wait-s', 35, 1),
     maxP95Ms: integer(argv, 'max-p95-ms', 8_000, 1),
     api: value(argv, 'api'),
     report: value(argv, 'report'),
@@ -215,6 +217,7 @@ async function main(): Promise<void> {
     cleanupWaitSec: args.cleanupWaitSec,
     cleanupRampSec: args.cleanupRampSec,
     disconnectRampSec: args.disconnectRampSec,
+    disconnectSettleWaitSec: args.disconnectSettleWaitSec,
     joinAtMs: args.startAtMs,
   });
   if (sampler) clearInterval(sampler);

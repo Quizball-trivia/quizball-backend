@@ -260,6 +260,22 @@ export const rankedService = {
     return profile;
   },
 
+  async ensureProfiles(userIds: string[]): Promise<Map<string, RankedProfileRow>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const existing = await rankedRepo.getProfilesByUserIds(uniqueUserIds);
+    const profilesByUserId = new Map(existing.map((profile) => [profile.user_id, profile]));
+    const needsEnsure = uniqueUserIds.filter((userId) => {
+      const profile = profilesByUserId.get(userId);
+      return !profile || profile.tier !== tierFromRp(profile.rp);
+    });
+
+    const ensured = await Promise.all(needsEnsure.map((userId) => rankedService.ensureProfile(userId)));
+    for (const profile of ensured) profilesByUserId.set(profile.user_id, profile);
+    return profilesByUserId;
+  },
+
   async getProfile(userId: string): Promise<RankedProfileRow | null> {
     return rankedRepo.getProfile(userId);
   },

@@ -55,10 +55,63 @@ const PARTY_QUESTION_TIME_MS = 10000;
 const PARTY_QUESTION_REVEAL_MS = 3000;
 const PARTY_ROUND_READY_ACK_CEILING_MS = 8000;
 const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
+const PARTY_READY_GATE_TTL_SEC = 60;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
 let partyReadyAckCeilingCount = 0;
+
+function partyReadyExpectedKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:expected:${matchId}:${qIndex}`;
+}
+
+function partyReadyAckKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:acks:${matchId}:${qIndex}`;
+}
+
+function partyReadyDispatchKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:dispatched:${matchId}:${qIndex}`;
+}
+
+// The expected set can be opened after a very fast client acknowledgement.
+// Keeping acks in a separate set makes that ordering safe. SET NX elects one
+// replica to advance when the final ack arrives.
+const CLAIM_PARTY_READY_GATE_SCRIPT = `
+  if redis.call("SCARD", KEYS[1]) == 0 then
+    return 0
+  end
+  if #redis.call("SDIFF", KEYS[1], KEYS[2]) > 0 then
+    return 0
+  end
+  if redis.call("SET", KEYS[3], "1", "NX", "EX", ARGV[1]) then
+    return 1
+  end
+  return 0
+`;
+
+async function claimSharedPartyReadyGate(matchId: string, qIndex: number): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return false;
+  const claimed = await redis.eval(CLAIM_PARTY_READY_GATE_SCRIPT, {
+    keys: [
+      partyReadyExpectedKey(matchId, qIndex),
+      partyReadyAckKey(matchId, qIndex),
+      partyReadyDispatchKey(matchId, qIndex),
+    ],
+    arguments: [String(PARTY_READY_GATE_TTL_SEC)],
+  });
+  return Number(claimed) === 1;
+}
+
+async function clearSharedPartyReadyGate(matchId: string, qIndex: number): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return;
+  await redis.del([
+    partyReadyExpectedKey(matchId, qIndex),
+    partyReadyAckKey(matchId, qIndex),
+    partyReadyDispatchKey(matchId, qIndex),
+  ]);
+}
 
 async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
   const redis = getRedisClient();
@@ -255,12 +308,34 @@ export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): v
   });
 }
 
-export function handlePartyQuizReadyForNextQuestion(
+export async function handlePartyQuizReadyForNextQuestion(
+  io: QuizballServer,
   userId: string,
   matchId: string,
   qIndex: number
-): void {
-  pendingReadyGates.acknowledge(userId, matchId, qIndex);
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    pendingReadyGates.acknowledge(userId, matchId, qIndex);
+  } else {
+    try {
+      await redis
+        .multi()
+        .sAdd(partyReadyAckKey(matchId, qIndex), userId)
+        .expire(partyReadyAckKey(matchId, qIndex), PARTY_READY_GATE_TTL_SEC)
+        .exec();
+      if (await claimSharedPartyReadyGate(matchId, qIndex)) {
+        await runPartyQuizRoundTransition(io, matchId, qIndex, qIndex + 1);
+      }
+    } catch (err) {
+      // The durable transition timer remains authoritative if Redis briefly
+      // fails while recording an optional fast-path acknowledgement.
+      logger.warn(
+        { err, matchId, qIndex, userId },
+        'Failed to record shared party ready acknowledgement'
+      );
+    }
+  }
   logger.debug(
     { eventName: 'match:ready_for_next_question', matchId, qIndex, userId },
     'Party quiz ready ack received'
@@ -555,6 +630,7 @@ async function schedulePartyQuizPostRoundAdvance(
     });
   };
 
+  let durableTimerScheduled = false;
   try {
     await scheduleRealtimeTimer(
       'party_round_transition',
@@ -562,6 +638,7 @@ async function schedulePartyQuizPostRoundAdvance(
       new Date(Date.now() + ceilingMs),
       { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
     );
+    durableTimerScheduled = true;
   } catch (error) {
     // Keep the local ready-gate ceiling as a degraded fallback if Redis has
     // a transient write failure. A durable retry is preferred, but dropping
@@ -572,34 +649,60 @@ async function schedulePartyQuizPostRoundAdvance(
     );
   }
 
-  pendingReadyGates.open({
-    scopeId: matchId,
-    token: resolvedQIndex,
-    waitingUserIds: participantUserIds,
-    ceilingMs,
-    dispatch,
-    onTimeout: (missing) => {
-      partyReadyAckCeilingCount += 1;
-      // A missed ready acknowledgement is a degraded-path signal, but a
-      // reconnect storm can produce one per round and match. Preserve the
-      // warning without letting it displace unrelated failures from Railway's
-      // bounded log stream.
-      if (partyReadyAckCeilingCount % 100 === 1) {
-        logger.warn(
-          {
-            eventName: 'party_ready_ack_ceiling',
-            matchId,
-            resolvedQIndex,
-            missingCount: missing.length,
-            missingSample: missing.slice(0, 10),
-            ceilingMs,
-            occurrences: partyReadyAckCeilingCount,
-          },
-          'Party ready-ack ceiling reached; advancing'
-        );
-      }
-    },
-  });
+  const redis = getRedisClient();
+  if (redis?.isOpen) {
+    try {
+      const expectedKey = partyReadyExpectedKey(matchId, resolvedQIndex);
+      await redis
+        .multi()
+        .sAdd(expectedKey, participantUserIds)
+        .expire(expectedKey, PARTY_READY_GATE_TTL_SEC)
+        .expire(partyReadyAckKey(matchId, resolvedQIndex), PARTY_READY_GATE_TTL_SEC)
+        .exec();
+      // Handles the legal race where every acknowledgement arrived before
+      // this replica finished opening the shared gate.
+      if (await claimSharedPartyReadyGate(matchId, resolvedQIndex)) dispatch();
+    } catch (err) {
+      logger.warn(
+        { err, matchId, resolvedQIndex, nextQIndex },
+        'Failed to open shared party ready gate; durable ceiling remains armed'
+      );
+    }
+  }
+
+  // If Redis is unavailable, or it claimed to be open but rejected the
+  // durable write, retain the process-local ceiling. A shared ack may still
+  // win first; the DB transition guard makes the later ceiling idempotent.
+  if (!redis?.isOpen || !durableTimerScheduled) {
+    pendingReadyGates.open({
+      scopeId: matchId,
+      token: resolvedQIndex,
+      waitingUserIds: participantUserIds,
+      ceilingMs,
+      dispatch,
+      onTimeout: (missing) => {
+        partyReadyAckCeilingCount += 1;
+        // A missed ready acknowledgement is a degraded-path signal, but a
+        // reconnect storm can produce one per round and match. Preserve the
+        // warning without letting it displace unrelated failures from Railway's
+        // bounded log stream.
+        if (partyReadyAckCeilingCount % 100 === 1) {
+          logger.warn(
+            {
+              eventName: 'party_ready_ack_ceiling',
+              matchId,
+              resolvedQIndex,
+              missingCount: missing.length,
+              missingSample: missing.slice(0, 10),
+              ceilingMs,
+              occurrences: partyReadyAckCeilingCount,
+            },
+            'Party ready-ack ceiling reached; advancing'
+          );
+        }
+      },
+    });
+  }
   logger.debug(
     {
       eventName: 'party_ready_gate_opened',
@@ -640,18 +743,30 @@ export async function runPartyQuizRoundTransition(
   try {
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.status !== 'active') {
-      await cancelRealtimeTimer('party_round_transition', timerKey);
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
-      await cancelRealtimeTimer('party_round_transition', timerKey);
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
     if (state.currentQuestion) {
       if (state.currentQuestion.qIndex >= nextQIndex) {
-        await cancelRealtimeTimer('party_round_transition', timerKey);
+        await Promise.all([
+          cancelRealtimeTimer('party_round_transition', timerKey),
+          clearSharedPartyReadyGate(matchId, resolvedQIndex),
+        ]);
+        pendingReadyGates.clear(matchId);
         return;
       }
       throw new Error(
@@ -668,7 +783,11 @@ export async function runPartyQuizRoundTransition(
 
     if (nextQIndex >= match.total_questions) {
       await completePartyQuizMatch(io, matchId);
-      await cancelRealtimeTimer('party_round_transition', timerKey);
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
       return;
     }
 
@@ -676,7 +795,11 @@ export async function runPartyQuizRoundTransition(
     if (!sent) {
       throw new Error(`Party quiz question ${nextQIndex} was not dispatched for ${matchId}`);
     }
-    await cancelRealtimeTimer('party_round_transition', timerKey);
+    await Promise.all([
+      cancelRealtimeTimer('party_round_transition', timerKey),
+      clearSharedPartyReadyGate(matchId, resolvedQIndex),
+    ]);
+    pendingReadyGates.clear(matchId);
   } finally {
     await releaseLock(lockKey, lock.token);
   }

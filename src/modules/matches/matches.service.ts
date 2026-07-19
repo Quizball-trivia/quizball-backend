@@ -817,17 +817,15 @@ export const matchesService = {
   },
 
   /**
-   * Atomic party-quiz answer write. Inserts a match_answers row
-   * (idempotent via ON CONFLICT) and on first-write increments the
-   * player's totals inside the same DB transaction.
+   * Atomic party-quiz answer write. One CTE statement inserts the answer
+   * idempotently and updates the player's totals only when that insert won.
    *
-   * On duplicate (a retry): the second call's insert no-ops, and we
-   * read the already-present rows so the caller can echo back the
-   * authoritative state without re-applying the score delta.
-   *
-   * Was on matches.repo as `recordPartyQuizAnswerIfMissing`; moved
-   * here so the cross-entity transaction is owned by the service
-   * layer. Repos stay table-pure.
+   * This deliberately stays one SQL statement instead of `sql.begin` with
+   * separate INSERT/UPDATE calls. At streamer load the managed-Postgres
+   * network round trips for BEGIN + two statements + COMMIT occupied every
+   * app-side pool slot even though Postgres execution itself was sub-ms.
+   * A single statement has the same atomicity and duplicate protection with
+   * one quarter of the connection-round-trip pressure.
    */
   async recordPartyQuizAnswerIfMissing(data: {
     matchId: string;
@@ -843,55 +841,91 @@ export const matchesService = {
     shooterSeat?: number | null;
   }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
     try {
-      return await sql.begin(async (tx) => {
-        const insertedAnswer = await matchAnswersRepo.insertMatchAnswerIfMissingInTx(tx, data);
+      const [result] = await sql<Array<{
+        inserted: boolean;
+        answer: MatchAnswerRow | null;
+        player: MatchPlayerRow | null;
+      }>>`
+        WITH inserted_answer AS (
+          INSERT INTO match_answers (
+            match_id,
+            q_index,
+            user_id,
+            selected_index,
+            is_correct,
+            time_ms,
+            points_earned,
+            answer_payload,
+            phase_kind,
+            phase_round,
+            shooter_seat
+          )
+          SELECT
+            ${data.matchId},
+            ${data.qIndex},
+            ${data.userId},
+            ${data.selectedIndex},
+            ${data.isCorrect},
+            ${data.timeMs},
+            ${data.pointsEarned},
+            ${sql.json(data.answerPayload ?? {})},
+            ${data.phaseKind ?? 'normal'},
+            ${data.phaseRound ?? null},
+            ${data.shooterSeat ?? null}
+          WHERE EXISTS (
+            SELECT 1
+            FROM match_players
+            WHERE match_id = ${data.matchId}
+              AND user_id = ${data.userId}
+          )
+          ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+          RETURNING *
+        ),
+        updated_player AS (
+          UPDATE match_players
+          SET total_points = total_points + ${data.pointsEarned},
+              correct_answers = correct_answers + ${data.isCorrect ? 1 : 0}
+          WHERE match_id = ${data.matchId}
+            AND user_id = ${data.userId}
+            AND EXISTS (SELECT 1 FROM inserted_answer)
+          RETURNING *
+        ),
+        selected_answer AS (
+          SELECT * FROM inserted_answer
+          UNION ALL
+          SELECT ma.*
+          FROM match_answers ma
+          WHERE ma.match_id = ${data.matchId}
+            AND ma.q_index = ${data.qIndex}
+            AND ma.user_id = ${data.userId}
+            AND NOT EXISTS (SELECT 1 FROM inserted_answer)
+          LIMIT 1
+        ),
+        selected_player AS (
+          SELECT * FROM updated_player
+          UNION ALL
+          SELECT mp.*
+          FROM match_players mp
+          WHERE mp.match_id = ${data.matchId}
+            AND mp.user_id = ${data.userId}
+            AND NOT EXISTS (SELECT 1 FROM updated_player)
+          LIMIT 1
+        )
+        SELECT
+          EXISTS (SELECT 1 FROM inserted_answer) AS inserted,
+          (SELECT row_to_json(answer_row) FROM selected_answer answer_row) AS answer,
+          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player
+      `;
 
-        if (insertedAnswer) {
-          const updatedPlayer = await matchPlayersRepo.updatePlayerTotalsInTx(
-            tx,
-            data.matchId,
-            data.userId,
-            data.pointsEarned,
-            data.isCorrect,
-          );
-
-          // UPDATE must hit one row — otherwise the answer persists without
-          // the score increment. Throw to roll back the transaction.
-          if (!updatedPlayer) {
-            throw new AppError(
-              'match_players row missing during party answer insert',
-              500,
-              ErrorCode.INTERNAL_ERROR,
-              { matchId: data.matchId, userId: data.userId },
-            );
-          }
-
-          return {
-            inserted: true,
-            answer: insertedAnswer,
-            player: updatedPlayer,
-          };
-        }
-
-        // ON CONFLICT path — answer already existed. Read back the
-        // authoritative rows so the caller has consistent state.
-        const existingAnswer = await matchAnswersRepo.getAnswerForUserInTx(
-          tx,
-          data.matchId,
-          data.qIndex,
-          data.userId,
+      if (!result?.answer || !result.player) {
+        throw new AppError(
+          'Party answer write returned incomplete state',
+          500,
+          ErrorCode.INTERNAL_ERROR,
+          { matchId: data.matchId, qIndex: data.qIndex, userId: data.userId },
         );
-        const existingPlayerRows = await tx.unsafe<MatchPlayerRow[]>(
-          `SELECT * FROM match_players WHERE match_id = $1 AND user_id = $2`,
-          [data.matchId, data.userId],
-        );
-
-        return {
-          inserted: false,
-          answer: existingAnswer,
-          player: existingPlayerRows[0] ?? null,
-        };
-      }) as { inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null };
+      }
+      return result;
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);

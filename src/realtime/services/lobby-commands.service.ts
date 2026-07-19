@@ -625,7 +625,10 @@ export async function startFriendlyMatch(
   }
 
   const lockKey = `lock:lobby:${lobbyId}`;
-  const lock = await acquireLock(lockKey, 3000);
+  // `lobby:state` announcing that both members are ready can reach the host
+  // just before the other ready handler releases this same lock. A one-shot
+  // acquire turned that normal race into MATCH_START_LOCKED at 1k load.
+  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000);
   if (!lock.acquired || !lock.token) {
     logger.warn({ lobbyId }, 'Friendly match start skipped: lock not acquired');
     socket.emit('error', {

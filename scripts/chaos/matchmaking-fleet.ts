@@ -35,6 +35,8 @@ interface ClientObservation {
   cleanupSent: boolean;
   cleanupConfirmedAt: number | null;
   errors: string[];
+  connectAttempts: number;
+  sessionCleanupFailed: boolean;
 }
 
 export interface MatchmakingFleetSummary {
@@ -43,6 +45,8 @@ export interface MatchmakingFleetSummary {
   elapsedSec: number;
   clients: number;
   connectedClients: number;
+  /** Connections that needed a second transport attempt before the measured join. */
+  connectionRetries?: number;
   searchStartedClients: number;
   humanMatchedClients: number;
   humanPairs: number;
@@ -120,6 +124,8 @@ export async function runMatchmakingFleet(
     cleanupSent: false,
     cleanupConfirmedAt: null,
     errors: [],
+    connectAttempts: 0,
+    sessionCleanupFailed: false,
   }));
   await Promise.all(observations.map(async (observation, index) => {
     const delayMs = cfg.clients > 1
@@ -127,14 +133,30 @@ export async function runMatchmakingFleet(
       : 0;
     if (delayMs > 0) await sleep(delayMs);
     const user = cfg.users[index]!;
-    const client = connectStaging(cfg.apiBase, user.token, user.userId);
-    observation.client = client;
-    if (!(await waitConnected(client, 20_000))) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      observation.connectAttempts += 1;
+      const client = connectStaging(cfg.apiBase, user.token, user.userId);
+      observation.client = client;
+      if (await waitConnected(client, 20_000)) {
+        observation.connected = true;
+        break;
+      }
+      client.disconnect();
+      if (attempt === 0) await sleep(250);
+    }
+    if (!observation.connected || !observation.client) {
       observation.errors.push('connect_timeout');
       return;
     }
-    observation.connected = true;
-    await clearActiveMatch(client);
+    try {
+      await clearActiveMatch(observation.client);
+    } catch {
+      observation.errors.push('session_cleanup_failed');
+      observation.sessionCleanupFailed = true;
+      observation.client.disconnect();
+      observation.connected = false;
+      return;
+    }
     installObservers(observation);
   }));
 
@@ -244,7 +266,7 @@ export function evaluateMatchmakingFleet(
 export function renderMatchmakingFleet(summary: MatchmakingFleetSummary): string {
   return [
     'MATCHMAKING QUEUE-STORM RESULTS',
-    `clients=${summary.clients} connected=${summary.connectedClients} searchStarted=${summary.searchStartedClients}`,
+    `clients=${summary.clients} connected=${summary.connectedClients} connectionRetries=${summary.connectionRetries ?? 0} searchStarted=${summary.searchStartedClients}`,
     `humanMatched=${summary.humanMatchedClients} humanPairs=${summary.humanPairs} aiFallbacks=${summary.aiFallbackClients} unmatched=${summary.unmatchedClients}`,
     `duplicates=${summary.duplicateMatchFoundClients} selfMatches=${summary.selfMatchedClients} invalidPairs=${summary.invalidPairClients} cleanupUnconfirmed=${summary.cleanupUnconfirmedClients}`,
     `join->match_found ms: p50=${summary.percentiles.p50} p95=${summary.percentiles.p95} p99=${summary.percentiles.p99} max=${summary.percentiles.max}`,
@@ -308,7 +330,8 @@ function summarizeMatchmakingFleet(
   const failures: MatchmakingFleetSummary['failures'] = [];
   for (const observation of observations) {
     const reasons: string[] = [];
-    if (!observation.connected) reasons.push('connect_failed');
+    if (observation.sessionCleanupFailed) reasons.push('session_cleanup_failed');
+    else if (!observation.connected) reasons.push('connect_failed');
     else if (!observation.matchFoundAt) reasons.push('match_found_timeout');
     if (observation.matchFoundCount > 1) reasons.push('duplicate_match_found');
     if (observation.opponentId === observation.userId) reasons.push('self_match');
@@ -340,6 +363,10 @@ function summarizeMatchmakingFleet(
     elapsedSec: (endedAtMs - startedAtMs) / 1_000,
     clients: observations.length,
     connectedClients: observations.filter((observation) => observation.connected).length,
+    connectionRetries: observations.reduce(
+      (sum, observation) => sum + Math.max(0, observation.connectAttempts - 1),
+      0
+    ),
     searchStartedClients: observations.filter((observation) => observation.searchStartedAt !== null).length,
     humanMatchedClients: pairAnalysis.humanMatchedClients,
     humanPairs: pairAnalysis.humanPairs,

@@ -6,6 +6,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     listMembersWithUser: vi.fn(),
     listPublicLobbies: vi.fn(),
+    listAllValidCategories: vi.fn(),
   },
 }));
 
@@ -30,12 +31,38 @@ vi.mock('../../src/core/index.js', async (importOriginal) => {
 });
 
 import { lobbiesRepo } from '../../src/modules/lobbies/lobbies.repo.js';
-import { lobbiesService } from '../../src/modules/lobbies/lobbies.service.js';
+import {
+  invalidateCategoryCache,
+  lobbiesService,
+} from '../../src/modules/lobbies/lobbies.service.js';
 
 describe('lobbiesService public/friendly helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateCategoryCache();
     ensureProfileMock.mockResolvedValue({ rp: 0 });
+  });
+
+  it('keeps category eligibility caches separate for 5- and 10-question modes', async () => {
+    (lobbiesRepo.listAllValidCategories as Mock).mockImplementation(async (minimum: number) => (
+      minimum >= 10
+        ? [{ id: 'deep', name: { en: 'Deep' }, icon: null, image_url: null }]
+        : [{ id: 'thin', name: { en: 'Thin' }, icon: null, image_url: null }]
+    ));
+
+    await expect(lobbiesService.selectRandomCategories(1, 5)).resolves.toEqual([
+      expect.objectContaining({ id: 'thin' }),
+    ]);
+    await expect(lobbiesService.selectRandomCategories(1, 10)).resolves.toEqual([
+      expect.objectContaining({ id: 'deep' }),
+    ]);
+    await expect(lobbiesService.selectRandomCategories(1, 5)).resolves.toEqual([
+      expect.objectContaining({ id: 'thin' }),
+    ]);
+
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenCalledTimes(2);
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(1, 5);
+    expect(lobbiesRepo.listAllValidCategories).toHaveBeenNthCalledWith(2, 10);
   });
 
   it('defaults legacy friendly game mode to friendly_possession in lobby state', async () => {

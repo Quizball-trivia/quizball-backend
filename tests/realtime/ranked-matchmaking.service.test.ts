@@ -67,7 +67,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     createLobby: (...args: unknown[]) => createLobbyMock(...args),
-    createLobbyWithMembers: (data: unknown) => createLobbyMock(data),
+    createLobbyWithMembers: (...args: unknown[]) => createLobbyMock(...args),
     addMember: (...args: unknown[]) => addMemberMock(...args),
     getById: (...args: unknown[]) => getLobbyByIdMock(...args),
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
@@ -470,6 +470,13 @@ describe('ranked-matchmaking.service queue behavior', () => {
     await vi.advanceTimersByTimeAsync(120);
 
     expect(createLobbyMock).toHaveBeenCalledTimes(1);
+    expect(createLobbyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostUserId: 'u1' }),
+      [
+        { userId: 'u1', isReady: true },
+        { userId: 'u2', isReady: true },
+      ],
+    );
     expect(startRankedAiForUserMock).not.toHaveBeenCalled();
     expect(getLobbyByIdMock).not.toHaveBeenCalled();
     expect(buildLobbyStateMock).not.toHaveBeenCalled();
@@ -891,7 +898,10 @@ describe('ranked-matchmaking.service queue behavior', () => {
     await vi.advanceTimersByTimeAsync(120);
 
     expect(createLobbyMock).toHaveBeenCalledTimes(2);
-    expect(createLobbyMock).toHaveBeenCalledWith(expect.objectContaining({ hostUserId: 'u3' }));
+    expect(createLobbyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostUserId: 'u3' }),
+      expect.any(Array),
+    );
     expect(logger.error).toHaveBeenCalledWith(
       { err: pairError, searchIdA: 's1', searchIdB: 's2', userAId: 'u1', userBId: 'u2' },
       'Ranked matchmaking pair failed for queued users'

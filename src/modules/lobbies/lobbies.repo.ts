@@ -30,12 +30,18 @@ export interface CreateLobbyMemberData {
   isReady: boolean;
 }
 
+function deriveLobbyDefaults(data: CreateLobbyData) {
+  return {
+    gameMode: data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
+    friendlyRandom: data.friendlyRandom ?? true,
+    isPublic: data.isPublic ?? false,
+    displayName: data.displayName ?? '',
+  };
+}
+
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
-    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
-    const friendlyRandom = data.friendlyRandom ?? true;
-    const isPublic = data.isPublic ?? false;
-    const displayName = data.displayName ?? '';
+    const { gameMode, friendlyRandom, isPublic, displayName } = deriveLobbyDefaults(data);
     const [row] = await sql<LobbyRow[]>`
       INSERT INTO lobbies (
         id,
@@ -80,10 +86,7 @@ export const lobbiesRepo = {
     data: CreateLobbyData,
     members: [CreateLobbyMemberData, CreateLobbyMemberData],
   ): Promise<LobbyRow> {
-    const gameMode = data.gameMode ?? (data.mode === 'ranked' ? 'ranked_sim' : 'friendly_possession');
-    const friendlyRandom = data.friendlyRandom ?? true;
-    const isPublic = data.isPublic ?? false;
-    const displayName = data.displayName ?? '';
+    const { gameMode, friendlyRandom, isPublic, displayName } = deriveLobbyDefaults(data);
     const [row] = await sql<LobbyRow[]>`
       WITH created_lobby AS (
         INSERT INTO lobbies (

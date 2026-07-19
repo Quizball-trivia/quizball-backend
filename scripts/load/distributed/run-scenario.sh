@@ -57,6 +57,46 @@ collect_one() {
   "${SCP[@]}" "root@$ip:$remote_report" "$local_report"
 }
 
+with_completion_marker() {
+  local command="$1"
+  local marker="$2"
+  printf "rm -f '%s' && %s; rc=\$?; printf '%%s\\n' \"\$rc\" > '%s'; exit \"\$rc\"" \
+    "$marker" "$command" "$marker"
+}
+
+wait_for_worker() {
+  local ip="$1"
+  local pid="$2"
+  local marker="$3"
+  local timeout_sec="${REMOTE_RESULT_TIMEOUT_SEC:-7200}"
+  local deadline=$((SECONDS + timeout_sec))
+  local status=''
+
+  while (( SECONDS < deadline )); do
+    status="$("${SSH[@]}" "root@$ip" "if test -f '$marker'; then cat '$marker'; fi" 2>/dev/null || true)"
+    if [[ "$status" =~ ^[0-9]+$ ]]; then
+      # Some long-lived Node processes leave the original SSH channel open
+      # after the workload and report have finished. The remote marker is the
+      # authoritative result, so close that stale local transport explicitly.
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      (( 10#$status == 0 ))
+      return
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      return $?
+    fi
+    sleep 2
+  done
+
+  printf 'worker %s did not publish completion marker %s within %ss\n' \
+    "$ip" "$marker" "$timeout_sec" >&2
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  return 124
+}
+
 run_gameplay() {
   local players="$1"
   local duration="$2"
@@ -89,7 +129,8 @@ run_gameplay() {
     "$workers" "$max_per_players" "$pair_remainder" "$total_rps" "$base_rps" "$rps_remainder" \
     "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
 
-  local index=0 ip offset=0 worker_pairs worker_players remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
     worker_pairs="$base_pairs"
     if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
@@ -102,9 +143,12 @@ run_gameplay() {
     (( index == 0 )) && db_flag=''
     local command
     command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
     offset=$((offset + worker_players))
     index=$((index + 1))
@@ -112,7 +156,7 @@ run_gameplay() {
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
@@ -144,7 +188,8 @@ run_matchmaking() {
   printf 'workers=%d max-clients/worker=%d pair-remainder=%d synchronized=%s\n' \
     "$workers" "$max_per_players" "$pair_remainder" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
 
-  local index=0 ip offset=0 worker_pairs worker_players remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
     worker_pairs="$base_pairs"
     if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
@@ -155,9 +200,12 @@ run_matchmaking() {
     (( index == 0 )) && db_flag=''
     local command
     command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
     offset=$((offset + worker_players))
     index=$((index + 1))
@@ -165,7 +213,9 @@ run_matchmaking() {
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then failed=$((failed + 1)); fi
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
+      failed=$((failed + 1))
+    fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -194,7 +244,8 @@ run_k6() {
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
     local worker_rate=$base_rate
     (( index < rate_remainder )) && worker_rate=$((worker_rate + 1))
@@ -208,16 +259,21 @@ run_k6() {
     local k6_mode="$mode"
     local command
     command="$(remote_prefix)TARGET=staging MODE=$k6_mode USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
     index=$((index + 1))
   done < <(worker_ips "$role")
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then failed=$((failed + 1)); fi
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
+      failed=$((failed + 1))
+    fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done

@@ -32,6 +32,10 @@ positive_int() {
   [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || die "$1 must be a positive integer"
 }
 
+non_negative_int() {
+  [[ "${2:-}" =~ ^[0-9]+$ ]] || die "$1 must be a non-negative integer"
+}
+
 format_epoch_utc() {
   local epoch="$1"
   if date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; then
@@ -180,7 +184,7 @@ run_matchmaking() {
   local join_ramp="${3:-1}"
   positive_int players "$players"
   positive_int join-timeout "$timeout"
-  positive_int join-ramp "$join_ramp"
+  non_negative_int join-ramp "$join_ramp"
   local workers
   workers="$(require_worker_count mixed 2)"
   (( players % 2 == 0 )) || die 'players must be even'

@@ -14,6 +14,7 @@ type RedisMultiOp = () => void | Promise<void>;
 
 class FakeRedis {
   private kv = new Map<string, string>();
+  private kvExpiresAt = new Map<string, number>();
   private hashes = new Map<string, Map<string, string>>();
   private zsets = new Map<string, Map<string, number>>();
 
@@ -22,12 +23,21 @@ class FakeRedis {
     value: string,
     options?: { NX?: boolean; EX?: number; PX?: number }
   ): Promise<'OK' | null> {
+    this.expireKvIfDue(key);
     if (options?.NX && this.kv.has(key)) return null;
     this.kv.set(key, value);
+    if (typeof options?.EX === 'number') {
+      this.kvExpiresAt.set(key, Date.now() + options.EX * 1_000);
+    } else if (typeof options?.PX === 'number') {
+      this.kvExpiresAt.set(key, Date.now() + options.PX);
+    } else {
+      this.kvExpiresAt.delete(key);
+    }
     return 'OK';
   }
 
   async get(key: string): Promise<string | null> {
+    this.expireKvIfDue(key);
     return this.kv.get(key) ?? null;
   }
 
@@ -35,7 +45,9 @@ class FakeRedis {
     const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
     let removed = 0;
     for (const key of keys) {
+      this.expireKvIfDue(key);
       if (this.kv.delete(key)) removed += 1;
+      this.kvExpiresAt.delete(key);
       if (this.hashes.delete(key)) removed += 1;
       if (this.zsets.delete(key)) removed += 1;
     }
@@ -43,6 +55,7 @@ class FakeRedis {
   }
 
   async exists(key: string): Promise<number> {
+    this.expireKvIfDue(key);
     return this.kv.has(key) || this.hashes.has(key) || this.zsets.has(key) ? 1 : 0;
   }
 
@@ -191,6 +204,8 @@ class FakeRedis {
       const userMapKey = data.keys[2];
       const searchPrefix = data.arguments[0] ?? 'ranked:mm:search:';
       const matchedAt = data.arguments[1] ?? String(Date.now());
+      const pairingPrefix = data.arguments[2] ?? 'ranked:mm:pairing:';
+      const pairingTtlSec = Number(data.arguments[3] ?? 30);
 
       const queue = this.zsets.get(queueKey);
       if (!queue || queue.size < 2) return [];
@@ -234,6 +249,8 @@ class FakeRedis {
       this.zsets.get(timeoutKey)?.delete(searchIdA);
       this.zsets.get(timeoutKey)?.delete(searchIdB);
       await this.hDel(userMapKey, userIdA, userIdB);
+      await this.set(`${pairingPrefix}${userIdA}`, '1', { EX: pairingTtlSec });
+      await this.set(`${pairingPrefix}${userIdB}`, '1', { EX: pairingTtlSec });
       return [searchIdA, userIdA, searchIdB, userIdB];
     }
 
@@ -298,6 +315,13 @@ class FakeRedis {
     }
 
     return [];
+  }
+
+  private expireKvIfDue(key: string): void {
+    const expiresAt = this.kvExpiresAt.get(key);
+    if (expiresAt === undefined || expiresAt > Date.now()) return;
+    this.kv.delete(key);
+    this.kvExpiresAt.delete(key);
   }
 
   private getOrCreateHash(key: string): Map<string, string> {
@@ -707,6 +731,31 @@ describe('ranked matchmaking socket integration (in-process)', () => {
     expect(aMatch.opponent.id).toBe('u2');
     expect(bMatch.opponent.id).toBe('u1');
     expect(mockStartRankedAiForUser).not.toHaveBeenCalled();
+  });
+
+  it('expires atomic pairing reservations using the Lua-provided TTL', async () => {
+    rankedMatchmakingService.stop();
+    const userA = createSocket('ttl-a');
+    const userB = createSocket('ttl-b');
+    await userA.trigger('ranked:queue_join', {});
+    await userB.trigger('ranked:queue_join', {});
+
+    vi.useFakeTimers();
+    try {
+      const result = await fakeRedis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+        keys: ['ranked:mm:queue', 'ranked:mm:timeouts', 'ranked:mm:user'],
+        arguments: ['ranked:mm:search:', String(Date.now()), 'ranked:mm:pairing:', '30'],
+      });
+      expect(result).toHaveLength(4);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-a')).toBe(1);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-b')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-a')).toBe(0);
+      expect(await fakeRedis.exists('ranked:mm:pairing:ttl-b')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('treats adapter lookup errors as inconclusive and keeps a healthy pairing', async () => {

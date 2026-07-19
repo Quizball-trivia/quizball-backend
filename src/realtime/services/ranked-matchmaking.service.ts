@@ -35,6 +35,7 @@ import {
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 import {
   RANKED_MM_QUEUE_KEY,
+  RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
   RANKED_MM_SEARCH_KEY_PREFIX,
   RANKED_MM_TIMEOUTS_KEY,
   RANKED_MM_USER_MAP_KEY,
@@ -52,11 +53,11 @@ const TICK_INTERVAL_MS = 100;
 const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
-// Starting a real match performs several independent database/network reads.
-// Serial starts made a 50-pair flash take roughly 11 seconds on staging. Keep
-// concurrency bounded so the matcher drains bursts without bypassing the DB
-// admission controller or spawning an unbounded Promise.all.
-const MAX_CONCURRENT_PAIR_STARTS = 4;
+// A real match start performs several database/network round trips. Keep eight
+// workflows moving as a streaming pool so one slow lobby does not stall the
+// other slots. The independent DB admission gate still enforces its 12-query
+// cap; this bound prevents the matcher itself from spawning unlimited work.
+const MAX_CONCURRENT_PAIR_STARTS = 8;
 const FOUND_MODAL_MS = 1200;
 
 const CANCEL_KEY_TTL_SEC = 30;
@@ -811,20 +812,56 @@ async function processPairs(io: QuizballServer): Promise<void> {
       return;
     }
 
+    type ClaimedPair = {
+      searchIdA: string;
+      searchIdB: string;
+      userAId: string;
+      userBId: string;
+      userACountryCode: string | null;
+      userBCountryCode: string | null;
+    };
+
     let pairCount = 0;
     let pairFailureCount = 0;
-    let pendingStarts: Promise<void>[] = [];
-    const flushStarts = async (): Promise<void> => {
-      if (pendingStarts.length === 0) return;
-      const current = pendingStarts;
-      pendingStarts = [];
-      await Promise.all(current);
+    const activeStarts = new Set<Promise<void>>();
+    const startClaimedPair = (pair: ClaimedPair): void => {
+      const start = (async () => {
+        try {
+          await startHumanRankedMatch(io, pair.userAId, pair.userBId, {
+            userA: pair.userACountryCode,
+            userB: pair.userBCountryCode,
+          });
+        } catch (error) {
+          pairFailureCount += 1;
+          logger.error(
+            {
+              err: error,
+              searchIdA: pair.searchIdA,
+              searchIdB: pair.searchIdB,
+              userAId: pair.userAId,
+              userBId: pair.userBId,
+            },
+            'Ranked matchmaking pair failed for queued users'
+          );
+        }
+      })();
+      activeStarts.add(start);
+      void start.finally(() => activeStarts.delete(start));
     };
+
     try {
       for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+        if (activeStarts.size >= MAX_CONCURRENT_PAIR_STARTS) {
+          await Promise.race(activeStarts);
+        }
         const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
           keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
-          arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
+          arguments: [
+            RANKED_MM_SEARCH_KEY_PREFIX,
+            String(Date.now()),
+            RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
+            String(PAIRING_IN_FLIGHT_TTL_SEC),
+          ],
         });
         const result = toStringArray(resultRaw);
         // The Lua script removed an expired/mismapped queue member. Keep scanning
@@ -842,32 +879,27 @@ async function processPairs(io: QuizballServer): Promise<void> {
         const userBCountryCode = hasCountryCodes ? result[5] || null : null;
         if (!userAId || !userBId) break;
         pairCount += 1;
+        const pair: ClaimedPair = {
+          searchIdA,
+          searchIdB,
+          userAId,
+          userBId,
+          userACountryCode,
+          userBCountryCode,
+        };
         rankedDebug('pair_claimed_two_users', {
           userA: rankedDebugUser(userAId),
           userB: rankedDebugUser(userBId),
           searchA: searchIdA.slice(0, 8),
           searchB: searchIdB.slice(0, 8),
         });
-        pendingStarts.push((async () => {
-          try {
-            await startHumanRankedMatch(io, userAId, userBId, {
-              userA: userACountryCode,
-              userB: userBCountryCode,
-            });
-          } catch (error) {
-            pairFailureCount += 1;
-            logger.error(
-              { err: error, searchIdA, searchIdB, userAId, userBId },
-              'Ranked matchmaking pair failed for queued users'
-            );
-          }
-        })());
-        if (pendingStarts.length >= MAX_CONCURRENT_PAIR_STARTS) {
-          await flushStarts();
-        }
+        startClaimedPair(pair);
       }
     } finally {
-      await flushStarts();
+      // A later Redis claim may fail after earlier users were already removed
+      // from the queue. Always drain every successful claim before surfacing
+      // that failure so claimed players are never silently stranded.
+      await Promise.all(activeStarts);
     }
     span.setAttribute('quizball.pair_count', pairCount);
     span.setAttribute('quizball.pair_failure_count', pairFailureCount);

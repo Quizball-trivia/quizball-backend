@@ -68,27 +68,32 @@ run_gameplay() {
   positive_int ramp "$ramp"
   local workers
   workers="$(require_worker_count mixed 2)"
-  (( players % workers == 0 )) || die "players must divide evenly across $workers workers"
-  local per_players=$((players / workers))
-  (( per_players % 2 == 0 )) || die 'players per worker must be even for human matchmaking'
+  (( players % 2 == 0 )) || die 'players must be even for human matchmaking'
+  local total_pairs=$((players / 2))
+  (( total_pairs >= workers )) || die "players must provide at least one pair per worker"
+  local base_pairs=$((total_pairs / workers))
+  local pair_remainder=$((total_pairs % workers))
+  local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
   (( total_rps >= workers )) \
     || die "total-http-rps must be at least the $workers-worker count for gameplay"
   local base_rps=$((total_rps / workers))
   local rps_remainder=$((total_rps % workers))
-  local lead=$((per_players * 23 / 10 + 180))
+  local lead=$((max_per_players * 23 / 10 + 180))
   (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-gameplay-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d players/worker=%d global-http-rps=%d base-rps/worker=%d remainder=%d synchronized=%s\n' \
-    "$workers" "$per_players" "$total_rps" "$base_rps" "$rps_remainder" \
+  printf 'workers=%d max-players/worker=%d pair-remainder=%d global-http-rps=%d base-rps/worker=%d rps-remainder=%d synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$total_rps" "$base_rps" "$rps_remainder" \
     "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report log pids=() reports=() ips=()
   while IFS= read -r ip; do
-    offset=$((index * per_players))
+    worker_pairs="$base_pairs"
+    if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
+    worker_players=$((worker_pairs * 2))
     local worker_rps=$base_rps
     (( index < rps_remainder )) && worker_rps=$((worker_rps + 1))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
@@ -96,11 +101,12 @@ run_gameplay() {
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$per_players --offset=$offset --sockets=$per_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     ips+=("$ip")
+    offset=$((offset + worker_players))
     index=$((index + 1))
   done < <(worker_ips mixed)
 
@@ -123,31 +129,37 @@ run_matchmaking() {
   positive_int join-timeout "$timeout"
   local workers
   workers="$(require_worker_count mixed 2)"
-  (( players % workers == 0 )) || die "players must divide evenly across $workers workers"
-  local per_players=$((players / workers))
-  (( per_players % 2 == 0 )) || die 'players per worker must be even'
-  local lead=$((per_players * 23 / 10 + 240))
+  (( players % 2 == 0 )) || die 'players must be even'
+  local total_pairs=$((players / 2))
+  (( total_pairs >= workers )) || die "players must provide at least one pair per worker"
+  local base_pairs=$((total_pairs / workers))
+  local pair_remainder=$((total_pairs % workers))
+  local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
+  local lead=$((max_per_players * 23 / 10 + 240))
   local start_at=$(( $(date +%s) + lead ))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-matchmaking-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d clients/worker=%d synchronized=%s\n' \
-    "$workers" "$per_players" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'workers=%d max-clients/worker=%d pair-remainder=%d synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report log pids=() reports=() ips=()
   while IFS= read -r ip; do
-    offset=$((index * per_players))
+    worker_pairs="$base_pairs"
+    if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
+    worker_players=$((worker_pairs * 2))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$per_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
+    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     ips+=("$ip")
+    offset=$((offset + worker_players))
     index=$((index + 1))
   done < <(worker_ips mixed)
 

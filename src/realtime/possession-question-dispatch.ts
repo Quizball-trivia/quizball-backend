@@ -1099,6 +1099,21 @@ export async function ensurePossessionActiveTimers(
   }
 
   scheduleQuestionTimeout(io, matchId, currentQuestion.qIndex, deadlineAt);
+  const pauseStartedAt = await getPauseStartedAt(matchId);
+  if (pauseStartedAt) {
+    logger.info(
+      {
+        eventName: 'match:question_timer',
+        matchId,
+        qIndex: currentQuestion.qIndex,
+        pauseStartedAt,
+        deadlineAt: deadlineAt.toISOString(),
+        ...questionLogFields(currentQuestion),
+      },
+      'Possession timer ensure deferred AI answer while match paused'
+    );
+    return true;
+  }
   // Reconnect/resume path: only schedule AI answer if no plan exists yet.
   // Rescheduling here would re-randomize the AI's plan and shift the
   // deadline forward, breaking live timing for ongoing rounds.

@@ -159,6 +159,23 @@ async function readPayload(member: string): Promise<RealtimeTimerPayload | null>
   }
 }
 
+/**
+ * Read a durable timer payload even when its ZSET deadline is already due.
+ *
+ * Reconnect flows use this to preserve decisions embedded in a timer payload
+ * while rebasing the deadline. Checking only ZSET membership is insufficient:
+ * a due timer may already have been popped by another replica while its
+ * payload is still the authoritative plan.
+ */
+export async function getRealtimeTimerPayload<K extends RealtimeTimerKind>(
+  kind: K,
+  key: string
+): Promise<Extract<RealtimeTimerPayload, { kind: K }> | null> {
+  const payload = await readPayload(timerMember(kind, key));
+  if (!payload || payload.kind !== kind) return null;
+  return payload as Extract<RealtimeTimerPayload, { kind: K }>;
+}
+
 async function processDueMember(member: string): Promise<void> {
   const lock = await acquireLock(timerLockKey(member), 10_000);
   if (!lock.acquired || !lock.token) {

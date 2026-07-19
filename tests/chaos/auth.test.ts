@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ChaosLoginError,
+  ensureCoinPurchaseFixtures,
   loginChaosUser,
   provisionUsers,
   type ProvisionConfig,
@@ -83,5 +84,43 @@ describe('chaos user login validation', () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.filter((url) => url.endsWith('/api/v1/auth/login'))).toHaveLength(1);
     expect(urls.filter((url) => url.endsWith('/api/v1/users/me'))).toHaveLength(1);
+  });
+});
+
+describe('economy fixture production guards', () => {
+  it('rejects the production API and project before opening a database connection', async () => {
+    await expect(ensureCoinPurchaseFixtures({
+      target: 'staging',
+      apiBase: 'https://api.quizball.io',
+      supabaseUrl: 'https://lfbwhxvwubzeqkztghok.supabase.co',
+      databaseUrl: 'postgresql://postgres@example.invalid/postgres',
+      userIds: ['synthetic-user'],
+      coins: 20_000,
+      productSlug: 'chance_card_5050',
+    })).rejects.toThrow('PROD GUARD');
+  });
+
+  it('permits only the bounded synthetic chance-card fixture', async () => {
+    await expect(ensureCoinPurchaseFixtures({
+      target: 'local',
+      apiBase: 'http://127.0.0.1:8001',
+      supabaseUrl: 'http://127.0.0.1:54321',
+      databaseUrl: 'postgresql://postgres@127.0.0.1:54322/postgres',
+      userIds: ['synthetic-user'],
+      coins: 20_000,
+      productSlug: 'coin_pack_100',
+    })).rejects.toThrow('only permits chance_card_5050');
+  });
+
+  it('rejects a remote database even when the API target says local', async () => {
+    await expect(ensureCoinPurchaseFixtures({
+      target: 'local',
+      apiBase: 'http://127.0.0.1:8001',
+      supabaseUrl: 'http://127.0.0.1:54321',
+      databaseUrl: 'postgresql://postgres@example.invalid/postgres',
+      userIds: ['synthetic-user'],
+      coins: 20_000,
+      productSlug: 'chance_card_5050',
+    })).rejects.toThrow('PROD GUARD');
   });
 });

@@ -18,6 +18,7 @@ usage() {
   cat <<'EOF'
 Usage:
   run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
+  run-scenario.sh party <players> [ramp-sec]
   run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec] [connect-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
   run-scenario.sh http-hot <global-rps> <duration> [ramp-duration]
@@ -28,6 +29,69 @@ gameplay and matchmaking use the mixed fleet. auth-login uses every
 mixed+auth worker so Supabase sees distributed source IPs. All commands source
 only the staging environment installed by sync-env.ts.
 EOF
+}
+
+run_party() {
+  local players="$1"
+  local ramp="${2:-120}"
+  positive_int players "$players"
+  non_negative_int ramp "$ramp"
+  local workers
+  workers="$(require_worker_count mixed 2)"
+  (( players % 2 == 0 )) || die 'players must be even for party pairs'
+  local total_pairs=$((players / 2))
+  (( total_pairs >= workers )) || die "players must provide at least one pair per worker"
+  local base_pairs=$((total_pairs / workers))
+  local pair_remainder=$((total_pairs % workers))
+  local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
+  local lead=$((max_per_players * 23 / 10 + 240))
+  (( lead < 300 )) && lead=300
+  local start_at=$(( $(date +%s) + lead ))
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-party-${players}"
+  local local_dir="$REPORT_ROOT/$stamp"
+  mkdir -p "$local_dir"
+  printf 'workers=%d max-clients/worker=%d pair-remainder=%d ramp=%ds synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$ramp" "$(format_epoch_utc "$start_at")"
+
+  local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
+  while IFS= read -r ip; do
+    worker_pairs="$base_pairs"
+    if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
+    worker_players=$((worker_pairs * 2))
+    remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
+    log="$local_dir/worker-$(printf '%02d' "$index").log"
+    local db_flag='--no-db-stats'
+    (( index == 0 )) && db_flag=''
+    local command
+    command="$(remote_prefix)npx tsx scripts/chaos/friendly.ts --target=staging --clients=$worker_players --offset=$offset --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
+    "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
+    pids+=("$!")
+    reports+=("$remote_report")
+    markers+=("$remote_marker")
+    ips+=("$ip")
+    offset=$((offset + worker_players))
+    index=$((index + 1))
+  done < <(worker_ips mixed)
+
+  local failed=0
+  for index in "${!pids[@]}"; do
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
+      failed=$((failed + 1))
+    fi
+    collect_one "${ips[$index]}" "${reports[$index]}" \
+      "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
+  done
+  local aggregate_failed=0
+  npx tsx "$REPO_ROOT/scripts/chaos/friendly-aggregate.ts" \
+    --expected-clients="$players" --report="$local_dir/aggregate.json" \
+    "$local_dir"/worker-*.json || aggregate_failed=1
+  printf 'reports=%s failed_workers=%d aggregate_failed=%d\n' \
+    "$local_dir" "$failed" "$aggregate_failed"
+  (( failed == 0 && aggregate_failed == 0 )) || return 1
 }
 
 positive_int() {
@@ -322,6 +386,7 @@ main() {
   local scenario="${1:-}"
   case "$scenario" in
     gameplay) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" ;;
+    party) [[ $# -ge 2 && $# -le 3 ]] || die 'party requires players [ramp]'; run_party "$2" "${3:-120}" ;;
     matchmaking) [[ $# -ge 2 && $# -le 5 ]] || die 'matchmaking requires players [timeout] [join-ramp] [connect-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" "${5:-60}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;
     http-hot) [[ $# -ge 3 && $# -le 4 ]] || die 'http-hot requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" hot-db ;;

@@ -89,6 +89,8 @@ scripts/load/distributed/run-scenario.sh gameplay 500 900 250
 scripts/load/distributed/run-scenario.sh gameplay 1000 900 500
 # Add real daily-completion and coin-purchase transactions (never Stripe).
 scripts/load/distributed/run-scenario.sh gameplay 1000 900 500 60 true
+# Real lobby create/join/ready/start and complete party-quiz matches.
+scripts/load/distributed/run-scenario.sh party 1000 120
 # Separate transport connection pressure from the synchronized queue storm.
 # This connects 5k clients over 120s, then joins the queue at 100 clients/s.
 scripts/load/distributed/run-scenario.sh matchmaking 5000 90 50 120

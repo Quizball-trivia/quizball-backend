@@ -18,6 +18,10 @@ const CONNECT_TIMEOUT_MS = 20_000;
 const LOBBY_START_TIMEOUT_MS = 90_000;
 const MATCH_FINISH_TIMEOUT_MS = 420_000;
 const MAX_FAILURE_DETAILS = 500;
+const MAX_SOCKET_ERROR_PAYLOADS = 10;
+const MAX_SOCKET_ERROR_KEYS = 12;
+const MAX_SOCKET_ERROR_ARRAY_ITEMS = 10;
+const MAX_SOCKET_ERROR_STRING_LENGTH = 500;
 
 export interface FriendlyFleetConfig {
   apiBase: string;
@@ -239,26 +243,67 @@ async function runPair(
     }
     metrics.matchesCompleted++;
     metrics.matchStartToFinalResultsMs.push(Date.now() - matchStartedAt);
-    const errorPayloads = [
-      ...host.trace.byEvent('error').map((event) => event.payload),
-      ...guest.trace.byEvent('error').map((event) => event.payload),
-    ];
-    const errors = errorPayloads.length;
-    metrics.socketErrors += errors;
-    if (errors > 0) {
-      fail(
-        metrics,
-        pairIndex,
-        'socket_error',
-        `events=${errors} payloads=${JSON.stringify(errorPayloads).slice(0, 1000)}`
-      );
-    }
   } catch (error) {
     fail(metrics, pairIndex, 'exception', error instanceof Error ? error.message : String(error));
   } finally {
+    if (clients) collectSocketErrors(metrics, pairIndex, clients);
     clients?.[0].disconnect();
     clients?.[1].disconnect();
   }
+}
+
+function collectSocketErrors(
+  metrics: MutableMetrics,
+  pairIndex: number,
+  clients: [StagingClient, StagingClient]
+): void {
+  const errorEvents = [
+    ...clients[0].trace.byEvent('error'),
+    ...clients[1].trace.byEvent('error'),
+  ];
+  if (errorEvents.length === 0) return;
+
+  metrics.socketErrors += errorEvents.length;
+  const payloads = errorEvents
+    .slice(0, MAX_SOCKET_ERROR_PAYLOADS)
+    .map((event) => boundSocketErrorValue(event.payload));
+  const detail = `socketErrors=${errorEvents.length} payloads=${JSON.stringify(payloads)}`;
+  const existingFailure = [...metrics.failures]
+    .reverse()
+    .find((failure) => failure.pairIndex === pairIndex);
+  if (existingFailure) {
+    existingFailure.detail = `${existingFailure.detail}; ${detail}`;
+    return;
+  }
+  fail(metrics, pairIndex, 'socket_error', detail);
+}
+
+function boundSocketErrorValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>()
+): unknown {
+  if (typeof value === 'string') return value.slice(0, MAX_SOCKET_ERROR_STRING_LENGTH);
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value !== 'object') return String(value).slice(0, MAX_SOCKET_ERROR_STRING_LENGTH);
+  if (seen.has(value)) return '[circular]';
+  if (depth >= 3) return '[depth-capped]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_SOCKET_ERROR_ARRAY_ITEMS)
+      .map((item) => boundSocketErrorValue(item, depth + 1, seen));
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, MAX_SOCKET_ERROR_KEYS)
+      .map(([key, item]) => [
+        key.slice(0, MAX_SOCKET_ERROR_STRING_LENGTH),
+        boundSocketErrorValue(item, depth + 1, seen),
+      ])
+  );
 }
 
 function attachBots(client: StagingClient): void {

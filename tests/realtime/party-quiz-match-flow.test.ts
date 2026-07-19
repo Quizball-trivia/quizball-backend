@@ -178,6 +178,8 @@ describe('party quiz realtime flow', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.mocked(acquireLock).mockImplementation(async () => ({ acquired: true, token: 'lock-token' }));
+    realtimeTimerMocks.schedule.mockResolvedValue(undefined);
+    realtimeTimerMocks.cancel.mockResolvedValue(undefined);
 
     partyState = {
       version: 1,
@@ -459,6 +461,70 @@ describe('party quiz realtime flow', () => {
     expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
       'party_round_transition',
       'match-1:0'
+    );
+  });
+
+  it('keeps the local ready ceiling when durable transition scheduling fails', async () => {
+    const {
+      resolvePartyQuizRound,
+      handlePartyQuizReadyForNextQuestion,
+    } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    realtimeTimerMocks.schedule.mockRejectedValueOnce(new Error('redis write failed'));
+    partyState = {
+      ...partyState,
+      answeredUserIds: ['u1', 'u2', 'u3'],
+    };
+    answers = players.map((player) => ({
+      user_id: player.user_id,
+      selected_index: 2,
+      is_correct: true,
+      points_earned: 100,
+      time_ms: 1000,
+    }));
+
+    await expect(resolvePartyQuizRound(io, 'match-1', 0)).resolves.toBeUndefined();
+    getMatchMock.mockImplementation(async () => ({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'active',
+      total_questions: 10,
+      current_q_index: 1,
+      state_payload: partyState,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      winner_user_id: null,
+      category_a_id: 'cat-1',
+    }));
+
+    handlePartyQuizReadyForNextQuestion('u1', 'match-1', 0);
+    handlePartyQuizReadyForNextQuestion('u2', 'match-1', 0);
+    handlePartyQuizReadyForNextQuestion('u3', 'match-1', 0);
+    await vi.waitFor(() => {
+      expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+    });
+  });
+
+  it('rejects a transition when an older question is still active', async () => {
+    const { runPartyQuizRoundTransition } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+
+    await expect(runPartyQuizRoundTransition(io, 'match-1', 0, 1)).rejects.toThrow(
+      'found question 0, expected 1'
+    );
+    expect(realtimeTimerMocks.cancel).not.toHaveBeenCalledWith(
+      'party_round_transition',
+      'match-1:0'
+    );
+  });
+
+  it('rejects a transition when the persisted question index is not ready', async () => {
+    const { runPartyQuizRoundTransition } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    partyState = { ...partyState, currentQuestion: null };
+
+    await expect(runPartyQuizRoundTransition(io, 'match-1', 0, 1)).rejects.toThrow(
+      'persisted index 0, expected 1'
     );
   });
 

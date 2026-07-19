@@ -611,6 +611,40 @@ describe('party quiz realtime flow', () => {
     );
   });
 
+  it('advances an empty participant gate without arming a durable timer', async () => {
+    const { resolvePartyQuizRound } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    partyState = {
+      ...partyState,
+      answeredUserIds: [],
+      droppedUserIds: players.map((player) => player.user_id),
+    };
+    answers = [];
+    getMatchMock.mockImplementation(async () => ({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'active',
+      total_questions: 10,
+      current_q_index: partyState.currentQuestion?.qIndex ?? 1,
+      state_payload: partyState,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      winner_user_id: null,
+      category_a_id: 'cat-1',
+    }));
+
+    await resolvePartyQuizRound(io, 'match-1', 0);
+    await vi.waitFor(() => {
+      expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+    });
+    expect(realtimeTimerMocks.schedule).not.toHaveBeenCalledWith(
+      'party_round_transition',
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it('rejects a transition when an older question is still active', async () => {
     const { runPartyQuizRoundTransition } = await import('../../src/realtime/party-quiz-match-flow.js');
     const { io } = createIoMock();

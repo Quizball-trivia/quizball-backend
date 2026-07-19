@@ -126,8 +126,8 @@ function scheduleLocalFallback(member: string, dueAtMs: number, payload: Realtim
   const delayMs = Math.max(0, dueAtMs - Date.now());
   const timer = setTimeout(() => {
     localFallbackTimers.delete(member);
-    void handleTimerPayload(member, payload).catch((error) => {
-      logger.error({ error, member }, 'Realtime fallback timer handler failed');
+    void handleTimerPayload(member, payload).catch((err) => {
+      logger.error({ err, member }, 'Realtime fallback timer handler failed');
     });
   }, delayMs);
   timer.unref?.();
@@ -218,8 +218,8 @@ async function processDueMember(member: string): Promise<void> {
           keys: [TIMER_ZSET_KEY, timerPayloadKey(member)],
           arguments: [member],
         });
-      } catch (error) {
-        logger.warn({ error, member }, 'Failed to clear realtime timer payload after processing');
+      } catch (err) {
+        logger.warn({ err, member }, 'Failed to clear realtime timer payload after processing');
       }
     }
   }
@@ -228,8 +228,8 @@ async function processDueMember(member: string): Promise<void> {
 async function rescheduleRedisMember(member: string, dueAtMs: number): Promise<void> {
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
-  await redis.zAdd(TIMER_ZSET_KEY, [{ score: dueAtMs, value: member }]).catch((error) => {
-    logger.warn({ error, member }, 'Failed to reschedule realtime timer');
+  await redis.zAdd(TIMER_ZSET_KEY, [{ score: dueAtMs, value: member }]).catch((err) => {
+    logger.warn({ err, member }, 'Failed to reschedule realtime timer');
   });
 }
 
@@ -279,8 +279,8 @@ async function pollDueTimersOnce(): Promise<void> {
       keys: [TIMER_ZSET_KEY],
       arguments: [String(Date.now()), String(TIMER_BATCH_SIZE)],
     });
-  } catch (error) {
-    logger.warn({ error }, 'Failed to poll realtime timers from Redis');
+  } catch (err) {
+    logger.warn({ err }, 'Failed to poll realtime timers from Redis');
     return;
   }
 

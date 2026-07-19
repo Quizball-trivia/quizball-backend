@@ -622,13 +622,20 @@ async function schedulePartyQuizPostRoundAdvance(
 ): Promise<void> {
   const timerKey = partyRoundTransitionTimerKey(matchId, resolvedQIndex);
   const dispatch = () => {
-    void runPartyQuizRoundTransition(io, matchId, resolvedQIndex, nextQIndex).catch((error) => {
+    void runPartyQuizRoundTransition(io, matchId, resolvedQIndex, nextQIndex).catch((err) => {
       logger.error(
-        { error, matchId, resolvedQIndex, nextQIndex },
+        { err, matchId, resolvedQIndex, nextQIndex },
         'Failed to advance party quiz round from ready gate'
       );
     });
   };
+
+  // No client can acknowledge an empty gate. Advance immediately instead of
+  // arming a Redis timer/set that can only expire later.
+  if (participantUserIds.length === 0) {
+    dispatch();
+    return;
+  }
 
   let durableTimerScheduled = false;
   try {
@@ -639,12 +646,12 @@ async function schedulePartyQuizPostRoundAdvance(
       { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
     );
     durableTimerScheduled = true;
-  } catch (error) {
+  } catch (err) {
     // Keep the local ready-gate ceiling as a degraded fallback if Redis has
     // a transient write failure. A durable retry is preferred, but dropping
     // both mechanisms here would recreate the frozen-between-rounds bug.
     logger.warn(
-      { error, matchId, resolvedQIndex, nextQIndex },
+      { err, matchId, resolvedQIndex, nextQIndex },
       'Failed to persist party round transition timer; using local ceiling'
     );
   }

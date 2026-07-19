@@ -820,52 +820,55 @@ async function processPairs(io: QuizballServer): Promise<void> {
       pendingStarts = [];
       await Promise.all(current);
     };
-    for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
-      const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
-        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
-        arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
-      });
-      const result = toStringArray(resultRaw);
-      // The Lua script removed an expired/mismapped queue member. Keep scanning
-      // in this same tick instead of letting one orphan throttle matchmaking to
-      // one cleanup per 100ms.
-      if (result[0] === RANKED_MM_STALE_RESULT) continue;
-      if (result.length < 4) break;
+    try {
+      for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+        const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+          keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+          arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
+        });
+        const result = toStringArray(resultRaw);
+        // The Lua script removed an expired/mismapped queue member. Keep scanning
+        // in this same tick instead of letting one orphan throttle matchmaking to
+        // one cleanup per 100ms.
+        if (result[0] === RANKED_MM_STALE_RESULT) continue;
+        if (result.length < 4) break;
 
-      const searchIdA = result[0];
-      const userAId = result[1];
-      const hasCountryCodes = result.length >= 6;
-      const userACountryCode = hasCountryCodes ? result[2] || null : null;
-      const searchIdB = hasCountryCodes ? result[3] : result[2];
-      const userBId = hasCountryCodes ? result[4] : result[3];
-      const userBCountryCode = hasCountryCodes ? result[5] || null : null;
-      if (!userAId || !userBId) break;
-      pairCount += 1;
-      rankedDebug('pair_claimed_two_users', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-        searchA: searchIdA.slice(0, 8),
-        searchB: searchIdB.slice(0, 8),
-      });
-      pendingStarts.push((async () => {
-        try {
-          await startHumanRankedMatch(io, userAId, userBId, {
-            userA: userACountryCode,
-            userB: userBCountryCode,
-          });
-        } catch (error) {
-          pairFailureCount += 1;
-          logger.error(
-            { err: error, searchIdA, searchIdB, userAId, userBId },
-            'Ranked matchmaking pair failed for queued users'
-          );
+        const searchIdA = result[0];
+        const userAId = result[1];
+        const hasCountryCodes = result.length >= 6;
+        const userACountryCode = hasCountryCodes ? result[2] || null : null;
+        const searchIdB = hasCountryCodes ? result[3] : result[2];
+        const userBId = hasCountryCodes ? result[4] : result[3];
+        const userBCountryCode = hasCountryCodes ? result[5] || null : null;
+        if (!userAId || !userBId) break;
+        pairCount += 1;
+        rankedDebug('pair_claimed_two_users', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          searchA: searchIdA.slice(0, 8),
+          searchB: searchIdB.slice(0, 8),
+        });
+        pendingStarts.push((async () => {
+          try {
+            await startHumanRankedMatch(io, userAId, userBId, {
+              userA: userACountryCode,
+              userB: userBCountryCode,
+            });
+          } catch (error) {
+            pairFailureCount += 1;
+            logger.error(
+              { err: error, searchIdA, searchIdB, userAId, userBId },
+              'Ranked matchmaking pair failed for queued users'
+            );
+          }
+        })());
+        if (pendingStarts.length >= MAX_CONCURRENT_PAIR_STARTS) {
+          await flushStarts();
         }
-      })());
-      if (pendingStarts.length >= MAX_CONCURRENT_PAIR_STARTS) {
-        await flushStarts();
       }
+    } finally {
+      await flushStarts();
     }
-    await flushStarts();
     span.setAttribute('quizball.pair_count', pairCount);
     span.setAttribute('quizball.pair_failure_count', pairFailureCount);
   });

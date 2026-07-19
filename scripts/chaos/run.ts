@@ -697,6 +697,7 @@ function mergeActivityPeak(current: ActivitySnapshot | null, next: ActivitySnaps
     idle: Math.max(current.idle, next.idle),
     idleInTxn: Math.max(current.idleInTxn, next.idleInTxn),
     waitingOnLock: Math.max(current.waitingOnLock, next.waitingOnLock),
+    longestLockWaitSec: Math.max(current.longestLockWaitSec, next.longestLockWaitSec),
     longestActiveSec: Math.max(current.longestActiveSec, next.longestActiveSec),
   };
 }

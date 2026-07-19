@@ -230,7 +230,14 @@ function evaluate(
   if (fleet.socketErrors > 0) violations.push(`socket error events ${fleet.socketErrors}`);
   if (fleet.failureCount > 0) violations.push(`friendly pair failures ${fleet.failureCount}`);
   if (dbPeak && dbPeak.utilizationPct > 75) violations.push(`DB connections ${dbPeak.utilizationPct}% > 75%`);
-  if (dbPeak && dbPeak.waitingOnLock > 0) violations.push(`DB lock waiters ${dbPeak.waitingOnLock}`);
+  // Millisecond row-lock handoffs are normal when hundreds of games update
+  // shared objective/achievement rows. Fail on a sustained wait, not on the
+  // existence of a lock waiter in one 1-second sample.
+  if (dbPeak && dbPeak.longestLockWaitSec > 1) {
+    violations.push(
+      `DB lock wait ${dbPeak.longestLockWaitSec}s > 1s (${dbPeak.waitingOnLock} waiters)`
+    );
+  }
   if (app.requestFailures > 0) violations.push(`app telemetry failures ${app.requestFailures}`);
   const instances = Object.entries(app.instances).filter(([name]) => name !== 'unknown');
   if (instances.length < expectedInstances) violations.push(`app replicas observed ${instances.length}/${expectedInstances}`);
@@ -259,6 +266,7 @@ function mergeActivityPeak(current: ActivitySnapshot | null, next: ActivitySnaps
     idle: Math.max(current.idle, next.idle),
     idleInTxn: Math.max(current.idleInTxn, next.idleInTxn),
     waitingOnLock: Math.max(current.waitingOnLock, next.waitingOnLock),
+    longestLockWaitSec: Math.max(current.longestLockWaitSec, next.longestLockWaitSec),
     longestActiveSec: Math.max(current.longestActiveSec, next.longestActiveSec),
   };
 }

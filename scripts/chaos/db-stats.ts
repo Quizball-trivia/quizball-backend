@@ -18,6 +18,7 @@ export interface ActivitySnapshot {
   idle: number;
   idleInTxn: number;
   waitingOnLock: number;
+  longestLockWaitSec: number;
   longestActiveSec: number;
   maxConnections: number;
   utilizationPct: number;
@@ -82,6 +83,7 @@ export async function snapshotActivity(
       idle: number;
       idle_in_txn: number;
       waiting_on_lock: number;
+      longest_lock_wait_sec: number;
       longest_active_sec: number;
       max_connections: number;
       utilization_pct: number;
@@ -99,6 +101,10 @@ export async function snapshotActivity(
       count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_txn,
       count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock,
       COALESCE(round(max(extract(epoch FROM (now() - query_start)))
+        FILTER (WHERE wait_event_type = 'Lock'
+          AND query NOT ILIKE '%pg_stat_activity%')::numeric, 3), 0)::float8
+        AS longest_lock_wait_sec,
+      COALESCE(round(max(extract(epoch FROM (now() - query_start)))
         FILTER (WHERE state = 'active'
           AND query NOT ILIKE '%pg_stat_activity%')::numeric, 1), 0)::float8
         AS longest_active_sec,
@@ -114,6 +120,7 @@ export async function snapshotActivity(
     idle: r.idle,
     idleInTxn: r.idle_in_txn,
     waitingOnLock: r.waiting_on_lock,
+    longestLockWaitSec: r.longest_lock_wait_sec,
     longestActiveSec: r.longest_active_sec,
     maxConnections: r.max_connections,
     utilizationPct: r.utilization_pct,

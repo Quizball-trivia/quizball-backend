@@ -1087,6 +1087,20 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(startDraftMock).toHaveBeenCalledWith(io, 'lobby-1');
   });
 
+  it('runRankedDraftStart rethrows DB admission pressure for durable retry', async () => {
+    const io = createIoMock();
+    redisMock.get.mockResolvedValue(null);
+    getLobbyByIdMock.mockResolvedValue(makeOpenLobby('lobby-1', 'waiting'));
+    const { DbOverloadedError } = await import('../../src/db/admission.js');
+    startDraftMock.mockRejectedValueOnce(new DbOverloadedError('queue_full'));
+
+    const mod = await import('../../src/realtime/services/ranked-matchmaking.service.js');
+    await expect(mod.runRankedDraftStart(io, 'lobby-1', 'u1', 'u2')).rejects.toMatchObject({
+      code: 'DB_OVERLOADED',
+      reason: 'queue_full',
+    });
+  });
+
   it('runRankedDraftStart skips when either player cancelled the search', async () => {
     const io = createIoMock();
     redisMock.get.mockImplementation(async (key: string) =>

@@ -11,6 +11,11 @@ const TIMER_PAYLOAD_TTL_SEC = 60 * 60 * 6;
 const TIMER_POLL_INTERVAL_MS = 500;
 const TIMER_HARNESS_POLL_INTERVAL_MS = 25;
 const TIMER_BATCH_SIZE = 100;
+// Timer handlers frequently perform several database operations. Launching an
+// entire 100-member Redis batch with Promise.all can instantly overflow the DB
+// admission queue even when every query is fast. Keep each replica below the
+// 12-slot DB bulkhead while still allowing independent replicas to share work.
+const TIMER_HANDLER_CONCURRENCY = 4;
 
 export type RealtimeTimerKind =
   | 'auction_bot_action'
@@ -60,6 +65,7 @@ export type RealtimeTimerHandlers = Partial<Record<RealtimeTimerKind, RealtimeTi
 let activeIo: QuizballServer | null = null;
 let activeHandlers: RealtimeTimerHandlers = {};
 let pollTimer: NodeJS.Timeout | null = null;
+let pollInFlight = false;
 const localFallbackTimers = new Map<string, NodeJS.Timeout>();
 
 function timerMember(kind: RealtimeTimerKind, key: string): string {
@@ -242,7 +248,22 @@ const CLEANUP_PAYLOAD_IF_UNSCHEDULED_SCRIPT = `
   return 1
 `;
 
-async function pollDueTimers(): Promise<void> {
+async function processDueMembers(members: string[]): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(TIMER_HANDLER_CONCURRENCY, members.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < members.length) {
+      const member = members[nextIndex];
+      nextIndex += 1;
+      if (!member) continue;
+      await processDueMember(member).catch((error) => {
+        logger.error({ error, member }, 'Failed to process realtime timer');
+      });
+    }
+  }));
+}
+
+async function pollDueTimersOnce(): Promise<void> {
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
 
@@ -258,13 +279,21 @@ async function pollDueTimers(): Promise<void> {
   }
 
   if (!Array.isArray(dueMembers) || dueMembers.length === 0) return;
-  await Promise.all(
-    dueMembers
-      .filter((member): member is string => typeof member === 'string')
-      .map((member) => processDueMember(member).catch((error) => {
-        logger.error({ error, member }, 'Failed to process realtime timer');
-      }))
+  await processDueMembers(
+    dueMembers.filter((member): member is string => typeof member === 'string')
   );
+}
+
+async function pollDueTimers(): Promise<void> {
+  // setInterval does not wait for an async callback. Without this guard, a slow
+  // batch lets later polls overlap it and defeats the handler concurrency cap.
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try {
+    await pollDueTimersOnce();
+  } finally {
+    pollInFlight = false;
+  }
 }
 
 export function startRealtimeTimerScheduler(
@@ -347,6 +376,7 @@ export async function cancelRealtimeTimer(kind: RealtimeTimerKind, key: string):
 }
 
 export const __realtimeTimerInternals = {
+  TIMER_HANDLER_CONCURRENCY,
   TIMER_ZSET_KEY,
   pollDueTimers,
   timerMember,

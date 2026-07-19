@@ -1,6 +1,6 @@
 export const RANKED_MM_STALE_RESULT = '__ranked_mm_stale__';
 
-export const RANKED_MM_PAIR_TWO_RANDOM_SCRIPT = `
+export const RANKED_MM_PAIR_TWO_OLDEST_SCRIPT = `
 local queueKey = KEYS[1]
 local timeoutKey = KEYS[2]
 local userMapKey = KEYS[3]
@@ -9,7 +9,15 @@ local matchedAt = ARGV[2]
 local pairingPrefix = ARGV[3]
 local pairingTtlSec = tonumber(ARGV[4])
 
-local picks = redis.call('ZRANDMEMBER', queueKey, 2)
+-- Claim the two oldest searches. Random claims were correct but unfair under a
+-- sustained streamer-scale backlog: unlucky early users could remain queued
+-- for tens of seconds while newer searches were repeatedly selected. The
+-- sorted set is already scored by join time, so oldest-first bounds the wait
+-- tail without changing the atomic cross-replica claim contract.
+-- Searches enqueued in the same millisecond form one equivalent FIFO cohort;
+-- Redis orders that small tie lexicographically by search id and drains it
+-- before moving to the next timestamp.
+local picks = redis.call('ZRANGE', queueKey, 0, 1)
 if (not picks) or (#picks < 2) then
   return {}
 end

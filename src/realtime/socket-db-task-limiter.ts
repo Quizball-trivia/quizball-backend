@@ -135,6 +135,6 @@ export class SocketDbTaskLimiter {
 
 // At most eight cleanup workflows per replica may generate DB work. The queue
 // can hold both lobby + match callbacks for a 5k-user fleet with headroom; a
-// 15s wait ceiling keeps cleanup inside the disconnect grace flow rather than
-// allowing stale work to accumulate indefinitely.
-export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 15_000);
+// 30s wait ceiling covers the measured 5k-user teardown while still bounding
+// stale cleanup to one disconnect-grace window.
+export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 30_000);

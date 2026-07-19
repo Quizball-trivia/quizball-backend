@@ -5,7 +5,7 @@ import { AppError } from '../../src/core/errors.js';
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
-  RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_PAIR_TWO_OLDEST_SCRIPT,
   RANKED_MM_STALE_RESULT,
 } from '../../src/realtime/lua/ranked-matchmaking.scripts.js';
 import '../setup.js';
@@ -206,7 +206,7 @@ class FakeRedis {
       arguments: string[];
     }
   ): Promise<string[]> {
-    if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) {
+    if (script === RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) {
       const queueKey = data.keys[0];
       const timeoutKey = data.keys[1];
       const userMapKey = data.keys[2];
@@ -809,7 +809,7 @@ describe('ranked matchmaking socket integration (in-process)', () => {
 
     vi.useFakeTimers();
     try {
-      const result = await fakeRedis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+      const result = await fakeRedis.eval(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT, {
         keys: ['ranked:mm:queue', 'ranked:mm:timeouts', 'ranked:mm:user'],
         arguments: ['ranked:mm:search:', String(Date.now()), 'ranked:mm:pairing:', '30'],
       });

@@ -5,6 +5,7 @@ vi.mock('../../src/modules/stats/stats.repo.js', () => ({
     getUserModeStats: vi.fn(),
     getRankedStatsByEventWindow: vi.fn(),
     listRecentMatchesForUser: vi.fn(),
+    listRecentFormsForUsers: vi.fn(),
   },
 }));
 
@@ -384,5 +385,28 @@ describe('statsService.getRecentMatchesForUser', () => {
         rpDelta: null,
       }),
     ]);
+  });
+});
+
+describe('statsService.getRecentFormsForUsers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('maps wins, losses, and draws for every requested user', async () => {
+    (statsRepo.listRecentFormsForUsers as Mock).mockResolvedValue([
+      { user_id: 'u1', winner_user_id: 'u1', ended_at: '2026-07-19T10:00:00Z' },
+      { user_id: 'u1', winner_user_id: null, ended_at: '2026-07-18T10:00:00Z' },
+      { user_id: 'u2', winner_user_id: 'u1', ended_at: '2026-07-19T10:00:00Z' },
+    ]);
+
+    const forms = await statsService.getRecentFormsForUsers(['u1', 'u2', 'u3', 'u1'], 3);
+
+    expect(forms).toEqual(new Map([
+      ['u1', ['W', 'D']],
+      ['u2', ['L']],
+      ['u3', []],
+    ]));
+    expect(statsRepo.listRecentFormsForUsers).toHaveBeenCalledWith(['u1', 'u2', 'u3'], 3);
   });
 });

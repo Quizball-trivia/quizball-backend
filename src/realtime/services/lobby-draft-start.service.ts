@@ -183,7 +183,7 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
         .catch((error) => {
           logger.warn({ error, lobbyId }, 'Failed to schedule automatic draft ban fallback');
         });
-      logger.info(
+      logger.debug(
         {
           lobbyId,
           hostUserId: lobby.host_user_id,

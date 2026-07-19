@@ -608,17 +608,21 @@ export async function startHumanRankedMatch(
 
       if (await abortIfMissingLiveSocket()) return;
 
-      const lobby = await lobbiesRepo.createLobby({
-        mode: 'ranked',
-        hostUserId: userAId,
-        inviteCode: null,
-      });
+      const lobby = await lobbiesRepo.createLobbyWithMembers(
+        {
+          mode: 'ranked',
+          hostUserId: userAId,
+          inviteCode: null,
+        },
+        [
+          { userId: userAId, isReady: true },
+          { userId: userBId, isReady: true },
+        ],
+      );
 
       span.setAttribute('quizball.lobby_id', lobby.id);
 
       await Promise.all([
-        lobbiesRepo.addMember(lobby.id, userAId, true),
-        lobbiesRepo.addMember(lobby.id, userBId, true),
         attachUserSocketsToLobby(io, userAId, lobby.id),
         attachUserSocketsToLobby(io, userBId, lobby.id),
       ]);
@@ -644,10 +648,11 @@ export async function startHumanRankedMatch(
       emitCreatedRankedLobbyState(io, lobby, userA, userB, profileA, profileB);
       emitCreatedRankedSessionStates(io, lobby.id, [userAId, userBId]);
 
-      const [formA, formB] = await Promise.all([
-        statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-        statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-      ]);
+      const recentForms = await statsService
+        .getRecentFormsForUsers([userAId, userBId], 3)
+        .catch(() => new Map<string, Array<'W' | 'L' | 'D'>>());
+      const formA = recentForms.get(userAId) ?? [];
+      const formB = recentForms.get(userBId) ?? [];
 
       io.to(`user:${userAId}`).emit('ranked:match_found', {
         lobbyId: lobby.id,
@@ -1245,7 +1250,7 @@ export const rankedMatchmakingService = {
           }
 
           const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId);
-          logger.info(
+          logger.debug(
             {
               userId,
               state: prepared.snapshot.state,

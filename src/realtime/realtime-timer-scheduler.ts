@@ -31,6 +31,7 @@ export type RealtimeTimerKind =
   | 'match_disconnect_forfeit'
   | 'match_resume_countdown'
   | 'party_question'
+  | 'party_round_transition'
   | 'possession_ai_answer'
   | 'possession_halftime'
   | 'possession_question'
@@ -50,6 +51,7 @@ export type RealtimeTimerPayload =
   | { kind: 'match_disconnect_forfeit'; matchId: string; disconnectedUserId: string; disconnectMarkerMs?: number }
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
+  | { kind: 'party_round_transition'; matchId: string; resolvedQIndex: number; nextQIndex: number }
   | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null; plannedIsCorrect?: boolean }
   | { kind: 'possession_halftime'; matchId: string }
   | { kind: 'possession_question'; matchId: string; qIndex: number }
@@ -100,6 +102,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'match_disconnect_forfeit'
     && kind !== 'match_resume_countdown'
     && kind !== 'party_question'
+    && kind !== 'party_round_transition'
     && kind !== 'possession_ai_answer'
     && kind !== 'possession_halftime'
     && kind !== 'possession_question'

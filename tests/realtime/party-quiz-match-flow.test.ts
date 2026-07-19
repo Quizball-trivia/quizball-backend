@@ -23,6 +23,10 @@ const listUnlockedForMatchMock = vi.fn();
 const redisMockState = vi.hoisted(() => ({
   pausedMatches: new Set<string>(),
 }));
+const realtimeTimerMocks = vi.hoisted(() => ({
+  schedule: vi.fn(async () => undefined),
+  cancel: vi.fn(async () => undefined),
+}));
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
@@ -42,6 +46,11 @@ vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => ({
     exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
   }),
+}));
+
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
+  scheduleRealtimeTimer: (...args: unknown[]) => realtimeTimerMocks.schedule(...args),
+  cancelRealtimeTimer: (...args: unknown[]) => realtimeTimerMocks.cancel(...args),
 }));
 
 vi.mock('../../src/modules/achievements/index.js', () => ({
@@ -110,6 +119,11 @@ function createIoMock() {
         emit(event: string, payload?: unknown) {
           events.push({ room, event, payload });
         },
+      };
+    },
+    in() {
+      return {
+        fetchSockets: async () => [],
       };
     },
   } as unknown as QuizballServer;
@@ -398,6 +412,54 @@ describe('party quiz realtime flow', () => {
         expect.objectContaining({ userId: 'u3', rank: 3, answered: false }),
       ]),
     }));
+    expect(realtimeTimerMocks.schedule).toHaveBeenCalledWith(
+      'party_round_transition',
+      'match-1:0',
+      expect.any(Date),
+      {
+        kind: 'party_round_transition',
+        matchId: 'match-1',
+        resolvedQIndex: 0,
+        nextQIndex: 1,
+      }
+    );
+  });
+
+  it('durably dispatches a missing next question and cancels the transition timer', async () => {
+    const { runPartyQuizRoundTransition } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+
+    partyState = {
+      ...partyState,
+      currentQuestion: null,
+      answeredUserIds: [],
+      stateVersionCounter: 3,
+    };
+    getMatchMock.mockImplementation(async () => ({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'active',
+      total_questions: 10,
+      current_q_index: 1,
+      state_payload: partyState,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      winner_user_id: null,
+      category_a_id: 'cat-1',
+    }));
+
+    await runPartyQuizRoundTransition(io, 'match-1', 0, 1);
+
+    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.objectContaining({ currentQuestion: { qIndex: 1, correctIndex: 2 } }),
+      1
+    );
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+    expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
+      'party_round_transition',
+      'match-1:0'
+    );
   });
 
   it('does not resolve and reveal a party round while the match is paused', async () => {

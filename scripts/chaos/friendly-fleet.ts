@@ -239,9 +239,20 @@ async function runPair(
     }
     metrics.matchesCompleted++;
     metrics.matchStartToFinalResultsMs.push(Date.now() - matchStartedAt);
-    const errors = host.count('error') + guest.count('error');
+    const errorPayloads = [
+      ...host.trace.byEvent('error').map((event) => event.payload),
+      ...guest.trace.byEvent('error').map((event) => event.payload),
+    ];
+    const errors = errorPayloads.length;
     metrics.socketErrors += errors;
-    if (errors > 0) fail(metrics, pairIndex, 'socket_error', `events=${errors}`);
+    if (errors > 0) {
+      fail(
+        metrics,
+        pairIndex,
+        'socket_error',
+        `events=${errors} payloads=${JSON.stringify(errorPayloads).slice(0, 1000)}`
+      );
+    }
   } catch (error) {
     fail(metrics, pairIndex, 'exception', error instanceof Error ? error.message : String(error));
   } finally {

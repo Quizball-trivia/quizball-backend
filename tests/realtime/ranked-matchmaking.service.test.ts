@@ -872,7 +872,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script === RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) {
         pairClaims += 1;
-        if (pairClaims === 1) return ['s1', 'u1', 's2', 'u2'];
+        if (pairClaims === 1) return ['s1', 'u1', '', 's2', 'u2', ''];
         return [];
       }
       return [];

@@ -109,6 +109,11 @@ const MATCH_DISCONNECT_GRACE_MS = 20000;
 // player forfeits (zombie / never-rejoined protection). Sized to the resume
 // UI-ready ceiling so a healthy client comfortably finishes its handshake.
 const MATCH_RECONNECT_PENDING_GRACE_MS = 8_000;
+// Socket.IO can establish a replacement socket shortly BEFORE the older
+// socket's ping timeout is observed and creates the next disconnect marker.
+// Treat that bounded handoff overlap as reconnect-pending too; it only grants
+// one extra handshake window and therefore cannot keep a zombie alive forever.
+const MATCH_RECONNECT_HANDOFF_OVERLAP_MS = 8_000;
 const MATCH_GATE_RECONNECT_PENDING_GRACE_MS = 20_000;
 const GRACE_EXTENDED_TTL_SEC = 30;
 const MAX_MATCH_DISCONNECTS = 3;
@@ -1605,11 +1610,10 @@ async function isPreQuestionKickoffStage(
  * at 11:24:48). Such players get a bounded extra UI-ready window rather than an
  * immediate forfeit.
  *
- * The `connectedAt > markerMs` test is what separates a real reconnect from a
- * ZOMBIE socket — one alive since BEFORE the drop (e.g. a menu socket after a
- * match:leave). A zombie's connectedAt predates the marker, so it is NOT
- * reconnect-pending and still forfeits (preserves S15b6). A socket with no
- * usable connectedAt is treated conservatively as NOT a fresh reconnect.
+ * A replacement may connect shortly before the old socket's ping timeout
+ * writes the newest marker, so a bounded pre-marker overlap is accepted. Older
+ * sockets remain zombies and still forfeit (preserves S15b6). A socket with no
+ * usable connectedAt is treated conservatively as NOT a reconnect candidate.
  */
 async function findReconnectPendingUsers(
   io: QuizballServer,
@@ -1634,7 +1638,7 @@ async function findReconnectPendingUsers(
       const hasFreshMatchSocket = matchRoomSockets.some(
         (socket) =>
           socketAuthenticatedAs(socket, userId) &&
-          (socketConnectedAt(socket) ?? 0) >= markerMs
+          (socketConnectedAt(socket) ?? 0) >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
       );
       if (hasFreshMatchSocket) {
         pending.add(userId);
@@ -1646,7 +1650,9 @@ async function findReconnectPendingUsers(
         return;
       }
       const hasFreshUserSocket = userRoomSockets.some(
-        (socket) => socketAuthenticatedAs(socket, userId) && (socketConnectedAt(socket) ?? 0) >= markerMs
+        (socket) =>
+          socketAuthenticatedAs(socket, userId) &&
+          (socketConnectedAt(socket) ?? 0) >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
       );
       if (hasFreshUserSocket) pending.add(userId);
     })

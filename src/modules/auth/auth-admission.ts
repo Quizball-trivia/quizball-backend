@@ -142,10 +142,12 @@ export class AuthAdmissionController {
   }
 }
 
+// Runtime fallbacks keep unit tests with intentionally partial config mocks
+// safe; parsed staging/prod configuration always supplies these defaults.
 const authAdmission = new AuthAdmissionController(
-  config.AUTH_INFLIGHT_LIMIT,
-  config.AUTH_QUEUE_LIMIT,
-  config.AUTH_ACQUIRE_TIMEOUT_MS,
+  config.AUTH_INFLIGHT_LIMIT ?? 4,
+  config.AUTH_QUEUE_LIMIT ?? 16,
+  config.AUTH_ACQUIRE_TIMEOUT_MS ?? 2_000,
 );
 
 export async function withAuthAdmission<T>(operation: () => PromiseLike<T> | T): Promise<T> {

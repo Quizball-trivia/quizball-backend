@@ -77,6 +77,7 @@ const configSchema = z.object({
   AUTH_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(4),
   AUTH_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1000).default(16),
   AUTH_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2000),
+  AUTH_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
   SMSOFFICE_API_KEY: z.string().optional(),
   SMSOFFICE_SENDER: z.string().default("QuizBall"),
   SMSOFFICE_DRY_RUN: z

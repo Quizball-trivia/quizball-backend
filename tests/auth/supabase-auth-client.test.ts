@@ -65,6 +65,15 @@ describe('SupabaseAuthClient.signUp', () => {
     expect(url).toContain('redirect_to=https%3A%2F%2Fquizball.io%2Fauth%2Fcallback');
     expect(body).toMatchObject({ data: { locale: 'en' } });
   });
+
+  it('puts a deadline on admitted Supabase Auth requests', async () => {
+    const client = new SupabaseAuthClient();
+    await client.signUp('deadline@quizball.io', 'password123');
+
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, { signal?: AbortSignal }];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+  });
 });
 
 describe('SupabaseAuthClient session phone normalization', () => {

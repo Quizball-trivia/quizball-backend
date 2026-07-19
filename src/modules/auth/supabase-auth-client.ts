@@ -297,6 +297,9 @@ export class SupabaseAuthClient implements AuthClient {
           const admittedResponse = await fetch(url, {
             ...options,
             headers,
+            // An admitted request must not own a scarce Auth slot forever if
+            // hosted Auth or its network path stalls.
+            signal: AbortSignal.timeout(config.AUTH_REQUEST_TIMEOUT_MS ?? 10_000),
           });
           const admittedData: unknown = await admittedResponse.json();
           return { response: admittedResponse, data: admittedData };

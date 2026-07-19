@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FLEET="$SCRIPT_DIR/fleet.sh"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
 REPORT_ROOT="$SCRIPT_DIR/reports/${CAMPAIGN_ID:-quizball-staging-5k}"
-SSH=(ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 
 die() {
@@ -22,7 +22,7 @@ Usage:
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
   run-scenario.sh auth-login <global-rps> <duration> [ramp-duration]
 
-gameplay and matchmaking use the ten-worker mixed fleet. auth-login uses every
+gameplay and matchmaking use the mixed fleet. auth-login uses every
 mixed+auth worker so Supabase sees distributed source IPs. All commands source
 only the staging environment installed by sync-env.ts.
 EOF
@@ -30,6 +30,14 @@ EOF
 
 positive_int() {
   [[ "${2:-}" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || die "$1 must be a positive integer"
+}
+
+format_epoch_utc() {
+  local epoch="$1"
+  if date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; then
+    return
+  fi
+  date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ
 }
 
 worker_ips() {
@@ -57,6 +65,46 @@ collect_one() {
   "${SCP[@]}" "root@$ip:$remote_report" "$local_report"
 }
 
+with_completion_marker() {
+  local command="$1"
+  local marker="$2"
+  printf "rm -f '%s' && %s; rc=\$?; printf '%%s\\n' \"\$rc\" > '%s'; exit \"\$rc\"" \
+    "$marker" "$command" "$marker"
+}
+
+wait_for_worker() {
+  local ip="$1"
+  local pid="$2"
+  local marker="$3"
+  local timeout_sec="${REMOTE_RESULT_TIMEOUT_SEC:-7200}"
+  local deadline=$((SECONDS + timeout_sec))
+  local status=''
+
+  while (( SECONDS < deadline )); do
+    status="$("${SSH[@]}" "root@$ip" "if test -f '$marker'; then cat '$marker'; fi" 2>/dev/null || true)"
+    if [[ "$status" =~ ^[0-9]+$ ]]; then
+      # Some long-lived Node processes leave the original SSH channel open
+      # after the workload and report have finished. The remote marker is the
+      # authoritative result, so close that stale local transport explicitly.
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      (( 10#$status == 0 ))
+      return
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      return $?
+    fi
+    sleep 2
+  done
+
+  printf 'worker %s did not publish completion marker %s within %ss\n' \
+    "$ip" "$marker" "$timeout_sec" >&2
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  return 124
+}
+
 run_gameplay() {
   local players="$1"
   local duration="$2"
@@ -68,27 +116,33 @@ run_gameplay() {
   positive_int ramp "$ramp"
   local workers
   workers="$(require_worker_count mixed 2)"
-  (( players % workers == 0 )) || die "players must divide evenly across $workers workers"
-  local per_players=$((players / workers))
-  (( per_players % 2 == 0 )) || die 'players per worker must be even for human matchmaking'
+  (( players % 2 == 0 )) || die 'players must be even for human matchmaking'
+  local total_pairs=$((players / 2))
+  (( total_pairs >= workers )) || die "players must provide at least one pair per worker"
+  local base_pairs=$((total_pairs / workers))
+  local pair_remainder=$((total_pairs % workers))
+  local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
   (( total_rps >= workers )) \
     || die "total-http-rps must be at least the $workers-worker count for gameplay"
   local base_rps=$((total_rps / workers))
   local rps_remainder=$((total_rps % workers))
-  local lead=$((per_players * 23 / 10 + 180))
+  local lead=$((max_per_players * 23 / 10 + 180))
   (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-gameplay-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d players/worker=%d global-http-rps=%d base-rps/worker=%d remainder=%d synchronized=%s\n' \
-    "$workers" "$per_players" "$total_rps" "$base_rps" "$rps_remainder" \
-    "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'workers=%d max-players/worker=%d pair-remainder=%d global-http-rps=%d base-rps/worker=%d rps-remainder=%d synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$total_rps" "$base_rps" "$rps_remainder" \
+    "$(format_epoch_utc "$start_at")"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
-    offset=$((index * per_players))
+    worker_pairs="$base_pairs"
+    if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
+    worker_players=$((worker_pairs * 2))
     local worker_rps=$base_rps
     (( index < rps_remainder )) && worker_rps=$((worker_rps + 1))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
@@ -96,17 +150,21 @@ run_gameplay() {
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$per_players --offset=$offset --sockets=$per_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
+    offset=$((offset + worker_players))
     index=$((index + 1))
   done < <(worker_ips mixed)
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
@@ -123,37 +181,50 @@ run_matchmaking() {
   positive_int join-timeout "$timeout"
   local workers
   workers="$(require_worker_count mixed 2)"
-  (( players % workers == 0 )) || die "players must divide evenly across $workers workers"
-  local per_players=$((players / workers))
-  (( per_players % 2 == 0 )) || die 'players per worker must be even'
-  local lead=$((per_players * 23 / 10 + 240))
+  (( players % 2 == 0 )) || die 'players must be even'
+  local total_pairs=$((players / 2))
+  (( total_pairs >= workers )) || die "players must provide at least one pair per worker"
+  local base_pairs=$((total_pairs / workers))
+  local pair_remainder=$((total_pairs % workers))
+  local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
+  local lead=$((max_per_players * 23 / 10 + 240))
+  (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-matchmaking-${players}"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
-  printf 'workers=%d clients/worker=%d synchronized=%s\n' \
-    "$workers" "$per_players" "$(date -u -r "$start_at" +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'workers=%d max-clients/worker=%d pair-remainder=%d synchronized=%s\n' \
+    "$workers" "$max_per_players" "$pair_remainder" "$(format_epoch_utc "$start_at")"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset=0 worker_pairs worker_players remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
-    offset=$((index * per_players))
+    worker_pairs="$base_pairs"
+    if (( index < pair_remainder )); then worker_pairs=$((worker_pairs + 1)); fi
+    worker_players=$((worker_pairs * 2))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$per_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
+    command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=60 --join-ramp-s=1 --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
+    offset=$((offset + worker_players))
     index=$((index + 1))
   done < <(worker_ips mixed)
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then failed=$((failed + 1)); fi
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
+      failed=$((failed + 1))
+    fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -182,7 +253,8 @@ run_k6() {
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
 
-  local index=0 ip offset remote_report log pids=() reports=() ips=()
+  local index=0 ip offset remote_report remote_marker log
+  local pids=() reports=() markers=() ips=()
   while IFS= read -r ip; do
     local worker_rate=$base_rate
     (( index < rate_remainder )) && worker_rate=$((worker_rate + 1))
@@ -196,16 +268,21 @@ run_k6() {
     local k6_mode="$mode"
     local command
     command="$(remote_prefix)TARGET=staging MODE=$k6_mode USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
+    remote_marker="${remote_report}.exit"
+    command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
+    markers+=("$remote_marker")
     ips+=("$ip")
     index=$((index + 1))
   done < <(worker_ips "$role")
 
   local failed=0
   for index in "${!pids[@]}"; do
-    if ! wait "${pids[$index]}"; then failed=$((failed + 1)); fi
+    if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
+      failed=$((failed + 1))
+    fi
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done

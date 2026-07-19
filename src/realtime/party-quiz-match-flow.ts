@@ -534,7 +534,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
   });
 }
 
-function schedulePartyQuizPostRoundAdvance(
+async function schedulePartyQuizPostRoundAdvance(
   io: QuizballServer,
   matchId: string,
   resolvedQIndex: number,
@@ -552,42 +552,52 @@ function schedulePartyQuizPostRoundAdvance(
     });
   };
 
-  return scheduleRealtimeTimer(
-    'party_round_transition',
-    timerKey,
-    new Date(Date.now() + ceilingMs),
-    { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
-  ).then(() => {
-    pendingReadyGates.open({
-      scopeId: matchId,
-      token: resolvedQIndex,
+  try {
+    await scheduleRealtimeTimer(
+      'party_round_transition',
+      timerKey,
+      new Date(Date.now() + ceilingMs),
+      { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
+    );
+  } catch (error) {
+    // Keep the local ready-gate ceiling as a degraded fallback if Redis has
+    // a transient write failure. A durable retry is preferred, but dropping
+    // both mechanisms here would recreate the frozen-between-rounds bug.
+    logger.warn(
+      { error, matchId, resolvedQIndex, nextQIndex },
+      'Failed to persist party round transition timer; using local ceiling'
+    );
+  }
+
+  pendingReadyGates.open({
+    scopeId: matchId,
+    token: resolvedQIndex,
+    waitingUserIds: participantUserIds,
+    ceilingMs,
+    dispatch,
+    onTimeout: (missing) => {
+      logger.info(
+        {
+          eventName: 'party_ready_ack_ceiling',
+          matchId,
+          resolvedQIndex,
+          missing,
+          ceilingMs,
+        },
+        'Party ready-ack ceiling reached; advancing'
+      );
+    },
+  });
+  logger.info(
+    {
+      eventName: 'party_ready_gate_opened',
+      matchId,
+      resolvedQIndex,
       waitingUserIds: participantUserIds,
       ceilingMs,
-      dispatch,
-      onTimeout: (missing) => {
-        logger.info(
-          {
-            eventName: 'party_ready_ack_ceiling',
-            matchId,
-            resolvedQIndex,
-            missing,
-            ceilingMs,
-          },
-          'Party ready-ack ceiling reached; advancing'
-        );
-      },
-    });
-    logger.info(
-      {
-        eventName: 'party_ready_gate_opened',
-        matchId,
-        resolvedQIndex,
-        waitingUserIds: participantUserIds,
-        ceilingMs,
-      },
-      'Party quiz post-round ready gate opened'
-    );
-  });
+    },
+    'Party quiz post-round ready gate opened'
+  );
 }
 
 function partyRoundTransitionTimerKey(matchId: string, resolvedQIndex: number): string {

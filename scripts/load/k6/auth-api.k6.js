@@ -24,6 +24,10 @@ const RAMP_DURATION = __ENV.RAMP_DURATION || '30s';
 const DURATION = __ENV.DURATION || '2m';
 const TIME_UNIT = __ENV.TIME_UNIT || '1s';
 const REFRESH_PAUSE_SECONDS = positiveNumber('REFRESH_PAUSE_SECONDS', 5);
+// Exact signup bursts are useful for local/email-sink certification. When
+// unset, signup keeps its open-loop arrival-rate behavior for ceiling ladders.
+const SIGNUP_ITERATIONS = nonNegativeInt('SIGNUP_ITERATIONS', 0);
+const SIGNUP_MAX_DURATION = __ENV.SIGNUP_MAX_DURATION || '5m';
 const PASSWORD = __ENV.TEST_PASSWORD || 'ChaosTest12345!';
 const EMAIL_PREFIX = __ENV.EMAIL_PREFIX || 'chaos';
 const EMAIL_DOMAIN = __ENV.EMAIL_DOMAIN || (TARGET === 'staging' ? 'quizball.io' : 'example.com');
@@ -369,6 +373,20 @@ function buildOptions() {
     };
   }
   if (MODE === 'signup') {
+    if (SIGNUP_ITERATIONS > 0) {
+      return {
+        scenarios: {
+          signup: {
+            executor: 'shared-iterations',
+            exec: 'signupArrival',
+            vus: VUS,
+            iterations: SIGNUP_ITERATIONS,
+            maxDuration: SIGNUP_MAX_DURATION,
+          },
+        },
+        thresholds,
+      };
+    }
     return { scenarios: { signup: { ...commonArrival, exec: 'signupArrival' } }, thresholds };
   }
   if (MODE === 'login') {

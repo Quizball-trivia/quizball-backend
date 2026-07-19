@@ -120,6 +120,19 @@ Reports include explicit counters for all `429` responses and separate login,
 refresh, and signup rate-limit counts. This prevents a managed Auth quota from
 being mistaken for an application or database crash.
 
+For an exact local signup burst, `SIGNUP_ITERATIONS` switches signup mode from
+the arrival-rate ladder to a bounded shared-iterations run. Local Supabase's
+Inbucket instance is the email sink; never use this override against a managed
+project without a dedicated sink:
+
+```bash
+TARGET=local API_BASE=http://127.0.0.1:8000 MODE=signup \
+  USERS=5000 VUS=5000 SIGNUP_ITERATIONS=5000 SIGNUP_MAX_DURATION=5m \
+  ALLOW_SIGNUP_LOAD=STAGING_EMAIL_SINK_CONFIGURED \
+  SIGNUP_EMAIL_DOMAIN=example.com SIGNUP_RUN_ID=exact-5k \
+  k6 run scripts/load/k6/auth-api.k6.js
+```
+
 The backend now tags proxied Supabase Auth limits as
 `details.source=supabase_auth`; k6 splits those from application-limiter and
 unknown 429s. A large Auth run is invalid if those sources are conflated.

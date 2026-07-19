@@ -354,6 +354,31 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:join_debounce:u1', '1', { NX: true, EX: 2 });
   });
 
+  it('keeps a committed queue join successful when queue-size telemetry fails', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    redisMock.zCard.mockRejectedValueOnce(new Error('telemetry unavailable'));
+
+    await service.handleQueueJoin(io, socket as never);
+
+    const emit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+    expect(redisMock.multi).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
+    expect(emit).toHaveBeenCalledWith(
+      'session:state',
+      expect.objectContaining({ state: 'IN_QUEUE', queueSearchId: expect.any(String) })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', err: expect.any(Error) }),
+      'Failed to read ranked queue size after join'
+    );
+    // One early session block plus one locked preparation; the old hot path
+    // repeatedly resolved the same match/lobby state after queue commit.
+    expect(getActiveMatchForUserMock).toHaveBeenCalledTimes(2);
+    expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(2);
+  });
+
   it('marks users as pairing in-flight during human match handoff', async () => {
     const service = await loadService();
     const io = createIoMock();

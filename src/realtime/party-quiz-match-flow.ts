@@ -58,6 +58,7 @@ const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+let partyReadyAckCeilingCount = 0;
 
 async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
   const redis = getRedisClient();
@@ -138,7 +139,12 @@ export async function emitPartyQuizState(io: QuizballServer, matchId: string): P
     const payload = await buildPartyStatePayload(matchId);
     if (!payload) return;
     io.to(`match:${matchId}`).emit('match:party_state', payload);
-    logger.info(partyStateLogFields(payload), 'Party quiz state emitted');
+    // This runs after every answer as well as every round transition. At
+    // streamer-scale load, one info line per state broadcast can exhaust the
+    // platform log-ingestion allowance and hide the warnings/errors we need.
+    // Traces and metrics retain the aggregate signal; keep the per-event
+    // payload available at debug level for targeted investigations.
+    logger.debug(partyStateLogFields(payload), 'Party quiz state emitted');
   });
 }
 
@@ -149,7 +155,7 @@ export async function emitPartyQuizStateToSocket(
   const payload = await buildPartyStatePayload(matchId);
   if (!payload) return;
   socket.emit('match:party_state', payload);
-  logger.info(
+  logger.debug(
     { ...partyStateLogFields(payload), recipientUserId: socket.data.user.id, source: 'socket_hydrate' },
     'Party quiz state emitted to socket'
   );
@@ -190,7 +196,7 @@ export async function emitPartyQuizStateToSocket(
     attackerSeat: null,
   });
   await markMatchEnteredForSocket(socket, matchId, 'party_quiz_socket_question');
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:question',
       matchId,
@@ -224,7 +230,7 @@ export async function emitPartyQuizStateToSocket(
       oppAnswered: answeredUserIds.size >= participants.length,
     })
   );
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:answer_ack',
       matchId,
@@ -255,7 +261,7 @@ export function handlePartyQuizReadyForNextQuestion(
   qIndex: number
 ): void {
   pendingReadyGates.acknowledge(userId, matchId, qIndex);
-  logger.info(
+  logger.debug(
     { eventName: 'match:ready_for_next_question', matchId, qIndex, userId },
     'Party quiz ready ack received'
   );
@@ -263,6 +269,7 @@ export function handlePartyQuizReadyForNextQuestion(
 
 export function resetPartyQuizReadyGates(): void {
   pendingReadyGates.reset();
+  partyReadyAckCeilingCount = 0;
 }
 
 function schedulePartyQuizTimeoutAt(
@@ -279,7 +286,7 @@ function schedulePartyQuizTimeoutAt(
   }).catch((error) => {
     logger.error({ error, matchId, qIndex }, 'Failed to schedule party quiz question timer');
   });
-  logger.info(
+  logger.debug(
     {
       eventName: 'party_question_timer_scheduled',
       matchId,
@@ -390,7 +397,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     if (!match || match.status !== 'active') return;
     span.setAttribute('quizball.total_questions', match.total_questions);
     if (await isPartyQuizMatchPaused(matchId)) {
-      logger.info(
+      logger.debug(
         { eventName: 'party_match_completion_skipped', matchId, reason: 'paused' },
         'Party quiz completion skipped while match is paused'
       );
@@ -572,19 +579,28 @@ async function schedulePartyQuizPostRoundAdvance(
     ceilingMs,
     dispatch,
     onTimeout: (missing) => {
-      logger.info(
-        {
-          eventName: 'party_ready_ack_ceiling',
-          matchId,
-          resolvedQIndex,
-          missing,
-          ceilingMs,
-        },
-        'Party ready-ack ceiling reached; advancing'
-      );
+      partyReadyAckCeilingCount += 1;
+      // A missed ready acknowledgement is a degraded-path signal, but a
+      // reconnect storm can produce one per round and match. Preserve the
+      // warning without letting it displace unrelated failures from Railway's
+      // bounded log stream.
+      if (partyReadyAckCeilingCount % 100 === 1) {
+        logger.warn(
+          {
+            eventName: 'party_ready_ack_ceiling',
+            matchId,
+            resolvedQIndex,
+            missingCount: missing.length,
+            missingSample: missing.slice(0, 10),
+            ceilingMs,
+            occurrences: partyReadyAckCeilingCount,
+          },
+          'Party ready-ack ceiling reached; advancing'
+        );
+      }
     },
   });
-  logger.info(
+  logger.debug(
     {
       eventName: 'party_ready_gate_opened',
       matchId,
@@ -682,7 +698,7 @@ export async function sendPartyQuizQuestion(
       return null;
     }
     if (await isPartyQuizMatchPaused(matchId)) {
-      logger.info(
+      logger.debug(
         { eventName: 'match:question', matchId, qIndex, skipped: true, reason: 'paused', source: 'dispatch' },
         'Party quiz question dispatch skipped while match is paused'
       );
@@ -773,7 +789,7 @@ export async function sendPartyQuizQuestion(
       attackerSeat: null,
     });
     await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:question',
         matchId,
@@ -959,7 +975,7 @@ export async function resolvePartyQuizRound(
         return;
       }
       if (await isPartyQuizMatchPaused(matchId)) {
-        logger.info(
+        logger.debug(
           {
             eventName: 'party_round_resolve_skipped',
             matchId,
@@ -1047,7 +1063,7 @@ export async function resolvePartyQuizRound(
         shooterSeat: null,
         attackerSeat: null,
       });
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:round_result',
           matchId,
@@ -1106,7 +1122,7 @@ export async function resolvePartyQuizRound(
         nextIndex,
         participantUserIds
       );
-      logger.info(
+      logger.debug(
         {
           eventName: 'party_next_question_scheduled',
           matchId,
@@ -1379,7 +1395,7 @@ export async function handlePartyQuizAnswer(
         pointsEarned: recorded.answer.points_earned,
       })
     );
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:answer_ack',
         matchId: payload.matchId,
@@ -1408,7 +1424,7 @@ export async function handlePartyQuizAnswer(
       'match:party_state',
       buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
     );
-    logger.info({
+    logger.debug({
       eventName: 'match:party_state',
       matchId: payload.matchId,
       qIndex: payload.qIndex,
@@ -1422,7 +1438,7 @@ export async function handlePartyQuizAnswer(
     }, 'Party answer live state emitted');
 
     if (activePlayers.length > 0 && activeAnswerCount >= activePlayers.length) {
-      logger.info(
+      logger.debug(
         {
           eventName: 'party_all_active_players_answered',
           matchId: payload.matchId,

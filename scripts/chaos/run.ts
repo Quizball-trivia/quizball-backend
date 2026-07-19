@@ -15,7 +15,7 @@
 //   --duration      seconds (default 30; 300 when --sockets > 0)
 //   --users         size of the test-user fleet to provision (default 25)
 //   --offset        first numeric test-user suffix for distributed shards (default 0)
-//   --include-spend also hit ticket/coin-draining routes (daily/complete)
+//   --include-spend also hit bounded economy routes (coin purchase/daily complete)
 //   --only          comma list of route names to restrict to
 //   --no-db-stats   skip the pg_stat_statements capture
 //   --api           override API base URL
@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { CHAOS_ROUTES, SPEND_ROUTES, type ChaosRoute } from './routes.js';
 import { discoverRouteFixtures } from './fixtures.js';
-import { ensureTickets, provisionUsers } from './auth.js';
+import { ensureCoinPurchaseFixtures, ensureTickets, provisionUsers } from './auth.js';
 import { runAllRoutes, runMixedRoutes } from './engine.js';
 import { summarize, renderTable } from './metrics.js';
 import { runLoginStorm } from './login-storm.js';
@@ -390,6 +390,20 @@ async function main() {
       tickets: 5,
     });
     console.log('  → tickets ready.\n');
+  }
+
+  if (args.includeSpend) {
+    console.log(`Preparing reversible coin-purchase fixtures for ${users.length} test users…`);
+    await ensureCoinPurchaseFixtures({
+      target: args.target,
+      apiBase: target.apiBase,
+      supabaseUrl: target.supabaseUrl,
+      databaseUrl: target.databaseUrl,
+      userIds: users.map((u) => u.userId),
+      coins: 20_000,
+      productSlug: 'chance_card_5050',
+    });
+    console.log('  → economy fixtures ready.\n');
   }
 
   if (users.length < 2 && routes.some((route) => route.name === 'stats.head-to-head')) {

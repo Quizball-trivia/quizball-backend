@@ -110,6 +110,17 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
 // enabled explicitly with --include-spend.
 export const SPEND_ROUTES: ChaosRoute[] = [
   {
+    name: 'store.purchase.coins',
+    method: 'POST',
+    path: '/api/v1/store/purchase-coins',
+    auth: 'bearer',
+    mutates: true,
+    weight: 1,
+    expectedStatuses: [200],
+    group: 'economy-write',
+    body: () => ({ productSlug: 'chance_card_5050' }),
+  },
+  {
     name: 'daily.complete',
     method: 'POST',
     path: `/api/v1/daily-challenges/${KNOWN_CHALLENGE}/complete`,

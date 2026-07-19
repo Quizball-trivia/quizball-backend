@@ -52,6 +52,16 @@ export interface TicketTopUpConfig {
   tickets: number;
 }
 
+export interface CoinPurchaseFixtureConfig {
+  target: 'staging' | 'local';
+  apiBase: string;
+  supabaseUrl: string;
+  databaseUrl: string;
+  userIds: string[];
+  coins: number;
+  productSlug: string;
+}
+
 function adminHeaders(cfg: Pick<ProvisionConfig, 'serviceRoleKey'>): Record<string, string> {
   return {
     apikey: cfg.serviceRoleKey,
@@ -195,6 +205,31 @@ function assertTicketTopUpTarget(cfg: TicketTopUpConfig): void {
   }
 }
 
+function assertDirectFixtureTarget(
+  cfg: Pick<CoinPurchaseFixtureConfig, 'target' | 'apiBase' | 'supabaseUrl' | 'databaseUrl'>
+): void {
+  const PROD_PROJECT = 'lfbwhxvwubzeqkztghok';
+  const STAGING_PROJECT = 'nsdfiprfmhdqhbfxfwpv';
+  const blob = `${cfg.apiBase} ${cfg.supabaseUrl} ${cfg.databaseUrl}`;
+  if (blob.includes(PROD_PROJECT) || blob.includes('api.quizball.io')) {
+    throw new Error('PROD GUARD: refusing direct economy fixture setup against production.');
+  }
+  if (cfg.target === 'staging') {
+    if (!cfg.supabaseUrl.includes(STAGING_PROJECT) || !cfg.databaseUrl.includes(STAGING_PROJECT)) {
+      throw new Error(
+        'PROD GUARD: staging economy setup requires both staging Supabase and database URLs.'
+      );
+    }
+  }
+  if (cfg.target === 'local') {
+    const localApi = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(cfg.apiBase);
+    const localDb = /^postgres(?:ql)?:\/\/[^@]*@(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(cfg.databaseUrl);
+    if (!localApi || !localDb) {
+      throw new Error('PROD GUARD: local economy setup requires localhost API and database URLs.');
+    }
+  }
+}
+
 export async function ensureTickets(cfg: TicketTopUpConfig): Promise<void> {
   assertTicketTopUpTarget(cfg);
   const userIds = cfg.userIds.filter(Boolean);
@@ -213,6 +248,66 @@ export async function ensureTickets(cfg: TicketTopUpConfig): Promise<void> {
           updated_at = NOW()
       WHERE id IN ${sql(userIds)}
     `;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+/**
+ * Reset only synthetic load users so the real coin-purchase transaction can be
+ * repeated without carrying state from an earlier run. This deliberately does
+ * not call Stripe or modify any account outside the explicitly provisioned
+ * non-production shard.
+ */
+export async function ensureCoinPurchaseFixtures(
+  cfg: CoinPurchaseFixtureConfig
+): Promise<void> {
+  assertDirectFixtureTarget(cfg);
+  const userIds = [...new Set(cfg.userIds.filter(Boolean))];
+  if (userIds.length === 0) return;
+  if (!cfg.databaseUrl) throw new Error('DATABASE_URL missing — cannot prepare economy fixtures.');
+  if (cfg.productSlug !== 'chance_card_5050') {
+    throw new Error(`Economy load fixture only permits chance_card_5050, got "${cfg.productSlug}".`);
+  }
+  const coins = Math.max(0, Math.min(100_000, Math.floor(cfg.coins)));
+  const sql = postgres(cfg.databaseUrl, { max: 1 });
+  try {
+    await sql.begin(async (tx) => {
+      const [product] = await tx<Array<{ id: string }>>`
+        SELECT id
+        FROM store_products
+        WHERE slug = ${cfg.productSlug}
+          AND is_active = true
+        LIMIT 1
+      `;
+      if (!product) throw new Error(`Required store product ${cfg.productSlug} is unavailable.`);
+
+      // Remove load-generated audit rows before their purchases so the audit
+      // FK never points at a deleted synthetic purchase.
+      await tx`
+        DELETE FROM store_transaction_logs
+        WHERE user_id IN ${tx(userIds)}
+          AND reason = 'coin_purchase'
+          AND product_id = ${product.id}
+      `;
+      await tx`
+        DELETE FROM store_purchases
+        WHERE user_id IN ${tx(userIds)}
+          AND product_id = ${product.id}
+          AND currency = 'coins'
+      `;
+      await tx`
+        DELETE FROM user_inventory
+        WHERE user_id IN ${tx(userIds)}
+          AND product_id = ${product.id}
+      `;
+      await tx`
+        UPDATE users
+        SET coins = GREATEST(coins, ${coins}),
+            updated_at = NOW()
+        WHERE id IN ${tx(userIds)}
+      `;
+    });
   } finally {
     await sql.end({ timeout: 5 });
   }

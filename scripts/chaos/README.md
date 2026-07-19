@@ -156,8 +156,9 @@ rate. A global in-flight cap (2000) sheds load if the target stalls completely.
    Postgres `max_connections` value and both replicas in Railway logs.
 4. Run the clean capacity ladder first. It increases players, real Socket.IO
    clients, login arrivals, weighted REST traffic, matchmaking, and full
-   gameplay together. It does not inject disconnects or repeatedly spend
-   limited economy resources.
+   gameplay together. Add `--include-spend=true` only after preparing the
+   staging/local economy fixtures; it executes real daily-completion and
+   coin-purchase transactions but never contacts Stripe.
 5. Treat the last passing level as the sustained capacity **for this traffic
    model**, not a marketing maximum. Operate at no more than roughly 50–60% of
    that level until a second run confirms it.

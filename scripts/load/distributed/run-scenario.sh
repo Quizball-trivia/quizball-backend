@@ -17,11 +17,12 @@ die() {
 usage() {
   cat <<'EOF'
 Usage:
-  run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec]
+  run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
   run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec] [connect-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
   run-scenario.sh http-hot <global-rps> <duration> [ramp-duration]
   run-scenario.sh auth-login <global-rps> <duration> [ramp-duration]
+  run-scenario.sh auth-mix <global-rps> <duration> [ramp-duration]
 
 gameplay and matchmaking use the mixed fleet. auth-login uses every
 mixed+auth worker so Supabase sees distributed source IPs. All commands source
@@ -115,10 +116,13 @@ run_gameplay() {
   local duration="$2"
   local total_rps="$3"
   local ramp="${4:-60}"
+  local include_spend="${5:-false}"
   positive_int players "$players"
   positive_int duration "$duration"
   positive_int total-http-rps "$total_rps"
   positive_int ramp "$ramp"
+  [[ "$include_spend" == true || "$include_spend" == false ]] \
+    || die 'include-spend must be true or false'
   local workers
   workers="$(require_worker_count mixed 2)"
   (( players % 2 == 0 )) || die 'players must be even for human matchmaking'
@@ -155,7 +159,9 @@ run_gameplay() {
     local db_flag='--no-db-stats'
     (( index == 0 )) && db_flag=''
     local command
-    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
+    local spend_flag=''
+    [[ "$include_spend" == true ]] && spend_flag='--include-spend=true'
+    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $spend_flag $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
@@ -253,7 +259,9 @@ run_k6() {
   local duration="$4"
   local ramp="${5:-2m}"
   local api_profile="${6:-full}"
+  local users_per_worker="${K6_USERS_PER_WORKER:-1250}"
   positive_int global-rps "$rate"
+  positive_int K6_USERS_PER_WORKER "$users_per_worker"
   local workers
   workers="$(require_worker_count "$role" 2)"
   local base_rate=$((rate / workers))
@@ -272,12 +280,12 @@ run_k6() {
       index=$((index + 1))
       continue
     fi
-    offset=$((index * 1000))
+    offset=$((index * users_per_worker))
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local k6_mode="$mode"
     local command
-    command="$(remote_prefix)TARGET=staging MODE=$k6_mode API_PROFILE=$api_profile USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
+    command="$(remote_prefix)TARGET=staging MODE=$k6_mode API_PROFILE=$api_profile USERS=$users_per_worker SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
@@ -307,11 +315,12 @@ run_k6() {
 main() {
   local scenario="${1:-}"
   case "$scenario" in
-    gameplay) [[ $# -ge 4 && $# -le 5 ]] || die 'gameplay requires players duration total-rps [ramp]'; run_gameplay "$2" "$3" "$4" "${5:-60}" ;;
+    gameplay) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" ;;
     matchmaking) [[ $# -ge 2 && $# -le 5 ]] || die 'matchmaking requires players [timeout] [join-ramp] [connect-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" "${5:-60}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;
     http-hot) [[ $# -ge 3 && $# -le 4 ]] || die 'http-hot requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" hot-db ;;
     auth-login) [[ $# -ge 3 && $# -le 4 ]] || die 'auth-login requires rps duration [ramp]'; run_k6 login all "$2" "$3" "${4:-2m}" ;;
+    auth-mix) [[ $# -ge 3 && $# -le 4 ]] || die 'auth-mix requires rps duration [ramp]'; run_k6 auth-mix all "$2" "$3" "${4:-2m}" ;;
     *) usage; [[ -z "$scenario" ]] || exit 1 ;;
   esac
 }

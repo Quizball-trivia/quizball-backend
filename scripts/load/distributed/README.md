@@ -87,6 +87,8 @@ timestamp:
 ```bash
 scripts/load/distributed/run-scenario.sh gameplay 500 900 250
 scripts/load/distributed/run-scenario.sh gameplay 1000 900 500
+# Add real daily-completion and coin-purchase transactions (never Stripe).
+scripts/load/distributed/run-scenario.sh gameplay 1000 900 500 60 true
 # Separate transport connection pressure from the synchronized queue storm.
 # This connects 5k clients over 120s, then joins the queue at 100 clients/s.
 scripts/load/distributed/run-scenario.sh matchmaking 5000 90 50 120
@@ -127,6 +129,7 @@ railway run \
   -- npx tsx scripts/load/distributed/sync-env.ts --fleet=all
 
 scripts/load/distributed/run-scenario.sh auth-login 10 10m 2m
+scripts/load/distributed/run-scenario.sh auth-mix 100 10m 2m
 ```
 
 Supabase signup mail must point at a staging sink before signup pressure is

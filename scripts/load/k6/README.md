@@ -129,7 +129,7 @@ project without a dedicated sink:
 TARGET=local API_BASE=http://127.0.0.1:8000 MODE=signup \
   USERS=5000 VUS=5000 SIGNUP_ITERATIONS=5000 SIGNUP_MAX_DURATION=5m \
   ALLOW_SIGNUP_LOAD=STAGING_EMAIL_SINK_CONFIGURED \
-  SIGNUP_EMAIL_DOMAIN=example.com SIGNUP_RUN_ID=exact-5k \
+  SIGNUP_EMAIL_DOMAIN=example.com SIGNUP_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)" \
   k6 run scripts/load/k6/auth-api.k6.js
 ```
 

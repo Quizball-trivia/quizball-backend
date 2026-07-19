@@ -823,6 +823,12 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
   const userId = socket.data.user.id;
   const boundMatchId = socket.data.matchId;
 
+  // A socket bound to a waiting/active lobby cannot simultaneously own an
+  // active match. Avoid the expensive DB fallback during draft disconnect
+  // storms; once the lobby becomes a match, matchId is bound and this guard no
+  // longer applies.
+  if (!boundMatchId && socket.data.lobbyId) return;
+
   // Fallback: a socket can lose (or never gain) its match binding — e.g. a
   // reconnected socket that re-authenticated but never completed the
   // match:rejoin handshake (diagnosed prod pattern during token-refresh

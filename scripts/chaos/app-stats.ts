@@ -8,6 +8,14 @@ export interface AppInstancePeak {
     newRejections: number;
     newTimeouts: number;
   };
+  socketDbTasks: {
+    active: number;
+    queued: number;
+    maxQueued: number;
+    maxWaitMs: number;
+    newRejections: number;
+    newTimeouts: number;
+  };
   runtime: {
     cpuPct: number;
     cpuCorePct: number;
@@ -34,6 +42,14 @@ interface HealthPayload {
     rejections?: number;
     timeouts?: number;
   };
+  socketDbTasks?: {
+    active?: number;
+    queued?: number;
+    maxQueued?: number;
+    maxWaitMs?: number;
+    rejections?: number;
+    timeouts?: number;
+  };
   runtime?: {
     instance?: string;
     cpuPct?: number;
@@ -50,6 +66,10 @@ interface InstanceAccumulator {
   lastRejections: number;
   firstTimeouts: number;
   lastTimeouts: number;
+  firstSocketTaskRejections: number;
+  lastSocketTaskRejections: number;
+  firstSocketTaskTimeouts: number;
+  lastSocketTaskTimeouts: number;
 }
 
 export interface AppStatsCollector {
@@ -84,6 +104,8 @@ export function startAppStatsCollector(
       const key = payload.runtime?.instance ?? 'unknown';
       const rejections = payload.pool?.rejections ?? 0;
       const timeouts = payload.pool?.timeouts ?? 0;
+      const socketTaskRejections = payload.socketDbTasks?.rejections ?? 0;
+      const socketTaskTimeouts = payload.socketDbTasks?.timeouts ?? 0;
       let accumulator = instances.get(key);
       if (!accumulator) {
         accumulator = {
@@ -91,10 +113,22 @@ export function startAppStatsCollector(
           lastRejections: rejections,
           firstTimeouts: timeouts,
           lastTimeouts: timeouts,
+          firstSocketTaskRejections: socketTaskRejections,
+          lastSocketTaskRejections: socketTaskRejections,
+          firstSocketTaskTimeouts: socketTaskTimeouts,
+          lastSocketTaskTimeouts: socketTaskTimeouts,
           peak: {
             samples: 0,
             healthFailures: 0,
             pool: { active: 0, queued: 0, maxWaitMs: 0, newRejections: 0, newTimeouts: 0 },
+            socketDbTasks: {
+              active: 0,
+              queued: 0,
+              maxQueued: 0,
+              maxWaitMs: 0,
+              newRejections: 0,
+              newTimeouts: 0,
+            },
             runtime: {
               cpuPct: 0,
               cpuCorePct: 0,
@@ -110,11 +144,29 @@ export function startAppStatsCollector(
       }
       accumulator.lastRejections = rejections;
       accumulator.lastTimeouts = timeouts;
+      accumulator.lastSocketTaskRejections = socketTaskRejections;
+      accumulator.lastSocketTaskTimeouts = socketTaskTimeouts;
       accumulator.peak.samples += 1;
       if (!response.ok || payload.ok === false) accumulator.peak.healthFailures += 1;
       accumulator.peak.pool.active = Math.max(accumulator.peak.pool.active, payload.pool?.active ?? 0);
       accumulator.peak.pool.queued = Math.max(accumulator.peak.pool.queued, payload.pool?.queued ?? 0);
       accumulator.peak.pool.maxWaitMs = Math.max(accumulator.peak.pool.maxWaitMs, payload.pool?.maxWaitMs ?? 0);
+      accumulator.peak.socketDbTasks.active = Math.max(
+        accumulator.peak.socketDbTasks.active,
+        payload.socketDbTasks?.active ?? 0
+      );
+      accumulator.peak.socketDbTasks.queued = Math.max(
+        accumulator.peak.socketDbTasks.queued,
+        payload.socketDbTasks?.queued ?? 0
+      );
+      accumulator.peak.socketDbTasks.maxQueued = Math.max(
+        accumulator.peak.socketDbTasks.maxQueued,
+        payload.socketDbTasks?.maxQueued ?? 0
+      );
+      accumulator.peak.socketDbTasks.maxWaitMs = Math.max(
+        accumulator.peak.socketDbTasks.maxWaitMs,
+        payload.socketDbTasks?.maxWaitMs ?? 0
+      );
       accumulator.peak.runtime.cpuPct = Math.max(
         accumulator.peak.runtime.cpuPct,
         payload.runtime?.cpuPct ?? 0
@@ -173,6 +225,14 @@ export function startAppStatsCollector(
         accumulator.peak.pool.newTimeouts = Math.max(
           0,
           accumulator.lastTimeouts - accumulator.firstTimeouts
+        );
+        accumulator.peak.socketDbTasks.newRejections = Math.max(
+          0,
+          accumulator.lastSocketTaskRejections - accumulator.firstSocketTaskRejections
+        );
+        accumulator.peak.socketDbTasks.newTimeouts = Math.max(
+          0,
+          accumulator.lastSocketTaskTimeouts - accumulator.firstSocketTaskTimeouts
         );
         output[key] = accumulator.peak;
       }

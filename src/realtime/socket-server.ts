@@ -48,6 +48,7 @@ import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
 import { runAuctionDisconnectGraceTimer, runAuctionResumeCountdownTimer } from './services/auction-disconnect.service.js';
+import { socketDbTaskLimiter } from './socket-db-task-limiter.js';
 import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
 import {
   auctionLifecycleService,
@@ -106,6 +107,14 @@ function runSocketTask(
         );
       }
     });
+}
+
+function runSocketDbTask(
+  operation: string,
+  userId: string,
+  task: () => Promise<unknown>,
+): void {
+  runSocketTask(operation, userId, () => socketDbTaskLimiter.run(task));
 }
 
 async function trackUserOnline(userId: string): Promise<void> {
@@ -514,8 +523,8 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
-      runSocketTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
-      runSocketTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
+      runSocketDbTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
+      runSocketDbTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
       runSocketTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));

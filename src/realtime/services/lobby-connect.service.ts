@@ -162,14 +162,15 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
         return;
       }
     }
-    void import('./draft-realtime.service.js')
-      .then(({ draftRealtimeService }) => draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId, {
+    try {
+      const { draftRealtimeService } = await import('./draft-realtime.service.js');
+      await draftRealtimeService.pauseDraftForDisconnectedPlayer(io, lobbyId, userId, {
         ignoreSocketId: socket.id,
         disconnectedConnectedAt: socket.data.connectedAt,
-      }))
-      .catch((error) => {
-        logger.warn({ error, lobbyId, userId }, 'Draft disconnect pause failed');
       });
+    } catch (error) {
+      logger.warn({ error, lobbyId, userId }, 'Draft disconnect pause failed');
+    }
     return;
   }
 

@@ -199,6 +199,28 @@ describe('chaos SLO verdict', () => {
     expect(verdict.violations.join(' ')).toContain('socket match starts: 20/100 expected');
   });
 
+  it('fails gameplay before a long matchmaking tail reaches the search deadline', () => {
+    const socket = {
+      clients: 100,
+      matchesStarted: 50,
+      matchesCompleted: 50,
+      matchesExpectedToComplete: 50,
+      deadlineCutoffs: { beforeMatchStart: 0, duringMatch: 0 },
+      wrongfulForfeits: 0,
+      deadSearch: 0,
+      banRollback: 0,
+      gateAbandon: 0,
+      legacyDraftStall: 0,
+      socketErrors: {},
+      latenciesMs: { answerToAck: [10], roundResultToNextQuestion: [20] },
+      percentiles: { queueJoinToMatchStart: { p95: 8_001 } },
+    } as unknown as NonNullable<Parameters<typeof evaluateChaosRun>[1]>;
+
+    expect(evaluateChaosRun([], socket, null).violations.join(' ')).toContain(
+      'matchmaking p95 8001ms > 8000ms'
+    );
+  });
+
   it('allows only explicitly expected socket errors for a fault scenario', () => {
     const socket = {
       clients: 2,

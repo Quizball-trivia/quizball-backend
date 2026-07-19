@@ -29,7 +29,7 @@ There are two load shapes:
   route p95 ≤1.5s, route p99 ≤3s, Postgres connections ≤75%, DB admission
   max wait ≤1s with no shedding, event-loop p99 ≤100ms, allocated CPU capacity
   ≤90%, no gameplay boot violations/wrongful forfeits, and matchmaking p95
-  ≤120s.
+  ≤8s.
 
 ## Run
 

@@ -26,7 +26,10 @@ export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
   maxDbConnectionUtilizationPct: 75,
   maxDbLockWaiters: 0,
   maxDbLongestActiveSec: 30,
-  maxQueueJoinP95Ms: 120_000,
+  // A client may remain in search for up to 120s before the harness gives up,
+  // but that deadline is not an acceptable latency SLO. Capacity certification
+  // uses the same strict queue target as the dedicated matchmaking fleet.
+  maxQueueJoinP95Ms: 8_000,
   maxAppDbWaitMs: 1_000,
   maxEventLoopP99Ms: 100,
   maxCpuPct: 90,

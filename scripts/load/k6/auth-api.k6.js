@@ -4,6 +4,7 @@ import { check, sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
 const MODE = (__ENV.MODE || 'smoke').toLowerCase();
+const API_PROFILE = (__ENV.API_PROFILE || 'full').toLowerCase();
 const TARGET = (__ENV.TARGET || 'local').toLowerCase();
 const API_BASE = (__ENV.API_BASE || (TARGET === 'staging'
   ? 'https://api-staging.quizball.io'
@@ -51,10 +52,6 @@ const refreshDuration = new Trend('auth_refresh_duration', true);
 const signupDuration = new Trend('auth_signup_duration', true);
 const walletDuration = new Trend('wallet_duration', true);
 
-assertSafeConfiguration();
-
-export const options = buildOptions();
-
 const SAFE_API_ROUTES = [
   { name: 'categories.list', path: '/api/v1/categories?limit=100&is_active=true&page=1', weight: 6, auth: false },
   { name: 'categories.list.minq', path: '/api/v1/categories?limit=100&is_active=true&min_questions=5', weight: 4, auth: false },
@@ -81,6 +78,24 @@ const SAFE_API_ROUTES = [
   { name: 'notifications.unread', path: '/api/v1/notifications/unread-count', weight: 2, auth: true },
   { name: 'users.search', path: '/api/v1/users/search?q=chaos&limit=20', weight: 2, auth: true },
 ];
+
+// Reproduces the previously observed single-generator 120 RPS failure with
+// exactly the same 40/48/32 questions, /me, and wallet split. Keeping this as
+// a named profile makes the distributed comparison repeatable instead of
+// relying on hand-edited route weights.
+const HOT_DB_ROUTE_NAMES = new Set(['questions.list', 'users.me', 'store.wallet']);
+const API_ROUTES = API_PROFILE === 'hot-db'
+  ? SAFE_API_ROUTES.filter((route) => HOT_DB_ROUTE_NAMES.has(route.name))
+  : SAFE_API_ROUTES;
+
+assertSafeConfiguration();
+
+export const options = {
+  ...buildOptions(),
+  // k6's default JSON summary omits p99 even when a p99 threshold exists.
+  // Preserve it explicitly so distributed aggregation can enforce both SLOs.
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
+};
 
 let apiSession = null;
 let refreshSession = null;
@@ -300,13 +315,13 @@ function userIndexForArrival() {
 }
 
 function weightedRoute(sequence) {
-  const total = SAFE_API_ROUTES.reduce((sum, route) => sum + route.weight, 0);
+  const total = API_ROUTES.reduce((sum, route) => sum + route.weight, 0);
   let slot = sequence % total;
-  for (const route of SAFE_API_ROUTES) {
+  for (const route of API_ROUTES) {
     slot -= route.weight;
     if (slot < 0) return route;
   }
-  return SAFE_API_ROUTES[SAFE_API_ROUTES.length - 1];
+  return API_ROUTES[API_ROUTES.length - 1];
 }
 
 function buildOptions() {
@@ -321,6 +336,15 @@ function buildOptions() {
     server_error_responses: ['count==0'],
     dropped_iterations: ['count==0'],
   };
+
+  if (['api', 'auth-mix'].includes(MODE)) {
+    for (const route of API_ROUTES) {
+      thresholds[`http_req_duration{endpoint:${route.name}}`] = [
+        'p(95)<1500',
+        'p(99)<3000',
+      ];
+    }
+  }
 
   const commonArrival = {
     executor: 'ramping-arrival-rate',
@@ -399,6 +423,9 @@ function assertSafeConfiguration() {
   }
   if (!['shared', 'per-vu'].includes(API_SESSION_MODE)) {
     throw new Error(`API_SESSION_MODE must be shared or per-vu, got ${API_SESSION_MODE}.`);
+  }
+  if (!['full', 'hot-db'].includes(API_PROFILE)) {
+    throw new Error(`API_PROFILE must be full or hot-db, got ${API_PROFILE}.`);
   }
   if (API_SESSION_MODE === 'shared' && ['api', 'auth-mix'].includes(MODE)) {
     const plannedSeconds = durationSeconds(RAMP_DURATION, true) + durationSeconds(DURATION) + 45;

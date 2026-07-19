@@ -20,6 +20,7 @@ Usage:
   run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec]
   run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec] [connect-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
+  run-scenario.sh http-hot <global-rps> <duration> [ramp-duration]
   run-scenario.sh auth-login <global-rps> <duration> [ramp-duration]
 
 gameplay and matchmaking use the mixed fleet. auth-login uses every
@@ -251,6 +252,7 @@ run_k6() {
   local rate="$3"
   local duration="$4"
   local ramp="${5:-2m}"
+  local api_profile="${6:-full}"
   positive_int global-rps "$rate"
   local workers
   workers="$(require_worker_count "$role" 2)"
@@ -275,7 +277,7 @@ run_k6() {
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local k6_mode="$mode"
     local command
-    command="$(remote_prefix)TARGET=staging MODE=$k6_mode USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
+    command="$(remote_prefix)TARGET=staging MODE=$k6_mode API_PROFILE=$api_profile USERS=1000 SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
@@ -294,8 +296,12 @@ run_k6() {
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
-  printf 'reports=%s failed_workers=%d\n' "$local_dir" "$failed"
-  (( failed == 0 )) || return 1
+  local aggregate_failed=0
+  npx tsx "$REPO_ROOT/scripts/load/k6/aggregate-summary.ts" \
+    --report "$local_dir/aggregate.json" "$local_dir"/worker-*.json || aggregate_failed=1
+  printf 'reports=%s failed_workers=%d aggregate_failed=%d\n' \
+    "$local_dir" "$failed" "$aggregate_failed"
+  (( failed == 0 && aggregate_failed == 0 )) || return 1
 }
 
 main() {
@@ -304,6 +310,7 @@ main() {
     gameplay) [[ $# -ge 4 && $# -le 5 ]] || die 'gameplay requires players duration total-rps [ramp]'; run_gameplay "$2" "$3" "$4" "${5:-60}" ;;
     matchmaking) [[ $# -ge 2 && $# -le 5 ]] || die 'matchmaking requires players [timeout] [join-ramp] [connect-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" "${5:-60}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;
+    http-hot) [[ $# -ge 3 && $# -le 4 ]] || die 'http-hot requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" hot-db ;;
     auth-login) [[ $# -ge 3 && $# -le 4 ]] || die 'auth-login requires rps duration [ramp]'; run_k6 login all "$2" "$3" "${4:-2m}" ;;
     *) usage; [[ -z "$scenario" ]] || exit 1 ;;
   esac

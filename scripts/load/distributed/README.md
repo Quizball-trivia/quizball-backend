@@ -91,6 +91,8 @@ scripts/load/distributed/run-scenario.sh gameplay 1000 900 500
 # This connects 5k clients over 120s, then joins the queue at 100 clients/s.
 scripts/load/distributed/run-scenario.sh matchmaking 5000 90 50 120
 scripts/load/distributed/run-scenario.sh http 2500 15m 2m
+# Exact distributed replay of the 40/48/32 RPS questions, /me, wallet mix.
+scripts/load/distributed/run-scenario.sh http-hot 120 5m 1m
 ```
 
 Only worker zero runs direct DB sampling. Other workers pass `--no-db-stats` so

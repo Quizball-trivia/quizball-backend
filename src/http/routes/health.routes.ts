@@ -5,6 +5,7 @@ import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 import { socketDbTaskLimiter } from '../../realtime/socket-db-task-limiter.js';
+import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
 
 const router = Router();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
@@ -78,6 +79,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       ok: true,
       durationMs: Date.now() - started,
       pool: dbPoolStats(),
+      authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
       runtime: runtimeStats(),
     });
@@ -88,6 +90,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       ok: false,
       durationMs: Date.now() - started,
       pool: stats,
+      authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
       runtime: runtimeStats(),
     });

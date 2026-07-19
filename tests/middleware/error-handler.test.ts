@@ -12,6 +12,7 @@ import {
   AuthenticationError,
   ValidationError,
   NotFoundError,
+  RateLimitError,
   ErrorCode,
 } from '../../src/core/errors.js';
 
@@ -56,6 +57,12 @@ describe('Error Handler Middleware', () => {
       throw new AppError('Failed to insert match answer', 500, ErrorCode.INTERNAL_ERROR, {
         code: ErrorCode.DB_OVERLOADED,
         reason: 'queue_full',
+      });
+    });
+
+    app.get('/rate-limit-error', (_req: Request, _res: Response) => {
+      throw new RateLimitError('Authentication is busy', {
+        source: 'application_auth_bulkhead',
       });
     });
 
@@ -173,6 +180,21 @@ describe('Error Handler Middleware', () => {
         message: 'Database temporarily unavailable',
         details: null,
         request_id: 'db-wrapped-1',
+      });
+    });
+
+    it('marks application rate limits as retryable', async () => {
+      const response = await request(app)
+        .get('/rate-limit-error')
+        .set('X-Request-ID', 'auth-busy-1');
+
+      expect(response.status).toBe(429);
+      expect(response.headers['retry-after']).toBe('1');
+      expect(response.body).toEqual({
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Authentication is busy',
+        details: { source: 'application_auth_bulkhead' },
+        request_id: 'auth-busy-1',
       });
     });
   });

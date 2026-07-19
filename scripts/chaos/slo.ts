@@ -156,6 +156,15 @@ export function evaluateChaosRun(
         );
       }
       if (
+        instance.authAdmission &&
+        (instance.authAdmission.newRejections > 0 || instance.authAdmission.newTimeouts > 0)
+      ) {
+        violations.push(
+          `${name} Auth admission shed ${instance.authAdmission.newRejections} requests ` +
+          `(${instance.authAdmission.newTimeouts} wait timeouts)`
+        );
+      }
+      if (
         instance.socketDbTasks &&
         (instance.socketDbTasks.newRejections > 0 || instance.socketDbTasks.newTimeouts > 0)
       ) {

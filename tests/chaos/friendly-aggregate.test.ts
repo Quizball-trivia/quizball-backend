@@ -14,6 +14,7 @@ function worker(offset: number) {
       matchesCompleted: 1,
       clientsReceivingFinalResults: 2,
       socketErrors: 0,
+      failureCount: 0,
       failures: [],
       latenciesMs: {
         connectToLobbyReady: [100 + offset],

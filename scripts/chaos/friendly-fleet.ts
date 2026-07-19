@@ -45,6 +45,7 @@ export interface FriendlyFleetSummary {
   matchesCompleted: number;
   clientsReceivingFinalResults: number;
   socketErrors: number;
+  failureCount: number;
   failures: FriendlyFleetFailure[];
   latenciesMs: {
     connectToLobbyReady: number[];
@@ -66,6 +67,7 @@ interface MutableMetrics {
   matchesCompleted: number;
   clientsReceivingFinalResults: number;
   socketErrors: number;
+  failureCount: number;
   failures: FriendlyFleetFailure[];
   connectToLobbyReadyMs: number[];
   lobbyCreateToMatchStartMs: number[];
@@ -91,6 +93,7 @@ export async function runFriendlyPartyFleet(
     matchesCompleted: 0,
     clientsReceivingFinalResults: 0,
     socketErrors: 0,
+    failureCount: 0,
     failures: [],
     connectToLobbyReadyMs: [],
     lobbyCreateToMatchStartMs: [],
@@ -103,7 +106,7 @@ export async function runFriendlyPartyFleet(
     const userB = cfg.users[pairIndex * 2 + 1]!;
     return runPair(pairIndex, userA, userB, rampMs, cfg.apiBase, metrics);
   });
-  await Promise.all(work);
+  await Promise.allSettled(work);
   const endedAtMs = Date.now();
   return {
     startedAt: new Date(startedAtMs).toISOString(),
@@ -118,6 +121,7 @@ export async function runFriendlyPartyFleet(
     matchesCompleted: metrics.matchesCompleted,
     clientsReceivingFinalResults: metrics.clientsReceivingFinalResults,
     socketErrors: metrics.socketErrors,
+    failureCount: metrics.failureCount,
     failures: metrics.failures,
     latenciesMs: {
       connectToLobbyReady: metrics.connectToLobbyReadyMs,
@@ -142,9 +146,11 @@ async function runPair(
 ): Promise<void> {
   if (rampMs > 0) await sleep(rampMs);
   const connectedAt = Date.now();
-  const host = connectStaging(apiBase, userA.token, userA.userId);
-  const guest = connectStaging(apiBase, userB.token, userB.userId);
+  let clients: [StagingClient, StagingClient] | null = null;
   try {
+    const host = connectStaging(apiBase, userA.token, userA.userId);
+    const guest = connectStaging(apiBase, userB.token, userB.userId);
+    clients = [host, guest];
     const connected = await Promise.all([
       waitConnected(host, CONNECT_TIMEOUT_MS),
       waitConnected(guest, CONNECT_TIMEOUT_MS),
@@ -232,8 +238,8 @@ async function runPair(
   } catch (error) {
     fail(metrics, pairIndex, 'exception', error instanceof Error ? error.message : String(error));
   } finally {
-    host.disconnect();
-    guest.disconnect();
+    clients?.[0].disconnect();
+    clients?.[1].disconnect();
   }
 }
 
@@ -258,15 +264,25 @@ function hasFinal(client: StagingClient, matchId: string | undefined): boolean {
 async function waitConnected(client: StagingClient, timeoutMs: number): Promise<boolean> {
   if (client.socket.connected) return true;
   return new Promise((resolveWait) => {
-    const timer = setTimeout(() => resolveWait(false), timeoutMs);
-    client.socket.once('connect', () => {
+    let settled = false;
+    const finish = (connected: boolean) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolveWait(true);
-    });
+      client.socket.off('connect', onConnect);
+      client.socket.off('connect_error', onConnectError);
+      resolveWait(connected);
+    };
+    const onConnect = () => finish(true);
+    const onConnectError = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    client.socket.once('connect', onConnect);
+    client.socket.once('connect_error', onConnectError);
   });
 }
 
 function fail(metrics: MutableMetrics, pairIndex: number, stage: string, detail: string): void {
+  metrics.failureCount++;
   if (metrics.failures.length < MAX_FAILURE_DETAILS) metrics.failures.push({ pairIndex, stage, detail });
 }
 

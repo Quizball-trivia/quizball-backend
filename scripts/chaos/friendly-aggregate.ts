@@ -13,6 +13,7 @@ interface WorkerReport {
     matchesCompleted: number;
     clientsReceivingFinalResults: number;
     socketErrors: number;
+    failureCount?: number;
     failures: unknown[];
     latenciesMs: {
       connectToLobbyReady: number[];
@@ -89,7 +90,7 @@ export function aggregateFriendlyReports(
     totals.matchesCompleted += fleet.matchesCompleted;
     totals.clientsReceivingFinalResults += fleet.clientsReceivingFinalResults;
     totals.socketErrors += fleet.socketErrors;
-    totals.pairFailures += fleet.failures.length;
+    totals.pairFailures += fleet.failureCount ?? fleet.failures.length;
     connect.push(...fleet.latenciesMs.connectToLobbyReady);
     start.push(...fleet.latenciesMs.lobbyCreateToMatchStart);
     finish.push(...fleet.latenciesMs.matchStartToFinalResults);

@@ -228,7 +228,7 @@ function evaluate(
     violations.push(`clients receiving final results ${fleet.clientsReceivingFinalResults}/${fleet.clients}`);
   }
   if (fleet.socketErrors > 0) violations.push(`socket error events ${fleet.socketErrors}`);
-  if (fleet.failures.length > 0) violations.push(`friendly pair failures ${fleet.failures.length}`);
+  if (fleet.failureCount > 0) violations.push(`friendly pair failures ${fleet.failureCount}`);
   if (dbPeak && dbPeak.utilizationPct > 75) violations.push(`DB connections ${dbPeak.utilizationPct}% > 75%`);
   if (dbPeak && dbPeak.waitingOnLock > 0) violations.push(`DB lock waiters ${dbPeak.waitingOnLock}`);
   if (app.requestFailures > 0) violations.push(`app telemetry failures ${app.requestFailures}`);

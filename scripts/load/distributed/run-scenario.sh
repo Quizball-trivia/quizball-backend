@@ -48,7 +48,7 @@ run_party() {
   (( lead < 300 )) && lead=300
   local start_at=$(( $(date +%s) + lead ))
   local stamp
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)-party-${players}"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-party-${players}-$$"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
   printf 'workers=%d max-clients/worker=%d pair-remainder=%d ramp=%ds synchronized=%s\n' \

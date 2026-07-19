@@ -9,6 +9,7 @@ import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import type { LobbyRow } from '../../modules/lobbies/lobbies.types.js';
+import { DbOverloadedError } from '../../db/admission.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
 import type { RankedProfileRow } from '../../modules/ranked/ranked.types.js';
 import { statsService } from '../../modules/stats/stats.service.js';
@@ -749,6 +750,10 @@ export async function runRankedDraftStart(
   try {
     await startDraft(io, lobbyId);
   } catch (error) {
+    // The durable timer scheduler will requeue transient admission pressure.
+    // Treating this as a terminal match-preparation failure strands a valid,
+    // committed lobby and forces both players to restart matchmaking.
+    if (error instanceof DbOverloadedError) throw error;
     // Keep the crash guard from the previous in-process timer path: a draft
     // start failure must notify both players and never become an unhandled
     // rejection from the durable scheduler.

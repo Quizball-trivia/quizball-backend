@@ -7,6 +7,16 @@ class FakeRedis {
   isOpen = true;
   values = new Map<string, string>();
   zsets = new Map<string, Map<string, number>>();
+  duePopCalls = 0;
+  private nextDuePopGate: Promise<void> | null = null;
+
+  blockNextDuePop(): () => void {
+    let release = () => {};
+    this.nextDuePopGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  }
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
@@ -76,6 +86,10 @@ class FakeRedis {
       return 1;
     }
     if (script.includes('ZRANGEBYSCORE')) {
+      this.duePopCalls += 1;
+      const gate = this.nextDuePopGate;
+      this.nextDuePopGate = null;
+      if (gate) await gate;
       const zset = this.zsets.get(params.keys[0]) ?? new Map<string, number>();
       const now = Number(params.arguments[0]);
       const limit = Number(params.arguments[1]);
@@ -148,6 +162,52 @@ describe('realtime timer scheduler', () => {
       { kind: 'possession_question', matchId: 'm1', qIndex: 3 }
     );
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
+  });
+
+  it('bounds a due timer burst and prevents overlapping polls', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const handled = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+    });
+    const {
+      __realtimeTimerInternals,
+      scheduleRealtimeTimer,
+      startRealtimeTimerScheduler,
+    } = await import('../../src/realtime/realtime-timer-scheduler.js');
+
+    startRealtimeTimerScheduler({} as QuizballServer, {
+      party_question: handled,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 12; index += 1) {
+      await scheduleRealtimeTimer(
+        'party_question',
+        `burst-${index}`,
+        new Date(Date.now()),
+        { kind: 'party_question', matchId: `m-${index}`, qIndex: 0 }
+      );
+    }
+
+    const popCallsBeforeBurst = redis?.duePopCalls ?? 0;
+    const releaseDuePop = redis!.blockNextDuePop();
+    const firstPoll = __realtimeTimerInternals.pollDueTimers();
+    await Promise.resolve();
+    expect(redis?.duePopCalls).toBe(popCallsBeforeBurst + 1);
+
+    const overlappingPoll = __realtimeTimerInternals.pollDueTimers();
+    await Promise.resolve();
+    expect(redis?.duePopCalls).toBe(popCallsBeforeBurst + 1);
+
+    releaseDuePop();
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([firstPoll, overlappingPoll]);
+
+    expect(handled).toHaveBeenCalledTimes(12);
+    expect(maxActive).toBe(__realtimeTimerInternals.TIMER_HANDLER_CONCURRENCY);
   });
 
   it('keeps the payload when the handler re-arms the same member during processing', async () => {

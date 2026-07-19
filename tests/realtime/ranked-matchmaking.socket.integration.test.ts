@@ -191,6 +191,7 @@ class FakeRedis {
       const userMapKey = data.keys[2];
       const searchPrefix = data.arguments[0] ?? 'ranked:mm:search:';
       const matchedAt = data.arguments[1] ?? String(Date.now());
+      const pairingPrefix = data.arguments[2] ?? 'ranked:mm:pairing:';
 
       const queue = this.zsets.get(queueKey);
       if (!queue || queue.size < 2) return [];
@@ -234,6 +235,8 @@ class FakeRedis {
       this.zsets.get(timeoutKey)?.delete(searchIdA);
       this.zsets.get(timeoutKey)?.delete(searchIdB);
       await this.hDel(userMapKey, userIdA, userIdB);
+      await this.set(`${pairingPrefix}${userIdA}`, '1');
+      await this.set(`${pairingPrefix}${userIdB}`, '1');
       return [searchIdA, userIdA, searchIdB, userIdB];
     }
 

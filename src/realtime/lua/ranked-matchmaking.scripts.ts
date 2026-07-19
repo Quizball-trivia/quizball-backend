@@ -6,6 +6,8 @@ local timeoutKey = KEYS[2]
 local userMapKey = KEYS[3]
 local searchPrefix = ARGV[1]
 local matchedAt = ARGV[2]
+local pairingPrefix = ARGV[3]
+local pairingTtlSec = tonumber(ARGV[4])
 
 local picks = redis.call('ZRANDMEMBER', queueKey, 2)
 if (not picks) or (#picks < 2) then
@@ -63,6 +65,11 @@ redis.call('HSET', searchKeyB, 'status', 'matched', 'matchedAt', matchedAt)
 redis.call('ZREM', queueKey, searchIdA, searchIdB)
 redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
 redis.call('HDEL', userMapKey, userIdA, userIdB)
+-- Reserve both users as part of the same atomic queue claim. processPairs
+-- deliberately claims a batch before starting the slower lobby builds; these
+-- markers stop a retrying client from re-joining during that bounded wait.
+redis.call('SET', pairingPrefix .. userIdA, '1', 'EX', pairingTtlSec)
+redis.call('SET', pairingPrefix .. userIdB, '1', 'EX', pairingTtlSec)
 
 return { searchIdA, userIdA, countryCodeA, searchIdB, userIdB, countryCodeB }
 `;

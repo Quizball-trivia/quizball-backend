@@ -820,6 +820,65 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
   });
 
+  it('keeps a bounded pool of pair starts full without over-claiming users', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    let pairScriptCalls = 0;
+    let releaseLobbyStarts!: () => void;
+    const lobbyStartGate = new Promise<void>((resolve) => {
+      releaseLobbyStarts = resolve;
+    });
+
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      pairScriptCalls += 1;
+      if (pairScriptCalls > 10) return [];
+      const userNumber = (pairScriptCalls - 1) * 2 + 1;
+      return [
+        `s${userNumber}`,
+        `u${userNumber}`,
+        `s${userNumber + 1}`,
+        `u${userNumber + 1}`,
+      ];
+    });
+    createLobbyMock.mockImplementation(async ({ hostUserId }: { hostUserId: string }) => {
+      await lobbyStartGate;
+      return {
+        id: `lobby-${hostUserId}`,
+        mode: 'ranked',
+        status: 'waiting',
+        host_user_id: hostUserId,
+        invite_code: null,
+        display_name: null,
+        is_public: false,
+        game_mode: 'ranked_sim',
+        friendly_random: true,
+        friendly_category_a_id: null,
+        friendly_category_b_id: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    service.start(io);
+    await vi.advanceTimersByTimeAsync(120);
+    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 8; i += 1) {
+      await Promise.resolve();
+    }
+
+    // Eight users pairs are atomically reserved and admitted. The remaining
+    // pairs stay recoverable in the live queue until a worker slot is free.
+    expect(pairScriptCalls).toBe(8);
+    expect(createLobbyMock).toHaveBeenCalledTimes(8);
+
+    releaseLobbyStarts();
+    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 10; i += 1) {
+      await Promise.resolve();
+    }
+    expect(pairScriptCalls).toBe(11);
+    expect(createLobbyMock).toHaveBeenCalledTimes(10);
+  });
+
   it('skips human pair creation when either claimed user already has session state', async () => {
     const service = await loadService();
     const io = createIoMock();

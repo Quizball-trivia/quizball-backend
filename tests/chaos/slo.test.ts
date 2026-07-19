@@ -114,6 +114,33 @@ describe('chaos SLO verdict', () => {
     expect(verdict).toMatchObject({ ok: true, violations: [] });
   });
 
+  it('fails a mixed run when the Auth bulkhead sheds requests', () => {
+    const app = {
+      requestFailures: 0,
+      instances: {
+        'staging-1': {
+          samples: 10,
+          healthFailures: 0,
+          pool: { newRejections: 0, newTimeouts: 0, maxWaitMs: 0 },
+          authAdmission: {
+            active: 4,
+            queued: 16,
+            maxQueued: 16,
+            maxWaitMs: 2_000,
+            newRejections: 3,
+            newTimeouts: 1,
+          },
+          runtime: { eventLoopP99Ms: 10, cpuPct: 10 },
+        },
+      },
+    } as unknown as NonNullable<Parameters<typeof evaluateChaosRun>[3]>;
+
+    const verdict = evaluateChaosRun([], null, null, app, undefined, 1);
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations.join(' ')).toContain('Auth admission shed 3 requests');
+  });
+
   it('fails when a supposedly valid route returns client errors', () => {
     const verdict = evaluateChaosRun([
       {

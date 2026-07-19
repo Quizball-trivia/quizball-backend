@@ -21,7 +21,7 @@ PRIMARY_IPV4_HOURLY_USD="${PRIMARY_IPV4_HOURLY_USD:-0.0010}"
 HCLOUD_SPEND_APPROVAL="${HCLOUD_SPEND_APPROVAL:-}"
 
 HCLOUD=(hcloud --context "$HCLOUD_CONTEXT")
-SSH=(ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 
 die() {

@@ -87,7 +87,9 @@ timestamp:
 ```bash
 scripts/load/distributed/run-scenario.sh gameplay 500 900 250
 scripts/load/distributed/run-scenario.sh gameplay 1000 900 500
-scripts/load/distributed/run-scenario.sh matchmaking 5000 30
+# Separate transport connection pressure from the synchronized queue storm.
+# This connects 5k clients over 120s, then joins the queue at 100 clients/s.
+scripts/load/distributed/run-scenario.sh matchmaking 5000 90 50 120
 scripts/load/distributed/run-scenario.sh http 2500 15m 2m
 ```
 

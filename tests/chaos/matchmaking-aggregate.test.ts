@@ -46,6 +46,8 @@ describe('distributed matchmaking aggregate', () => {
   it('proves reciprocal pairs even when opponents are split across workers', () => {
     const a = worker(0, 2);
     const b = worker(2, 2);
+    a.fleet.connectionRetries = 1;
+    b.fleet.connectionRetries = 2;
     // Split each pair across the two workers to exercise cross-worker proof.
     a.fleet.pairObservations = [
       { userId: 'u0', opponentId: 'u1', lobbyId: 'l0' },
@@ -58,6 +60,7 @@ describe('distributed matchmaking aggregate', () => {
     expect(aggregateMatchmakingReports([a, b], 4)).toMatchObject({
       humanMatchedClients: 4,
       humanPairs: 2,
+      connectionRetries: 3,
       verdict: { ok: true, violations: [] },
     });
   });

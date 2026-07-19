@@ -21,6 +21,7 @@ export interface MatchmakingAggregate {
   clients: number;
   uniqueClients: number;
   connectedClients: number;
+  connectionRetries: number;
   searchStartedClients: number;
   humanMatchedClients: number;
   humanPairs: number;
@@ -66,6 +67,7 @@ export function aggregateMatchmakingReports(
   const duplicateUserIds = new Set<string>();
   let clients = 0;
   let connectedClients = 0;
+  let connectionRetries = 0;
   let searchStartedClients = 0;
   let unmatchedClients = 0;
   let duplicateMatchFoundClients = 0;
@@ -80,6 +82,7 @@ export function aggregateMatchmakingReports(
     }
     clients += report.fleet.clients;
     connectedClients += report.fleet.connectedClients;
+    connectionRetries += report.fleet.connectionRetries ?? 0;
     searchStartedClients += report.fleet.searchStartedClients;
     unmatchedClients += report.fleet.unmatchedClients;
     duplicateMatchFoundClients += report.fleet.duplicateMatchFoundClients;
@@ -127,6 +130,7 @@ export function aggregateMatchmakingReports(
     clients,
     uniqueClients: seenUsers.size,
     connectedClients,
+    connectionRetries,
     searchStartedClients,
     humanMatchedClients: pairs.humanMatchedClients,
     humanPairs: pairs.humanPairs,

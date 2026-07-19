@@ -608,40 +608,16 @@ vi.mock('../../src/modules/store/store.service.js', () => ({
   },
 }));
 
-vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
-  lobbiesRepo: {
-    createLobby: vi.fn(async ({ hostUserId }: { hostUserId: string }) => {
-      lobbyCounter += 1;
-      const id = `lobby-${lobbyCounter}`;
-      lobbyMembers.set(id, [hostUserId]);
-      return {
-        id,
-        mode: 'ranked',
-        status: 'waiting',
-        host_user_id: hostUserId,
-        invite_code: null,
-        display_name: null,
-        is_public: false,
-        game_mode: 'ranked_sim',
-        friendly_random: true,
-        friendly_category_a_id: null,
-        friendly_category_b_id: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    }),
-    addMember: vi.fn(async (lobbyId: string, userId: string) => {
-      const members = lobbyMembers.get(lobbyId) ?? [];
-      if (!members.includes(userId)) {
-        members.push(userId);
-      }
-      lobbyMembers.set(lobbyId, members);
-    }),
-    getById: vi.fn(async (lobbyId: string) => ({
-      id: lobbyId,
+vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => {
+  const createLobby = async ({ hostUserId }: { hostUserId: string }) => {
+    lobbyCounter += 1;
+    const id = `lobby-${lobbyCounter}`;
+    lobbyMembers.set(id, [hostUserId]);
+    return {
+      id,
       mode: 'ranked',
       status: 'waiting',
-      host_user_id: lobbyMembers.get(lobbyId)?.[0] ?? 'u1',
+      host_user_id: hostUserId,
       invite_code: null,
       display_name: null,
       is_public: false,
@@ -651,9 +627,45 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
       friendly_category_b_id: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    })),
-  },
-}));
+    };
+  };
+
+  return {
+    lobbiesRepo: {
+      createLobby: vi.fn(createLobby),
+      createLobbyWithMembers: vi.fn(async (
+        data: { hostUserId: string },
+        members: Array<{ userId: string }>,
+      ) => {
+        const lobby = await createLobby(data);
+        lobbyMembers.set(lobby.id, members.map((member) => member.userId));
+        return lobby;
+      }),
+      addMember: vi.fn(async (lobbyId: string, userId: string) => {
+        const members = lobbyMembers.get(lobbyId) ?? [];
+        if (!members.includes(userId)) {
+          members.push(userId);
+        }
+        lobbyMembers.set(lobbyId, members);
+      }),
+      getById: vi.fn(async (lobbyId: string) => ({
+        id: lobbyId,
+        mode: 'ranked',
+        status: 'waiting',
+        host_user_id: lobbyMembers.get(lobbyId)?.[0] ?? 'u1',
+        invite_code: null,
+        display_name: null,
+        is_public: false,
+        game_mode: 'ranked_sim',
+        friendly_random: true,
+        friendly_category_a_id: null,
+        friendly_category_b_id: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })),
+    },
+  };
+});
 
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {

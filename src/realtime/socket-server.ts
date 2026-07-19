@@ -495,7 +495,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       // (socket missing its matchId while a match is live) is diagnosable from
       // logs — observed once on staging (reconnect_smoke 2026-06-10) where a
       // mid-match disconnect produced no pause and no skip.
-      logger.info(
+      logger.debug(
         {
           userId: user.id,
           socketId: socket.id,

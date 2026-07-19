@@ -67,6 +67,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     createLobby: (...args: unknown[]) => createLobbyMock(...args),
+    createLobbyWithMembers: (data: unknown) => createLobbyMock(data),
     addMember: (...args: unknown[]) => addMemberMock(...args),
     getById: (...args: unknown[]) => getLobbyByIdMock(...args),
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
@@ -139,6 +140,9 @@ vi.mock('../../src/modules/store/store.service.js', () => ({
 vi.mock('../../src/modules/stats/stats.service.js', () => ({
   statsService: {
     getRecentFormForUser: vi.fn().mockResolvedValue([]),
+    getRecentFormsForUsers: vi.fn(async (userIds: string[]) => new Map(
+      userIds.map((userId) => [userId, []]),
+    )),
   },
 }));
 

@@ -291,6 +291,21 @@ export const matchesRepo = {
     return row ?? null;
   },
 
+  async getActiveMatchesForUsers(userIds: string[]): Promise<Map<string, MatchRow>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return new Map();
+
+    const rows = await sql<Array<MatchRow & { session_user_id: string }>>`
+      SELECT DISTINCT ON (mp.user_id) mp.user_id AS session_user_id, m.*
+      FROM match_players mp
+      JOIN matches m ON m.id = mp.match_id
+      WHERE mp.user_id = ANY(${sql.array(uniqueUserIds)}::uuid[])
+        AND m.status = 'active'
+      ORDER BY mp.user_id, m.started_at DESC
+    `;
+    return new Map(rows.map(({ session_user_id, ...match }) => [session_user_id, match as MatchRow]));
+  },
+
   /**
    * Matches stuck in 'active' with no state write for `olderThanMs`. Used by the
    * stale-match sweeper to clean up orphans whose in-process grace/forfeit timer

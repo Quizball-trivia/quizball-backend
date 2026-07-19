@@ -160,6 +160,41 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
   });
 }
 
+async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveContext>> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.length === 0) return new Map();
+
+  return withSpan('session.resolve_contexts', {
+    'quizball.user_count': uniqueUserIds.length,
+  }, async () => {
+    const redis = getRedisClient();
+    const queueSearchIdsPromise = redis
+      ? Promise.all(uniqueUserIds.map((userId) => redis.hGet(RANKED_USER_MAP_KEY, userId)))
+      : Promise.resolve(uniqueUserIds.map(() => null));
+    const [activeMatchesByUserId, openLobbiesByUserId, queueSearchIds] = await Promise.all([
+      matchesRepo.getActiveMatchesForUsers(uniqueUserIds),
+      lobbiesRepo.listOpenLobbiesForUsers(uniqueUserIds),
+      queueSearchIdsPromise,
+    ]);
+
+    return new Map(uniqueUserIds.map((userId, index) => {
+      const rawActiveMatch = activeMatchesByUserId.get(userId) ?? null;
+      const activeMatch = rawActiveMatch && isUserDroppedFromPartyMatch(rawActiveMatch, userId)
+        ? null
+        : rawActiveMatch;
+      const openLobbies = openLobbiesByUserId.get(userId) ?? [];
+      const context: ResolveContext = {
+        activeMatch,
+        queueSearchId: queueSearchIds[index] ?? null,
+        waitingLobbies: openLobbies.filter((lobby) => lobby.status === 'waiting'),
+        activeLobbies: openLobbies.filter((lobby) => lobby.status === 'active'),
+        openLobbies,
+      };
+      return [userId, context];
+    }));
+  });
+}
+
 async function hasRankedPairingInFlight(userId: string): Promise<boolean> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return false;
@@ -650,6 +685,11 @@ export const userSessionGuardService = {
   async resolveState(userId: string): Promise<SessionStatePayload> {
     const context = await resolveContext(userId);
     return toSnapshot(context);
+  },
+
+  async resolveStates(userIds: string[]): Promise<Map<string, SessionStatePayload>> {
+    const contexts = await resolveContexts(userIds);
+    return new Map([...contexts].map(([userId, context]) => [userId, toSnapshot(context)]));
   },
 
   async emitState(io: QuizballServer, userId: string): Promise<SessionStatePayload> {

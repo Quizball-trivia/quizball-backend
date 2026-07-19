@@ -70,12 +70,25 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     addMember: (...args: unknown[]) => addMemberMock(...args),
     getById: (...args: unknown[]) => getLobbyByIdMock(...args),
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
+    listOpenLobbiesForUsers: async (userIds: string[]) => new Map(
+      await Promise.all(userIds.map(async (userId) => [
+        userId,
+        await listOpenLobbiesForUserMock(userId),
+      ] as const))
+    ),
   },
 }));
 
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
+    getActiveMatchesForUsers: async (userIds: string[]) => {
+      const entries = await Promise.all(userIds.map(async (userId) => [
+        userId,
+        await getActiveMatchForUserMock(userId),
+      ] as const));
+      return new Map(entries.filter((entry) => entry[1]));
+    },
   },
 }));
 
@@ -109,6 +122,17 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
 vi.mock('../../src/modules/store/store.service.js', () => ({
   storeService: {
     getWallet: (...args: unknown[]) => getWalletMock(...args),
+    getRankedTicketWallets: async (userIds: string[]) => {
+      const entries: Array<readonly [string, unknown]> = [];
+      for (const userId of userIds) {
+        try {
+          entries.push([userId, await getWalletMock(userId)] as const);
+        } catch (error) {
+          if (!(error instanceof NotFoundError)) throw error;
+        }
+      }
+      return new Map(entries);
+    },
   },
 }));
 
@@ -405,6 +429,26 @@ describe('ranked-matchmaking.service queue behavior', () => {
     expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:pairing:u1', '1', { EX: 30 });
     expect(redisMock.set).toHaveBeenCalledWith('ranked:mm:pairing:u2', '1', { EX: 30 });
     expect(redisMock.del).toHaveBeenCalledWith(['ranked:mm:pairing:u1', 'ranked:mm:pairing:u2']);
+  });
+
+  it('skips queue cleanup when a cross-replica socket already has a committed lobby assignment', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    const socket = createSocketMock('u1');
+    redisMock.get.mockImplementation(async (key: string) => (
+      key === 'ranked:mm:assigned-lobby:u1' ? 'lobby-u1' : null
+    ));
+
+    await service.handleSocketDisconnect(io, socket as never);
+
+    expect(redisMock.eval).not.toHaveBeenCalled();
+    expect(redisMock.set).not.toHaveBeenCalledWith(
+      'ranked:mm:cancel:u1',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(getActiveMatchForUserMock).not.toHaveBeenCalled();
+    expect(listOpenLobbiesForUserMock).not.toHaveBeenCalled();
   });
 
   it('pairs one match when queue effectively has 2 users', async () => {
@@ -937,21 +981,28 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
   });
 
-  it('logs lock release failures without rejecting the tick', async () => {
+  it('does not overlap local ticks while a previous tick is still running', async () => {
     const service = await loadService();
     const io = createIoMock();
-    const releaseError = new Error('release failed');
-
-    releaseLockMock.mockRejectedValueOnce(releaseError);
+    let pairScriptCalls = 0;
+    let releasePairClaim!: () => void;
+    const pairClaimGate = new Promise<void>((resolve) => {
+      releasePairClaim = resolve;
+    });
+    redisMock.eval.mockImplementation(async (script: string) => {
+      if (script !== RANKED_MM_PAIR_TWO_RANDOM_SCRIPT) return [];
+      pairScriptCalls += 1;
+      await pairClaimGate;
+      return [];
+    });
 
     service.start(io);
     await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(500);
 
-    expect(releaseLockMock).toHaveBeenCalledWith('ranked:mm:tick-lock', 't1');
-    expect(logger.error).toHaveBeenCalledWith(
-      { err: releaseError },
-      'Ranked matchmaking tick lock release failed'
-    );
+    expect(pairScriptCalls).toBe(1);
+    releasePairClaim();
+    await Promise.resolve();
   });
 
   it('emits ranked:match_found with opponent RP from ensured profiles', async () => {

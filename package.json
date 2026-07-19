@@ -19,6 +19,7 @@
     "staging:gate": "tsx game-regression/staging/run.mts",
     "chaos:capacity": "tsx scripts/chaos/capacity.ts",
     "chaos:matchmaking": "tsx scripts/chaos/matchmaking.ts",
+    "chaos:party": "tsx scripts/chaos/friendly.ts",
     "load:k6:inspect": "k6 inspect scripts/load/k6/auth-api.k6.js",
     "load:k6:smoke": "TARGET=staging MODE=smoke USERS=2 VUS=2 k6 run scripts/load/k6/auth-api.k6.js",
     "load:k6": "k6 run scripts/load/k6/auth-api.k6.js",

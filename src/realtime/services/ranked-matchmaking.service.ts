@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import type { SessionStatePayload } from '../socket.types.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { config } from '../../core/config.js';
 import { countryPayload } from '../../core/country.js';
@@ -51,6 +52,11 @@ const TICK_INTERVAL_MS = 100;
 const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
+// Starting a real match performs several independent database/network reads.
+// Serial starts made a 50-pair flash take roughly 11 seconds on staging. Keep
+// concurrency bounded so the matcher drains bursts without bypassing the DB
+// admission controller or spawning an unbounded Promise.all.
+const MAX_CONCURRENT_PAIR_STARTS = 4;
 const FOUND_MODAL_MS = 1200;
 
 const CANCEL_KEY_TTL_SEC = 30;
@@ -60,6 +66,25 @@ const DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS = 1_000;
 
 function waitForMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function emitQueuedSessionState(
+  io: QuizballServer,
+  userId: string,
+  snapshot: SessionStatePayload,
+  searchId: string,
+): SessionStatePayload {
+  const queuedSnapshot: SessionStatePayload = {
+    ...snapshot,
+    state: 'IN_QUEUE',
+    activeMatchId: null,
+    waitingLobbyId: null,
+    queueSearchId: searchId,
+    openLobbyIds: [],
+    resolvedAt: new Date().toISOString(),
+  };
+  io.to(`user:${userId}`).emit('session:state', queuedSnapshot);
+  return queuedSnapshot;
 }
 const JOIN_DEBOUNCE_TTL_SEC = 2;
 const PAIRING_IN_FLIGHT_TTL_SEC = 30;
@@ -788,45 +813,61 @@ async function processPairs(io: QuizballServer): Promise<void> {
 
     let pairCount = 0;
     let pairFailureCount = 0;
-    for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
-      const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
-        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
-        arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
-      });
-      const result = toStringArray(resultRaw);
-      // The Lua script removed an expired/mismapped queue member. Keep scanning
-      // in this same tick instead of letting one orphan throttle matchmaking to
-      // one cleanup per 100ms.
-      if (result[0] === RANKED_MM_STALE_RESULT) continue;
-      if (result.length < 4) break;
-
-      const searchIdA = result[0];
-      const userAId = result[1];
-      const hasCountryCodes = result.length >= 6;
-      const userACountryCode = hasCountryCodes ? result[2] || null : null;
-      const searchIdB = hasCountryCodes ? result[3] : result[2];
-      const userBId = hasCountryCodes ? result[4] : result[3];
-      const userBCountryCode = hasCountryCodes ? result[5] || null : null;
-      if (!userAId || !userBId) break;
-      pairCount += 1;
-      rankedDebug('pair_claimed_two_users', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-        searchA: searchIdA.slice(0, 8),
-        searchB: searchIdB.slice(0, 8),
-      });
-      try {
-        await startHumanRankedMatch(io, userAId, userBId, {
-          userA: userACountryCode,
-          userB: userBCountryCode,
+    let pendingStarts: Promise<void>[] = [];
+    const flushStarts = async (): Promise<void> => {
+      if (pendingStarts.length === 0) return;
+      const current = pendingStarts;
+      pendingStarts = [];
+      await Promise.all(current);
+    };
+    try {
+      for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+        const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
+          keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+          arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
         });
-      } catch (error) {
-        pairFailureCount += 1;
-        logger.error(
-          { err: error, searchIdA, searchIdB, userAId, userBId },
-          'Ranked matchmaking pair failed for queued users'
-        );
+        const result = toStringArray(resultRaw);
+        // The Lua script removed an expired/mismapped queue member. Keep scanning
+        // in this same tick instead of letting one orphan throttle matchmaking to
+        // one cleanup per 100ms.
+        if (result[0] === RANKED_MM_STALE_RESULT) continue;
+        if (result.length < 4) break;
+
+        const searchIdA = result[0];
+        const userAId = result[1];
+        const hasCountryCodes = result.length >= 6;
+        const userACountryCode = hasCountryCodes ? result[2] || null : null;
+        const searchIdB = hasCountryCodes ? result[3] : result[2];
+        const userBId = hasCountryCodes ? result[4] : result[3];
+        const userBCountryCode = hasCountryCodes ? result[5] || null : null;
+        if (!userAId || !userBId) break;
+        pairCount += 1;
+        rankedDebug('pair_claimed_two_users', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          searchA: searchIdA.slice(0, 8),
+          searchB: searchIdB.slice(0, 8),
+        });
+        pendingStarts.push((async () => {
+          try {
+            await startHumanRankedMatch(io, userAId, userBId, {
+              userA: userACountryCode,
+              userB: userBCountryCode,
+            });
+          } catch (error) {
+            pairFailureCount += 1;
+            logger.error(
+              { err: error, searchIdA, searchIdB, userAId, userBId },
+              'Ranked matchmaking pair failed for queued users'
+            );
+          }
+        })());
+        if (pendingStarts.length >= MAX_CONCURRENT_PAIR_STARTS) {
+          await flushStarts();
+        }
       }
+    } finally {
+      await flushStarts();
     }
     span.setAttribute('quizball.pair_count', pairCount);
     span.setAttribute('quizball.pair_failure_count', pairFailureCount);
@@ -1195,7 +1236,7 @@ export const rankedMatchmakingService = {
                 remainingMs,
               });
               io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
-              const snapshot = await userSessionGuardService.emitState(io, userId);
+              const snapshot = emitQueuedSessionState(io, userId, prepared.snapshot, existingSearchId);
               logger.info(
                 {
                   userId,
@@ -1254,8 +1295,15 @@ export const rankedMatchmakingService = {
           }
 
           io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-          const queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
-          span.setAttribute('quizball.queue_size', queueSize);
+          let queueSize: number | null = null;
+          try {
+            queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
+            span.setAttribute('quizball.queue_size', queueSize);
+          } catch (error) {
+            // The search is already committed and acknowledged. Telemetry must
+            // never turn a successful queue join into a client-visible error.
+            logger.warn({ err: error, userId, searchId: newSearchId }, 'Failed to read ranked queue size after join');
+          }
           logger.info(
             { userId, searchId: newSearchId, queueSize, ...queueClientContext },
             'User joined ranked queue'
@@ -1271,7 +1319,7 @@ export const rankedMatchmakingService = {
             queueSize,
             durationMs: SEARCH_DURATION_MS,
           });
-          const snapshot = await userSessionGuardService.emitState(io, userId);
+          const snapshot = emitQueuedSessionState(io, userId, prepared.snapshot, newSearchId);
           logger.info(
             {
               userId,

@@ -30,7 +30,13 @@ import {
   lastMatchKey,
 } from './match-keys.js';
 import { buildStandings, bumpStateVersion } from './match-utils.js';
-import { deleteMatchCache } from './match-cache.js';
+import {
+  commitCachedAnswer,
+  deleteMatchCache,
+  getMatchCacheOrRebuild,
+  type CachedAnswer,
+  type MatchCache,
+} from './match-cache.js';
 import {
   getActivePartyPlayers,
   getDroppedUserIds,
@@ -120,7 +126,7 @@ async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
 }
 
 function buildPartyStatePayloadFromRows(
-  match: MatchRow,
+  match: Pick<MatchRow, 'id' | 'total_questions' | 'current_q_index'>,
   state: PartyQuizStatePayload,
   players: MatchPlayerRow[],
   answers: MatchAnswerRow[]
@@ -149,6 +155,36 @@ function buildPartyStatePayloadFromRows(
     })),
     stateVersion,
   };
+}
+
+function cachedPartyPlayers(cache: MatchCache): MatchPlayerRow[] {
+  return cache.players.map((player) => ({
+    match_id: cache.matchId,
+    user_id: player.userId,
+    seat: player.seat,
+    total_points: player.totalPoints,
+    correct_answers: player.correctAnswers,
+    avg_time_ms: player.avgTimeMs,
+    goals: player.goals,
+    penalty_goals: player.penaltyGoals,
+  }));
+}
+
+function cachedPartyAnswers(cache: MatchCache): MatchAnswerRow[] {
+  return Object.values(cache.answers).map((answer) => ({
+    match_id: cache.matchId,
+    q_index: cache.currentQIndex,
+    user_id: answer.userId,
+    selected_index: answer.selectedIndex,
+    is_correct: answer.isCorrect,
+    time_ms: answer.timeMs,
+    points_earned: answer.pointsEarned,
+    answer_payload: {},
+    phase_kind: answer.phaseKind,
+    phase_round: answer.phaseRound,
+    shooter_seat: answer.shooterSeat,
+    answered_at: answer.answeredAt ?? new Date().toISOString(),
+  }));
 }
 
 function partyStateLogFields(payload: MatchPartyStatePayload): Record<string, unknown> {
@@ -1273,15 +1309,17 @@ export async function handlePartyQuizAnswer(
   io: QuizballServer,
   socket: QuizballSocket,
   payload: MatchAnswerPayload,
-  preloadedMatch?: MatchRow
+  preloadedMatch?: MatchRow,
+  preloadedCache?: MatchCache
 ): Promise<void> {
   await withSpan('match.party.answer', {
     'quizball.match_id': payload.matchId,
     'quizball.q_index': payload.qIndex,
     'quizball.user_id': socket.data.user.id,
   }, async (span) => {
-    const match = preloadedMatch ?? await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
+    const match = preloadedMatch ?? (preloadedCache ? null : await matchesRepo.getMatch(payload.matchId));
+    const matchStatus = preloadedCache?.status ?? match?.status;
+    if (matchStatus !== 'active') {
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1289,7 +1327,7 @@ export async function handlePartyQuizAnswer(
           qIndex: payload.qIndex,
           userId: socket.data.user.id,
           reason: 'match_not_active',
-          status: match?.status ?? null,
+          status: matchStatus ?? null,
         },
         'Party quiz answer rejected'
       );
@@ -1300,7 +1338,9 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    const matchMode = preloadedCache?.mode ?? match?.mode;
+    const statePayload = preloadedCache?.statePayload ?? match?.state_payload;
+    if (!matchMode || resolveMatchVariant(statePayload, matchMode) !== 'friendly_party_quiz') {
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1318,7 +1358,14 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    const totalQuestions = preloadedCache?.totalQuestions ?? match?.total_questions ?? 0;
+    const currentQuestionIndex = preloadedCache?.currentQIndex ?? match?.current_q_index ?? 0;
+    const matchView = {
+      id: payload.matchId,
+      total_questions: totalQuestions,
+      current_q_index: currentQuestionIndex,
+    };
+    const state = sanitizePartyQuizState(statePayload, totalQuestions);
     const redis = getRedisClient();
     if (redis && await redis.exists(matchPauseKey(payload.matchId))) {
       logger.info(
@@ -1400,7 +1447,9 @@ export async function handlePartyQuizAnswer(
     }
 
     const userId = socket.data.user.id;
-    const participants = await matchPlayersRepo.listMatchPlayers(payload.matchId);
+    const participants = preloadedCache
+      ? cachedPartyPlayers(preloadedCache)
+      : await matchPlayersRepo.listMatchPlayers(payload.matchId);
     const isParticipant = participants.some((player) => player.user_id === userId);
     if (!isParticipant) {
       logger.info(
@@ -1542,17 +1591,48 @@ export async function handlePartyQuizAnswer(
       'Party quiz answer ack emitted'
     );
 
-    const [livePlayers, answers] = await Promise.all([
-      matchPlayersRepo.listMatchPlayers(payload.matchId),
-      matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
-    ]);
+    let livePlayers: MatchPlayerRow[];
+    let answers: MatchAnswerRow[];
+    if (preloadedCache) {
+      const cachedPlayer = preloadedCache.players.find((player) => player.userId === userId);
+      if (cachedPlayer && recorded.player) {
+        cachedPlayer.totalPoints = recorded.player.total_points;
+        cachedPlayer.correctAnswers = recorded.player.correct_answers;
+      }
+      const cachedAnswer: CachedAnswer = {
+        userId,
+        questionKind: 'multipleChoice',
+        selectedIndex: recorded.answer.selected_index,
+        isCorrect: recorded.answer.is_correct,
+        timeMs: recorded.answer.time_ms,
+        pointsEarned: recorded.answer.points_earned,
+        phaseKind: recorded.answer.phase_kind,
+        phaseRound: recorded.answer.phase_round,
+        shooterSeat: recorded.answer.shooter_seat === 1 || recorded.answer.shooter_seat === 2
+          ? recorded.answer.shooter_seat
+          : null,
+        answeredAt: recorded.answer.answered_at,
+      };
+      preloadedCache.answers[userId] = cachedAnswer;
+      await commitCachedAnswer(preloadedCache, cachedAnswer);
+      // Re-read the small Redis cache/overlay so an answer committed by the
+      // other replica is visible before deciding whether the round is done.
+      const latestCache = await getMatchCacheOrRebuild(payload.matchId) ?? preloadedCache;
+      livePlayers = cachedPartyPlayers(latestCache);
+      answers = cachedPartyAnswers(latestCache);
+    } else {
+      [livePlayers, answers] = await Promise.all([
+        matchPlayersRepo.listMatchPlayers(payload.matchId),
+        matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
+      ]);
+    }
     const activePlayers = getActivePartyPlayers(livePlayers, state.droppedUserIds);
     const activeAnswerCount = answers.filter((answer) =>
       activePlayers.some((player) => player.user_id === answer.user_id)
     ).length;
     io.to(`match:${payload.matchId}`).emit(
       'match:party_state',
-      buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
+      buildPartyStatePayloadFromRows(matchView, state, livePlayers, answers)
     );
     logger.debug({
       eventName: 'match:party_state',

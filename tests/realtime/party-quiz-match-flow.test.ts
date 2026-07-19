@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
 import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-server.js';
+import type { MatchCache } from '../../src/realtime/match-cache.js';
 import { acquireLock } from '../../src/realtime/locks.js';
 
 const getMatchMock = vi.fn();
@@ -17,6 +18,8 @@ const updatePlayerAvgTimeMock = vi.fn();
 const setQuestionTimingMock = vi.fn();
 const getMatchQuestionMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
+const commitCachedAnswerMock = vi.fn();
+const getMatchCacheOrRebuildMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const evaluateAchievementsForMatchMock = vi.fn();
@@ -113,6 +116,8 @@ vi.mock('../../src/modules/achievements/index.js', () => ({
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
   deleteMatchCache: (...args: unknown[]) => deleteMatchCacheMock(...args),
+  commitCachedAnswer: (...args: unknown[]) => commitCachedAnswerMock(...args),
+  getMatchCacheOrRebuild: (...args: unknown[]) => getMatchCacheOrRebuildMock(...args),
 }));
 
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
@@ -326,6 +331,8 @@ describe('party quiz realtime flow', () => {
     setQuestionTimingMock.mockResolvedValue(undefined);
     getMatchQuestionMock.mockResolvedValue({ correct_index: 2 });
     deleteMatchCacheMock.mockResolvedValue(undefined);
+    commitCachedAnswerMock.mockResolvedValue(undefined);
+    getMatchCacheOrRebuildMock.mockResolvedValue(null);
     computeAvgTimesMock.mockResolvedValue(new Map());
     evaluateAchievementsForMatchMock.mockResolvedValue({
       u1: [
@@ -418,6 +425,75 @@ describe('party quiz realtime flow', () => {
       ]),
     }));
     expect(setMatchStatePayloadMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the supplied Redis cache without party answer read round trips', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    const { socket } = createSocketMock('u1');
+    const cache = {
+      matchId: 'match-1',
+      status: 'active',
+      mode: 'friendly',
+      totalQuestions: 10,
+      categoryAId: 'cat-1',
+      categoryBId: null,
+      startedAt: new Date().toISOString(),
+      players: players.map((player) => ({
+        userId: player.user_id,
+        seat: player.seat,
+        totalPoints: player.total_points,
+        correctAnswers: player.correct_answers,
+        goals: player.goals,
+        penaltyGoals: player.penalty_goals,
+        avgTimeMs: player.avg_time_ms,
+      })),
+      currentQIndex: 0,
+      statePayload: partyState,
+      currentQuestion: null,
+      answers: {},
+    } as unknown as MatchCache;
+    recordPartyQuizAnswerIfMissingMock.mockResolvedValue({
+      inserted: true,
+      answer: {
+        match_id: 'match-1',
+        q_index: 0,
+        user_id: 'u1',
+        selected_index: 2,
+        is_correct: true,
+        time_ms: 1500,
+        points_earned: 85,
+        answer_payload: {},
+        phase_kind: 'normal',
+        phase_round: 1,
+        shooter_seat: null,
+        answered_at: new Date().toISOString(),
+      },
+      player: {
+        match_id: 'match-1',
+        user_id: 'u1',
+        seat: 1,
+        total_points: 205,
+        correct_answers: 2,
+        avg_time_ms: 2200,
+        goals: 0,
+        penalty_goals: 0,
+      },
+    });
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 0,
+      selectedIndex: 2,
+      timeMs: 1500,
+    }, undefined, cache);
+
+    expect(getMatchMock).not.toHaveBeenCalled();
+    expect(listMatchPlayersMock).not.toHaveBeenCalled();
+    expect(listAnswersForQuestionMock).not.toHaveBeenCalled();
+    expect(commitCachedAnswerMock).toHaveBeenCalledTimes(1);
+    expect(events.some((entry) => entry.event === 'match:party_state')).toBe(true);
   });
 
   it('emits ranking order sorted by points, correctness, then average time when resolving a round', async () => {

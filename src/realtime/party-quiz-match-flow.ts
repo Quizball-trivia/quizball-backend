@@ -265,10 +265,6 @@ export function resetPartyQuizReadyGates(): void {
   pendingReadyGates.reset();
 }
 
-function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
-  schedulePartyQuizTimeoutAt(io, matchId, qIndex, new Date(Date.now() + PARTY_QUESTION_TIME_MS));
-}
-
 function schedulePartyQuizTimeoutAt(
   _io: QuizballServer,
   matchId: string,
@@ -800,7 +796,10 @@ export async function sendPartyQuizQuestion(
       variant: 'friendly_party_quiz',
       source: questionSource,
     });
-    schedulePartyQuizTimeout(io, matchId, qIndex);
+    // The answer window starts after the reveal. Scheduling from dispatch time
+    // closes every round PARTY_QUESTION_REVEAL_MS early and rejects legitimate
+    // late-window answers even though the client-visible deadline is later.
+    schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
     return {
       correctIndex,
     };

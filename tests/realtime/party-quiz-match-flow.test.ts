@@ -453,6 +453,7 @@ describe('party quiz realtime flow', () => {
       category_a_id: 'cat-1',
     }));
 
+    const dispatchedAt = Date.now();
     await runPartyQuizRoundTransition(io, 'match-1', 0, 1);
 
     expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
@@ -461,6 +462,11 @@ describe('party quiz realtime flow', () => {
       1
     );
     expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+    const questionTimerCall = realtimeTimerMocks.schedule.mock.calls.find(
+      (call) => call[0] === 'party_question' && call[1] === 'match-1:1'
+    );
+    expect(questionTimerCall?.[2]).toBeInstanceOf(Date);
+    expect((questionTimerCall?.[2] as Date).getTime() - dispatchedAt).toBe(13_000);
     expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
       'party_round_transition',
       'match-1:0'

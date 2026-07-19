@@ -21,8 +21,10 @@ import {
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
+import { socketDbTaskLimiter } from '../socket-db-task-limiter.js';
 
 const LOBBY_DISCONNECT_GRACE_MS = 15000;
+let delayedLobbyCleanupRejections = 0;
 
 interface ActiveDraftRejoinOptions {
   resume?: boolean;
@@ -178,39 +180,54 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
     return;
   }
 
-  setTimeout(async () => {
-    try {
-      const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-      const stillPresent = sockets.some((s) => s.data.user.id === userId);
-      if (stillPresent) return;
+  setTimeout(() => {
+    // The outer disconnect callback releases its limiter slot while this grace
+    // timer is sleeping. Reacquire here so thousands of timers expiring in the
+    // same event-loop turn cannot bypass the socket cleanup bulkhead and flood
+    // the application DB admission queue.
+    void socketDbTaskLimiter.run(async () => {
+      try {
+        const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
+        const stillPresent = sockets.some((s) => s.data.user.id === userId);
+        if (stillPresent) return;
 
-      await lobbiesRepo.removeMember(lobbyId, userId);
-      if (isRankedAiLobby(lobby)) {
-        const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-        if (aiUserId) {
-          await lobbiesRepo.removeMember(lobbyId, aiUserId);
+        await lobbiesRepo.removeMember(lobbyId, userId);
+        if (isRankedAiLobby(lobby)) {
+          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
+          if (aiUserId) {
+            await lobbiesRepo.removeMember(lobbyId, aiUserId);
+          }
+          const redis = getRedisClient();
+          if (redis) {
+            await redis.del(rankedAiLobbyKey(lobbyId));
+          }
         }
-        const redis = getRedisClient();
-        if (redis) {
-          await redis.del(rankedAiLobbyKey(lobbyId));
+        logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
+
+        const closed = await closeLobbyIfEmpty(io, lobbyId);
+        if (closed) {
+          return;
         }
+
+        if (lobby.host_user_id === userId) {
+          await transferHostIfNeeded(lobbyId, userId);
+        }
+
+        await syncFriendlyLobbyModeForMemberCount(lobbyId);
+
+        await emitLobbyState(io, lobbyId);
+      } catch (error) {
+        logger.warn({ error, lobbyId, userId }, 'Lobby disconnect cleanup failed');
       }
-      logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
-
-      const closed = await closeLobbyIfEmpty(io, lobbyId);
-      if (closed) {
-        return;
+    }).catch((error) => {
+      delayedLobbyCleanupRejections += 1;
+      // Avoid turning a genuine overload into a second log-volume incident.
+      if (delayedLobbyCleanupRejections % 50 === 1) {
+        logger.warn(
+          { error, lobbyId, userId, failures: delayedLobbyCleanupRejections },
+          'Lobby disconnect cleanup rejected by socket DB task limiter'
+        );
       }
-
-      if (lobby.host_user_id === userId) {
-        await transferHostIfNeeded(lobbyId, userId);
-      }
-
-      await syncFriendlyLobbyModeForMemberCount(lobbyId);
-
-      await emitLobbyState(io, lobbyId);
-    } catch (error) {
-      logger.warn({ error, lobbyId, userId }, 'Lobby disconnect cleanup failed');
-    }
+    });
   }, LOBBY_DISCONNECT_GRACE_MS);
 }

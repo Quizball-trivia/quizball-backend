@@ -90,7 +90,11 @@ function parseArgs(argv: string[]): Args {
     cleanupWaitSec: integer(argv, 'cleanup-wait-s', 5, 1),
     cleanupRampSec: integer(argv, 'cleanup-ramp-s', 1, 0),
     disconnectRampSec: integer(argv, 'disconnect-ramp-s', 5, 0),
-    disconnectSettleWaitSec: integer(argv, 'disconnect-settle-wait-s', 35, 1),
+    // The waiting-lobby cleanup deliberately sleeps for a 15s reconnect grace
+    // and then reacquires the bounded socket DB task limiter. A 60s collector
+    // tail covers that grace plus the measured ~21s 5k queue drain with
+    // headroom, so a report cannot finish before delayed cleanup is observed.
+    disconnectSettleWaitSec: integer(argv, 'disconnect-settle-wait-s', 60, 1),
     maxP95Ms: integer(argv, 'max-p95-ms', 8_000, 1),
     api: value(argv, 'api'),
     report: value(argv, 'report'),

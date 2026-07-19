@@ -14,6 +14,9 @@ local pairingTtlSec = tonumber(ARGV[4])
 -- for tens of seconds while newer searches were repeatedly selected. The
 -- sorted set is already scored by join time, so oldest-first bounds the wait
 -- tail without changing the atomic cross-replica claim contract.
+-- Searches enqueued in the same millisecond form one equivalent FIFO cohort;
+-- Redis orders that small tie lexicographically by search id and drains it
+-- before moving to the next timestamp.
 local picks = redis.call('ZRANGE', queueKey, 0, 1)
 if (not picks) or (#picks < 2) then
   return {}

@@ -155,7 +155,11 @@ function resolveTarget(args: Args): TargetConfig {
 
 async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
-    console.log('Usage: npm run chaos:matchmaking -- --target=local|staging --clients=100 [--offset=0]');
+    console.log(
+      'Usage: npm run chaos:matchmaking -- --target=local|staging --clients=100 ' +
+      '[--offset=0] [--disconnect-settle-wait-s=35]'
+    );
+    console.log('--disconnect-settle-wait-s keeps infrastructure collectors active after socket teardown.');
     console.log('Production targets are always blocked. Client count must be even.');
     return;
   }

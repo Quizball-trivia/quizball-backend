@@ -23,6 +23,9 @@ const evaluateAchievementsForMatchMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
 const redisMockState = vi.hoisted(() => ({
   pausedMatches: new Set<string>(),
+  open: false,
+  sets: new Map<string, Set<string>>(),
+  strings: new Map<string, string>(),
 }));
 const realtimeTimerMocks = vi.hoisted(() => ({
   schedule: vi.fn(async () => undefined),
@@ -44,9 +47,53 @@ vi.mock('../../src/realtime/locks.js', () => ({
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
-  getRedisClient: () => ({
-    exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
-  }),
+  getRedisClient: () => {
+    const client = {
+      isOpen: redisMockState.open,
+      exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
+      sAdd: async (key: string, values: string | string[]) => {
+        const set = redisMockState.sets.get(key) ?? new Set<string>();
+        const before = set.size;
+        for (const value of Array.isArray(values) ? values : [values]) set.add(value);
+        redisMockState.sets.set(key, set);
+        return set.size - before;
+      },
+      expire: async () => true,
+      del: async (keys: string | string[]) => {
+        let removed = 0;
+        for (const key of Array.isArray(keys) ? keys : [keys]) {
+          if (redisMockState.sets.delete(key)) removed += 1;
+          if (redisMockState.strings.delete(key)) removed += 1;
+        }
+        return removed;
+      },
+      eval: async (_script: string, params: { keys: string[] }) => {
+        const [expectedKey, ackKey, dispatchKey] = params.keys;
+        const expected = redisMockState.sets.get(expectedKey ?? '') ?? new Set<string>();
+        const acks = redisMockState.sets.get(ackKey ?? '') ?? new Set<string>();
+        if (expected.size === 0 || [...expected].some((userId) => !acks.has(userId))) return 0;
+        if (redisMockState.strings.has(dispatchKey ?? '')) return 0;
+        redisMockState.strings.set(dispatchKey ?? '', '1');
+        return 1;
+      },
+      multi: () => {
+        const operations: Array<() => Promise<unknown>> = [];
+        const chain = {
+          sAdd: (key: string, values: string | string[]) => {
+            operations.push(() => client.sAdd(key, values));
+            return chain;
+          },
+          expire: (key: string, seconds: number) => {
+            operations.push(() => client.expire(key, seconds));
+            return chain;
+          },
+          exec: async () => Promise.all(operations.map((operation) => operation())),
+        };
+        return chain;
+      },
+    };
+    return client;
+  },
 }));
 
 vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
@@ -194,6 +241,9 @@ describe('party quiz realtime flow', () => {
       stateVersionCounter: 0,
     };
     redisMockState.pausedMatches.clear();
+    redisMockState.open = false;
+    redisMockState.sets.clear();
+    redisMockState.strings.clear();
     players = [
       { user_id: 'u1', seat: 1, total_points: 120, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: 2200 },
       { user_id: 'u2', seat: 2, total_points: 90, correct_answers: 1, goals: 0, penalty_goals: 0, avg_time_ms: 2100 },
@@ -506,12 +556,57 @@ describe('party quiz realtime flow', () => {
       category_a_id: 'cat-1',
     }));
 
-    handlePartyQuizReadyForNextQuestion('u1', 'match-1', 0);
-    handlePartyQuizReadyForNextQuestion('u2', 'match-1', 0);
-    handlePartyQuizReadyForNextQuestion('u3', 'match-1', 0);
+    await handlePartyQuizReadyForNextQuestion(io, 'u1', 'match-1', 0);
+    await handlePartyQuizReadyForNextQuestion(io, 'u2', 'match-1', 0);
+    await handlePartyQuizReadyForNextQuestion(io, 'u3', 'match-1', 0);
     await vi.waitFor(() => {
       expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
     });
+  });
+
+  it('advances immediately when a shared Redis ready gate receives every ack', async () => {
+    const {
+      resolvePartyQuizRound,
+      handlePartyQuizReadyForNextQuestion,
+    } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    redisMockState.open = true;
+    partyState = {
+      ...partyState,
+      answeredUserIds: ['u1', 'u2', 'u3'],
+    };
+    answers = players.map((player) => ({
+      user_id: player.user_id,
+      selected_index: 2,
+      is_correct: true,
+      points_earned: 100,
+      time_ms: 1000,
+    }));
+
+    await resolvePartyQuizRound(io, 'match-1', 0);
+    getMatchMock.mockImplementation(async () => ({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'active',
+      total_questions: 10,
+      current_q_index: 1,
+      state_payload: partyState,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      winner_user_id: null,
+      category_a_id: 'cat-1',
+    }));
+
+    await handlePartyQuizReadyForNextQuestion(io, 'u1', 'match-1', 0);
+    await handlePartyQuizReadyForNextQuestion(io, 'u2', 'match-1', 0);
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(false);
+
+    await handlePartyQuizReadyForNextQuestion(io, 'u3', 'match-1', 0);
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+    expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
+      'party_round_transition',
+      'match-1:0'
+    );
   });
 
   it('rejects a transition when an older question is still active', async () => {

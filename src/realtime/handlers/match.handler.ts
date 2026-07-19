@@ -370,7 +370,7 @@ export function registerMatchHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await matchRealtimeService.handleReadyForNextQuestion(socket, parsed.data);
+      await matchRealtimeService.handleReadyForNextQuestion(io, socket, parsed.data);
     } catch (error) {
       logger.error(
         {

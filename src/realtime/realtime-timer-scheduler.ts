@@ -260,7 +260,10 @@ async function processDueMembers(members: string[]): Promise<void> {
       nextIndex += 1;
       if (!member) continue;
       await processDueMember(member).catch((error) => {
-        logger.error({ error, member }, 'Failed to process realtime timer');
+        // Pino's Error serializer is attached to the conventional `err` key.
+        // Logging this as `error` produced `{}` during the 1k staging run and
+        // hid the exact database-admission failure we needed to diagnose.
+        logger.error({ err: error, member }, 'Failed to process realtime timer');
       });
     }
   }));

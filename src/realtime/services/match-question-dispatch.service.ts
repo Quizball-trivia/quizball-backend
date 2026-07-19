@@ -218,6 +218,7 @@ export async function handleCluesAnswer(
 }
 
 export async function handleReadyForNextQuestion(
+  io: QuizballServer,
   socket: QuizballSocket,
   payload: MatchReadyForNextQuestionPayload
 ): Promise<void> {
@@ -229,7 +230,7 @@ export async function handleReadyForNextQuestion(
 
   const variant = resolveMatchVariant(cache.statePayload, cache.mode);
   if (variant === 'friendly_party_quiz') {
-    handlePartyQuizReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
+    await handlePartyQuizReadyForNextQuestion(io, userId, payload.matchId, payload.qIndex);
     return;
   }
 

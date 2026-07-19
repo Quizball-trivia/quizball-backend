@@ -203,6 +203,8 @@ describe('grace expiry — reconnect-pending deferral (root fix)', () => {
     await resolveExpiredGraceWindow(io, 'm1', 'human-1');
 
     expect(finalizeForfeitMock).not.toHaveBeenCalled();
+    expect(redis._store.has('match:grace:m1')).toBe(true);
+    expect(redis._store.has('match:pause:m1')).toBe(true);
     expect(redis._store.has('match:grace_extended:m1')).toBe(true);
     expect(emits['user:human-1']).toHaveBeenCalledWith(
       'match:rejoin_available', expect.objectContaining({ matchId: 'm1' })

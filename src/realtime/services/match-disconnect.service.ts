@@ -1635,11 +1635,15 @@ async function findReconnectPendingUsers(
       // Without a usable marker timestamp we cannot tell a reconnect from a
       // zombie, so do NOT defer — fall through to the normal forfeit decision.
       if (!(markerMs > 0)) return;
-      const hasFreshMatchSocket = matchRoomSockets.some(
-        (socket) =>
+      const hasFreshMatchSocket = matchRoomSockets.some((socket) => {
+        const connectedAt = socketConnectedAt(socket);
+        return (
           socketAuthenticatedAs(socket, userId) &&
-          (socketConnectedAt(socket) ?? 0) >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
-      );
+          connectedAt !== null &&
+          Number.isFinite(connectedAt) &&
+          connectedAt >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
+        );
+      });
       if (hasFreshMatchSocket) {
         pending.add(userId);
         return;
@@ -1649,11 +1653,15 @@ async function findReconnectPendingUsers(
         pending.add(userId);
         return;
       }
-      const hasFreshUserSocket = userRoomSockets.some(
-        (socket) =>
+      const hasFreshUserSocket = userRoomSockets.some((socket) => {
+        const connectedAt = socketConnectedAt(socket);
+        return (
           socketAuthenticatedAs(socket, userId) &&
-          (socketConnectedAt(socket) ?? 0) >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
-      );
+          connectedAt !== null &&
+          Number.isFinite(connectedAt) &&
+          connectedAt >= markerMs - MATCH_RECONNECT_HANDOFF_OVERLAP_MS
+        );
+      });
       if (hasFreshUserSocket) pending.add(userId);
     })
   );

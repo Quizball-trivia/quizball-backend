@@ -100,6 +100,10 @@ scripts/load/distributed/run-scenario.sh http-hot 120 5m 1m
 Only worker zero runs direct DB sampling. Other workers pass `--no-db-stats` so
 monitoring does not become a distributed workload of its own.
 
+Gameplay runs also emit `aggregate.json`. It fails unless every expected socket
+client completes, every worker passes its SLOs, all HTTP requests complete, and
+the requested spend actions were actually observed across the combined fleet.
+
 The matchmaking scenario deliberately defers opponent validation until all
 worker reports have been downloaded. Its aggregate report must prove every
 account appears once, every opponent is another fleet account with the same

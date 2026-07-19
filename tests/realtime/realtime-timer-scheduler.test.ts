@@ -7,6 +7,16 @@ class FakeRedis {
   isOpen = true;
   values = new Map<string, string>();
   zsets = new Map<string, Map<string, number>>();
+  duePopCalls = 0;
+  private nextDuePopGate: Promise<void> | null = null;
+
+  blockNextDuePop(): () => void {
+    let release = () => {};
+    this.nextDuePopGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  }
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
@@ -76,6 +86,10 @@ class FakeRedis {
       return 1;
     }
     if (script.includes('ZRANGEBYSCORE')) {
+      this.duePopCalls += 1;
+      const gate = this.nextDuePopGate;
+      this.nextDuePopGate = null;
+      if (gate) await gate;
       const zset = this.zsets.get(params.keys[0]) ?? new Map<string, number>();
       const now = Number(params.arguments[0]);
       const limit = Number(params.arguments[1]);
@@ -168,6 +182,7 @@ describe('realtime timer scheduler', () => {
     startRealtimeTimerScheduler({} as QuizballServer, {
       party_question: handled,
     });
+    await vi.advanceTimersByTimeAsync(0);
     for (let index = 0; index < 12; index += 1) {
       await scheduleRealtimeTimer(
         'party_question',
@@ -177,8 +192,17 @@ describe('realtime timer scheduler', () => {
       );
     }
 
+    const popCallsBeforeBurst = redis?.duePopCalls ?? 0;
+    const releaseDuePop = redis!.blockNextDuePop();
     const firstPoll = __realtimeTimerInternals.pollDueTimers();
+    await Promise.resolve();
+    expect(redis?.duePopCalls).toBe(popCallsBeforeBurst + 1);
+
     const overlappingPoll = __realtimeTimerInternals.pollDueTimers();
+    await Promise.resolve();
+    expect(redis?.duePopCalls).toBe(popCallsBeforeBurst + 1);
+
+    releaseDuePop();
     await vi.advanceTimersByTimeAsync(100);
     await Promise.all([firstPoll, overlappingPoll]);
 

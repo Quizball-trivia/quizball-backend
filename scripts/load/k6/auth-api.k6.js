@@ -52,10 +52,6 @@ const refreshDuration = new Trend('auth_refresh_duration', true);
 const signupDuration = new Trend('auth_signup_duration', true);
 const walletDuration = new Trend('wallet_duration', true);
 
-assertSafeConfiguration();
-
-export const options = buildOptions();
-
 const SAFE_API_ROUTES = [
   { name: 'categories.list', path: '/api/v1/categories?limit=100&is_active=true&page=1', weight: 6, auth: false },
   { name: 'categories.list.minq', path: '/api/v1/categories?limit=100&is_active=true&min_questions=5', weight: 4, auth: false },
@@ -91,6 +87,10 @@ const HOT_DB_ROUTE_NAMES = new Set(['questions.list', 'users.me', 'store.wallet'
 const API_ROUTES = API_PROFILE === 'hot-db'
   ? SAFE_API_ROUTES.filter((route) => HOT_DB_ROUTE_NAMES.has(route.name))
   : SAFE_API_ROUTES;
+
+assertSafeConfiguration();
+
+export const options = buildOptions();
 
 let apiSession = null;
 let refreshSession = null;
@@ -331,6 +331,15 @@ function buildOptions() {
     server_error_responses: ['count==0'],
     dropped_iterations: ['count==0'],
   };
+
+  if (['api', 'auth-mix'].includes(MODE)) {
+    for (const route of API_ROUTES) {
+      thresholds[`http_req_duration{endpoint:${route.name}}`] = [
+        'p(95)<1500',
+        'p(99)<3000',
+      ];
+    }
+  }
 
   const commonArrival = {
     executor: 'ramping-arrival-rate',

@@ -296,8 +296,12 @@ run_k6() {
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
-  printf 'reports=%s failed_workers=%d\n' "$local_dir" "$failed"
-  (( failed == 0 )) || return 1
+  local aggregate_failed=0
+  npx tsx "$REPO_ROOT/scripts/load/k6/aggregate-summary.ts" \
+    --report "$local_dir/aggregate.json" "$local_dir"/worker-*.json || aggregate_failed=1
+  printf 'reports=%s failed_workers=%d aggregate_failed=%d\n' \
+    "$local_dir" "$failed" "$aggregate_failed"
+  (( failed == 0 && aggregate_failed == 0 )) || return 1
 }
 
 main() {

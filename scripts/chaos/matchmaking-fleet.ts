@@ -364,7 +364,9 @@ function summarizeMatchmakingFleet(
     clients: observations.length,
     connectedClients: observations.filter((observation) => observation.connected).length,
     connectionRetries: observations.reduce(
-      (sum, observation) => sum + Math.max(0, observation.connectAttempts - 1),
+      (sum, observation) => (
+        sum + (observation.connected ? Math.max(0, observation.connectAttempts - 1) : 0)
+      ),
       0
     ),
     searchStartedClients: observations.filter((observation) => observation.searchStartedAt !== null).length,

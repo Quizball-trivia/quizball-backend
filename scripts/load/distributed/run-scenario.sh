@@ -186,7 +186,7 @@ run_matchmaking() {
   positive_int players "$players"
   positive_int join-timeout "$timeout"
   non_negative_int join-ramp "$join_ramp"
-  positive_int connect-ramp "$connect_ramp"
+  non_negative_int connect-ramp "$connect_ramp"
   local workers
   workers="$(require_worker_count mixed 2)"
   (( players % 2 == 0 )) || die 'players must be even'

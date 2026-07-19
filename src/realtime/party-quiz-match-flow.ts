@@ -58,6 +58,7 @@ const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+let partyReadyAckCeilingCount = 0;
 
 async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
   const redis = getRedisClient();
@@ -268,6 +269,7 @@ export function handlePartyQuizReadyForNextQuestion(
 
 export function resetPartyQuizReadyGates(): void {
   pendingReadyGates.reset();
+  partyReadyAckCeilingCount = 0;
 }
 
 function schedulePartyQuizTimeoutAt(
@@ -577,16 +579,25 @@ async function schedulePartyQuizPostRoundAdvance(
     ceilingMs,
     dispatch,
     onTimeout: (missing) => {
-      logger.debug(
-        {
-          eventName: 'party_ready_ack_ceiling',
-          matchId,
-          resolvedQIndex,
-          missing,
-          ceilingMs,
-        },
-        'Party ready-ack ceiling reached; advancing'
-      );
+      partyReadyAckCeilingCount += 1;
+      // A missed ready acknowledgement is a degraded-path signal, but a
+      // reconnect storm can produce one per round and match. Preserve the
+      // warning without letting it displace unrelated failures from Railway's
+      // bounded log stream.
+      if (partyReadyAckCeilingCount % 100 === 1) {
+        logger.warn(
+          {
+            eventName: 'party_ready_ack_ceiling',
+            matchId,
+            resolvedQIndex,
+            missingCount: missing.length,
+            missingSample: missing.slice(0, 10),
+            ceilingMs,
+            occurrences: partyReadyAckCeilingCount,
+          },
+          'Party ready-ack ceiling reached; advancing'
+        );
+      }
     },
   });
   logger.debug(
@@ -1082,7 +1093,7 @@ export async function resolvePartyQuizRound(
 
       const participantUserIds = activePlayers.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
-        logger.debug(
+        logger.info(
           {
             eventName: 'party_match_completion_scheduled',
             matchId,

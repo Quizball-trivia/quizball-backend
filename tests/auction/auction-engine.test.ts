@@ -193,7 +193,7 @@ describe('auction engine transitions', () => {
       { seatId: 'seat-human', amount: 30_000_000, placedAt: '2026-06-20T10:00:00.000Z' },
     ]);
     expect(next.currentRound?.currentTurnSeatId).toBe('bot-seat-1');
-    expect(next.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:10.000Z');
+    expect(next.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:15.000Z');
   });
 
   it('auto-folds a non-opener timeout and skips the high bidder on the next turn', () => {

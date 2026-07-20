@@ -158,7 +158,7 @@ describe('auction bot service', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_bot_action',
       auctionBotActionTimerKey('match-1', 'round-1', 'seat-bot-a'),
-      new Date('2026-06-20T10:00:00.800Z'),
+      new Date('2026-06-20T10:00:02.000Z'),
       {
         kind: 'auction_bot_action',
         matchId: 'match-1',

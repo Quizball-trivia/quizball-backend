@@ -20,6 +20,7 @@ const TIMER_HANDLER_CONCURRENCY = 4;
 export type RealtimeTimerKind =
   | 'auction_bot_action'
   | 'auction_clue_reveal'
+  | 'auction_clue_study'
   | 'auction_disconnect_grace'
   | 'auction_matchmaking_fill'
   | 'auction_resume_countdown'
@@ -40,6 +41,7 @@ export type RealtimeTimerKind =
 export type RealtimeTimerPayload =
   | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
+  | { kind: 'auction_clue_study'; matchId: string; roundId: string; stateVersion: number }
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
   | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
@@ -91,6 +93,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   if (
     kind !== 'auction_bot_action'
     && kind !== 'auction_clue_reveal'
+    && kind !== 'auction_clue_study'
     && kind !== 'auction_disconnect_grace'
     && kind !== 'auction_matchmaking_fill'
     && kind !== 'auction_resume_countdown'

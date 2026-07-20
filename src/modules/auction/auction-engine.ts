@@ -1,6 +1,7 @@
 import { shuffle } from '../../core/rng.js';
 import {
   AUCTION_SEAT_COUNT,
+  CLUE_STUDY_MS,
   FORMATIONS,
   OPENING_TURN_MS,
   POSITION_GROUPS,
@@ -155,6 +156,7 @@ export function startBiddingRound(
     currentTurnSeatId: null,
     foldedSeatIds: [],
     turnEndsAt: null,
+    biddingStartsAt: null,
     startedAt: now,
     updatedAt: now,
   };
@@ -262,6 +264,35 @@ export function revealNextClue(
   }, context);
 }
 
+/**
+ * Opens the study window that sits between the last clue and the first turn:
+ * every clue is on screen and players get {@link CLUE_STUDY_MS} to read them
+ * before anyone can bid. Stays in `clue_reveal` — only `biddingStartsAt` moves.
+ */
+export function beginClueStudy(
+  state: AuctionMatchState,
+  contextInput?: AuctionEngineContext
+): AuctionMatchState {
+  const context = resolveAuctionContext(contextInput);
+  const round = requireCurrentRound(state);
+  if (state.phase !== 'clue_reveal') {
+    throw new AuctionInvalidActionError('Cannot start clue study outside clue reveal phase');
+  }
+  const clueCount = round.footballer.clues?.length ?? 0;
+  if (round.clueRevealIndex < clueCount) {
+    throw new AuctionInvalidActionError('All clues must be revealed before the study window');
+  }
+
+  return touch({
+    ...state,
+    currentRound: {
+      ...round,
+      biddingStartsAt: addMs(context.now(), CLUE_STUDY_MS),
+      updatedAt: context.nowIso(),
+    },
+  }, context);
+}
+
 export function startBidding(
   state: AuctionMatchState,
   contextInput?: AuctionEngineContext
@@ -292,6 +323,7 @@ export function startBidding(
       ...round,
       currentTurnSeatId: firstTurn,
       turnEndsAt: addMs(context.now(), getTurnMs(round)),
+      biddingStartsAt: null,
       updatedAt: context.nowIso(),
     },
   }, context);
@@ -432,6 +464,7 @@ export function resolveRoundWin(
       ...round,
       currentTurnSeatId: null,
       turnEndsAt: null,
+      biddingStartsAt: null,
       winnerSeatId: round.highestBidderSeatId,
       winningBid: round.highestBid,
       revealed: true,
@@ -485,6 +518,7 @@ export function resolveUnsoldRound(
     ...round,
     currentTurnSeatId: null,
     turnEndsAt: null,
+    biddingStartsAt: null,
     winnerSeatId: null,
     winningBid: 0,
     revealed: true,
@@ -666,6 +700,7 @@ function createCompletedSoloPickRound(
     currentTurnSeatId: null,
     foldedSeatIds: [],
     turnEndsAt: null,
+    biddingStartsAt: null,
     startedAt: now,
     updatedAt: now,
   };

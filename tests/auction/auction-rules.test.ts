@@ -159,11 +159,11 @@ describe('auction rules', () => {
       highestBid: 30_000_000,
     };
 
-    expect(isBidValid({ ...base, amount: 34_999_999 })).toBe(false);
-    expect(isBidValid({ ...base, amount: 35_000_000 })).toBe(true);
+    expect(isBidValid({ ...base, amount: 39_999_999 })).toBe(false);
+    expect(isBidValid({ ...base, amount: 40_000_000 })).toBe(true);
     expect(isBidValid({ ...base, amount: 60_000_000 })).toBe(true);
     expect(isBidValid({ ...base, amount: 60_000_001 })).toBe(false);
-    expect(isBidValid({ ...base, amount: 35_000_000.5 })).toBe(false);
+    expect(isBidValid({ ...base, amount: 40_000_000.5 })).toBe(false);
   });
 
   it('uses MIN_PLAYER_COST for post-purchase elimination', () => {

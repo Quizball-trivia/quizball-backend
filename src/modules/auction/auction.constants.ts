@@ -4,11 +4,15 @@ export const AUCTION_SEAT_COUNT = 3;
 export const AUCTION_SQUAD_SIZE = 11;
 
 export const STARTING_BUDGET = 1_000_000_000;
-export const MIN_BID_INCREMENT = 5_000_000;
+// Every raise is exactly one increment — the bidding UI offers a single
+// "+10M" button, so the minimum raise and the only raise are the same value.
+export const MIN_BID_INCREMENT = 10_000_000;
 export const MIN_PLAYER_COST = 20_000_000;
 export const OPENING_TURN_MS = 30_000;
-export const RAISE_TURN_MS = 10_000;
-export const CLUE_REVEAL_INTERVAL_MS = 2_500;
+export const RAISE_TURN_MS = 15_000;
+export const CLUE_REVEAL_INTERVAL_MS = 1_200;
+// Study window after the third clue lands, before the first turn opens.
+export const CLUE_STUDY_MS = 10_000;
 
 export const POSITION_GROUPS = ['GK', 'DEF', 'MID', 'FWD'] as const satisfies readonly PositionGroup[];
 

@@ -205,14 +205,14 @@ describe('auction turn service', () => {
       'auction:turn_started',
       expect.objectContaining({
         currentTurnSeatId: 'seat-bot-a',
-        minBid: 35_000_000,
+        minBid: 40_000_000,
         stateVersion: 4,
       })
     );
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_turn_timeout',
       'match-1:round-1:seat-bot-a',
-      new Date('2026-06-20T10:00:10.000Z'),
+      new Date('2026-06-20T10:00:15.000Z'),
       expect.objectContaining({ expectedTurnSeatId: 'seat-bot-a', stateVersion: 4 })
     );
 
@@ -328,7 +328,7 @@ describe('auction turn service', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_turn_timeout',
       'match-1:round-1:seat-bot-a',
-      new Date('2026-06-20T10:00:10.000Z'),
+      new Date('2026-06-20T10:00:15.000Z'),
       expect.objectContaining({ expectedTurnSeatId: 'seat-bot-a', stateVersion: 4 })
     );
   });

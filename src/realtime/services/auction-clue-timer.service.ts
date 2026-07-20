@@ -1,8 +1,8 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
-import { CLUE_REVEAL_INTERVAL_MS } from '../../modules/auction/auction.constants.js';
-import { revealNextClue, startBidding, type AuctionEngineContext } from '../../modules/auction/auction-engine.js';
+import { CLUE_REVEAL_INTERVAL_MS, CLUE_STUDY_MS } from '../../modules/auction/auction.constants.js';
+import { beginClueStudy, revealNextClue, startBidding, type AuctionEngineContext } from '../../modules/auction/auction-engine.js';
 import {
   toPublicAuctionMatchState,
   type AuctionMatchState,
@@ -29,6 +29,7 @@ import { emitAndScheduleAuctionTurnStarted } from './auction-turn.service.js';
 import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
 
 export type AuctionClueRevealPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_reveal' }>;
+export type AuctionClueStudyPayload = Extract<RealtimeTimerPayload, { kind: 'auction_clue_study' }>;
 
 export interface AuctionClueRevealTimerOptions {
   now?: Date;
@@ -38,7 +39,11 @@ export interface AuctionClueRevealTimerOptions {
 type AuctionClueTimerOutcome =
   | { kind: 'noop'; reason: string }
   | { kind: 'clue_revealed'; state: AuctionMatchState; clue: string; clueIndex: number }
-  | { kind: 'bidding_started'; state: AuctionMatchState; clue: string; clueIndex: number };
+  | { kind: 'study_started'; state: AuctionMatchState; clue: string; clueIndex: number };
+
+type AuctionClueStudyOutcome =
+  | { kind: 'noop'; reason: string }
+  | { kind: 'bidding_started'; state: AuctionMatchState };
 
 export function auctionClueRevealTimerKey(
   matchId: string,
@@ -46,6 +51,10 @@ export function auctionClueRevealTimerKey(
   expectedClueIndex: number
 ): string {
   return `${matchId}:${roundId}:${expectedClueIndex}`;
+}
+
+export function auctionClueStudyTimerKey(matchId: string, roundId: string): string {
+  return `${matchId}:${roundId}`;
 }
 
 export async function scheduleAuctionClueRevealTimer(
@@ -110,16 +119,11 @@ export async function runAuctionClueRevealTimer(
   const cluePayload = buildClueRevealedPayload(publicState, outcome.clue, outcome.clueIndex);
   io.to(`match:${outcome.state.matchId}`).emit('auction:clue_revealed', cluePayload);
 
-  if (outcome.kind === 'bidding_started') {
-    io.to(`match:${outcome.state.matchId}`).emit('auction:bidding_started', buildBiddingStartedPayload(publicState));
-    openAuctionUiReadyGate({
-      io,
-      state: outcome.state,
-      phase: 'bidding',
-      dispatch: () => {
-        void emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
-      },
-    });
+  // Last clue: hold on the full board for the study window instead of opening
+  // turns immediately. `biddingStartsAt` rides along on the clue payload above,
+  // so the client renders the countdown off the same event.
+  if (outcome.kind === 'study_started') {
+    await scheduleAuctionClueStudyTimer(outcome.state, options);
     return outcome;
   }
 
@@ -129,6 +133,97 @@ export async function runAuctionClueRevealTimer(
   }
 
   await scheduleAuctionClueRevealTimer(outcome.state, options);
+  return outcome;
+}
+
+export async function scheduleAuctionClueStudyTimer(
+  state: AuctionMatchState,
+  options: AuctionClueRevealTimerOptions = {}
+): Promise<void> {
+  const round = state.currentRound;
+  if (state.phase !== 'clue_reveal' || !round) return;
+
+  const nowMs = (options.now ?? options.context?.now?.() ?? new Date()).getTime();
+  const studyEndsMs = round.biddingStartsAt ? Date.parse(round.biddingStartsAt) : NaN;
+  const dueAt = new Date(
+    Number.isFinite(studyEndsMs)
+      ? Math.max(studyEndsMs, nowMs)
+      : nowMs + harnessDelayMs(CLUE_STUDY_MS, 50)
+  );
+
+  await scheduleRealtimeTimer(
+    'auction_clue_study',
+    auctionClueStudyTimerKey(state.matchId, round.roundId),
+    dueAt,
+    {
+      kind: 'auction_clue_study',
+      matchId: state.matchId,
+      roundId: round.roundId,
+      stateVersion: state.version,
+    }
+  );
+}
+
+/** Fires when the post-clue study window closes: opens bidding on the lot. */
+export async function runAuctionClueStudyTimer(
+  io: QuizballServer,
+  payload: AuctionClueStudyPayload,
+  options: AuctionClueRevealTimerOptions = {}
+): Promise<AuctionClueStudyOutcome> {
+  // Same pause contract as the clue timer: never open bidding while a player
+  // sits in their disconnect grace window.
+  const pause = await getAuctionPause(payload.matchId);
+  if (pause) {
+    const pauseUntilMs = Date.parse(pause.pauseUntil);
+    const dueAt = new Date(Math.max(Number.isFinite(pauseUntilMs) ? pauseUntilMs : 0, Date.now()) + 2_000);
+    await scheduleRealtimeTimer(
+      'auction_clue_study',
+      auctionClueStudyTimerKey(payload.matchId, payload.roundId),
+      dueAt,
+      payload
+    );
+    logger.debug({ matchId: payload.matchId, roundId: payload.roundId }, 'Auction study timer deferred (match paused)');
+    return { kind: 'noop', reason: 'paused' };
+  }
+
+  const context = resolveAuctionContext(options);
+  const outcome = await auctionStateStore.mutate<AuctionClueStudyOutcome>(payload.matchId, (current) => {
+    const round = current.currentRound;
+    if (current.version !== payload.stateVersion) return skipAuctionMatchMutation(noop('version_mismatch'));
+    if (current.phase !== 'clue_reveal') return skipAuctionMatchMutation(noop('phase_mismatch'));
+    if (!round) return skipAuctionMatchMutation(noop('missing_round'));
+    if (round.roundId !== payload.roundId) return skipAuctionMatchMutation(noop('round_mismatch'));
+
+    return saveAuctionMatchMutation(startBidding(current, context), (saved) => ({
+      kind: 'bidding_started',
+      state: saved,
+    } as AuctionClueStudyOutcome));
+  }, {
+    now: context.now,
+    onMissingState: () => noop('missing_state'),
+  });
+
+  if (outcome.kind === 'noop') {
+    logger.debug({ matchId: payload.matchId, roundId: payload.roundId, reason: outcome.reason }, 'Auction study timer ignored');
+    return outcome;
+  }
+
+  // startBidding falls through to resolveUnsoldRound when nobody can open.
+  if (outcome.state.phase !== 'bidding') {
+    await advanceAuctionMatchFlowAfterMutation(io, outcome.state, options);
+    return outcome;
+  }
+
+  const publicState = toPublicAuctionMatchState(outcome.state);
+  io.to(`match:${outcome.state.matchId}`).emit('auction:bidding_started', buildBiddingStartedPayload(publicState));
+  openAuctionUiReadyGate({
+    io,
+    state: outcome.state,
+    phase: 'bidding',
+    dispatch: () => {
+      void emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
+    },
+  });
   return outcome;
 }
 
@@ -152,12 +247,11 @@ async function advanceClueRevealState(
     if (!revealedRound) return skipAuctionMatchMutation(noop('missing_revealed_round'));
 
     const clueCount = revealedRound.footballer.clues?.length ?? 0;
-    const nextState = revealedRound.clueRevealIndex >= clueCount
-      ? startBidding(revealed, context)
-      : revealed;
+    const allCluesOut = revealedRound.clueRevealIndex >= clueCount;
+    const nextState = allCluesOut ? beginClueStudy(revealed, context) : revealed;
 
     return saveAuctionMatchMutation(nextState, (saved) => ({
-      kind: saved.phase === 'bidding' ? 'bidding_started' : 'clue_revealed',
+      kind: allCluesOut ? 'study_started' : 'clue_revealed',
       state: saved,
       clue,
       clueIndex: payload.expectedClueIndex,
@@ -168,7 +262,8 @@ async function advanceClueRevealState(
   });
 }
 
-function noop(reason: string): AuctionClueTimerOutcome {
+/** Narrow return type on purpose: assignable to both timer outcome unions. */
+function noop(reason: string): { kind: 'noop'; reason: string } {
   return { kind: 'noop', reason };
 }
 

@@ -18,8 +18,11 @@ const updatePlayerAvgTimeMock = vi.fn();
 const setQuestionTimingMock = vi.fn();
 const getMatchQuestionMock = vi.fn();
 const deleteMatchCacheMock = vi.fn();
+const buildInitialCacheMock = vi.fn();
 const commitCachedAnswerMock = vi.fn();
+const getMatchCacheMock = vi.fn();
 const getMatchCacheOrRebuildMock = vi.fn();
+const setMatchCacheMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const evaluateAchievementsForMatchMock = vi.fn();
@@ -115,9 +118,12 @@ vi.mock('../../src/modules/achievements/index.js', () => ({
 }));
 
 vi.mock('../../src/realtime/match-cache.js', () => ({
+  buildInitialCache: (...args: unknown[]) => buildInitialCacheMock(...args),
   deleteMatchCache: (...args: unknown[]) => deleteMatchCacheMock(...args),
   commitCachedAnswer: (...args: unknown[]) => commitCachedAnswerMock(...args),
+  getMatchCache: (...args: unknown[]) => getMatchCacheMock(...args),
   getMatchCacheOrRebuild: (...args: unknown[]) => getMatchCacheOrRebuildMock(...args),
+  setMatchCache: (...args: unknown[]) => setMatchCacheMock(...args),
 }));
 
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
@@ -331,8 +337,36 @@ describe('party quiz realtime flow', () => {
     setQuestionTimingMock.mockResolvedValue(undefined);
     getMatchQuestionMock.mockResolvedValue({ correct_index: 2 });
     deleteMatchCacheMock.mockResolvedValue(undefined);
+    buildInitialCacheMock.mockImplementation((params: {
+      match: { id: string; status: MatchCache['status']; mode: MatchCache['mode']; total_questions: number; category_a_id: string; category_b_id?: string | null; started_at?: string; current_q_index: number };
+      players: typeof players;
+      state: MatchCache['statePayload'];
+    }) => ({
+      matchId: params.match.id,
+      status: params.match.status,
+      mode: params.match.mode,
+      totalQuestions: params.match.total_questions,
+      categoryAId: params.match.category_a_id,
+      categoryBId: params.match.category_b_id ?? null,
+      startedAt: params.match.started_at ?? new Date().toISOString(),
+      players: params.players.map((player) => ({
+        userId: player.user_id,
+        seat: player.seat,
+        totalPoints: player.total_points,
+        correctAnswers: player.correct_answers,
+        goals: player.goals,
+        penaltyGoals: player.penalty_goals,
+        avgTimeMs: player.avg_time_ms,
+      })),
+      currentQIndex: params.match.current_q_index,
+      statePayload: params.state,
+      currentQuestion: null,
+      answers: {},
+    }));
     commitCachedAnswerMock.mockResolvedValue(undefined);
+    getMatchCacheMock.mockResolvedValue(null);
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
+    setMatchCacheMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     evaluateAchievementsForMatchMock.mockResolvedValue({
       u1: [
@@ -592,6 +626,12 @@ describe('party quiz realtime flow', () => {
       expect.objectContaining({ currentQuestion: { qIndex: 1, correctIndex: 2 } }),
       1
     );
+    expect(setMatchCacheMock).toHaveBeenCalledWith(expect.objectContaining({
+      matchId: 'match-1',
+      currentQIndex: 1,
+      currentQuestion: expect.objectContaining({ qIndex: 1, correctIndex: 2 }),
+      answers: {},
+    }));
     expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
     const questionTimerCall = realtimeTimerMocks.schedule.mock.calls.find(
       (call) => call[0] === 'party_question' && call[1] === 'match-1:1'

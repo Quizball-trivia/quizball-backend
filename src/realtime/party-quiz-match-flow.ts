@@ -31,9 +31,12 @@ import {
 } from './match-keys.js';
 import { buildStandings, bumpStateVersion } from './match-utils.js';
 import {
+  buildInitialCache,
   commitCachedAnswer,
   deleteMatchCache,
+  getMatchCache,
   getMatchCacheOrRebuild,
+  setMatchCache,
   type CachedAnswer,
   type MatchCache,
 } from './match-cache.js';
@@ -939,12 +942,37 @@ export async function sendPartyQuizQuestion(
 
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
     await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-    // The generic match cache is long-lived. Party rounds persist their full
-    // state on every transition, so invalidate the previous-question snapshot
-    // before any answer can reuse it. The first event for this round rebuilds
-    // once; subsequent answers share that Redis snapshot.
-    await deleteMatchCache(matchId);
-    await emitPartyQuizState(io, matchId);
+    const players = await matchPlayersRepo.listMatchPlayers(matchId);
+    const cache = buildInitialCache({
+      match: {
+        ...match,
+        current_q_index: qIndex,
+        state_payload: state,
+      },
+      players,
+      state: state as unknown as MatchCache['statePayload'],
+    });
+    cache.currentQuestion = {
+      qIndex,
+      kind: payload.question.kind,
+      questionId: payload.question.id,
+      correctIndex,
+      phaseKind: payload.phaseKind,
+      phaseRound: payload.phaseRound,
+      shooterSeat: payload.shooterSeat,
+      attackerSeat: payload.attackerSeat,
+      shownAt: playableAt.toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+      questionDTO: payload.question,
+      evaluation: payload.evaluation,
+      reveal: payload.reveal,
+    };
+    cache.answers = {};
+    await setMatchCache(cache);
+
+    const partyStatePayload = buildPartyStatePayloadFromRows(match, state, players, []);
+    io.to(`match:${matchId}`).emit('match:party_state', partyStatePayload);
+    logger.debug(partyStateLogFields(partyStatePayload), 'Party quiz state emitted');
 
     io.to(`match:${matchId}`).emit('match:question', {
       matchId,
@@ -1217,7 +1245,16 @@ export async function resolvePartyQuizRound(
 
       const nextIndex = qIndex + 1;
       await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
-      await deleteMatchCache(matchId);
+      const cache = await getMatchCache(matchId);
+      if (cache) {
+        cache.currentQIndex = nextIndex;
+        cache.statePayload = state as unknown as MatchCache['statePayload'];
+        cache.currentQuestion = null;
+        cache.answers = {};
+        await setMatchCache(cache);
+      } else {
+        await deleteMatchCache(matchId);
+      }
 
       io.to(`match:${matchId}`).emit('match:round_result', {
         matchId,

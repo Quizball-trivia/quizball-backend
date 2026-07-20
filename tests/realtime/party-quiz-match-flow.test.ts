@@ -997,6 +997,48 @@ describe('party quiz realtime flow', () => {
     expect(recordPartyQuizAnswerIfMissingMock).not.toHaveBeenCalled();
   });
 
+  it('silently ignores an unanswered packet after the round advanced', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    const { socket, emitted } = createSocketMock('u1');
+    partyState = { ...partyState, currentQuestion: { qIndex: 1 } };
+    getAnswerForUserMock.mockResolvedValue(null);
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 0,
+      selectedIndex: 2,
+      timeMs: 1000,
+    });
+
+    expect(emitted.some((entry) => entry.event === 'error')).toBe(false);
+    expect(recordPartyQuizAnswerIfMissingMock).not.toHaveBeenCalled();
+  });
+
+  it('silently ignores an answer packet after the match completed', async () => {
+    const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    const { socket, emitted } = createSocketMock('u1');
+    getMatchMock.mockResolvedValue({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'completed',
+      total_questions: 10,
+      current_q_index: 9,
+      state_payload: { ...partyState, currentQuestion: null },
+    });
+
+    await handlePartyQuizAnswer(io, socket, {
+      matchId: 'match-1',
+      qIndex: 9,
+      selectedIndex: 2,
+      timeMs: 1000,
+    });
+
+    expect(emitted.some((entry) => entry.event === 'error')).toBe(false);
+    expect(recordPartyQuizAnswerIfMissingMock).not.toHaveBeenCalled();
+  });
+
   it('handles six concurrent party answers without losing answered state', async () => {
     const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
     const { io, events } = createIoMock();

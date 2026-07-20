@@ -11,6 +11,8 @@ const buildAiMatchContextMock = vi.fn();
 const markMatchCompletedMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const recordUserModeStatsMock = vi.fn();
+const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const insertMatchQuestionsMock = vi.fn();
 
 // Entity-repo mocks for the new cross-entity service orchestrators
 // (incrementGoalsAndInsertEventIfMissing, recordPartyQuizAnswerIfMissing).
@@ -94,6 +96,14 @@ vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
+    getRandomQuestionCandidatesForMatch: (...args: unknown[]) =>
+      getRandomQuestionCandidatesForMatchMock(...args),
+    insertMatchQuestions: (...args: unknown[]) => insertMatchQuestionsMock(...args),
+  },
+}));
+
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
@@ -116,6 +126,8 @@ describe('matches.service friendly-party-quiz variants', () => {
     getUserByIdMock.mockResolvedValue({ id: 'user-1', is_ai: false });
     ensureProfileMock.mockResolvedValue({ placementStatus: 'placed' });
     buildAiMatchContextMock.mockReturnValue(null);
+    getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
+    insertMatchQuestionsMock.mockResolvedValue([]);
   });
 
   it('creates the initial party quiz state with the default v1 question count', async () => {
@@ -223,6 +235,58 @@ describe('matches.service friendly-party-quiz variants', () => {
     ]);
     expect(result.playerIds).toEqual(['host-user', 'guest-a']);
     expect(result.variant).toBe('friendly_party_quiz');
+  });
+
+  it('pre-seeds a complete party question pack in one bulk insert', async () => {
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'host-user' },
+      { user_id: 'guest-a' },
+    ]);
+    getRandomQuestionCandidatesForMatchMock.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        id: `question-${index}`,
+        category_id: 'cat-party',
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'Correct' }, is_correct: true },
+            { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+            { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+            { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+          ],
+        },
+      })),
+    );
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await matchesService.createMatchFromLobby({
+      lobbyId: 'lobby-party-pack',
+      mode: 'friendly',
+      variant: 'friendly_party_quiz',
+      hostUserId: 'host-user',
+      categoryAId: 'cat-party',
+      categoryBId: null,
+    });
+
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith({
+      matchId: 'match-1',
+      categoryIds: ['cat-party'],
+      difficulties: ['easy', 'medium', 'hard'],
+      limit: 10,
+    });
+    expect(insertMatchQuestionsMock).toHaveBeenCalledTimes(1);
+    const insertedPack = insertMatchQuestionsMock.mock.calls[0]?.[1] as Array<{ qIndex: number }>;
+    expect(insertedPack).toHaveLength(10);
+    expect(insertedPack.map((question) => question.qIndex)).toEqual(
+      Array.from({ length: 10 }, (_, index) => index),
+    );
+    expect(insertMatchQuestionsMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.arrayContaining([
+        expect.objectContaining({ qIndex: 0, questionId: 'question-0', correctIndex: 0 }),
+        expect.objectContaining({ qIndex: 9, questionId: 'question-9', correctIndex: 0 }),
+      ]),
+    );
   });
 
   it('rejects party quiz creation when the lobby has fewer than 2 members', async () => {

@@ -784,6 +784,30 @@ function partyRoundTransitionTimerKey(matchId: string, resolvedQIndex: number): 
 }
 
 /**
+ * Persist the party-quiz kickoff as the transition from the synthetic round
+ * -1 to question 0. Reusing the normal durable transition handler means a
+ * transient DB admission rejection is retried by the Redis timer scheduler
+ * instead of being logged and permanently dropped by a process-local timeout.
+ */
+export async function schedulePartyQuizKickoff(
+  matchId: string,
+  dueAt: Date,
+): Promise<void> {
+  const resolvedQIndex = -1;
+  await scheduleRealtimeTimer(
+    'party_round_transition',
+    partyRoundTransitionTimerKey(matchId, resolvedQIndex),
+    dueAt,
+    {
+      kind: 'party_round_transition',
+      matchId,
+      resolvedQIndex,
+      nextQIndex: 0,
+    },
+  );
+}
+
+/**
  * Idempotently drive the transition after a party-quiz round.
  *
  * The ready-ack gate is process-local so it can provide a fast path when all

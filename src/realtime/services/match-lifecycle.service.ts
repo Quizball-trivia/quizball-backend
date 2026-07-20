@@ -36,6 +36,7 @@ import {
   emitPartyQuizState,
   emitPartyQuizStateToSocket,
   ensurePartyQuizActiveTimer,
+  schedulePartyQuizKickoff,
 } from '../party-quiz-match-flow.js';
 import { getRedisClient } from '../redis.js';
 import {
@@ -173,6 +174,30 @@ function startKickoffCountdown(params: {
     },
     'Match start countdown scheduled'
   );
+
+  if (variant === 'friendly_party_quiz') {
+    // Question 0 used to be a local setTimeout whose catch only logged a DB
+    // overload. At a synchronized party burst that left active matches frozen
+    // forever at q0. The durable transition timer retries transient failures;
+    // retain the local dispatch only as a degraded fallback if Redis cannot
+    // persist the timer at all.
+    const kickoffDueAtMs = countdownScheduledAtMs + countdownMs;
+    void schedulePartyQuizKickoff(matchId, new Date(kickoffDueAtMs))
+      .catch((error) => {
+        logger.warn(
+          { error, matchId },
+          'Failed to persist party quiz kickoff timer; using local fallback',
+        );
+        scheduleFirstQuestionAfterCountdown(
+          io,
+          matchId,
+          variant,
+          Math.max(0, kickoffDueAtMs - Date.now()),
+          options,
+        );
+      });
+    return;
+  }
 
   scheduleFirstQuestionAfterCountdown(io, matchId, variant, countdownMs, options);
 }

@@ -27,19 +27,20 @@ export type QuestionPayload = {
 
 export function autoAnswer(client: StagingClient, options: BotBehaviorOptions = {}): void {
   const completed = new Set<string>();
+  const finishedMatches = new Set<string>();
   let activeQuestion: QuestionPayload | null = null;
   const keyFor = (matchId: string, qIndex: number) => `${matchId}:${qIndex}`;
 
   const sendAnswer = (q: QuestionPayload, retryDelayMs = 50) => {
     const key = keyFor(q.matchId, q.qIndex);
-    if (completed.has(key)) return;
+    if (completed.has(key) || finishedMatches.has(q.matchId)) return;
     const waitMs = q.playableAt ? Math.max(0, new Date(q.playableAt).getTime() - Date.now()) : 0;
     const planned = options.answerPlan?.({ client, question: q });
     const delayMs = typeof planned === 'object' && typeof planned.delayMs === 'number'
       ? Math.max(0, planned.delayMs)
       : 0;
     setTimeout(() => {
-      if (completed.has(key)) return;
+      if (completed.has(key) || finishedMatches.has(q.matchId)) return;
       const kind = q.question?.kind ?? 'multipleChoice';
       const base = { matchId: q.matchId, qIndex: q.qIndex };
       const mode = typeof planned === 'string' ? planned : planned?.mode ?? 'correct';
@@ -82,6 +83,11 @@ export function autoAnswer(client: StagingClient, options: BotBehaviorOptions = 
         qIndex: result.qIndex,
       });
     }
+  });
+  client.socket.on('match:final_results', (result: { matchId?: string }) => {
+    if (!result.matchId) return;
+    finishedMatches.add(result.matchId);
+    if (activeQuestion?.matchId === result.matchId) activeQuestion = null;
   });
   client.socket.on('match:resume', () => {
     if (activeQuestion) sendAnswer(activeQuestion, 250);

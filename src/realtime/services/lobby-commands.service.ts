@@ -47,6 +47,7 @@ import {
 } from './lobby-lifecycle.helpers.js';
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
+const MATCH_START_LOCK_WAIT_MS = 5000;
 
 export async function createLobby(
   io: QuizballServer,
@@ -163,31 +164,9 @@ export async function joinByCode(
     io,
     socket,
     async () => {
-      const snapshot = await userSessionGuardService.resolveState(userId);
-      if (snapshot.activeMatchId) {
-        userSessionGuardService.emitBlocked(socket, {
-          reason: 'ACTIVE_MATCH',
-          message: 'You are already in an active match',
-          stateSnapshot: snapshot,
-        });
-        socket.emit('error', {
-          code: 'ALREADY_IN_LOBBY',
-          message: 'You are already in an active match',
-          meta: { stateSnapshot: snapshot },
-        });
-        result = {
-          ok: false,
-          code: 'ALREADY_IN_LOBBY',
-          message: 'You are already in an active match',
-          retryable: false,
-          correlationId,
-          stateSnapshot: snapshot,
-        };
-        return;
-      }
-
       const inviteLobby = await lobbiesRepo.getByInviteCode(normalizedCode);
       if (!inviteLobby) {
+        const snapshot = await userSessionGuardService.resolveState(userId);
         logger.warn(
           { inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
           'Lobby not found for invite'
@@ -627,8 +606,11 @@ export async function startFriendlyMatch(
   const lockKey = `lock:lobby:${lobbyId}`;
   // `lobby:state` announcing that both members are ready can reach the host
   // just before the other ready handler releases this same lock. A one-shot
-  // acquire turned that normal race into MATCH_START_LOCKED at 1k load.
-  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000);
+  // acquire turned that normal race into MATCH_START_LOCKED at load. At 2k,
+  // admission-queue wait can keep the ready check alive beyond the generic
+  // 1.2s lobby retry budget, so match start gets a bounded command-specific
+  // wait rather than requiring a human to press Start again.
+  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000, MATCH_START_LOCK_WAIT_MS);
   if (!lock.acquired || !lock.token) {
     logger.warn({ lobbyId }, 'Friendly match start skipped: lock not acquired');
     socket.emit('error', {

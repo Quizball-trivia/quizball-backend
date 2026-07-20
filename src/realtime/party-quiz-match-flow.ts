@@ -939,6 +939,11 @@ export async function sendPartyQuizQuestion(
 
     await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
     await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
+    // The generic match cache is long-lived. Party rounds persist their full
+    // state on every transition, so invalidate the previous-question snapshot
+    // before any answer can reuse it. The first event for this round rebuilds
+    // once; subsequent answers share that Redis snapshot.
+    await deleteMatchCache(matchId);
     await emitPartyQuizState(io, matchId);
 
     io.to(`match:${matchId}`).emit('match:question', {
@@ -1212,6 +1217,7 @@ export async function resolvePartyQuizRound(
 
       const nextIndex = qIndex + 1;
       await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
+      await deleteMatchCache(matchId);
 
       io.to(`match:${matchId}`).emit('match:round_result', {
         matchId,
@@ -1488,7 +1494,9 @@ export async function handlePartyQuizAnswer(
     }
     const totalPointsBefore = participants.find((player) => player.user_id === userId)?.total_points ?? 0;
 
-    let correctIndex = state.currentQuestion.correctIndex ?? null;
+    let correctIndex = state.currentQuestion.correctIndex
+      ?? preloadedCache?.currentQuestion?.correctIndex
+      ?? null;
     if (correctIndex === null) {
       const question = normalizeMatchQuestionPayload(
         await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)

@@ -33,7 +33,7 @@ usage() {
   cat <<'EOF'
 Usage:
   fleet.sh preflight
-  fleet.sh estimate <count> <cx23|cx33|cx43|cx53>
+  fleet.sh estimate <count> <cx23|cx33|cx43|cx53|cpx32>
   fleet.sh provision <mixed|auth> <count> <cx23|cx33|cx43|cx53|cpx32>
   fleet.sh list [mixed|auth|all]
   fleet.sh wait-ready <mixed|auth>
@@ -143,8 +143,8 @@ ensure_ssh_key() {
   fi
   local remote_json remote_key local_key
   remote_json="$("${HCLOUD[@]}" ssh-key describe "$SSH_KEY_NAME" -o json)"
-  remote_key="$(jq -r '.public_key // empty' <<< "$remote_json" | awk '{print $1 " " $2}')"
-  local_key="$(awk '{print $1 " " $2}' "$SSH_KEY_PATH.pub")"
+  remote_key="$(jq -r '.public_key // empty' <<< "$remote_json" | awk 'NF >= 2 { print $1 " " $2; exit }')"
+  local_key="$(awk 'NF >= 2 { print $1 " " $2; exit }' "$SSH_KEY_PATH.pub")"
   [[ -n "$remote_key" && "$remote_key" == "$local_key" ]] \
     || die "Hetzner SSH key '$SSH_KEY_NAME' does not match $SSH_KEY_PATH.pub"
 }

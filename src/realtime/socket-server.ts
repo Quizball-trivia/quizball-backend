@@ -12,7 +12,11 @@ import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
 import { registerAuctionHandlers } from './handlers/auction.handler.js';
-import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
+import type {
+  ClientToServerEvents,
+  InterServerEvents,
+  ServerToClientEvents,
+} from './socket.types.js';
 import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
 import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
@@ -56,9 +60,15 @@ import {
 } from './services/auction-lifecycle.service.js';
 import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
+import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
 
-export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
-export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
+export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketAuthData>;
+export type QuizballServer = Server<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  InterServerEvents,
+  SocketAuthData
+>;
 
 const ONLINE_COUNT_KEY = 'presence:online_users';
 const PRESENCE_LOCK_TTL_MS = 3000;
@@ -427,6 +437,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   io.adapter(createAdapter(pubClient, subClient));
+
+  // A match's kickoff gate lives on the replica that started it, while each
+  // player's sticky websocket may live on either replica. Forward an ack that
+  // misses locally to every peer; only the replica owning the gate consumes it.
+  io.on('match:ui_ready_ack', (userId, matchId, phase) => {
+    acknowledgeLocalMatchUiReady(io, userId, matchId, phase);
+  });
 
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).

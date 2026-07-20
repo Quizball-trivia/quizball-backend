@@ -31,7 +31,9 @@ export type CachedSeat = 1 | 2;
 
 export interface CachedPlayer {
   userId: string;
-  seat: CachedSeat;
+  // Possession uses seats 1/2, but party-quiz lobbies support up to six
+  // players. Keeping the durable seat avoids collapsing players 3..6 onto 1.
+  seat: number;
   totalPoints: number;
   correctAnswers: number;
   goals: number;
@@ -370,7 +372,7 @@ export function buildInitialCache(params: {
   const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload, params.match.mode);
   const players = params.players.map((player) => ({
     userId: player.user_id,
-    seat: (player.seat === 2 ? 2 : 1) as CachedSeat,
+    seat: Number.isInteger(player.seat) && player.seat > 0 ? player.seat : 1,
     totalPoints: player.total_points,
     correctAnswers: player.correct_answers,
     goals: player.goals,

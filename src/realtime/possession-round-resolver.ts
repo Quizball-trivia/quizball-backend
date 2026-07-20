@@ -521,7 +521,7 @@ export async function resolvePossessionRound(
       );
       if (penaltyOutcome.goalScoredByUserId) {
         const scorer = cache.players.find((player) => player.userId === penaltyOutcome.goalScoredByUserId);
-        goalScoredBySeat = scorer?.seat ?? null;
+        goalScoredBySeat = scorer?.seat === 1 || scorer?.seat === 2 ? scorer.seat : null;
       }
       logger.info(
         {

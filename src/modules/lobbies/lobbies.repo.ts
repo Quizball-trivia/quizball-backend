@@ -277,6 +277,15 @@ export const lobbiesRepo = {
     `;
   },
 
+  async removeMembers(lobbyId: string, userIds: string[]): Promise<void> {
+    if (userIds.length === 0) return;
+    await sql`
+      DELETE FROM lobby_members
+      WHERE lobby_id = ${lobbyId}
+        AND user_id = ANY(${sql.array(userIds)}::uuid[])
+    `;
+  },
+
   async updateMemberReady(lobbyId: string, userId: string, isReady: boolean): Promise<boolean> {
     const [row] = await sql<LobbyMemberRow[]>`
       UPDATE lobby_members

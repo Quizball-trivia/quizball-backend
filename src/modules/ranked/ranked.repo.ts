@@ -5,9 +5,11 @@ import { tierFromRp } from './ranked.service.js';
 import type {
   PlacementStatus,
   RankedLeaderboardEntry,
+  ArchivedRankedUserRankResult,
   RankedProfileRow,
   RankedRpChangeRow,
   RankedTier,
+  RankedSeason,
   RankedUserRankResult,
 } from './ranked.types.js';
 
@@ -282,7 +284,11 @@ export const rankedRepo = {
    * placement progress is cleared so players start fresh. Runs in one
    * transaction so the archive and reset are atomic.
    */
-  async resetLeaderboard(actorUserId: string, notes: string | null): Promise<{
+  async resetLeaderboard(
+    actorUserId: string,
+    notes: string | null,
+    seasonNumber: number | null = null
+  ): Promise<{
     batchId: string;
     profilesArchived: number;
     rpChangesArchived: number;
@@ -290,8 +296,8 @@ export const rankedRepo = {
   }> {
     return sql.begin(async (tx) => {
       const batchRows = await tx.unsafe<{ id: string }[]>(
-        `INSERT INTO ranked_reset_batches (triggered_by, notes) VALUES ($1, $2) RETURNING id`,
-        [actorUserId, notes]
+        `INSERT INTO ranked_reset_batches (triggered_by, notes, season_number) VALUES ($1, $2, $3) RETURNING id`,
+        [actorUserId, notes, seasonNumber]
       );
       const batchId = batchRows[0].id;
 
@@ -435,6 +441,90 @@ export const rankedRepo = {
       LIMIT ${limit}
       OFFSET ${offset}
     `;
+  },
+
+  async listSeasons(): Promise<RankedSeason[]> {
+    // Only batches stamped with a season_number are seasons — boundary resets
+    // (e.g. the pre-event zeroing) keep NULL and stay out of the public list.
+    return sql<RankedSeason[]>`
+      SELECT
+        id,
+        season_number AS "seasonNumber",
+        started_at AS "startedAt",
+        completed_at AS "completedAt"
+      FROM ranked_reset_batches
+      WHERE completed_at IS NOT NULL
+        AND season_number IS NOT NULL
+      ORDER BY season_number ASC
+    `;
+  },
+
+  async listArchivedLeaderboard(
+    batchId: string,
+    limit: number,
+    offset: number,
+    country?: string
+  ): Promise<RankedLeaderboardEntry[]> {
+    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+    return sql<RankedLeaderboardEntry[]>`
+      SELECT
+        rp.user_id AS "userId",
+        COALESCE(u.nickname, 'Player') AS "username",
+        u.avatar_url AS "avatarUrl",
+        u.avatar_customization AS "avatarCustomization",
+        rp.rp,
+        rp.tier,
+        u.country,
+        0::int AS "trendWins",
+        0::int AS "trendTotal"
+      FROM ranked_profiles_archive rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE rp.reset_batch_id = ${batchId}
+        AND u.is_ai = false
+        AND u.is_seed = false
+        AND u.is_deleted = false
+        AND u.deleted_at IS NULL
+        AND u.pending_deletion_at IS NULL
+        AND rp.placement_status = 'placed'
+        ${countryFilter}
+      ORDER BY rp.rp DESC, rp.last_ranked_match_at ASC NULLS LAST, rp.user_id ASC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+  },
+
+  async getArchivedUserRank(
+    batchId: string,
+    userId: string,
+    country?: string
+  ): Promise<ArchivedRankedUserRankResult | null> {
+    const countryFilter = country ? sql`AND u.country = ${country}` : sql``;
+    const [result] = await sql<ArchivedRankedUserRankResult[]>`
+      WITH eligible AS (
+        SELECT rp.user_id, rp.rp, rp.tier
+        FROM ranked_profiles_archive rp
+        JOIN users u ON u.id = rp.user_id
+        WHERE rp.reset_batch_id = ${batchId}
+          AND u.is_ai = false
+          AND u.is_seed = false
+          AND u.is_deleted = false
+          AND u.deleted_at IS NULL
+          AND u.pending_deletion_at IS NULL
+          AND rp.placement_status = 'placed'
+          ${countryFilter}
+      ), target AS (
+        SELECT rp, tier FROM eligible WHERE user_id = ${userId}
+      )
+      SELECT
+        (SELECT COUNT(*)::int + 1 FROM eligible WHERE rp > target.rp) AS rank,
+        (SELECT COUNT(*)::int FROM eligible) AS total,
+        0::int AS "trendWins",
+        0::int AS "trendTotal",
+        target.rp,
+        target.tier
+      FROM target
+    `;
+    return result ?? null;
   },
 
   async getUserRank(userId: string, country?: string): Promise<RankedUserRankResult | null> {

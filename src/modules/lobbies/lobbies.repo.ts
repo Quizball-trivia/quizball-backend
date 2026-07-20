@@ -1,6 +1,6 @@
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
-import { RANKED_ELIGIBILITY_HAVING_COUNTS } from '../../db/sql-fragments.js';
+import { MATCHMAKING_CATEGORY_EXCLUSIONS, RANKED_ELIGIBILITY_HAVING_COUNTS } from '../../db/sql-fragments.js';
 import type {
   LobbyRow,
   LobbyWithJoinedAt,
@@ -414,6 +414,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
@@ -436,6 +437,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
@@ -453,6 +455,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
@@ -477,6 +480,7 @@ export const lobbiesRepo = {
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${exclusionClause}
         AND q.status = 'published'
@@ -500,6 +504,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type = 'mcq_single'
@@ -519,6 +524,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
+        ${MATCHMAKING_CATEGORY_EXCLUSIONS}
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')

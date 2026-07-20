@@ -110,7 +110,7 @@ export async function createLobby(
       await attachUserSocketsToLobby(io, userId, lobby.id);
 
       const redactedInvite = inviteCode ? `${inviteCode.slice(0, 2)}***` : null;
-      logger.info(
+      logger.debug(
         { lobbyId: lobby.id, hostUserId: userId, inviteCode: redactedInvite, correlationId },
         'Lobby created'
       );
@@ -292,7 +292,7 @@ export async function joinByCode(
         }
         await attachUserSocketsToLobby(io, userId, lobby.id);
 
-        logger.info(
+        logger.debug(
           { lobbyId: lobby.id, userId, alreadyMember, correlationId },
           alreadyMember ? 'Lobby rejoined as existing member' : 'Lobby joined by code'
         );
@@ -355,7 +355,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
     );
     return;
   }
-  logger.info(
+  logger.debug(
     { lobbyId, userId: socket.data.user.id, ready },
     'Lobby member ready state updated'
   );
@@ -364,7 +364,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
   const lockKey = `lock:lobby:${lobbyId}`;
   const lock = await acquireLock(lockKey, 3000);
   if (!lock.acquired || !lock.token) {
-    logger.warn({ lobbyId }, 'Lobby ready check skipped: lock not acquired');
+    logger.debug({ lobbyId }, 'Lobby ready check skipped: lock not acquired');
     return;
   }
 
@@ -381,7 +381,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
         (friendlyMode === 'friendly_possession' && memberCount === 2 && allReady) ||
         (friendlyMode === 'friendly_party_quiz' && memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS && allReady)
       ) {
-        logger.info({ lobbyId, gameMode: friendlyMode }, 'Lobby ready -> waiting for host start (friendly)');
+        logger.debug({ lobbyId, gameMode: friendlyMode }, 'Lobby ready -> waiting for host start (friendly)');
         return;
       }
       if (friendlyMode !== 'ranked_sim') {
@@ -539,7 +539,7 @@ export async function updateSettings(
       await lobbiesRepo.setVisibility(lobbyId, payload.isPublic);
     }
 
-    logger.info(
+    logger.debug(
       {
         lobbyId,
         socketId: socket.id,
@@ -748,7 +748,7 @@ export async function startFriendlyMatch(
     await emitLobbyState(io, lobbyId);
     await warmupRealtimeService.cleanupLobby(lobbyId);
 
-    logger.info(
+    logger.debug(
       { lobbyId, matchId: result.match.id, mode: currentLobby.mode, categoryAId, categoryBId },
       'Friendly match created'
     );

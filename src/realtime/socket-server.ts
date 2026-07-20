@@ -558,7 +558,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       scheduleOnlineCountBroadcast(io);
     });
 
-    logger.info(
+    logger.debug(
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
       'Socket connected'
     );

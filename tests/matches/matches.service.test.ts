@@ -275,6 +275,11 @@ describe('matches.service friendly-party-quiz variants', () => {
       limit: 10,
     });
     expect(insertMatchQuestionsMock).toHaveBeenCalledTimes(1);
+    const insertedPack = insertMatchQuestionsMock.mock.calls[0]?.[1] as Array<{ qIndex: number }>;
+    expect(insertedPack).toHaveLength(10);
+    expect(insertedPack.map((question) => question.qIndex)).toEqual(
+      Array.from({ length: 10 }, (_, index) => index),
+    );
     expect(insertMatchQuestionsMock).toHaveBeenCalledWith(
       'match-1',
       expect.arrayContaining([

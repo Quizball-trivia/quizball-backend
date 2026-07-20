@@ -3216,6 +3216,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
       await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
       await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
 
+      expect(schedulePartyQuizKickoffMock).toHaveBeenCalledTimes(1);
       expect(schedulePartyQuizKickoffMock).toHaveBeenCalledWith(
         'm1',
         expect.any(Date),

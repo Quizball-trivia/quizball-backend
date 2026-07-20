@@ -70,6 +70,28 @@ describe('database resilience configuration', () => {
   });
 });
 
+describe('realtime timer capacity configuration', () => {
+  it('defaults to a conservative per-replica worker count', () => {
+    expect(parseConfig(baseEnv()).REALTIME_TIMER_HANDLER_CONCURRENCY).toBe(4);
+  });
+
+  it('accepts a measured worker count and rejects unsafe values', () => {
+    expect(parseConfig(baseEnv({
+      REALTIME_TIMER_HANDLER_CONCURRENCY: '12',
+    })).REALTIME_TIMER_HANDLER_CONCURRENCY).toBe(12);
+    expect(() => parseConfig(baseEnv({
+      REALTIME_TIMER_HANDLER_CONCURRENCY: '0',
+    }))).toThrow(/REALTIME_TIMER_HANDLER_CONCURRENCY/);
+    expect(() => parseConfig(baseEnv({
+      REALTIME_TIMER_HANDLER_CONCURRENCY: '31',
+    }))).toThrow(/REALTIME_TIMER_HANDLER_CONCURRENCY/);
+    expect(() => parseConfig(baseEnv({
+      DB_INFLIGHT_LIMIT: '8',
+      REALTIME_TIMER_HANDLER_CONCURRENCY: '9',
+    }))).toThrow(/REALTIME_TIMER_HANDLER_CONCURRENCY/);
+  });
+});
+
 describe('Supabase Auth IP forwarding configuration', () => {
   it('is disabled by default and keeps the anon-key path available', () => {
     const parsed = parseConfig(baseEnv());

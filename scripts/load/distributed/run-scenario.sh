@@ -6,8 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FLEET="$SCRIPT_DIR/fleet.sh"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
 REPORT_ROOT="$SCRIPT_DIR/reports/${CAMPAIGN_ID:-quizball-staging-5k}"
-SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
-SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o TCPKeepAlive=yes)
+SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o TCPKeepAlive=yes)
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -138,8 +138,9 @@ collect_one() {
 with_completion_marker() {
   local command="$1"
   local marker="$2"
-  printf "rm -f '%s' && %s; rc=\$?; printf '%%s\\n' \"\$rc\" > '%s'; exit \"\$rc\"" \
-    "$marker" "$command" "$marker"
+  local started_marker="${marker}.started"
+  printf "rm -f '%s' '%s' && printf 'started\\n' > '%s' && %s; rc=\$?; printf '%%s\\n' \"\$rc\" > '%s'; exit \"\$rc\"" \
+    "$marker" "$started_marker" "$started_marker" "$command" "$marker"
 }
 
 wait_for_worker() {
@@ -148,7 +149,8 @@ wait_for_worker() {
   local marker="$3"
   local timeout_sec="${REMOTE_RESULT_TIMEOUT_SEC:-7200}"
   local deadline=$((SECONDS + timeout_sec))
-  local status=''
+  local start_deadline=$((SECONDS + 60))
+  local status='' started='' started_seen=0 transport_reaped=0
 
   while (( SECONDS < deadline )); do
     status="$("${SSH[@]}" "root@$ip" "if test -f '$marker'; then cat '$marker'; fi" 2>/dev/null || true)"
@@ -161,9 +163,23 @@ wait_for_worker() {
       (( 10#$status == 0 ))
       return
     fi
+
+    if (( started_seen == 0 )); then
+      started="$("${SSH[@]}" "root@$ip" "if test -f '${marker}.started'; then printf 'yes'; fi" 2>/dev/null || true)"
+      [[ "$started" == 'yes' ]] && started_seen=1
+    fi
     if ! kill -0 "$pid" 2>/dev/null; then
-      wait "$pid"
-      return $?
+      if (( transport_reaped == 0 )); then
+        # Losing the control-plane SSH channel must not be confused with the
+        # remotely running workload finishing. The remote marker remains the
+        # authoritative result and is deliberately polled through reconnects.
+        wait "$pid" 2>/dev/null || true
+        transport_reaped=1
+      fi
+      if (( started_seen == 0 && SECONDS >= start_deadline )); then
+        printf 'worker %s never published start marker %s.started\n' "$ip" "$marker" >&2
+        return 125
+      fi
     fi
     sleep 2
   done

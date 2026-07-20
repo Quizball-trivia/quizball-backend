@@ -593,6 +593,78 @@ describe('party quiz realtime flow', () => {
         nextQIndex: 1,
       }
     );
+    expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
+      'party_question',
+      'match-1:0',
+    );
+  });
+
+  it('keeps the question timer armed when a transient round write fails', async () => {
+    const { resolvePartyQuizRound } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    setMatchStatePayloadMock.mockRejectedValueOnce(new Error('database busy'));
+
+    await expect(resolvePartyQuizRound(io, 'match-1', 0)).rejects.toThrow('database busy');
+
+    expect(realtimeTimerMocks.cancel).not.toHaveBeenCalledWith(
+      'party_question',
+      'match-1:0',
+    );
+  });
+
+  it('rejects lock contention so the durable timer scheduler retries it', async () => {
+    const { resolvePartyQuizRound } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    vi.mocked(acquireLock).mockResolvedValueOnce({ acquired: false });
+
+    await expect(resolvePartyQuizRound(io, 'match-1', 0, true)).rejects.toThrow(
+      'Party quiz round lock unavailable for match-1:0',
+    );
+    expect(realtimeTimerMocks.cancel).not.toHaveBeenCalledWith(
+      'party_question',
+      'match-1:0',
+    );
+  });
+
+  it('re-arms a missing transition after the round state was already persisted', async () => {
+    const { resolvePartyQuizRound } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io } = createIoMock();
+    partyState = {
+      ...partyState,
+      currentQuestion: null,
+      answeredUserIds: [],
+      stateVersionCounter: 3,
+    };
+    getMatchMock.mockResolvedValueOnce({
+      id: 'match-1',
+      mode: 'friendly',
+      status: 'active',
+      total_questions: 10,
+      current_q_index: 1,
+      state_payload: partyState,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      winner_user_id: null,
+      category_a_id: 'cat-1',
+    });
+
+    await resolvePartyQuizRound(io, 'match-1', 0, true);
+
+    expect(realtimeTimerMocks.schedule).toHaveBeenCalledWith(
+      'party_round_transition',
+      'match-1:0',
+      expect.any(Date),
+      {
+        kind: 'party_round_transition',
+        matchId: 'match-1',
+        resolvedQIndex: 0,
+        nextQIndex: 1,
+      },
+    );
+    expect(realtimeTimerMocks.cancel).toHaveBeenCalledWith(
+      'party_question',
+      'match-1:0',
+    );
   });
 
   it('durably dispatches a missing next question and cancels the transition timer', async () => {

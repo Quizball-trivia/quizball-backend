@@ -133,6 +133,24 @@ function runSocketDbTask(
   runSocketTask(operation, userId, () => socketDbTaskLimiter.run(task));
 }
 
+type DisconnectDbTask = 'lobby_disconnect' | 'match_disconnect';
+
+/**
+ * Route a disconnect through the state it was actually bound to. A known
+ * match socket cannot also need the lobby DB fallback (and vice versa), while
+ * an unbound socket still needs both defensive recovery lookups.
+ */
+function selectDisconnectDbTasks(binding: {
+  lobbyId?: string;
+  matchId?: string;
+}): DisconnectDbTask[] {
+  const hasLobby = Boolean(binding.lobbyId);
+  const hasMatch = Boolean(binding.matchId);
+  if (hasLobby && !hasMatch) return ['lobby_disconnect'];
+  if (hasMatch && !hasLobby) return ['match_disconnect'];
+  return ['lobby_disconnect', 'match_disconnect'];
+}
+
 async function trackUserOnline(userId: string): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
@@ -572,8 +590,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
-      runSocketDbTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
-      runSocketDbTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
+      const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
+      if (disconnectDbTasks.includes('lobby_disconnect')) {
+        runSocketDbTask('lobby_disconnect', user.id, () => lobbyRealtimeService.handleLobbyDisconnect(io, socket));
+      }
+      if (disconnectDbTasks.includes('match_disconnect')) {
+        runSocketDbTask('match_disconnect', user.id, () => matchRealtimeService.handleMatchDisconnect(io, socket));
+      }
       runSocketTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
@@ -598,3 +621,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
   return io;
 }
+
+export const __socketServerInternals = {
+  selectDisconnectDbTasks,
+};

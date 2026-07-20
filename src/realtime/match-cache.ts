@@ -11,6 +11,7 @@ import {
   createInitialPossessionState,
   matchesService,
   POSSESSION_QUESTIONS_PER_HALF,
+  resolveMatchVariant,
   type MatchQuestionEvaluation,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
@@ -20,6 +21,7 @@ import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
 import { normalizeI18nName } from './match-utils.js';
+import { sanitizePartyQuizState } from './party-quiz-state.js';
 import type { DraftCategory, GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
@@ -606,12 +608,14 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       return null;
     }
     const players = await matchPlayersRepo.listMatchPlayers(matchId);
-    const state = sanitizePossessionState(match.state_payload, match.mode);
+    const state = resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz'
+      ? sanitizePartyQuizState(match.state_payload, match.total_questions)
+      : sanitizePossessionState(match.state_payload, match.mode);
 
     const cache = buildInitialCache({
       match,
       players,
-      state,
+      state: state as PossessionStatePayload,
     });
 
     // Take the freshest of the two q-index signals: routine rounds only touch

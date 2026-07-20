@@ -69,6 +69,18 @@ vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
 
 vi.mock('../../src/modules/matches/matches.service.js', () => ({
   POSSESSION_QUESTIONS_PER_HALF: 6,
+  resolveMatchVariant: (state: { variant?: string } | null, mode: string) =>
+    state?.variant ?? (mode === 'ranked' ? 'ranked_sim' : 'friendly_possession'),
+  createInitialPartyQuizState: (totalQuestions: number) => ({
+    version: 1,
+    variant: 'friendly_party_quiz',
+    totalQuestions,
+    currentQuestion: null,
+    answeredUserIds: [],
+    droppedUserIds: [],
+    winnerDecisionMethod: null,
+    stateVersionCounter: 0,
+  }),
   createInitialPossessionState: (variant = 'friendly_possession') => ({
     version: 1,
     variant,
@@ -236,5 +248,50 @@ describe('match-cache rebuild locking', () => {
     expect(buildMatchQuestionPayloadMock).toHaveBeenCalledWith('m1', 5);
     expect(result?.currentQIndex).toBe(5);
     expect(result?.currentQuestion?.qIndex).toBe(5);
+  });
+
+  it('rebuilds a six-player party cache without converting it to possession state', async () => {
+    redisGetMock.mockResolvedValue(null);
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    getMatchMock.mockResolvedValue({
+      id: 'party-1',
+      status: 'active',
+      mode: 'friendly',
+      total_questions: 10,
+      category_a_id: 'cat-a',
+      category_b_id: null,
+      started_at: new Date().toISOString(),
+      current_q_index: 3,
+      state_payload: {
+        version: 1,
+        variant: 'friendly_party_quiz',
+        totalQuestions: 10,
+        currentQuestion: { qIndex: 3, correctIndex: 2 },
+        answeredUserIds: ['u1'],
+        droppedUserIds: [],
+        winnerDecisionMethod: null,
+        stateVersionCounter: 7,
+      },
+    });
+    listMatchPlayersMock.mockResolvedValue(Array.from({ length: 6 }, (_, index) => ({
+      user_id: `u${index + 1}`,
+      seat: index + 1,
+      total_points: 0,
+      correct_answers: 0,
+      goals: 0,
+      penalty_goals: 0,
+      avg_time_ms: null,
+    })));
+    buildMatchQuestionPayloadMock.mockResolvedValue(null);
+
+    const { getMatchCacheOrRebuild } = await import('../../src/realtime/match-cache.js');
+    const result = await getMatchCacheOrRebuild('party-1');
+
+    expect(result?.statePayload).toEqual(expect.objectContaining({
+      variant: 'friendly_party_quiz',
+      stateVersionCounter: 7,
+    }));
+    expect(result?.currentQIndex).toBe(3);
+    expect(result?.players.map((player) => player.seat)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });

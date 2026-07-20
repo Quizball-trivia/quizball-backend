@@ -107,3 +107,15 @@ export interface RankedUserRankResult {
   trendWins: number;
   trendTotal: number;
 }
+
+export interface RankedSeason {
+  id: string;
+  seasonNumber: number;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface ArchivedRankedUserRankResult extends RankedUserRankResult {
+  rp: number;
+  tier: RankedTier;
+}

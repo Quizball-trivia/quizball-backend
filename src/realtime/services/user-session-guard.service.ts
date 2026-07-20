@@ -792,6 +792,7 @@ export const userSessionGuardService = {
       keepWaitingLobbyId?: string;
     }
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
+    const cleanupStartedAtMs = Date.now();
     // Lobby create/join is another flash-traffic path. The connection hook has
     // already performed general recovery, but this command still needs its own
     // authoritative read for races and non-socket callers. As with ranked queue
@@ -822,7 +823,10 @@ export const userSessionGuardService = {
 
     if (context.queueSearchId) await cancelRankedQueueSearch(userId);
     if (hasLobbyToClean) {
-      await cleanupOpenLobbies(io, userId, { keepWaitingLobbyId });
+      await cleanupOpenLobbies(io, userId, {
+        keepWaitingLobbyId,
+        cleanupStartedAtMs,
+      });
     }
     context = await resolveContext(userId);
     snapshot = toSnapshot(context);

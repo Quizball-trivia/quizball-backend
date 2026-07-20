@@ -168,6 +168,12 @@ wait_for_worker() {
       started="$("${SSH[@]}" "root@$ip" "if test -f '${marker}.started'; then printf 'yes'; fi" 2>/dev/null || true)"
       [[ "$started" == 'yes' ]] && started_seen=1
     fi
+    if (( started_seen == 0 && SECONDS >= start_deadline )); then
+      printf 'worker %s never published start marker %s.started\n' "$ip" "$marker" >&2
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 125
+    fi
     if ! kill -0 "$pid" 2>/dev/null; then
       if (( transport_reaped == 0 )); then
         # Losing the control-plane SSH channel must not be confused with the
@@ -175,10 +181,6 @@ wait_for_worker() {
         # authoritative result and is deliberately polled through reconnects.
         wait "$pid" 2>/dev/null || true
         transport_reaped=1
-      fi
-      if (( started_seen == 0 && SECONDS >= start_deadline )); then
-        printf 'worker %s never published start marker %s.started\n' "$ip" "$marker" >&2
-        return 125
       fi
     fi
     sleep 2

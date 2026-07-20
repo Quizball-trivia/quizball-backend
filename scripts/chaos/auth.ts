@@ -107,6 +107,26 @@ async function adminCreateConfirmedUser(
   });
   if (res.status === 200 || res.status === 201) return;
   const text = await res.text();
+  const duplicateUser = res.status === 422 && (
+    text.toLowerCase().includes('email_exists') ||
+    text.toLowerCase().includes('already been registered') ||
+    text.toLowerCase().includes('already registered')
+  );
+  if (duplicateUser) {
+    // A retry can receive 422 after the first POST committed successfully but
+    // its response was lost or surfaced as a transient 5xx. Reconcile that
+    // ambiguous outcome instead of failing preparation or trusting an unknown
+    // password left by an earlier attempt.
+    const existing = await listAdminUserIdsByEmail(
+      cfg,
+      new Set([email.toLowerCase()]),
+    );
+    const existingId = existing.get(email.toLowerCase());
+    if (existingId) {
+      await adminResetConfirmedUser(cfg, existingId, email);
+      return;
+    }
+  }
   throw new Error(`admin create user ${email} failed: ${res.status} ${text.slice(0, 200)}`);
 }
 

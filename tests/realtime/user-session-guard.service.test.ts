@@ -406,6 +406,43 @@ describe('user-session-guard.service', () => {
     expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves a lobby membership created during lobby-entry cleanup', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    const oldLobby = {
+      id: 'old-lobby',
+      mode: 'friendly',
+      status: 'waiting',
+      host_user_id: 'other-host',
+      joined_at: new Date(Date.now() - 10_000).toISOString(),
+    };
+    const lateJoinedLobby = {
+      id: 'fresh-lobby',
+      mode: 'friendly',
+      status: 'waiting',
+      host_user_id: 'fresh-host',
+      joined_at: new Date(Date.now() + 10_000).toISOString(),
+    };
+    listOpenLobbiesForUserMock
+      .mockResolvedValueOnce([oldLobby])
+      .mockResolvedValueOnce([oldLobby, lateJoinedLobby])
+      .mockResolvedValueOnce([lateJoinedLobby]);
+
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForLobbyEntry(io, 'idle-user');
+
+    expect(removeMemberMock).toHaveBeenCalledOnce();
+    expect(removeMemberMock).toHaveBeenCalledWith('old-lobby', 'idle-user');
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: { state: 'IN_WAITING_LOBBY', waitingLobbyId: 'fresh-lobby' },
+    });
+  });
+
   it('re-reads once after clean connect preparation to observe a concurrent lobby join', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     const joinedAfterCleanupStarted = {

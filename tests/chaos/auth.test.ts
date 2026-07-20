@@ -96,6 +96,35 @@ describe('chaos user login validation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
+  it('reconciles a duplicate user after an ambiguous retried create', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ users: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'temporarily unavailable' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        code: 'email_exists',
+        message: 'A user with this email address has already been registered',
+      }), { status: 422 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        users: [{ id: 'auth-user-id', email: 'load+u0@example.com' }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'internal-user-id' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = provisionUsers(provisionConfig);
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual([expect.objectContaining({
+      token: 'token',
+      userId: 'internal-user-id',
+    })]);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock.mock.calls[4]?.[1]).toMatchObject({ method: 'PUT' });
+  });
+
   it('does not retry a successful /users/me response with a missing identity', async () => {
     const fetchMock = vi.fn();
     existingUserResponses(fetchMock);

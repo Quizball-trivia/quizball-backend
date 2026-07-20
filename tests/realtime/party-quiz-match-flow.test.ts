@@ -885,6 +885,51 @@ describe('party quiz realtime flow', () => {
     expect(events.some((entry) => entry.event === 'match:question')).toBe(false);
   });
 
+  it('runs independent party-question reads and writes in bounded parallel waves', async () => {
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+      return { promise, resolve };
+    };
+    const matchRead = deferred<Awaited<ReturnType<typeof getMatchMock>>>();
+    const questionRead = deferred<Awaited<ReturnType<typeof buildMatchQuestionPayloadMock>>>();
+    const playersRead = deferred<Awaited<ReturnType<typeof listMatchPlayersMock>>>();
+    const stateWrite = deferred<void>();
+    const timingWrite = deferred<void>();
+
+    const match = await getMatchMock();
+    const question = await buildMatchQuestionPayloadMock();
+    const currentPlayers = await listMatchPlayersMock();
+    getMatchMock.mockReturnValue(matchRead.promise);
+    buildMatchQuestionPayloadMock.mockReturnValue(questionRead.promise);
+    listMatchPlayersMock.mockReturnValue(playersRead.promise);
+    setMatchStatePayloadMock.mockReturnValue(stateWrite.promise);
+    setQuestionTimingMock.mockReturnValue(timingWrite.promise);
+
+    const { sendPartyQuizQuestion } = await import('../../src/realtime/party-quiz-match-flow.js');
+    const { io, events } = createIoMock();
+    const dispatch = sendPartyQuizQuestion(io, 'match-1', 0);
+    await Promise.resolve();
+
+    expect(getMatchMock).toHaveBeenCalledTimes(2);
+    expect(buildMatchQuestionPayloadMock).toHaveBeenCalledTimes(2);
+    expect(listMatchPlayersMock).toHaveBeenCalledTimes(2);
+
+    matchRead.resolve(match);
+    questionRead.resolve(question);
+    playersRead.resolve(currentPlayers);
+    await vi.waitFor(() => {
+      expect(setMatchStatePayloadMock).toHaveBeenCalledTimes(1);
+      expect(setQuestionTimingMock).toHaveBeenCalledTimes(1);
+    });
+
+    stateWrite.resolve();
+    timingWrite.resolve();
+    await dispatch;
+
+    expect(events.some((entry) => entry.event === 'match:question')).toBe(true);
+  });
+
   it('derives answered users from answer rows instead of mutating match state', async () => {
     const { handlePartyQuizAnswer } = await import('../../src/realtime/party-quiz-match-flow.js');
     const { io, events } = createIoMock();

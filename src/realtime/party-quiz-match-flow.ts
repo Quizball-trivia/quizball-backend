@@ -903,12 +903,25 @@ export async function sendPartyQuizQuestion(
     'quizball.q_index': qIndex,
   }, async (span) => {
     const startedAt = Date.now();
-    const match = await matchesRepo.getMatch(matchId);
+    // These reads are independent. Keeping them sequential made every party
+    // kickoff consume several database/network round trips before the next
+    // durable timer could run. At thousands of simultaneous matches that
+    // serialized question 0 for minutes even while PostgreSQL itself remained
+    // mostly idle. The timer concurrency is deliberately small, so fan out at
+    // most three DB reads per handler and collapse the critical path to one
+    // read wave.
+    const [match, initialPayload, paused, players] = await Promise.all([
+      matchesRepo.getMatch(matchId),
+      matchesService.buildMatchQuestionPayload(matchId, qIndex)
+        .then((raw) => normalizeMatchQuestionPayload(raw)),
+      isPartyQuizMatchPaused(matchId),
+      matchPlayersRepo.listMatchPlayers(matchId),
+    ]);
     if (!match || match.status !== 'active') return null;
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
       return null;
     }
-    if (await isPartyQuizMatchPaused(matchId)) {
+    if (paused) {
       logger.debug(
         { eventName: 'match:question', matchId, qIndex, skipped: true, reason: 'paused', source: 'dispatch' },
         'Party quiz question dispatch skipped while match is paused'
@@ -925,7 +938,7 @@ export async function sendPartyQuizQuestion(
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-    let payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
+    let payload = initialPayload;
     let questionSource: 'existing' | 'picked' = 'existing';
     if (!payload) {
       const picked = await matchQuestionsRepo.getRandomQuestionForMatch({
@@ -982,9 +995,16 @@ export async function sendPartyQuizQuestion(
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
-    await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-    const players = await matchPlayersRepo.listMatchPlayers(matchId);
+    // The match row and timing row do not depend on one another. Dispatch them
+    // as one bounded write wave, while the room-membership lookup that marks
+    // players as having entered runs in parallel. We still await all durable
+    // state before emitting the question or populating the cache.
+    const enteredPromise = markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
+    await Promise.all([
+      matchesRepo.setMatchStatePayload(matchId, state, qIndex),
+      matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt),
+      enteredPromise,
+    ]);
     const cache = buildInitialCache({
       match: {
         ...match,
@@ -1029,7 +1049,6 @@ export async function sendPartyQuizQuestion(
       shooterSeat: null,
       attackerSeat: null,
     });
-    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     logger.debug(
       {
         eventName: 'match:question',

@@ -621,11 +621,45 @@ export async function startFriendlyMatch(
   }
 
   try {
+    // The bounded lock wait can outlive the snapshot above. Revalidate every
+    // start precondition while holding the lock so a concurrent leave,
+    // unready, settings edit, host transfer, or completed start cannot create
+    // a match from stale state.
+    const currentLobby = await lobbiesRepo.getById(lobbyId);
+    if (!currentLobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+    if (socket.data.user.id !== currentLobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can start the match' });
+      return;
+    }
+    if (currentLobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby is not ready to start' });
+      return;
+    }
+    const currentFriendlyMode = normalizeFriendlyGameMode(currentLobby.game_mode);
+    if (currentFriendlyMode === 'ranked_sim') {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
+      return;
+    }
+    const currentMemberCount = await lobbiesRepo.countMembers(lobbyId);
+    const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+    const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
+    const currentValidStart =
+      (currentFriendlyMode === 'friendly_possession' && currentMemberCount === 2) ||
+      (currentFriendlyMode === 'friendly_party_quiz' &&
+        currentMemberCount >= 2 && currentMemberCount <= FRIENDLY_LOBBY_MAX_MEMBERS);
+    if (!currentValidStart || !currentAllReady) {
+      socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
+      return;
+    }
+
     let categoryAId: string;
     let categoryBId: string | null;
 
-    if (lobby.friendly_random) {
-      const minimumQuestions = friendlyMode === 'friendly_party_quiz'
+    if (currentLobby.friendly_random) {
+      const minimumQuestions = currentFriendlyMode === 'friendly_party_quiz'
         ? PARTY_QUIZ_TOTAL_QUESTIONS
         : MIN_QUESTIONS_PER_CATEGORY;
       const categories = await lobbiesService.selectRandomCategories(1, minimumQuestions);
@@ -645,7 +679,7 @@ export async function startFriendlyMatch(
       categoryAId = categories[0].id;
       categoryBId = null;
     } else {
-      const categoryA = lobby.friendly_category_a_id;
+      const categoryA = currentLobby.friendly_category_a_id;
       if (!categoryA) {
         socket.emit('error', {
           code: 'INVALID_SETTINGS',
@@ -665,7 +699,7 @@ export async function startFriendlyMatch(
 
       const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
         [categoryA],
-        friendlyMode === 'friendly_party_quiz'
+        currentFriendlyMode === 'friendly_party_quiz'
           ? PARTY_QUIZ_TOTAL_QUESTIONS
           : MIN_QUESTIONS_PER_CATEGORY
       );
@@ -687,9 +721,9 @@ export async function startFriendlyMatch(
     try {
       result = await matchesService.createMatchFromLobby({
         lobbyId,
-        mode: lobby.mode,
-        variant: friendlyMode,
-        hostUserId: lobby.host_user_id,
+        mode: currentLobby.mode,
+        variant: currentFriendlyMode,
+        hostUserId: currentLobby.host_user_id,
         categoryAId,
         categoryBId,
       });
@@ -715,7 +749,7 @@ export async function startFriendlyMatch(
     await warmupRealtimeService.cleanupLobby(lobbyId);
 
     logger.info(
-      { lobbyId, matchId: result.match.id, mode: lobby.mode, categoryAId, categoryBId },
+      { lobbyId, matchId: result.match.id, mode: currentLobby.mode, categoryAId, categoryBId },
       'Friendly match created'
     );
 

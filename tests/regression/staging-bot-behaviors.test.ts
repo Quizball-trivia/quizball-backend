@@ -59,4 +59,23 @@ describe('staging auto-answer behavior', () => {
 
     expect(emit).not.toHaveBeenCalledWith('match:answer', expect.anything());
   });
+
+  it('does not schedule an answer for a question received after final results', async () => {
+    vi.useFakeTimers();
+    const { client, handlers, emit } = makeClient();
+    autoAnswer(client, {
+      answerPlan: () => ({ mode: 'correct', timeMs: 500, delayMs: 1_000 }),
+    });
+
+    dispatch(handlers, 'match:final_results', { matchId: 'already-finished' });
+    dispatch(handlers, 'match:question', {
+      matchId: 'already-finished',
+      qIndex: 9,
+      correctIndex: 0,
+      question: { kind: 'multipleChoice' },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(emit).not.toHaveBeenCalledWith('match:answer', expect.anything());
+  });
 });

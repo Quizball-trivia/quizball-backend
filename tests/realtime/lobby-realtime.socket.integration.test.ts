@@ -1534,6 +1534,45 @@ describe('lobby realtime socket integration', () => {
     expect(vi.mocked(matchesService.createMatchFromLobby)).toHaveBeenCalledOnce();
   });
 
+  it('revalidates readiness after a slow start-lock handoff', async () => {
+    const host = createSocket('stale-ready-host');
+    const guest = createSocket('stale-ready-guest');
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    const { lobbiesService } = await import('../../src/modules/lobbies/lobbies.service.js');
+
+    vi.mocked(lobbiesService.selectRandomCategories).mockResolvedValue([{ id: 'cat-stale-ready' }] as never);
+    const created = await host.triggerWithAck<LobbyCreateResult>('lobby:create', {
+      mode: 'friendly',
+    });
+    if (!created?.ok || !created.inviteCode || !created.lobbyId) {
+      throw new Error('Expected lobby creation to succeed');
+    }
+    await guest.trigger('lobby:join_by_code', { inviteCode: created.inviteCode });
+    await host.trigger('lobby:ready', { ready: true });
+    await guest.trigger('lobby:ready', { ready: true });
+
+    const lockKey = `lock:lobby:${created.lobbyId}`;
+    lockStore.set(lockKey, 'competing-ready-handler');
+    const changeReadiness = setTimeout(() => {
+      const members = store.members.get(created.lobbyId!) ?? [];
+      const guestMember = members.find((member) => member.user_id === 'stale-ready-guest');
+      if (guestMember) guestMember.is_ready = false;
+      lockStore.delete(lockKey);
+    }, 1_500);
+    try {
+      await host.trigger('lobby:start');
+    } finally {
+      clearTimeout(changeReadiness);
+      lockStore.delete(lockKey);
+    }
+
+    expect(host.emitted.some((entry) =>
+      entry.event === 'error' &&
+      (entry.payload as { code?: string }).code === 'LOBBY_NOT_READY'
+    )).toBe(true);
+    expect(vi.mocked(matchesService.createMatchFromLobby)).not.toHaveBeenCalled();
+  });
+
   it('blocks friendly start when selected categories are insufficient (manual mode)', async () => {
     const host = createSocket('host-sel');
     const guest = createSocket('guest-sel');

@@ -6,6 +6,7 @@ import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
 import { socketDbTaskLimiter } from '../../realtime/socket-db-task-limiter.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
+import { socketRuntimeTracker } from '../../realtime/socket-runtime-stats.js';
 
 const router = Router();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
@@ -81,6 +82,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: dbPoolStats(),
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });
   } catch (error) {
@@ -92,6 +94,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: stats,
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });
   }

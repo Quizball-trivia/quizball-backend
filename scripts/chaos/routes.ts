@@ -40,6 +40,16 @@ export interface ChaosRouteFixtures {
 }
 
 const KNOWN_CHALLENGE = 'countdown';
+const ADDITIONAL_DAILY_CHALLENGES = [
+  'moneyDrop',
+  'trueFalse',
+  'clues',
+  'putInOrder',
+  'imposter',
+  'careerPath',
+  'highLow',
+  'footballLogic',
+] as const;
 
 export const CHAOS_ROUTES: ChaosRoute[] = [
   // ── Public reads (no token) — the unauthenticated browse surface ──────────
@@ -90,6 +100,16 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     expectedStatuses: [200, 404, 409],
     group: 'session-write',
   },
+  ...ADDITIONAL_DAILY_CHALLENGES.map((challengeType): ChaosRoute => ({
+    name: `daily.session.${challengeType}`,
+    method: 'POST',
+    path: `/api/v1/daily-challenges/${challengeType}/session`,
+    auth: 'bearer',
+    mutates: true,
+    weight: 1,
+    expectedStatuses: [200, 404, 409],
+    group: 'session-write',
+  })),
   {
     name: 'users.me.update',
     method: 'PUT',
@@ -100,6 +120,26 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     group: 'social-write',
     // No-op-ish profile write: re-set the locale, which always validates.
     body: () => ({ language: 'en' }),
+  },
+  {
+    name: 'users.me.complete-onboarding',
+    method: 'POST',
+    path: '/api/v1/users/me/complete-onboarding',
+    auth: 'bearer',
+    mutates: true,
+    weight: 1,
+    expectedStatuses: [200],
+    group: 'social-write',
+  },
+  {
+    name: 'notifications.read-all',
+    method: 'POST',
+    path: '/api/v1/notifications/read-all',
+    auth: 'bearer',
+    mutates: true,
+    weight: 1,
+    expectedStatuses: [200],
+    group: 'social-write',
   },
 ];
 
@@ -131,4 +171,15 @@ export const SPEND_ROUTES: ChaosRoute[] = [
     group: 'economy-write',
     body: () => ({ score: 1, correctAnswers: 1, durationMs: 5000 }),
   },
+  ...ADDITIONAL_DAILY_CHALLENGES.map((challengeType): ChaosRoute => ({
+    name: `daily.complete.${challengeType}`,
+    method: 'POST',
+    path: `/api/v1/daily-challenges/${challengeType}/complete`,
+    auth: 'bearer',
+    mutates: true,
+    weight: 1,
+    expectedStatuses: [200, 404, 409],
+    group: 'economy-write',
+    body: () => ({ score: 1, correctAnswers: 1, durationMs: 5000 }),
+  })),
 ];

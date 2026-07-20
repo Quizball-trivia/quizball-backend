@@ -61,6 +61,7 @@ import {
 import { auctionMatchmakingService } from './services/auction-matchmaking.service.js';
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
+import { socketRuntimeTracker } from './socket-runtime-stats.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketAuthData>;
 export type QuizballServer = Server<
@@ -474,6 +475,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.use(socketAuthMiddleware);
 
   io.on('connection', async (socket: QuizballSocket) => {
+    socketRuntimeTracker.connected();
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
 
@@ -526,6 +528,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     });
 
     socket.on('disconnect', (reason) => {
+      socketRuntimeTracker.disconnected();
       // matchId/lobbyId included so a silent handleMatchDisconnect early-return
       // (socket missing its matchId while a match is live) is diagnosable from
       // logs — observed once on staging (reconnect_smoke 2026-06-10) where a

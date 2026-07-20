@@ -24,6 +24,11 @@ export interface AppInstancePeak {
     newRejections: number;
     newTimeouts: number;
   };
+  sockets: {
+    active: number;
+    peak: number;
+    accepted: number;
+  };
   runtime: {
     cpuPct: number;
     cpuCorePct: number;
@@ -65,6 +70,11 @@ interface HealthPayload {
     maxWaitMs?: number;
     rejections?: number;
     timeouts?: number;
+  };
+  sockets?: {
+    active?: number;
+    peak?: number;
+    accepted?: number;
   };
   runtime?: {
     instance?: string;
@@ -163,6 +173,7 @@ export function startAppStatsCollector(
               newRejections: 0,
               newTimeouts: 0,
             },
+            sockets: { active: 0, peak: 0, accepted: 0 },
             runtime: {
               cpuPct: 0,
               cpuCorePct: 0,
@@ -218,6 +229,18 @@ export function startAppStatsCollector(
       accumulator.peak.socketDbTasks.maxWaitMs = Math.max(
         accumulator.peak.socketDbTasks.maxWaitMs,
         payload.socketDbTasks?.maxWaitMs ?? 0
+      );
+      accumulator.peak.sockets.active = Math.max(
+        accumulator.peak.sockets.active,
+        payload.sockets?.active ?? 0
+      );
+      accumulator.peak.sockets.peak = Math.max(
+        accumulator.peak.sockets.peak,
+        payload.sockets?.peak ?? 0
+      );
+      accumulator.peak.sockets.accepted = Math.max(
+        accumulator.peak.sockets.accepted,
+        payload.sockets?.accepted ?? 0
       );
       accumulator.peak.runtime.cpuPct = Math.max(
         accumulator.peak.runtime.cpuPct,

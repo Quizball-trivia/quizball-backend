@@ -260,6 +260,19 @@ async function processDueMembers(members: string[]): Promise<void> {
       nextIndex += 1;
       if (!member) continue;
       await processDueMember(member).catch((error) => {
+        // The shared ready-ack fast path and the durable Redis ceiling are
+        // intentionally allowed to race. The loser cannot take the per-match
+        // transition lock, is rescheduled by processDueMember, and then
+        // observes the winner's persisted state. At large match counts this is
+        // routine contention, not a failed timer, and logging one error per
+        // loser can exhaust Railway's bounded log stream during teardown.
+        if (
+          error instanceof Error
+          && error.message.startsWith('Party transition lock unavailable for ')
+        ) {
+          logger.debug({ member }, 'Realtime timer transition contention; retry scheduled');
+          return;
+        }
         // Pino's Error serializer is attached to the conventional `err` key.
         // Logging this as `error` produced `{}` during the 1k staging run and
         // hid the exact database-admission failure we needed to diagnose.

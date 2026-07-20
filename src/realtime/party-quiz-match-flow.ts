@@ -594,7 +594,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       if (payload) {
         io.to(`match:${matchId}`).emit('match:final_results', payload);
-        logger.info(
+        logger.debug(
           {
             eventName: 'match:final_results',
             matchId,
@@ -1399,7 +1399,7 @@ export async function resolvePartyQuizRound(
 
       const participantUserIds = activePlayers.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
-        logger.info(
+        logger.debug(
           {
             eventName: 'party_match_completion_scheduled',
             matchId,

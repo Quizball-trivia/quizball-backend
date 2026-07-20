@@ -148,6 +148,34 @@ describe('matches.service friendly-party-quiz variants', () => {
     });
   });
 
+  it('persists party question state and timing with one atomic SQL statement', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    sqlQueryMock.mockResolvedValue([{ match_updated: true, question_updated: true }]);
+
+    await matchesService.persistPartyQuestionDispatch({
+      matchId: 'match-1',
+      qIndex: 2,
+      statePayload: { currentQuestion: { qIndex: 2, correctIndex: 1 } },
+      shownAt: new Date('2026-07-20T21:00:00.000Z'),
+      deadlineAt: new Date('2026-07-20T21:00:13.000Z'),
+    });
+
+    expect(sqlQueryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects party question dispatch when the atomic target is missing', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    sqlQueryMock.mockResolvedValue([{ match_updated: false, question_updated: false }]);
+
+    await expect(matchesService.persistPartyQuestionDispatch({
+      matchId: 'missing-match',
+      qIndex: 0,
+      statePayload: { currentQuestion: { qIndex: 0, correctIndex: 1 } },
+      shownAt: new Date('2026-07-20T21:00:00.000Z'),
+      deadlineAt: new Date('2026-07-20T21:00:13.000Z'),
+    })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('resolves explicit and fallback match variants correctly', async () => {
     const { resolveMatchVariant } = await import('../../src/modules/matches/matches.service.js');
 

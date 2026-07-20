@@ -903,12 +903,25 @@ export async function sendPartyQuizQuestion(
     'quizball.q_index': qIndex,
   }, async (span) => {
     const startedAt = Date.now();
-    const match = await matchesRepo.getMatch(matchId);
+    // These reads are independent. Keeping them sequential made every party
+    // kickoff consume several database/network round trips before the next
+    // durable timer could run. At thousands of simultaneous matches that
+    // serialized question 0 for minutes even while PostgreSQL itself remained
+    // mostly idle. The timer concurrency is deliberately small, so fan out at
+    // most three DB reads per handler and collapse the critical path to one
+    // read wave.
+    const [match, initialPayload, paused, players] = await Promise.all([
+      matchesRepo.getMatch(matchId),
+      matchesService.buildMatchQuestionPayload(matchId, qIndex)
+        .then((raw) => normalizeMatchQuestionPayload(raw)),
+      isPartyQuizMatchPaused(matchId),
+      matchPlayersRepo.listMatchPlayers(matchId),
+    ]);
     if (!match || match.status !== 'active') return null;
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
       return null;
     }
-    if (await isPartyQuizMatchPaused(matchId)) {
+    if (paused) {
       logger.debug(
         { eventName: 'match:question', matchId, qIndex, skipped: true, reason: 'paused', source: 'dispatch' },
         'Party quiz question dispatch skipped while match is paused'
@@ -925,7 +938,7 @@ export async function sendPartyQuizQuestion(
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-    let payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
+    let payload = initialPayload;
     let questionSource: 'existing' | 'picked' = 'existing';
     if (!payload) {
       const picked = await matchQuestionsRepo.getRandomQuestionForMatch({
@@ -982,9 +995,19 @@ export async function sendPartyQuizQuestion(
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
-    await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-    const players = await matchPlayersRepo.listMatchPlayers(matchId);
+    // One CTE statement commits the match state and client-visible timing
+    // atomically. It is also one network round trip, which is materially faster
+    // than either sequential updates or an explicit begin/update/update/commit
+    // transaction during synchronized kickoffs.
+    await matchesService.persistPartyQuestionDispatch({
+      matchId,
+      qIndex,
+      statePayload: state,
+      shownAt: playableAt,
+      deadlineAt,
+    });
+    // Entry evidence must only be written after durable question state commits.
+    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     const cache = buildInitialCache({
       match: {
         ...match,
@@ -1029,7 +1052,6 @@ export async function sendPartyQuizQuestion(
       shooterSeat: null,
       attackerSeat: null,
     });
-    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     logger.debug(
       {
         eventName: 'match:question',

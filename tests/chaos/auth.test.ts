@@ -33,6 +33,7 @@ function existingUserResponses(fetchMock: ReturnType<typeof vi.fn>): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -68,6 +69,31 @@ describe('chaos user login validation', () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.filter((url) => url.endsWith('/api/v1/auth/login'))).toHaveLength(3);
     expect(urls.filter((url) => url.endsWith('/api/v1/users/me'))).toHaveLength(2);
+  });
+
+  it('retries transport failures while preparing and logging in test users', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        users: [{ id: 'auth-user-id', email: 'load+u0@example.com' }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'temporarily unavailable' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'internal-user-id' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = provisionUsers(provisionConfig);
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual([expect.objectContaining({
+      token: 'token',
+      userId: 'internal-user-id',
+    })]);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it('does not retry a successful /users/me response with a missing identity', async () => {

@@ -1181,14 +1181,25 @@ export async function resolvePartyQuizRound(
     const lockKey = `lock:match:${matchId}:round:${qIndex}`;
     const lock = await acquireLock(lockKey, 3000);
     if (!lock.acquired || !lock.token) {
-      logger.warn({ matchId, qIndex }, 'Party quiz round resolve skipped: lock not acquired');
+      // The Redis timer scheduler only retries handlers that reject. Returning
+      // from its timeout path marks the popped timer handled and permanently
+      // drops the round. Fast-path answer contenders can return safely because
+      // the lock owner is already resolving and the durable timer remains.
+      if (fromTimeout) {
+        throw new Error(`Party quiz round lock unavailable for ${matchId}:${qIndex}`);
+      }
+      logger.debug({ matchId, qIndex }, 'Party quiz round resolve already in progress');
       return;
     }
 
     try {
       const match = await matchesRepo.getMatch(matchId);
-      if (!match || match.status !== 'active') return;
+      if (!match || match.status !== 'active') {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+        return;
+      }
       if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }
       if (await isPartyQuizMatchPaused(matchId)) {
@@ -1206,7 +1217,51 @@ export async function resolvePartyQuizRound(
       }
 
       const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-      if (!state.currentQuestion || state.currentQuestion.qIndex !== qIndex) {
+      if (!state.currentQuestion) {
+        const nextIndex = qIndex + 1;
+        if (match.current_q_index === nextIndex) {
+          // A previous attempt may have persisted the resolved state and then
+          // failed before arming the post-round transition. Rebuild that
+          // durable handoff instead of treating the retry as stale and
+          // stranding the match between questions.
+          const players = await matchPlayersRepo.listMatchPlayers(matchId);
+          const participantUserIds = getActivePartyPlayers(
+            players,
+            state.droppedUserIds,
+          ).map((player) => player.user_id);
+          await schedulePartyQuizPostRoundAdvance(
+            io,
+            matchId,
+            qIndex,
+            nextIndex,
+            participantUserIds,
+            nextIndex >= match.total_questions
+              ? PARTY_FINAL_READY_ACK_CEILING_MS
+              : PARTY_ROUND_READY_ACK_CEILING_MS,
+          );
+          await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+          logger.warn(
+            { eventName: 'party_round_transition_recovered', matchId, qIndex, nextIndex },
+            'Recovered missing party round transition after partial resolution',
+          );
+          return;
+        }
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+        logger.info(
+          {
+            eventName: 'party_round_resolve_skipped',
+            matchId,
+            qIndex,
+            fromTimeout,
+            reason: 'stale_question',
+            currentQuestionIndex: null,
+          },
+          'Party quiz round resolve skipped for stale question'
+        );
+        return;
+      }
+      if (state.currentQuestion.qIndex !== qIndex) {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         logger.info(
           {
             eventName: 'party_round_resolve_skipped',
@@ -1339,6 +1394,7 @@ export async function resolvePartyQuizRound(
           participantUserIds,
           PARTY_FINAL_READY_ACK_CEILING_MS
         );
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }
 
@@ -1349,6 +1405,7 @@ export async function resolvePartyQuizRound(
         nextIndex,
         participantUserIds
       );
+      await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
       logger.debug(
         {
           eventName: 'party_next_question_scheduled',
@@ -1360,7 +1417,6 @@ export async function resolvePartyQuizRound(
         'Party quiz next question scheduled after round'
       );
     } finally {
-      cancelPartyQuizQuestionTimer(matchId, qIndex);
       await releaseLock(lockKey, lock.token);
     }
   });

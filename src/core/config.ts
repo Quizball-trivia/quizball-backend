@@ -24,7 +24,11 @@ const configSchema = z.object({
   // for Auth, Storage, PostgREST, Realtime, observability, and administration.
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),
   DB_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(12),
-  DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(100).default(12),
+  // Keep this finite so a database outage still sheds instead of accumulating
+  // unbounded promises. Streamer-scale bursts can safely need more than 100
+  // waiters while millisecond queries drain; the acquire deadline remains the
+  // hard time bound.
+  DB_QUEUE_LIMIT: z.coerce.number().int().min(0).max(1_000).default(12),
   DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(1500),
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().min(60).max(7200).default(1800),
   DB_WATCHDOG_ENABLED: z

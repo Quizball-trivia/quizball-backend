@@ -14,7 +14,7 @@ import { usersRepo } from '../../modules/users/users.repo.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedAiLobbyKey, rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { trackPartyQuizStarted, trackMatchCreated } from '../../core/analytics/game-events.js';
-import { buildInitialCache, setMatchCache } from '../match-cache.js';
+import { buildInitialCache, setMatchCache, type MatchCache } from '../match-cache.js';
 import { sendMatchQuestion } from '../match-flow.js';
 import { devSkipToPossessionPhase } from '../possession-dev-skip.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
@@ -319,7 +319,7 @@ export async function beginMatchForLobby(
 
   // Lobby is no longer needed for membership tracking once match starts.
   await lobbiesRepo.setLobbyStatus(lobbyId, 'closed');
-  await Promise.all(lobbyMembers.map((member) => lobbiesRepo.removeMember(lobbyId, member.user_id)));
+  await lobbiesRepo.removeMembers(lobbyId, lobbyMembers.map((member) => member.user_id));
 
   const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
   sockets.forEach((socket) => {
@@ -341,12 +341,19 @@ export async function beginMatchForLobby(
     })
   );
 
-  const initialPossessionCache = variant !== 'friendly_party_quiz'
-    ? buildInitialCache({ match, players })
-    : null;
-  if (initialPossessionCache) {
-    await setMatchCache(initialPossessionCache);
-  }
+  const initialMatchCache = buildInitialCache({
+    match,
+    players,
+    ...(variant === 'friendly_party_quiz'
+      ? {
+          state: sanitizePartyQuizState(
+            match.state_payload,
+            match.total_questions,
+          ) as unknown as MatchCache['statePayload'],
+        }
+      : {}),
+  });
+  await setMatchCache(initialMatchCache);
 
   const seatByUserId = new Map(players.map((player) => [player.user_id, player.seat]));
 
@@ -380,17 +387,20 @@ export async function beginMatchForLobby(
 
   // Fetch recent form (W/L/D × 3) for each member up-front so each emit can
   // include both the recipient's own form and their opponent's.
-  const recentFormByUserId = new Map<string, Array<'W' | 'L' | 'D'>>();
-  await Promise.all(
-    members.map(async (m) => {
-      try {
-        recentFormByUserId.set(m.user_id, await statsService.getRecentFormForUser(m.user_id, 3));
-      } catch (err) {
-        logger.warn({ err, userId: m.user_id }, 'Failed to load recent form for showdown (non-fatal)');
-        recentFormByUserId.set(m.user_id, []);
-      }
-    }),
+  let recentFormByUserId = new Map<string, Array<'W' | 'L' | 'D'>>(
+    members.map((member) => [member.user_id, []]),
   );
+  try {
+    recentFormByUserId = await statsService.getRecentFormsForUsers(
+      members.map((member) => member.user_id),
+      3,
+    );
+  } catch (err) {
+    logger.warn(
+      { err, userIds: members.map((member) => member.user_id) },
+      'Failed to load recent forms for showdown (non-fatal)',
+    );
+  }
 
   // Resolve the first-half category name so the client's round-1 intro
   // doesn't flash a placeholder while waiting for match:question.
@@ -470,8 +480,8 @@ export async function beginMatchForLobby(
     } catch (err) {
       logger.warn({ err, matchId }, 'party_quiz_started analytics failed');
     }
-  } else if (initialPossessionCache) {
-    await emitMatchState(io, matchId, initialPossessionCache.statePayload);
+  } else {
+    await emitMatchState(io, matchId, initialMatchCache.statePayload);
   }
 
   const redis = getRedisClient();

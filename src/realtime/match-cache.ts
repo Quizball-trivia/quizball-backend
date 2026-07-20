@@ -11,6 +11,7 @@ import {
   createInitialPossessionState,
   matchesService,
   POSSESSION_QUESTIONS_PER_HALF,
+  resolveMatchVariant,
   type MatchQuestionEvaluation,
   type PossessionStatePayload,
 } from '../modules/matches/matches.service.js';
@@ -20,6 +21,7 @@ import { countdownPlayerKey } from './match-keys.js';
 import { getCachedMultipleChoiceCorrectIndex, normalizeMatchQuestionPayload } from './question-compat.js';
 import { clamp } from './scoring.js';
 import { normalizeI18nName } from './match-utils.js';
+import { sanitizePartyQuizState } from './party-quiz-state.js';
 import type { DraftCategory, GameQuestionDTO, MatchPhaseKind, MatchMode, MatchQuestionKind, MatchRoundReveal } from './socket.types.js';
 
 const MATCH_CACHE_TTL_SEC = 60 * 60;
@@ -31,7 +33,9 @@ export type CachedSeat = 1 | 2;
 
 export interface CachedPlayer {
   userId: string;
-  seat: CachedSeat;
+  // Possession uses seats 1/2, but party-quiz lobbies support up to six
+  // players. Keeping the durable seat avoids collapsing players 3..6 onto 1.
+  seat: number;
   totalPoints: number;
   correctAnswers: number;
   goals: number;
@@ -370,7 +374,7 @@ export function buildInitialCache(params: {
   const statePayload = params.state ?? sanitizePossessionState(params.match.state_payload, params.match.mode);
   const players = params.players.map((player) => ({
     userId: player.user_id,
-    seat: (player.seat === 2 ? 2 : 1) as CachedSeat,
+    seat: Number.isInteger(player.seat) && player.seat > 0 ? player.seat : 1,
     totalPoints: player.total_points,
     correctAnswers: player.correct_answers,
     goals: player.goals,
@@ -604,12 +608,14 @@ export async function rebuildCacheFromDB(matchId: string): Promise<MatchCache | 
       return null;
     }
     const players = await matchPlayersRepo.listMatchPlayers(matchId);
-    const state = sanitizePossessionState(match.state_payload, match.mode);
+    const state = resolveMatchVariant(match.state_payload, match.mode) === 'friendly_party_quiz'
+      ? sanitizePartyQuizState(match.state_payload, match.total_questions)
+      : sanitizePossessionState(match.state_payload, match.mode);
 
     const cache = buildInitialCache({
       match,
       players,
-      state,
+      state: state as PossessionStatePayload,
     });
 
     // Take the freshest of the two q-index signals: routine rounds only touch

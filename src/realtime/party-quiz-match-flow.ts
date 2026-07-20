@@ -211,6 +211,24 @@ function partyStateLogFields(payload: MatchPartyStatePayload): Record<string, un
 }
 
 async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {
+  const cache = await getMatchCache(matchId);
+  if (
+    cache
+    && cache.status === 'active'
+    && resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz'
+  ) {
+    return buildPartyStatePayloadFromRows(
+      {
+        id: cache.matchId,
+        total_questions: cache.totalQuestions,
+        current_q_index: cache.currentQIndex,
+      },
+      sanitizePartyQuizState(cache.statePayload, cache.totalQuestions),
+      cachedPartyPlayers(cache),
+      cachedPartyAnswers(cache),
+    );
+  }
+
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return null;
 

@@ -55,6 +55,35 @@ describe('match-cache helpers', () => {
     expect(getCachedPlayerBySeat(cache, 2)?.userId).toBe('u2');
   });
 
+  it('preserves all six party-quiz seats instead of collapsing seats 3..6', () => {
+    const state = createInitialPossessionState();
+    const cache = buildInitialCache({
+      match: {
+        id: 'party-1',
+        status: 'active',
+        mode: 'friendly',
+        total_questions: 10,
+        category_a_id: 'cat-a',
+        category_b_id: null,
+        started_at: new Date().toISOString(),
+        current_q_index: 0,
+        state_payload: state,
+      },
+      players: Array.from({ length: 6 }, (_, index) => ({
+        user_id: `u${index + 1}`,
+        seat: index + 1,
+        total_points: 0,
+        correct_answers: 0,
+        goals: 0,
+        penalty_goals: 0,
+        avg_time_ms: null,
+      })),
+      state,
+    });
+
+    expect(cache.players.map((player) => player.seat)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it('tracks answer count and duplicate check', () => {
     const cache = createCache();
     cache.answers.u1 = {

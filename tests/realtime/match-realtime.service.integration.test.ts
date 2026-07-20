@@ -19,6 +19,7 @@ const updateLobbySettingsMock = vi.fn();
 const setAllReadyMock = vi.fn();
 const setLobbyStatusMock = vi.fn();
 const removeMemberMock = vi.fn();
+const removeMembersMock = vi.fn();
 const prepareForLobbyEntryMock = vi.fn();
 
 type FakeRedisStore = {
@@ -225,6 +226,7 @@ vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
     listMembersWithUser: (...args: unknown[]) => listMembersWithUserMock(...args),
     setLobbyStatus: (...args: unknown[]) => setLobbyStatusMock(...args),
     removeMember: (...args: unknown[]) => removeMemberMock(...args),
+    removeMembers: (...args: unknown[]) => removeMembersMock(...args),
   },
 }));
 
@@ -272,6 +274,9 @@ vi.mock('../../src/modules/ranked/ranked.service.js', () => ({
 vi.mock('../../src/modules/stats/stats.service.js', () => ({
   statsService: {
     getRecentFormForUser: vi.fn().mockResolvedValue([]),
+    getRecentFormsForUsers: vi.fn(async (userIds: string[]) => new Map(
+      userIds.map((userId) => [userId, []]),
+    )),
   },
 }));
 
@@ -424,6 +429,7 @@ describe('match-realtime.service high-risk integration behavior', () => {
     ]);
     setLobbyStatusMock.mockResolvedValue(undefined);
     removeMemberMock.mockResolvedValue(undefined);
+    removeMembersMock.mockResolvedValue(undefined);
     getLobbyByIdMock.mockResolvedValue({
       id: 'l1',
       invite_code: 'ROOM42',

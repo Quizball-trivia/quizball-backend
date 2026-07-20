@@ -121,7 +121,7 @@ export function emitMatchUiReadyGateStateToSocket(
   return true;
 }
 
-export function acknowledgeMatchUiReady(
+export function acknowledgeLocalMatchUiReady(
   io: QuizballServer,
   userId: string,
   matchId: string,
@@ -149,6 +149,21 @@ export function acknowledgeMatchUiReady(
   if (gate.readyUserIds.size >= gate.waitingUserIds.size) {
     closeGate(key, gate, 'all_ready');
   }
+  return true;
+}
+
+export function acknowledgeMatchUiReady(
+  io: QuizballServer,
+  userId: string,
+  matchId: string,
+  phase: MatchUiReadyPhase
+): boolean {
+  if (acknowledgeLocalMatchUiReady(io, userId, matchId, phase)) return true;
+
+  // serverSideEmit is delivered only to the other Socket.IO servers. That is
+  // exactly what we need after proving the gate is not owned by this process.
+  // The owner will call acknowledgeLocalMatchUiReady and will not rebroadcast.
+  io.serverSideEmit('match:ui_ready_ack', userId, matchId, phase);
   return true;
 }
 

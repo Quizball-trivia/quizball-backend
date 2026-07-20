@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import postgres from 'postgres';
 
 import { provisionUsers } from './auth.js';
 import { startAppStatsCollector, type AppStatsSummary } from './app-stats.js';
@@ -25,6 +26,62 @@ interface TargetConfig {
   databaseUrl: string;
   bypassToken?: string;
   emailDomain: string;
+}
+
+async function resetPartyLoadFixtures(
+  databaseUrl: string,
+  users: Array<{ userId: string }>,
+): Promise<{ abandonedMatches: number; closedLobbies: number; removedLobbyMembers: number }> {
+  const target = databaseUrl.includes('nsdfiprfmhdqhbfxfwpv')
+    ? 'staging'
+    : databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1')
+      ? 'local'
+      : 'unknown';
+  if (target === 'unknown' || databaseUrl.includes('lfbwhxvwubzeqkztghok')) {
+    throw new Error('PROD GUARD: refusing to reset party load fixtures outside staging/local.');
+  }
+  const userIds = [...new Set(users.map((user) => user.userId))];
+  const sql = postgres(databaseUrl, { max: 1, connect_timeout: 10, idle_timeout: 5 });
+  try {
+    return await sql.begin(async (tx) => {
+      const abandonedMatches = await tx<{ id: string }[]>`
+        UPDATE matches AS m
+        SET status = 'abandoned', ended_at = NOW()
+        WHERE m.status = 'active'
+          AND EXISTS (
+            SELECT 1
+            FROM match_players mp
+            WHERE mp.match_id = m.id
+              AND mp.user_id = ANY(${tx.array(userIds)}::uuid[])
+          )
+        RETURNING m.id
+      `;
+      const closedLobbies = await tx<{ id: string }[]>`
+        UPDATE lobbies AS l
+        SET status = 'closed', updated_at = NOW()
+        WHERE l.status IN ('waiting', 'active')
+          AND EXISTS (
+            SELECT 1
+            FROM lobby_members lm
+            WHERE lm.lobby_id = l.id
+              AND lm.user_id = ANY(${tx.array(userIds)}::uuid[])
+          )
+        RETURNING l.id
+      `;
+      const removedLobbyMembers = await tx<{ lobby_id: string }[]>`
+        DELETE FROM lobby_members
+        WHERE user_id = ANY(${tx.array(userIds)}::uuid[])
+        RETURNING lobby_id
+      `;
+      return {
+        abandonedMatches: abandonedMatches.length,
+        closedLobbies: closedLobbies.length,
+        removedLobbyMembers: removedLobbyMembers.length,
+      };
+    });
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }
 
 function value(argv: string[], key: string): string | undefined {
@@ -152,6 +209,12 @@ async function main(): Promise<void> {
     loginIntervalMs: args.target === 'staging' ? 2_200 : 0,
     bypassToken: target.bypassToken,
   });
+  const fixtureReset = await resetPartyLoadFixtures(target.databaseUrl, users);
+  console.log(
+    `fixture-reset abandoned-matches=${fixtureReset.abandonedMatches} `
+    + `closed-lobbies=${fixtureReset.closedLobbies} `
+    + `removed-lobby-members=${fixtureReset.removedLobbyMembers}`
+  );
   if (args.startAtMs) {
     const waitMs = args.startAtMs - Date.now();
     if (waitMs < -5_000) throw new Error(`Missed synchronized start ${new Date(args.startAtMs).toISOString()}.`);

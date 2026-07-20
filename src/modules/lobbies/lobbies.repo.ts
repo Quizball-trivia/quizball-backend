@@ -307,11 +307,9 @@ export const lobbiesRepo = {
   async listAllValidCategories(
     minQuestions: number
   ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
-    // Friendly/party pool = NON-featured categories only. Featured categories
-    // are reserved exclusively for ranked (listAllRankedEligibleCategories), so
-    // the casual modes draw from everything else. Counts-only (no payloads join /
-    // JSONB validation) — see RANKED_ELIGIBILITY_HAVING_COUNTS in
-    // sql-fragments.ts for the rationale and staging identity verification.
+    // Friendly/party pool = NON-featured categories only. Counts-only (no
+    // payloads join / JSONB validation) — see RANKED_ELIGIBILITY_HAVING_COUNTS
+    // in sql-fragments.ts for the rationale and staging identity verification.
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
@@ -331,16 +329,15 @@ export const lobbiesRepo = {
     icon: string | null;
     image_url: string | null;
   }>> {
-    // Ranked draft pool = FEATURED categories only (featured_categories join
-    // table). Every ranked question — MCQ, put-in-order, clue_chain ("who am
-    // I") and the Q4 image MCQ — is drawn from the drafted categories, so this
-    // single filter guarantees ranked matches only serve featured content.
+    // Ranked draft pool = NON-featured categories. Featured held the World Cup
+    // event content; with the event over, ranked draws from everything else
+    // until the featured list is repurposed.
     return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
       SELECT c.id, c.name, c.icon, c.image_url
       FROM categories c
-      JOIN featured_categories fc ON fc.category_id = c.id
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id, c.name, c.icon, c.image_url
@@ -420,10 +417,10 @@ export const lobbiesRepo = {
     const rows = await sql<{ id: string }[]>`
       SELECT c.id
       FROM categories c
-      JOIN featured_categories fc ON fc.category_id = c.id
       JOIN questions q ON q.category_id = c.id
       WHERE c.id = ANY(${sql.array(categoryIds)}::uuid[])
         AND c.is_active = true
+        AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
       GROUP BY c.id

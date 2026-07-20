@@ -62,6 +62,8 @@ import { auctionMatchmakingService } from './services/auction-matchmaking.servic
 import { runAuctionTurnTimeoutTimer } from './services/auction-turn.service.js';
 import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
 import { socketRuntimeTracker } from './socket-runtime-stats.js';
+import { ConnectStateBatcher } from './connect-state-batcher.js';
+import type { SessionStatePayload } from './socket.types.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketAuthData>;
 export type QuizballServer = Server<
@@ -93,6 +95,9 @@ let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
 const detachedSocketFailureCounts = new Map<string, number>();
+const connectStateBatcher = new ConnectStateBatcher(
+  (userIds) => userSessionGuardService.resolveStates(userIds),
+);
 
 /**
  * Socket.IO does not observe promises returned by event listeners. Every
@@ -213,15 +218,24 @@ async function runPostConnectHydration(
 
   const userId = socket.data.user.id;
   let lockAcquired = false;
+  let preparedSnapshot: SessionStatePayload | null = null;
   try {
-    const lockResult = await userSessionGuardService.withUserSessionLock(
-      userId,
-      async () => {
-        await userSessionGuardService.prepareForConnect(io, userId);
-      },
-      { waitMs: POST_CONNECT_RETRY_MS }
-    );
-    lockAcquired = lockResult !== null;
+    const initialSnapshot = await connectStateBatcher.resolve(userId);
+    if (initialSnapshot.state === 'IDLE') {
+      // The common path is read-only. Avoid taking the transition lock so an
+      // immediate lobby:create/search command cannot race and lose to optional
+      // connection hydration.
+      preparedSnapshot = initialSnapshot;
+      lockAcquired = true;
+    } else {
+      const lockResult = await userSessionGuardService.withUserSessionLock(
+        userId,
+        async () => userSessionGuardService.prepareForConnect(io, userId),
+        { waitMs: POST_CONNECT_RETRY_MS }
+      );
+      if (lockResult) preparedSnapshot = lockResult;
+      lockAcquired = lockResult !== null;
+    }
   } catch (error) {
     logger.warn({ error, userId, attempt }, 'Failed to prepare session state on connect');
   }
@@ -258,13 +272,15 @@ async function runPostConnectHydration(
     return;
   }
 
-  try {
-    await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
-  } catch (error) {
-    logger.warn({ error, userId }, 'Failed to rejoin active match on connect');
+  if (preparedSnapshot?.activeMatchId) {
+    try {
+      await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin active match on connect');
+    }
   }
 
-  if (!socket.data.matchId) {
+  if (!socket.data.matchId && preparedSnapshot?.waitingLobbyId) {
     try {
       await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
     } catch (error) {
@@ -272,7 +288,7 @@ async function runPostConnectHydration(
     }
   }
 
-  if (!socket.data.matchId && !socket.data.lobbyId) {
+  if (!socket.data.matchId && !socket.data.lobbyId && preparedSnapshot?.waitingLobbyId) {
     try {
       await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket);
     } catch (error) {
@@ -306,10 +322,14 @@ async function runPostConnectHydration(
     }
   }
 
-  try {
-    await userSessionGuardService.emitState(io, userId);
-  } catch (error) {
-    logger.warn({ error, userId }, 'Failed to emit session state on connect');
+  if (preparedSnapshot?.state === 'IDLE') {
+    userSessionGuardService.emitSnapshot(io, userId, preparedSnapshot);
+  } else {
+    try {
+      await userSessionGuardService.emitState(io, userId);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to emit session state on connect');
+    }
   }
 }
 

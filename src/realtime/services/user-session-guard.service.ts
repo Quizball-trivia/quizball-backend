@@ -694,8 +694,16 @@ export const userSessionGuardService = {
 
   async emitState(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
     const snapshot = await this.resolveState(userId);
-    io.to(`user:${userId}`).emit('session:state', snapshot);
+    this.emitSnapshot(io, userId, snapshot);
     return snapshot;
+  },
+
+  emitSnapshot(
+    io: QuizballServer,
+    userId: string,
+    snapshot: SessionStatePayload,
+  ): void {
+    io.to(`user:${userId}`).emit('session:state', snapshot);
   },
 
   emitBlocked(

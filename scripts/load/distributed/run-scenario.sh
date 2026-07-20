@@ -18,6 +18,8 @@ usage() {
   cat <<'EOF'
 Usage:
   run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
+  run-scenario.sh gameplay-chaos <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend] [flap-rate] [flap-stages]
+  run-scenario.sh gameplay-raid <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
   run-scenario.sh party <players> [ramp-sec]
   run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec] [connect-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
@@ -100,6 +102,11 @@ positive_int() {
 
 non_negative_int() {
   [[ "${2:-}" =~ ^[0-9]+$ ]] || die "$1 must be a non-negative integer"
+}
+
+non_negative_number() {
+  [[ "${2:-}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] \
+    || die "$1 must be a non-negative number"
 }
 
 format_epoch_utc() {
@@ -199,12 +206,20 @@ run_gameplay() {
   local total_rps="$3"
   local ramp="${4:-60}"
   local include_spend="${5:-false}"
+  local flap_rate="${6:-0}"
+  local flap_stages="${7:-match}"
+  local login_storm="${8:-false}"
   positive_int players "$players"
   positive_int duration "$duration"
   positive_int total-http-rps "$total_rps"
   positive_int ramp "$ramp"
   [[ "$include_spend" == true || "$include_spend" == false ]] \
     || die 'include-spend must be true or false'
+  non_negative_number flap-rate "$flap_rate"
+  [[ "$flap_stages" =~ ^(search|draft|gate|match)(,(search|draft|gate|match))*$ ]] \
+    || die 'flap-stages must be a comma-separated subset of search,draft,gate,match'
+  [[ "$login_storm" == true || "$login_storm" == false ]] \
+    || die 'login-storm must be true or false'
   local workers
   workers="$(require_worker_count mixed 2)"
   (( players % 2 == 0 )) || die 'players must be even for human matchmaking'
@@ -243,7 +258,12 @@ run_gameplay() {
     local command
     local spend_flag=''
     [[ "$include_spend" == true ]] && spend_flag='--include-spend=true'
-    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at $spend_flag $db_flag --report=$remote_report"
+    local login_flag=''
+    [[ "$login_storm" == true ]] && login_flag="--login-storm=true --login-ramp-s=$ramp"
+    local expected_fault_flag=''
+    [[ "$flap_rate" =~ ^0+([.]0*)?$ ]] \
+      || expected_fault_flag='--expect-socket-error=MATCH_PAUSED'
+    command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at --flap-rate=$flap_rate --flap-stage=$flap_stages $expected_fault_flag $login_flag $spend_flag $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
     "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
@@ -404,6 +424,8 @@ main() {
   local scenario="${1:-}"
   case "$scenario" in
     gameplay) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" ;;
+    gameplay-chaos) [[ $# -ge 4 && $# -le 8 ]] || die 'gameplay-chaos requires players duration total-rps [ramp] [include-spend] [flap-rate] [flap-stages]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" "${7:-0.5}" "${8:-search,draft,gate,match}" false ;;
+    gameplay-raid) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay-raid requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" 0 match true ;;
     party) [[ $# -ge 2 && $# -le 3 ]] || die 'party requires players [ramp]'; run_party "$2" "${3:-120}" ;;
     matchmaking) [[ $# -ge 2 && $# -le 5 ]] || die 'matchmaking requires players [timeout] [join-ramp] [connect-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" "${5:-60}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;

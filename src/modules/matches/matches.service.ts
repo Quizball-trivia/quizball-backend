@@ -662,6 +662,57 @@ export const matchesService = {
       }))
     );
 
+    if (params.variant === 'friendly_party_quiz') {
+      try {
+        // Party clients answer at nearly the same time, so lazily selecting and
+        // inserting one question per match on every round created a thundering
+        // herd of two extra DB acquisitions per transition. Select the complete
+        // pack once and bulk-insert it. The existing lazy path remains a safe
+        // fallback for any candidate that cannot be normalized.
+        const candidates = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+          matchId: match.id,
+          categoryIds: [params.categoryAId],
+          difficulties: ['easy', 'medium', 'hard'],
+          limit: totalQuestions,
+        });
+        const seededQuestions = candidates.flatMap((candidate, qIndex) => {
+          const parsed = questionPayloadSchema.safeParse(candidate.payload);
+          if (!parsed.success || parsed.data.type !== 'mcq_single') return [];
+          const correctIndex = parsed.data.options.findIndex((option) => option.is_correct === true);
+          if (correctIndex < 0) return [];
+          return [{
+            qIndex,
+            questionId: candidate.id,
+            categoryId: candidate.category_id,
+            correctIndex,
+            phaseKind: 'normal' as const,
+            phaseRound: qIndex + 1,
+          }];
+        });
+        if (seededQuestions.length > 0) {
+          await matchQuestionsRepo.insertMatchQuestions(match.id, seededQuestions);
+        }
+        if (seededQuestions.length < totalQuestions) {
+          logger.warn(
+            {
+              matchId: match.id,
+              requested: totalQuestions,
+              seeded: seededQuestions.length,
+            },
+            'Party quiz question pack was only partially seeded; lazy selection will fill gaps',
+          );
+        }
+      } catch (err) {
+        // Match creation must remain available if pre-seeding is temporarily
+        // overloaded. The durable kickoff and existing lazy per-round picker
+        // can still construct the pack later.
+        logger.warn(
+          { err, matchId: match.id },
+          'Failed to pre-seed party quiz question pack; using lazy selection',
+        );
+      }
+    }
+
     return {
       match,
       playerIds,

@@ -9,7 +9,9 @@ const resumePossessionMatchQuestionMock = vi.fn();
 const ensurePossessionActiveTimersMock = vi.fn();
 const resumePartyQuizQuestionMock = vi.fn();
 const emitPossessionStateToSocketMock = vi.fn();
+const emitPartyQuizStateMock = vi.fn();
 const emitPartyQuizStateToSocketMock = vi.fn();
+const schedulePartyQuizKickoffMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const getLobbyByIdMock = vi.fn();
 const createLobbyMock = vi.fn();
@@ -325,8 +327,10 @@ vi.mock('../../src/realtime/party-quiz-match-flow.js', async (importOriginal) =>
   const actual = await importOriginal<typeof import('../../src/realtime/party-quiz-match-flow.js')>();
   return {
     ...actual,
+    emitPartyQuizState: (...args: unknown[]) => emitPartyQuizStateMock(...args),
     emitPartyQuizStateToSocket: (...args: unknown[]) => emitPartyQuizStateToSocketMock(...args),
     resumePartyQuizQuestion: (...args: unknown[]) => resumePartyQuizQuestionMock(...args),
+    schedulePartyQuizKickoff: (...args: unknown[]) => schedulePartyQuizKickoffMock(...args),
   };
 });
 
@@ -422,7 +426,9 @@ describe('match-realtime.service high-risk integration behavior', () => {
     resumePartyQuizQuestionMock.mockResolvedValue(false);
     ensurePossessionActiveTimersMock.mockResolvedValue(true);
     emitPossessionStateToSocketMock.mockResolvedValue(undefined);
+    emitPartyQuizStateMock.mockResolvedValue(undefined);
     emitPartyQuizStateToSocketMock.mockResolvedValue(undefined);
+    schedulePartyQuizKickoffMock.mockResolvedValue(undefined);
     listMembersWithUserMock.mockResolvedValue([
       { user_id: 'u1', nickname: 'u1', avatar_url: null },
       { user_id: 'u2', nickname: 'u2', avatar_url: null },
@@ -3184,6 +3190,37 @@ describe('match-realtime.service high-risk integration behavior', () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(devSkipToPossessionPhaseMock).toHaveBeenCalledWith(io, 'm1', 'penalty_ban');
+      expect(sendMatchQuestionMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('S24c: party kickoff persists question 0 as a durable transition timer', async () => {
+    vi.useFakeTimers();
+    try {
+      getMatchMock.mockResolvedValueOnce({
+        id: 'm1',
+        mode: 'friendly',
+        status: 'active',
+        current_q_index: 0,
+        total_questions: 10,
+        started_at: new Date().toISOString(),
+        lobby_id: 'l1',
+        state_payload: { variant: 'friendly_party_quiz' },
+      });
+      const { beginMatchForLobby, matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
+      const io = createIoMock();
+
+      await beginMatchForLobby(io, 'l1', 'm1');
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u1'), { matchId: 'm1' });
+      await matchRealtimeService.handleKickoffUiReady(io, createSocketMock('u2'), { matchId: 'm1' });
+
+      expect(schedulePartyQuizKickoffMock).toHaveBeenCalledWith(
+        'm1',
+        expect.any(Date),
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
       expect(sendMatchQuestionMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

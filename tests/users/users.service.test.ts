@@ -44,6 +44,7 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
   },
   isUserAccountInactive: (user: { is_deleted?: boolean; deleted_at?: string | null; pending_deletion_at?: string | null }) =>
     Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at),
+  isUserBanned: (user: { is_banned?: boolean }) => Boolean(user.is_banned),
 }));
 
 vi.mock('../../src/modules/store/store.repo.js', () => ({

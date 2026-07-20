@@ -80,6 +80,29 @@ export const RANKED_ELIGIBILITY_HAVING_COUNTS = sql`
     AND COUNT(*) FILTER (WHERE q.type = 'clue_chain') >= 1
 `;
 
+/**
+ * Game-mode/daily-challenge categories must never enter matchmaking pools
+ * (ranked or friendly): they hold content authored for other surfaces —
+ * the daily-challenges tree (matched structurally via parent/slug so future
+ * children are covered) plus standalone mode categories matched by slug.
+ * Mirrors the welcome-screen exclusion list in the web app
+ * (welcome.content.ts EXCLUDED_SLUGS) — keep the two in sync.
+ * Assumes `c` aliases `categories`.
+ */
+export const MATCHMAKING_CATEGORY_EXCLUSIONS = sql`
+  AND c.slug NOT LIKE 'daily-challenges%'
+  AND c.slug NOT IN (
+    'daily', 'daily-quiz', 'daily-challenge', 'career-path', 'career_path',
+    'football-logic', 'high-low', 'high_low', 'imposter', 'jeopardy',
+    'football-jeopardy', 'countdown', 'count-down', 'clues',
+    'true-or-false', 'put-in-order', 'money-drop'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM categories pc
+    WHERE pc.id = c.parent_id AND pc.slug LIKE 'daily-challenges%'
+  )
+`;
+
 // ── Raw string version for use with sql.unsafe() ──
 // Single source of truth: derived from the same logic as MCQ_VALIDATION_CONDITIONS above.
 // Builders are parameterized on the payload expression so the per-row-once

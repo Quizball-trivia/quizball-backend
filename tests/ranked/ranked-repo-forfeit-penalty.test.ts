@@ -65,7 +65,7 @@ describe('applyEarlyForfeitRpPenalty', () => {
     expect(insert?.params).toEqual([MATCH_ID, USER_ID, 5000, -100, 4900]);
 
     const update = findCall((q) => q.includes('UPDATE ranked_profiles'));
-    expect(update?.params).toEqual([4900, 'Legend', USER_ID]);
+    expect(update?.params).toEqual([4900, 'Captain', USER_ID]);
   });
 
   it('returns null when the user has no ranked profile', async () => {

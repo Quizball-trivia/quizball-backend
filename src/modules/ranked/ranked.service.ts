@@ -104,15 +104,18 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
   return null;
 }
 
+// Season 2 curve — recalibrated from Season 1 prod data (94 GOATs, 49 players
+// past 10k RP): early tiers stay cheap, steps grow toward the top so GOAT is
+// elite again. Keep in sync with web's RANKED_TIER_BANDS (utils/rankedTier.ts).
 export function tierFromRp(rp: number): RankedTier {
-  if (rp >= 5000) return 'GOAT';
-  if (rp >= 2900) return 'Legend';
-  if (rp >= 2600) return 'World-Class';
-  if (rp >= 2200) return 'Captain';
-  if (rp >= 1850) return 'Key Player';
-  if (rp >= 1500) return 'Starting11';
-  if (rp >= 1200) return 'Rotation';
-  if (rp >= 900) return 'Bench';
+  if (rp >= 9000) return 'GOAT';
+  if (rp >= 6800) return 'Legend';
+  if (rp >= 5200) return 'World-Class';
+  if (rp >= 4000) return 'Captain';
+  if (rp >= 3000) return 'Key Player';
+  if (rp >= 2200) return 'Starting11';
+  if (rp >= 1500) return 'Rotation';
+  if (rp >= 1000) return 'Bench';
   if (rp >= 600) return 'Reserve';
   if (rp >= 300) return 'Youth Prospect';
   return 'Academy';
@@ -190,13 +193,21 @@ export const rankedService = {
    * zeroes every real user's RP (tier 'Academy', placement cleared). Records an
    * audit entry in store_transaction_logs with the acting admin's id.
    */
-  async resetLeaderboard(options: { actorId: string; notes?: string | null }): Promise<{
+  async resetLeaderboard(options: {
+    actorId: string;
+    notes?: string | null;
+    seasonNumber?: number | null;
+  }): Promise<{
     batchId: string;
     profilesReset: number;
     profilesArchived: number;
     rpChangesArchived: number;
   }> {
-    const result = await rankedRepo.resetLeaderboard(options.actorId, options.notes ?? null);
+    const result = await rankedRepo.resetLeaderboard(
+      options.actorId,
+      options.notes ?? null,
+      options.seasonNumber ?? null
+    );
 
     await storeRepo.insertTransactionLog({
       eventType: 'leaderboard_reset',
@@ -611,6 +622,18 @@ export const rankedService = {
 
   async getLeaderboard(limit: number, offset: number, country?: string) {
     return rankedRepo.listLeaderboard(limit, offset, country);
+  },
+
+  async listSeasons() {
+    return rankedRepo.listSeasons();
+  },
+
+  async getArchivedLeaderboard(batchId: string, limit: number, offset: number, country?: string) {
+    return rankedRepo.listArchivedLeaderboard(batchId, limit, offset, country);
+  },
+
+  async getArchivedUserRank(batchId: string, userId: string, country?: string) {
+    return rankedRepo.getArchivedUserRank(batchId, userId, country);
   },
 
   async getUserRank(userId: string, country?: string) {

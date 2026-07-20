@@ -138,23 +138,23 @@ describe('rankedService', () => {
       { rp: 300, expected: 'Youth Prospect' },
       { rp: 599, expected: 'Youth Prospect' },
       { rp: 600, expected: 'Reserve' },
-      { rp: 899, expected: 'Reserve' },
-      { rp: 900, expected: 'Bench' },
-      { rp: 1199, expected: 'Bench' },
-      { rp: 1200, expected: 'Rotation' },
-      { rp: 1499, expected: 'Rotation' },
-      { rp: 1500, expected: 'Starting11' },
-      { rp: 1849, expected: 'Starting11' },
-      { rp: 1850, expected: 'Key Player' },
-      { rp: 2199, expected: 'Key Player' },
-      { rp: 2200, expected: 'Captain' },
-      { rp: 2599, expected: 'Captain' },
-      { rp: 2600, expected: 'World-Class' },
-      { rp: 2899, expected: 'World-Class' },
-      { rp: 2900, expected: 'Legend' },
-      { rp: 4999, expected: 'Legend' },
-      { rp: 5000, expected: 'GOAT' },
-      { rp: 6000, expected: 'GOAT' },
+      { rp: 999, expected: 'Reserve' },
+      { rp: 1000, expected: 'Bench' },
+      { rp: 1499, expected: 'Bench' },
+      { rp: 1500, expected: 'Rotation' },
+      { rp: 2199, expected: 'Rotation' },
+      { rp: 2200, expected: 'Starting11' },
+      { rp: 2999, expected: 'Starting11' },
+      { rp: 3000, expected: 'Key Player' },
+      { rp: 3999, expected: 'Key Player' },
+      { rp: 4000, expected: 'Captain' },
+      { rp: 5199, expected: 'Captain' },
+      { rp: 5200, expected: 'World-Class' },
+      { rp: 6799, expected: 'World-Class' },
+      { rp: 6800, expected: 'Legend' },
+      { rp: 8999, expected: 'Legend' },
+      { rp: 9000, expected: 'GOAT' },
+      { rp: 12000, expected: 'GOAT' },
     ];
 
     for (const entry of cases) {
@@ -165,7 +165,7 @@ describe('rankedService', () => {
   it('evaluates placement requirement by status and count', () => {
     const unplaced = createProfile({
       user_id: 'u-1',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'unplaced',
       placement_played: 0,
@@ -173,7 +173,7 @@ describe('rankedService', () => {
     });
     const inProgress = createProfile({
       user_id: 'u-2',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'in_progress',
       placement_played: 2,
@@ -181,7 +181,7 @@ describe('rankedService', () => {
     });
     const placedIncompleteCount = createProfile({
       user_id: 'u-3',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'placed',
       placement_played: 2,
@@ -189,7 +189,7 @@ describe('rankedService', () => {
     });
     const placedComplete = createProfile({
       user_id: 'u-4',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'placed',
       placement_played: 3,
@@ -205,7 +205,7 @@ describe('rankedService', () => {
   it('builds progressive placement AI context (harder after wins, easier after losses)', () => {
     const freshProfile = createProfile({
       user_id: 'fresh',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'unplaced',
       placement_played: 0,
@@ -213,7 +213,7 @@ describe('rankedService', () => {
     });
     const winningProfile = createProfile({
       user_id: 'win',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'in_progress',
       placement_played: 1,
@@ -221,7 +221,7 @@ describe('rankedService', () => {
     });
     const losingProfile = createProfile({
       user_id: 'loss',
-      rp: 1200,
+      rp: 1500,
       tier: 'Rotation',
       placement_status: 'in_progress',
       placement_played: 1,

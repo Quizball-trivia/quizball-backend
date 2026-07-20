@@ -5,7 +5,12 @@ import { registerEndpoint } from '../../http/openapi/register-endpoint.js';
 import {
   leaderboardResetBodySchema,
   leaderboardResetResponseSchema,
+  rankedLeaderboardQuerySchema,
+  rankedLeaderboardResponseSchema,
   rankedProfileResponseSchema,
+  rankedSeasonsResponseSchema,
+  rankedUserRankQuerySchema,
+  rankedUserRankResponseSchema,
 } from './ranked.schemas.js';
 
 export function registerRankedOpenApi(registry: OpenAPIRegistry): void {
@@ -19,6 +24,46 @@ export function registerRankedOpenApi(registry: OpenAPIRegistry): void {
     security: [{ bearerAuth: [] }],
     responses: {
       200: { description: 'Ranked profile', schema: rankedProfileResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/ranked/leaderboard',
+    summary: 'List the live or archived ranked leaderboard',
+    tags: ['Ranked'],
+    security: [{ bearerAuth: [] }],
+    query: rankedLeaderboardQuerySchema,
+    responses: {
+      200: { description: 'Ranked leaderboard', schema: rankedLeaderboardResponseSchema },
+      400: { description: 'Invalid query parameters', schema: errorResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/ranked/leaderboard/me',
+    summary: "Get the authenticated user's live or archived rank",
+    tags: ['Ranked'],
+    security: [{ bearerAuth: [] }],
+    query: rankedUserRankQuerySchema,
+    responses: {
+      200: { description: 'Rank information, or null when unranked', schema: rankedUserRankResponseSchema },
+      400: { description: 'Invalid query parameters', schema: errorResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/ranked/leaderboard/seasons',
+    summary: 'List completed ranked seasons',
+    tags: ['Ranked'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Completed seasons and current season number', schema: rankedSeasonsResponseSchema },
       401: { description: 'Authentication required', schema: errorResponseSchema },
     },
   });

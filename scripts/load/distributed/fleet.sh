@@ -34,7 +34,7 @@ usage() {
 Usage:
   fleet.sh preflight
   fleet.sh estimate <count> <cx23|cx33|cx43|cx53>
-  fleet.sh provision <mixed|auth> <count> <cx23|cx33|cx43|cx53>
+  fleet.sh provision <mixed|auth> <count> <cx23|cx33|cx43|cx53|cpx32>
   fleet.sh list [mixed|auth|all]
   fleet.sh wait-ready <mixed|auth>
   fleet.sh upload <mixed|auth>
@@ -74,7 +74,7 @@ validate_role() {
 
 validate_type() {
   case "${1:-}" in
-    cx23|cx33|cx43|cx53) ;;
+    cx23|cx33|cx43|cx53|cpx32) ;;
     *) die "unsupported shared server type '${1:-}'" ;;
   esac
 }

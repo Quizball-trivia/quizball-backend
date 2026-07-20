@@ -271,7 +271,8 @@
                   "type": "string",
                   "enum": [
                     "friendly",
-                    "ranked"
+                    "ranked",
+                    "auction"
                   ]
                 },
                 "competition": {
@@ -279,7 +280,8 @@
                   "enum": [
                     "friendly",
                     "placement",
-                    "ranked"
+                    "ranked",
+                    "auction"
                   ]
                 },
                 "status": {
@@ -344,6 +346,117 @@
                 "rpDelta": {
                   "type": "integer",
                   "nullable": true
+                },
+                "placement": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "playerCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 2
+                },
+                "opponents": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uuid"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "avatarUrl": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uri"
+                      },
+                      "avatarCustomization": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                          "skin": {
+                            "type": "string",
+                            "enum": [
+                              "skin_male_white",
+                              "skin_male_white_alt",
+                              "skin_male_dark",
+                              "skin_male_dark_alt"
+                            ]
+                          },
+                          "jersey": {
+                            "type": "string",
+                            "enum": [
+                              "jersey_green",
+                              "jersey_blue",
+                              "jersey_yellow",
+                              "jersey_red",
+                              "jersey_violet",
+                              "jersey_pink",
+                              "jersey_real",
+                              "jersey_liverpool",
+                              "jersey_barcelona",
+                              "jersey_milan",
+                              "jersey_bayern",
+                              "jersey_brazil_retro",
+                              "jersey_argentina_retro",
+                              "jersey_france_retro",
+                              "jersey_germany_retro",
+                              "jersey_netherlands_retro",
+                              "jersey_georgia_retro",
+                              "jersey_psg_retro"
+                            ]
+                          },
+                          "hair": {
+                            "type": "string",
+                            "enum": [
+                              "hair_boy_basic",
+                              "hair_girl_basic",
+                              "hair_hamsik",
+                              "hair_ramos",
+                              "hair_ronaldo_brazil",
+                              "hair_ronaldo_goat"
+                            ]
+                          },
+                          "glasses": {
+                            "type": "string",
+                            "enum": [
+                              "glasses_wayfarer",
+                              "glasses_round",
+                              "glasses_aviator"
+                            ]
+                          },
+                          "facialHair": {
+                            "type": "string",
+                            "enum": [
+                              "stache",
+                              "beard"
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "isAi": {
+                        "type": "boolean"
+                      },
+                      "placement": {
+                        "type": "integer",
+                        "nullable": true
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "username",
+                      "avatarUrl",
+                      "avatarCustomization",
+                      "isAi",
+                      "placement"
+                    ]
+                  },
+                  "default": []
                 },
                 "opponent": {
                   "type": "object",
@@ -472,6 +585,7 @@
                 "opponentPenaltyGoals",
                 "winnerDecisionMethod",
                 "rpDelta",
+                "placement",
                 "opponent"
               ]
             }
@@ -1113,7 +1227,9 @@
               "objective_reward_succeeded",
               "admin_progression_adjustment",
               "leaderboard_reset",
-              "admin_ticket_window_reset"
+              "admin_ticket_window_reset",
+              "admin_account_ban",
+              "admin_account_unban"
             ]
           },
           "outcome": {
@@ -1244,7 +1360,9 @@
                     "objective_reward_succeeded",
                     "admin_progression_adjustment",
                     "leaderboard_reset",
-                    "admin_ticket_window_reset"
+                    "admin_ticket_window_reset",
+                    "admin_account_ban",
+                    "admin_account_unban"
                   ]
                 },
                 "outcome": {
@@ -1917,6 +2035,9 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "is_banned": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -1932,7 +2053,8 @@
                 "placement_status",
                 "coins",
                 "tickets",
-                "created_at"
+                "created_at",
+                "is_banned"
               ]
             }
           },
@@ -6075,8 +6197,8 @@
             "enum": [
               "draft",
               "needs_review",
+              "approved",
               "published",
-              "archived",
               "rejected"
             ]
           },
@@ -6290,8 +6412,8 @@
             "enum": [
               "draft",
               "needs_review",
+              "approved",
               "published",
-              "archived",
               "rejected"
             ]
           },
@@ -6804,8 +6926,8 @@
                   "enum": [
                     "draft",
                     "needs_review",
+                    "approved",
                     "published",
-                    "archived",
                     "rejected"
                   ]
                 },
@@ -6985,6 +7107,394 @@
           "limit",
           "total",
           "total_pages"
+        ]
+      },
+      "PlayerClueCardPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "rowsParsed": {
+            "type": "integer"
+          },
+          "matchedCount": {
+            "type": "integer"
+          },
+          "ambiguousCount": {
+            "type": "integer"
+          },
+          "unmatchedCount": {
+            "type": "integer"
+          },
+          "warningCount": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rowIndex": {
+                  "type": "integer"
+                },
+                "sourcePlayerNumber": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "answerName": {
+                  "type": "string"
+                },
+                "difficulty": {
+                  "type": "string",
+                  "enum": [
+                    "easy",
+                    "medium",
+                    "hard"
+                  ]
+                },
+                "clue1": {
+                  "type": "string"
+                },
+                "clue2": {
+                  "type": "string"
+                },
+                "clue3": {
+                  "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "validationErrors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "factRiskFlags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "originalText": {
+                  "type": "string"
+                },
+                "matchStatus": {
+                  "type": "string",
+                  "enum": [
+                    "matched",
+                    "ambiguous",
+                    "unmatched"
+                  ]
+                },
+                "matchedPlayer": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "footballPlayerId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "transfermarktId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "currentClub": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nationality": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "positionGroup": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "currentValueEur": {
+                      "type": "number",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "footballPlayerId",
+                    "name"
+                  ]
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "footballPlayerId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "transfermarktId": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "currentClub": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "nationality": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "positionGroup": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "imageUrl": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "currentValueEur": {
+                        "type": "number",
+                        "nullable": true
+                      }
+                    },
+                    "required": [
+                      "footballPlayerId",
+                      "name"
+                    ]
+                  }
+                },
+                "matchMethod": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "matchConfidence": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                }
+              },
+              "required": [
+                "rowIndex",
+                "sourcePlayerNumber",
+                "answerName",
+                "difficulty",
+                "clue1",
+                "clue2",
+                "clue3",
+                "warnings",
+                "validationErrors",
+                "factRiskFlags",
+                "originalText",
+                "matchStatus",
+                "matchedPlayer",
+                "candidates"
+              ]
+            }
+          }
+        },
+        "required": [
+          "rowsParsed",
+          "matchedCount",
+          "ambiguousCount",
+          "unmatchedCount",
+          "warningCount",
+          "rows"
+        ]
+      },
+      "PlayerClueCardCommitResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "inserted": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          },
+          "skippedExisting": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rowIndex": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "inserted",
+                    "updated",
+                    "skipped_existing",
+                    "failed"
+                  ]
+                },
+                "clueCardId": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "error": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "rowIndex",
+                "status",
+                "clueCardId",
+                "error"
+              ]
+            }
+          }
+        },
+        "required": [
+          "total",
+          "inserted",
+          "updated",
+          "skippedExisting",
+          "failed",
+          "rows"
+        ]
+      },
+      "PlayerClueCardDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "football_player_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "transfermarkt_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "locale": {
+            "type": "string"
+          },
+          "clue_1": {
+            "type": "string"
+          },
+          "clue_2": {
+            "type": "string"
+          },
+          "clue_3": {
+            "type": "string"
+          },
+          "difficulty": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "generation_provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "generation_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "source_payload": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "review_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "rejection_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "playerName": {
+            "type": "string"
+          },
+          "playerImageUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "playerPositionGroup": {
+            "type": "string",
+            "nullable": true
+          },
+          "playerNationality": {
+            "type": "string",
+            "nullable": true
+          },
+          "playerCurrentClub": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "football_player_id",
+          "transfermarkt_id",
+          "locale",
+          "clue_1",
+          "clue_2",
+          "clue_3",
+          "difficulty",
+          "status",
+          "source",
+          "generation_provider",
+          "generation_model",
+          "prompt_version",
+          "evidence",
+          "source_payload",
+          "review_notes",
+          "rejection_reason",
+          "created_at",
+          "updated_at",
+          "playerName",
+          "playerImageUrl",
+          "playerPositionGroup",
+          "playerNationality",
+          "playerCurrentClub"
         ]
       }
     },
@@ -8335,7 +8845,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 50,
+              "maximum": 10,
               "default": 10
             },
             "required": false,
@@ -8373,7 +8883,8 @@
                             "type": "string",
                             "enum": [
                               "friendly",
-                              "ranked"
+                              "ranked",
+                              "auction"
                             ]
                           },
                           "competition": {
@@ -8381,7 +8892,8 @@
                             "enum": [
                               "friendly",
                               "placement",
-                              "ranked"
+                              "ranked",
+                              "auction"
                             ]
                           },
                           "status": {
@@ -8446,6 +8958,117 @@
                           "rpDelta": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "placement": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "playerCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 2
+                          },
+                          "opponents": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "format": "uuid"
+                                },
+                                "username": {
+                                  "type": "string"
+                                },
+                                "avatarUrl": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "format": "uri"
+                                },
+                                "avatarCustomization": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "skin": {
+                                      "type": "string",
+                                      "enum": [
+                                        "skin_male_white",
+                                        "skin_male_white_alt",
+                                        "skin_male_dark",
+                                        "skin_male_dark_alt"
+                                      ]
+                                    },
+                                    "jersey": {
+                                      "type": "string",
+                                      "enum": [
+                                        "jersey_green",
+                                        "jersey_blue",
+                                        "jersey_yellow",
+                                        "jersey_red",
+                                        "jersey_violet",
+                                        "jersey_pink",
+                                        "jersey_real",
+                                        "jersey_liverpool",
+                                        "jersey_barcelona",
+                                        "jersey_milan",
+                                        "jersey_bayern",
+                                        "jersey_brazil_retro",
+                                        "jersey_argentina_retro",
+                                        "jersey_france_retro",
+                                        "jersey_germany_retro",
+                                        "jersey_netherlands_retro",
+                                        "jersey_georgia_retro",
+                                        "jersey_psg_retro"
+                                      ]
+                                    },
+                                    "hair": {
+                                      "type": "string",
+                                      "enum": [
+                                        "hair_boy_basic",
+                                        "hair_girl_basic",
+                                        "hair_hamsik",
+                                        "hair_ramos",
+                                        "hair_ronaldo_brazil",
+                                        "hair_ronaldo_goat"
+                                      ]
+                                    },
+                                    "glasses": {
+                                      "type": "string",
+                                      "enum": [
+                                        "glasses_wayfarer",
+                                        "glasses_round",
+                                        "glasses_aviator"
+                                      ]
+                                    },
+                                    "facialHair": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stache",
+                                        "beard"
+                                      ]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                "isAi": {
+                                  "type": "boolean"
+                                },
+                                "placement": {
+                                  "type": "integer",
+                                  "nullable": true
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "username",
+                                "avatarUrl",
+                                "avatarCustomization",
+                                "isAi",
+                                "placement"
+                              ]
+                            },
+                            "default": []
                           },
                           "opponent": {
                             "type": "object",
@@ -8574,6 +9197,7 @@
                           "opponentPenaltyGoals",
                           "winnerDecisionMethod",
                           "rpDelta",
+                          "placement",
                           "opponent"
                         ]
                       }
@@ -10025,7 +10649,9 @@
                 "objective_reward_succeeded",
                 "admin_progression_adjustment",
                 "leaderboard_reset",
-                "admin_ticket_window_reset"
+                "admin_ticket_window_reset",
+                "admin_account_ban",
+                "admin_account_unban"
               ]
             },
             "required": false,
@@ -10115,7 +10741,9 @@
                               "objective_reward_succeeded",
                               "admin_progression_adjustment",
                               "leaderboard_reset",
-                              "admin_ticket_window_reset"
+                              "admin_ticket_window_reset",
+                              "admin_account_ban",
+                              "admin_account_unban"
                             ]
                           },
                           "outcome": {
@@ -13174,9 +13802,14 @@
     "/api/v1/categories/{id}/dependencies": {
       "get": {
         "summary": "Get category dependencies",
-        "description": "Returns child categories, associated questions, and featured status",
+        "description": "Returns child categories, associated questions, and featured status. Requires admin role.",
         "tags": [
           "Categories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {
@@ -13196,6 +13829,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CategoryDependenciesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions (admin role required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -13604,8 +14257,14 @@
     "/api/v1/questions": {
       "get": {
         "summary": "List questions with pagination and filters",
+        "description": "Requires authentication. Players are restricted to published questions; full filters and search require admin role. Search terms shorter than 3 characters are ignored.",
         "tags": [
           "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {
@@ -13665,7 +14324,9 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 200,
+              "description": "Admin-only substring search. Terms shorter than 3 characters are accepted but ignored."
             },
             "required": false,
             "name": "search",
@@ -13698,6 +14359,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PaginatedQuestionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -13832,8 +14503,14 @@
     "/api/v1/questions/{id}": {
       "get": {
         "summary": "Get question by ID with payload",
+        "description": "Requires authentication. Players can retrieve published questions only; admins can retrieve any status.",
         "tags": [
           "Questions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
         ],
         "parameters": [
           {
@@ -13853,6 +14530,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QuestionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -17154,8 +17841,8 @@
               "enum": [
                 "draft",
                 "needs_review",
+                "approved",
                 "published",
-                "archived",
                 "rejected"
               ]
             },
@@ -17570,8 +18257,8 @@
                     "enum": [
                       "draft",
                       "needs_review",
+                      "approved",
                       "published",
-                      "archived",
                       "rejected"
                     ]
                   },
@@ -17630,6 +18317,480 @@
           },
           "404": {
             "description": "Auction card not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/player-clue-cards/import/preview": {
+      "post": {
+        "summary": "Preview parsed player clue card import (no DB writes)",
+        "tags": [
+          "PlayerClueCards"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka"
+                    ]
+                  },
+                  "promptVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": "cms-import"
+                  },
+                  "defaultDifficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard"
+                    ],
+                    "default": "medium"
+                  },
+                  "style": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": "editor_first_person"
+                  }
+                },
+                "required": [
+                  "text",
+                  "locale"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Parsed preview with match results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerClueCardPreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/player-clue-cards/import/commit": {
+      "post": {
+        "summary": "Commit player clue card import rows as needs_review or approved",
+        "tags": [
+          "PlayerClueCards"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "locale": {
+                    "type": "string",
+                    "enum": [
+                      "en",
+                      "ka"
+                    ]
+                  },
+                  "promptVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": "cms-import"
+                  },
+                  "defaultDifficulty": {
+                    "type": "string",
+                    "enum": [
+                      "easy",
+                      "medium",
+                      "hard"
+                    ],
+                    "default": "medium"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "needs_review",
+                      "approved"
+                    ],
+                    "default": "needs_review"
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "rowIndex": {
+                          "type": "integer"
+                        },
+                        "answerName": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "difficulty": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "easy",
+                            "medium",
+                            "hard"
+                          ]
+                        },
+                        "clue1": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clue2": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "clue3": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "footballPlayerId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "originalText": {
+                          "type": "string",
+                          "default": ""
+                        },
+                        "sourcePlayerNumber": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "manualMapping": {
+                          "type": "boolean",
+                          "default": false
+                        },
+                        "matchMethod": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "matchConfidence": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "high",
+                            "medium",
+                            "low"
+                          ]
+                        },
+                        "factRiskFlags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "default": []
+                        }
+                      },
+                      "required": [
+                        "rowIndex",
+                        "answerName",
+                        "clue1",
+                        "clue2",
+                        "clue3",
+                        "footballPlayerId"
+                      ]
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "locale",
+                  "rows"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Commit result with per-row status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerClueCardCommitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/player-clue-cards/{id}/status": {
+      "patch": {
+        "summary": "Update player clue card status (approve, publish, reject)",
+        "tags": [
+          "PlayerClueCards"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "needs_review",
+                      "approved",
+                      "published",
+                      "rejected"
+                    ]
+                  },
+                  "reviewNotes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "rejectionReason": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated player clue card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerClueCardDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Card not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/player-clue-cards/status/bulk": {
+      "patch": {
+        "summary": "Bulk update player clue card status (approve, publish, reject)",
+        "tags": [
+          "PlayerClueCards"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "minItems": 1,
+                    "maxItems": 200
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "approved",
+                      "published",
+                      "rejected"
+                    ]
+                  },
+                  "reviewNotes": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "ids",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of updated cards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updated": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "updated"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
             "content": {
               "application/json": {
                 "schema": {

@@ -748,15 +748,24 @@ export const userSessionGuardService = {
   async prepareForConnect(io: QuizballServer, userId: string): Promise<SessionStatePayload> {
     const cleanupStartedAtMs = Date.now();
     let context = await resolveContext(userId);
-    await cleanupStaleOrphanActiveMatch(io, userId, context);
-    context = await resolveContext(userId);
+    // The overwhelmingly common connect path is a clean IDLE user. Do not
+    // re-read the same match/lobby state or run a second lobby-only query when
+    // the first snapshot proves there is nothing to clean. Keep one final
+    // resolve below so a lobby membership created concurrently after this
+    // snapshot is still observed instead of being removed as stale.
+    if (context.activeMatch) {
+      await cleanupStaleOrphanActiveMatch(io, userId, context);
+      context = await resolveContext(userId);
+    }
 
     if (context.activeMatch?.id) {
       await cancelRankedQueueSearch(userId);
-      await cleanupOpenLobbies(io, userId, {
-        preserveActiveMatchId: context.activeMatch.id,
-        cleanupStartedAtMs,
-      });
+      if (context.openLobbies.length > 0) {
+        await cleanupOpenLobbies(io, userId, {
+          preserveActiveMatchId: context.activeMatch.id,
+          cleanupStartedAtMs,
+        });
+      }
       return this.resolveState(userId);
     }
 
@@ -764,12 +773,15 @@ export const userSessionGuardService = {
     if (context.queueSearchId && keepLobbyId) {
       await cancelRankedQueueSearch(userId);
     }
-    await cleanupOpenLobbies(io, userId, {
-      keepLobbyId,
-      keepWaitingLobbyId: context.waitingLobbies[0]?.id,
-      preserveActiveMatchId: null,
-      cleanupStartedAtMs,
-    });
+    const hasExtraLobby = context.openLobbies.some((lobby) => lobby.id !== keepLobbyId);
+    if (hasExtraLobby) {
+      await cleanupOpenLobbies(io, userId, {
+        keepLobbyId,
+        keepWaitingLobbyId: context.waitingLobbies[0]?.id,
+        preserveActiveMatchId: null,
+        cleanupStartedAtMs,
+      });
+    }
     return this.resolveState(userId);
   },
 
@@ -780,8 +792,17 @@ export const userSessionGuardService = {
       keepWaitingLobbyId?: string;
     }
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
-    await this.prepareForConnect(io, userId);
-    const snapshot = await this.resolveState(userId);
+    const cleanupStartedAtMs = Date.now();
+    // Lobby create/join is another flash-traffic path. The connection hook has
+    // already performed general recovery, but this command still needs its own
+    // authoritative read for races and non-socket callers. As with ranked queue
+    // entry, keep the clean IDLE path to one batched match+lobby read.
+    let context = await resolveContext(userId);
+    if (context.activeMatch) {
+      await cleanupStaleOrphanActiveMatch(io, userId, context);
+      context = await resolveContext(userId);
+    }
+    let snapshot = toSnapshot(context);
 
     if (snapshot.activeMatchId) {
       return {
@@ -792,12 +813,24 @@ export const userSessionGuardService = {
       };
     }
 
-    await cancelRankedQueueSearch(userId);
-    await cleanupOpenLobbies(io, userId, {
-      keepWaitingLobbyId: options?.keepWaitingLobbyId,
-    });
-    const nextSnapshot = await this.resolveState(userId);
-    return { ok: true, snapshot: nextSnapshot };
+    const keepWaitingLobbyId = options?.keepWaitingLobbyId;
+    const hasLobbyToClean = context.openLobbies.some(
+      (lobby) => lobby.id !== keepWaitingLobbyId
+    );
+    if (!context.queueSearchId && !hasLobbyToClean) {
+      return { ok: true, snapshot };
+    }
+
+    if (context.queueSearchId) await cancelRankedQueueSearch(userId);
+    if (hasLobbyToClean) {
+      await cleanupOpenLobbies(io, userId, {
+        keepWaitingLobbyId,
+        cleanupStartedAtMs,
+      });
+    }
+    context = await resolveContext(userId);
+    snapshot = toSnapshot(context);
+    return { ok: true, snapshot };
   },
 
   async prepareForQueueJoin(

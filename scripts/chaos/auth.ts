@@ -62,6 +62,32 @@ export interface CoinPurchaseFixtureConfig {
   productSlug: string;
 }
 
+const AUTH_FETCH_MAX_ATTEMPTS = 5;
+
+function retryDelayMs(attempt: number): number {
+  return 100 * (2 ** attempt) + Math.floor(Math.random() * 100);
+}
+
+async function fetchAuthWithRetry(
+  input: string,
+  init?: RequestInit,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < AUTH_FETCH_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(input, init);
+      const retryableStatus = response.status === 429 || response.status >= 500;
+      if (!retryableStatus || attempt === AUTH_FETCH_MAX_ATTEMPTS - 1) return response;
+      await response.arrayBuffer().catch(() => undefined);
+    } catch (error) {
+      lastError = error;
+      if (attempt === AUTH_FETCH_MAX_ATTEMPTS - 1) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+  }
+  throw lastError instanceof Error ? lastError : new Error('Auth request exhausted retries');
+}
+
 function adminHeaders(cfg: Pick<ProvisionConfig, 'serviceRoleKey'>): Record<string, string> {
   return {
     apikey: cfg.serviceRoleKey,
@@ -74,13 +100,33 @@ async function adminCreateConfirmedUser(
   cfg: ProvisionConfig,
   email: string
 ): Promise<void> {
-  const res = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users`, {
+  const res = await fetchAuthWithRetry(`${cfg.supabaseUrl}/auth/v1/admin/users`, {
     method: 'POST',
     headers: adminHeaders(cfg),
     body: JSON.stringify({ email, password: cfg.password, email_confirm: true }),
   });
   if (res.status === 200 || res.status === 201) return;
   const text = await res.text();
+  const duplicateUser = res.status === 422 && (
+    text.toLowerCase().includes('email_exists') ||
+    text.toLowerCase().includes('already been registered') ||
+    text.toLowerCase().includes('already registered')
+  );
+  if (duplicateUser) {
+    // A retry can receive 422 after the first POST committed successfully but
+    // its response was lost or surfaced as a transient 5xx. Reconcile that
+    // ambiguous outcome instead of failing preparation or trusting an unknown
+    // password left by an earlier attempt.
+    const existing = await listAdminUserIdsByEmail(
+      cfg,
+      new Set([email.toLowerCase()]),
+    );
+    const existingId = existing.get(email.toLowerCase());
+    if (existingId) {
+      await adminResetConfirmedUser(cfg, existingId, email);
+      return;
+    }
+  }
   throw new Error(`admin create user ${email} failed: ${res.status} ${text.slice(0, 200)}`);
 }
 
@@ -93,7 +139,7 @@ async function listAdminUserIdsByEmail(
   // The Auth admin endpoint is paginated. Bound the scan so a broken upstream
   // response cannot make a load-test preparation command loop forever.
   for (let page = 1; page <= 100 && found.size < wantedEmails.size; page += 1) {
-    const response = await fetch(
+    const response = await fetchAuthWithRetry(
       `${cfg.supabaseUrl}/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
       { headers: adminHeaders(cfg) }
     );
@@ -119,7 +165,7 @@ async function adminResetConfirmedUser(
   userId: string,
   email: string
 ): Promise<void> {
-  const response = await fetch(`${cfg.supabaseUrl}/auth/v1/admin/users/${userId}`, {
+  const response = await fetchAuthWithRetry(`${cfg.supabaseUrl}/auth/v1/admin/users/${userId}`, {
     method: 'PUT',
     headers: adminHeaders(cfg),
     body: JSON.stringify({ password: cfg.password, email_confirm: true }),
@@ -135,11 +181,20 @@ export async function loginChaosUser(
 ): Promise<{ token: string; userId: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (cfg.bypassToken) headers['x-chaos-bypass'] = cfg.bypassToken;
-  const res = await fetch(`${cfg.apiBase}/api/v1/auth/login`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ email, password: cfg.password }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.apiBase}/api/v1/auth/login`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, password: cfg.password }),
+    });
+  } catch (error) {
+    throw new ChaosLoginError(
+      `login ${email} transport failed: ${error instanceof Error ? error.message : String(error)}`,
+      0,
+      true,
+    );
+  }
   const body = (await res.json().catch(() => ({}))) as {
     access_token?: string;
     user?: { provider_sub?: string };
@@ -149,12 +204,21 @@ export async function loginChaosUser(
   }
   // Resolve the internal user id via /users/me (provider_sub is the supabase id,
   // not the app's internal id used in route params).
-  const meRes = await fetch(`${cfg.apiBase}/api/v1/users/me`, {
-    headers: {
-      Authorization: `Bearer ${body.access_token}`,
-      ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
-    },
-  });
+  let meRes: Response;
+  try {
+    meRes = await fetch(`${cfg.apiBase}/api/v1/users/me`, {
+      headers: {
+        Authorization: `Bearer ${body.access_token}`,
+        ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
+      },
+    });
+  } catch (error) {
+    throw new ChaosLoginError(
+      `resolve /users/me for ${email} transport failed: ${error instanceof Error ? error.message : String(error)}`,
+      0,
+      true,
+    );
+  }
   const me: unknown = await meRes.json().catch(() => null);
   const userId = typeof me === 'object'
     && me !== null
@@ -348,8 +412,7 @@ export async function provisionUsers(cfg: ProvisionConfig): Promise<ChaosUser[]>
         if (!(error instanceof ChaosLoginError) || !error.retryable || attempt === 4) {
           throw error;
         }
-        const backoffMs = 100 * (2 ** attempt) + Math.floor(Math.random() * 100);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
       }
     }
     throw new Error(`login ${email} exhausted retries`);

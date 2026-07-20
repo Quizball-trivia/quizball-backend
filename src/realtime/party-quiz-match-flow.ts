@@ -1461,6 +1461,22 @@ export async function handlePartyQuizAnswer(
     const match = preloadedMatch ?? (preloadedCache ? null : await matchesRepo.getMatch(payload.matchId));
     const matchStatus = preloadedCache?.status ?? match?.status;
     if (matchStatus !== 'active') {
+      // Answer delivery races the round timer and the other players by design.
+      // Once final results have won that race, a packet that was already in
+      // flight is a harmless terminal replay, not a client-visible failure.
+      if (matchStatus === 'completed') {
+        logger.debug(
+          {
+            eventName: 'match:answer_ignored',
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            userId: socket.data.user.id,
+            reason: 'match_completed',
+          },
+          'Party quiz late answer ignored after match completion'
+        );
+        return;
+      }
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1568,6 +1584,27 @@ export async function handlePartyQuizAnswer(
           );
           return;
         }
+      }
+
+      const activeQIndex = state.currentQuestion?.qIndex;
+      if (activeQIndex === undefined || payload.qIndex < activeQIndex) {
+        // A timer or another player's answer can advance the round while this
+        // packet is in flight. Older packets are safe to ignore: the client
+        // receives the authoritative round/final state, and no score mutation
+        // has occurred for this submission. Keep rejecting future indexes so
+        // malformed clients still receive a useful protocol error.
+        logger.debug(
+          {
+            eventName: 'match:answer_ignored',
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            userId: socket.data.user.id,
+            reason: activeQIndex === undefined ? 'no_active_question' : 'stale_question',
+            currentQuestionIndex: activeQIndex ?? null,
+          },
+          'Party quiz stale answer ignored'
+        );
+        return;
       }
       logger.info(
         {

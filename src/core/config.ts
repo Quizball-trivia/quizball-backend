@@ -41,6 +41,10 @@ const configSchema = z.object({
 
   // Redis
   REDIS_URL: z.string().url().optional(),
+  // Maximum durable realtime timers handled concurrently by each replica.
+  // Keep the default conservative for small/local pools; large synchronized
+  // gameplay starts can raise this explicitly after sizing the DB bulkhead.
+  REALTIME_TIMER_HANDLER_CONCURRENCY: z.coerce.number().int().min(1).max(30).default(4),
   RANKED_HUMAN_QUEUE_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("false")
@@ -177,6 +181,16 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
     throw new ConfigError(
       `Invalid configuration: ${regressionFlag} may only be set in the local environment (it is a regression-harness-only flag).`,
       { nodeEnv: result.data.NODE_ENV, flag: regressionFlag },
+    );
+  }
+
+  if (result.data.REALTIME_TIMER_HANDLER_CONCURRENCY > result.data.DB_INFLIGHT_LIMIT) {
+    throw new ConfigError(
+      "Invalid configuration: REALTIME_TIMER_HANDLER_CONCURRENCY cannot exceed DB_INFLIGHT_LIMIT.",
+      {
+        realtimeTimerHandlerConcurrency: result.data.REALTIME_TIMER_HANDLER_CONCURRENCY,
+        dbInflightLimit: result.data.DB_INFLIGHT_LIMIT,
+      },
     );
   }
 

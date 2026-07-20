@@ -450,7 +450,7 @@ describe('party quiz realtime flow', () => {
       })),
       currentQIndex: 0,
       statePayload: partyState,
-      currentQuestion: null,
+      currentQuestion: { qIndex: 0, correctIndex: 2 },
       answers: {},
     } as unknown as MatchCache;
     recordPartyQuizAnswerIfMissingMock.mockResolvedValue({
@@ -492,6 +492,7 @@ describe('party quiz realtime flow', () => {
     expect(getMatchMock).not.toHaveBeenCalled();
     expect(listMatchPlayersMock).not.toHaveBeenCalled();
     expect(listAnswersForQuestionMock).not.toHaveBeenCalled();
+    expect(buildMatchQuestionPayloadMock).not.toHaveBeenCalled();
     expect(commitCachedAnswerMock).toHaveBeenCalledTimes(1);
     expect(events.some((entry) => entry.event === 'match:party_state')).toBe(true);
   });

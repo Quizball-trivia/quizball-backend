@@ -55,7 +55,6 @@ function emitChallengeStatus(
 
 export async function emitPendingChallengeInvitesOnConnect(socket: QuizballSocket): Promise<void> {
   const userId = socket.data.user.id;
-  await lobbyChallengeInvitationsRepo.expireStalePendingForUser(userId);
   const invites = await lobbyChallengeInvitationsRepo.listPendingForUser(userId);
   for (const invite of invites) {
     const payload = mapChallengeInvitePayload(invite);

@@ -24,6 +24,7 @@ const getMatchCacheMock = vi.fn();
 const getMatchCacheOrRebuildMock = vi.fn();
 const setMatchCacheMock = vi.fn();
 const buildMatchQuestionPayloadMock = vi.fn();
+const persistPartyQuestionDispatchMock = vi.fn();
 const computeAvgTimesMock = vi.fn();
 const evaluateAchievementsForMatchMock = vi.fn();
 const listUnlockedForMatchMock = vi.fn();
@@ -31,6 +32,7 @@ const redisMockState = vi.hoisted(() => ({
   pausedMatches: new Set<string>(),
   open: false,
   failCommands: false,
+  pauseReadPromise: null as Promise<number> | null,
   sets: new Map<string, Set<string>>(),
   strings: new Map<string, string>(),
 }));
@@ -57,7 +59,12 @@ vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => {
     const client = {
       isOpen: redisMockState.open,
-      exists: async (key: string) => (redisMockState.pausedMatches.has(key) ? 1 : 0),
+      exists: async (key: string) => {
+        if (redisMockState.pauseReadPromise && key.startsWith('match:pause:')) {
+          return redisMockState.pauseReadPromise;
+        }
+        return redisMockState.pausedMatches.has(key) ? 1 : 0;
+      },
       sAdd: async (key: string, values: string | string[]) => {
         if (redisMockState.failCommands) throw new Error('redis unavailable');
         const set = redisMockState.sets.get(key) ?? new Set<string>();
@@ -165,6 +172,7 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
     matchesService: {
       ...actual.matchesService,
       buildMatchQuestionPayload: (...args: unknown[]) => buildMatchQuestionPayloadMock(...args),
+      persistPartyQuestionDispatch: (...args: unknown[]) => persistPartyQuestionDispatchMock(...args),
       computeAvgTimes: (...args: unknown[]) => computeAvgTimesMock(...args),
       completeMatch: (...args: unknown[]) => completeMatchMock(...args),
       // recordPartyQuizAnswerIfMissing moved from matchesRepo to
@@ -174,7 +182,7 @@ vi.mock('../../src/modules/matches/matches.service.js', async (importOriginal) =
   };
 });
 
-function createIoMock() {
+function createIoMock(fetchSockets: () => Promise<unknown[]> = async () => []) {
   const events: Array<{ room: string; event: string; payload: unknown }> = [];
   const io = {
     to(room: string) {
@@ -186,7 +194,7 @@ function createIoMock() {
     },
     in() {
       return {
-        fetchSockets: async () => [],
+        fetchSockets,
       };
     },
   } as unknown as QuizballServer;
@@ -257,6 +265,7 @@ describe('party quiz realtime flow', () => {
     redisMockState.pausedMatches.clear();
     redisMockState.open = false;
     redisMockState.failCommands = false;
+    redisMockState.pauseReadPromise = null;
     redisMockState.sets.clear();
     redisMockState.strings.clear();
     players = [
@@ -367,6 +376,7 @@ describe('party quiz realtime flow', () => {
     getMatchCacheMock.mockResolvedValue(null);
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     setMatchCacheMock.mockResolvedValue(undefined);
+    persistPartyQuestionDispatchMock.mockResolvedValue(undefined);
     computeAvgTimesMock.mockResolvedValue(new Map());
     evaluateAchievementsForMatchMock.mockResolvedValue({
       u1: [
@@ -693,10 +703,14 @@ describe('party quiz realtime flow', () => {
     const dispatchedAt = Date.now();
     await runPartyQuizRoundTransition(io, 'match-1', 0, 1);
 
-    expect(setMatchStatePayloadMock).toHaveBeenCalledWith(
-      'match-1',
-      expect.objectContaining({ currentQuestion: { qIndex: 1, correctIndex: 2 } }),
-      1
+    expect(persistPartyQuestionDispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: 'match-1',
+        qIndex: 1,
+        statePayload: expect.objectContaining({ currentQuestion: { qIndex: 1, correctIndex: 2 } }),
+        shownAt: expect.any(Date),
+        deadlineAt: expect.any(Date),
+      })
     );
     expect(setMatchCacheMock).toHaveBeenCalledWith(expect.objectContaining({
       matchId: 'match-1',
@@ -894,8 +908,10 @@ describe('party quiz realtime flow', () => {
     const matchRead = deferred<Awaited<ReturnType<typeof getMatchMock>>>();
     const questionRead = deferred<Awaited<ReturnType<typeof buildMatchQuestionPayloadMock>>>();
     const playersRead = deferred<Awaited<ReturnType<typeof listMatchPlayersMock>>>();
-    const stateWrite = deferred<void>();
-    const timingWrite = deferred<void>();
+    const pauseRead = deferred<number>();
+    const dispatchWrite = deferred<void>();
+    const roomEntry = deferred<unknown[]>();
+    const fetchSockets = vi.fn(() => roomEntry.promise);
 
     const match = await getMatchMock();
     const question = await buildMatchQuestionPayloadMock();
@@ -903,28 +919,34 @@ describe('party quiz realtime flow', () => {
     getMatchMock.mockReturnValue(matchRead.promise);
     buildMatchQuestionPayloadMock.mockReturnValue(questionRead.promise);
     listMatchPlayersMock.mockReturnValue(playersRead.promise);
-    setMatchStatePayloadMock.mockReturnValue(stateWrite.promise);
-    setQuestionTimingMock.mockReturnValue(timingWrite.promise);
+    redisMockState.open = true;
+    redisMockState.pauseReadPromise = pauseRead.promise;
+    persistPartyQuestionDispatchMock.mockReturnValue(dispatchWrite.promise);
 
     const { sendPartyQuizQuestion } = await import('../../src/realtime/party-quiz-match-flow.js');
-    const { io, events } = createIoMock();
+    const { io, events } = createIoMock(fetchSockets);
     const dispatch = sendPartyQuizQuestion(io, 'match-1', 0);
     await Promise.resolve();
 
     expect(getMatchMock).toHaveBeenCalledTimes(2);
     expect(buildMatchQuestionPayloadMock).toHaveBeenCalledTimes(2);
     expect(listMatchPlayersMock).toHaveBeenCalledTimes(2);
+    expect(persistPartyQuestionDispatchMock).not.toHaveBeenCalled();
 
     matchRead.resolve(match);
     questionRead.resolve(question);
     playersRead.resolve(currentPlayers);
+    await Promise.resolve();
+    expect(persistPartyQuestionDispatchMock).not.toHaveBeenCalled();
+    pauseRead.resolve(0);
     await vi.waitFor(() => {
-      expect(setMatchStatePayloadMock).toHaveBeenCalledTimes(1);
-      expect(setQuestionTimingMock).toHaveBeenCalledTimes(1);
+      expect(persistPartyQuestionDispatchMock).toHaveBeenCalledTimes(1);
     });
+    expect(fetchSockets).not.toHaveBeenCalled();
 
-    stateWrite.resolve();
-    timingWrite.resolve();
+    dispatchWrite.resolve();
+    await vi.waitFor(() => expect(fetchSockets).toHaveBeenCalledTimes(1));
+    roomEntry.resolve([]);
     await dispatch;
 
     expect(events.some((entry) => entry.event === 'match:question')).toBe(true);

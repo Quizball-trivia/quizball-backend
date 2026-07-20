@@ -995,16 +995,19 @@ export async function sendPartyQuizQuestion(
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
-    // The match row and timing row do not depend on one another. Dispatch them
-    // as one bounded write wave, while the room-membership lookup that marks
-    // players as having entered runs in parallel. We still await all durable
-    // state before emitting the question or populating the cache.
-    const enteredPromise = markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
-    await Promise.all([
-      matchesRepo.setMatchStatePayload(matchId, state, qIndex),
-      matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt),
-      enteredPromise,
-    ]);
+    // One CTE statement commits the match state and client-visible timing
+    // atomically. It is also one network round trip, which is materially faster
+    // than either sequential updates or an explicit begin/update/update/commit
+    // transaction during synchronized kickoffs.
+    await matchesService.persistPartyQuestionDispatch({
+      matchId,
+      qIndex,
+      statePayload: state,
+      shownAt: playableAt,
+      deadlineAt,
+    });
+    // Entry evidence must only be written after durable question state commits.
+    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
     const cache = buildInitialCache({
       match: {
         ...match,

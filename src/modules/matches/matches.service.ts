@@ -753,6 +753,63 @@ export const matchesService = {
     };
   },
 
+  /**
+   * Persist the server-authoritative party question state and its visible
+   * timing as one SQL statement. A joined target CTE means a missing match or
+   * question updates neither row; any statement failure rolls both updates
+   * back. Keeping this as one statement also avoids the extra begin/commit
+   * round trips of an explicit transaction on the synchronized kickoff path.
+   */
+  async persistPartyQuestionDispatch(params: {
+    matchId: string;
+    qIndex: number;
+    statePayload: unknown;
+    shownAt: Date;
+    deadlineAt: Date;
+  }): Promise<void> {
+    const jsonPayload = sql.json(params.statePayload as Json ?? null);
+    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean }>>`
+      WITH target AS (
+        SELECT m.id AS match_id, mq.q_index
+        FROM matches m
+        JOIN match_questions mq
+          ON mq.match_id = m.id
+         AND mq.q_index = ${params.qIndex}
+        WHERE m.id = ${params.matchId}
+      ),
+      updated_match AS (
+        UPDATE matches m
+        SET state_payload = ${jsonPayload},
+            current_q_index = GREATEST(m.current_q_index, ${params.qIndex}),
+            updated_at = NOW()
+        FROM target
+        WHERE m.id = target.match_id
+        RETURNING m.id
+      ),
+      updated_question AS (
+        UPDATE match_questions mq
+        SET shown_at = ${params.shownAt},
+            deadline_at = ${params.deadlineAt}
+        FROM target
+        WHERE mq.match_id = target.match_id
+          AND mq.q_index = target.q_index
+        RETURNING mq.match_id
+      )
+      SELECT
+        EXISTS (SELECT 1 FROM updated_match) AS match_updated,
+        EXISTS (SELECT 1 FROM updated_question) AS question_updated
+    `;
+
+    if (!result?.match_updated || !result.question_updated) {
+      throw new AppError(
+        'Party question dispatch target is missing',
+        409,
+        ErrorCode.CONFLICT,
+        { matchId: params.matchId, qIndex: params.qIndex },
+      );
+    }
+  },
+
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
     const rows = await matchAnswersRepo.getAverageTimes(matchId);
     return new Map(rows.map((row) => [row.user_id, row.avg_time_ms]));

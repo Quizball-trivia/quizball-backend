@@ -9,22 +9,29 @@ export const awardIdParamSchema = z.object({
 });
 export type AwardIdParam = z.infer<typeof awardIdParamSchema>;
 
-function toResponse(rows: EventAwardRow[]) {
+function toPublicAward(row: EventAwardRow) {
   return {
-    awards: rows.map((row) => ({
-      id: row.id,
-      eventSlug: row.event_slug,
-      place: row.place,
-      awardedAt: row.awarded_at,
-      seen: row.seen_at !== null,
-    })),
+    id: row.id,
+    eventSlug: row.event_slug,
+    place: row.place,
+    awardedAt: row.awarded_at,
   };
+}
+
+function toOwnResponse(rows: EventAwardRow[]) {
+  return {
+    awards: rows.map((row) => ({ ...toPublicAward(row), seen: row.seen_at !== null })),
+  };
+}
+
+function toPublicResponse(rows: EventAwardRow[]) {
+  return { awards: rows.map(toPublicAward) };
 }
 
 export const eventAwardsController = {
   async getMyAwards(req: Request, res: Response): Promise<void> {
     const rows = await eventAwardsRepo.listForUser(req.user!.id);
-    res.json(toResponse(rows));
+    res.json(toOwnResponse(rows));
   },
 
   async markSeen(req: Request, res: Response): Promise<void> {
@@ -37,6 +44,6 @@ export const eventAwardsController = {
     const { userId } = req.validated.params as UserIdParam;
     await usersService.assertPublicUserVisible(userId);
     const rows = await eventAwardsRepo.listForUser(userId);
-    res.json(toResponse(rows));
+    res.json(toPublicResponse(rows));
   },
 };

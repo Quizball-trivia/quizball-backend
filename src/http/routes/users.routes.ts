@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import { config } from '../../core/config.js';
 import { usersController, updateProfileSchema, userIdParamSchema, userSearchQuerySchema } from '../../modules/users/index.js';
+import { eventAwardsController, awardIdParamSchema } from '../../modules/event-awards/event-awards.controller.js';
 
 const router = Router();
 
@@ -31,6 +32,23 @@ router.get('/me', usersController.getMe);
  * Get current user achievements.
  */
 router.get('/me/achievements', usersController.getMyAchievements);
+
+/**
+ * GET /api/v1/users/me/event-awards
+ * Event podium awards for the current user (seen flag drives the one-time
+ * unlock ceremony on login).
+ */
+router.get('/me/event-awards', eventAwardsController.getMyAwards);
+
+/**
+ * POST /api/v1/users/me/event-awards/:awardId/seen
+ * Acknowledge the unlock ceremony so it never replays.
+ */
+router.post(
+  '/me/event-awards/:awardId/seen',
+  validate({ params: awardIdParamSchema }),
+  eventAwardsController.markSeen
+);
 
 /**
  * PUT /api/v1/users/me
@@ -82,6 +100,16 @@ router.get(
   '/:userId/achievements',
   validate({ params: userIdParamSchema }),
   usersController.getUserAchievements
+);
+
+/**
+ * GET /api/v1/users/:userId/event-awards
+ * Event podium awards for any visible user (profile achievement cards).
+ */
+router.get(
+  '/:userId/event-awards',
+  validate({ params: userIdParamSchema }),
+  eventAwardsController.getUserAwards
 );
 
 export const usersRoutes = router;

@@ -282,7 +282,7 @@ async function runPostConnectHydration(
     if (attempt < POST_CONNECT_MAX_ATTEMPTS) {
       const delayMs = POST_CONNECT_RETRY_MS * (attempt + 1);
       setTimeout(() => {
-        void runPostConnectHydration(io, socket, attempt + 1);
+        runLimitedPostConnectHydration(io, socket, attempt + 1);
       }, delayMs);
     } else {
       logger.warn(
@@ -352,6 +352,18 @@ async function runPostConnectHydration(
       logger.warn({ error, userId }, 'Failed to emit session state on connect');
     }
   }
+}
+
+function runLimitedPostConnectHydration(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  attempt = 0,
+): void {
+  runSocketTask(
+    'post_connect_hydration',
+    socket.data.user.id,
+    () => postConnectDbTaskLimiter.run(() => runPostConnectHydration(io, socket, attempt)),
+  );
 }
 
 /**
@@ -619,11 +631,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     runSocketTask('presence_online', user.id, () => trackUserOnline(user.id));
     runSocketTask('presence_count', user.id, () => emitOnlineCount(io, socket));
     scheduleOnlineCountBroadcast(io);
-    runSocketTask(
-      'post_connect_hydration',
-      user.id,
-      () => postConnectDbTaskLimiter.run(() => runPostConnectHydration(io, socket)),
-    );
+    runLimitedPostConnectHydration(io, socket);
   });
 
   return io;

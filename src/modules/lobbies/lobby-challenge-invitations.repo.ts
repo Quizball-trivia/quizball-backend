@@ -76,14 +76,6 @@ export const lobbyChallengeInvitationsRepo = {
 
   async listPendingForUser(userId: string): Promise<PendingLobbyChallengeInvitationRow[]> {
     return sql<PendingLobbyChallengeInvitationRow[]>`
-      WITH expired AS (
-        UPDATE lobby_challenge_invitations
-        SET status = 'expired', updated_at = NOW()
-        WHERE to_user_id = ${userId}
-          AND status = 'pending'
-          AND expires_at <= NOW()
-        RETURNING id
-      )
       SELECT
         i.*,
         u.nickname AS from_nickname,

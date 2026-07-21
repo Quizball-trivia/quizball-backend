@@ -138,3 +138,10 @@ export class SocketDbTaskLimiter {
 // 30s wait ceiling covers the measured 5k-user teardown while still bounding
 // stale cleanup to one disconnect-grace window.
 export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 30_000);
+
+// Connection hydration is useful but optional background work: resume lookups,
+// pending invites, and last-result delivery. A reconnect/login wave must not
+// let thousands of those workflows enter the application DB admission queue at
+// once and crowd out foreground lobby commands. Keep this budget separate from
+// disconnect cleanup so a hydration backlog cannot delay match cleanup.
+export const postConnectDbTaskLimiter = new SocketDbTaskLimiter(4, 12_000, 30_000);

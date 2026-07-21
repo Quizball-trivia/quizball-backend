@@ -4,7 +4,10 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
-import { socketDbTaskLimiter } from '../../realtime/socket-db-task-limiter.js';
+import {
+  postConnectDbTaskLimiter,
+  socketDbTaskLimiter,
+} from '../../realtime/socket-db-task-limiter.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
 import { socketRuntimeTracker } from '../../realtime/socket-runtime-stats.js';
 
@@ -82,6 +85,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: dbPoolStats(),
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });
@@ -94,6 +98,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       pool: stats,
       authAdmission: authAdmissionStats(),
       socketDbTasks: socketDbTaskLimiter.stats(),
+      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });

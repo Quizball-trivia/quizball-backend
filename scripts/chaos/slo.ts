@@ -176,6 +176,15 @@ export function evaluateChaosRun(
           `(${instance.socketDbTasks.newTimeouts} wait timeouts)`
         );
       }
+      if (
+        instance.postConnectDbTasks &&
+        (instance.postConnectDbTasks.newRejections > 0 || instance.postConnectDbTasks.newTimeouts > 0)
+      ) {
+        violations.push(
+          `${name} post-connect DB task queue shed ${instance.postConnectDbTasks.newRejections} workflows ` +
+          `(${instance.postConnectDbTasks.newTimeouts} wait timeouts)`
+        );
+      }
       if (instance.pool.maxWaitMs > thresholds.maxAppDbWaitMs) {
         violations.push(`${name} DB pool max wait ${instance.pool.maxWaitMs}ms > ${thresholds.maxAppDbWaitMs}ms`);
       }

@@ -312,6 +312,15 @@ function evaluateInfrastructure(
         `timeouts=${instance.socketDbTasks.newTimeouts}`
       );
     }
+    if (
+      instance.postConnectDbTasks &&
+      (instance.postConnectDbTasks.newRejections > 0 || instance.postConnectDbTasks.newTimeouts > 0)
+    ) {
+      violations.push(
+        `${name} post-connect DB task sheds=${instance.postConnectDbTasks.newRejections} ` +
+        `timeouts=${instance.postConnectDbTasks.newTimeouts}`
+      );
+    }
     if (instance.pool.maxWaitMs > 1_000) violations.push(`${name} DB wait ${instance.pool.maxWaitMs}ms > 1000ms`);
     if (instance.runtime.eventLoopP99Ms > 100) violations.push(`${name} event-loop p99 ${instance.runtime.eventLoopP99Ms}ms > 100ms`);
     if (instance.runtime.cpuPct > 90) violations.push(`${name} CPU capacity ${instance.runtime.cpuPct}% > 90%`);

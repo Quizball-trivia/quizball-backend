@@ -52,7 +52,10 @@ import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
 import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
 import { runAuctionDisconnectGraceTimer, runAuctionResumeCountdownTimer } from './services/auction-disconnect.service.js';
-import { socketDbTaskLimiter } from './socket-db-task-limiter.js';
+import {
+  postConnectDbTaskLimiter,
+  socketDbTaskLimiter,
+} from './socket-db-task-limiter.js';
 import { runAuctionSoloPickTimeoutTimer } from './services/auction-match-flow.service.js';
 import {
   auctionLifecycleService,
@@ -616,7 +619,11 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     runSocketTask('presence_online', user.id, () => trackUserOnline(user.id));
     runSocketTask('presence_count', user.id, () => emitOnlineCount(io, socket));
     scheduleOnlineCountBroadcast(io);
-    runSocketTask('post_connect_hydration', user.id, () => runPostConnectHydration(io, socket));
+    runSocketTask(
+      'post_connect_hydration',
+      user.id,
+      () => postConnectDbTaskLimiter.run(() => runPostConnectHydration(io, socket)),
+    );
   });
 
   return io;

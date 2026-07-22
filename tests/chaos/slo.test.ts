@@ -10,15 +10,15 @@ describe('chaos SLO verdict', () => {
         statusHist: { '200': 100 },
       },
     ], null, {
-      total: 70,
+      total: 73,
       active: 30,
-      idle: 40,
+      idle: 43,
       idleInTxn: 0,
       waitingOnLock: 0,
       longestLockWaitSec: 0,
       longestActiveSec: 1,
       maxConnections: 90,
-      utilizationPct: 77.8,
+      utilizationPct: 81.1,
     });
 
     expect(verdict.ok).toBe(false);

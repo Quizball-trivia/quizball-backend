@@ -23,7 +23,10 @@ export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
   maxUnexpectedClientErrorPct: 0.1,
   maxRouteP95Ms: 1_500,
   maxRouteP99Ms: 3_000,
-  maxDbConnectionUtilizationPct: 75,
+  // Preserve at least 20% global headroom for Supabase services, health probes,
+  // and reconnect bursts. On the 60-connection staging tier this fails at 49+
+  // sessions while allowing the proven 47-session gameplay peak.
+  maxDbConnectionUtilizationPct: 80,
   maxDbLockWaiters: 0,
   maxDbLongestActiveSec: 30,
   // A client may remain in search for up to 120s before the harness gives up,

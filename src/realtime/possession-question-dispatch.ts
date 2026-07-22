@@ -63,6 +63,7 @@ import {
 import { getMultipleChoiceCorrectIndexFromPayload, normalizeMatchQuestionPayload } from './question-compat.js';
 import { createReadyGateRegistry } from './ready-gate.js';
 import { checkDevPauseAndDefer } from './services/dev-realtime.service.js';
+import { completePossessionMatch } from './possession-completion.js';
 import {
   markMatchEnteredForRoom,
   markMatchEnteredForSocket,
@@ -781,6 +782,23 @@ export async function sendPossessionMatchQuestion(
         { matchId, qIndex, phaseKind, categoryIds, statePhase: state.phase, half: state.half },
         'Failed to pick a valid question for possession state'
       );
+      // Shootouts are intentionally unbounded, but match_questions forbids
+      // reusing a question within one match. A thin penalty category can run
+      // dry during sudden death. Returning here would leave both players
+      // waiting forever for a question that cannot exist, so finish through
+      // the existing deterministic natural fallback (penalty goals, then
+      // total points).
+      if (state.phase === 'PENALTY_SHOOTOUT') {
+        const completion = await completePossessionMatch(io, matchId, state, cache, {
+          source: 'penalty_question_pool_exhausted',
+        });
+        if (!completion.completed) {
+          logger.error(
+            { matchId, qIndex, reason: completion.reason ?? null },
+            'Failed to complete possession match after penalty question pool exhaustion'
+          );
+        }
+      }
       return null;
     }
 

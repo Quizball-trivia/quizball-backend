@@ -72,6 +72,16 @@ export function createApp(): Express {
     customErrorMessage: (req, res, err) => {
       return `${req.method} ${req.url} ${res.statusCode} - ${err.message}`;
     },
+    // Successful access logs are high-cardinality telemetry, not operational
+    // events. At a few hundred RPS, logging every 2xx at info level exhausted
+    // Railway's bounded log stream and hid the errors needed to diagnose a
+    // stalled ranked match. Keep them available at debug locally, while 4xx
+    // and 5xx responses remain visible in staging/prod.
+    customLogLevel: (_req, res, err) => {
+      if (err || res.statusCode >= 500) return 'error';
+      if (res.statusCode >= 400) return 'warn';
+      return 'debug';
+    },
     // Attach user info to every request log
     customProps: (req) => {
       const expressReq = req as unknown as import('express').Request;

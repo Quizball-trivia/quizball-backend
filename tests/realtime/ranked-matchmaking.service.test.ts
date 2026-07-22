@@ -955,7 +955,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     redisMock.eval.mockImplementation(async (script: string) => {
       if (script !== RANKED_MM_PAIR_TWO_OLDEST_SCRIPT) return [];
       pairScriptCalls += 1;
-      if (pairScriptCalls > 10) return [];
+      if (pairScriptCalls > 30) return [];
       const userNumber = (pairScriptCalls - 1) * 2 + 1;
       return [
         `s${userNumber}`,
@@ -985,21 +985,21 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
     service.start(io);
     await vi.advanceTimersByTimeAsync(120);
-    for (let i = 0; i < 100 && createLobbyMock.mock.calls.length < 6; i += 1) {
+    for (let i = 0; i < 500 && createLobbyMock.mock.calls.length < 24; i += 1) {
       await Promise.resolve();
     }
 
-    // Six user pairs are atomically reserved and admitted. The remaining
+    // Twenty-four user pairs are atomically reserved and admitted. The remaining
     // pairs stay recoverable in the live queue until a worker slot is free.
-    expect(pairScriptCalls).toBe(6);
-    expect(createLobbyMock).toHaveBeenCalledTimes(6);
+    expect(pairScriptCalls).toBe(24);
+    expect(createLobbyMock).toHaveBeenCalledTimes(24);
 
     releaseLobbyStarts();
-    for (let i = 0; i < 1_000 && createLobbyMock.mock.calls.length < 10; i += 1) {
+    for (let i = 0; i < 2_000 && createLobbyMock.mock.calls.length < 30; i += 1) {
       await Promise.resolve();
     }
-    expect(pairScriptCalls).toBe(11);
-    expect(createLobbyMock).toHaveBeenCalledTimes(10);
+    expect(pairScriptCalls).toBe(31);
+    expect(createLobbyMock).toHaveBeenCalledTimes(30);
   });
 
   it('skips human pair creation when either claimed user already has session state', async () => {

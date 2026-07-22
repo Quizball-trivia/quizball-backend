@@ -367,6 +367,10 @@ export const rankedService = {
     if (existing.length >= humanPlayers.length) {
       const profiles = await rankedRepo.getProfilesByUserIds(humanPlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
+      await invalidateUserRankCaches(profiles.map((profile) => ({
+        userId: profile.user_id,
+        country: profile.country,
+      })));
       const outcomeByUser: Record<string, RankedUserOutcome> = {};
       for (const row of existing) {
         if (!profileByUser.has(row.user_id)) continue;

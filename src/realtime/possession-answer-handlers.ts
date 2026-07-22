@@ -99,7 +99,7 @@ export async function handlePossessionAnswer(
 
   const { matchId, qIndex, selectedIndex, timeMs } = payload;
   const userId = socket.data.user.id;
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:answer',
       matchId,
@@ -200,7 +200,7 @@ export async function handlePossessionAnswer(
         phaseRound: question.phaseRound,
         shooterSeat: question.shooterSeat,
       });
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:answer',
           matchId,
@@ -278,7 +278,7 @@ export async function handlePossessionAnswer(
     // Hot path: one small overlay HSET instead of re-serializing the whole
     // cache blob per answer (see commitCachedAnswer / db-optimize.md #7).
     await commitCachedAnswer(cache, answer);
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:answer',
         matchId,
@@ -367,7 +367,7 @@ export async function handlePossessionAnswer(
   });
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:answer',
         matchId,
@@ -397,7 +397,7 @@ export async function handlePossessionCountdownGuess(
 
   const { matchId, qIndex, guess } = payload;
   const userId = socket.data.user.id;
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:countdown_guess',
       matchId,
@@ -459,7 +459,7 @@ export async function handlePossessionCountdownGuess(
 
   const matched = countdownMatch(question.evaluation, guess, foundIds);
   if (!matched) {
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:countdown_guess',
         matchId,
@@ -486,7 +486,7 @@ export async function handlePossessionCountdownGuess(
 
   const addResult = await countdownAddFound(matchId, userId, matched.id);
   if (!addResult.added) {
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:countdown_guess',
         matchId,
@@ -512,7 +512,7 @@ export async function handlePossessionCountdownGuess(
     return;
   }
 
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:countdown_guess',
       matchId,
@@ -565,7 +565,7 @@ export async function handlePossessionPutInOrderAnswer(
 
   const { matchId, qIndex, orderedItemIds, timeMs } = payload;
   const userId = socket.data.user.id;
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:put_in_order_answer',
       matchId,
@@ -639,7 +639,7 @@ export async function handlePossessionPutInOrderAnswer(
     if (existingAnswer) {
       const answerAck = buildCachedAnswerAckPayload(cache, userId);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:put_in_order_answer',
           matchId,
@@ -693,7 +693,7 @@ export async function handlePossessionPutInOrderAnswer(
     const expectedCount = getExpectedUserIds(cache).length;
     const currentAnswerCount = answerCount(cache);
     await commitCachedAnswer(cache, answer);
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:put_in_order_answer',
         matchId,
@@ -779,7 +779,7 @@ export async function handlePossessionPutInOrderAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:put_in_order_answer',
         matchId,
@@ -822,7 +822,7 @@ export async function handlePossessionCluesAnswer(
   const userId = socket.data.user.id;
   const giveUp = payload.kind === 'giveUp';
   const guess = payload.kind === 'guess' ? payload.guess : '';
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:clues_answer',
       matchId,
@@ -901,7 +901,7 @@ export async function handlePossessionCluesAnswer(
     if (existingAnswer) {
       const answerAck = buildCachedAnswerAckPayload(cache, userId);
       if (answerAck) socket.emit('match:answer_ack', answerAck);
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:clues_answer',
           matchId,
@@ -954,7 +954,7 @@ export async function handlePossessionCluesAnswer(
 
     const currentAnswerCount = answerCount(cache);
     await commitCachedAnswer(cache, answer);
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:clues_answer',
         matchId,
@@ -1051,7 +1051,7 @@ export async function handlePossessionCluesAnswer(
   }
 
   if (committed.answerCount >= committed.expectedCount) {
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:clues_answer',
         matchId,

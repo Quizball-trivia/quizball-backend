@@ -47,6 +47,7 @@ import {
 } from './lobby-lifecycle.helpers.js';
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
+const SETTINGS_LOCK_WAIT_MS = 3500;
 const MATCH_START_LOCK_WAIT_MS = 5000;
 
 export async function createLobby(
@@ -447,7 +448,7 @@ export async function updateSettings(
   }
 
   const lockKey = `lock:lobby:${lobbyId}`;
-  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000);
+  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000, SETTINGS_LOCK_WAIT_MS);
   if (!lock.acquired || !lock.token) {
     logger.warn(
       { lobbyId, userId: socket.data.user.id, socketId: socket.id },

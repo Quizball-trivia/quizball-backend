@@ -63,6 +63,7 @@ export interface CoinPurchaseFixtureConfig {
 }
 
 const AUTH_FETCH_MAX_ATTEMPTS = 5;
+const AUTH_FETCH_TIMEOUT_MS = 15_000;
 
 function retryDelayMs(attempt: number): number {
   return 100 * (2 ** attempt) + Math.floor(Math.random() * 100);
@@ -75,7 +76,10 @@ async function fetchAuthWithRetry(
   let lastError: unknown;
   for (let attempt = 0; attempt < AUTH_FETCH_MAX_ATTEMPTS; attempt += 1) {
     try {
-      const response = await fetch(input, init);
+      const response = await fetch(input, {
+        ...init,
+        signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+      });
       const retryableStatus = response.status === 429 || response.status >= 500;
       if (!retryableStatus || attempt === AUTH_FETCH_MAX_ATTEMPTS - 1) return response;
       await response.arrayBuffer().catch(() => undefined);
@@ -187,6 +191,7 @@ export async function loginChaosUser(
       method: 'POST',
       headers,
       body: JSON.stringify({ email, password: cfg.password }),
+      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
     throw new ChaosLoginError(
@@ -211,6 +216,7 @@ export async function loginChaosUser(
         Authorization: `Bearer ${body.access_token}`,
         ...(cfg.bypassToken ? { 'x-chaos-bypass': cfg.bypassToken } : {}),
       },
+      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
     throw new ChaosLoginError(

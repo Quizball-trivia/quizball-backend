@@ -11,7 +11,9 @@ const getMatchMock = vi.fn();
 const setMatchStatePayloadMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const completeMatchMock = vi.fn();
+const computeAvgTimesMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
+const updatePlayerAvgTimeMock = vi.fn();
 const listAnswersForMatchMock = vi.fn();
 const getByIdsMock = vi.fn();
 const refundRankedTicketsMock = vi.fn();
@@ -41,12 +43,14 @@ vi.mock('../../src/modules/matches/matches.service.js', () => ({
   matchesService: {
     abandonMatch: (...a: unknown[]) => abandonMatchMock(...a),
     completeMatch: (...a: unknown[]) => completeMatchMock(...a),
+    computeAvgTimes: (...a: unknown[]) => computeAvgTimesMock(...a),
   },
 }));
 
 vi.mock('../../src/modules/matches/match-players.repo.js', () => ({
   matchPlayersRepo: {
     listMatchPlayers: (...a: unknown[]) => listMatchPlayersMock(...a),
+    updatePlayerAvgTime: (...a: unknown[]) => updatePlayerAvgTimeMock(...a),
   },
 }));
 
@@ -132,6 +136,9 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     });
     setMatchStatePayloadMock.mockResolvedValue(undefined);
     abandonMatchMock.mockResolvedValue(undefined);
+    completeMatchMock.mockResolvedValue(undefined);
+    computeAvgTimesMock.mockResolvedValue(new Map());
+    updatePlayerAvgTimeMock.mockResolvedValue(undefined);
     deleteMatchCacheMock.mockResolvedValue(undefined);
     getMatchCacheOrRebuildMock.mockResolvedValue(null);
     setMatchCacheMock.mockResolvedValue(undefined);
@@ -262,6 +269,65 @@ describe('finalizeRankedMatchAsNoContest — zero human interaction', () => {
     expect(releaseLockMock).toHaveBeenCalledWith(
       `lock:match:${MATCH_ID}:complete`,
       'completion-token'
+    );
+  });
+
+  it('emits terminal results even when Redis replay bookkeeping and cache cleanup fail', async () => {
+    getMatchMock.mockResolvedValue({
+      id: MATCH_ID,
+      mode: 'friendly',
+      status: 'active',
+      state_payload: { variant: 'ranked_sim' },
+      current_q_index: 12,
+      total_questions: 12,
+      started_at: new Date().toISOString(),
+    });
+    listMatchPlayersMock.mockResolvedValue([
+      {
+        user_id: HUMAN_A,
+        seat: 1,
+        total_points: 100,
+        correct_answers: 1,
+        goals: 1,
+        penalty_goals: 0,
+      },
+      {
+        user_id: HUMAN_B,
+        seat: 2,
+        total_points: 0,
+        correct_answers: 0,
+        goals: 0,
+        penalty_goals: 0,
+      },
+    ]);
+    const redis = {
+      get: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+      del: vi.fn(),
+      set: vi.fn(),
+    };
+    getRedisClientMock.mockReturnValue(redis);
+    deleteMatchCacheMock.mockRejectedValueOnce(new Error('redis cleanup unavailable'));
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
+
+    const { completePossessionMatch } = await import(
+      '../../src/realtime/possession-completion.js'
+    );
+    const result = await completePossessionMatch(io as never, MATCH_ID, {
+      goals: { seat1: 1, seat2: 0 },
+      penaltyGoals: { seat1: 0, seat2: 0 },
+    } as never);
+
+    expect(result.completed).toBe(true);
+    expect(completeMatchMock).toHaveBeenCalledWith(MATCH_ID, HUMAN_A);
+    expect(io.to).toHaveBeenCalledWith([
+      `match:${MATCH_ID}`,
+      `user:${HUMAN_A}`,
+      `user:${HUMAN_B}`,
+    ]);
+    expect(emit).toHaveBeenCalledWith(
+      'match:final_results',
+      expect.objectContaining({ matchId: MATCH_ID, winnerId: HUMAN_A })
     );
   });
 });

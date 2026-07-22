@@ -117,7 +117,7 @@ export async function resolvePossessionRound(
       if (rebuilt) {
         cache = rebuilt;
         await setMatchCache(rebuilt);
-        logger.info(
+        logger.debug(
           { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
           'Possession round resolve refreshed cache before timeout resolution'
         );
@@ -126,7 +126,7 @@ export async function resolvePossessionRound(
     if (cache.currentQIndex > qIndex) {
       // This round is already behind us — its timers are stale; clear them.
       roundConcluded = true;
-      logger.info(
+      logger.debug(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, ...cacheLogFields(cache) },
         'Possession round resolve skipped: qIndex already advanced'
       );
@@ -151,7 +151,7 @@ export async function resolvePossessionRound(
 
     const pauseStartedAt = await redis.get(matchPauseKey(matchId));
     if (pauseStartedAt) {
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:round_result',
           matchId,
@@ -168,7 +168,7 @@ export async function resolvePossessionRound(
 
     const expectedUserIds = getExpectedUserIds(cache);
     if (!fromTimeout && answerCount(cache) < expectedUserIds.length) {
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -183,7 +183,7 @@ export async function resolvePossessionRound(
       );
       return;
     }
-    logger.info(
+    logger.debug(
       {
         matchId,
         eventName: 'match:round_result',
@@ -239,7 +239,7 @@ export async function resolvePossessionRound(
           });
         });
       }
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -295,7 +295,7 @@ export async function resolvePossessionRound(
           : (answer.foundCount ?? 0) > seat1FoundCount;
       }
 
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -350,7 +350,7 @@ export async function resolvePossessionRound(
           );
         });
       }
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -458,7 +458,7 @@ export async function resolvePossessionRound(
         state.speedStreakCandidateCount = stayedInSameSegment ? streak.nextCandidateCount : 0;
       }
 
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -523,7 +523,7 @@ export async function resolvePossessionRound(
         const scorer = cache.players.find((player) => player.userId === penaltyOutcome.goalScoredByUserId);
         goalScoredBySeat = scorer?.seat === 1 || scorer?.seat === 2 ? scorer.seat : null;
       }
-      logger.info(
+      logger.debug(
         {
           matchId,
           eventName: 'match:round_result',
@@ -609,7 +609,7 @@ export async function resolvePossessionRound(
       }
     }
 
-    logger.info(
+    logger.debug(
       {
         matchId,
         eventName: 'match:round_result',
@@ -689,7 +689,7 @@ export async function resolvePossessionRound(
     // take below.
     roundConcluded = true;
     await emitMatchState(io, matchId, state);
-    logger.info(
+    logger.debug(
       {
         matchId,
         eventName: 'match:state',
@@ -731,14 +731,14 @@ export async function resolvePossessionRound(
     }
 
     if (state.phase === 'HALFTIME') {
-      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');
+      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
       return;
     }
 
     if (state.phase === 'COMPLETED') {
-      logger.info({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
+      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex }, 'Possession match completed after round resolve');
       await completePossessionMatch(io, matchId, state, cache);
       return;
     }
@@ -760,12 +760,12 @@ export async function resolvePossessionRound(
       // it armed" is only true for answer-triggered resolves. Re-arm so the
       // unconcluded round always keeps an auto-resolve pending.
       await deferQuestionTimer(matchId, qIndex, TIMEOUT_NOOP_RETRY_MS);
-      logger.info(
+      logger.debug(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout, retryInMs: TIMEOUT_NOOP_RETRY_MS },
         'Possession round resolve re-armed timeout: round not concluded'
       );
     } else {
-      logger.info(
+      logger.debug(
         { eventName: 'match:round_result', matchId, qIndex, fromTimeout },
         'Possession round resolve left timers armed: round not concluded'
       );

@@ -479,20 +479,38 @@ export async function completePossessionMatch(
     // key is the only reliable AI signal here.
     let aiOpponentUserId: string | null = null;
     if (redis) {
-      aiOpponentUserId = await redis.get(rankedAiMatchKey(matchId));
-      await redis.del(rankedAiMatchKey(matchId));
-      await Promise.all(
-        finalPlayers.map((player) =>
-          redis.set(
-            lastMatchKey(player.user_id),
-            JSON.stringify({ matchId, resultVersion }),
-            { EX: LAST_MATCH_REPLAY_TTL_SEC }
+      try {
+        aiOpponentUserId = await redis.get(rankedAiMatchKey(matchId));
+        await redis.del(rankedAiMatchKey(matchId));
+        await Promise.all(
+          finalPlayers.map((player) =>
+            redis.set(
+              lastMatchKey(player.user_id),
+              JSON.stringify({ matchId, resultVersion }),
+              { EX: LAST_MATCH_REPLAY_TTL_SEC }
+            )
           )
-        )
-      );
+        );
+      } catch (err) {
+        // The durable match result is already committed. Redis only supports
+        // reconnect replay and analytics metadata here, so a transient Redis
+        // failure must never suppress the live terminal event and strand both
+        // players on the gameplay screen.
+        logger.warn(
+          { err, matchId },
+          'Final-results replay bookkeeping failed — emitting live result anyway'
+        );
+      }
     }
 
-    io.to(`match:${matchId}`).emit('match:final_results', finalResultsPayload);
+    // Emit to both the match room and durable user rooms. A player can move
+    // replicas or briefly lose match-room membership during completion; the
+    // user rooms provide a second delivery path without another database read.
+    const finalResultRooms = [
+      `match:${matchId}`,
+      ...finalPlayers.map((player) => `user:${player.user_id}`),
+    ];
+    io.to(finalResultRooms).emit('match:final_results', finalResultsPayload);
 
     fireAndForget('evaluateObjectivesAfterPossessionFinalResults', async () => {
       await objectivesService.evaluateForMatchBestEffort(matchId);
@@ -534,7 +552,13 @@ export async function completePossessionMatch(
 
     clearAiMaps(matchId);
     clearHalftimeTimer(matchId);
-    await deleteMatchCache(matchId);
+    try {
+      await deleteMatchCache(matchId);
+    } catch (err) {
+      // Cleanup is also post-commit. The TTL will eventually remove stale
+      // cache state, and completion must still report success to its caller.
+      logger.warn({ err, matchId }, 'Completed match cache cleanup failed');
+    }
     return {
       matchId,
       winnerId: decision.winnerId,

@@ -133,7 +133,7 @@ export const matchesRepo = {
           UPDATE matches
           SET state_payload = ${jsonPayload},
               updated_at = NOW()
-          WHERE id = ${matchId}
+          WHERE id = ${matchId} AND status = 'active'
         `;
         return;
       }
@@ -143,7 +143,7 @@ export const matchesRepo = {
         SET state_payload = ${jsonPayload},
             current_q_index = GREATEST(current_q_index, ${qIndex}),
             updated_at = NOW()
-        WHERE id = ${matchId}
+        WHERE id = ${matchId} AND status = 'active'
       `;
     });
   },

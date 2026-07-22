@@ -2,7 +2,7 @@ import { logger } from './logger.js';
 import { getRedisClient } from '../realtime/redis.js';
 
 const pendingLoads = new Map<string, Promise<unknown>>();
-const keyGenerations = new Map<string, number>();
+const invalidatedLoads = new WeakSet<Promise<unknown>>();
 
 /**
  * Cache shared, JSON-serializable read models in Redis while coalescing cache
@@ -31,10 +31,10 @@ export async function getOrLoadJson<T>(
   const pending = pendingLoads.get(key) as Promise<T> | undefined;
   if (pending) return pending;
 
-  const generation = keyGenerations.get(key) ?? 0;
-  const load = (async () => {
+  let load!: Promise<T>;
+  load = (async () => {
     const value = await loader();
-    if (redis?.isOpen && (keyGenerations.get(key) ?? 0) === generation) {
+    if (redis?.isOpen && !invalidatedLoads.has(load)) {
       try {
         await redis.set(key, JSON.stringify(value), { EX: ttlSeconds });
       } catch (err) {
@@ -61,8 +61,9 @@ export async function deleteJsonCacheKeys(keys: string[]): Promise<void> {
   if (uniqueKeys.length === 0) return;
 
   for (const key of uniqueKeys) {
+    const pending = pendingLoads.get(key);
+    if (pending) invalidatedLoads.add(pending);
     pendingLoads.delete(key);
-    keyGenerations.set(key, (keyGenerations.get(key) ?? 0) + 1);
   }
 
   const redis = getRedisClient();

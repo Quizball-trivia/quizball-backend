@@ -206,6 +206,26 @@ export async function withStatementTimeout<T>(
   );
 }
 
+/**
+ * Probe the same postgres.js pool as application traffic, but jump ahead of
+ * the bounded request backlog. This distinguishes a genuinely stuck pool from
+ * a healthy pool that is merely busy and prevents load from causing a false
+ * watchdog restart.
+ */
+export async function withDbWatchdogProbe<T>(
+  fn: (tx: postgres.TransactionSql) => Promise<T>,
+  statementMs = 2_000,
+  acquireTimeoutMs = 3_500,
+): Promise<T> {
+  return admission.runPriority(
+    () => rawBegin<T>(async (tx) => {
+      await setLocalTimeouts(tx, statementMs, IDLE_IN_TX_MS);
+      return fn(tx);
+    }) as Promise<T>,
+    acquireTimeoutMs,
+  );
+}
+
 // Re-export postgres types for use in repos
 export type { TransactionSql } from 'postgres';
 

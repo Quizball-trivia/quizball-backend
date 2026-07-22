@@ -89,14 +89,32 @@ export class DbAdmissionController {
     }
   }
 
-  private acquire(): Promise<() => void> {
+  /**
+   * Let a liveness probe observe the real pool without waiting behind the
+   * ordinary request backlog. A single priority waiter may exceed queueLimit;
+   * otherwise a full-but-healthy bulkhead would make the watchdog kill the
+   * replica it is meant to protect.
+   */
+  async runPriority<T>(
+    operation: () => PromiseLike<T> | T,
+    acquireTimeoutMs = this.acquireTimeoutMs,
+  ): Promise<T> {
+    const release = await this.acquire(true, acquireTimeoutMs);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private acquire(priority = false, acquireTimeoutMs = this.acquireTimeoutMs): Promise<() => void> {
     if (this.active < this.limit) {
       this.active += 1;
       this.recordAcquisition(0, false);
       return Promise.resolve(this.makeRelease());
     }
 
-    if (this.waiters.length >= this.queueLimit) {
+    if (!priority && this.waiters.length >= this.queueLimit) {
       this.rejections += 1;
       return Promise.reject(new DbOverloadedError('queue_full'));
     }
@@ -115,10 +133,11 @@ export class DbAdmissionController {
           this.rejections += 1;
           this.timeouts += 1;
           reject(new DbOverloadedError('acquire_timeout'));
-        }, this.acquireTimeoutMs),
+        }, acquireTimeoutMs),
       };
       waiter.timer.unref?.();
-      this.waiters.push(waiter);
+      if (priority) this.waiters.unshift(waiter);
+      else this.waiters.push(waiter);
     });
   }
 

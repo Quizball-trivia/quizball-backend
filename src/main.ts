@@ -5,7 +5,7 @@ import { logger } from './core/logger.js';
 import { shutdownLokiLogStream } from './core/loki.js';
 import { shutdownTelemetry } from './core/otel.js';
 import { disconnectDb } from './db/index.js';
-import { dbPoolStats, withStatementTimeout } from './db/index.js';
+import { dbPoolStats, withDbWatchdogProbe } from './db/index.js';
 import { DbWatchdog } from './db/watchdog.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
@@ -26,9 +26,9 @@ const server = httpServer.listen(config.PORT, () => {
 });
 
 const dbWatchdog = new DbWatchdog({
-  probe: () => withStatementTimeout(async (tx) => {
+  probe: () => withDbWatchdogProbe(async (tx) => {
     await tx.unsafe('SELECT 1');
-  }, 2_000),
+  }, 2_000, Math.max(500, config.DB_WATCHDOG_TIMEOUT_MS - 500)),
   intervalMs: config.DB_WATCHDOG_INTERVAL_MS,
   timeoutMs: config.DB_WATCHDOG_TIMEOUT_MS,
   maxFailures: config.DB_WATCHDOG_FAILURES,

@@ -53,15 +53,12 @@ const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
-// A real match start performs several sequential database/Redis/network round
-// trips. Keeping only six workflows in flight per replica left those waits on
-// the critical path: a 1k-player flash crowd plus the normal HTTP mix produced
-// a ~49s matchmaking p95 even though the DB stayed below 65% utilisation and
-// the admission gate never timed out. Allow enough orchestration concurrency
-// to overlap those waits. This does NOT raise database concurrency: the
-// independent DB admission gate remains the hard 12-query cap per replica, so
-// pool budgeting and overload shedding are unchanged.
-const MAX_CONCURRENT_PAIR_STARTS = 24;
+// A real match start performs several database/network round trips. Keep six
+// workflows moving as a streaming pool so one slow lobby does not stall the
+// other slots. Six leaves room for durable timer work while the independent DB
+// admission gate remains the hard 12-query cap; this bound prevents the
+// matcher itself from spawning unlimited work.
+const MAX_CONCURRENT_PAIR_STARTS = 6;
 const FOUND_MODAL_MS = 1200;
 // Match already-queued players before starting more DB-heavy draft workflows.
 // This feedback threshold keeps the ranked queue tail bounded during a flash

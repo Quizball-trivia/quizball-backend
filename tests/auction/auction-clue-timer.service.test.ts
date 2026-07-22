@@ -94,6 +94,7 @@ function matchState(overrides: Partial<AuctionMatchState> = {}): AuctionMatchSta
       currentTurnSeatId: null,
       foldedSeatIds: [],
       turnEndsAt: null,
+      biddingStartsAt: null,
       startedAt: '2026-06-20T10:00:00.000Z',
       updatedAt: '2026-06-20T10:00:00.000Z',
     },
@@ -137,7 +138,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       auctionClueRevealTimerKey('match-1', 'round-1', 1),
-      new Date('2026-06-20T10:00:02.500Z'),
+      new Date('2026-06-20T10:00:01.200Z'),
       {
         kind: 'auction_clue_reveal',
         matchId: 'match-1',
@@ -182,7 +183,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       'match-1:round-1:2',
-      new Date('2026-06-20T10:00:02.500Z'),
+      new Date('2026-06-20T10:00:01.200Z'),
       expect.objectContaining({ expectedClueIndex: 2, stateVersion: 1 })
     );
 
@@ -192,7 +193,7 @@ describe('auction clue reveal timers', () => {
     expect(payloadText).not.toContain('180000000');
   });
 
-  it('reveals clue 3, starts bidding, and does not schedule another clue timer', async () => {
+  it('reveals clue 3, opens the study window instead of bidding, and schedules the study timer', async () => {
     const { io, roomEmit } = createIo();
     const { runAuctionClueRevealTimer } = await import('../../src/realtime/services/auction-clue-timer.service.js');
     stateStoreMock.load.mockResolvedValue(matchState({
@@ -211,13 +212,71 @@ describe('auction clue reveal timers', () => {
       stateVersion: 2,
     }, { context: timerContext });
 
+    expect(outcome.kind).toBe('study_started');
+    const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
+    // Still clue_reveal: all three clues sit on screen for the study window.
+    expect(saved.phase).toBe('clue_reveal');
+    expect(saved.currentRound?.clueRevealIndex).toBe(3);
+    expect(saved.currentRound?.currentTurnSeatId).toBeNull();
+    expect(saved.currentRound?.biddingStartsAt).toBe('2026-06-20T10:00:10.000Z');
+
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:clue_revealed',
+      expect.objectContaining({
+        clueIndex: 3,
+        round: expect.objectContaining({ biddingStartsAt: '2026-06-20T10:00:10.000Z' }),
+      })
+    );
+    expect(roomEmit).not.toHaveBeenCalledWith('auction:bidding_started', expect.anything());
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_clue_study',
+      'match-1:round-1',
+      new Date('2026-06-20T10:00:10.000Z'),
+      expect.objectContaining({
+        kind: 'auction_clue_study',
+        matchId: 'match-1',
+        roundId: 'round-1',
+        stateVersion: 3,
+      })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalledWith(
+      'auction_clue_reveal',
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+
+    const payloadText = JSON.stringify(roomEmit.mock.calls);
+    expect(payloadText).not.toContain('Erling Haaland');
+    expect(payloadText).not.toContain('Manchester City');
+    expect(payloadText).not.toContain('180000000');
+  });
+
+  it('opens bidding when the study window closes', async () => {
+    const { io, roomEmit } = createIo();
+    const { runAuctionClueStudyTimer } = await import('../../src/realtime/services/auction-clue-timer.service.js');
+    stateStoreMock.load.mockResolvedValue(matchState({
+      version: 2,
+      currentRound: {
+        ...matchState().currentRound!,
+        clueRevealIndex: 3,
+        biddingStartsAt: '2026-06-20T10:00:10.000Z',
+      },
+    }));
+
+    const outcome = await runAuctionClueStudyTimer(io, {
+      kind: 'auction_clue_study',
+      matchId: 'match-1',
+      roundId: 'round-1',
+      stateVersion: 2,
+    }, { context: timerContext });
+
     expect(outcome.kind).toBe('bidding_started');
     const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
     expect(saved.phase).toBe('bidding');
-    expect(saved.currentRound?.clueRevealIndex).toBe(3);
     expect(saved.currentRound?.currentTurnSeatId).toBe('seat-human');
     expect(saved.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:30.000Z');
-    expect(roomEmit).toHaveBeenCalledWith('auction:clue_revealed', expect.objectContaining({ clueIndex: 3 }));
+    expect(saved.currentRound?.biddingStartsAt).toBeNull();
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:bidding_started',
       expect.objectContaining({

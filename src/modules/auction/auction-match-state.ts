@@ -38,6 +38,8 @@ export interface AuctionRoundState {
   currentTurnSeatId: string | null;
   foldedSeatIds: string[];
   turnEndsAt: string | null;
+  /** Deadline of the post-clue study window; null outside it. */
+  biddingStartsAt: string | null;
   startedAt: string;
   updatedAt: string;
 }

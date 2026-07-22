@@ -30,8 +30,11 @@ import {
   buildTurnStartedPayload,
 } from './auction-realtime-payloads.js';
 
-export const AUCTION_BOT_MIN_THINK_MS = 800;
-export const AUCTION_BOT_MAX_THINK_MS = 2_800;
+// Bots deliberate long enough for the bidding to read as a back-and-forth
+// rather than resolving the instant a turn opens. Kept comfortably under
+// RAISE_TURN_MS so a bot never runs its own turn down to the auto-fold.
+export const AUCTION_BOT_MIN_THINK_MS = 2_000;
+export const AUCTION_BOT_MAX_THINK_MS = 5_000;
 
 export type AuctionBotActionTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_bot_action' }>;
 

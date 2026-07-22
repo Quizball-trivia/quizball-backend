@@ -50,7 +50,7 @@ import {
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
 import { runAuctionBotActionTimer } from './services/auction-bot.service.js';
-import { runAuctionClueRevealTimer } from './services/auction-clue-timer.service.js';
+import { runAuctionClueRevealTimer, runAuctionClueStudyTimer } from './services/auction-clue-timer.service.js';
 import { runAuctionDisconnectGraceTimer, runAuctionResumeCountdownTimer } from './services/auction-disconnect.service.js';
 import {
   postConnectDbTaskLimiter,
@@ -390,6 +390,10 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
     auction_clue_reveal: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_clue_reveal') return;
       await runAuctionClueRevealTimer(server, payload);
+    },
+    auction_clue_study: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'auction_clue_study') return;
+      await runAuctionClueStudyTimer(server, payload);
     },
     auction_disconnect_grace: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'auction_disconnect_grace') return;

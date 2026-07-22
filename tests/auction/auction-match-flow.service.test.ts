@@ -289,7 +289,7 @@ describe('auction match flow service', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       expect.any(String),
-      new Date('2026-06-20T10:00:02.500Z'),
+      new Date('2026-06-20T10:00:01.200Z'),
       expect.objectContaining({ kind: 'auction_clue_reveal', stateVersion: 2 })
     );
     expect(contentServiceMock.getRandomPublishedAuctionCard).toHaveBeenCalledWith(

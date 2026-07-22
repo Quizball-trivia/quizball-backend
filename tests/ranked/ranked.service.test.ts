@@ -9,6 +9,12 @@ vi.mock('../../src/core/logger.js', () => ({
   },
 }));
 
+const deleteJsonCacheKeysMock = vi.fn();
+vi.mock('../../src/core/json-cache.js', () => ({
+  deleteJsonCacheKeys: (keys: string[]) => deleteJsonCacheKeysMock(keys),
+  getOrLoadJson: <T>(_key: string, _ttlSeconds: number, loader: () => Promise<T>) => loader(),
+}));
+
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getMatch: vi.fn(),
@@ -66,6 +72,7 @@ function createProfile(overrides: Partial<RankedProfileRow> & {
 }): RankedProfileRow {
   return {
     user_id: overrides.user_id,
+    country: overrides.country ?? null,
     rp: overrides.rp,
     tier: overrides.tier,
     placement_status: overrides.placement_status ?? 'unplaced',
@@ -687,6 +694,7 @@ describe('rankedService', () => {
     (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([
       createProfile({
         user_id: 'u-1',
+        country: 'US',
         rp: 1225,
         tier: rankedService.tierFromRp(1225),
         placement_status: 'placed',
@@ -694,6 +702,7 @@ describe('rankedService', () => {
       }),
       createProfile({
         user_id: 'u-2',
+        country: 'GE',
         rp: 1175,
         tier: rankedService.tierFromRp(1175),
         placement_status: 'placed',
@@ -709,5 +718,11 @@ describe('rankedService', () => {
     expect(outcome?.byUserId['u-2']?.deltaRp).toBe(-25);
     expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
     expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(deleteJsonCacheKeysMock).toHaveBeenCalledWith([
+      'ranked:user-rank:v2:global:u-1',
+      'ranked:user-rank:v2:country:US:u-1',
+      'ranked:user-rank:v2:global:u-2',
+      'ranked:user-rank:v2:country:GE:u-2',
+    ]);
   });
 });

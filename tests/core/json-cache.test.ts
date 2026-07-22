@@ -4,6 +4,7 @@ const redis = {
   isOpen: true,
   get: vi.fn(),
   set: vi.fn(),
+  del: vi.fn(),
 };
 
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -14,7 +15,7 @@ vi.mock('../../src/core/logger.js', () => ({
   logger: { warn: vi.fn() },
 }));
 
-import { getOrLoadJson } from '../../src/core/json-cache.js';
+import { deleteJsonCacheKeys, getOrLoadJson } from '../../src/core/json-cache.js';
 
 describe('getOrLoadJson', () => {
   beforeEach(() => {
@@ -56,5 +57,36 @@ describe('getOrLoadJson', () => {
 
     await expect(getOrLoadJson('key:fallback', 5, loader)).resolves.toBe(42);
     expect(loader).toHaveBeenCalledOnce();
+  });
+
+  it('deletes unique exact keys from the shared cache', async () => {
+    redis.del.mockResolvedValue(2);
+
+    await deleteJsonCacheKeys(['rank:global:u-1', 'rank:country:US:u-1', 'rank:global:u-1']);
+
+    expect(redis.del).toHaveBeenCalledOnce();
+    expect(redis.del).toHaveBeenCalledWith(['rank:global:u-1', 'rank:country:US:u-1']);
+  });
+
+  it('does not repopulate a key from a load invalidated while it was resolving', async () => {
+    redis.get.mockResolvedValue(null);
+    redis.del.mockResolvedValue(1);
+    let release!: (value: { rank: number }) => void;
+    const loader = vi.fn(() => new Promise<{ rank: number }>((resolve) => { release = resolve; }));
+
+    const pending = getOrLoadJson('rank:global:u-racing', 300, loader);
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+    await deleteJsonCacheKeys(['rank:global:u-racing']);
+    release({ rank: 4 });
+
+    await expect(pending).resolves.toEqual({ rank: 4 });
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('treats cache invalidation as a no-op when Redis is unavailable', async () => {
+    redis.isOpen = false;
+
+    await expect(deleteJsonCacheKeys(['rank:global:u-1'])).resolves.toBeUndefined();
+    expect(redis.del).not.toHaveBeenCalled();
   });
 });

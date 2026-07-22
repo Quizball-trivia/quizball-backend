@@ -369,9 +369,12 @@ function runLimitedPostConnectHydration(
       // turned a connection wave into hundreds of tiny serialized queries.
       const initialSnapshot = await connectStateBatcher.resolve(socket.data.user.id);
       if (!socket.connected) return;
-      await postConnectDbTaskLimiter.run(
-        () => runPostConnectHydration(io, socket, initialSnapshot, attempt),
-      );
+      const hydrate = () => runPostConnectHydration(io, socket, initialSnapshot, attempt);
+      if (initialSnapshot.state === 'IDLE') {
+        await postConnectDbTaskLimiter.run(hydrate);
+      } else {
+        await postConnectDbTaskLimiter.runPriority(hydrate);
+      }
     },
   );
 }

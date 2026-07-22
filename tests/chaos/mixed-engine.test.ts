@@ -61,4 +61,45 @@ describe('weighted mixed traffic engine', () => {
     expect(metrics.statusHist['409']).toBeGreaterThan(0);
     expect(metrics.clientErrors).toBe(0);
   });
+
+  it('runs one-time journeys once per user and redistributes the remaining load', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const routes: ChaosRoute[] = [
+      {
+        name: 'daily.complete',
+        method: 'POST',
+        path: '/daily/complete',
+        auth: 'bearer',
+        mutates: true,
+        weight: 1,
+        maxPerUser: 1,
+        group: 'economy-write',
+      },
+      {
+        name: 'users.me',
+        method: 'GET',
+        path: '/users/me',
+        auth: 'bearer',
+        mutates: false,
+        weight: 1,
+        group: 'auth-read',
+      },
+    ];
+
+    const metrics = await runMixedRoutes(routes, {
+      apiBase: 'http://localhost',
+      rps: 0,
+      totalRps: 100,
+      rampSec: 0,
+      durationSec: 0.2,
+      users: [user, { ...user, email: 'chaos2@example.com', userId: 'u2' }],
+      maxInflight: 100,
+      timeoutMs: 1_000,
+    });
+
+    const byName = Object.fromEntries(metrics.map((metric) => [metric.name, metric.sent]));
+    expect(byName['daily.complete']).toBe(2);
+    expect(byName['users.me']).toBeGreaterThan(10);
+    expect(byName['daily.complete'] + byName['users.me']).toBeGreaterThanOrEqual(18);
+  });
 });

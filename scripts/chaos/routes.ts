@@ -17,6 +17,11 @@ export interface ChaosRoute {
   // Query string appended verbatim (already URL-encoded).
   query?: string | ((ctx: RouteBodyContext) => string);
   weight: number;
+  // In the production-shaped mixed scheduler, stop selecting this action once
+  // every test user has performed it this many times. This keeps one-time
+  // journeys (daily session/complete) realistic while the remaining RPS is
+  // redistributed to repeatable reads and writes.
+  maxPerUser?: number;
   // Business-state responses that are valid for a repeated load-test action.
   // Any other 4xx remains an unexpected client error and fails the SLO gate.
   expectedStatuses?: number[];
@@ -94,6 +99,7 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 2,
+    maxPerUser: 1,
     // A deployment with no active challenge returns 404; repeated session
     // creation for the same challenge returns 409. Both are valid business
     // states, not malformed load requests.
@@ -107,6 +113,7 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 1,
+    maxPerUser: 1,
     expectedStatuses: [200, 404, 409],
     group: 'session-write',
   })),
@@ -117,6 +124,7 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 1,
+    maxPerUser: 1,
     group: 'social-write',
     // No-op-ish profile write: re-set the locale, which always validates.
     body: () => ({ language: 'en' }),
@@ -128,6 +136,7 @@ export const CHAOS_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 1,
+    maxPerUser: 1,
     expectedStatuses: [200],
     group: 'social-write',
   },
@@ -167,6 +176,7 @@ export const SPEND_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 1,
+    maxPerUser: 1,
     expectedStatuses: [200, 409],
     group: 'economy-write',
     body: () => ({ score: 1, correctAnswers: 1, durationMs: 5000 }),
@@ -178,6 +188,7 @@ export const SPEND_ROUTES: ChaosRoute[] = [
     auth: 'bearer',
     mutates: true,
     weight: 1,
+    maxPerUser: 1,
     expectedStatuses: [200, 404, 409],
     group: 'economy-write',
     body: () => ({ score: 1, correctAnswers: 1, durationMs: 5000 }),

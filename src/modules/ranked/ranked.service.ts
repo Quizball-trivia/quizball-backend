@@ -1,5 +1,5 @@
 import { logger } from '../../core/logger.js';
-import { getOrLoadJson } from '../../core/json-cache.js';
+import { deleteJsonCacheKeys, getOrLoadJson } from '../../core/json-cache.js';
 import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
@@ -21,7 +21,25 @@ import type {
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 const LIVE_LEADERBOARD_CACHE_TTL_SECONDS = 5;
-const USER_RANK_CACHE_TTL_SECONDS = 30;
+// Rank is expensive to derive because it compares a player with the eligible
+// leaderboard. Keep read traffic off Postgres during active sessions, then
+// invalidate the affected player's exact global/country keys after settlement
+// so the post-match response is still fresh.
+const USER_RANK_CACHE_TTL_SECONDS = 300;
+
+function userRankCacheKey(userId: string, country?: string | null): string {
+  const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
+  return `ranked:user-rank:v2:${scope}:${userId}`;
+}
+
+async function invalidateUserRankCaches(
+  users: Array<{ userId: string; country?: string | null }>
+): Promise<void> {
+  await deleteJsonCacheKeys(users.flatMap(({ userId, country }) => [
+    userRankCacheKey(userId),
+    ...(country ? [userRankCacheKey(userId, country)] : []),
+  ]));
+}
 
 // ── Placement seed range ─────────────────────────────────────────────────────
 // The best possible placement run lands at the TOP OF RESERVE (875 RP) — every
@@ -396,6 +414,7 @@ export const rankedService = {
     const settlementEntries: Array<{
       profile: {
         userId: string;
+        country: string | null;
         rp: number;
         tier: RankedTier;
         placementStatus: PlacementStatus;
@@ -527,6 +546,7 @@ export const rankedService = {
       settlementEntries.push({
         profile: {
           userId: player.user_id,
+          country: profile.country,
           rp: newRp,
           tier: newTier,
           placementStatus,
@@ -579,6 +599,10 @@ export const rankedService = {
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
+    })));
+    await invalidateUserRankCaches(settlementEntries.map((entry) => ({
+      userId: entry.outcome.userId,
+      country: entry.profile.country,
     })));
     logger.info({
       matchId,
@@ -660,9 +684,8 @@ export const rankedService = {
   },
 
   async getUserRank(userId: string, country?: string) {
-    const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
     return getOrLoadJson(
-      `ranked:user-rank:v1:${scope}:${userId}`,
+      userRankCacheKey(userId, country),
       USER_RANK_CACHE_TTL_SECONDS,
       () => rankedRepo.getUserRank(userId, country)
     );

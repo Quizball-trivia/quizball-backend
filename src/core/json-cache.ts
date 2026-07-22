@@ -2,6 +2,7 @@ import { logger } from './logger.js';
 import { getRedisClient } from '../realtime/redis.js';
 
 const pendingLoads = new Map<string, Promise<unknown>>();
+const keyGenerations = new Map<string, number>();
 
 /**
  * Cache shared, JSON-serializable read models in Redis while coalescing cache
@@ -30,9 +31,10 @@ export async function getOrLoadJson<T>(
   const pending = pendingLoads.get(key) as Promise<T> | undefined;
   if (pending) return pending;
 
+  const generation = keyGenerations.get(key) ?? 0;
   const load = (async () => {
     const value = await loader();
-    if (redis?.isOpen) {
+    if (redis?.isOpen && (keyGenerations.get(key) ?? 0) === generation) {
       try {
         await redis.set(key, JSON.stringify(value), { EX: ttlSeconds });
       } catch (err) {
@@ -46,5 +48,28 @@ export async function getOrLoadJson<T>(
     return await load;
   } finally {
     if (pendingLoads.get(key) === load) pendingLoads.delete(key);
+  }
+}
+
+/**
+ * Remove exact shared-cache keys after a write changes their source data.
+ * Pending in-process loads are forgotten too, so a request arriving after the
+ * invalidation cannot attach to an older load that is still resolving.
+ */
+export async function deleteJsonCacheKeys(keys: string[]): Promise<void> {
+  const uniqueKeys = [...new Set(keys)];
+  if (uniqueKeys.length === 0) return;
+
+  for (const key of uniqueKeys) {
+    pendingLoads.delete(key);
+    keyGenerations.set(key, (keyGenerations.get(key) ?? 0) + 1);
+  }
+
+  const redis = getRedisClient();
+  if (!redis?.isOpen) return;
+  try {
+    await redis.del(uniqueKeys);
+  } catch (err) {
+    logger.warn({ err, keys: uniqueKeys }, 'Shared JSON cache invalidation failed');
   }
 }

@@ -233,6 +233,7 @@ function scheduleOnlineCountBroadcast(io: QuizballServer): void {
 async function runPostConnectHydration(
   io: QuizballServer,
   socket: QuizballSocket,
+  initialSnapshot: SessionStatePayload,
   attempt = 0
 ): Promise<void> {
   if (!socket.connected) return;
@@ -241,7 +242,6 @@ async function runPostConnectHydration(
   let lockAcquired = false;
   let preparedSnapshot: SessionStatePayload | null = null;
   try {
-    const initialSnapshot = await connectStateBatcher.resolve(userId);
     if (initialSnapshot.state === 'IDLE') {
       // The common path is read-only. Avoid taking the transition lock so an
       // immediate lobby:create/search command cannot race and lose to optional
@@ -362,7 +362,17 @@ function runLimitedPostConnectHydration(
   runSocketTask(
     'post_connect_hydration',
     socket.data.user.id,
-    () => postConnectDbTaskLimiter.run(() => runPostConnectHydration(io, socket, attempt)),
+    async () => {
+      // Resolve connection state before entering the per-user follow-up
+      // limiter. Keeping this lookup inside a four-task limiter prevented the
+      // 250-user batcher above from ever collecting more than four users and
+      // turned a connection wave into hundreds of tiny serialized queries.
+      const initialSnapshot = await connectStateBatcher.resolve(socket.data.user.id);
+      if (!socket.connected) return;
+      await postConnectDbTaskLimiter.run(
+        () => runPostConnectHydration(io, socket, initialSnapshot, attempt),
+      );
+    },
   );
 }
 

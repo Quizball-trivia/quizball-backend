@@ -21,6 +21,7 @@ import type {
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
 const LIVE_LEADERBOARD_CACHE_TTL_SECONDS = 5;
+const USER_RANK_CACHE_TTL_SECONDS = 30;
 
 // ── Placement seed range ─────────────────────────────────────────────────────
 // The best possible placement run lands at the TOP OF RESERVE (875 RP) — every
@@ -659,7 +660,12 @@ export const rankedService = {
   },
 
   async getUserRank(userId: string, country?: string) {
-    return rankedRepo.getUserRank(userId, country);
+    const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
+    return getOrLoadJson(
+      `ranked:user-rank:v1:${scope}:${userId}`,
+      USER_RANK_CACHE_TTL_SECONDS,
+      () => rankedRepo.getUserRank(userId, country)
+    );
   },
 
   tierFromRp,

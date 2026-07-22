@@ -54,7 +54,8 @@ async function fireRequest(
   cfg: EngineConfig,
   inflight: { count: number },
   metrics: RouteMetrics,
-  seq: number
+  seq: number,
+  selectedUser?: ChaosUser
 ): Promise<void> {
   if (inflight.count >= cfg.maxInflight) {
     metrics.sent++;
@@ -62,7 +63,7 @@ async function fireRequest(
     metrics.statusHist.shed = (metrics.statusHist.shed ?? 0) + 1;
     return;
   }
-  const user = pickUser(cfg.users, seq);
+  const user = selectedUser ?? pickUser(cfg.users, seq);
   const ctx = routeContext(cfg, user, seq);
   const url = buildUrl(cfg.apiBase, route, ctx);
   const headers: Record<string, string> = {};
@@ -181,7 +182,30 @@ export async function runMixedRoutes(
   const pending = new Set<Promise<void>>();
   const startedAt = Date.now();
   const durationMs = cfg.durationSec * 1000;
+  const perUserRouteCounts = new Map<string, Map<string, number>>();
   let sent = 0;
+
+  const routeHasCapacity = (route: ChaosRoute): boolean => {
+    if (route.maxPerUser === undefined) return true;
+    const counts = perUserRouteCounts.get(route.name);
+    const used = counts ? [...counts.values()].reduce((sum, count) => sum + count, 0) : 0;
+    return used < route.maxPerUser * cfg.users.length;
+  };
+
+  const reserveRouteUser = (route: ChaosRoute, seq: number): ChaosUser => {
+    if (route.maxPerUser === undefined) return pickUser(cfg.users, seq);
+    const counts = perUserRouteCounts.get(route.name) ?? new Map<string, number>();
+    perUserRouteCounts.set(route.name, counts);
+    for (let offset = 0; offset < cfg.users.length; offset++) {
+      const candidate = pickUser(cfg.users, seq + offset);
+      const used = counts.get(candidate.userId) ?? 0;
+      if (used < route.maxPerUser) {
+        counts.set(candidate.userId, used + 1);
+        return candidate;
+      }
+    }
+    throw new Error(`No remaining user capacity for mixed route ${route.name}`);
+  };
 
   await new Promise<void>((resolve) => {
     const tick = () => {
@@ -195,9 +219,12 @@ export async function runMixedRoutes(
 
       while (sent < desired) {
         const seq = sent++;
-        const route = weightedRoute(routes, seq);
+        const eligibleRoutes = routes.filter(routeHasCapacity);
+        if (eligibleRoutes.length === 0) break;
+        const route = weightedRoute(eligibleRoutes, seq);
+        const user = reserveRouteUser(route, seq);
         const routeMetrics = metrics.get(route.name)!;
-        const request = fireRequest(route, cfg, inflight, routeMetrics, seq);
+        const request = fireRequest(route, cfg, inflight, routeMetrics, seq, user);
         pending.add(request);
         request.finally(() => pending.delete(request));
       }

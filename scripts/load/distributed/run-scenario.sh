@@ -143,7 +143,14 @@ collect_one() {
   local ip="$1"
   local remote_report="$2"
   local local_report="$3"
-  "${SCP[@]}" "root@$ip:$remote_report" "$local_report"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "${SCP[@]}" "root@$ip:$remote_report" "$local_report"; then
+      return 0
+    fi
+    sleep $((attempt * 2))
+  done
+  return 1
 }
 
 with_completion_marker() {

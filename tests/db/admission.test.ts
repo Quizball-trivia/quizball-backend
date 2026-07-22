@@ -87,4 +87,32 @@ describe('DbAdmissionController', () => {
       vi.useRealTimers();
     }
   });
+
+  it('runs a priority health probe before a full ordinary backlog', async () => {
+    const gate = new DbAdmissionController(1, 1, 1_000);
+    const active = deferred<void>();
+    const priority = deferred<void>();
+    const order: string[] = [];
+
+    const first = gate.run(() => active.promise);
+    const ordinary = gate.run(async () => {
+      order.push('ordinary');
+    });
+    const probe = gate.runPriority(async () => {
+      order.push('probe');
+      await priority.promise;
+    });
+
+    await Promise.resolve();
+    expect(gate.stats()).toMatchObject({ active: 1, queued: 2 });
+
+    active.resolve();
+    await first;
+    await vi.waitFor(() => expect(order).toEqual(['probe']));
+
+    priority.resolve();
+    await Promise.all([probe, ordinary]);
+    expect(order).toEqual(['probe', 'ordinary']);
+    expect(gate.stats()).toMatchObject({ active: 0, queued: 0 });
+  });
 });

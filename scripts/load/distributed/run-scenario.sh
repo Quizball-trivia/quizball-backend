@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FLEET="$SCRIPT_DIR/fleet.sh"
 SSH_KEY_PATH="${HCLOUD_SSH_KEY_PATH:-$HOME/.ssh/quizball-staging-load}"
-REPORT_ROOT="$SCRIPT_DIR/reports/${CAMPAIGN_ID:-quizball-staging-5k}"
+REPORT_ROOT="${REPORT_ROOT_OVERRIDE:-$SCRIPT_DIR/reports/${CAMPAIGN_ID:-quizball-staging-5k}}"
 SSH=(ssh -n -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o TCPKeepAlive=yes)
 SCP=(scp -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o TCPKeepAlive=yes)
 
@@ -20,6 +20,7 @@ Usage:
   run-scenario.sh gameplay <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
   run-scenario.sh gameplay-chaos <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend] [flap-rate] [flap-stages]
   run-scenario.sh gameplay-raid <players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
+  run-scenario.sh mixed-product <total-players> <ranked-players> <duration-sec> <total-http-rps> [ramp-sec] [include-spend]
   run-scenario.sh party <players> [ramp-sec]
   run-scenario.sh matchmaking <players> [join-timeout-sec] [join-ramp-sec] [connect-ramp-sec]
   run-scenario.sh http <global-rps> <duration> [ramp-duration]
@@ -48,7 +49,8 @@ run_party() {
   local max_per_players=$(( (base_pairs + (pair_remainder > 0 ? 1 : 0)) * 2 ))
   local lead=$((max_per_players * 23 / 10 + 240))
   (( lead < 300 )) && lead=300
-  local start_at=$(( $(date +%s) + lead ))
+  local start_at="${SCENARIO_START_AT:-$(( $(date +%s) + lead ))}"
+  positive_int SCENARIO_START_AT "$start_at"
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-party-${players}-$$"
   local local_dir="$REPORT_ROOT/$stamp"
@@ -65,12 +67,12 @@ run_party() {
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local db_flag='--no-db-stats'
-    (( index == 0 )) && db_flag=''
+    if (( index == 0 )) && [[ "${COLLECT_DB_STATS:-true}" == true ]]; then db_flag=''; fi
     local command
     command="$(remote_prefix)npx tsx scripts/chaos/friendly.ts --target=staging --clients=$worker_players --offset=$offset --ramp-s=$ramp --start-at=$start_at $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
-    "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
+    launch_remote "$ip" "$command" "$remote_marker" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     markers+=("$remote_marker")
@@ -84,6 +86,8 @@ run_party() {
     if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
+    collect_one "${ips[$index]}" "${markers[$index]}.log" \
+      "$local_dir/worker-$(printf '%02d' "$index").log" || failed=$((failed + 1))
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -148,6 +152,16 @@ with_completion_marker() {
   local started_marker="${marker}.started"
   printf "rm -f '%s' '%s' && printf 'started\\n' > '%s' && %s; rc=\$?; printf '%%s\\n' \"\$rc\" > '%s'; exit \"\$rc\"" \
     "$marker" "$started_marker" "$started_marker" "$command" "$marker"
+}
+
+launch_remote() {
+  local ip="$1"
+  local command="$2"
+  local marker="$3"
+  local encoded
+  encoded="$(printf '%s' "$command" | base64 | tr -d '\n')"
+  "${SSH[@]}" "root@$ip" \
+    "printf '%s' '$encoded' | base64 -d > '${marker}.run.sh' && chmod 700 '${marker}.run.sh' && nohup bash '${marker}.run.sh' > '${marker}.log' 2>&1 < /dev/null &"
 }
 
 wait_for_worker() {
@@ -234,9 +248,10 @@ run_gameplay() {
   local rps_remainder=$((total_rps % workers))
   local lead=$((max_per_players * 23 / 10 + 180))
   (( lead < 300 )) && lead=300
-  local start_at=$(( $(date +%s) + lead ))
+  local start_at="${SCENARIO_START_AT:-$(( $(date +%s) + lead ))}"
+  positive_int SCENARIO_START_AT "$start_at"
   local stamp
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)-gameplay-${players}"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-gameplay-${players}-$$"
   local local_dir="$REPORT_ROOT/$stamp"
   mkdir -p "$local_dir"
   printf 'workers=%d max-players/worker=%d pair-remainder=%d global-http-rps=%d base-rps/worker=%d rps-remainder=%d synchronized=%s\n' \
@@ -254,7 +269,7 @@ run_gameplay() {
     remote_report="/opt/quizball-load/reports/${stamp}-worker-$(printf '%02d' "$index").json"
     log="$local_dir/worker-$(printf '%02d' "$index").log"
     local db_flag='--no-db-stats'
-    (( index == 0 )) && db_flag=''
+    if (( index == 0 )) && [[ "${COLLECT_DB_STATS:-true}" == true ]]; then db_flag=''; fi
     local command
     local spend_flag=''
     [[ "$include_spend" == true ]] && spend_flag='--include-spend=true'
@@ -266,7 +281,7 @@ run_gameplay() {
     command="$(remote_prefix)npx tsx scripts/chaos/run.ts --target=staging --users=$worker_players --offset=$offset --sockets=$worker_players --matches-per-client=1 --total-rps=$worker_rps --duration=$duration --ramp-s=$ramp --start-at=$start_at --flap-rate=$flap_rate --flap-stage=$flap_stages $expected_fault_flag $login_flag $spend_flag $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
-    "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
+    launch_remote "$ip" "$command" "$remote_marker" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     markers+=("$remote_marker")
@@ -280,6 +295,8 @@ run_gameplay() {
     if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
+    collect_one "${ips[$index]}" "${markers[$index]}.log" \
+      "$local_dir/worker-$(printf '%02d' "$index").log" || failed=$((failed + 1))
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -291,6 +308,76 @@ run_gameplay() {
   printf 'reports=%s failed_workers=%d aggregate_failed=%d\n' \
     "$local_dir" "$failed" "$aggregate_failed"
   (( failed == 0 && aggregate_failed == 0 )) || return 1
+}
+
+run_mixed_product() {
+  local total_players="$1"
+  local ranked_players="$2"
+  local duration="$3"
+  local total_rps="$4"
+  local ramp="${5:-120}"
+  local include_spend="${6:-true}"
+  positive_int total-players "$total_players"
+  positive_int ranked-players "$ranked_players"
+  positive_int duration "$duration"
+  positive_int total-http-rps "$total_rps"
+  positive_int ramp "$ramp"
+  [[ "$include_spend" == true || "$include_spend" == false ]] \
+    || die 'include-spend must be true or false'
+  (( total_players % 2 == 0 )) || die 'total-players must be even'
+  (( ranked_players % 2 == 0 )) || die 'ranked-players must be even'
+  (( ranked_players < total_players )) || die 'ranked-players must be smaller than total-players'
+
+  local party_players=$((total_players - ranked_players))
+  (( party_players % 2 == 0 )) || die 'inferred party players must be even'
+  local workers
+  workers="$(require_worker_count mixed 2)"
+  local max_users_per_worker=$(( (total_players + workers - 1) / workers ))
+  # Both account namespaces prepare concurrently on each source IP. Budget the
+  # lead time for their combined user count so provisioning is outside the
+  # measured phase even when Auth asks either process to back off.
+  local lead=$((max_users_per_worker * 23 / 10 + 300))
+  (( lead < 600 )) && lead=600
+  local start_at=$(( $(date +%s) + lead ))
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-mixed-${total_players}-$$"
+  local mixed_dir="$REPORT_ROOT/$stamp"
+  mkdir -p "$mixed_dir"
+  printf 'mixed total=%d ranked=%d party=%d http-rps=%d synchronized=%s\n' \
+    "$total_players" "$ranked_players" "$party_players" "$total_rps" \
+    "$(format_epoch_utc "$start_at")"
+
+  (
+    REPORT_ROOT="$mixed_dir/ranked" \
+    SCENARIO_START_AT="$start_at" \
+    COLLECT_DB_STATS=true \
+      run_gameplay "$ranked_players" "$duration" "$total_rps" "$ramp" "$include_spend"
+  ) >"$mixed_dir/ranked-orchestration.log" 2>&1 &
+  local ranked_pid=$!
+  (
+    REPORT_ROOT="$mixed_dir/party" \
+    SCENARIO_START_AT="$start_at" \
+    COLLECT_DB_STATS=false \
+      run_party "$party_players" "$ramp"
+  ) >"$mixed_dir/party-orchestration.log" 2>&1 &
+  local party_pid=$!
+
+  local ranked_failed=0 party_failed=0
+  if ! wait "$ranked_pid"; then ranked_failed=1; fi
+  if ! wait "$party_pid"; then party_failed=1; fi
+
+  local ranked_report party_report aggregate_failed=0
+  ranked_report="$(find "$mixed_dir/ranked" -type f -name aggregate.json -print -quit)"
+  party_report="$(find "$mixed_dir/party" -type f -name aggregate.json -print -quit)"
+  [[ -n "$ranked_report" ]] || die 'ranked aggregate report was not produced'
+  [[ -n "$party_report" ]] || die 'party aggregate report was not produced'
+  npx tsx "$REPO_ROOT/scripts/chaos/mixed-product-aggregate.ts" \
+    --expected-total-clients="$total_players" \
+    --ranked="$ranked_report" --party="$party_report" \
+    --report="$mixed_dir/aggregate.json" || aggregate_failed=1
+  printf 'reports=%s ranked_failed=%d party_failed=%d aggregate_failed=%d\n' \
+    "$mixed_dir" "$ranked_failed" "$party_failed" "$aggregate_failed"
+  (( ranked_failed == 0 && party_failed == 0 && aggregate_failed == 0 )) || return 1
 }
 
 run_matchmaking() {
@@ -334,7 +421,7 @@ run_matchmaking() {
     command="$(remote_prefix)npm run chaos:matchmaking -- --target=staging --clients=$worker_players --offset=$offset --connect-ramp-s=$connect_ramp --join-ramp-s=$join_ramp --timeout-s=$timeout --start-at=$start_at --defer-pair-validation $db_flag --report=$remote_report"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
-    "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
+    launch_remote "$ip" "$command" "$remote_marker" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     markers+=("$remote_marker")
@@ -348,6 +435,8 @@ run_matchmaking() {
     if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
+    collect_one "${ips[$index]}" "${markers[$index]}.log" \
+      "$local_dir/worker-$(printf '%02d' "$index").log" || failed=$((failed + 1))
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -396,7 +485,7 @@ run_k6() {
     command="$(remote_prefix)TARGET=staging MODE=$k6_mode API_PROFILE=$api_profile USERS=$users_per_worker SHARD_START=$offset RATE=$worker_rate START_RATE=1 TIME_UNIT=1s RAMP_DURATION=$ramp DURATION=$duration PREALLOCATED_VUS=$((worker_rate * 2)) MAX_VUS=$((worker_rate * 4)) k6 run --summary-export $remote_report scripts/load/k6/auth-api.k6.js"
     remote_marker="${remote_report}.exit"
     command="$(with_completion_marker "$command" "$remote_marker")"
-    "${SSH[@]}" "root@$ip" "$command" >"$log" 2>&1 &
+    launch_remote "$ip" "$command" "$remote_marker" >"$log" 2>&1 &
     pids+=("$!")
     reports+=("$remote_report")
     markers+=("$remote_marker")
@@ -409,6 +498,8 @@ run_k6() {
     if ! wait_for_worker "${ips[$index]}" "${pids[$index]}" "${markers[$index]}"; then
       failed=$((failed + 1))
     fi
+    collect_one "${ips[$index]}" "${markers[$index]}.log" \
+      "$local_dir/worker-$(printf '%02d' "$index").log" || failed=$((failed + 1))
     collect_one "${ips[$index]}" "${reports[$index]}" \
       "$local_dir/worker-$(printf '%02d' "$index").json" || failed=$((failed + 1))
   done
@@ -426,6 +517,7 @@ main() {
     gameplay) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" ;;
     gameplay-chaos) [[ $# -ge 4 && $# -le 8 ]] || die 'gameplay-chaos requires players duration total-rps [ramp] [include-spend] [flap-rate] [flap-stages]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" "${7:-0.5}" "${8:-search,draft,gate,match}" false ;;
     gameplay-raid) [[ $# -ge 4 && $# -le 6 ]] || die 'gameplay-raid requires players duration total-rps [ramp] [include-spend]'; run_gameplay "$2" "$3" "$4" "${5:-60}" "${6:-false}" 0 match true ;;
+    mixed-product) [[ $# -ge 5 && $# -le 7 ]] || die 'mixed-product requires total-players ranked-players duration total-rps [ramp] [include-spend]'; run_mixed_product "$2" "$3" "$4" "$5" "${6:-120}" "${7:-true}" ;;
     party) [[ $# -ge 2 && $# -le 3 ]] || die 'party requires players [ramp]'; run_party "$2" "${3:-120}" ;;
     matchmaking) [[ $# -ge 2 && $# -le 5 ]] || die 'matchmaking requires players [timeout] [join-ramp] [connect-ramp]'; run_matchmaking "$2" "${3:-30}" "${4:-1}" "${5:-60}" ;;
     http) [[ $# -ge 3 && $# -le 4 ]] || die 'http requires rps duration [ramp]'; run_k6 api mixed "$2" "$3" "${4:-2m}" ;;

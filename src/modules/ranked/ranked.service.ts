@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { getOrLoadJson } from '../../core/json-cache.js';
 import { getRequestId } from '../../core/request-context.js';
 import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
@@ -19,6 +20,7 @@ import type {
 
 const DEFAULT_PLACEMENT_MATCHES = 3;
 const DEFAULT_PLACEMENT_ANCHOR_RP = 1900;
+const LIVE_LEADERBOARD_CACHE_TTL_SECONDS = 5;
 
 // ── Placement seed range ─────────────────────────────────────────────────────
 // The best possible placement run lands at the TOP OF RESERVE (875 RP) — every
@@ -637,7 +639,11 @@ export const rankedService = {
   },
 
   async getLeaderboard(limit: number, offset: number, country?: string) {
-    return rankedRepo.listLeaderboard(limit, offset, country);
+    const scope = country ? `country:${encodeURIComponent(country)}` : 'global';
+    const key = `ranked:leaderboard:v1:${scope}:${limit}:${offset}`;
+    return getOrLoadJson(key, LIVE_LEADERBOARD_CACHE_TTL_SECONDS, () =>
+      rankedRepo.listLeaderboard(limit, offset, country)
+    );
   },
 
   async listSeasons() {

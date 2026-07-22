@@ -91,6 +91,9 @@ scripts/load/distributed/run-scenario.sh gameplay 1000 900 500
 scripts/load/distributed/run-scenario.sh gameplay 1000 900 500 60 true
 # Real lobby create/join/ready/start and complete party-quiz matches.
 scripts/load/distributed/run-scenario.sh party 1000 120
+# One synchronized 2k product mix: 1k ranked + 1k party, while ranked users
+# also drive 600 RPS across normal APIs, daily completion and safe coin spend.
+scripts/load/distributed/run-scenario.sh mixed-product 2000 1000 900 600 120 true
 # Separate transport connection pressure from the synchronized queue storm.
 # This connects 5k clients over 120s, then joins the queue at 100 clients/s.
 scripts/load/distributed/run-scenario.sh matchmaking 5000 90 50 120
@@ -101,6 +104,11 @@ scripts/load/distributed/run-scenario.sh http-hot 120 5m 1m
 
 Only worker zero runs direct DB sampling. Other workers pass `--no-db-stats` so
 monitoring does not become a distributed workload of its own.
+
+The mixed-product scenario uses separate account namespaces for ranked and
+party clients, starts both workloads at the same timestamp, and emits a parent
+aggregate that fails unless both component aggregates pass and all expected
+clients participated. Account preparation remains outside the measured phase.
 
 Gameplay runs also emit `aggregate.json`. It fails unless every expected socket
 client completes, every worker passes its SLOs, all HTTP requests complete, and

@@ -44,6 +44,7 @@ import {
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
+import { socketDbTaskLimiter } from './socket-db-task-limiter.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -69,6 +70,34 @@ export const SOCKET_HEARTBEAT_CONFIG = {
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
+
+function runSocketDbTask(
+  operation: string,
+  userId: string,
+  task: () => Promise<unknown>
+): void {
+  void socketDbTaskLimiter.run(task).catch((error) => {
+    logger.warn({ error, operation, userId }, 'Socket DB task failed');
+  });
+}
+
+type DisconnectDbTask = 'lobby_disconnect' | 'match_disconnect';
+
+/**
+ * Route a disconnect through the state it was actually bound to. A known
+ * match socket cannot also need the lobby DB fallback (and vice versa), while
+ * an unbound socket still needs both defensive recovery lookups.
+ */
+function selectDisconnectDbTasks(binding: {
+  lobbyId?: string;
+  matchId?: string;
+}): DisconnectDbTask[] {
+  const hasLobby = Boolean(binding.lobbyId);
+  const hasMatch = Boolean(binding.matchId);
+  if (hasLobby && !hasMatch) return ['lobby_disconnect'];
+  if (hasMatch && !hasLobby) return ['match_disconnect'];
+  return ['lobby_disconnect', 'match_disconnect'];
+}
 
 async function trackUserOnline(userId: string): Promise<void> {
   const redis = getRedisClient();
@@ -433,8 +462,17 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       const durationMs = Date.now() - (socket.data.connectedAt ?? connectedAt);
       trackSocketDisconnected(user.id, reason, durationMs);
       warmupRealtimeService.handleSocketDisconnect(socket.id);
-      void lobbyRealtimeService.handleLobbyDisconnect(io, socket);
-      void matchRealtimeService.handleMatchDisconnect(io, socket);
+      const disconnectDbTasks = selectDisconnectDbTasks(socket.data);
+      if (disconnectDbTasks.includes('lobby_disconnect')) {
+        runSocketDbTask('lobby_disconnect', user.id, () =>
+          lobbyRealtimeService.handleLobbyDisconnect(io, socket)
+        );
+      }
+      if (disconnectDbTasks.includes('match_disconnect')) {
+        runSocketDbTask('match_disconnect', user.id, () =>
+          matchRealtimeService.handleMatchDisconnect(io, socket)
+        );
+      }
       void rankedMatchmakingService.handleSocketDisconnect(io, socket);
       void trackUserOffline(io, user.id);
       scheduleOnlineCountBroadcast(io);
@@ -457,3 +495,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
   return io;
 }
+
+export const __socketServerInternals = {
+  selectDisconnectDbTasks,
+};

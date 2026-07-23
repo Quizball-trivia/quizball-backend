@@ -662,6 +662,57 @@ export const matchesService = {
       }))
     );
 
+    if (params.variant === 'friendly_party_quiz') {
+      try {
+        // Party clients answer at nearly the same time, so lazily selecting and
+        // inserting one question per match on every round created a thundering
+        // herd of two extra DB acquisitions per transition. Select the complete
+        // pack once and bulk-insert it. The existing lazy path remains a safe
+        // fallback for any candidate that cannot be normalized.
+        const candidates = await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+          matchId: match.id,
+          categoryIds: [params.categoryAId],
+          difficulties: ['easy', 'medium', 'hard'],
+          limit: totalQuestions,
+        });
+        const seededQuestions = candidates.flatMap((candidate, qIndex) => {
+          const parsed = questionPayloadSchema.safeParse(candidate.payload);
+          if (!parsed.success || parsed.data.type !== 'mcq_single') return [];
+          const correctIndex = parsed.data.options.findIndex((option) => option.is_correct === true);
+          if (correctIndex < 0) return [];
+          return [{
+            qIndex,
+            questionId: candidate.id,
+            categoryId: candidate.category_id,
+            correctIndex,
+            phaseKind: 'normal' as const,
+            phaseRound: qIndex + 1,
+          }];
+        });
+        if (seededQuestions.length > 0) {
+          await matchQuestionsRepo.insertMatchQuestions(match.id, seededQuestions);
+        }
+        if (seededQuestions.length < totalQuestions) {
+          logger.warn(
+            {
+              matchId: match.id,
+              requested: totalQuestions,
+              seeded: seededQuestions.length,
+            },
+            'Party quiz question pack was only partially seeded; lazy selection will fill gaps',
+          );
+        }
+      } catch (err) {
+        // Match creation must remain available if pre-seeding is temporarily
+        // overloaded. The durable kickoff and existing lazy per-round picker
+        // can still construct the pack later.
+        logger.warn(
+          { err, matchId: match.id },
+          'Failed to pre-seed party quiz question pack; using lazy selection',
+        );
+      }
+    }
+
     return {
       match,
       playerIds,
@@ -700,6 +751,63 @@ export const matchesService = {
       shooterSeat: row.shooter_seat as 1 | 2 | null,
       attackerSeat: row.attacker_seat as 1 | 2 | null,
     };
+  },
+
+  /**
+   * Persist the server-authoritative party question state and its visible
+   * timing as one SQL statement. A joined target CTE means a missing match or
+   * question updates neither row; any statement failure rolls both updates
+   * back. Keeping this as one statement also avoids the extra begin/commit
+   * round trips of an explicit transaction on the synchronized kickoff path.
+   */
+  async persistPartyQuestionDispatch(params: {
+    matchId: string;
+    qIndex: number;
+    statePayload: unknown;
+    shownAt: Date;
+    deadlineAt: Date;
+  }): Promise<void> {
+    const jsonPayload = sql.json(params.statePayload as Json ?? null);
+    const [result] = await sql<Array<{ match_updated: boolean; question_updated: boolean }>>`
+      WITH target AS (
+        SELECT m.id AS match_id, mq.q_index
+        FROM matches m
+        JOIN match_questions mq
+          ON mq.match_id = m.id
+         AND mq.q_index = ${params.qIndex}
+        WHERE m.id = ${params.matchId}
+      ),
+      updated_match AS (
+        UPDATE matches m
+        SET state_payload = ${jsonPayload},
+            current_q_index = GREATEST(m.current_q_index, ${params.qIndex}),
+            updated_at = NOW()
+        FROM target
+        WHERE m.id = target.match_id
+        RETURNING m.id
+      ),
+      updated_question AS (
+        UPDATE match_questions mq
+        SET shown_at = ${params.shownAt},
+            deadline_at = ${params.deadlineAt}
+        FROM target
+        WHERE mq.match_id = target.match_id
+          AND mq.q_index = target.q_index
+        RETURNING mq.match_id
+      )
+      SELECT
+        EXISTS (SELECT 1 FROM updated_match) AS match_updated,
+        EXISTS (SELECT 1 FROM updated_question) AS question_updated
+    `;
+
+    if (!result?.match_updated || !result.question_updated) {
+      throw new AppError(
+        'Party question dispatch target is missing',
+        409,
+        ErrorCode.CONFLICT,
+        { matchId: params.matchId, qIndex: params.qIndex },
+      );
+    }
   },
 
   async computeAvgTimes(matchId: string): Promise<Map<string, number | null>> {
@@ -817,17 +925,15 @@ export const matchesService = {
   },
 
   /**
-   * Atomic party-quiz answer write. Inserts a match_answers row
-   * (idempotent via ON CONFLICT) and on first-write increments the
-   * player's totals inside the same DB transaction.
+   * Atomic party-quiz answer write. One CTE statement inserts the answer
+   * idempotently and updates the player's totals only when that insert won.
    *
-   * On duplicate (a retry): the second call's insert no-ops, and we
-   * read the already-present rows so the caller can echo back the
-   * authoritative state without re-applying the score delta.
-   *
-   * Was on matches.repo as `recordPartyQuizAnswerIfMissing`; moved
-   * here so the cross-entity transaction is owned by the service
-   * layer. Repos stay table-pure.
+   * This deliberately stays one SQL statement instead of `sql.begin` with
+   * separate INSERT/UPDATE calls. At streamer load the managed-Postgres
+   * network round trips for BEGIN + two statements + COMMIT occupied every
+   * app-side pool slot even though Postgres execution itself was sub-ms.
+   * A single statement has the same atomicity and duplicate protection with
+   * one quarter of the connection-round-trip pressure.
    */
   async recordPartyQuizAnswerIfMissing(data: {
     matchId: string;
@@ -843,55 +949,91 @@ export const matchesService = {
     shooterSeat?: number | null;
   }): Promise<{ inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null }> {
     try {
-      return await sql.begin(async (tx) => {
-        const insertedAnswer = await matchAnswersRepo.insertMatchAnswerIfMissingInTx(tx, data);
+      const [result] = await sql<Array<{
+        inserted: boolean;
+        answer: MatchAnswerRow | null;
+        player: MatchPlayerRow | null;
+      }>>`
+        WITH inserted_answer AS (
+          INSERT INTO match_answers (
+            match_id,
+            q_index,
+            user_id,
+            selected_index,
+            is_correct,
+            time_ms,
+            points_earned,
+            answer_payload,
+            phase_kind,
+            phase_round,
+            shooter_seat
+          )
+          SELECT
+            ${data.matchId},
+            ${data.qIndex},
+            ${data.userId},
+            ${data.selectedIndex},
+            ${data.isCorrect},
+            ${data.timeMs},
+            ${data.pointsEarned},
+            ${sql.json(data.answerPayload ?? {})},
+            ${data.phaseKind ?? 'normal'},
+            ${data.phaseRound ?? null},
+            ${data.shooterSeat ?? null}
+          WHERE EXISTS (
+            SELECT 1
+            FROM match_players
+            WHERE match_id = ${data.matchId}
+              AND user_id = ${data.userId}
+          )
+          ON CONFLICT (match_id, q_index, user_id) DO NOTHING
+          RETURNING *
+        ),
+        updated_player AS (
+          UPDATE match_players
+          SET total_points = total_points + ${data.pointsEarned},
+              correct_answers = correct_answers + ${data.isCorrect ? 1 : 0}
+          WHERE match_id = ${data.matchId}
+            AND user_id = ${data.userId}
+            AND EXISTS (SELECT 1 FROM inserted_answer)
+          RETURNING *
+        ),
+        selected_answer AS (
+          SELECT * FROM inserted_answer
+          UNION ALL
+          SELECT ma.*
+          FROM match_answers ma
+          WHERE ma.match_id = ${data.matchId}
+            AND ma.q_index = ${data.qIndex}
+            AND ma.user_id = ${data.userId}
+            AND NOT EXISTS (SELECT 1 FROM inserted_answer)
+          LIMIT 1
+        ),
+        selected_player AS (
+          SELECT * FROM updated_player
+          UNION ALL
+          SELECT mp.*
+          FROM match_players mp
+          WHERE mp.match_id = ${data.matchId}
+            AND mp.user_id = ${data.userId}
+            AND NOT EXISTS (SELECT 1 FROM updated_player)
+          LIMIT 1
+        )
+        SELECT
+          EXISTS (SELECT 1 FROM inserted_answer) AS inserted,
+          (SELECT row_to_json(answer_row) FROM selected_answer answer_row) AS answer,
+          (SELECT row_to_json(player_row) FROM selected_player player_row) AS player
+      `;
 
-        if (insertedAnswer) {
-          const updatedPlayer = await matchPlayersRepo.updatePlayerTotalsInTx(
-            tx,
-            data.matchId,
-            data.userId,
-            data.pointsEarned,
-            data.isCorrect,
-          );
-
-          // UPDATE must hit one row — otherwise the answer persists without
-          // the score increment. Throw to roll back the transaction.
-          if (!updatedPlayer) {
-            throw new AppError(
-              'match_players row missing during party answer insert',
-              500,
-              ErrorCode.INTERNAL_ERROR,
-              { matchId: data.matchId, userId: data.userId },
-            );
-          }
-
-          return {
-            inserted: true,
-            answer: insertedAnswer,
-            player: updatedPlayer,
-          };
-        }
-
-        // ON CONFLICT path — answer already existed. Read back the
-        // authoritative rows so the caller has consistent state.
-        const existingAnswer = await matchAnswersRepo.getAnswerForUserInTx(
-          tx,
-          data.matchId,
-          data.qIndex,
-          data.userId,
+      if (!result?.answer || !result.player) {
+        throw new AppError(
+          'Party answer write returned incomplete state',
+          500,
+          ErrorCode.INTERNAL_ERROR,
+          { matchId: data.matchId, qIndex: data.qIndex, userId: data.userId },
         );
-        const existingPlayerRows = await tx.unsafe<MatchPlayerRow[]>(
-          `SELECT * FROM match_players WHERE match_id = $1 AND user_id = $2`,
-          [data.matchId, data.userId],
-        );
-
-        return {
-          inserted: false,
-          answer: existingAnswer,
-          player: existingPlayerRows[0] ?? null,
-        };
-      }) as { inserted: boolean; answer: MatchAnswerRow | null; player: MatchPlayerRow | null };
+      }
+      return result;
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw new AppError('Failed to record party quiz answer', 500, ErrorCode.INTERNAL_ERROR, err);

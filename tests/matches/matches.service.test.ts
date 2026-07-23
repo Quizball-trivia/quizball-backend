@@ -11,6 +11,8 @@ const buildAiMatchContextMock = vi.fn();
 const markMatchCompletedMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const recordUserModeStatsMock = vi.fn();
+const getRandomQuestionCandidatesForMatchMock = vi.fn();
+const insertMatchQuestionsMock = vi.fn();
 
 // Entity-repo mocks for the new cross-entity service orchestrators
 // (incrementGoalsAndInsertEventIfMissing, recordPartyQuizAnswerIfMissing).
@@ -19,6 +21,7 @@ const updatePlayerGoalTotalsInTxMock = vi.fn();
 const insertMatchAnswerIfMissingInTxMock = vi.fn();
 const updatePlayerTotalsInTxMock = vi.fn();
 const getAnswerForUserInTxMock = vi.fn();
+const sqlQueryMock = vi.fn();
 
 // sql.begin's callback often does an inline `tx.unsafe(...)` read
 // (recordPartyQuizAnswerIfMissing reads the existing match_players row on
@@ -37,7 +40,7 @@ const sqlBeginMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
 });
 
 vi.mock('../../src/db/index.js', () => ({
-  sql: Object.assign((..._args: unknown[]) => undefined, {
+  sql: Object.assign((...args: unknown[]) => sqlQueryMock(...args), {
     begin: (cb: (tx: unknown) => Promise<unknown>) => sqlBeginMock(cb),
     json: (v: unknown) => v,
   }),
@@ -93,6 +96,14 @@ vi.mock('../../src/modules/matches/match-answers.repo.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/matches/match-questions.repo.js', () => ({
+  matchQuestionsRepo: {
+    getRandomQuestionCandidatesForMatch: (...args: unknown[]) =>
+      getRandomQuestionCandidatesForMatchMock(...args),
+    insertMatchQuestions: (...args: unknown[]) => insertMatchQuestionsMock(...args),
+  },
+}));
+
 vi.mock('../../src/modules/users/users.repo.js', () => ({
   usersRepo: {
     getById: (...args: unknown[]) => getUserByIdMock(...args),
@@ -115,6 +126,8 @@ describe('matches.service friendly-party-quiz variants', () => {
     getUserByIdMock.mockResolvedValue({ id: 'user-1', is_ai: false });
     ensureProfileMock.mockResolvedValue({ placementStatus: 'placed' });
     buildAiMatchContextMock.mockReturnValue(null);
+    getRandomQuestionCandidatesForMatchMock.mockResolvedValue([]);
+    insertMatchQuestionsMock.mockResolvedValue([]);
   });
 
   it('creates the initial party quiz state with the default v1 question count', async () => {
@@ -133,6 +146,34 @@ describe('matches.service friendly-party-quiz variants', () => {
       winnerDecisionMethod: null,
       stateVersionCounter: 0,
     });
+  });
+
+  it('persists party question state and timing with one atomic SQL statement', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    sqlQueryMock.mockResolvedValue([{ match_updated: true, question_updated: true }]);
+
+    await matchesService.persistPartyQuestionDispatch({
+      matchId: 'match-1',
+      qIndex: 2,
+      statePayload: { currentQuestion: { qIndex: 2, correctIndex: 1 } },
+      shownAt: new Date('2026-07-20T21:00:00.000Z'),
+      deadlineAt: new Date('2026-07-20T21:00:13.000Z'),
+    });
+
+    expect(sqlQueryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects party question dispatch when the atomic target is missing', async () => {
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    sqlQueryMock.mockResolvedValue([{ match_updated: false, question_updated: false }]);
+
+    await expect(matchesService.persistPartyQuestionDispatch({
+      matchId: 'missing-match',
+      qIndex: 0,
+      statePayload: { currentQuestion: { qIndex: 0, correctIndex: 1 } },
+      shownAt: new Date('2026-07-20T21:00:00.000Z'),
+      deadlineAt: new Date('2026-07-20T21:00:13.000Z'),
+    })).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('resolves explicit and fallback match variants correctly', async () => {
@@ -222,6 +263,58 @@ describe('matches.service friendly-party-quiz variants', () => {
     ]);
     expect(result.playerIds).toEqual(['host-user', 'guest-a']);
     expect(result.variant).toBe('friendly_party_quiz');
+  });
+
+  it('pre-seeds a complete party question pack in one bulk insert', async () => {
+    listMembersWithUserMock.mockResolvedValue([
+      { user_id: 'host-user' },
+      { user_id: 'guest-a' },
+    ]);
+    getRandomQuestionCandidatesForMatchMock.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        id: `question-${index}`,
+        category_id: 'cat-party',
+        payload: {
+          type: 'mcq_single',
+          options: [
+            { id: 'a', text: { en: 'Correct' }, is_correct: true },
+            { id: 'b', text: { en: 'Wrong B' }, is_correct: false },
+            { id: 'c', text: { en: 'Wrong C' }, is_correct: false },
+            { id: 'd', text: { en: 'Wrong D' }, is_correct: false },
+          ],
+        },
+      })),
+    );
+
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
+    await matchesService.createMatchFromLobby({
+      lobbyId: 'lobby-party-pack',
+      mode: 'friendly',
+      variant: 'friendly_party_quiz',
+      hostUserId: 'host-user',
+      categoryAId: 'cat-party',
+      categoryBId: null,
+    });
+
+    expect(getRandomQuestionCandidatesForMatchMock).toHaveBeenCalledWith({
+      matchId: 'match-1',
+      categoryIds: ['cat-party'],
+      difficulties: ['easy', 'medium', 'hard'],
+      limit: 10,
+    });
+    expect(insertMatchQuestionsMock).toHaveBeenCalledTimes(1);
+    const insertedPack = insertMatchQuestionsMock.mock.calls[0]?.[1] as Array<{ qIndex: number }>;
+    expect(insertedPack).toHaveLength(10);
+    expect(insertedPack.map((question) => question.qIndex)).toEqual(
+      Array.from({ length: 10 }, (_, index) => index),
+    );
+    expect(insertMatchQuestionsMock).toHaveBeenCalledWith(
+      'match-1',
+      expect.arrayContaining([
+        expect.objectContaining({ qIndex: 0, questionId: 'question-0', correctIndex: 0 }),
+        expect.objectContaining({ qIndex: 9, questionId: 'question-9', correctIndex: 0 }),
+      ]),
+    );
   });
 
   it('rejects party quiz creation when the lobby has fewer than 2 members', async () => {
@@ -478,63 +571,58 @@ describe('matches.service recordPartyQuizAnswerIfMissing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    sqlBeginMock.mockImplementation(async (cb) => {
-      const tx = { unsafe: (...args: unknown[]) => txUnsafeMock(...args) };
-      return cb(tx);
-    });
   });
 
-  it('inserts the answer and updates player totals on first write', async () => {
-    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1', is_correct: true, points_earned: 10 });
-    updatePlayerTotalsInTxMock.mockResolvedValue({ id: 'mp-1', total_points: 10, correct_answers: 1 });
+  it('returns the inserted answer and updated totals from one atomic statement', async () => {
+    sqlQueryMock.mockResolvedValue([{
+      inserted: true,
+      answer: { id: 'ma-1', is_correct: true, points_earned: 10 },
+      player: { id: 'mp-1', total_points: 10, correct_answers: 1 },
+    }]);
 
     const { matchesService } = await import('../../src/modules/matches/matches.service.js');
     const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
 
-    expect(insertMatchAnswerIfMissingInTxMock).toHaveBeenCalledTimes(1);
-    expect(updatePlayerTotalsInTxMock).toHaveBeenCalledWith(
-      expect.anything(), // the tx sentinel
-      matchId,
-      userId,
-      10,
-      true,
-    );
+    expect(sqlQueryMock).toHaveBeenCalledTimes(1);
+    expect(sqlBeginMock).not.toHaveBeenCalled();
     expect(result.inserted).toBe(true);
     expect(result.answer).toEqual({ id: 'ma-1', is_correct: true, points_earned: 10 });
     expect(result.player).toEqual({ id: 'mp-1', total_points: 10, correct_answers: 1 });
   });
 
-  it('reads back existing rows on duplicate without scoring again (no double-count)', async () => {
-    insertMatchAnswerIfMissingInTxMock.mockResolvedValue(null); // ON CONFLICT path
-    getAnswerForUserInTxMock.mockResolvedValue({ id: 'ma-existing', is_correct: true });
-    // The service's existing-player read uses tx.unsafe directly. Mock the
-    // SELECT to return one row.
-    txUnsafeMock.mockResolvedValue([{ id: 'mp-existing', total_points: 10 }]);
+  it('returns existing rows on duplicate without a second transaction', async () => {
+    sqlQueryMock.mockResolvedValue([{
+      inserted: false,
+      answer: { id: 'ma-existing', is_correct: true },
+      player: { id: 'mp-existing', total_points: 10 },
+    }]);
 
     const { matchesService } = await import('../../src/modules/matches/matches.service.js');
     const result = await matchesService.recordPartyQuizAnswerIfMissing(answerInput);
 
-    expect(insertMatchAnswerIfMissingInTxMock).toHaveBeenCalledTimes(1);
-    expect(updatePlayerTotalsInTxMock).not.toHaveBeenCalled(); // crucial: no double-score
+    expect(sqlQueryMock).toHaveBeenCalledTimes(1);
+    expect(sqlBeginMock).not.toHaveBeenCalled();
     expect(result.inserted).toBe(false);
     expect(result.answer).toEqual({ id: 'ma-existing', is_correct: true });
     expect(result.player).toEqual({ id: 'mp-existing', total_points: 10 });
   });
 
-  it('throws (rolling back) if match_players row is missing during first write', async () => {
-    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1' });
-    updatePlayerTotalsInTxMock.mockResolvedValue(null); // FK violation analog
+  it('throws if the atomic statement returns incomplete state', async () => {
+    sqlQueryMock.mockResolvedValue([{
+      inserted: true,
+      answer: { id: 'ma-1' },
+      player: null,
+    }]);
 
     const { matchesService } = await import('../../src/modules/matches/matches.service.js');
 
     await expect(
       matchesService.recordPartyQuizAnswerIfMissing(answerInput),
-    ).rejects.toThrow(/match_players row missing/);
+    ).rejects.toThrow(/incomplete state/);
   });
 
-  it('propagates other errors from the player update so sql.begin can roll back', async () => {
-    insertMatchAnswerIfMissingInTxMock.mockResolvedValue({ id: 'ma-1' });
-    updatePlayerTotalsInTxMock.mockRejectedValue(new Error('player update failed'));
+  it('wraps database errors from the atomic statement', async () => {
+    sqlQueryMock.mockRejectedValue(new Error('statement failed'));
 
     const { matchesService } = await import('../../src/modules/matches/matches.service.js');
 

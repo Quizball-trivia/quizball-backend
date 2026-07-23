@@ -128,9 +128,11 @@ export async function handleAnswer(
   }
 
   if (resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz') {
-    // Party quiz needs the full match row (state merge under lock); it loads
-    // it itself — only the rarer party path pays the Postgres read now.
-    await handlePartyQuizAnswer(io, socket, payload);
+    // Party quiz can use the same authoritative Redis cache as the possession
+    // path. Passing it through avoids re-reading the match and roster from
+    // Postgres for every answer while the atomic answer write remains the
+    // durable source of truth.
+    await handlePartyQuizAnswer(io, socket, payload, undefined, cache);
     return;
   }
 
@@ -218,6 +220,7 @@ export async function handleCluesAnswer(
 }
 
 export async function handleReadyForNextQuestion(
+  io: QuizballServer,
   socket: QuizballSocket,
   payload: MatchReadyForNextQuestionPayload
 ): Promise<void> {
@@ -229,7 +232,7 @@ export async function handleReadyForNextQuestion(
 
   const variant = resolveMatchVariant(cache.statePayload, cache.mode);
   if (variant === 'friendly_party_quiz') {
-    handlePartyQuizReadyForNextQuestion(userId, payload.matchId, payload.qIndex);
+    await handlePartyQuizReadyForNextQuestion(io, userId, payload.matchId, payload.qIndex);
     return;
   }
 

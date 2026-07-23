@@ -1118,6 +1118,19 @@ export interface ClientToServerEvents {
   'dev:resume_match': (data: { matchId: string }) => void;
 }
 
+/**
+ * Internal events forwarded by the Socket.IO Redis adapter between Railway
+ * replicas. Keep these separate from client events: browsers must never be
+ * able to impersonate another replica.
+ */
+export interface InterServerEvents {
+  'match:ui_ready_ack': (
+    userId: string,
+    matchId: string,
+    phase: MatchUiReadyPhase,
+  ) => void;
+}
+
 export interface ErrorPayload {
   code: string;
   message: string;

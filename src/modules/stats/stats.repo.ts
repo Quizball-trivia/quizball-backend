@@ -65,6 +65,12 @@ export interface RankedSplitStatsRow {
   event_draws: number;
 }
 
+export interface RecentFormRow {
+  user_id: string;
+  winner_user_id: string | null;
+  ended_at: string | null;
+}
+
 export const statsRepo = {
   async getHeadToHead(userAId: string, userBId: string): Promise<HeadToHeadRow> {
     const [row] = await sql<HeadToHeadRow[]>`
@@ -269,6 +275,33 @@ export const statsRepo = {
         AND m.is_dev = false
       ORDER BY m.ended_at DESC NULLS LAST, m.started_at DESC
       LIMIT ${limit}
+    `;
+  },
+
+  /** Fetch the recent-form strips for a group in one round trip. */
+  async listRecentFormsForUsers(userIds: string[], limit: number): Promise<RecentFormRow[]> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return [];
+
+    return sql<RecentFormRow[]>`
+      SELECT user_id, winner_user_id, ended_at
+      FROM (
+        SELECT
+          mp.user_id,
+          m.winner_user_id,
+          m.ended_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY mp.user_id
+            ORDER BY m.ended_at DESC NULLS LAST, m.started_at DESC
+          ) AS form_rank
+        FROM match_players mp
+        JOIN matches m ON m.id = mp.match_id
+        WHERE mp.user_id = ANY(${sql.array(uniqueUserIds)}::uuid[])
+          AND m.status = 'completed'
+          AND m.is_dev = false
+      ) recent
+      WHERE form_rank <= ${limit}
+      ORDER BY user_id, form_rank
     `;
   },
 };

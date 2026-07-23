@@ -267,4 +267,21 @@ export const statsService = {
       row.winner_user_id === null ? 'D' : row.winner_user_id === userId ? 'W' : 'L',
     );
   },
+
+  async getRecentFormsForUsers(
+    userIds: string[],
+    limit: number,
+  ): Promise<Map<string, Array<'W' | 'L' | 'D'>>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    const forms = new Map<string, Array<'W' | 'L' | 'D'>>(
+      uniqueUserIds.map((userId) => [userId, []]),
+    );
+    const rows = await statsRepo.listRecentFormsForUsers(uniqueUserIds, limit);
+    for (const row of rows) {
+      forms.get(row.user_id)?.push(
+        row.winner_user_id === null ? 'D' : row.winner_user_id === row.user_id ? 'W' : 'L',
+      );
+    }
+    return forms;
+  },
 };

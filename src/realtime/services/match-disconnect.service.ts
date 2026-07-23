@@ -1697,7 +1697,7 @@ export async function resolveExpiredGraceWindow(
       || Number(currentDisconnectMarker) === armedDisconnectMarkerMs
     );
   if (!markerMatchesArmedEpisode) {
-    logger.info(
+    logger.debug(
       {
         matchId,
         disconnectedUserId,

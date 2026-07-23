@@ -628,7 +628,7 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
         const aiUserId = await deps.resolveAiUserId(matchId);
         if (!aiUserId) return;
         const aiPlayer = getCachedPlayer(cache, aiUserId);
-        if (!aiPlayer) return;
+        if (!aiPlayer || (aiPlayer.seat !== 1 && aiPlayer.seat !== 2)) return;
 
         const aiSeatKey = seatToBanKey(aiPlayer.seat);
         if (state.halftime.bans[aiSeatKey]) return;

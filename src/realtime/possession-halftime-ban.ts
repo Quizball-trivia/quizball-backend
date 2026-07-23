@@ -48,7 +48,7 @@ export async function handlePossessionHalftimeBan(
 
     const player = getCachedPlayer(cache, socket.data.user.id);
     const seat = player?.seat ?? null;
-    if (!seat) {
+    if (seat !== 1 && seat !== 2) {
       socket.emit('error', {
         code: 'MATCH_NOT_ALLOWED',
         message: 'You are not a participant in this match.',

@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { logger } from '../../core/logger.js';
 import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
+import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { getMatchCacheOrRebuild, type MatchCache } from '../match-cache.js';
 import { getRedisClient } from '../redis.js';
 import { matchPauseKey } from '../match-keys.js';
@@ -59,6 +60,25 @@ async function getActiveMatchCache(socket: QuizballSocket, matchId: string): Pro
   return cache;
 }
 
+async function rejectMissingActiveMatch(
+  socket: QuizballSocket,
+  matchId: string,
+  message: string
+): Promise<void> {
+  // Cache cleanup follows the terminal broadcast. An in-flight packet can
+  // observe a miss immediately after completion; silently ignore that packet
+  // instead of showing a false error over the final-results screen.
+  const match = await matchesRepo.getMatch(matchId);
+  if (match?.status === 'completed') {
+    logger.debug(
+      { matchId, userId: socket.data.user.id },
+      'Late match packet ignored after completion'
+    );
+    return;
+  }
+  socket.emit('error', { code: 'MATCH_NOT_ACTIVE', message });
+}
+
 /**
  * Self-healing socket->match binding. handleMatchDisconnect keys the
  * pause/grace flow off `socket.data.matchId`; if a playing socket ever loses
@@ -91,10 +111,11 @@ export async function handleHalftimeBan(
 
   const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
-    socket.emit('error', {
-      code: 'MATCH_NOT_ACTIVE',
-      message: 'No active match found for halftime category ban.',
-    });
+    await rejectMissingActiveMatch(
+      socket,
+      payload.matchId,
+      'No active match found for halftime category ban.'
+    );
     return;
   }
 
@@ -120,10 +141,7 @@ export async function handleAnswer(
 
   const cache = await getActiveMatchCache(socket, matchId);
   if (!cache) {
-    socket.emit('error', {
-      code: 'MATCH_NOT_ACTIVE',
-      message: 'No active match found',
-    });
+    await rejectMissingActiveMatch(socket, matchId, 'No active match found');
     return;
   }
 
@@ -145,10 +163,7 @@ export async function handleCountdownGuess(
 
   const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
-    socket.emit('error', {
-      code: 'MATCH_NOT_ACTIVE',
-      message: 'No active match found',
-    });
+    await rejectMissingActiveMatch(socket, payload.matchId, 'No active match found');
     return;
   }
 
@@ -172,10 +187,7 @@ export async function handlePutInOrderAnswer(
 
   const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
-    socket.emit('error', {
-      code: 'MATCH_NOT_ACTIVE',
-      message: 'No active match found',
-    });
+    await rejectMissingActiveMatch(socket, payload.matchId, 'No active match found');
     return;
   }
 
@@ -199,10 +211,7 @@ export async function handleCluesAnswer(
 
   const cache = await getActiveMatchCache(socket, payload.matchId);
   if (!cache) {
-    socket.emit('error', {
-      code: 'MATCH_NOT_ACTIVE',
-      message: 'No active match found',
-    });
+    await rejectMissingActiveMatch(socket, payload.matchId, 'No active match found');
     return;
   }
 

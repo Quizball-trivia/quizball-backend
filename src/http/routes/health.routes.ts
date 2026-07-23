@@ -1,7 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
-import { socketDbTaskLimiter } from '../../realtime/socket-db-task-limiter.js';
+import {
+  postConnectDbTaskLimiter,
+  socketDbTaskLimiter,
+} from '../../realtime/socket-db-task-limiter.js';
 
 const router = Router();
 
@@ -37,6 +40,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       durationMs: Date.now() - started,
       pool: stats,
       socketDbTasks: socketDbTaskLimiter.stats(),
+      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
     });
   } catch (error) {
     logger.error({ error, durationMs: Date.now() - started, pool: stats }, 'health/db probe failed');
@@ -45,6 +49,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       durationMs: Date.now() - started,
       pool: stats,
       socketDbTasks: socketDbTaskLimiter.stats(),
+      postConnectDbTasks: postConnectDbTaskLimiter.stats(),
     });
   }
 });

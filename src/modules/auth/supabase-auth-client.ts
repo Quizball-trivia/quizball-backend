@@ -7,6 +7,7 @@ import {
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
+import { withAuthAdmission } from './auth-admission.js';
 import type { AuthClient } from './auth.client.js';
 import type { AuthSession } from './auth.schemas.js';
 
@@ -257,13 +258,17 @@ export class SupabaseAuthClient implements AuthClient {
       }
 
       try {
-        const response = await fetch(url, {
-          ...options,
-          headers,
+        const { response, data } = await withAuthAdmission(async () => {
+          const admittedResponse = await fetch(url, {
+            ...options,
+            headers,
+            signal: AbortSignal.timeout(config.AUTH_REQUEST_TIMEOUT_MS ?? 10_000),
+          });
+          const admittedData: unknown = await admittedResponse.json();
+          return { response: admittedResponse, data: admittedData };
         });
 
         span.setAttribute('http.response.status_code', response.status);
-        const data = await response.json();
 
         if (!response.ok) {
           this.handleError(response.status, data);

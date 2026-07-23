@@ -76,3 +76,22 @@ describe('database resilience configuration', () => {
       .toThrow(/DB_WATCHDOG_FAILURES/);
   });
 });
+
+describe('hosted Auth resilience configuration', () => {
+  it('uses bounded per-replica defaults', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.AUTH_INFLIGHT_LIMIT).toBe(4);
+    expect(parsed.AUTH_QUEUE_LIMIT).toBe(16);
+    expect(parsed.AUTH_ACQUIRE_TIMEOUT_MS).toBe(2_000);
+    expect(parsed.AUTH_REQUEST_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it('rejects invalid Auth limits and deadlines', () => {
+    expect(() => parseConfig(baseEnv({ AUTH_INFLIGHT_LIMIT: '0' })))
+      .toThrow(/AUTH_INFLIGHT_LIMIT/);
+    expect(() => parseConfig(baseEnv({ AUTH_QUEUE_LIMIT: '-1' })))
+      .toThrow(/AUTH_QUEUE_LIMIT/);
+    expect(() => parseConfig(baseEnv({ AUTH_REQUEST_TIMEOUT_MS: '100' })))
+      .toThrow(/AUTH_REQUEST_TIMEOUT_MS/);
+  });
+});

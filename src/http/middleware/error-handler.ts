@@ -87,6 +87,9 @@ export function errorHandler(
 
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
+    if (err.code === ErrorCode.RATE_LIMIT_EXCEEDED) {
+      res.setHeader('Retry-After', '1');
+    }
     const response: ErrorResponse = {
       code: err.code,
       message: err.message,

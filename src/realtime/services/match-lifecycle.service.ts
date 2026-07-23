@@ -161,7 +161,7 @@ function startKickoffCountdown(params: {
     serverNow: new Date(countdownScheduledAtMs).toISOString(),
     reason: 'kickoff',
   });
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:countdown',
       matchId,
@@ -486,7 +486,7 @@ export async function beginMatchForLobby(
 
   if (variant === 'friendly_party_quiz') {
     await emitPartyQuizState(io, matchId);
-    logger.info(
+    logger.debug(
       {
         eventName: 'party_match_started',
         matchId,
@@ -528,7 +528,7 @@ export async function beginMatchForLobby(
 
   if (kickoffReadyUserIds.length > 0) {
     emitMatchUiReadyGateState(io, matchId, 'kickoff');
-    logger.info(
+    logger.debug(
       { eventName: 'match:waiting_for_ready', matchId, phase: 'kickoff', waitingUserIds: kickoffReadyUserIds },
       'Match kickoff waiting for client UI ready'
     );

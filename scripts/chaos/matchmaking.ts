@@ -268,7 +268,11 @@ async function main(): Promise<void> {
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 
   console.log('\n' + renderMatchmakingFleet(fleet));
-  console.log(`DB peak=${peak?.total ?? 0}/${peak?.maxConnections ?? 0} (${peak?.utilizationPct ?? 0}%) active=${peak?.active ?? 0} locks=${peak?.waitingOnLock ?? 0}`);
+  console.log(
+    `DB peak=${peak?.total ?? 0}/${peak?.maxConnections ?? 0} ` +
+    `(${peak?.utilizationPct ?? 0}%) active=${peak?.active ?? 0} ` +
+    `locks=${peak?.waitingOnLock ?? 0} longestLock=${peak?.longestLockWaitSec ?? 0}s`
+  );
   console.log(`SLO VERDICT: ${verdict.ok ? 'PASS' : 'FAIL'}`);
   for (const violation of verdict.violations) console.log(`  - ${violation}`);
   console.log(`Full JSON report: ${reportPath}`);
@@ -283,6 +287,9 @@ function evaluateInfrastructure(
   const violations: string[] = [];
   if (dbPeak && dbPeak.utilizationPct > 75) {
     violations.push(`DB connections ${dbPeak.utilizationPct}% > 75%`);
+  }
+  if (dbPeak && dbPeak.longestLockWaitSec > 0.5) {
+    violations.push(`DB longest lock wait ${dbPeak.longestLockWaitSec}s > 0.5s`);
   }
   if (app.requestFailures > 0) violations.push(`app telemetry failures: ${app.requestFailures}`);
   const instances = Object.entries(app.instances).filter(([name]) => name !== 'unknown');

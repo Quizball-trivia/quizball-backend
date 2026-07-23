@@ -9,7 +9,7 @@ export interface ChaosSloThresholds {
   maxRouteP95Ms: number;
   maxRouteP99Ms: number;
   maxDbConnectionUtilizationPct: number;
-  maxDbLockWaiters: number;
+  maxDbLockWaitSec: number;
   maxDbLongestActiveSec: number;
   maxQueueJoinP95Ms: number;
   maxAppDbWaitMs: number;
@@ -27,7 +27,9 @@ export const DEFAULT_CHAOS_SLOS: ChaosSloThresholds = {
   // and reconnect bursts. On the 60-connection staging tier this fails at 49+
   // sessions while allowing the proven 47-session gameplay peak.
   maxDbConnectionUtilizationPct: 80,
-  maxDbLockWaiters: 0,
+  // Brief row-lock waits are normal under concurrent writes. Fail only when a
+  // waiter persists long enough to threaten the user-facing latency budget.
+  maxDbLockWaitSec: 0.5,
   maxDbLongestActiveSec: 30,
   // A client may remain in search for up to 120s before the harness gives up,
   // but that deadline is not an acceptable latency SLO. Capacity certification
@@ -89,9 +91,9 @@ export function evaluateChaosRun(
       `DB connections ${dbPeak.utilizationPct.toFixed(1)}% (${dbPeak.total}/${dbPeak.maxConnections}) > ${thresholds.maxDbConnectionUtilizationPct}%`
     );
   }
-  if (dbPeak && dbPeak.waitingOnLock > thresholds.maxDbLockWaiters) {
+  if (dbPeak && dbPeak.longestLockWaitSec > thresholds.maxDbLockWaitSec) {
     violations.push(
-      `DB lock waiters ${dbPeak.waitingOnLock} > ${thresholds.maxDbLockWaiters}`
+      `DB longest lock wait ${dbPeak.longestLockWaitSec.toFixed(3)}s > ${thresholds.maxDbLockWaitSec}s`
     );
   }
   if (dbPeak && dbPeak.longestActiveSec > thresholds.maxDbLongestActiveSec) {

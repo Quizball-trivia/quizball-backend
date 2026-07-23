@@ -67,6 +67,8 @@ if mappedSearchIdB ~= searchIdB then
 end
 local countryCodeA = redis.call('HGET', searchKeyA, 'countryCode') or ''
 local countryCodeB = redis.call('HGET', searchKeyB, 'countryCode') or ''
+local queuedAtA = redis.call('HGET', searchKeyA, 'queuedAt') or ''
+local queuedAtB = redis.call('HGET', searchKeyB, 'queuedAt') or ''
 
 redis.call('HSET', searchKeyA, 'status', 'matched', 'matchedAt', matchedAt)
 redis.call('HSET', searchKeyB, 'status', 'matched', 'matchedAt', matchedAt)
@@ -79,7 +81,18 @@ redis.call('HDEL', userMapKey, userIdA, userIdB)
 redis.call('SET', pairingPrefix .. userIdA, '1', 'EX', pairingTtlSec)
 redis.call('SET', pairingPrefix .. userIdB, '1', 'EX', pairingTtlSec)
 
-return { searchIdA, userIdA, countryCodeA, searchIdB, userIdB, countryCodeB }
+-- queuedAt values are appended so older four/six-field result parsers remain
+-- compatible during a rolling deploy.
+return {
+  searchIdA,
+  userIdA,
+  countryCodeA,
+  searchIdB,
+  userIdB,
+  countryCodeB,
+  queuedAtA,
+  queuedAtB
+}
 `;
 
 export const RANKED_MM_CLAIM_FALLBACK_SCRIPT = `

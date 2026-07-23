@@ -92,6 +92,24 @@ describe('realtime timer capacity configuration', () => {
   });
 });
 
+describe('penalty shootout safety bound configuration', () => {
+  it('preserves existing behavior by default and accepts a staging trial bound', () => {
+    expect(parseConfig(baseEnv()).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(0);
+    expect(parseConfig(baseEnv({
+      POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: '3',
+    })).POSSESSION_MAX_SUDDEN_DEATH_ROUNDS).toBe(3);
+  });
+
+  it('rejects negative or excessive bounds', () => {
+    expect(() => parseConfig(baseEnv({
+      POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: '-1',
+    }))).toThrow(/POSSESSION_MAX_SUDDEN_DEATH_ROUNDS/);
+    expect(() => parseConfig(baseEnv({
+      POSSESSION_MAX_SUDDEN_DEATH_ROUNDS: '21',
+    }))).toThrow(/POSSESSION_MAX_SUDDEN_DEATH_ROUNDS/);
+  });
+});
+
 describe('Supabase Auth IP forwarding configuration', () => {
   it('is disabled by default and keeps the anon-key path available', () => {
     const parsed = parseConfig(baseEnv());

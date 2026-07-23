@@ -23,6 +23,11 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
 import {
+  rankedMatchmakingRuntimeTracker,
+  type RankedMatchmakingStage,
+  type RankedPairOutcome,
+} from '../ranked-matchmaking-runtime-stats.js';
+import {
   trackRankedQueueJoined,
   trackRankedQueueJoinIgnored,
   trackRankedQueueLeft,
@@ -70,6 +75,34 @@ const CANCEL_KEY_TTL_SEC = 30;
 const LEAVE_GUARD_TTL_SEC = 2;
 const DISCONNECT_CLEANUP_LOCK_ATTEMPTS = 3;
 const DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS = 1_000;
+
+type RankedPairContext = {
+  userA?: string | null;
+  userB?: string | null;
+  correlationId?: string;
+  claimedAtMs?: number;
+};
+
+function recordRankedStage(stage: RankedMatchmakingStage, durationMs: number): void {
+  rankedMatchmakingRuntimeTracker.recordStage(stage, durationMs);
+  appMetrics.rankedMatchmakingStageDuration.record(durationMs, { stage });
+}
+
+async function measureRankedStage<T>(
+  stage: RankedMatchmakingStage,
+  correlationId: string | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await withSpan(`ranked.matchmaking.${stage}`, {
+      'quizball.matchmaking_stage': stage,
+      ...(correlationId ? { 'quizball.correlation_id': correlationId } : {}),
+    }, async () => operation());
+  } finally {
+    recordRankedStage(stage, performance.now() - startedAt);
+  }
+}
 
 function waitForMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -396,23 +429,30 @@ export async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
   userBId: string,
-  sessionCountries?: {
-    userA?: string | null;
-    userB?: string | null;
-  }
+  sessionCountries?: RankedPairContext
 ): Promise<void> {
-  await withSpan('ranked.match_found.human', {
-    'quizball.user_a_id': userAId,
-    'quizball.user_b_id': userBId,
-  }, async (span) => {
-    if (userAId === userBId) {
-      rankedDebug('human_pair_skipped_same_user', {
-        user: rankedDebugUser(userAId),
-      });
-      return;
-    }
-    try {
-      await setPairingInFlight([userAId, userBId]);
+  rankedMatchmakingRuntimeTracker.pairStarted();
+  let pairOutcome: RankedPairOutcome = 'skipped';
+  try {
+    await withSpan('ranked.match_found.human', {
+      'quizball.user_a_id': userAId,
+      'quizball.user_b_id': userBId,
+      ...(sessionCountries?.correlationId
+        ? { 'quizball.correlation_id': sessionCountries.correlationId }
+        : {}),
+    }, async (span) => {
+      if (userAId === userBId) {
+        rankedDebug('human_pair_skipped_same_user', {
+          user: rankedDebugUser(userAId),
+        });
+        return;
+      }
+      try {
+        await measureRankedStage(
+          'pairing_marker_set',
+          sessionCountries?.correlationId,
+          () => setPairingInFlight([userAId, userBId]),
+        );
       rankedDebug('human_pair_candidate', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),
@@ -449,7 +489,11 @@ export async function startHumanRankedMatch(
       };
 
       {
-        const [userACancelled, userBCancelled] = await getCancelFlags();
+        const [userACancelled, userBCancelled] = await measureRankedStage(
+          'cancel_check_initial',
+          sessionCountries?.correlationId,
+          getCancelFlags,
+        );
         if (userACancelled || userBCancelled) {
           logger.info(
             { userAId, userBId, userACancelled, userBCancelled },
@@ -467,11 +511,17 @@ export async function startHumanRankedMatch(
         }
       }
 
-      const abortIfMissingLiveSocket = async (): Promise<boolean> => {
-        const [userAPresent, userBPresent] = await Promise.all([
-          hasLiveAuthenticatedSocket(io, userAId),
-          hasLiveAuthenticatedSocket(io, userBId),
-        ]);
+      const abortIfMissingLiveSocket = async (
+        stage: 'socket_presence_initial' | 'socket_presence_pre_lobby',
+      ): Promise<boolean> => {
+        const [userAPresent, userBPresent] = await measureRankedStage(
+          stage,
+          sessionCountries?.correlationId,
+          () => Promise.all([
+            hasLiveAuthenticatedSocket(io, userAId),
+            hasLiveAuthenticatedSocket(io, userBId),
+          ]),
+        );
         if (userAPresent && userBPresent) return false;
 
         logger.warn(
@@ -513,9 +563,13 @@ export async function startHumanRankedMatch(
         return true;
       };
 
-      if (await abortIfMissingLiveSocket()) return;
+      if (await abortIfMissingLiveSocket('socket_presence_initial')) return;
 
-      const usersById = await usersRepo.getByIds([userAId, userBId]);
+      const usersById = await measureRankedStage(
+        'users_lookup',
+        sessionCountries?.correlationId,
+        () => usersRepo.getByIds([userAId, userBId]),
+      );
       const userA = usersById.get(userAId) ?? null;
       const userB = usersById.get(userBId) ?? null;
       if (!userA || !userB) {
@@ -533,13 +587,21 @@ export async function startHumanRankedMatch(
         return;
       }
 
-      const profilesByUserId = await rankedService.ensureProfiles([userAId, userBId]);
+      const profilesByUserId = await measureRankedStage(
+        'profiles_lookup',
+        sessionCountries?.correlationId,
+        () => rankedService.ensureProfiles([userAId, userBId]),
+      );
       const profileA = profilesByUserId.get(userAId);
       const profileB = profilesByUserId.get(userBId);
       if (!profileA || !profileB) {
         throw new Error('Ranked profile batch did not return both paired users');
       }
-      const wallets = await getRankedTicketWallets([userAId, userBId]);
+      const wallets = await measureRankedStage(
+        'wallets_lookup',
+        sessionCountries?.correlationId,
+        () => getRankedTicketWallets([userAId, userBId]),
+      );
       const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
       if (insufficientUserIds.length > 0) {
         logger.warn(
@@ -573,7 +635,11 @@ export async function startHumanRankedMatch(
         return;
       }
       {
-        const [userACancelled, userBCancelled] = await getCancelFlags();
+        const [userACancelled, userBCancelled] = await measureRankedStage(
+          'cancel_check_pre_lobby',
+          sessionCountries?.correlationId,
+          getCancelFlags,
+        );
         if (userACancelled || userBCancelled) {
           logger.info({ userAId, userBId, userACancelled, userBCancelled }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
           rankedDebug('human_pair_skipped_cancelled_before_lobby', {
@@ -586,9 +652,13 @@ export async function startHumanRankedMatch(
         }
       }
 
-      const sessionBlocks = await getRankedMatchmakingSessionBlocks(
-        [userAId, userBId],
-        { ignorePairingInFlight: true }
+      const sessionBlocks = await measureRankedStage(
+        'session_state_preflight',
+        sessionCountries?.correlationId,
+        () => getRankedMatchmakingSessionBlocks(
+          [userAId, userBId],
+          { ignorePairingInFlight: true }
+        ),
       );
       const sessionBlockA = sessionBlocks.get(userAId) ?? null;
       const sessionBlockB = sessionBlocks.get(userBId) ?? null;
@@ -612,34 +682,46 @@ export async function startHumanRankedMatch(
         return;
       }
 
-      if (await abortIfMissingLiveSocket()) return;
+      if (await abortIfMissingLiveSocket('socket_presence_pre_lobby')) return;
 
-      const lobby = await lobbiesRepo.createLobbyWithMembers(
-        {
-          mode: 'ranked',
-          hostUserId: userAId,
-          inviteCode: null,
-        },
-        [
-          { userId: userAId, isReady: true },
-          { userId: userBId, isReady: true },
-        ],
+      const lobby = await measureRankedStage(
+        'lobby_create',
+        sessionCountries?.correlationId,
+        () => lobbiesRepo.createLobbyWithMembers(
+          {
+            mode: 'ranked',
+            hostUserId: userAId,
+            inviteCode: null,
+          },
+          [
+            { userId: userAId, isReady: true },
+            { userId: userBId, isReady: true },
+          ],
+        ),
       );
 
       span.setAttribute('quizball.lobby_id', lobby.id);
 
-      await Promise.all([
-        attachUserSocketsToLobby(io, userAId, lobby.id),
-        attachUserSocketsToLobby(io, userBId, lobby.id),
-      ]);
+      await measureRankedStage(
+        'socket_lobby_attach',
+        sessionCountries?.correlationId,
+        () => Promise.all([
+          attachUserSocketsToLobby(io, userAId, lobby.id),
+          attachUserSocketsToLobby(io, userBId, lobby.id),
+        ]).then(() => undefined),
+      );
 
       const redis = getRedisClient();
       if (redis) {
         try {
-          await Promise.all([
-            redis.set(rankedAssignedLobbyKey(userAId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
-            redis.set(rankedAssignedLobbyKey(userBId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
-          ]);
+          await measureRankedStage(
+            'assignment_markers',
+            sessionCountries?.correlationId,
+            () => Promise.all([
+              redis.set(rankedAssignedLobbyKey(userAId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+              redis.set(rankedAssignedLobbyKey(userBId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+            ]).then(() => undefined),
+          );
         } catch (error) {
           // The lobby and both members have committed; marker telemetry must
           // not turn that successful handoff into a failed pair.
@@ -651,43 +733,63 @@ export async function startHumanRankedMatch(
       // profiles are already in memory. Re-reading them here used to add four
       // sequential database stages (roughly eight queries) per pair and let the
       // matcher starve queue joins.
-      emitCreatedRankedLobbyState(io, lobby, userA, userB, profileA, profileB);
-      emitCreatedRankedSessionStates(io, lobby.id, [userAId, userBId]);
+      await measureRankedStage(
+        'lobby_state_emit',
+        sessionCountries?.correlationId,
+        async () => {
+          emitCreatedRankedLobbyState(io, lobby, userA, userB, profileA, profileB);
+          emitCreatedRankedSessionStates(io, lobby.id, [userAId, userBId]);
+        },
+      );
 
-      const recentForms = await statsService
-        .getRecentFormsForUsers([userAId, userBId], 3)
-        .catch(() => new Map<string, Array<'W' | 'L' | 'D'>>());
+      const recentForms = await measureRankedStage(
+        'recent_form_lookup',
+        sessionCountries?.correlationId,
+        () => statsService
+          .getRecentFormsForUsers([userAId, userBId], 3)
+          .catch(() => new Map<string, Array<'W' | 'L' | 'D'>>()),
+      );
       const formA = recentForms.get(userAId) ?? [];
       const formB = recentForms.get(userBId) ?? [];
 
-      io.to(`user:${userAId}`).emit('ranked:match_found', {
-        lobbyId: lobby.id,
-        myRecentForm: formA,
-        opponent: {
-          id: userB.id,
-          username: userB.nickname ?? 'Player',
-          avatarUrl: userB.avatar_url,
-          avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
-          favoriteClub: userB.favorite_club ?? null,
-          recentForm: formB,
-          rp: profileB.rp,
-          ...countryPayload(sessionCountries?.userB ?? userB.country),
+      await measureRankedStage(
+        'match_found_emit',
+        sessionCountries?.correlationId,
+        async () => {
+          io.to(`user:${userAId}`).emit('ranked:match_found', {
+            lobbyId: lobby.id,
+            myRecentForm: formA,
+            opponent: {
+              id: userB.id,
+              username: userB.nickname ?? 'Player',
+              avatarUrl: userB.avatar_url,
+              avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+              favoriteClub: userB.favorite_club ?? null,
+              recentForm: formB,
+              rp: profileB.rp,
+              ...countryPayload(sessionCountries?.userB ?? userB.country),
+            },
+          });
+          io.to(`user:${userBId}`).emit('ranked:match_found', {
+            lobbyId: lobby.id,
+            myRecentForm: formB,
+            opponent: {
+              id: userA.id,
+              username: userA.nickname ?? 'Player',
+              avatarUrl: userA.avatar_url,
+              avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+              favoriteClub: userA.favorite_club ?? null,
+              recentForm: formA,
+              rp: profileA.rp,
+              ...countryPayload(sessionCountries?.userA ?? userA.country),
+            },
+          });
         },
-      });
-      io.to(`user:${userBId}`).emit('ranked:match_found', {
-        lobbyId: lobby.id,
-        myRecentForm: formB,
-        opponent: {
-          id: userA.id,
-          username: userA.nickname ?? 'Player',
-          avatarUrl: userA.avatar_url,
-          avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
-          favoriteClub: userA.favorite_club ?? null,
-          recentForm: formA,
-          rp: profileA.rp,
-          ...countryPayload(sessionCountries?.userA ?? userA.country),
-        },
-      });
+      );
+      if (sessionCountries?.claimedAtMs !== undefined) {
+        recordRankedStage('claim_to_match_found', Date.now() - sessionCountries.claimedAtMs);
+      }
+      pairOutcome = 'completed';
 
       logger.debug({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
       rankedDebug('human_match_found', {
@@ -706,11 +808,15 @@ export async function startHumanRankedMatch(
       // a CLOSED client, not a failing write), fall back to the old in-process
       // timer — a non-durable draft start beats a stranded waiting lobby.
       try {
-        await scheduleRealtimeTimer(
-          'ranked_draft_start',
-          lobby.id,
-          new Date(Date.now() + FOUND_MODAL_MS),
-          { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+        await measureRankedStage(
+          'draft_schedule',
+          sessionCountries?.correlationId,
+          () => scheduleRealtimeTimer(
+            'ranked_draft_start',
+            lobby.id,
+            new Date(Date.now() + FOUND_MODAL_MS),
+            { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+          ),
         );
       } catch (err) {
         logger.error(
@@ -724,10 +830,20 @@ export async function startHumanRankedMatch(
         }, FOUND_MODAL_MS);
         fallback.unref?.();
       }
-    } finally {
-      await clearPairingInFlight([userAId, userBId]);
-    }
-  });
+      } finally {
+        await measureRankedStage(
+          'pairing_marker_clear',
+          sessionCountries?.correlationId,
+          () => clearPairingInFlight([userAId, userBId]),
+        );
+      }
+    });
+  } catch (error) {
+    pairOutcome = 'failed';
+    throw error;
+  } finally {
+    rankedMatchmakingRuntimeTracker.pairFinished(pairOutcome);
+  }
 }
 
 /**
@@ -876,6 +992,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     // least two candidates remain; fallbacks resume on the next tick once
     // fewer than two searches are available.
     const queuedCount = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    rankedMatchmakingRuntimeTracker.recordQueueDepth(queuedCount);
     span.setAttribute('quizball.queued_search_count', queuedCount);
     if (queuedCount >= 2) {
       span.setAttribute('quizball.deferred_for_human_pair', true);
@@ -930,6 +1047,8 @@ async function processPairs(io: QuizballServer): Promise<void> {
       userBId: string;
       userACountryCode: string | null;
       userBCountryCode: string | null;
+      correlationId: string;
+      claimedAtMs: number;
     };
 
     let pairCount = 0;
@@ -941,6 +1060,8 @@ async function processPairs(io: QuizballServer): Promise<void> {
           await startHumanRankedMatch(io, pair.userAId, pair.userBId, {
             userA: pair.userACountryCode,
             userB: pair.userBCountryCode,
+            correlationId: pair.correlationId,
+            claimedAtMs: pair.claimedAtMs,
           });
         } catch (error) {
           pairFailureCount += 1;
@@ -963,17 +1084,28 @@ async function processPairs(io: QuizballServer): Promise<void> {
     try {
       for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
         if (activeStarts.size >= MAX_CONCURRENT_PAIR_STARTS) {
+          const slotWaitStartedAt = performance.now();
           await Promise.race(activeStarts);
+          const slotWaitMs = performance.now() - slotWaitStartedAt;
+          recordRankedStage('pair_start_slot_wait', slotWaitMs);
+          span.addEvent('ranked.pair_start_slot_available', {
+            'quizball.duration_ms': slotWaitMs,
+          });
         }
+        const claimStartedAt = performance.now();
         const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT, {
-          keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
-          arguments: [
-            RANKED_MM_SEARCH_KEY_PREFIX,
-            String(Date.now()),
-            RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
-            String(PAIRING_IN_FLIGHT_TTL_SEC),
-          ],
-        });
+            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            arguments: [
+              RANKED_MM_SEARCH_KEY_PREFIX,
+              String(Date.now()),
+              RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
+              String(PAIRING_IN_FLIGHT_TTL_SEC),
+            ],
+          })
+          .finally(() => recordRankedStage(
+            'pair_claim_redis',
+            performance.now() - claimStartedAt,
+          ));
         const result = toStringArray(resultRaw);
         // The Lua script removed an expired/mismapped queue member. Keep scanning
         // in this same tick instead of letting one orphan throttle matchmaking to
@@ -990,6 +1122,16 @@ async function processPairs(io: QuizballServer): Promise<void> {
         const userBCountryCode = hasCountryCodes ? result[5] || null : null;
         if (!userAId || !userBId) break;
         pairCount += 1;
+        rankedMatchmakingRuntimeTracker.pairClaimed();
+        const claimedAtMs = Date.now();
+        if (result.length >= 8) {
+          for (const queuedAtRaw of [result[6], result[7]]) {
+            const queuedAtMs = Number(queuedAtRaw);
+            if (Number.isFinite(queuedAtMs) && queuedAtMs > 0) {
+              recordRankedStage('queue_wait_to_claim', claimedAtMs - queuedAtMs);
+            }
+          }
+        }
         const pair: ClaimedPair = {
           searchIdA,
           searchIdB,
@@ -997,6 +1139,8 @@ async function processPairs(io: QuizballServer): Promise<void> {
           userBId,
           userACountryCode,
           userBCountryCode,
+          correlationId: `${searchIdA}:${searchIdB}`,
+          claimedAtMs,
         };
         rankedDebug('pair_claimed_two_users', {
           userA: rankedDebugUser(userAId),

@@ -76,3 +76,48 @@ describe('database resilience configuration', () => {
       .toThrow(/DB_WATCHDOG_FAILURES/);
   });
 });
+
+describe('hosted Auth resilience configuration', () => {
+  it('uses bounded per-replica defaults', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.AUTH_INFLIGHT_LIMIT).toBe(4);
+    expect(parsed.AUTH_QUEUE_LIMIT).toBe(16);
+    expect(parsed.AUTH_ACQUIRE_TIMEOUT_MS).toBe(2_000);
+    expect(parsed.AUTH_REQUEST_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it('rejects invalid Auth limits and deadlines', () => {
+    expect(() => parseConfig(baseEnv({ AUTH_INFLIGHT_LIMIT: '0' })))
+      .toThrow(/AUTH_INFLIGHT_LIMIT/);
+    expect(() => parseConfig(baseEnv({ AUTH_QUEUE_LIMIT: '-1' })))
+      .toThrow(/AUTH_QUEUE_LIMIT/);
+    expect(() => parseConfig(baseEnv({ AUTH_REQUEST_TIMEOUT_MS: '100' })))
+      .toThrow(/AUTH_REQUEST_TIMEOUT_MS/);
+  });
+});
+
+describe('Supabase Auth IP forwarding configuration', () => {
+  it('is disabled by default and keeps the anon-key path available', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.SUPABASE_AUTH_IP_FORWARDING_ENABLED).toBe(false);
+  });
+
+  it('requires a modern server-only Supabase secret key when enabled', () => {
+    expect(() => parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+    }))).toThrow(/SUPABASE_SECRET_KEY/);
+
+    expect(() => parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+      SUPABASE_SECRET_KEY: 'legacy-service-role-key',
+    }))).toThrow(/sb_secret_/);
+  });
+
+  it('accepts an explicit modern secret key when enabled', () => {
+    const parsed = parseConfig(baseEnv({
+      SUPABASE_AUTH_IP_FORWARDING_ENABLED: 'true',
+      SUPABASE_SECRET_KEY: 'sb_secret_test-only',
+    }));
+    expect(parsed.SUPABASE_AUTH_IP_FORWARDING_ENABLED).toBe(true);
+  });
+});

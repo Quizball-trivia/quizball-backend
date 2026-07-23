@@ -7,8 +7,17 @@ import {
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
-import type { AuthClient } from './auth.client.js';
+import { normalizeClientIp } from '../../http/client-ip.js';
+import { withAuthAdmission } from './auth-admission.js';
+import type { AuthClient, AuthRequestContext } from './auth.client.js';
 import type { AuthSession } from './auth.schemas.js';
+
+interface SupabaseAuthClientOptions {
+  baseUrl?: string;
+  anonKey?: string;
+  secretKey?: string;
+  forwardClientIp?: boolean;
+}
 
 /**
  * Supabase auth client implementation.
@@ -16,14 +25,27 @@ import type { AuthSession } from './auth.schemas.js';
  */
 export class SupabaseAuthClient implements AuthClient {
   private readonly baseUrl: string;
-  private readonly anonKey: string;
+  private readonly apiKey: string;
+  private readonly forwardClientIp: boolean;
 
-  constructor() {
-    if (!config.SUPABASE_URL || !config.SUPABASE_ANON_KEY) {
-      throw new Error('SUPABASE_URL and SUPABASE_ANON_KEY are required');
+  constructor(options: SupabaseAuthClientOptions = {}) {
+    const baseUrl = options.baseUrl ?? config.SUPABASE_URL;
+    this.forwardClientIp = options.forwardClientIp ?? config.SUPABASE_AUTH_IP_FORWARDING_ENABLED;
+    const apiKey = this.forwardClientIp
+      ? options.secretKey ?? config.SUPABASE_SECRET_KEY
+      : options.anonKey ?? config.SUPABASE_ANON_KEY;
+    if (!baseUrl || !apiKey) {
+      throw new Error(
+        this.forwardClientIp
+          ? 'SUPABASE_URL and SUPABASE_SECRET_KEY are required for Auth IP forwarding'
+          : 'SUPABASE_URL and SUPABASE_ANON_KEY are required'
+      );
     }
-    this.baseUrl = config.SUPABASE_URL.replace(/\/$/, '');
-    this.anonKey = config.SUPABASE_ANON_KEY;
+    if (this.forwardClientIp && !apiKey.startsWith('sb_secret_')) {
+      throw new Error('Auth IP forwarding requires a modern Supabase key beginning with sb_secret_');
+    }
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.apiKey = apiKey;
   }
 
   async signUp(
@@ -31,6 +53,7 @@ export class SupabaseAuthClient implements AuthClient {
     password: string,
     redirectTo?: string,
     locale?: string,
+    context?: AuthRequestContext,
   ): Promise<AuthSession> {
     return withSpan('auth.signup', {
       'quizball.auth_provider': 'supabase',
@@ -46,7 +69,7 @@ export class SupabaseAuthClient implements AuthClient {
       const response = await this.request(path, {
         method: 'POST',
         body: JSON.stringify(body),
-      });
+      }, context);
 
       const session = this.normalizeSession(response);
 
@@ -69,7 +92,7 @@ export class SupabaseAuthClient implements AuthClient {
     });
   }
 
-  async signIn(email: string, password: string): Promise<AuthSession> {
+  async signIn(email: string, password: string, context?: AuthRequestContext): Promise<AuthSession> {
     return withSpan('auth.signin', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -78,14 +101,15 @@ export class SupabaseAuthClient implements AuthClient {
         {
           method: 'POST',
           body: JSON.stringify({ email, password }),
-        }
+        },
+        context,
       );
 
       return this.normalizeSession(response);
     });
   }
 
-  async refresh(refreshToken: string): Promise<AuthSession> {
+  async refresh(refreshToken: string, context?: AuthRequestContext): Promise<AuthSession> {
     return withSpan('auth.refresh', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -94,14 +118,15 @@ export class SupabaseAuthClient implements AuthClient {
         {
           method: 'POST',
           body: JSON.stringify({ refresh_token: refreshToken }),
-        }
+        },
+        context,
       );
 
       return this.normalizeSession(response);
     });
   }
 
-  async forgotPassword(email: string, redirectTo?: string): Promise<void> {
+  async forgotPassword(email: string, redirectTo?: string, context?: AuthRequestContext): Promise<void> {
     await withSpan('auth.forgot_password', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -111,11 +136,11 @@ export class SupabaseAuthClient implements AuthClient {
           email,
           ...(redirectTo && { redirect_to: redirectTo }),
         }),
-      });
+      }, context);
     });
   }
 
-  async resetPassword(accessToken: string, newPassword: string): Promise<void> {
+  async resetPassword(accessToken: string, newPassword: string, context?: AuthRequestContext): Promise<void> {
     await withSpan('auth.reset_password', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -125,11 +150,11 @@ export class SupabaseAuthClient implements AuthClient {
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ password: newPassword }),
-      });
+      }, context);
     });
   }
 
-  async updateUserPhone(accessToken: string, phone: string): Promise<void> {
+  async updateUserPhone(accessToken: string, phone: string, context?: AuthRequestContext): Promise<void> {
     await withSpan('auth.update_user_phone', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -139,7 +164,7 @@ export class SupabaseAuthClient implements AuthClient {
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ phone }),
-      });
+      }, context);
     });
   }
 
@@ -147,6 +172,7 @@ export class SupabaseAuthClient implements AuthClient {
     provider: string,
     idToken: string,
     nonce?: string,
+    context?: AuthRequestContext,
   ): Promise<AuthSession> {
     return withSpan('auth.signin_id_token', {
       'quizball.auth_provider': 'supabase',
@@ -159,12 +185,12 @@ export class SupabaseAuthClient implements AuthClient {
           id_token: idToken,
           ...(nonce ? { nonce } : {}),
         }),
-      });
+      }, context);
       return this.normalizeSession(response);
     });
   }
 
-  async sendPhoneOtp(phone: string): Promise<void> {
+  async sendPhoneOtp(phone: string, context?: AuthRequestContext): Promise<void> {
     await withSpan('auth.phone_otp_send', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -174,11 +200,11 @@ export class SupabaseAuthClient implements AuthClient {
           phone,
           create_user: false,
         }),
-      });
+      }, context);
     });
   }
 
-  async verifyPhoneOtp(phone: string, token: string): Promise<AuthSession> {
+  async verifyPhoneOtp(phone: string, token: string, context?: AuthRequestContext): Promise<AuthSession> {
     return withSpan('auth.phone_otp_verify', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -189,13 +215,18 @@ export class SupabaseAuthClient implements AuthClient {
           token,
           type: 'sms',
         }),
-      });
+      }, context);
 
       return this.normalizeSession(response);
     });
   }
 
-  async verifyPhoneChange(accessToken: string, phone: string, token: string): Promise<AuthSession> {
+  async verifyPhoneChange(
+    accessToken: string,
+    phone: string,
+    token: string,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession> {
     return withSpan('auth.phone_change_verify', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -209,7 +240,7 @@ export class SupabaseAuthClient implements AuthClient {
           token,
           type: 'phone_change',
         }),
-      });
+      }, context);
 
       return this.normalizeSession(response);
     });
@@ -239,7 +270,8 @@ export class SupabaseAuthClient implements AuthClient {
    */
   private async request(
     path: string,
-    options: { method?: string; body?: string; headers?: Record<string, string> } = {}
+    options: { method?: string; body?: string; headers?: Record<string, string> } = {},
+    context?: AuthRequestContext,
   ): Promise<unknown> {
     return withSpan('auth.supabase.request', {
       'quizball.auth_provider': 'supabase',
@@ -249,21 +281,29 @@ export class SupabaseAuthClient implements AuthClient {
       const url = `${this.baseUrl}${path}`;
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        apikey: this.anonKey,
+        apikey: this.apiKey,
       };
+
+      const clientIp = this.forwardClientIp ? normalizeClientIp(context?.clientIp) : undefined;
+      if (clientIp) headers['Sb-Forwarded-For'] = clientIp;
+      span.setAttribute('quizball.auth_ip_forwarded', Boolean(clientIp));
 
       if (options.headers) {
         Object.assign(headers, options.headers);
       }
 
       try {
-        const response = await fetch(url, {
-          ...options,
-          headers,
+        const { response, data } = await withAuthAdmission(async () => {
+          const admittedResponse = await fetch(url, {
+            ...options,
+            headers,
+            signal: AbortSignal.timeout(config.AUTH_REQUEST_TIMEOUT_MS ?? 10_000),
+          });
+          const admittedData: unknown = await admittedResponse.json();
+          return { response: admittedResponse, data: admittedData };
         });
 
         span.setAttribute('http.response.status_code', response.status);
-        const data = await response.json();
 
         if (!response.ok) {
           this.handleError(response.status, data);
@@ -293,7 +333,14 @@ export class SupabaseAuthClient implements AuthClient {
    * Handle Supabase error responses.
    */
   private handleError(status: number, data: unknown): never {
-    const errorData = data as { error?: string; error_description?: string; message?: string; msg?: string };
+    const errorData = data as {
+      code?: string;
+      error_code?: string;
+      error?: string;
+      error_description?: string;
+      message?: string;
+      msg?: string;
+    };
     const message =
       errorData.error_description ||
       errorData.msg ||
@@ -313,7 +360,10 @@ export class SupabaseAuthClient implements AuthClient {
       case 429:
         // Supabase email/auth rate limit — surface as our own 429 so clients
         // can back off, instead of masking it as a 502 upstream failure.
-        throw new RateLimitError(message);
+        throw new RateLimitError(message, {
+          source: 'supabase_auth',
+          upstream_code: errorData.error_code ?? errorData.code ?? null,
+        });
       default:
         throw new ExternalServiceError(message, { statusCode: status });
     }

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
+import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
 
 const router = Router();
 
@@ -31,10 +32,20 @@ router.get('/health/db', async (_req: Request, res: Response) => {
     await withStatementTimeout(async (tx) => {
       await tx.unsafe('SELECT 1');
     }, 2000);
-    res.json({ ok: true, durationMs: Date.now() - started, pool: stats });
+    res.json({
+      ok: true,
+      durationMs: Date.now() - started,
+      pool: stats,
+      authAdmission: authAdmissionStats(),
+    });
   } catch (error) {
     logger.error({ error, durationMs: Date.now() - started, pool: stats }, 'health/db probe failed');
-    res.status(503).json({ ok: false, durationMs: Date.now() - started, pool: stats });
+    res.status(503).json({
+      ok: false,
+      durationMs: Date.now() - started,
+      pool: stats,
+      authAdmission: authAdmissionStats(),
+    });
   }
 });
 

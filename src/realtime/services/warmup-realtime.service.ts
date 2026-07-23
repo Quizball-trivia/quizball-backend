@@ -342,7 +342,7 @@ export const warmupRealtimeService = {
       }
       scoreErrorAtByLobby.delete(lobbyId);
       pruneScoreTrackingMaps();
-      logger.info({ lobbyId }, 'Warmup state cleaned up');
+      logger.debug({ lobbyId }, 'Warmup state cleaned up');
     } catch (error) {
       logger.warn({ error, lobbyId }, 'Warmup cleanup failed');
     }

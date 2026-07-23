@@ -125,8 +125,10 @@ export const rankedRepo = {
   async getProfilesByUserIds(userIds: string[]): Promise<RankedProfileRow[]> {
     if (userIds.length === 0) return [];
     return sql<RankedProfileRow[]>`
-      SELECT * FROM ranked_profiles
-      WHERE user_id = ANY(${sql.array(userIds)}::uuid[])
+      SELECT rp.*, u.country
+      FROM ranked_profiles rp
+      JOIN users u ON u.id = rp.user_id
+      WHERE rp.user_id = ANY(${sql.array(userIds)}::uuid[])
     `;
   },
 

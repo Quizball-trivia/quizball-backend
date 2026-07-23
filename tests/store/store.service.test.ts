@@ -17,6 +17,7 @@ vi.mock('../../src/modules/store/store.repo.js', () => ({
     getPurchaseByStripeCheckoutIdInTx: vi.fn(),
     markPurchaseCompletedInTx: vi.fn(),
     getWallet: vi.fn(),
+    getWallets: vi.fn(),
     getWalletForUpdateInTx: vi.fn(),
     adjustWalletInTx: vi.fn(),
     addCoinsInTx: vi.fn(),
@@ -53,6 +54,21 @@ describe('storeService', () => {
     vi.clearAllMocks();
     config.STRIPE_SUCCESS_URL = 'http://localhost:3000/store?purchase=success';
     config.STRIPE_CANCEL_URL = 'http://localhost:3000/store?purchase=cancelled';
+  });
+
+  it('batch-loads lightweight ranked ticket wallets and clamps ticket counts', async () => {
+    (storeRepo.getWallets as Mock).mockResolvedValue(new Map([
+      ['u-high', { coins: 10, tickets: 9, tickets_refill_started_at: null }],
+      ['u-low', { coins: 20, tickets: -2, tickets_refill_started_at: null }],
+    ]));
+
+    const wallets = await storeService.getRankedTicketWallets(['u-high', 'u-low', 'u-missing']);
+
+    expect(storeRepo.getWallets).toHaveBeenCalledOnce();
+    expect(storeRepo.getWallets).toHaveBeenCalledWith(['u-high', 'u-low', 'u-missing']);
+    expect(wallets.get('u-high')).toMatchObject({ coins: 10, tickets: 5 });
+    expect(wallets.get('u-low')).toMatchObject({ coins: 20, tickets: 0 });
+    expect(wallets.has('u-missing')).toBe(false);
   });
 
   it('createCheckoutSession logs successful checkout creation', async () => {

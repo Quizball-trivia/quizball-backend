@@ -1,15 +1,17 @@
 import { randomUUID } from 'crypto';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
+import type { LobbyState, SessionStatePayload } from '../socket.types.js';
+import type { User } from '../../db/types.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
 import { config } from '../../core/config.js';
 import { countryPayload } from '../../core/country.js';
-import { NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { getRedisClient } from '../redis.js';
-import { acquireLock, releaseLock } from '../locks.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
-import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
+import type { LobbyRow } from '../../modules/lobbies/lobbies.types.js';
+import { DbOverloadedError } from '../../db/index.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
+import type { RankedProfileRow } from '../../modules/ranked/ranked.types.js';
 import { statsService } from '../../modules/stats/stats.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { parseStoredAvatarCustomization } from '../../modules/users/avatar-customization.js';
@@ -21,6 +23,11 @@ import { userSessionGuardService } from './user-session-guard.service.js';
 import { withSpan } from '../../core/tracing.js';
 import { appMetrics } from '../../core/metrics.js';
 import {
+  rankedMatchmakingRuntimeTracker,
+  type RankedMatchmakingStage,
+  type RankedPairOutcome,
+} from '../ranked-matchmaking-runtime-stats.js';
+import {
   trackRankedQueueJoined,
   trackRankedQueueJoinIgnored,
   trackRankedQueueLeft,
@@ -28,14 +35,17 @@ import {
 import {
   RANKED_MM_CANCEL_SEARCH_SCRIPT,
   RANKED_MM_CLAIM_FALLBACK_SCRIPT,
-  RANKED_MM_PAIR_TWO_RANDOM_SCRIPT,
+  RANKED_MM_PAIR_TWO_OLDEST_SCRIPT,
+  RANKED_MM_STALE_RESULT,
 } from '../lua/ranked-matchmaking.scripts.js';
 import { rankedDebug, rankedDebugUser } from '../ranked-debug.js';
 import {
   RANKED_MM_QUEUE_KEY,
+  RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
   RANKED_MM_SEARCH_KEY_PREFIX,
   RANKED_MM_TIMEOUTS_KEY,
   RANKED_MM_USER_MAP_KEY,
+  rankedAssignedLobbyKey,
   rankedCancelKey,
   rankedJoinDebounceKey,
   rankedLeaveGuardKey,
@@ -46,26 +56,82 @@ import {
 const SEARCH_DURATION_MS = 10000;
 const SEARCH_KEY_TTL_SEC = 60;
 const TICK_INTERVAL_MS = 100;
-// Keep lock alive across worst-case tick I/O so parallel ticks cannot overlap.
-const TICK_LOCK_TTL_MS = SEARCH_DURATION_MS;
 const MAX_FALLBACKS_PER_TICK = 50;
 const MAX_PAIRS_PER_TICK = 100;
+// A real match start performs several database/network round trips. Keep six
+// workflows moving as a streaming pool so one slow lobby does not stall the
+// other slots. Six leaves room for durable timer work while the independent DB
+// admission gate remains the hard 12-query cap; this bound prevents the
+// matcher itself from spawning unlimited work.
+const MAX_CONCURRENT_PAIR_STARTS = 6;
 const FOUND_MODAL_MS = 1200;
+// Match already-queued players before starting more DB-heavy draft workflows.
+// This feedback threshold keeps the ranked queue tail bounded during a flash
+// crowd while still allowing drafts to start whenever pairing is keeping up.
+const DRAFT_DEFER_QUEUE_THRESHOLD = 50;
+const DRAFT_DEFER_MS = 500;
 
 const CANCEL_KEY_TTL_SEC = 30;
 const LEAVE_GUARD_TTL_SEC = 2;
 const DISCONNECT_CLEANUP_LOCK_ATTEMPTS = 3;
 const DISCONNECT_CLEANUP_LOCK_RETRY_DELAY_MS = 1_000;
 
+type RankedPairContext = {
+  userA?: string | null;
+  userB?: string | null;
+  correlationId?: string;
+  claimedAtMs?: number;
+};
+
+function recordRankedStage(stage: RankedMatchmakingStage, durationMs: number): void {
+  rankedMatchmakingRuntimeTracker.recordStage(stage, durationMs);
+  appMetrics.rankedMatchmakingStageDuration.record(durationMs, { stage });
+}
+
+async function measureRankedStage<T>(
+  stage: RankedMatchmakingStage,
+  correlationId: string | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await withSpan(`ranked.matchmaking.${stage}`, {
+      'quizball.matchmaking_stage': stage,
+      ...(correlationId ? { 'quizball.correlation_id': correlationId } : {}),
+    }, async () => operation());
+  } finally {
+    recordRankedStage(stage, performance.now() - startedAt);
+  }
+}
+
 function waitForMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function emitQueuedSessionState(
+  io: QuizballServer,
+  userId: string,
+  snapshot: SessionStatePayload,
+  searchId: string,
+): SessionStatePayload {
+  const queuedSnapshot: SessionStatePayload = {
+    ...snapshot,
+    state: 'IN_QUEUE',
+    activeMatchId: null,
+    waitingLobbyId: null,
+    queueSearchId: searchId,
+    openLobbyIds: [],
+    resolvedAt: new Date().toISOString(),
+  };
+  io.to(`user:${userId}`).emit('session:state', queuedSnapshot);
+  return queuedSnapshot;
+}
 const JOIN_DEBOUNCE_TTL_SEC = 2;
 const PAIRING_IN_FLIGHT_TTL_SEC = 30;
-const TICK_LOCK_KEY = 'ranked:mm:tick-lock';
-
+const ASSIGNED_LOBBY_TTL_SEC = 5 * 60;
 let loopTimer: NodeJS.Timeout | null = null;
 let loopIo: QuizballServer | null = null;
+let tickInFlight = false;
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -86,10 +152,6 @@ async function clearPairingInFlight(userIds: string[]): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
   await redis.del(userIds.map((userId) => rankedPairingInFlightKey(userId)));
-}
-
-function isMissingUserWalletError(error: unknown): error is NotFoundError {
-  return error instanceof NotFoundError && error.message === 'User not found';
 }
 
 async function bestEffortCancelRankedQueueSearch(userId: string, source: string): Promise<string | null> {
@@ -124,56 +186,53 @@ async function handleStaleRankedQueueUser(
   io.to(`user:${userId}`).emit('ranked:queue_left');
 }
 
-async function getRankedMatchmakingSessionBlock(userId: string): Promise<{
+type RankedMatchmakingSessionBlock = {
   activeMatchId: string | null;
   waitingLobbyId: string | null;
   queueSearchId: string | null;
   state: string;
-} | null>;
-async function getRankedMatchmakingSessionBlock(
-  userId: string,
-  options: { ignorePairingInFlight?: boolean }
-): Promise<{
-  activeMatchId: string | null;
-  waitingLobbyId: string | null;
-  queueSearchId: string | null;
-  state: string;
-} | null>;
+};
+
+async function getRankedMatchmakingSessionBlocks(
+  userIds: string[],
+  options: { ignorePairingInFlight?: boolean } = {}
+): Promise<Map<string, RankedMatchmakingSessionBlock | null>> {
+  const uniqueUserIds = [...new Set(userIds)];
+  const snapshots = await userSessionGuardService.resolveStates(uniqueUserIds);
+  const redis = getRedisClient();
+  const pairingStates = !options.ignorePairingInFlight && redis
+    ? await Promise.all(uniqueUserIds.map(async (userId) => (
+      (await redis.exists(rankedPairingInFlightKey(userId))) === 1
+    )))
+    : uniqueUserIds.map(() => false);
+
+  return new Map(uniqueUserIds.map((userId, index) => {
+    const snapshot = snapshots.get(userId);
+    if (!snapshot) return [userId, null];
+    const pairingInFlight = pairingStates[index] ?? false;
+    const blocked = Boolean(
+      snapshot.activeMatchId ||
+      snapshot.waitingLobbyId ||
+      snapshot.queueSearchId ||
+      snapshot.state === 'CORRUPT_MULTI_STATE' ||
+      pairingInFlight
+    );
+    if (!blocked) return [userId, null];
+    return [userId, {
+      activeMatchId: snapshot.activeMatchId,
+      waitingLobbyId: snapshot.waitingLobbyId,
+      queueSearchId: snapshot.queueSearchId,
+      state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
+    }];
+  }));
+}
+
 async function getRankedMatchmakingSessionBlock(
   userId: string,
   options: { ignorePairingInFlight?: boolean } = {}
-): Promise<{
-  activeMatchId: string | null;
-  waitingLobbyId: string | null;
-  queueSearchId: string | null;
-  state: string;
-} | null> {
-  const snapshot = await userSessionGuardService.resolveState(userId);
-  const redis = getRedisClient();
-  const pairingInFlight = !options.ignorePairingInFlight && redis
-    ? (await redis.exists(rankedPairingInFlightKey(userId))) === 1
-    : false;
-  const blocked = Boolean(
-    snapshot.activeMatchId ||
-    snapshot.waitingLobbyId ||
-    snapshot.queueSearchId ||
-    snapshot.state === 'CORRUPT_MULTI_STATE' ||
-    pairingInFlight
-  );
-  if (!blocked) return null;
-  return {
-    activeMatchId: snapshot.activeMatchId,
-    waitingLobbyId: snapshot.waitingLobbyId,
-    queueSearchId: snapshot.queueSearchId,
-    state: pairingInFlight ? 'PAIRING_IN_FLIGHT' : snapshot.state,
-  };
-}
-
-async function emitLobbyState(io: QuizballServer, lobbyId: string): Promise<void> {
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (!lobby) return;
-  const state = await lobbiesService.buildLobbyState(lobby);
-  io.to(`lobby:${lobbyId}`).emit('lobby:state', state);
+): Promise<RankedMatchmakingSessionBlock | null> {
+  const blocks = await getRankedMatchmakingSessionBlocks([userId], options);
+  return blocks.get(userId) ?? null;
 }
 
 function emitInsufficientTickets(
@@ -200,29 +259,85 @@ function emitInsufficientTickets(
 }
 
 async function getRankedTicketWallets(userIds: string[]): Promise<Record<string, { coins: number; tickets: number }>> {
-  const entries = await Promise.all(
-    [...new Set(userIds)].map(async (userId) => {
-      const wallet = await storeService.getWallet(userId);
-      return [userId, wallet] as const;
-    })
-  );
-  return Object.fromEntries(entries);
+  const wallets = await storeService.getRankedTicketWallets(userIds);
+  return Object.fromEntries(wallets);
+}
+
+function emitCreatedRankedLobbyState(
+  io: QuizballServer,
+  lobby: LobbyRow,
+  userA: User,
+  userB: User,
+  profileA: RankedProfileRow,
+  profileB: RankedProfileRow,
+): void {
+  const state: LobbyState = {
+    lobbyId: lobby.id,
+    mode: 'ranked',
+    status: lobby.status,
+    inviteCode: lobby.invite_code,
+    displayName: lobby.display_name ?? 'Friendly Lobby',
+    isPublic: lobby.is_public ?? false,
+    hostUserId: lobby.host_user_id,
+    settings: {
+      gameMode: lobby.game_mode ?? 'ranked_sim',
+      friendlyRandom: lobby.friendly_random ?? true,
+      friendlyCategoryAId: lobby.friendly_category_a_id ?? null,
+      friendlyCategoryBId: lobby.friendly_category_b_id ?? null,
+    },
+    members: [
+      {
+        userId: userA.id,
+        username: userA.nickname ?? 'Player',
+        avatarUrl: userA.avatar_url,
+        avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+        isReady: true,
+        isHost: userA.id === lobby.host_user_id,
+        ...{ rankPoints: profileA.rp },
+      },
+      {
+        userId: userB.id,
+        username: userB.nickname ?? 'Player',
+        avatarUrl: userB.avatar_url,
+        avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+        isReady: true,
+        isHost: userB.id === lobby.host_user_id,
+        ...{ rankPoints: profileB.rp },
+      },
+    ],
+  };
+  io.to(`lobby:${lobby.id}`).emit('lobby:state', state);
+}
+
+function emitCreatedRankedSessionStates(
+  io: QuizballServer,
+  lobbyId: string,
+  userIds: string[],
+): void {
+  const resolvedAt = new Date().toISOString();
+  for (const userId of userIds) {
+    const snapshot: SessionStatePayload = {
+      state: 'IN_WAITING_LOBBY',
+      activeMatchId: null,
+      waitingLobbyId: lobbyId,
+      queueSearchId: null,
+      openLobbyIds: [lobbyId],
+      resolvedAt,
+    };
+    io.to(`user:${userId}`).emit('session:state', snapshot);
+  }
 }
 
 async function hasTicketForRankedQueue(io: QuizballServer, userId: string, source: string): Promise<boolean> {
-  let wallet: { coins: number; tickets: number };
-  try {
-    wallet = await storeService.getWallet(userId);
-  } catch (error) {
-    if (isMissingUserWalletError(error)) {
-      await handleStaleRankedQueueUser(io, userId, source);
-      return false;
-    }
-    throw error;
+  const wallets = await storeService.getRankedTicketWallets([userId]);
+  const wallet = wallets.get(userId);
+  if (!wallet) {
+    await handleStaleRankedQueueUser(io, userId, source);
+    return false;
   }
 
   if (wallet.tickets >= 1) {
-    logger.info({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
+    logger.debug({ userId, source, tickets: wallet.tickets }, 'Ranked ticket preflight passed');
     rankedDebug('ticket_preflight_passed', {
       user: rankedDebugUser(userId),
       source,
@@ -314,23 +429,30 @@ export async function startHumanRankedMatch(
   io: QuizballServer,
   userAId: string,
   userBId: string,
-  sessionCountries?: {
-    userA?: string | null;
-    userB?: string | null;
-  }
+  sessionCountries?: RankedPairContext
 ): Promise<void> {
-  await withSpan('ranked.match_found.human', {
-    'quizball.user_a_id': userAId,
-    'quizball.user_b_id': userBId,
-  }, async (span) => {
-    if (userAId === userBId) {
-      rankedDebug('human_pair_skipped_same_user', {
-        user: rankedDebugUser(userAId),
-      });
-      return;
-    }
-    try {
-      await setPairingInFlight([userAId, userBId]);
+  rankedMatchmakingRuntimeTracker.pairStarted();
+  let pairOutcome: RankedPairOutcome = 'skipped';
+  try {
+    await withSpan('ranked.match_found.human', {
+      'quizball.user_a_id': userAId,
+      'quizball.user_b_id': userBId,
+      ...(sessionCountries?.correlationId
+        ? { 'quizball.correlation_id': sessionCountries.correlationId }
+        : {}),
+    }, async (span) => {
+      if (userAId === userBId) {
+        rankedDebug('human_pair_skipped_same_user', {
+          user: rankedDebugUser(userAId),
+        });
+        return;
+      }
+      try {
+        await measureRankedStage(
+          'pairing_marker_set',
+          sessionCountries?.correlationId,
+          () => setPairingInFlight([userAId, userBId]),
+        );
       rankedDebug('human_pair_candidate', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),
@@ -367,7 +489,11 @@ export async function startHumanRankedMatch(
       };
 
       {
-        const [userACancelled, userBCancelled] = await getCancelFlags();
+        const [userACancelled, userBCancelled] = await measureRankedStage(
+          'cancel_check_initial',
+          sessionCountries?.correlationId,
+          getCancelFlags,
+        );
         if (userACancelled || userBCancelled) {
           logger.info(
             { userAId, userBId, userACancelled, userBCancelled },
@@ -385,11 +511,17 @@ export async function startHumanRankedMatch(
         }
       }
 
-      const abortIfMissingLiveSocket = async (): Promise<boolean> => {
-        const [userAPresent, userBPresent] = await Promise.all([
-          hasLiveAuthenticatedSocket(io, userAId),
-          hasLiveAuthenticatedSocket(io, userBId),
-        ]);
+      const abortIfMissingLiveSocket = async (
+        stage: 'socket_presence_initial' | 'socket_presence_pre_lobby',
+      ): Promise<boolean> => {
+        const [userAPresent, userBPresent] = await measureRankedStage(
+          stage,
+          sessionCountries?.correlationId,
+          () => Promise.all([
+            hasLiveAuthenticatedSocket(io, userAId),
+            hasLiveAuthenticatedSocket(io, userBId),
+          ]),
+        );
         if (userAPresent && userBPresent) return false;
 
         logger.warn(
@@ -431,9 +563,13 @@ export async function startHumanRankedMatch(
         return true;
       };
 
-      if (await abortIfMissingLiveSocket()) return;
+      if (await abortIfMissingLiveSocket('socket_presence_initial')) return;
 
-      const usersById = await usersRepo.getByIds([userAId, userBId]);
+      const usersById = await measureRankedStage(
+        'users_lookup',
+        sessionCountries?.correlationId,
+        () => usersRepo.getByIds([userAId, userBId]),
+      );
       const userA = usersById.get(userAId) ?? null;
       const userB = usersById.get(userBId) ?? null;
       if (!userA || !userB) {
@@ -451,11 +587,21 @@ export async function startHumanRankedMatch(
         return;
       }
 
-      const [profileA, profileB] = await Promise.all([
-        rankedService.ensureProfile(userAId),
-        rankedService.ensureProfile(userBId),
-      ]);
-      const wallets = await getRankedTicketWallets([userAId, userBId]);
+      const profilesByUserId = await measureRankedStage(
+        'profiles_lookup',
+        sessionCountries?.correlationId,
+        () => rankedService.ensureProfiles([userAId, userBId]),
+      );
+      const profileA = profilesByUserId.get(userAId);
+      const profileB = profilesByUserId.get(userBId);
+      if (!profileA || !profileB) {
+        throw new Error('Ranked profile batch did not return both paired users');
+      }
+      const wallets = await measureRankedStage(
+        'wallets_lookup',
+        sessionCountries?.correlationId,
+        () => getRankedTicketWallets([userAId, userBId]),
+      );
       const insufficientUserIds = [userAId, userBId].filter((userId) => (wallets[userId]?.tickets ?? 0) < 1);
       if (insufficientUserIds.length > 0) {
         logger.warn(
@@ -489,7 +635,11 @@ export async function startHumanRankedMatch(
         return;
       }
       {
-        const [userACancelled, userBCancelled] = await getCancelFlags();
+        const [userACancelled, userBCancelled] = await measureRankedStage(
+          'cancel_check_pre_lobby',
+          sessionCountries?.correlationId,
+          getCancelFlags,
+        );
         if (userACancelled || userBCancelled) {
           logger.info({ userAId, userBId, userACancelled, userBCancelled }, 'Ranked human match creation skipped because a player cancelled before lobby creation');
           rankedDebug('human_pair_skipped_cancelled_before_lobby', {
@@ -502,10 +652,16 @@ export async function startHumanRankedMatch(
         }
       }
 
-      const [sessionBlockA, sessionBlockB] = await Promise.all([
-        getRankedMatchmakingSessionBlock(userAId, { ignorePairingInFlight: true }),
-        getRankedMatchmakingSessionBlock(userBId, { ignorePairingInFlight: true }),
-      ]);
+      const sessionBlocks = await measureRankedStage(
+        'session_state_preflight',
+        sessionCountries?.correlationId,
+        () => getRankedMatchmakingSessionBlocks(
+          [userAId, userBId],
+          { ignorePairingInFlight: true }
+        ),
+      );
+      const sessionBlockA = sessionBlocks.get(userAId) ?? null;
+      const sessionBlockB = sessionBlocks.get(userBId) ?? null;
       if (sessionBlockA || sessionBlockB) {
         logger.warn(
           {
@@ -526,64 +682,116 @@ export async function startHumanRankedMatch(
         return;
       }
 
-      if (await abortIfMissingLiveSocket()) return;
+      if (await abortIfMissingLiveSocket('socket_presence_pre_lobby')) return;
 
-      const lobby = await lobbiesRepo.createLobby({
-        mode: 'ranked',
-        hostUserId: userAId,
-        inviteCode: null,
-      });
+      const lobby = await measureRankedStage(
+        'lobby_create',
+        sessionCountries?.correlationId,
+        () => lobbiesRepo.createLobbyWithMembers(
+          {
+            mode: 'ranked',
+            hostUserId: userAId,
+            inviteCode: null,
+          },
+          [
+            { userId: userAId, isReady: true },
+            { userId: userBId, isReady: true },
+          ],
+        ),
+      );
 
       span.setAttribute('quizball.lobby_id', lobby.id);
 
-      await Promise.all([
-        lobbiesRepo.addMember(lobby.id, userAId, true),
-        lobbiesRepo.addMember(lobby.id, userBId, true),
-        attachUserSocketsToLobby(io, userAId, lobby.id),
-        attachUserSocketsToLobby(io, userBId, lobby.id),
-      ]);
+      await measureRankedStage(
+        'socket_lobby_attach',
+        sessionCountries?.correlationId,
+        () => Promise.all([
+          attachUserSocketsToLobby(io, userAId, lobby.id),
+          attachUserSocketsToLobby(io, userBId, lobby.id),
+        ]).then(() => undefined),
+      );
 
-      await emitLobbyState(io, lobby.id);
-      await Promise.all([
-        userSessionGuardService.emitState(io, userAId),
-        userSessionGuardService.emitState(io, userBId),
-      ]);
+      const redis = getRedisClient();
+      if (redis) {
+        try {
+          await measureRankedStage(
+            'assignment_markers',
+            sessionCountries?.correlationId,
+            () => Promise.all([
+              redis.set(rankedAssignedLobbyKey(userAId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+              redis.set(rankedAssignedLobbyKey(userBId), lobby.id, { EX: ASSIGNED_LOBBY_TTL_SEC }),
+            ]).then(() => undefined),
+          );
+        } catch (error) {
+          // The lobby and both members have committed; marker telemetry must
+          // not turn that successful handoff into a failed pair.
+          logger.warn({ error, lobbyId: lobby.id, userAId, userBId }, 'Failed to mark ranked lobby assignment');
+        }
+      }
 
-      const [formA, formB] = await Promise.all([
-        statsService.getRecentFormForUser(userAId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-        statsService.getRecentFormForUser(userBId, 3).catch(() => [] as Array<'W' | 'L' | 'D'>),
-      ]);
-
-      io.to(`user:${userAId}`).emit('ranked:match_found', {
-        lobbyId: lobby.id,
-        myRecentForm: formA,
-        opponent: {
-          id: userB.id,
-          username: userB.nickname ?? 'Player',
-          avatarUrl: userB.avatar_url,
-          avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
-          favoriteClub: userB.favorite_club ?? null,
-          recentForm: formB,
-          rp: profileB.rp,
-          ...countryPayload(sessionCountries?.userB ?? userB.country),
+      // The lobby row, both committed members, user display data and rank
+      // profiles are already in memory. Re-reading them here used to add four
+      // sequential database stages (roughly eight queries) per pair and let the
+      // matcher starve queue joins.
+      await measureRankedStage(
+        'lobby_state_emit',
+        sessionCountries?.correlationId,
+        async () => {
+          emitCreatedRankedLobbyState(io, lobby, userA, userB, profileA, profileB);
+          emitCreatedRankedSessionStates(io, lobby.id, [userAId, userBId]);
         },
-      });
-      io.to(`user:${userBId}`).emit('ranked:match_found', {
-        lobbyId: lobby.id,
-        myRecentForm: formB,
-        opponent: {
-          id: userA.id,
-          username: userA.nickname ?? 'Player',
-          avatarUrl: userA.avatar_url,
-          avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
-          favoriteClub: userA.favorite_club ?? null,
-          recentForm: formA,
-          rp: profileA.rp,
-          ...countryPayload(sessionCountries?.userA ?? userA.country),
-        },
-      });
+      );
 
-      logger.info({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
+      const recentForms = await measureRankedStage(
+        'recent_form_lookup',
+        sessionCountries?.correlationId,
+        () => statsService
+          .getRecentFormsForUsers([userAId, userBId], 3)
+          .catch(() => new Map<string, Array<'W' | 'L' | 'D'>>()),
+      );
+      const formA = recentForms.get(userAId) ?? [];
+      const formB = recentForms.get(userBId) ?? [];
+
+      await measureRankedStage(
+        'match_found_emit',
+        sessionCountries?.correlationId,
+        async () => {
+          io.to(`user:${userAId}`).emit('ranked:match_found', {
+            lobbyId: lobby.id,
+            myRecentForm: formA,
+            opponent: {
+              id: userB.id,
+              username: userB.nickname ?? 'Player',
+              avatarUrl: userB.avatar_url,
+              avatarCustomization: parseStoredAvatarCustomization(userB.avatar_customization),
+              favoriteClub: userB.favorite_club ?? null,
+              recentForm: formB,
+              rp: profileB.rp,
+              ...countryPayload(sessionCountries?.userB ?? userB.country),
+            },
+          });
+          io.to(`user:${userBId}`).emit('ranked:match_found', {
+            lobbyId: lobby.id,
+            myRecentForm: formB,
+            opponent: {
+              id: userA.id,
+              username: userA.nickname ?? 'Player',
+              avatarUrl: userA.avatar_url,
+              avatarCustomization: parseStoredAvatarCustomization(userA.avatar_customization),
+              favoriteClub: userA.favorite_club ?? null,
+              recentForm: formA,
+              rp: profileA.rp,
+              ...countryPayload(sessionCountries?.userA ?? userA.country),
+            },
+          });
+        },
+      );
+      if (sessionCountries?.claimedAtMs !== undefined) {
+        recordRankedStage('claim_to_match_found', Date.now() - sessionCountries.claimedAtMs);
+      }
+      pairOutcome = 'completed';
+
+      logger.debug({ lobbyId: lobby.id, userAId, userBId }, 'Ranked human match found');
       rankedDebug('human_match_found', {
         userA: rankedDebugUser(userAId),
         userB: rankedDebugUser(userBId),
@@ -600,11 +808,15 @@ export async function startHumanRankedMatch(
       // a CLOSED client, not a failing write), fall back to the old in-process
       // timer — a non-durable draft start beats a stranded waiting lobby.
       try {
-        await scheduleRealtimeTimer(
-          'ranked_draft_start',
-          lobby.id,
-          new Date(Date.now() + FOUND_MODAL_MS),
-          { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+        await measureRankedStage(
+          'draft_schedule',
+          sessionCountries?.correlationId,
+          () => scheduleRealtimeTimer(
+            'ranked_draft_start',
+            lobby.id,
+            new Date(Date.now() + FOUND_MODAL_MS),
+            { kind: 'ranked_draft_start', lobbyId: lobby.id, userAId, userBId }
+          ),
         );
       } catch (err) {
         logger.error(
@@ -618,10 +830,20 @@ export async function startHumanRankedMatch(
         }, FOUND_MODAL_MS);
         fallback.unref?.();
       }
-    } finally {
-      await clearPairingInFlight([userAId, userBId]);
-    }
-  });
+      } finally {
+        await measureRankedStage(
+          'pairing_marker_clear',
+          sessionCountries?.correlationId,
+          () => clearPairingInFlight([userAId, userBId]),
+        );
+      }
+    });
+  } catch (error) {
+    pairOutcome = 'failed';
+    throw error;
+  } finally {
+    rankedMatchmakingRuntimeTracker.pairFinished(pairOutcome);
+  }
 }
 
 /**
@@ -649,12 +871,31 @@ export async function runRankedDraftStart(
       );
       return;
     }
+
+    const queuedSearches = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    if (queuedSearches >= DRAFT_DEFER_QUEUE_THRESHOLD) {
+      await scheduleRealtimeTimer(
+        'ranked_draft_start',
+        lobbyId,
+        new Date(Date.now() + DRAFT_DEFER_MS),
+        { kind: 'ranked_draft_start', lobbyId, userAId, userBId }
+      );
+      logger.debug(
+        { lobbyId, queuedSearches },
+        'Deferred ranked draft start behind matchmaking backlog'
+      );
+      return;
+    }
   }
   const latest = await lobbiesRepo.getById(lobbyId);
   if (!latest || latest.status !== 'waiting' || latest.mode !== 'ranked') return;
   try {
     await startDraft(io, lobbyId);
   } catch (error) {
+    // The durable timer scheduler will requeue transient admission pressure.
+    // Treating this as a terminal match-preparation failure strands a valid,
+    // committed lobby and forces both players to restart matchmaking.
+    if (error instanceof DbOverloadedError) throw error;
     // Keep the crash guard from the previous in-process timer path: a draft
     // start failure must notify both players and never become an unhandled
     // rejection from the durable scheduler.
@@ -751,6 +992,7 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
     // least two candidates remain; fallbacks resume on the next tick once
     // fewer than two searches are available.
     const queuedCount = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    rankedMatchmakingRuntimeTracker.recordQueueDepth(queuedCount);
     span.setAttribute('quizball.queued_search_count', queuedCount);
     if (queuedCount >= 2) {
       span.setAttribute('quizball.deferred_for_human_pair', true);
@@ -798,43 +1040,121 @@ async function processPairs(io: QuizballServer): Promise<void> {
       return;
     }
 
+    type ClaimedPair = {
+      searchIdA: string;
+      searchIdB: string;
+      userAId: string;
+      userBId: string;
+      userACountryCode: string | null;
+      userBCountryCode: string | null;
+      correlationId: string;
+      claimedAtMs: number;
+    };
+
     let pairCount = 0;
     let pairFailureCount = 0;
-    for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
-      const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_RANDOM_SCRIPT, {
-        keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
-        arguments: [RANKED_MM_SEARCH_KEY_PREFIX, String(Date.now())],
-      });
-      const result = toStringArray(resultRaw);
-      if (result.length < 4) break;
+    const activeStarts = new Set<Promise<void>>();
+    const startClaimedPair = (pair: ClaimedPair): void => {
+      const start = (async () => {
+        try {
+          await startHumanRankedMatch(io, pair.userAId, pair.userBId, {
+            userA: pair.userACountryCode,
+            userB: pair.userBCountryCode,
+            correlationId: pair.correlationId,
+            claimedAtMs: pair.claimedAtMs,
+          });
+        } catch (error) {
+          pairFailureCount += 1;
+          logger.error(
+            {
+              err: error,
+              searchIdA: pair.searchIdA,
+              searchIdB: pair.searchIdB,
+              userAId: pair.userAId,
+              userBId: pair.userBId,
+            },
+            'Ranked matchmaking pair failed for queued users'
+          );
+        }
+      })();
+      activeStarts.add(start);
+      void start.finally(() => activeStarts.delete(start));
+    };
 
-      const searchIdA = result[0];
-      const userAId = result[1];
-      const hasCountryCodes = result.length >= 6;
-      const userACountryCode = hasCountryCodes ? result[2] || null : null;
-      const searchIdB = hasCountryCodes ? result[3] : result[2];
-      const userBId = hasCountryCodes ? result[4] : result[3];
-      const userBCountryCode = hasCountryCodes ? result[5] || null : null;
-      if (!userAId || !userBId) break;
-      pairCount += 1;
-      rankedDebug('pair_claimed_two_users', {
-        userA: rankedDebugUser(userAId),
-        userB: rankedDebugUser(userBId),
-        searchA: searchIdA.slice(0, 8),
-        searchB: searchIdB.slice(0, 8),
-      });
-      try {
-        await startHumanRankedMatch(io, userAId, userBId, {
-          userA: userACountryCode,
-          userB: userBCountryCode,
+    try {
+      for (let i = 0; i < MAX_PAIRS_PER_TICK; i += 1) {
+        if (activeStarts.size >= MAX_CONCURRENT_PAIR_STARTS) {
+          const slotWaitStartedAt = performance.now();
+          await Promise.race(activeStarts);
+          const slotWaitMs = performance.now() - slotWaitStartedAt;
+          recordRankedStage('pair_start_slot_wait', slotWaitMs);
+          span.addEvent('ranked.pair_start_slot_available', {
+            'quizball.duration_ms': slotWaitMs,
+          });
+        }
+        const claimStartedAt = performance.now();
+        const resultRaw = await redis.eval(RANKED_MM_PAIR_TWO_OLDEST_SCRIPT, {
+            keys: [RANKED_MM_QUEUE_KEY, RANKED_MM_TIMEOUTS_KEY, RANKED_MM_USER_MAP_KEY],
+            arguments: [
+              RANKED_MM_SEARCH_KEY_PREFIX,
+              String(Date.now()),
+              RANKED_MM_PAIRING_IN_FLIGHT_KEY_PREFIX,
+              String(PAIRING_IN_FLIGHT_TTL_SEC),
+            ],
+          })
+          .finally(() => recordRankedStage(
+            'pair_claim_redis',
+            performance.now() - claimStartedAt,
+          ));
+        const result = toStringArray(resultRaw);
+        // The Lua script removed an expired/mismapped queue member. Keep scanning
+        // in this same tick instead of letting one orphan throttle matchmaking to
+        // one cleanup per 100ms.
+        if (result[0] === RANKED_MM_STALE_RESULT) continue;
+        if (result.length < 4) break;
+
+        const searchIdA = result[0];
+        const userAId = result[1];
+        const hasCountryCodes = result.length >= 6;
+        const userACountryCode = hasCountryCodes ? result[2] || null : null;
+        const searchIdB = hasCountryCodes ? result[3] : result[2];
+        const userBId = hasCountryCodes ? result[4] : result[3];
+        const userBCountryCode = hasCountryCodes ? result[5] || null : null;
+        if (!userAId || !userBId) break;
+        pairCount += 1;
+        rankedMatchmakingRuntimeTracker.pairClaimed();
+        const claimedAtMs = Date.now();
+        if (result.length >= 8) {
+          for (const queuedAtRaw of [result[6], result[7]]) {
+            const queuedAtMs = Number(queuedAtRaw);
+            if (Number.isFinite(queuedAtMs) && queuedAtMs > 0) {
+              recordRankedStage('queue_wait_to_claim', claimedAtMs - queuedAtMs);
+            }
+          }
+        }
+        const pair: ClaimedPair = {
+          searchIdA,
+          searchIdB,
+          userAId,
+          userBId,
+          userACountryCode,
+          userBCountryCode,
+          correlationId: `${searchIdA}:${searchIdB}`,
+          claimedAtMs,
+        };
+        rankedDebug('pair_claimed_two_users', {
+          userA: rankedDebugUser(userAId),
+          userB: rankedDebugUser(userBId),
+          searchA: searchIdA.slice(0, 8),
+          searchB: searchIdB.slice(0, 8),
         });
-      } catch (error) {
-        pairFailureCount += 1;
-        logger.error(
-          { err: error, searchIdA, searchIdB, userAId, userBId },
-          'Ranked matchmaking pair failed for queued users'
-        );
+        startClaimedPair(pair);
       }
+    } finally {
+      // A later Redis claim may fail after earlier users were already removed
+      // from the queue. Always drain every successful claim before surfacing
+      // that failure so claimed players are never silently stranded.
+      await Promise.all(activeStarts);
     }
     span.setAttribute('quizball.pair_count', pairCount);
     span.setAttribute('quizball.pair_failure_count', pairFailureCount);
@@ -856,40 +1176,29 @@ async function rankedTick(): Promise<void> {
         return;
       }
 
-      const lock = await acquireLock(TICK_LOCK_KEY, TICK_LOCK_TTL_MS);
-      if (!lock.acquired || !lock.token) {
-        span.setAttribute('quizball.tick_lock_acquired', false);
-        return;
-      }
+      // Each replica runs one local tick. Cross-replica exclusion is
+      // intentionally delegated to the atomic Redis claim scripts: a global
+      // tick lock made one Railway replica build every lobby while the other
+      // sat idle, halving throughput and concentrating DB admission pressure.
 
-      span.setAttribute('quizball.tick_lock_acquired', true);
       let phaseFailureCount = 0;
       try {
-        try {
-          await processFallbacks(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.fallback_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking fallback phase failed');
-        }
-
-        try {
-          await processPairs(io);
-        } catch (error) {
-          phaseFailureCount += 1;
-          span.setAttribute('quizball.pair_phase_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking pair phase failed');
-        }
-
-        span.setAttribute('quizball.phase_failure_count', phaseFailureCount);
-      } finally {
-        try {
-          await releaseLock(TICK_LOCK_KEY, lock.token);
-        } catch (error) {
-          span.setAttribute('quizball.tick_lock_release_failed', true);
-          logger.error({ err: error }, 'Ranked matchmaking tick lock release failed');
-        }
+        await processFallbacks(io);
+      } catch (error) {
+        phaseFailureCount += 1;
+        span.setAttribute('quizball.fallback_phase_failed', true);
+        logger.error({ err: error }, 'Ranked matchmaking fallback phase failed');
       }
+
+      try {
+        await processPairs(io);
+      } catch (error) {
+        phaseFailureCount += 1;
+        span.setAttribute('quizball.pair_phase_failed', true);
+        logger.error({ err: error }, 'Ranked matchmaking pair phase failed');
+      }
+
+      span.setAttribute('quizball.phase_failure_count', phaseFailureCount);
     });
   } catch (error) {
     logger.error({ err: error }, 'Ranked matchmaking tick failed outside guarded section');
@@ -901,9 +1210,15 @@ export const rankedMatchmakingService = {
     if (loopTimer || !config.RANKED_HUMAN_QUEUE_ENABLED) return;
     loopIo = io;
     loopTimer = setInterval(() => {
-      void rankedTick().catch((error) => {
-        logger.error({ err: error }, 'Ranked matchmaking tick rejected unexpectedly');
-      });
+      if (tickInFlight) return;
+      tickInFlight = true;
+      void rankedTick()
+        .catch((error) => {
+          logger.error({ err: error }, 'Ranked matchmaking tick rejected unexpectedly');
+        })
+        .finally(() => {
+          tickInFlight = false;
+        });
     }, TICK_INTERVAL_MS);
     logger.info('Ranked matchmaking loop started');
   },
@@ -939,7 +1254,7 @@ export const rankedMatchmakingService = {
       'quizball.client_reason': queueClientContext.clientReason,
       'quizball.client_request_id': queueClientContext.clientRequestId ?? '',
     }, async (span) => {
-      logger.info(
+      logger.debug(
         { userId, ...queueClientContext, searchMode: payload?.searchMode ?? 'human_first' },
         'Ranked queue join requested'
       );
@@ -1006,6 +1321,12 @@ export const rankedMatchmakingService = {
       }
 
       const redis = getRedisClient();
+      if (redis) {
+        // Reaching a fresh queue join proves any previous assignment is no
+        // longer the user's authoritative session. Clear the disconnect guard
+        // so a later disconnect from this new search is cleaned normally.
+        await redis.del(rankedAssignedLobbyKey(userId));
+      }
       const ignoreRecentLeave = async (): Promise<void> => {
         logger.info(
           { userId, ...queueClientContext, leaveGuardTtlSec: LEAVE_GUARD_TTL_SEC },
@@ -1107,7 +1428,7 @@ export const rankedMatchmakingService = {
           }
 
           const prepared = await userSessionGuardService.prepareForQueueJoin(io, userId);
-          logger.info(
+          logger.debug(
             {
               userId,
               state: prepared.snapshot.state,
@@ -1203,7 +1524,7 @@ export const rankedMatchmakingService = {
                 remainingMs,
               });
               io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: remainingMs || SEARCH_DURATION_MS });
-              const snapshot = await userSessionGuardService.emitState(io, userId);
+              const snapshot = emitQueuedSessionState(io, userId, prepared.snapshot, existingSearchId);
               logger.info(
                 {
                   userId,
@@ -1262,9 +1583,16 @@ export const rankedMatchmakingService = {
           }
 
           io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: SEARCH_DURATION_MS });
-          const queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
-          span.setAttribute('quizball.queue_size', queueSize);
-          logger.info(
+          let queueSize: number | null = null;
+          try {
+            queueSize = await redis.zCard(RANKED_MM_QUEUE_KEY);
+            span.setAttribute('quizball.queue_size', queueSize);
+          } catch (error) {
+            // The search is already committed and acknowledged. Telemetry must
+            // never turn a successful queue join into a client-visible error.
+            logger.warn({ err: error, userId, searchId: newSearchId }, 'Failed to read ranked queue size after join');
+          }
+          logger.debug(
             { userId, searchId: newSearchId, queueSize, ...queueClientContext },
             'User joined ranked queue'
           );
@@ -1279,8 +1607,8 @@ export const rankedMatchmakingService = {
             queueSize,
             durationMs: SEARCH_DURATION_MS,
           });
-          const snapshot = await userSessionGuardService.emitState(io, userId);
-          logger.info(
+          const snapshot = emitQueuedSessionState(io, userId, prepared.snapshot, newSearchId);
+          logger.debug(
             {
               userId,
               state: snapshot.state,
@@ -1323,6 +1651,14 @@ export const rankedMatchmakingService = {
       const redis = getRedisClient();
       if (!redis) {
         span.setAttribute('quizball.redis_available', false);
+        return;
+      }
+
+      // A late explicit queue-leave after match_found must not cancel a lobby
+      // that has already been committed on another replica.
+      const assignedLobbyId = await redis.get(rankedAssignedLobbyKey(userId));
+      if (assignedLobbyId) {
+        span.setAttribute('quizball.skipped_due_to_assigned_lobby', true);
         return;
       }
 
@@ -1412,6 +1748,16 @@ export const rankedMatchmakingService = {
         return;
       }
 
+      // Cross-replica Socket.IO room joins do not persistently mutate the
+      // owning replica's socket.data. The committed Redis marker prevents the
+      // remote socket's later disconnect from being mistaken for an active
+      // queue search and triggering two session queries during mass cleanup.
+      const assignedLobbyId = await redis.get(rankedAssignedLobbyKey(userId));
+      if (assignedLobbyId) {
+        span.setAttribute('quizball.skipped_due_to_assigned_lobby', true);
+        return;
+      }
+
       // Set the cancel marker BEFORE attempting the transition lock (it is
       // idempotent and re-set under the lock below). Previously the marker
       // was only written inside the lock callback — if the lock was busy at
@@ -1481,7 +1827,7 @@ export const rankedMatchmakingService = {
         return;
       }
       const snapshot = await userSessionGuardService.emitState(io, userId);
-      logger.info(
+      logger.debug(
         {
           userId,
           state: snapshot.state,

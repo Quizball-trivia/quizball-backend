@@ -9,6 +9,7 @@ import {
   socketDbTaskLimiter,
 } from '../../realtime/socket-db-task-limiter.js';
 import { socketRuntimeTracker } from '../../realtime/socket-runtime-stats.js';
+import { rankedMatchmakingRuntimeTracker } from '../../realtime/ranked-matchmaking-runtime-stats.js';
 
 const router = Router();
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
@@ -85,6 +86,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       socketDbTasks: socketDbTaskLimiter.stats(),
       postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
+      rankedMatchmaking: rankedMatchmakingRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });
   } catch (error) {
@@ -97,6 +99,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       socketDbTasks: socketDbTaskLimiter.stats(),
       postConnectDbTasks: postConnectDbTaskLimiter.stats(),
       sockets: socketRuntimeTracker.stats(),
+      rankedMatchmaking: rankedMatchmakingRuntimeTracker.stats(),
       runtime: runtimeStats(),
     });
   }

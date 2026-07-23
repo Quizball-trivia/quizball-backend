@@ -845,9 +845,16 @@ export const userSessionGuardService = {
     io: QuizballServer,
     userId: string
   ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
-    await this.prepareForConnect(io, userId);
-    const context = await resolveContext(userId);
-    const snapshot = toSnapshot(context);
+    // Queue join is a flash-traffic path. A clean user only needs one context
+    // read; the generic connect preparation used to resolve the same match and
+    // lobby state repeatedly before resolving it yet again below.
+    let context = await resolveContext(userId);
+    if (context.activeMatch) {
+      await cleanupStaleOrphanActiveMatch(io, userId, context);
+      context = await resolveContext(userId);
+    }
+
+    let snapshot = toSnapshot(context);
     if (await hasRankedPairingInFlight(userId)) {
       return {
         ok: false,
@@ -879,10 +886,17 @@ export const userSessionGuardService = {
       return { ok: true, snapshot };
     }
 
-    await cancelRankedQueueSearch(userId);
-    await cleanupOpenLobbies(io, userId);
-    const nextSnapshot = await this.resolveState(userId);
-    return { ok: true, snapshot: nextSnapshot };
+    // The common IDLE path has no artifacts to clean and can return without
+    // another database round trip. Only resolve again when cleanup changed
+    // actual lobby/queue state.
+    if (context.openLobbies.length > 0 || context.queueSearchId) {
+      await cancelRankedQueueSearch(userId);
+      await cleanupOpenLobbies(io, userId);
+      context = await resolveContext(userId);
+      snapshot = toSnapshot(context);
+    }
+
+    return { ok: true, snapshot };
   },
 
   async cleanupRankedQueueArtifacts(io: QuizballServer, userId: string): Promise<SessionStatePayload> {

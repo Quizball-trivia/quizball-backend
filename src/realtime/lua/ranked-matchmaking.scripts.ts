@@ -1,11 +1,23 @@
-export const RANKED_MM_PAIR_TWO_RANDOM_SCRIPT = `
+export const RANKED_MM_STALE_RESULT = '__ranked_mm_stale__';
+
+export const RANKED_MM_PAIR_TWO_OLDEST_SCRIPT = `
 local queueKey = KEYS[1]
 local timeoutKey = KEYS[2]
 local userMapKey = KEYS[3]
 local searchPrefix = ARGV[1]
 local matchedAt = ARGV[2]
+local pairingPrefix = ARGV[3]
+local pairingTtlSec = tonumber(ARGV[4])
 
-local picks = redis.call('ZRANDMEMBER', queueKey, 2)
+-- Claim the two oldest searches. Random claims were correct but unfair under a
+-- sustained streamer-scale backlog: unlucky early users could remain queued
+-- for tens of seconds while newer searches were repeatedly selected. The
+-- sorted set is already scored by join time, so oldest-first bounds the wait
+-- tail without changing the atomic cross-replica claim contract.
+-- Searches enqueued in the same millisecond form one equivalent FIFO cohort;
+-- Redis orders that small tie lexicographically by search id and drains it
+-- before moving to the next timestamp.
+local picks = redis.call('ZRANGE', queueKey, 0, 1)
 if (not picks) or (#picks < 2) then
   return {}
 end
@@ -24,12 +36,12 @@ local statusB = redis.call('HGET', searchKeyB, 'status')
 if statusA ~= 'queued' then
   redis.call('ZREM', queueKey, searchIdA)
   redis.call('ZREM', timeoutKey, searchIdA)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 if statusB ~= 'queued' then
   redis.call('ZREM', queueKey, searchIdB)
   redis.call('ZREM', timeoutKey, searchIdB)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 
 local userIdA = redis.call('HGET', searchKeyA, 'userId')
@@ -37,7 +49,7 @@ local userIdB = redis.call('HGET', searchKeyB, 'userId')
 if (not userIdA) or (not userIdB) then
   redis.call('ZREM', queueKey, searchIdA, searchIdB)
   redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
-  return {}
+  return {'${RANKED_MM_STALE_RESULT}'}
 end
 local mappedSearchIdA = redis.call('HGET', userMapKey, userIdA)
 local mappedSearchIdB = redis.call('HGET', userMapKey, userIdB)
@@ -55,14 +67,32 @@ if mappedSearchIdB ~= searchIdB then
 end
 local countryCodeA = redis.call('HGET', searchKeyA, 'countryCode') or ''
 local countryCodeB = redis.call('HGET', searchKeyB, 'countryCode') or ''
+local queuedAtA = redis.call('HGET', searchKeyA, 'queuedAt') or ''
+local queuedAtB = redis.call('HGET', searchKeyB, 'queuedAt') or ''
 
 redis.call('HSET', searchKeyA, 'status', 'matched', 'matchedAt', matchedAt)
 redis.call('HSET', searchKeyB, 'status', 'matched', 'matchedAt', matchedAt)
 redis.call('ZREM', queueKey, searchIdA, searchIdB)
 redis.call('ZREM', timeoutKey, searchIdA, searchIdB)
 redis.call('HDEL', userMapKey, userIdA, userIdB)
+-- Reserve both users as part of the same atomic queue claim. processPairs
+-- deliberately claims a batch before starting the slower lobby builds; these
+-- markers stop a retrying client from re-joining during that bounded wait.
+redis.call('SET', pairingPrefix .. userIdA, '1', 'EX', pairingTtlSec)
+redis.call('SET', pairingPrefix .. userIdB, '1', 'EX', pairingTtlSec)
 
-return { searchIdA, userIdA, countryCodeA, searchIdB, userIdB, countryCodeB }
+-- queuedAt values are appended so older four/six-field result parsers remain
+-- compatible during a rolling deploy.
+return {
+  searchIdA,
+  userIdA,
+  countryCodeA,
+  searchIdB,
+  userIdB,
+  countryCodeB,
+  queuedAtA,
+  queuedAtB
+}
 `;
 
 export const RANKED_MM_CLAIM_FALLBACK_SCRIPT = `
@@ -76,6 +106,11 @@ local fallbackAt = ARGV[3]
 
 local status = redis.call('HGET', searchKey, 'status')
 if status ~= 'queued' then
+  -- Hashes have a TTL but sorted-set members do not. A replica crash can leave
+  -- this orphan behind after the hash expires; remove it here so the first 50
+  -- dead timeout entries cannot permanently starve every real fallback.
+  redis.call('ZREM', queueKey, searchId)
+  redis.call('ZREM', timeoutKey, searchId)
   return {}
 end
 

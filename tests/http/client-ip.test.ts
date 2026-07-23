@@ -43,6 +43,15 @@ describe('trusted client IP resolution', () => {
     expect(resolveTrustedClientIp(req, 'local')).toBe('127.0.0.1');
   });
 
+  it('ignores X-Real-IP in local mode where no trusted edge exists', () => {
+    const req = request({
+      headers: { 'x-real-ip': '203.0.113.42' },
+      remoteAddress: '::ffff:127.0.0.1',
+    });
+
+    expect(resolveTrustedClientIp(req, 'local')).toBe('127.0.0.1');
+  });
+
   it('rejects lists and non-IP values', () => {
     expect(normalizeClientIp('203.0.113.1, 198.51.100.2')).toBeUndefined();
     expect(normalizeClientIp('not-an-ip')).toBeUndefined();

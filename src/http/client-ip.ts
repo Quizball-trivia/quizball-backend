@@ -35,10 +35,8 @@ export function resolveTrustedClientIp(
   req: Pick<Request, 'headers' | 'socket'>,
   nodeEnv: 'local' | 'staging' | 'prod' = config.NODE_ENV,
 ): string | undefined {
-  const railwayIp = normalizeClientIp(firstHeaderValue(req.headers['x-real-ip']));
-  if (railwayIp) return railwayIp;
-  if (nodeEnv !== 'local') return undefined;
-  return normalizeClientIp(req.socket?.remoteAddress);
+  if (nodeEnv === 'local') return normalizeClientIp(req.socket?.remoteAddress);
+  return normalizeClientIp(firstHeaderValue(req.headers['x-real-ip']));
 }
 
 export function authRequestContext(req: Pick<Request, 'headers' | 'socket'>): AuthRequestContext | undefined {

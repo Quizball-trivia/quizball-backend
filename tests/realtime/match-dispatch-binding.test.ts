@@ -6,6 +6,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 
 const getMatchCacheOrRebuildMock = vi.hoisted(() => vi.fn());
 const handlePossessionAnswerMock = vi.hoisted(() => vi.fn());
+const getMatchMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -17,6 +18,10 @@ vi.mock('../../src/realtime/match-cache.js', () => ({
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => null, // no pause key checks in these tests
+}));
+
+vi.mock('../../src/modules/matches/matches.repo.js', () => ({
+  matchesRepo: { getMatch: (...args: unknown[]) => getMatchMock(...args) },
 }));
 
 vi.mock('../../src/realtime/possession-match-flow.js', () => ({
@@ -73,6 +78,7 @@ describe('dispatch gate heals the socket->match binding (silent-pause-bypass gua
   beforeEach(() => {
     vi.clearAllMocks();
     getMatchCacheOrRebuildMock.mockResolvedValue(createCache());
+    getMatchMock.mockResolvedValue(null);
   });
 
   it('repairs a participant socket that lost its matchId', async () => {
@@ -99,5 +105,21 @@ describe('dispatch gate heals the socket->match binding (silent-pause-bypass gua
     await handleAnswer(io, socket, { matchId: MATCH_ID, qIndex: 2, answerIndex: 1, timeMs: 1000 });
 
     expect(socket.data.matchId).toBe(MATCH_ID);
+  });
+
+  it('silently ignores an in-flight answer after the match completed', async () => {
+    getMatchCacheOrRebuildMock.mockResolvedValue(null);
+    getMatchMock.mockResolvedValue({ id: MATCH_ID, status: 'completed' });
+    const socket = createSocket('u1', MATCH_ID);
+
+    await handleAnswer(io, socket, {
+      matchId: MATCH_ID,
+      qIndex: 12,
+      answerIndex: 1,
+      timeMs: 1000,
+    });
+
+    expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+    expect(handlePossessionAnswerMock).not.toHaveBeenCalled();
   });
 });

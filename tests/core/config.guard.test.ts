@@ -52,3 +52,27 @@ describe('config guard: REGRESSION_* flags are local-only', () => {
     }))).not.toThrow();
   });
 });
+
+describe('database resilience configuration', () => {
+  it('uses conservative pool, admission, and watchdog defaults', () => {
+    const parsed = parseConfig(baseEnv());
+    expect(parsed.DB_POOL_MAX).toBe(12);
+    expect(parsed.DB_INFLIGHT_LIMIT).toBe(12);
+    expect(parsed.DB_QUEUE_LIMIT).toBe(12);
+    expect(parsed.DB_ACQUIRE_TIMEOUT_MS).toBe(1500);
+    expect(parsed.DB_MAX_LIFETIME_SECONDS).toBe(1800);
+    expect(parsed.DB_WATCHDOG_ENABLED).toBe(true);
+    expect(parsed.DB_WATCHDOG_INTERVAL_MS).toBe(10_000);
+    expect(parsed.DB_WATCHDOG_TIMEOUT_MS).toBe(4_000);
+    expect(parsed.DB_WATCHDOG_FAILURES).toBe(3);
+  });
+
+  it('rejects unsafe or nonsensical database limits', () => {
+    expect(() => parseConfig(baseEnv({ DB_POOL_MAX: '0' }))).toThrow(/DB_POOL_MAX/);
+    expect(() => parseConfig(baseEnv({ DB_POOL_MAX: '31' }))).toThrow(/DB_POOL_MAX/);
+    expect(() => parseConfig(baseEnv({ DB_ACQUIRE_TIMEOUT_MS: '50' })))
+      .toThrow(/DB_ACQUIRE_TIMEOUT_MS/);
+    expect(() => parseConfig(baseEnv({ DB_WATCHDOG_FAILURES: '0' })))
+      .toThrow(/DB_WATCHDOG_FAILURES/);
+  });
+});

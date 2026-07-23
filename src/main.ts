@@ -4,7 +4,12 @@ import { config } from './core/config.js';
 import { logger } from './core/logger.js';
 import { shutdownLokiLogStream } from './core/loki.js';
 import { shutdownTelemetry } from './core/otel.js';
-import { disconnectDb } from './db/index.js';
+import {
+  dbPoolStats,
+  disconnectDb,
+  withDbWatchdogProbe,
+} from './db/index.js';
+import { DbWatchdog } from './db/watchdog.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
@@ -23,9 +28,39 @@ const server = httpServer.listen(config.PORT, () => {
   );
 });
 
+const dbWatchdog = new DbWatchdog({
+  probe: () => withDbWatchdogProbe(async (tx) => {
+    await tx.unsafe('SELECT 1');
+  }, 2_000, Math.max(500, config.DB_WATCHDOG_TIMEOUT_MS - 500)),
+  intervalMs: config.DB_WATCHDOG_INTERVAL_MS,
+  timeoutMs: config.DB_WATCHDOG_TIMEOUT_MS,
+  maxFailures: config.DB_WATCHDOG_FAILURES,
+  onFailure: (error, failures, maxFailures) => {
+    logger.error(
+      { error, failures, maxFailures, pool: dbPoolStats() },
+      'Database watchdog probe failed'
+    );
+  },
+  onRecovery: (previousFailures) => {
+    logger.info({ previousFailures, pool: dbPoolStats() }, 'Database watchdog recovered');
+  },
+  onFatal: (error) => {
+    logger.fatal(
+      { error, pool: dbPoolStats() },
+      'Database pool is unrecoverable; exiting so Railway replaces this replica'
+    );
+    process.exit(1);
+  },
+});
+
+if (config.NODE_ENV !== 'local' && config.DB_WATCHDOG_ENABLED) {
+  dbWatchdog.start();
+}
+
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
+  dbWatchdog.stop();
   io.close();
   server.close(async () => {
     const results = await Promise.allSettled([

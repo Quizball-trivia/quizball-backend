@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { BadRequestError, NotFoundError } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
 import {
   campaignQuizzesRepo,
@@ -42,7 +43,11 @@ type CampaignPayload = Extract<
 >;
 
 function parseCampaignQuestion(row: CampaignQuizQuestionRow): CampaignPayload {
-  const payload = questionPayloadSchema.parse(row.payload);
+  const parsed = questionPayloadSchema.safeParse(row.payload);
+  if (!parsed.success) {
+    throw new BadRequestError('Campaign quiz question payload is invalid');
+  }
+  const payload = parsed.data;
   if (
     payload.type !== 'mcq_single'
     && payload.type !== 'true_false'
@@ -75,7 +80,14 @@ function generatedOptions(
 
   const distractors = rows
     .filter((candidate) => candidate.id !== row.id)
-    .map((candidate) => generatedAnswer(parseCampaignQuestion(candidate)))
+    .map((candidate) => {
+      try {
+        return generatedAnswer(parseCampaignQuestion(candidate));
+      } catch (error) {
+        if (error instanceof BadRequestError) return null;
+        throw error;
+      }
+    })
     .filter((answer): answer is string => Boolean(answer && answer !== correctAnswer))
     .filter((answer, index, answers) => answers.indexOf(answer) === index)
     .sort((left, right) =>
@@ -167,12 +179,28 @@ export const campaignQuizzesService = {
       campaignQuizzesRepo.getPublishedQuestions(slug),
       campaignQuizzesRepo.getRating(slug),
     ]);
+    const questions = rows.flatMap((row) => {
+      try {
+        return [toPublicQuestion(row, rows)];
+      } catch (error) {
+        if (!(error instanceof BadRequestError)) throw error;
+        logger.warn(
+          {
+            quizSlug: slug,
+            questionId: row.id,
+            errorMessage: error.message,
+          },
+          'Skipping invalid campaign quiz question',
+        );
+        return [];
+      }
+    });
 
     return {
       slug: quiz.slug,
       title: quiz.title,
-      total_questions: rows.length,
-      questions: rows.map((row) => toPublicQuestion(row, rows)),
+      total_questions: questions.length,
+      questions,
       rating: normalizeRating(rating),
     };
   },

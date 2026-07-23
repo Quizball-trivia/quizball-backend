@@ -69,6 +69,29 @@ describe('campaignQuizzesService', () => {
     expect(quiz.rating).toEqual({ average: 4.75, count: 12 });
   });
 
+  it('skips a malformed campaign question without failing the whole quiz', async () => {
+    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue([
+      {
+        ...question,
+        id: '6c6b8d10-8b8e-4d12-9a10-000000000002',
+        payload: null,
+      },
+      {
+        ...question,
+        display_order: 2,
+      },
+    ]);
+
+    const quiz = await campaignQuizzesService.getQuiz('liverpool');
+
+    expect(quiz.total_questions).toBe(1);
+    expect(quiz.questions).toHaveLength(1);
+    expect(quiz.questions[0]).toMatchObject({
+      id: question.id,
+      position: 2,
+    });
+  });
+
   it('reveals the correct option only after an answer is submitted', async () => {
     await expect(
       campaignQuizzesService.answer('liverpool', question.id, 'a'),

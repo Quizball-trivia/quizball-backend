@@ -36,7 +36,23 @@ describe('chaos SLO verdict', () => {
     expect(verdict).toMatchObject({ ok: true, violations: [] });
   });
 
-  it('fails when Postgres has a lock waiter or long-running query', () => {
+  it('allows a brief lock waiter below the duration SLO', () => {
+    const verdict = evaluateChaosRun([], null, {
+      total: 10,
+      active: 2,
+      idle: 8,
+      idleInTxn: 0,
+      waitingOnLock: 1,
+      longestLockWaitSec: 0.041,
+      longestActiveSec: 1,
+      maxConnections: 60,
+      utilizationPct: 16.7,
+    });
+
+    expect(verdict).toMatchObject({ ok: true, violations: [] });
+  });
+
+  it('fails when a lock wait breaches 500ms or a query runs too long', () => {
     const verdict = evaluateChaosRun([], null, {
       total: 10,
       active: 2,
@@ -50,7 +66,7 @@ describe('chaos SLO verdict', () => {
     });
 
     expect(verdict.ok).toBe(false);
-    expect(verdict.violations.join(' ')).toContain('DB lock waiters');
+    expect(verdict.violations.join(' ')).toContain('DB longest lock wait');
     expect(verdict.violations.join(' ')).toContain('DB longest active query');
   });
 

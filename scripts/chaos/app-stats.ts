@@ -37,6 +37,23 @@ export interface AppInstancePeak {
     peak: number;
     accepted: number;
   };
+  rankedMatchmaking?: {
+    queueDepth: number;
+    peakQueueDepth: number;
+    activePairStarts: number;
+    peakActivePairStarts: number;
+    pairsClaimed: number;
+    pairsCompleted: number;
+    pairsSkipped: number;
+    pairsFailed: number;
+    stages: Record<string, {
+      count: number;
+      p50Ms: number;
+      p95Ms: number;
+      p99Ms: number;
+      maxMs: number;
+    }>;
+  };
   runtime: {
     cpuPct: number;
     cpuCorePct: number;
@@ -91,6 +108,23 @@ interface HealthPayload {
     active?: number;
     peak?: number;
     accepted?: number;
+  };
+  rankedMatchmaking?: {
+    queueDepth?: number;
+    peakQueueDepth?: number;
+    activePairStarts?: number;
+    peakActivePairStarts?: number;
+    pairsClaimed?: number;
+    pairsCompleted?: number;
+    pairsSkipped?: number;
+    pairsFailed?: number;
+    stages?: Record<string, {
+      count?: number;
+      p50Ms?: number;
+      p95Ms?: number;
+      p99Ms?: number;
+      maxMs?: number;
+    }>;
   };
   runtime?: {
     instance?: string;
@@ -294,6 +328,43 @@ export function startAppStatsCollector(
         accumulator.peak.sockets.accepted,
         payload.sockets?.accepted ?? 0
       );
+      if (payload.rankedMatchmaking) {
+        const stages = Object.fromEntries(
+          Object.entries(payload.rankedMatchmaking.stages ?? {}).map(([stage, stats]) => [
+            stage,
+            {
+              count: stats.count ?? 0,
+              p50Ms: stats.p50Ms ?? 0,
+              p95Ms: stats.p95Ms ?? 0,
+              p99Ms: stats.p99Ms ?? 0,
+              maxMs: stats.maxMs ?? 0,
+            },
+          ])
+        );
+        const nextStageSamples = Object.values(stages)
+          .reduce((sum, stage) => sum + stage.count, 0);
+        const currentStageSamples = Object.values(accumulator.peak.rankedMatchmaking?.stages ?? {})
+          .reduce((sum, stage) => sum + stage.count, 0);
+        // Counters and stage sample counts are monotonic for the lifetime of a
+        // replica. Keep the newest snapshot seen from each load-balanced
+        // instance so the final report contains its full per-stage percentiles.
+        if (
+          !accumulator.peak.rankedMatchmaking
+          || nextStageSamples >= currentStageSamples
+        ) {
+          accumulator.peak.rankedMatchmaking = {
+            queueDepth: payload.rankedMatchmaking.queueDepth ?? 0,
+            peakQueueDepth: payload.rankedMatchmaking.peakQueueDepth ?? 0,
+            activePairStarts: payload.rankedMatchmaking.activePairStarts ?? 0,
+            peakActivePairStarts: payload.rankedMatchmaking.peakActivePairStarts ?? 0,
+            pairsClaimed: payload.rankedMatchmaking.pairsClaimed ?? 0,
+            pairsCompleted: payload.rankedMatchmaking.pairsCompleted ?? 0,
+            pairsSkipped: payload.rankedMatchmaking.pairsSkipped ?? 0,
+            pairsFailed: payload.rankedMatchmaking.pairsFailed ?? 0,
+            stages,
+          };
+        }
+      }
       accumulator.peak.runtime.cpuPct = Math.max(
         accumulator.peak.runtime.cpuPct,
         payload.runtime?.cpuPct ?? 0

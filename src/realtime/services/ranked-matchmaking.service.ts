@@ -744,6 +744,19 @@ async function processFallbacks(io: QuizballServer): Promise<void> {
       return;
     }
 
+    // A user whose deadline just elapsed should still receive the available
+    // human opponent beside them. Claiming fallbacks first used to peel one
+    // expired user into an AI match even when the queue contained an even
+    // human pair. Leave the whole queue to the atomic pair phase while at
+    // least two candidates remain; fallbacks resume on the next tick once
+    // fewer than two searches are available.
+    const queuedCount = await redis.zCard(RANKED_MM_QUEUE_KEY);
+    span.setAttribute('quizball.queued_search_count', queuedCount);
+    if (queuedCount >= 2) {
+      span.setAttribute('quizball.deferred_for_human_pair', true);
+      return;
+    }
+
     const now = Date.now();
     const due = await redis.zRangeByScore(RANKED_MM_TIMEOUTS_KEY, 0, now, {
       LIMIT: { offset: 0, count: MAX_FALLBACKS_PER_TICK },

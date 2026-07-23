@@ -8,7 +8,7 @@ import { getRequestId } from '../../core/request-context.js';
 import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
 import { disconnectUserSockets } from '../../realtime/services/auth-realtime.service.js';
 import { rankedRepo } from '../ranked/ranked.repo.js';
-import { tierFromRp } from '../ranked/ranked.service.js';
+import { rankedService, tierFromRp } from '../ranked/ranked.service.js';
 import { statsService } from '../stats/stats.service.js';
 import type {
   AdminProgressionResult,
@@ -612,8 +612,8 @@ export const usersService = {
       viewerUserId !== targetUserId
         ? statsService.getHeadToHead(viewerUserId, targetUserId)
         : Promise.resolve(null),
-      rankedRepo.getUserRank(targetUserId),
-      user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
+      rankedService.getUserRank(targetUserId),
+      user.country ? rankedService.getUserRank(targetUserId, user.country) : Promise.resolve(null),
     ]);
 
     return {

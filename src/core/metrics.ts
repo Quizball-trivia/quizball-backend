@@ -18,6 +18,14 @@ const rankedHumanMatches = meter.createCounter('quizball_ranked_human_matches_to
   description: 'Number of human-vs-human ranked matches created',
 });
 
+const rankedMatchmakingStageDuration = meter.createHistogram(
+  'quizball_ranked_matchmaking_stage_duration_ms',
+  {
+    description: 'Latency of each ranked matchmaking stage',
+    unit: 'ms',
+  }
+);
+
 const socketReconnects = meter.createCounter('quizball_socket_reconnects_total', {
   description: 'Number of active-match rejoins on connect',
 });
@@ -57,6 +65,7 @@ export const appMetrics = {
   rankedQueueLeaves,
   rankedAiFallbacks,
   rankedHumanMatches,
+  rankedMatchmakingStageDuration,
   socketReconnects,
   matchPauses,
   cacheRebuilds,

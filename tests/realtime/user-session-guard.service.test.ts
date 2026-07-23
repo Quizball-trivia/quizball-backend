@@ -389,6 +389,23 @@ describe('user-session-guard.service', () => {
     expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
   });
 
+  it('uses one session-context read for an idle ranked queue join', async () => {
+    getActiveMatchForUserMock.mockResolvedValue(null);
+    listOpenLobbiesForUserMock.mockResolvedValue([]);
+
+    const io = {
+      in: vi.fn(() => ({ fetchSockets: vi.fn(async () => []) })),
+      to: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as QuizballServer;
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const result = await userSessionGuardService.prepareForQueueJoin(io, 'idle-user');
+
+    expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
+    expect(getActiveMatchForUserMock).toHaveBeenCalledTimes(1);
+    expect(listOpenLobbiesForUserMock).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves a lobby membership created during lobby-entry cleanup', async () => {
     getActiveMatchForUserMock.mockResolvedValue(null);
     const oldLobby = {

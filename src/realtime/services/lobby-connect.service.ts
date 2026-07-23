@@ -133,11 +133,11 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
     const openLobby = await lobbiesRepo.findOpenLobbyForUser(userId);
     lobbyId = openLobby?.id;
     if (!lobbyId) {
-      logger.info({ userId }, 'Lobby disconnect: no lobby attached');
+      logger.debug({ userId }, 'Lobby disconnect: no lobby attached');
       return;
     }
     resolvedFromDb = true;
-    logger.info({ userId, lobbyId, status: openLobby?.status ?? null }, 'Lobby disconnect: resolved lobby from DB');
+    logger.debug({ userId, lobbyId, status: openLobby?.status ?? null }, 'Lobby disconnect: resolved lobby from DB');
   }
 
   const lobby = await lobbiesRepo.getById(lobbyId);

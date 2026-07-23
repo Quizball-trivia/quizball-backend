@@ -813,7 +813,7 @@ export async function scheduleDraftAutoBanForCurrentTurn(
     requireUiReady: true,
     forceAtMs,
   });
-  logger.info({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
+  logger.debug({ lobbyId, expectedUserId, forceAtMs }, 'Draft auto-ban waiting for client ui_ready');
 }
 
 export async function runDraftAutoBan(
@@ -1326,7 +1326,7 @@ export const draftRealtimeService = {
         graceMs: DRAFT_DISCONNECT_GRACE_MS,
       });
     });
-    logger.info(
+    logger.debug(
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
       'Draft paused for disconnected player'
     );
@@ -1358,7 +1358,7 @@ export const draftRealtimeService = {
       }, harnessDelayMs(DRAFT_DISCONNECT_GRACE_MS));
       fallback.unref?.();
     });
-    logger.info(
+    logger.debug(
       { lobbyId, userId, graceMs: DRAFT_DISCONNECT_GRACE_MS },
       'draft_grace_expiry_scheduled'
     );

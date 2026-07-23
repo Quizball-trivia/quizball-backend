@@ -18,6 +18,11 @@ import type {
   SmsOfficeStatusResponse,
 } from './auth.schemas.js';
 import type { AuthIdentity } from '../../core/types.js';
+import type { AuthRequestContext } from './auth.client.js';
+
+function optionalAuthContext(context?: AuthRequestContext): [] | [AuthRequestContext] {
+  return context ? [context] : [];
+}
 
 const GEORGIAN_MOBILE_RE = /^\+9955\d{8}$/;
 const PROFILE_PROVISIONING_DETAILS = { reason: 'profile_provisioning_failed' } as const;
@@ -402,7 +407,7 @@ async function restorePendingDeletionForSession(session: AuthSession): Promise<v
 }
 
 export const authService = {
-  async register(request: RegisterRequest): Promise<AuthSession> {
+  async register(request: RegisterRequest, context?: AuthRequestContext): Promise<AuthSession> {
     return withSpan('auth.register', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -412,6 +417,7 @@ export const authService = {
         request.password,
         request.redirect_to,
         request.locale,
+        ...optionalAuthContext(context),
       );
       if (session.alreadyRegistered) {
         const pendingUser = await usersService.getPendingDeletionByEmail(request.email);
@@ -426,40 +432,57 @@ export const authService = {
     });
   },
 
-  async login(request: LoginRequest): Promise<AuthSession> {
+  async login(request: LoginRequest, context?: AuthRequestContext): Promise<AuthSession> {
     return withSpan('auth.login', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const authClient = getAuthClient();
-      const session = await authClient.signIn(request.email, request.password);
+      const session = await authClient.signIn(
+        request.email,
+        request.password,
+        ...optionalAuthContext(context),
+      );
       await provisionIdentityOrThrowSession(session);
       return session;
     });
   },
 
-  async restorePendingDeletionWithLogin(request: LoginRequest): Promise<AuthSession> {
+  async restorePendingDeletionWithLogin(
+    request: LoginRequest,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession> {
     return withSpan('auth.restore_pending_deletion_login', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const authClient = getAuthClient();
-      const session = await authClient.signIn(request.email, request.password);
+      const session = await authClient.signIn(
+        request.email,
+        request.password,
+        ...optionalAuthContext(context),
+      );
       await restorePendingDeletionForSession(session);
       return session;
     });
   },
 
-  async restorePendingDeletionWithRefreshToken(refreshToken: string): Promise<AuthSession> {
+  async restorePendingDeletionWithRefreshToken(
+    refreshToken: string,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession> {
     return withSpan('auth.restore_pending_deletion_refresh', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const authClient = getAuthClient();
-      const session = await authClient.refresh(refreshToken);
+      const session = await authClient.refresh(refreshToken, ...optionalAuthContext(context));
       await restorePendingDeletionForSession(session);
       return session;
     });
   },
 
-  async socialLoginToken(request: SocialLoginTokenRequest): Promise<AuthSession> {
+  async socialLoginToken(
+    request: SocialLoginTokenRequest,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession> {
     return withSpan('auth.social_login_token', {
       'quizball.auth_provider': 'supabase',
       'quizball.oauth_provider': request.provider,
@@ -469,6 +492,7 @@ export const authService = {
         request.provider,
         request.id_token,
         request.nonce,
+        ...optionalAuthContext(context),
       );
       if (request.restore_pending_deletion) {
         await restorePendingDeletionForSession(session);
@@ -479,7 +503,7 @@ export const authService = {
     });
   },
 
-  async startGeorgianPhoneOtp(rawPhone: string): Promise<void> {
+  async startGeorgianPhoneOtp(rawPhone: string, context?: AuthRequestContext): Promise<void> {
     return withSpan('auth.georgian_phone_otp_start', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -491,17 +515,26 @@ export const authService = {
       }
 
       const authClient = getAuthClient();
-      await authClient.sendPhoneOtp(phone);
+      await authClient.sendPhoneOtp(phone, ...optionalAuthContext(context));
     });
   },
 
-  async verifyGeorgianPhoneOtp(rawPhone: string, token: string, restorePendingDeletion = false): Promise<AuthSession> {
+  async verifyGeorgianPhoneOtp(
+    rawPhone: string,
+    token: string,
+    restorePendingDeletion = false,
+    context?: AuthRequestContext,
+  ): Promise<AuthSession> {
     return withSpan('auth.georgian_phone_otp_verify', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
       const phone = normalizeGeorgianPhone(rawPhone);
       const authClient = getAuthClient();
-      const session = await authClient.verifyPhoneOtp(phone, token);
+      const session = await authClient.verifyPhoneOtp(
+        phone,
+        token,
+        ...optionalAuthContext(context),
+      );
       if (session.user) {
         session.user.phone = session.user.phone ?? phone;
         session.user.phoneConfirmedAt = session.user.phoneConfirmedAt ?? new Date().toISOString();
@@ -515,7 +548,12 @@ export const authService = {
     });
   },
 
-  async startGeorgianPhoneLink(userId: string, accessToken: string, rawPhone: string): Promise<PhoneLinkStartResponse> {
+  async startGeorgianPhoneLink(
+    userId: string,
+    accessToken: string,
+    rawPhone: string,
+    context?: AuthRequestContext,
+  ): Promise<PhoneLinkStartResponse> {
     return withSpan('auth.georgian_phone_link_start', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -530,7 +568,7 @@ export const authService = {
       }
 
       const authClient = getAuthClient();
-      await authClient.updateUserPhone(accessToken, phone);
+      await authClient.updateUserPhone(accessToken, phone, ...optionalAuthContext(context));
       return {
         message: 'Verification code sent',
         phone,
@@ -539,7 +577,13 @@ export const authService = {
     });
   },
 
-  async verifyGeorgianPhoneLink(userId: string, accessToken: string, rawPhone: string, token: string) {
+  async verifyGeorgianPhoneLink(
+    userId: string,
+    accessToken: string,
+    rawPhone: string,
+    token: string,
+    context?: AuthRequestContext,
+  ) {
     return withSpan('auth.georgian_phone_link_verify', {
       'quizball.auth_provider': 'supabase',
     }, async () => {
@@ -547,7 +591,12 @@ export const authService = {
       await usersService.assertPhoneCanBeLinked(userId, phone);
 
       const authClient = getAuthClient();
-      const session = await authClient.verifyPhoneChange(accessToken, phone, token);
+      const session = await authClient.verifyPhoneChange(
+        accessToken,
+        phone,
+        token,
+        ...optionalAuthContext(context),
+      );
       const verifiedAt = session.user?.phoneConfirmedAt ?? new Date().toISOString();
       const user = await usersService.setVerifiedPhoneNumber(userId, phone, verifiedAt);
 

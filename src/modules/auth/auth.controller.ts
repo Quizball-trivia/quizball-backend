@@ -28,6 +28,13 @@ import {
 import { toUserResponse } from '../users/users.schemas.js';
 import { AuthenticationError, BadRequestError } from '../../core/errors.js';
 import { detectCountryFromRequest } from '../../core/geo.js';
+import { authRequestContext } from '../../http/client-ip.js';
+import type { AuthRequestContext } from './auth.client.js';
+
+function requestAuthContextArgs(req: Request): [] | [AuthRequestContext] {
+  const context = authRequestContext(req);
+  return context ? [context] : [];
+}
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -217,7 +224,10 @@ export const authController = {
    */
   async register(req: Request, res: Response): Promise<void> {
     const { email, password, redirect_to, locale } = req.validated.body as RegisterRequest;
-    const session = await authService.register({ email, password, redirect_to, locale });
+    const session = await authService.register(
+      { email, password, redirect_to, locale },
+      ...requestAuthContextArgs(req),
+    );
 
     setAuthCookies(res, session);
     res.status(201).json(toAuthResponse(session));
@@ -231,7 +241,7 @@ export const authController = {
     const { email, password } = req.validated.body as LoginRequest;
     let session;
     try {
-      session = await authService.login({ email, password });
+      session = await authService.login({ email, password }, ...requestAuthContextArgs(req));
     } catch (error) {
       preservePendingDeletionRefreshCookie(res, error);
       throw error;
@@ -247,7 +257,10 @@ export const authController = {
    */
   async restorePendingDeletionLogin(req: Request, res: Response): Promise<void> {
     const { email, password } = req.validated.body as LoginRequest;
-    const session = await authService.restorePendingDeletionWithLogin({ email, password });
+    const session = await authService.restorePendingDeletionWithLogin(
+      { email, password },
+      ...requestAuthContextArgs(req),
+    );
 
     setAuthCookies(res, session);
     res.json(toAuthResponse(session));
@@ -275,7 +288,7 @@ export const authController = {
 
     let session;
     try {
-      session = await authClient.refresh(refreshToken);
+      session = await authClient.refresh(refreshToken, ...requestAuthContextArgs(req));
       await authService.ensureSessionAccountActive(session);
     } catch (error) {
       // A failed refresh means the supplied refresh token (often the httpOnly
@@ -317,7 +330,10 @@ export const authController = {
 
     let session;
     try {
-      session = await authService.restorePendingDeletionWithRefreshToken(refreshToken);
+      session = await authService.restorePendingDeletionWithRefreshToken(
+        refreshToken,
+        ...requestAuthContextArgs(req),
+      );
     } catch (error) {
       if (
         error instanceof BadRequestError ||
@@ -340,7 +356,7 @@ export const authController = {
     const { email, redirect_to } = req.validated.body as ForgotPasswordRequest;
     const authClient = getAuthClient();
 
-    await authClient.forgotPassword(email, redirect_to);
+    await authClient.forgotPassword(email, redirect_to, ...requestAuthContextArgs(req));
 
     res.json({ message: 'Password reset email sent' });
   },
@@ -357,7 +373,7 @@ export const authController = {
     const { new_password } = req.validated.body as ResetPasswordRequest;
     const authClient = getAuthClient();
 
-    await authClient.resetPassword(accessToken, new_password);
+    await authClient.resetPassword(accessToken, new_password, ...requestAuthContextArgs(req));
 
     res.json({ message: 'Password reset successfully' });
   },
@@ -383,7 +399,10 @@ export const authController = {
       .body as SocialLoginTokenRequest;
     let session;
     try {
-      session = await authService.socialLoginToken({ provider, id_token, nonce, restore_pending_deletion });
+      session = await authService.socialLoginToken(
+        { provider, id_token, nonce, restore_pending_deletion },
+        ...requestAuthContextArgs(req),
+      );
     } catch (error) {
       preservePendingDeletionRefreshCookie(res, error);
       throw error;
@@ -399,7 +418,7 @@ export const authController = {
    */
   async startGeorgianPhoneOtp(req: Request, res: Response): Promise<void> {
     const { phone } = req.validated.body as GeorgianPhoneOtpStartRequest;
-    await authService.startGeorgianPhoneOtp(phone);
+    await authService.startGeorgianPhoneOtp(phone, ...requestAuthContextArgs(req));
 
     res.json({ message: 'Verification code sent' });
   },
@@ -412,7 +431,12 @@ export const authController = {
     const { phone, token, restore_pending_deletion } = req.validated.body as GeorgianPhoneOtpVerifyRequest;
     let session;
     try {
-      session = await authService.verifyGeorgianPhoneOtp(phone, token, restore_pending_deletion === true);
+      session = await authService.verifyGeorgianPhoneOtp(
+        phone,
+        token,
+        restore_pending_deletion === true,
+        ...requestAuthContextArgs(req),
+      );
     } catch (error) {
       preservePendingDeletionRefreshCookie(res, error);
       throw error;
@@ -429,7 +453,12 @@ export const authController = {
   async startGeorgianPhoneLink(req: Request, res: Response): Promise<void> {
     const { phone } = req.validated.body as GeorgianPhoneLinkStartRequest;
     const accessToken = getAccessTokenFromRequest(req);
-    const result = await authService.startGeorgianPhoneLink(req.user!.id, accessToken, phone);
+    const result = await authService.startGeorgianPhoneLink(
+      req.user!.id,
+      accessToken,
+      phone,
+      ...requestAuthContextArgs(req),
+    );
 
     res.json(result);
   },
@@ -446,6 +475,7 @@ export const authController = {
       accessToken,
       phone,
       token,
+      ...requestAuthContextArgs(req),
     );
 
     setAuthCookies(res, session);

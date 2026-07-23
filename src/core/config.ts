@@ -58,7 +58,14 @@ const configSchema = z.object({
   // Supabase
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
+  // Modern server-only API key (sb_secret_...). Required only when hosted
+  // Supabase Auth IP forwarding is explicitly enabled.
+  SUPABASE_SECRET_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SUPABASE_AUTH_IP_FORWARDING_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   // Separate per-process bulkhead for hosted Auth, whose work sits outside the
   // application's postgres.js pool.
   AUTH_INFLIGHT_LIMIT: z.coerce.number().int().min(1).max(30).default(4),
@@ -194,6 +201,19 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
       "Invalid configuration: SUPABASE_SMS_HOOK_SECRET is required outside local environment.",
       { nodeEnv: result.data.NODE_ENV },
     );
+  }
+
+  if (result.data.SUPABASE_AUTH_IP_FORWARDING_ENABLED) {
+    const secretKey = result.data.SUPABASE_SECRET_KEY?.trim();
+    if (!secretKey?.startsWith("sb_secret_")) {
+      throw new ConfigError(
+        "Invalid configuration: SUPABASE_AUTH_IP_FORWARDING_ENABLED requires a modern SUPABASE_SECRET_KEY beginning with sb_secret_.",
+        {
+          nodeEnv: result.data.NODE_ENV,
+          hasSecretKey: Boolean(secretKey),
+        },
+      );
+    }
   }
 
   const hasAnyStripeConfig = Boolean(

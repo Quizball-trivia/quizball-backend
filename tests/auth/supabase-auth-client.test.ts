@@ -177,7 +177,14 @@ describe('SupabaseAuthClient error mapping', () => {
 
     await expect(
       client.forgotPassword('player@quizball.io', 'https://quizball.io/auth/reset-password'),
-    ).rejects.toMatchObject({ statusCode: 429, code: 'RATE_LIMIT_EXCEEDED' });
+    ).rejects.toMatchObject({
+      statusCode: 429,
+      code: 'RATE_LIMIT_EXCEEDED',
+      details: {
+        source: 'supabase_auth',
+        upstream_code: 'over_email_send_rate_limit',
+      },
+    });
   });
 
   it('maps a Supabase 401 to AuthenticationError (401)', async () => {
@@ -196,5 +203,78 @@ describe('SupabaseAuthClient error mapping', () => {
     await expect(client.resetPassword('token', 'password123')).rejects.toMatchObject({
       statusCode: 502,
     });
+  });
+});
+
+describe('SupabaseAuthClient trusted IP forwarding', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function successfulSession() {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: 'access',
+        refresh_token: 'refresh',
+        user: { id: 'user-1', email: 'player@quizball.io' },
+      }),
+    };
+  }
+
+  it('uses the modern secret key and Sb-Forwarded-For when enabled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successfulSession());
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new SupabaseAuthClient({
+      baseUrl: 'https://test.supabase.co',
+      secretKey: 'sb_secret_test-only',
+      forwardClientIp: true,
+    });
+
+    await client.signIn('player@quizball.io', 'password', { clientIp: '203.0.113.42' });
+
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, { headers: Record<string, string> }];
+    expect(init.headers.apikey).toBe('sb_secret_test-only');
+    expect(init.headers['Sb-Forwarded-For']).toBe('203.0.113.42');
+  });
+
+  it('does not forward an invalid or comma-separated address', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successfulSession());
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new SupabaseAuthClient({
+      baseUrl: 'https://test.supabase.co',
+      secretKey: 'sb_secret_test-only',
+      forwardClientIp: true,
+    });
+
+    await client.refresh('refresh', { clientIp: '203.0.113.42, 198.51.100.7' });
+
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, { headers: Record<string, string> }];
+    expect(init.headers).not.toHaveProperty('Sb-Forwarded-For');
+  });
+
+  it('keeps the anon key and omits forwarding when disabled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successfulSession());
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new SupabaseAuthClient({
+      baseUrl: 'https://test.supabase.co',
+      anonKey: 'anon-test-key',
+      forwardClientIp: false,
+    });
+
+    await client.signIn('player@quizball.io', 'password', { clientIp: '203.0.113.42' });
+
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, { headers: Record<string, string> }];
+    expect(init.headers.apikey).toBe('anon-test-key');
+    expect(init.headers).not.toHaveProperty('Sb-Forwarded-For');
+  });
+
+  it('rejects legacy keys when forwarding is enabled', () => {
+    expect(() => new SupabaseAuthClient({
+      baseUrl: 'https://test.supabase.co',
+      secretKey: 'legacy-service-role-key',
+      forwardClientIp: true,
+    })).toThrow(/sb_secret_/);
   });
 });

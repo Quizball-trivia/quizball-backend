@@ -9,6 +9,7 @@ import type { User as DbUser } from '../db/types.js';
 import { getCachedUser } from '../modules/users/user-cache.js';
 import { rememberCurrentCountry } from './session-country.js';
 import { AppError } from '../core/errors.js';
+import { DbOverloadedError } from '../db/index.js';
 
 export interface SocketAuthData {
   user: DbUser;
@@ -118,6 +119,18 @@ export async function socketAuthMiddleware(
       const bannedError = new Error('Account is banned');
       (bannedError as Error & { data?: unknown }).data = { reason: 'banned' };
       next(bannedError);
+      return;
+    }
+    if (error instanceof DbOverloadedError) {
+      const overloadedError = new Error('Server busy; retry connection');
+      (overloadedError as Error & { data?: unknown }).data = {
+        code: 'DB_OVERLOADED',
+        retryable: true,
+        reason:
+          (error as DbOverloadedError & { reason?: unknown }).reason ??
+          'overloaded',
+      };
+      next(overloadedError);
       return;
     }
     next(new Error('Invalid token'));

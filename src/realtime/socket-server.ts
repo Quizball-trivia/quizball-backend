@@ -44,7 +44,12 @@ import {
   recordMatchStageReady,
 } from './services/match-stage-presence.service.js';
 import { rankedDebug, rankedDebugUser } from './ranked-debug.js';
-import { socketDbTaskLimiter } from './socket-db-task-limiter.js';
+import {
+  postConnectDbTaskLimiter,
+  socketDbTaskLimiter,
+} from './socket-db-task-limiter.js';
+import { ConnectStateBatcher } from './connect-state-batcher.js';
+import type { SessionStatePayload } from './socket.types.js';
 
 export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
 export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -70,6 +75,9 @@ export const SOCKET_HEARTBEAT_CONFIG = {
 let onlineCountDebounceTimer: NodeJS.Timeout | null = null;
 let onlineCountRefreshTimer: NodeJS.Timeout | null = null;
 let onlineCountInFlight = false;
+const connectStateBatcher = new ConnectStateBatcher(
+  (userIds) => userSessionGuardService.resolveStates(userIds)
+);
 
 function runSocketDbTask(
   operation: string,
@@ -178,21 +186,30 @@ function scheduleOnlineCountBroadcast(io: QuizballServer): void {
 async function runPostConnectHydration(
   io: QuizballServer,
   socket: QuizballSocket,
+  initialSnapshot: SessionStatePayload,
   attempt = 0
 ): Promise<void> {
   if (!socket.connected) return;
 
   const userId = socket.data.user.id;
   let lockAcquired = false;
+  let preparedSnapshot: SessionStatePayload | null = null;
   try {
-    const lockResult = await userSessionGuardService.withUserSessionLock(
-      userId,
-      async () => {
-        await userSessionGuardService.prepareForConnect(io, userId);
-      },
-      { waitMs: POST_CONNECT_RETRY_MS }
-    );
-    lockAcquired = lockResult !== null;
+    if (initialSnapshot.state === 'IDLE') {
+      // The common path is read-only. Avoid taking the transition lock so an
+      // immediate lobby:create/search command cannot race and lose to optional
+      // connection hydration.
+      preparedSnapshot = initialSnapshot;
+      lockAcquired = true;
+    } else {
+      const lockResult = await userSessionGuardService.withUserSessionLock(
+        userId,
+        async () => userSessionGuardService.prepareForConnect(io, userId),
+        { waitMs: POST_CONNECT_RETRY_MS }
+      );
+      if (lockResult) preparedSnapshot = lockResult;
+      lockAcquired = lockResult !== null;
+    }
   } catch (error) {
     logger.warn({ error, userId, attempt }, 'Failed to prepare session state on connect');
   }
@@ -218,7 +235,7 @@ async function runPostConnectHydration(
     if (attempt < POST_CONNECT_MAX_ATTEMPTS) {
       const delayMs = POST_CONNECT_RETRY_MS * (attempt + 1);
       setTimeout(() => {
-        void runPostConnectHydration(io, socket, attempt + 1);
+        runLimitedPostConnectHydration(io, socket, attempt + 1);
       }, delayMs);
     } else {
       logger.warn(
@@ -229,13 +246,15 @@ async function runPostConnectHydration(
     return;
   }
 
-  try {
-    await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
-  } catch (error) {
-    logger.warn({ error, userId }, 'Failed to rejoin active match on connect');
+  if (preparedSnapshot?.activeMatchId) {
+    try {
+      await matchRealtimeService.rejoinActiveMatchOnConnect(io, socket);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to rejoin active match on connect');
+    }
   }
 
-  if (!socket.data.matchId) {
+  if (!socket.data.matchId && preparedSnapshot?.waitingLobbyId) {
     try {
       await lobbyRealtimeService.rejoinWaitingLobbyOnConnect(io, socket);
     } catch (error) {
@@ -243,7 +262,7 @@ async function runPostConnectHydration(
     }
   }
 
-  if (!socket.data.matchId && !socket.data.lobbyId) {
+  if (!socket.data.matchId && !socket.data.lobbyId && preparedSnapshot?.waitingLobbyId) {
     try {
       await lobbyRealtimeService.rejoinActiveDraftLobbyOnConnect(io, socket);
     } catch (error) {
@@ -269,11 +288,46 @@ async function runPostConnectHydration(
     }
   }
 
-  try {
-    await userSessionGuardService.emitState(io, userId);
-  } catch (error) {
-    logger.warn({ error, userId }, 'Failed to emit session state on connect');
+  if (preparedSnapshot?.state === 'IDLE') {
+    userSessionGuardService.emitSnapshot(io, userId, preparedSnapshot);
+  } else {
+    try {
+      await userSessionGuardService.emitState(io, userId);
+    } catch (error) {
+      logger.warn({ error, userId }, 'Failed to emit session state on connect');
+    }
   }
+}
+
+function runLimitedPostConnectHydration(
+  io: QuizballServer,
+  socket: QuizballSocket,
+  attempt = 0
+): void {
+  void (async () => {
+    // Resolve connection state before entering the four-task follow-up limiter.
+    // Keeping this lookup inside the limiter prevented the 250-user batcher
+    // from ever collecting more than four users during a connection wave.
+    const initialSnapshot = await connectStateBatcher.resolve(socket.data.user.id);
+    if (!socket.connected) return;
+    const hydrate = () =>
+      runPostConnectHydration(io, socket, initialSnapshot, attempt);
+    if (initialSnapshot.state === 'IDLE') {
+      await postConnectDbTaskLimiter.run(hydrate);
+    } else {
+      await postConnectDbTaskLimiter.runPriority(hydrate);
+    }
+  })().catch((error) => {
+    logger.warn(
+      {
+        error,
+        userId: socket.data.user.id,
+        socketId: socket.id,
+        attempt,
+      },
+      'Post-connect hydration task failed'
+    );
+  });
 }
 
 /**
@@ -490,7 +544,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     void trackUserOnline(user.id);
     void emitOnlineCount(io, socket);
     scheduleOnlineCountBroadcast(io);
-    void runPostConnectHydration(io, socket);
+    runLimitedPostConnectHydration(io, socket);
   });
 
   return io;

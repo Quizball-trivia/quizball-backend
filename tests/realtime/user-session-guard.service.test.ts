@@ -3,7 +3,9 @@ import '../setup.js';
 import type { QuizballServer } from '../../src/realtime/socket-server.js';
 
 const getActiveMatchForUserMock = vi.fn();
+const getActiveMatchesForUsersMock = vi.fn();
 const listOpenLobbiesForUserMock = vi.fn();
+const listOpenLobbiesForUsersMock = vi.fn();
 const listMatchPlayersMock = vi.fn();
 const abandonMatchMock = vi.fn();
 const finalizeMatchAsForfeitMock = vi.fn();
@@ -35,6 +37,7 @@ vi.mock('../../src/realtime/redis.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     listOpenLobbiesForUser: (...args: unknown[]) => listOpenLobbiesForUserMock(...args),
+    listOpenLobbiesForUsers: (...args: unknown[]) => listOpenLobbiesForUsersMock(...args),
     getById: vi.fn(),
     removeMember: (...args: unknown[]) => removeMemberMock(...args),
     countMembers: (...args: unknown[]) => countMembersMock(...args),
@@ -53,6 +56,7 @@ vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
 vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   matchesRepo: {
     getActiveMatchForUser: (...args: unknown[]) => getActiveMatchForUserMock(...args),
+    getActiveMatchesForUsers: (...args: unknown[]) => getActiveMatchesForUsersMock(...args),
     abandonMatch: (...args: unknown[]) => abandonMatchMock(...args),
     getActiveMatchForLobby: (...args: unknown[]) => getActiveMatchForLobbyMock(...args),
   },
@@ -122,6 +126,8 @@ describe('user-session-guard.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listOpenLobbiesForUserMock.mockResolvedValue([]);
+    listOpenLobbiesForUsersMock.mockResolvedValue(new Map());
+    getActiveMatchesForUsersMock.mockResolvedValue(new Map());
     listMatchPlayersMock.mockResolvedValue([
       { user_id: 'u1' },
       { user_id: 'u2' },
@@ -158,6 +164,40 @@ describe('user-session-guard.service', () => {
     buildFinalResultsPayloadMock.mockResolvedValue({ matchId: 'm1', resultVersion: 123 });
     emitFinalResultsMock.mockResolvedValue(undefined);
     abandonMatchWithCompleteLockMock.mockResolvedValue({ abandoned: true });
+  });
+
+  it('resolves multiple session states with one batched match query and one batched lobby query', async () => {
+    getActiveMatchesForUsersMock.mockResolvedValue(new Map([['u2', {
+      id: 'match-u2',
+      mode: 'ranked',
+      status: 'active',
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      lobby_id: 'active-lobby-u2',
+      state_payload: { variant: 'ranked_sim' },
+    }]]));
+    listOpenLobbiesForUsersMock.mockResolvedValue(new Map([
+      ['u1', [{ id: 'waiting-u1', status: 'waiting', joined_at: new Date().toISOString() }]],
+      ['u2', []],
+    ]));
+
+    const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+    const snapshots = await userSessionGuardService.resolveStates(['u1', 'u2', 'u1']);
+
+    expect(getActiveMatchesForUsersMock).toHaveBeenCalledOnce();
+    expect(getActiveMatchesForUsersMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(listOpenLobbiesForUsersMock).toHaveBeenCalledOnce();
+    expect(listOpenLobbiesForUsersMock).toHaveBeenCalledWith(['u1', 'u2']);
+    expect(getActiveMatchForUserMock).not.toHaveBeenCalled();
+    expect(listOpenLobbiesForUserMock).not.toHaveBeenCalled();
+    expect(snapshots.get('u1')).toMatchObject({
+      state: 'IN_WAITING_LOBBY',
+      waitingLobbyId: 'waiting-u1',
+    });
+    expect(snapshots.get('u2')).toMatchObject({
+      state: 'IN_ACTIVE_MATCH',
+      activeMatchId: 'match-u2',
+    });
   });
 
   it('completes stale ranked orphan matches from progress before any forfeit', async () => {

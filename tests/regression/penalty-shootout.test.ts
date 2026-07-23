@@ -206,6 +206,42 @@ describeLocal('regression: deterministic penalty shootout', () => {
     });
   }, 180_000);
 
+  it('bounds a fully tied shootout after three sudden-death pairs', async () => {
+    const { config } = await import('../../src/core/config.js');
+    const previousBound = config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS;
+    config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS = 3;
+    try {
+      const { bootFriendlyLobbyMatch, playLobbyMatch } = await import('../../game-regression/src/runner.mjs');
+      const run = await bootFriendlyLobbyMatch(bootOptions);
+      expect(run.matchId).toBeTruthy();
+
+      await playLobbyMatch(run, {
+        maxMs: 140_000,
+        answerPlan: scriptedPenaltyPlan(
+          Array.from({ length: 16 }, () => 'miss' as const),
+        ),
+      });
+
+      expect(run.trace.byEvent('match:final_results').length).toBeGreaterThan(0);
+      const facts = await loadFacts(run.matchId!);
+      const state = typeof facts.match.state_payload === 'string'
+        ? JSON.parse(facts.match.state_payload) as Record<string, unknown>
+        : asRecord(facts.match.state_payload);
+      const penalty = asRecord(state.penalty);
+      const kicksTaken = asRecord(penalty.kicksTaken);
+      const penaltyQuestions = facts.questions.filter(
+        (question) => question.phase_kind === 'penalty',
+      );
+      const seat1UserId = facts.players.find((player) => player.seat === 1)?.user_id;
+
+      expect(kicksTaken).toMatchObject({ seat1: 8, seat2: 8 });
+      expect(penaltyQuestions).toHaveLength(16);
+      expect(facts.match.winner_user_id).toBe(seat1UserId);
+    } finally {
+      config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS = previousBound;
+    }
+  }, 180_000);
+
   it('flaps a reconnected player between penalty kicks without hanging or wrongful forfeit', async () => {
     const { bootFriendlyLobbyMatch, playLobbyMatch } = await import('../../game-regression/src/runner.mjs');
     const { checkLifecycleInvariants, formatViolation } = await import('../../game-regression/src/invariants.mjs');

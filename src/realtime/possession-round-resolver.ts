@@ -1,4 +1,5 @@
 import { logger } from '../core/logger.js';
+import { config } from '../core/config.js';
 import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
@@ -549,7 +550,8 @@ export async function resolvePossessionRound(
         state,
         cache.players,
         answerByUserId,
-        asSeat(question.shooterSeat) ?? state.penalty.shooterSeat
+        asSeat(question.shooterSeat) ?? state.penalty.shooterSeat,
+        config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
       );
       penaltyOutcomeReason = penaltyOutcome.penaltyOutcomeReason;
       if (penaltyOutcome.goalScoredByUserId) {
@@ -566,10 +568,25 @@ export async function resolvePossessionRound(
           goalScoredByUserId: penaltyOutcome.goalScoredByUserId,
           statePhase: state.phase,
           penaltyRound: state.penalty.round,
+          forcedBySuddenDeathCap: penaltyOutcome.forcedBySuddenDeathCap,
+          maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
           ...questionLogFields(question),
         },
         'Possession penalty resolution computed'
       );
+      if (penaltyOutcome.forcedBySuddenDeathCap) {
+        logger.warn(
+          {
+            matchId,
+            qIndex,
+            penaltyRound: state.penalty.round,
+            penaltyGoals: state.penaltyGoals,
+            kicksTaken: state.penalty.kicksTaken,
+            maxSuddenDeathRounds: config.POSSESSION_MAX_SUDDEN_DEATH_ROUNDS,
+          },
+          'Possession shootout reached configured sudden-death bound; using deterministic fallback'
+        );
+      }
 
       // Analytics: per-shooter penalty attempt. `attemptNumber` is the
       // current penalty round; rounds > MAX_PENALTY_ROUNDS are sudden-death.

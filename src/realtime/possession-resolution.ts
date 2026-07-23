@@ -247,15 +247,20 @@ export function applyPenaltyResolution(
   state: PossessionStatePayload,
   players: CachedPlayer[],
   answerByUserId: Map<string, { is_correct: boolean; time_ms: number; points_earned: number }>,
-  shooterSeat: Seat
-): { goalScoredByUserId: string | null; penaltyOutcomeReason: PenaltyOutcomeReason | null } {
+  shooterSeat: Seat,
+  maxSuddenDeathRounds = 0,
+): {
+  goalScoredByUserId: string | null;
+  forcedBySuddenDeathCap: boolean;
+  penaltyOutcomeReason: PenaltyOutcomeReason | null;
+} {
   const keeperSeat = nextSeat(shooterSeat);
   const shooterUserId = getUserIdByCachedSeat(players, shooterSeat);
   const keeperUserId = getUserIdByCachedSeat(players, keeperSeat);
   if (!shooterUserId) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId: null, penaltyOutcomeReason: null };
+    return { goalScoredByUserId: null, forcedBySuddenDeathCap: false, penaltyOutcomeReason: null };
   }
 
   const shooterAnswer = answerByUserId.get(shooterUserId);
@@ -315,7 +320,7 @@ export function applyPenaltyResolution(
   if (winnerSeat) {
     state.phase = 'COMPLETED';
     state.currentQuestion = null;
-    return { goalScoredByUserId, penaltyOutcomeReason };
+    return { goalScoredByUserId, forcedBySuddenDeathCap: false, penaltyOutcomeReason };
   }
 
   state.phase = 'PENALTY_SHOOTOUT';
@@ -328,8 +333,21 @@ export function applyPenaltyResolution(
   ) {
     state.penalty.suddenDeath = true;
   }
+  const forcedBySuddenDeathCap = Boolean(
+    maxSuddenDeathRounds > 0
+    && state.penalty.suddenDeath
+    && state.penalty.kicksTaken.seat1 === state.penalty.kicksTaken.seat2
+    && state.penalty.kicksTaken.seat1 >= 5 + maxSuddenDeathRounds
+    && state.penaltyGoals.seat1 === state.penaltyGoals.seat2
+  );
+  if (forcedBySuddenDeathCap) {
+    // Both players received the same number of sudden-death kicks. Complete
+    // through the existing deterministic winner fallback (total points,
+    // followed by seat 1 only if every gameplay signal is still tied).
+    state.phase = 'COMPLETED';
+  }
   state.currentQuestion = null;
-  return { goalScoredByUserId, penaltyOutcomeReason };
+  return { goalScoredByUserId, forcedBySuddenDeathCap, penaltyOutcomeReason };
 }
 
 export function categoryIdsForCurrentHalf(

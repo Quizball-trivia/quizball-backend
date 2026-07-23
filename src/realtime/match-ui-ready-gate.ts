@@ -134,7 +134,7 @@ export function acknowledgeLocalMatchUiReady(
 
   gate.readyUserIds.add(userId);
   emitGateState(io, gate);
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:ui_ready',
       matchId,

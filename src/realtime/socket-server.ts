@@ -58,6 +58,7 @@ import {
 import { ConnectStateBatcher } from './connect-state-batcher.js';
 import type { SessionStatePayload } from './socket.types.js';
 import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
+import { socketRuntimeTracker } from './socket-runtime-stats.js';
 
 export type QuizballSocket = Socket<
   ClientToServerEvents,
@@ -476,6 +477,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   io.use(socketAuthMiddleware);
 
   io.on('connection', async (socket: QuizballSocket) => {
+    socketRuntimeTracker.connected();
     const user = socket.data.user;
     socket.join(`user:${user.id}`);
 
@@ -527,6 +529,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     });
 
     socket.on('disconnect', (reason) => {
+      socketRuntimeTracker.disconnected();
       // matchId/lobbyId included so a silent handleMatchDisconnect early-return
       // (socket missing its matchId while a match is live) is diagnosable from
       // logs — observed once on staging (reconnect_smoke 2026-06-10) where a
@@ -566,7 +569,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       scheduleOnlineCountBroadcast(io);
     });
 
-    logger.info(
+    logger.debug(
       { userId: user.id, socketId: socket.id, transport: socket.conn.transport.name },
       'Socket connected'
     );

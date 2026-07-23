@@ -64,6 +64,7 @@ export interface UpdateQuestionData {
 export interface ListQuestionsFilter {
   categoryId?: string;
   status?: string;
+  rankedEligible?: boolean;
   difficulty?: string;
   type?: string;
   mcqImage?: 'with' | 'without';
@@ -90,6 +91,9 @@ export const questionsRepo = {
     // Use tagged template with conditional fragments
     const categoryFilter = filter?.categoryId ? sql`AND q.category_id = ${filter.categoryId}` : sql``;
     const statusFilter = filter?.status ? sql`AND q.status = ${filter.status}` : sql``;
+    const rankedEligibleFilter = filter?.rankedEligible !== undefined
+      ? sql`AND q.ranked_eligible = ${filter.rankedEligible}`
+      : sql``;
     const difficultyFilter = filter?.difficulty ? sql`AND q.difficulty = ${filter.difficulty}` : sql``;
     const typeFilter = filter?.type ? sql`AND q.type = ${filter.type}` : sql``;
     const normalizedPayload = sql`
@@ -154,6 +158,7 @@ export const questionsRepo = {
       WHERE 1=1
       ${categoryFilter}
       ${statusFilter}
+      ${rankedEligibleFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}
@@ -172,6 +177,7 @@ export const questionsRepo = {
       WHERE 1=1
       ${categoryFilter}
       ${statusFilter}
+      ${rankedEligibleFilter}
       ${difficultyFilter}
       ${typeFilter}
       ${mcqImageFilter}

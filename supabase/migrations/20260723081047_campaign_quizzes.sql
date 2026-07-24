@@ -8,10 +8,6 @@
 ALTER TABLE public.questions
   ADD COLUMN IF NOT EXISTS ranked_eligible BOOLEAN NOT NULL DEFAULT TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_questions_ranked_eligible
-  ON public.questions (category_id, status, ranked_eligible)
-  WHERE ranked_eligible = TRUE;
-
 CREATE TABLE IF NOT EXISTS public.campaign_quizzes (
   slug TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -49,6 +45,32 @@ CREATE TABLE IF NOT EXISTS public.campaign_quiz_questions (
     CHECK (display_order BETWEEN 1 AND 15)
 );
 
+CREATE OR REPLACE FUNCTION public.reserve_campaign_quiz_question()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.questions
+  SET ranked_eligible = FALSE,
+      updated_at = NOW()
+  WHERE id = NEW.question_id;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.reserve_campaign_quiz_question()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_reserve_campaign_quiz_question
+  ON public.campaign_quiz_questions;
+CREATE TRIGGER trg_reserve_campaign_quiz_question
+  AFTER INSERT OR UPDATE OF question_id
+  ON public.campaign_quiz_questions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.reserve_campaign_quiz_question();
+
 ALTER TABLE public.campaign_quiz_questions
   ADD COLUMN IF NOT EXISTS difficulty TEXT;
 
@@ -73,8 +95,7 @@ ALTER TABLE public.campaign_quiz_questions
   ADD CONSTRAINT chk_campaign_quiz_display_order
   CHECK (display_order BETWEEN 1 AND 15);
 
-DROP INDEX IF EXISTS public.idx_campaign_quiz_questions_order;
-CREATE INDEX idx_campaign_quiz_questions_order
+CREATE INDEX IF NOT EXISTS idx_campaign_quiz_questions_order
   ON public.campaign_quiz_questions (quiz_slug, difficulty, display_order);
 
 CREATE TABLE IF NOT EXISTS public.campaign_quiz_ratings (

@@ -98,7 +98,7 @@ export async function socketAuthMiddleware(
       };
       socket.data = { ...(socket.data ?? {}), ...data };
 
-      logger.info({ userId: user.id, socketId: socket.id }, 'Socket authenticated');
+      logger.debug({ userId: user.id, socketId: socket.id }, 'Socket authenticated');
       next();
     });
   } catch (error) {

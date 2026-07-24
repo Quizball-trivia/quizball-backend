@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
+import { socketDbTaskLimiter } from '../../realtime/socket-db-task-limiter.js';
 
 const router = Router();
 
@@ -37,6 +38,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       durationMs: Date.now() - started,
       pool: stats,
       authAdmission: authAdmissionStats(),
+      socketDbTasks: socketDbTaskLimiter.stats(),
     });
   } catch (error) {
     logger.error({ error, durationMs: Date.now() - started, pool: stats }, 'health/db probe failed');
@@ -45,6 +47,7 @@ router.get('/health/db', async (_req: Request, res: Response) => {
       durationMs: Date.now() - started,
       pool: stats,
       authAdmission: authAdmissionStats(),
+      socketDbTasks: socketDbTaskLimiter.stats(),
     });
   }
 });

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import '../setup.js';
 import {
+  __socketServerInternals,
   buildRealtimeTimerHandlers,
   SOCKET_HEARTBEAT_CONFIG,
   type QuizballServer,
@@ -29,6 +30,24 @@ describe('socket heartbeat config', () => {
     expect(
       SOCKET_HEARTBEAT_CONFIG.pingInterval + SOCKET_HEARTBEAT_CONFIG.pingTimeout
     ).toBeLessThanOrEqual(15000);
+  });
+});
+
+describe('socket disconnect DB task routing', () => {
+  it('avoids the unrelated fallback for a socket with a known binding', () => {
+    expect(__socketServerInternals.selectDisconnectDbTasks({ lobbyId: 'lobby-1' }))
+      .toEqual(['lobby_disconnect']);
+    expect(__socketServerInternals.selectDisconnectDbTasks({ matchId: 'match-1' }))
+      .toEqual(['match_disconnect']);
+  });
+
+  it('retains both recovery lookups for unbound or inconsistent sockets', () => {
+    expect(__socketServerInternals.selectDisconnectDbTasks({}))
+      .toEqual(['lobby_disconnect', 'match_disconnect']);
+    expect(__socketServerInternals.selectDisconnectDbTasks({
+      lobbyId: 'lobby-1',
+      matchId: 'match-1',
+    })).toEqual(['lobby_disconnect', 'match_disconnect']);
   });
 });
 

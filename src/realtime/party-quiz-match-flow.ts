@@ -30,7 +30,16 @@ import {
   lastMatchKey,
 } from './match-keys.js';
 import { buildStandings, bumpStateVersion } from './match-utils.js';
-import { deleteMatchCache } from './match-cache.js';
+import {
+  buildInitialCache,
+  commitCachedAnswer,
+  deleteMatchCache,
+  getMatchCache,
+  getMatchCacheOrRebuild,
+  setMatchCache,
+  type CachedAnswer,
+  type MatchCache,
+} from './match-cache.js';
 import {
   getActivePartyPlayers,
   getDroppedUserIds,
@@ -55,9 +64,63 @@ const PARTY_QUESTION_TIME_MS = 10000;
 const PARTY_QUESTION_REVEAL_MS = 3000;
 const PARTY_ROUND_READY_ACK_CEILING_MS = 8000;
 const PARTY_FINAL_READY_ACK_CEILING_MS = 4000;
+const PARTY_READY_GATE_TTL_SEC = 60;
 const FORFEIT_TTL_SEC = 600;
 
 const pendingReadyGates = createReadyGateRegistry<number>();
+let partyReadyAckCeilingCount = 0;
+
+function partyReadyExpectedKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:expected:${matchId}:${qIndex}`;
+}
+
+function partyReadyAckKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:acks:${matchId}:${qIndex}`;
+}
+
+function partyReadyDispatchKey(matchId: string, qIndex: number): string {
+  return `match:party_ready:dispatched:${matchId}:${qIndex}`;
+}
+
+// The expected set can be opened after a very fast client acknowledgement.
+// Keeping acks in a separate set makes that ordering safe. SET NX elects one
+// replica to advance when the final ack arrives.
+const CLAIM_PARTY_READY_GATE_SCRIPT = `
+  if redis.call("SCARD", KEYS[1]) == 0 then
+    return 0
+  end
+  if #redis.call("SDIFF", KEYS[1], KEYS[2]) > 0 then
+    return 0
+  end
+  if redis.call("SET", KEYS[3], "1", "NX", "EX", ARGV[1]) then
+    return 1
+  end
+  return 0
+`;
+
+async function claimSharedPartyReadyGate(matchId: string, qIndex: number): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return false;
+  const claimed = await redis.eval(CLAIM_PARTY_READY_GATE_SCRIPT, {
+    keys: [
+      partyReadyExpectedKey(matchId, qIndex),
+      partyReadyAckKey(matchId, qIndex),
+      partyReadyDispatchKey(matchId, qIndex),
+    ],
+    arguments: [String(PARTY_READY_GATE_TTL_SEC)],
+  });
+  return Number(claimed) === 1;
+}
+
+async function clearSharedPartyReadyGate(matchId: string, qIndex: number): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) return;
+  await redis.del([
+    partyReadyExpectedKey(matchId, qIndex),
+    partyReadyAckKey(matchId, qIndex),
+    partyReadyDispatchKey(matchId, qIndex),
+  ]);
+}
 
 async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
   const redis = getRedisClient();
@@ -66,7 +129,7 @@ async function isPartyQuizMatchPaused(matchId: string): Promise<boolean> {
 }
 
 function buildPartyStatePayloadFromRows(
-  match: MatchRow,
+  match: Pick<MatchRow, 'id' | 'total_questions' | 'current_q_index'>,
   state: PartyQuizStatePayload,
   players: MatchPlayerRow[],
   answers: MatchAnswerRow[]
@@ -97,6 +160,36 @@ function buildPartyStatePayloadFromRows(
   };
 }
 
+function cachedPartyPlayers(cache: MatchCache): MatchPlayerRow[] {
+  return cache.players.map((player) => ({
+    match_id: cache.matchId,
+    user_id: player.userId,
+    seat: player.seat,
+    total_points: player.totalPoints,
+    correct_answers: player.correctAnswers,
+    avg_time_ms: player.avgTimeMs,
+    goals: player.goals,
+    penalty_goals: player.penaltyGoals,
+  }));
+}
+
+function cachedPartyAnswers(cache: MatchCache): MatchAnswerRow[] {
+  return Object.values(cache.answers).map((answer) => ({
+    match_id: cache.matchId,
+    q_index: cache.currentQIndex,
+    user_id: answer.userId,
+    selected_index: answer.selectedIndex,
+    is_correct: answer.isCorrect,
+    time_ms: answer.timeMs,
+    points_earned: answer.pointsEarned,
+    answer_payload: {},
+    phase_kind: answer.phaseKind,
+    phase_round: answer.phaseRound,
+    shooter_seat: answer.shooterSeat,
+    answered_at: answer.answeredAt ?? new Date().toISOString(),
+  }));
+}
+
 function partyStateLogFields(payload: MatchPartyStatePayload): Record<string, unknown> {
   return {
     eventName: 'match:party_state',
@@ -118,6 +211,24 @@ function partyStateLogFields(payload: MatchPartyStatePayload): Record<string, un
 }
 
 async function buildPartyStatePayload(matchId: string): Promise<MatchPartyStatePayload | null> {
+  const cache = await getMatchCache(matchId);
+  if (
+    cache
+    && cache.status === 'active'
+    && resolveMatchVariant(cache.statePayload, cache.mode) === 'friendly_party_quiz'
+  ) {
+    return buildPartyStatePayloadFromRows(
+      {
+        id: cache.matchId,
+        total_questions: cache.totalQuestions,
+        current_q_index: cache.currentQIndex,
+      },
+      sanitizePartyQuizState(cache.statePayload, cache.totalQuestions),
+      cachedPartyPlayers(cache),
+      cachedPartyAnswers(cache),
+    );
+  }
+
   const match = await matchesRepo.getMatch(matchId);
   if (!match) return null;
 
@@ -138,7 +249,12 @@ export async function emitPartyQuizState(io: QuizballServer, matchId: string): P
     const payload = await buildPartyStatePayload(matchId);
     if (!payload) return;
     io.to(`match:${matchId}`).emit('match:party_state', payload);
-    logger.info(partyStateLogFields(payload), 'Party quiz state emitted');
+    // This runs after every answer as well as every round transition. At
+    // streamer-scale load, one info line per state broadcast can exhaust the
+    // platform log-ingestion allowance and hide the warnings/errors we need.
+    // Traces and metrics retain the aggregate signal; keep the per-event
+    // payload available at debug level for targeted investigations.
+    logger.debug(partyStateLogFields(payload), 'Party quiz state emitted');
   });
 }
 
@@ -149,7 +265,7 @@ export async function emitPartyQuizStateToSocket(
   const payload = await buildPartyStatePayload(matchId);
   if (!payload) return;
   socket.emit('match:party_state', payload);
-  logger.info(
+  logger.debug(
     { ...partyStateLogFields(payload), recipientUserId: socket.data.user.id, source: 'socket_hydrate' },
     'Party quiz state emitted to socket'
   );
@@ -190,7 +306,7 @@ export async function emitPartyQuizStateToSocket(
     attackerSeat: null,
   });
   await markMatchEnteredForSocket(socket, matchId, 'party_quiz_socket_question');
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:question',
       matchId,
@@ -224,7 +340,7 @@ export async function emitPartyQuizStateToSocket(
       oppAnswered: answeredUserIds.size >= participants.length,
     })
   );
-  logger.info(
+  logger.debug(
     {
       eventName: 'match:answer_ack',
       matchId,
@@ -249,13 +365,35 @@ export function cancelPartyQuizQuestionTimer(matchId: string, qIndex: number): v
   });
 }
 
-export function handlePartyQuizReadyForNextQuestion(
+export async function handlePartyQuizReadyForNextQuestion(
+  io: QuizballServer,
   userId: string,
   matchId: string,
   qIndex: number
-): void {
-  pendingReadyGates.acknowledge(userId, matchId, qIndex);
-  logger.info(
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis || !redis.isOpen) {
+    pendingReadyGates.acknowledge(userId, matchId, qIndex);
+  } else {
+    try {
+      await redis
+        .multi()
+        .sAdd(partyReadyAckKey(matchId, qIndex), userId)
+        .expire(partyReadyAckKey(matchId, qIndex), PARTY_READY_GATE_TTL_SEC)
+        .exec();
+      if (await claimSharedPartyReadyGate(matchId, qIndex)) {
+        await runPartyQuizRoundTransition(io, matchId, qIndex, qIndex + 1);
+      }
+    } catch (err) {
+      // The durable transition timer remains authoritative if Redis briefly
+      // fails while recording an optional fast-path acknowledgement.
+      logger.warn(
+        { err, matchId, qIndex, userId },
+        'Failed to record shared party ready acknowledgement'
+      );
+    }
+  }
+  logger.debug(
     { eventName: 'match:ready_for_next_question', matchId, qIndex, userId },
     'Party quiz ready ack received'
   );
@@ -263,10 +401,7 @@ export function handlePartyQuizReadyForNextQuestion(
 
 export function resetPartyQuizReadyGates(): void {
   pendingReadyGates.reset();
-}
-
-function schedulePartyQuizTimeout(io: QuizballServer, matchId: string, qIndex: number): void {
-  schedulePartyQuizTimeoutAt(io, matchId, qIndex, new Date(Date.now() + PARTY_QUESTION_TIME_MS));
+  partyReadyAckCeilingCount = 0;
 }
 
 function schedulePartyQuizTimeoutAt(
@@ -283,7 +418,7 @@ function schedulePartyQuizTimeoutAt(
   }).catch((error) => {
     logger.error({ error, matchId, qIndex }, 'Failed to schedule party quiz question timer');
   });
-  logger.info(
+  logger.debug(
     {
       eventName: 'party_question_timer_scheduled',
       matchId,
@@ -394,7 +529,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
     if (!match || match.status !== 'active') return;
     span.setAttribute('quizball.total_questions', match.total_questions);
     if (await isPartyQuizMatchPaused(matchId)) {
-      logger.info(
+      logger.debug(
         { eventName: 'party_match_completion_skipped', matchId, reason: 'paused' },
         'Party quiz completion skipped while match is paused'
       );
@@ -459,7 +594,7 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
 
       if (payload) {
         io.to(`match:${matchId}`).emit('match:final_results', payload);
-        logger.info(
+        logger.debug(
           {
             eventName: 'match:final_results',
             matchId,
@@ -534,33 +669,105 @@ async function completePartyQuizMatch(io: QuizballServer, matchId: string): Prom
   });
 }
 
-function schedulePartyQuizPostRoundAdvance(
+async function schedulePartyQuizPostRoundAdvance(
+  io: QuizballServer,
   matchId: string,
   resolvedQIndex: number,
+  nextQIndex: number,
   participantUserIds: string[],
-  dispatch: () => void,
   ceilingMs = PARTY_ROUND_READY_ACK_CEILING_MS
-): void {
-  pendingReadyGates.open({
-    scopeId: matchId,
-    token: resolvedQIndex,
-    waitingUserIds: participantUserIds,
-    ceilingMs,
-    dispatch,
-    onTimeout: (missing) => {
-      logger.info(
-        {
-          eventName: 'party_ready_ack_ceiling',
-          matchId,
-          resolvedQIndex,
-          missing,
-          ceilingMs,
-        },
-        'Party ready-ack ceiling reached; advancing'
+): Promise<void> {
+  const timerKey = partyRoundTransitionTimerKey(matchId, resolvedQIndex);
+  const dispatch = () => {
+    void runPartyQuizRoundTransition(io, matchId, resolvedQIndex, nextQIndex).catch((err) => {
+      logger.error(
+        { err, matchId, resolvedQIndex, nextQIndex },
+        'Failed to advance party quiz round from ready gate'
       );
-    },
-  });
-  logger.info(
+    });
+  };
+
+  // No client can acknowledge an empty gate. Advance immediately instead of
+  // arming a Redis timer/set that can only expire later.
+  if (participantUserIds.length === 0) {
+    dispatch();
+    return;
+  }
+
+  let durableTimerScheduled = false;
+  try {
+    await scheduleRealtimeTimer(
+      'party_round_transition',
+      timerKey,
+      new Date(Date.now() + ceilingMs),
+      { kind: 'party_round_transition', matchId, resolvedQIndex, nextQIndex }
+    );
+    durableTimerScheduled = true;
+  } catch (err) {
+    // Keep the local ready-gate ceiling as a degraded fallback if Redis has
+    // a transient write failure. A durable retry is preferred, but dropping
+    // both mechanisms here would recreate the frozen-between-rounds bug.
+    logger.warn(
+      { err, matchId, resolvedQIndex, nextQIndex },
+      'Failed to persist party round transition timer; using local ceiling'
+    );
+  }
+
+  const redis = getRedisClient();
+  if (redis?.isOpen) {
+    try {
+      const expectedKey = partyReadyExpectedKey(matchId, resolvedQIndex);
+      await redis
+        .multi()
+        .sAdd(expectedKey, participantUserIds)
+        .expire(expectedKey, PARTY_READY_GATE_TTL_SEC)
+        .expire(partyReadyAckKey(matchId, resolvedQIndex), PARTY_READY_GATE_TTL_SEC)
+        .exec();
+      // Handles the legal race where every acknowledgement arrived before
+      // this replica finished opening the shared gate.
+      if (await claimSharedPartyReadyGate(matchId, resolvedQIndex)) dispatch();
+    } catch (err) {
+      logger.warn(
+        { err, matchId, resolvedQIndex, nextQIndex },
+        'Failed to open shared party ready gate; durable ceiling remains armed'
+      );
+    }
+  }
+
+  // If Redis is unavailable, or it claimed to be open but rejected the
+  // durable write, retain the process-local ceiling. A shared ack may still
+  // win first; the DB transition guard makes the later ceiling idempotent.
+  if (!redis?.isOpen || !durableTimerScheduled) {
+    pendingReadyGates.open({
+      scopeId: matchId,
+      token: resolvedQIndex,
+      waitingUserIds: participantUserIds,
+      ceilingMs,
+      dispatch,
+      onTimeout: (missing) => {
+        partyReadyAckCeilingCount += 1;
+        // A missed ready acknowledgement is a degraded-path signal, but a
+        // reconnect storm can produce one per round and match. Preserve the
+        // warning without letting it displace unrelated failures from Railway's
+        // bounded log stream.
+        if (partyReadyAckCeilingCount % 100 === 1) {
+          logger.warn(
+            {
+              eventName: 'party_ready_ack_ceiling',
+              matchId,
+              resolvedQIndex,
+              missingCount: missing.length,
+              missingSample: missing.slice(0, 10),
+              ceilingMs,
+              occurrences: partyReadyAckCeilingCount,
+            },
+            'Party ready-ack ceiling reached; advancing'
+          );
+        }
+      },
+    });
+  }
+  logger.debug(
     {
       eventName: 'party_ready_gate_opened',
       matchId,
@@ -570,6 +777,120 @@ function schedulePartyQuizPostRoundAdvance(
     },
     'Party quiz post-round ready gate opened'
   );
+}
+
+function partyRoundTransitionTimerKey(matchId: string, resolvedQIndex: number): string {
+  return `${matchId}:${resolvedQIndex}`;
+}
+
+/**
+ * Persist the party-quiz kickoff as the transition from the synthetic round
+ * -1 to question 0. Reusing the normal durable transition handler means a
+ * transient DB admission rejection is retried by the Redis timer scheduler
+ * instead of being logged and permanently dropped by a process-local timeout.
+ */
+export async function schedulePartyQuizKickoff(
+  matchId: string,
+  dueAt: Date,
+): Promise<void> {
+  const resolvedQIndex = -1;
+  await scheduleRealtimeTimer(
+    'party_round_transition',
+    partyRoundTransitionTimerKey(matchId, resolvedQIndex),
+    dueAt,
+    {
+      kind: 'party_round_transition',
+      matchId,
+      resolvedQIndex,
+      nextQIndex: 0,
+    },
+  );
+}
+
+/**
+ * Idempotently drive the transition after a party-quiz round.
+ *
+ * The ready-ack gate is process-local so it can provide a fast path when all
+ * sockets happen to land on one replica. The ceiling is a Redis-backed durable
+ * timer, and this lock/state check makes the fast path and timer safe to race
+ * across replicas without emitting a duplicate question.
+ */
+export async function runPartyQuizRoundTransition(
+  io: QuizballServer,
+  matchId: string,
+  resolvedQIndex: number,
+  nextQIndex: number
+): Promise<void> {
+  const timerKey = partyRoundTransitionTimerKey(matchId, resolvedQIndex);
+  const lockKey = `lock:match:${matchId}:party_transition:${resolvedQIndex}`;
+  const lock = await acquireLock(lockKey, 10_000);
+  if (!lock.acquired || !lock.token) {
+    throw new Error(`Party transition lock unavailable for ${matchId}:${resolvedQIndex}`);
+  }
+
+  try {
+    const match = await matchesRepo.getMatch(matchId);
+    if (!match || match.status !== 'active') {
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
+      return;
+    }
+    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
+      return;
+    }
+
+    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    if (state.currentQuestion) {
+      if (state.currentQuestion.qIndex >= nextQIndex) {
+        await Promise.all([
+          cancelRealtimeTimer('party_round_transition', timerKey),
+          clearSharedPartyReadyGate(matchId, resolvedQIndex),
+        ]);
+        pendingReadyGates.clear(matchId);
+        return;
+      }
+      throw new Error(
+        `Party transition ${matchId}:${resolvedQIndex} found question `
+        + `${state.currentQuestion.qIndex}, expected ${nextQIndex}`
+      );
+    }
+    if (match.current_q_index !== nextQIndex) {
+      throw new Error(
+        `Party transition ${matchId}:${resolvedQIndex} persisted index `
+        + `${match.current_q_index}, expected ${nextQIndex}`
+      );
+    }
+
+    if (nextQIndex >= match.total_questions) {
+      await completePartyQuizMatch(io, matchId);
+      await Promise.all([
+        cancelRealtimeTimer('party_round_transition', timerKey),
+        clearSharedPartyReadyGate(matchId, resolvedQIndex),
+      ]);
+      pendingReadyGates.clear(matchId);
+      return;
+    }
+
+    const sent = await sendPartyQuizQuestion(io, matchId, nextQIndex);
+    if (!sent) {
+      throw new Error(`Party quiz question ${nextQIndex} was not dispatched for ${matchId}`);
+    }
+    await Promise.all([
+      cancelRealtimeTimer('party_round_transition', timerKey),
+      clearSharedPartyReadyGate(matchId, resolvedQIndex),
+    ]);
+    pendingReadyGates.clear(matchId);
+  } finally {
+    await releaseLock(lockKey, lock.token);
+  }
 }
 
 export async function sendPartyQuizQuestion(
@@ -582,13 +903,26 @@ export async function sendPartyQuizQuestion(
     'quizball.q_index': qIndex,
   }, async (span) => {
     const startedAt = Date.now();
-    const match = await matchesRepo.getMatch(matchId);
+    // These reads are independent. Keeping them sequential made every party
+    // kickoff consume several database/network round trips before the next
+    // durable timer could run. At thousands of simultaneous matches that
+    // serialized question 0 for minutes even while PostgreSQL itself remained
+    // mostly idle. The timer concurrency is deliberately small, so fan out at
+    // most three DB reads per handler and collapse the critical path to one
+    // read wave.
+    const [match, initialPayload, paused, players] = await Promise.all([
+      matchesRepo.getMatch(matchId),
+      matchesService.buildMatchQuestionPayload(matchId, qIndex)
+        .then((raw) => normalizeMatchQuestionPayload(raw)),
+      isPartyQuizMatchPaused(matchId),
+      matchPlayersRepo.listMatchPlayers(matchId),
+    ]);
     if (!match || match.status !== 'active') return null;
     if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
       return null;
     }
-    if (await isPartyQuizMatchPaused(matchId)) {
-      logger.info(
+    if (paused) {
+      logger.debug(
         { eventName: 'match:question', matchId, qIndex, skipped: true, reason: 'paused', source: 'dispatch' },
         'Party quiz question dispatch skipped while match is paused'
       );
@@ -604,7 +938,7 @@ export async function sendPartyQuizQuestion(
     }
 
     const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-    let payload = normalizeMatchQuestionPayload(await matchesService.buildMatchQuestionPayload(matchId, qIndex));
+    let payload = initialPayload;
     let questionSource: 'existing' | 'picked' = 'existing';
     if (!payload) {
       const picked = await matchQuestionsRepo.getRandomQuestionForMatch({
@@ -661,9 +995,49 @@ export async function sendPartyQuizQuestion(
     state.answeredUserIds = [];
     bumpStateVersion(state);
 
-    await matchesRepo.setMatchStatePayload(matchId, state, qIndex);
-    await matchQuestionsRepo.setQuestionTiming(matchId, qIndex, playableAt, deadlineAt);
-    await emitPartyQuizState(io, matchId);
+    // One CTE statement commits the match state and client-visible timing
+    // atomically. It is also one network round trip, which is materially faster
+    // than either sequential updates or an explicit begin/update/update/commit
+    // transaction during synchronized kickoffs.
+    await matchesService.persistPartyQuestionDispatch({
+      matchId,
+      qIndex,
+      statePayload: state,
+      shownAt: playableAt,
+      deadlineAt,
+    });
+    // Entry evidence must only be written after durable question state commits.
+    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
+    const cache = buildInitialCache({
+      match: {
+        ...match,
+        current_q_index: qIndex,
+        state_payload: state,
+      },
+      players,
+      state: state as unknown as MatchCache['statePayload'],
+    });
+    cache.currentQuestion = {
+      qIndex,
+      kind: payload.question.kind,
+      questionId: payload.question.id,
+      correctIndex,
+      phaseKind: payload.phaseKind,
+      phaseRound: payload.phaseRound,
+      shooterSeat: payload.shooterSeat,
+      attackerSeat: payload.attackerSeat,
+      shownAt: playableAt.toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+      questionDTO: payload.question,
+      evaluation: payload.evaluation,
+      reveal: payload.reveal,
+    };
+    cache.answers = {};
+    await setMatchCache(cache);
+
+    const partyStatePayload = buildPartyStatePayloadFromRows(match, state, players, []);
+    io.to(`match:${matchId}`).emit('match:party_state', partyStatePayload);
+    logger.debug(partyStateLogFields(partyStatePayload), 'Party quiz state emitted');
 
     io.to(`match:${matchId}`).emit('match:question', {
       matchId,
@@ -678,8 +1052,7 @@ export async function sendPartyQuizQuestion(
       shooterSeat: null,
       attackerSeat: null,
     });
-    await markMatchEnteredForRoom(io, matchId, 'party_quiz_question');
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:question',
         matchId,
@@ -702,7 +1075,10 @@ export async function sendPartyQuizQuestion(
       variant: 'friendly_party_quiz',
       source: questionSource,
     });
-    schedulePartyQuizTimeout(io, matchId, qIndex);
+    // The answer window starts after the reveal. Scheduling from dispatch time
+    // closes every round PARTY_QUESTION_REVEAL_MS early and rejects legitimate
+    // late-window answers even though the client-visible deadline is later.
+    schedulePartyQuizTimeoutAt(io, matchId, qIndex, deadlineAt);
     return {
       correctIndex,
     };
@@ -851,18 +1227,29 @@ export async function resolvePartyQuizRound(
     const lockKey = `lock:match:${matchId}:round:${qIndex}`;
     const lock = await acquireLock(lockKey, 3000);
     if (!lock.acquired || !lock.token) {
-      logger.warn({ matchId, qIndex }, 'Party quiz round resolve skipped: lock not acquired');
+      // The Redis timer scheduler only retries handlers that reject. Returning
+      // from its timeout path marks the popped timer handled and permanently
+      // drops the round. Fast-path answer contenders can return safely because
+      // the lock owner is already resolving and the durable timer remains.
+      if (fromTimeout) {
+        throw new Error(`Party quiz round lock unavailable for ${matchId}:${qIndex}`);
+      }
+      logger.debug({ matchId, qIndex }, 'Party quiz round resolve already in progress');
       return;
     }
 
     try {
       const match = await matchesRepo.getMatch(matchId);
-      if (!match || match.status !== 'active') return;
+      if (!match || match.status !== 'active') {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+        return;
+      }
       if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }
       if (await isPartyQuizMatchPaused(matchId)) {
-        logger.info(
+        logger.debug(
           {
             eventName: 'party_round_resolve_skipped',
             matchId,
@@ -876,7 +1263,51 @@ export async function resolvePartyQuizRound(
       }
 
       const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
-      if (!state.currentQuestion || state.currentQuestion.qIndex !== qIndex) {
+      if (!state.currentQuestion) {
+        const nextIndex = qIndex + 1;
+        if (match.current_q_index === nextIndex) {
+          // A previous attempt may have persisted the resolved state and then
+          // failed before arming the post-round transition. Rebuild that
+          // durable handoff instead of treating the retry as stale and
+          // stranding the match between questions.
+          const players = await matchPlayersRepo.listMatchPlayers(matchId);
+          const participantUserIds = getActivePartyPlayers(
+            players,
+            state.droppedUserIds,
+          ).map((player) => player.user_id);
+          await schedulePartyQuizPostRoundAdvance(
+            io,
+            matchId,
+            qIndex,
+            nextIndex,
+            participantUserIds,
+            nextIndex >= match.total_questions
+              ? PARTY_FINAL_READY_ACK_CEILING_MS
+              : PARTY_ROUND_READY_ACK_CEILING_MS,
+          );
+          await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+          logger.warn(
+            { eventName: 'party_round_transition_recovered', matchId, qIndex, nextIndex },
+            'Recovered missing party round transition after partial resolution',
+          );
+          return;
+        }
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+        logger.info(
+          {
+            eventName: 'party_round_resolve_skipped',
+            matchId,
+            qIndex,
+            fromTimeout,
+            reason: 'stale_question',
+            currentQuestionIndex: null,
+          },
+          'Party quiz round resolve skipped for stale question'
+        );
+        return;
+      }
+      if (state.currentQuestion.qIndex !== qIndex) {
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         logger.info(
           {
             eventName: 'party_round_resolve_skipped',
@@ -933,6 +1364,16 @@ export async function resolvePartyQuizRound(
 
       const nextIndex = qIndex + 1;
       await matchesRepo.setMatchStatePayload(matchId, state, nextIndex);
+      const cache = await getMatchCache(matchId);
+      if (cache) {
+        cache.currentQIndex = nextIndex;
+        cache.statePayload = state as unknown as MatchCache['statePayload'];
+        cache.currentQuestion = null;
+        cache.answers = {};
+        await setMatchCache(cache);
+      } else {
+        await deleteMatchCache(matchId);
+      }
 
       io.to(`match:${matchId}`).emit('match:round_result', {
         matchId,
@@ -950,7 +1391,7 @@ export async function resolvePartyQuizRound(
         shooterSeat: null,
         attackerSeat: null,
       });
-      logger.info(
+      logger.debug(
         {
           eventName: 'match:round_result',
           matchId,
@@ -980,7 +1421,7 @@ export async function resolvePartyQuizRound(
 
       const participantUserIds = activePlayers.map((player) => player.user_id);
       if (nextIndex >= match.total_questions) {
-        logger.info(
+        logger.debug(
           {
             eventName: 'party_match_completion_scheduled',
             matchId,
@@ -991,20 +1432,27 @@ export async function resolvePartyQuizRound(
           },
           'Party quiz completion scheduled after final round'
         );
-        schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
-          void completePartyQuizMatch(io, matchId).catch((error) => {
-            logger.error({ error, matchId }, 'Failed to complete party quiz match');
-          });
-        }, PARTY_FINAL_READY_ACK_CEILING_MS);
+        await schedulePartyQuizPostRoundAdvance(
+          io,
+          matchId,
+          qIndex,
+          nextIndex,
+          participantUserIds,
+          PARTY_FINAL_READY_ACK_CEILING_MS
+        );
+        await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
         return;
       }
 
-      schedulePartyQuizPostRoundAdvance(matchId, qIndex, participantUserIds, () => {
-        void sendPartyQuizQuestion(io, matchId, nextIndex).catch((error) => {
-          logger.error({ error, matchId, nextIndex, fromTimeout }, 'Failed to send next party quiz question');
-        });
-      });
-      logger.info(
+      await schedulePartyQuizPostRoundAdvance(
+        io,
+        matchId,
+        qIndex,
+        nextIndex,
+        participantUserIds
+      );
+      await cancelRealtimeTimer('party_question', questionTimerKey(matchId, qIndex));
+      logger.debug(
         {
           eventName: 'party_next_question_scheduled',
           matchId,
@@ -1015,7 +1463,6 @@ export async function resolvePartyQuizRound(
         'Party quiz next question scheduled after round'
       );
     } finally {
-      cancelPartyQuizQuestionTimer(matchId, qIndex);
       await releaseLock(lockKey, lock.token);
     }
   });
@@ -1025,15 +1472,33 @@ export async function handlePartyQuizAnswer(
   io: QuizballServer,
   socket: QuizballSocket,
   payload: MatchAnswerPayload,
-  preloadedMatch?: MatchRow
+  preloadedMatch?: MatchRow,
+  preloadedCache?: MatchCache
 ): Promise<void> {
   await withSpan('match.party.answer', {
     'quizball.match_id': payload.matchId,
     'quizball.q_index': payload.qIndex,
     'quizball.user_id': socket.data.user.id,
   }, async (span) => {
-    const match = preloadedMatch ?? await matchesRepo.getMatch(payload.matchId);
-    if (!match || match.status !== 'active') {
+    const match = preloadedMatch ?? (preloadedCache ? null : await matchesRepo.getMatch(payload.matchId));
+    const matchStatus = preloadedCache?.status ?? match?.status;
+    if (matchStatus !== 'active') {
+      // Answer delivery races the round timer and the other players by design.
+      // Once final results have won that race, a packet that was already in
+      // flight is a harmless terminal replay, not a client-visible failure.
+      if (matchStatus === 'completed') {
+        logger.debug(
+          {
+            eventName: 'match:answer_ignored',
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            userId: socket.data.user.id,
+            reason: 'match_completed',
+          },
+          'Party quiz late answer ignored after match completion'
+        );
+        return;
+      }
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1041,7 +1506,7 @@ export async function handlePartyQuizAnswer(
           qIndex: payload.qIndex,
           userId: socket.data.user.id,
           reason: 'match_not_active',
-          status: match?.status ?? null,
+          status: matchStatus ?? null,
         },
         'Party quiz answer rejected'
       );
@@ -1052,7 +1517,9 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    if (resolveMatchVariant(match.state_payload, match.mode) !== 'friendly_party_quiz') {
+    const matchMode = preloadedCache?.mode ?? match?.mode;
+    const statePayload = preloadedCache?.statePayload ?? match?.state_payload;
+    if (!matchMode || resolveMatchVariant(statePayload, matchMode) !== 'friendly_party_quiz') {
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1070,7 +1537,14 @@ export async function handlePartyQuizAnswer(
       return;
     }
 
-    const state = sanitizePartyQuizState(match.state_payload, match.total_questions);
+    const totalQuestions = preloadedCache?.totalQuestions ?? match?.total_questions ?? 0;
+    const currentQuestionIndex = preloadedCache?.currentQIndex ?? match?.current_q_index ?? 0;
+    const matchView = {
+      id: payload.matchId,
+      total_questions: totalQuestions,
+      current_q_index: currentQuestionIndex,
+    };
+    const state = sanitizePartyQuizState(statePayload, totalQuestions);
     const redis = getRedisClient();
     if (redis && await redis.exists(matchPauseKey(payload.matchId))) {
       logger.info(
@@ -1090,6 +1564,70 @@ export async function handlePartyQuizAnswer(
       return;
     }
     if (!state.currentQuestion || state.currentQuestion.qIndex !== payload.qIndex) {
+      // Socket delivery is intentionally at-least-once. A reconnect/hydration
+      // can schedule the same client answer twice; if the first answer already
+      // committed and advanced the round, acknowledge the stored result again
+      // instead of surfacing a misleading MATCH_NOT_ACTIVE error.
+      const existingAnswer = await matchAnswersRepo.getAnswerForUser(
+        payload.matchId,
+        payload.qIndex,
+        socket.data.user.id
+      );
+      if (existingAnswer) {
+        const [question, participants] = await Promise.all([
+          matchQuestionsRepo.getMatchQuestion(payload.matchId, payload.qIndex),
+          matchPlayersRepo.listMatchPlayers(payload.matchId),
+        ]);
+        const player = participants.find((candidate) => candidate.user_id === socket.data.user.id);
+        const correctIndex = question?.correct_index;
+        if (typeof correctIndex === 'number') {
+          socket.emit(
+            'match:answer_ack',
+            buildAnswerAckPayload({
+              matchId: payload.matchId,
+              qIndex: payload.qIndex,
+              selectedIndex: existingAnswer.selected_index,
+              isCorrect: existingAnswer.is_correct,
+              correctIndex,
+              myTotalPoints: player?.total_points ?? existingAnswer.points_earned,
+              pointsEarned: existingAnswer.points_earned,
+            })
+          );
+          logger.info(
+            {
+              eventName: 'match:answer_ack',
+              matchId: payload.matchId,
+              qIndex: payload.qIndex,
+              userId: socket.data.user.id,
+              source: 'stale_duplicate',
+              inserted: false,
+            },
+            'Party quiz duplicate answer ack emitted'
+          );
+          return;
+        }
+      }
+
+      const activeQIndex = state.currentQuestion?.qIndex;
+      if (activeQIndex === undefined || payload.qIndex < activeQIndex) {
+        // A timer or another player's answer can advance the round while this
+        // packet is in flight. Older packets are safe to ignore: the client
+        // receives the authoritative round/final state, and no score mutation
+        // has occurred for this submission. Keep rejecting future indexes so
+        // malformed clients still receive a useful protocol error.
+        logger.debug(
+          {
+            eventName: 'match:answer_ignored',
+            matchId: payload.matchId,
+            qIndex: payload.qIndex,
+            userId: socket.data.user.id,
+            reason: activeQIndex === undefined ? 'no_active_question' : 'stale_question',
+            currentQuestionIndex: activeQIndex ?? null,
+          },
+          'Party quiz stale answer ignored'
+        );
+        return;
+      }
       logger.info(
         {
           eventName: 'match:answer_rejected',
@@ -1109,7 +1647,9 @@ export async function handlePartyQuizAnswer(
     }
 
     const userId = socket.data.user.id;
-    const participants = await matchPlayersRepo.listMatchPlayers(payload.matchId);
+    const participants = preloadedCache
+      ? cachedPartyPlayers(preloadedCache)
+      : await matchPlayersRepo.listMatchPlayers(payload.matchId);
     const isParticipant = participants.some((player) => player.user_id === userId);
     if (!isParticipant) {
       logger.info(
@@ -1148,7 +1688,9 @@ export async function handlePartyQuizAnswer(
     }
     const totalPointsBefore = participants.find((player) => player.user_id === userId)?.total_points ?? 0;
 
-    let correctIndex = state.currentQuestion.correctIndex ?? null;
+    let correctIndex = state.currentQuestion.correctIndex
+      ?? preloadedCache?.currentQuestion?.correctIndex
+      ?? null;
     if (correctIndex === null) {
       const question = normalizeMatchQuestionPayload(
         await matchesService.buildMatchQuestionPayload(payload.matchId, payload.qIndex)
@@ -1234,7 +1776,7 @@ export async function handlePartyQuizAnswer(
         pointsEarned: recorded.answer.points_earned,
       })
     );
-    logger.info(
+    logger.debug(
       {
         eventName: 'match:answer_ack',
         matchId: payload.matchId,
@@ -1251,19 +1793,50 @@ export async function handlePartyQuizAnswer(
       'Party quiz answer ack emitted'
     );
 
-    const [livePlayers, answers] = await Promise.all([
-      matchPlayersRepo.listMatchPlayers(payload.matchId),
-      matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
-    ]);
+    let livePlayers: MatchPlayerRow[];
+    let answers: MatchAnswerRow[];
+    if (preloadedCache) {
+      const cachedPlayer = preloadedCache.players.find((player) => player.userId === userId);
+      if (cachedPlayer && recorded.player) {
+        cachedPlayer.totalPoints = recorded.player.total_points;
+        cachedPlayer.correctAnswers = recorded.player.correct_answers;
+      }
+      const cachedAnswer: CachedAnswer = {
+        userId,
+        questionKind: 'multipleChoice',
+        selectedIndex: recorded.answer.selected_index,
+        isCorrect: recorded.answer.is_correct,
+        timeMs: recorded.answer.time_ms,
+        pointsEarned: recorded.answer.points_earned,
+        phaseKind: recorded.answer.phase_kind,
+        phaseRound: recorded.answer.phase_round,
+        shooterSeat: recorded.answer.shooter_seat === 1 || recorded.answer.shooter_seat === 2
+          ? recorded.answer.shooter_seat
+          : null,
+        answeredAt: recorded.answer.answered_at,
+      };
+      preloadedCache.answers[userId] = cachedAnswer;
+      await commitCachedAnswer(preloadedCache, cachedAnswer);
+      // Re-read the small Redis cache/overlay so an answer committed by the
+      // other replica is visible before deciding whether the round is done.
+      const latestCache = await getMatchCacheOrRebuild(payload.matchId) ?? preloadedCache;
+      livePlayers = cachedPartyPlayers(latestCache);
+      answers = cachedPartyAnswers(latestCache);
+    } else {
+      [livePlayers, answers] = await Promise.all([
+        matchPlayersRepo.listMatchPlayers(payload.matchId),
+        matchAnswersRepo.listAnswersForQuestion(payload.matchId, payload.qIndex),
+      ]);
+    }
     const activePlayers = getActivePartyPlayers(livePlayers, state.droppedUserIds);
     const activeAnswerCount = answers.filter((answer) =>
       activePlayers.some((player) => player.user_id === answer.user_id)
     ).length;
     io.to(`match:${payload.matchId}`).emit(
       'match:party_state',
-      buildPartyStatePayloadFromRows(match, state, livePlayers, answers)
+      buildPartyStatePayloadFromRows(matchView, state, livePlayers, answers)
     );
-    logger.info({
+    logger.debug({
       eventName: 'match:party_state',
       matchId: payload.matchId,
       qIndex: payload.qIndex,
@@ -1277,7 +1850,7 @@ export async function handlePartyQuizAnswer(
     }, 'Party answer live state emitted');
 
     if (activePlayers.length > 0 && activeAnswerCount >= activePlayers.length) {
-      logger.info(
+      logger.debug(
         {
           eventName: 'party_all_active_players_answered',
           matchId: payload.matchId,

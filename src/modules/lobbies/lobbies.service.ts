@@ -76,20 +76,24 @@ interface CategoryCacheEntry {
   expiresAt: number;
 }
 
-let validCategoryCache: CategoryCacheEntry | null = null;
+// Friendly possession and party quiz require different pool depths. Key the
+// cache by the requested minimum so a warm 5-question possession lookup can
+// never make an 8-question category eligible for a 10-question party quiz.
+const validCategoryCache = new Map<number, CategoryCacheEntry>();
 let rankedCategoryCache: CategoryCacheEntry | null = null;
 
 async function getValidCategories(
   minQuestions: number
 ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
   const now = Date.now();
-  if (validCategoryCache && validCategoryCache.expiresAt > now) {
-    return validCategoryCache.rows;
+  const cached = validCategoryCache.get(minQuestions);
+  if (cached && cached.expiresAt > now) {
+    return cached.rows;
   }
   // Fetch ALL valid categories (no LIMIT, no randomization) and cache the full set.
   // Callers shuffle/filter/slice from this cached set.
   const rows = await lobbiesRepo.listAllValidCategories(minQuestions);
-  validCategoryCache = { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS };
+  validCategoryCache.set(minQuestions, { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS });
   return rows;
 }
 
@@ -106,7 +110,7 @@ async function getRankedCategories(): Promise<Array<{ id: string; name: Record<s
 
 /** Invalidate the category cache (e.g., after question import). */
 export function invalidateCategoryCache(): void {
-  validCategoryCache = null;
+  validCategoryCache.clear();
   rankedCategoryCache = null;
 }
 
@@ -140,8 +144,11 @@ export const lobbiesService = {
     return lobby;
   },
 
-  async selectRandomCategories(count: number): Promise<DraftCategory[]> {
-    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
+  async selectRandomCategories(
+    count: number,
+    minQuestions = MIN_QUESTIONS_PER_CATEGORY
+  ): Promise<DraftCategory[]> {
+    const allValid = await getValidCategories(minQuestions);
     // Shuffle and take `count` from cached set
     const shuffled = shuffle([...allValid]);
     const selected = shuffled.slice(0, count);

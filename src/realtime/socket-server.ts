@@ -11,7 +11,11 @@ import { registerMatchHandlers } from './handlers/match.handler.js';
 import { registerRankedHandlers } from './handlers/ranked.handler.js';
 import { registerWarmupHandlers } from './handlers/warmup.handler.js';
 import { registerDevHandlers } from './handlers/dev.handler.js';
-import type { ClientToServerEvents, ServerToClientEvents } from './socket.types.js';
+import type {
+  ClientToServerEvents,
+  InterServerEvents,
+  ServerToClientEvents,
+} from './socket.types.js';
 import { lobbyRealtimeService } from './services/lobby-realtime.service.js';
 import { matchRealtimeService } from './services/match-realtime.service.js';
 import { rankedMatchmakingService } from './services/ranked-matchmaking.service.js';
@@ -23,7 +27,10 @@ import { trackSocketConnected, trackSocketDisconnected } from '../core/analytics
 import { getRedisClient } from './redis.js';
 import { setUserPingMs } from './user-ping.js';
 import { acquireLock, releaseLock } from './locks.js';
-import { resolvePartyQuizRound } from './party-quiz-match-flow.js';
+import {
+  resolvePartyQuizRound,
+  runPartyQuizRoundTransition,
+} from './party-quiz-match-flow.js';
 import { finalizeHalftime, resolvePossessionRound, runPossessionAiAnswer } from './possession-match-flow.js';
 import {
   startRealtimeTimerScheduler,
@@ -50,9 +57,20 @@ import {
 } from './socket-db-task-limiter.js';
 import { ConnectStateBatcher } from './connect-state-batcher.js';
 import type { SessionStatePayload } from './socket.types.js';
+import { acknowledgeLocalMatchUiReady } from './match-ui-ready-gate.js';
 
-export type QuizballSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketAuthData>;
-export type QuizballServer = Server<ClientToServerEvents, ServerToClientEvents>;
+export type QuizballSocket = Socket<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  InterServerEvents,
+  SocketAuthData
+>;
+export type QuizballServer = Server<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  InterServerEvents,
+  SocketAuthData
+>;
 
 const ONLINE_COUNT_KEY = 'presence:online_users';
 const PRESENCE_LOCK_TTL_MS = 3000;
@@ -356,6 +374,15 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       if (payload.kind !== 'party_question') return;
       await resolvePartyQuizRound(server, payload.matchId, payload.qIndex, true);
     },
+    party_round_transition: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind !== 'party_round_transition') return;
+      await runPartyQuizRoundTransition(
+        server,
+        payload.matchId,
+        payload.resolvedQIndex,
+        payload.nextQIndex
+      );
+    },
     possession_ai_answer: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'possession_ai_answer') return;
       await runPossessionAiAnswer(
@@ -413,6 +440,13 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   });
 
   io.adapter(createAdapter(pubClient, subClient));
+
+  // A match's kickoff gate lives on the replica that started it, while each
+  // player's sticky websocket may live on either replica. Forward an ack that
+  // misses locally to every peer; only the replica owning the gate consumes it.
+  io.on('match:ui_ready_ack', (userId, matchId, phase) => {
+    acknowledgeLocalMatchUiReady(io, userId, matchId, phase);
+  });
 
   // Lets services force-disconnect a user's sockets without importing socket-server
   // (which would create a cycle through socket-auth → users.service).

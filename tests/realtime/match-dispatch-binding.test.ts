@@ -7,6 +7,7 @@ import type { QuizballServer, QuizballSocket } from '../../src/realtime/socket-s
 const getMatchCacheOrRebuildMock = vi.hoisted(() => vi.fn());
 const handlePossessionAnswerMock = vi.hoisted(() => vi.fn());
 const getMatchMock = vi.hoisted(() => vi.fn());
+const handlePartyQuizAnswerMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/core/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -35,7 +36,7 @@ vi.mock('../../src/realtime/possession-match-flow.js', () => ({
 }));
 
 vi.mock('../../src/realtime/party-quiz-match-flow.js', () => ({
-  handlePartyQuizAnswer: vi.fn(),
+  handlePartyQuizAnswer: (...args: unknown[]) => handlePartyQuizAnswerMock(...args),
   handlePartyQuizReadyForNextQuestion: vi.fn(),
 }));
 
@@ -120,6 +121,16 @@ describe('dispatch gate heals the socket->match binding (silent-pause-bypass gua
     });
 
     expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+  it('passes the authoritative cache into the party answer hot path', async () => {
+    const cache = createCache();
+    cache.statePayload = createInitialPossessionState('friendly_party_quiz');
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const socket = createSocket('u1', MATCH_ID);
+    const payload = { matchId: MATCH_ID, qIndex: 2, answerIndex: 1, timeMs: 1000 };
+
+    await handleAnswer(io, socket, payload);
+
+    expect(handlePartyQuizAnswerMock).toHaveBeenCalledWith(io, socket, payload, undefined, cache);
     expect(handlePossessionAnswerMock).not.toHaveBeenCalled();
   });
 });

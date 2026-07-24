@@ -10,7 +10,10 @@ import {
   MIN_QUESTIONS_PER_CATEGORY,
 } from '../../modules/lobbies/lobbies.service.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
-import { matchesService } from '../../modules/matches/matches.service.js';
+import {
+  matchesService,
+  PARTY_QUIZ_TOTAL_QUESTIONS,
+} from '../../modules/matches/matches.service.js';
 import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
@@ -45,6 +48,7 @@ import {
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
 const SETTINGS_LOCK_WAIT_MS = 3500;
+const MATCH_START_LOCK_WAIT_MS = 5000;
 
 export async function createLobby(
   io: QuizballServer,
@@ -161,31 +165,9 @@ export async function joinByCode(
     io,
     socket,
     async () => {
-      const snapshot = await userSessionGuardService.resolveState(userId);
-      if (snapshot.activeMatchId) {
-        userSessionGuardService.emitBlocked(socket, {
-          reason: 'ACTIVE_MATCH',
-          message: 'You are already in an active match',
-          stateSnapshot: snapshot,
-        });
-        socket.emit('error', {
-          code: 'ALREADY_IN_LOBBY',
-          message: 'You are already in an active match',
-          meta: { stateSnapshot: snapshot },
-        });
-        result = {
-          ok: false,
-          code: 'ALREADY_IN_LOBBY',
-          message: 'You are already in an active match',
-          retryable: false,
-          correlationId,
-          stateSnapshot: snapshot,
-        };
-        return;
-      }
-
       const inviteLobby = await lobbiesRepo.getByInviteCode(normalizedCode);
       if (!inviteLobby) {
+        const snapshot = await userSessionGuardService.resolveState(userId);
         logger.warn(
           { inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
           'Lobby not found for invite'
@@ -623,7 +605,13 @@ export async function startFriendlyMatch(
   }
 
   const lockKey = `lock:lobby:${lobbyId}`;
-  const lock = await acquireLock(lockKey, 3000);
+  // `lobby:state` announcing that both members are ready can reach the host
+  // just before the other ready handler releases this same lock. A one-shot
+  // acquire turned that normal race into MATCH_START_LOCKED at load. At 2k,
+  // admission-queue wait can keep the ready check alive beyond the generic
+  // 1.2s lobby retry budget, so match start gets a bounded command-specific
+  // wait rather than requiring a human to press Start again.
+  const lock = await acquireLobbyLockWithRetry(lobbyId, 3000, MATCH_START_LOCK_WAIT_MS);
   if (!lock.acquired || !lock.token) {
     logger.warn({ lobbyId }, 'Friendly match start skipped: lock not acquired');
     socket.emit('error', {
@@ -634,11 +622,48 @@ export async function startFriendlyMatch(
   }
 
   try {
+    // The bounded lock wait can outlive the snapshot above. Revalidate every
+    // start precondition while holding the lock so a concurrent leave,
+    // unready, settings edit, host transfer, or completed start cannot create
+    // a match from stale state.
+    const currentLobby = await lobbiesRepo.getById(lobbyId);
+    if (!currentLobby) {
+      socket.emit('error', { code: 'LOBBY_NOT_FOUND', message: 'Lobby not found' });
+      return;
+    }
+    if (socket.data.user.id !== currentLobby.host_user_id) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can start the match' });
+      return;
+    }
+    if (currentLobby.status !== 'waiting') {
+      socket.emit('error', { code: 'LOBBY_NOT_WAITING', message: 'Lobby is not ready to start' });
+      return;
+    }
+    const currentFriendlyMode = normalizeFriendlyGameMode(currentLobby.game_mode);
+    if (currentFriendlyMode === 'ranked_sim') {
+      socket.emit('error', { code: 'INVALID_SETTINGS', message: 'Host start is not available for ranked sim mode' });
+      return;
+    }
+    const currentMemberCount = await lobbiesRepo.countMembers(lobbyId);
+    const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
+    const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
+    const currentValidStart =
+      (currentFriendlyMode === 'friendly_possession' && currentMemberCount === 2) ||
+      (currentFriendlyMode === 'friendly_party_quiz' &&
+        currentMemberCount >= 2 && currentMemberCount <= FRIENDLY_LOBBY_MAX_MEMBERS);
+    if (!currentValidStart || !currentAllReady) {
+      socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
+      return;
+    }
+
     let categoryAId: string;
     let categoryBId: string | null;
 
-    if (lobby.friendly_random) {
-      const categories = await lobbiesService.selectRandomCategories(1);
+    if (currentLobby.friendly_random) {
+      const minimumQuestions = currentFriendlyMode === 'friendly_party_quiz'
+        ? PARTY_QUIZ_TOTAL_QUESTIONS
+        : MIN_QUESTIONS_PER_CATEGORY;
+      const categories = await lobbiesService.selectRandomCategories(1, minimumQuestions);
       if (categories.length < 1) {
         logger.warn(
           { lobbyId, categoryCount: categories.length },
@@ -655,7 +680,7 @@ export async function startFriendlyMatch(
       categoryAId = categories[0].id;
       categoryBId = null;
     } else {
-      const categoryA = lobby.friendly_category_a_id;
+      const categoryA = currentLobby.friendly_category_a_id;
       if (!categoryA) {
         socket.emit('error', {
           code: 'INVALID_SETTINGS',
@@ -675,7 +700,9 @@ export async function startFriendlyMatch(
 
       const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
         [categoryA],
-        MIN_QUESTIONS_PER_CATEGORY
+        currentFriendlyMode === 'friendly_party_quiz'
+          ? PARTY_QUIZ_TOTAL_QUESTIONS
+          : MIN_QUESTIONS_PER_CATEGORY
       );
       if (validCategoryIds.length !== 1) {
         socket.emit('error', {
@@ -695,9 +722,9 @@ export async function startFriendlyMatch(
     try {
       result = await matchesService.createMatchFromLobby({
         lobbyId,
-        mode: lobby.mode,
-        variant: friendlyMode,
-        hostUserId: lobby.host_user_id,
+        mode: currentLobby.mode,
+        variant: currentFriendlyMode,
+        hostUserId: currentLobby.host_user_id,
         categoryAId,
         categoryBId,
       });
@@ -723,7 +750,7 @@ export async function startFriendlyMatch(
     await warmupRealtimeService.cleanupLobby(lobbyId);
 
     logger.info(
-      { lobbyId, matchId: result.match.id, mode: lobby.mode, categoryAId, categoryBId },
+      { lobbyId, matchId: result.match.id, mode: currentLobby.mode, categoryAId, categoryBId },
       'Friendly match created'
     );
 

@@ -150,6 +150,42 @@ describe('realtime timer scheduler', () => {
     expect(redis?.values.has(__realtimeTimerInternals.timerPayloadKey(member))).toBe(false);
   });
 
+  it('bounds a due timer burst and prevents overlapping polls', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const handled = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+    });
+    const {
+      __realtimeTimerInternals,
+      scheduleRealtimeTimer,
+      startRealtimeTimerScheduler,
+    } = await import('../../src/realtime/realtime-timer-scheduler.js');
+
+    startRealtimeTimerScheduler({} as QuizballServer, {
+      party_question: handled,
+    });
+    for (let index = 0; index < 12; index += 1) {
+      await scheduleRealtimeTimer(
+        'party_question',
+        `burst-${index}`,
+        new Date(Date.now()),
+        { kind: 'party_question', matchId: `m-${index}`, qIndex: 0 }
+      );
+    }
+
+    const firstPoll = __realtimeTimerInternals.pollDueTimers();
+    const overlappingPoll = __realtimeTimerInternals.pollDueTimers();
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([firstPoll, overlappingPoll]);
+
+    expect(handled).toHaveBeenCalledTimes(12);
+    expect(maxActive).toBe(__realtimeTimerInternals.TIMER_HANDLER_CONCURRENCY);
+  });
+
   it('keeps the payload when the handler re-arms the same member during processing', async () => {
     const {
       __realtimeTimerInternals,

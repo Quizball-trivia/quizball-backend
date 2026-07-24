@@ -25,7 +25,7 @@ describe('ticketRefillService', () => {
 
   // Refills are now granted by the global `refill-tickets-every-4h` cron, NOT
   // lazily from elapsed time. resolveHydratedTicketState is therefore a pure
-  // clamp to [0, MAX_TICKETS] that leaves the (now-inert) anchor untouched.
+  // clamp to [0, MAX_TICKETS] that leaves the cron-owned anchor untouched.
   describe('resolveHydratedTicketState (pure clamp — cron owns refills)', () => {
     it('does NOT add tickets from elapsed time, even after many hours', () => {
       const result = resolveHydratedTicketState(

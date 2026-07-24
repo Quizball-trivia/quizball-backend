@@ -59,4 +59,23 @@ describe('SocketDbTaskLimiter', () => {
       vi.useRealTimers();
     }
   });
+
+  it('drains priority recovery before optional queued work', async () => {
+    const limiter = new SocketDbTaskLimiter(1, 3, 1_000);
+    const activeGate = deferred();
+    const order: string[] = [];
+    const active = limiter.run(async () => {
+      await activeGate.promise;
+      order.push('active');
+    });
+    const optional = limiter.run(async () => { order.push('optional'); });
+    const recovery = limiter.runPriority(async () => { order.push('recovery'); });
+
+    await Promise.resolve();
+    activeGate.resolve();
+    await Promise.all([active, optional, recovery]);
+
+    expect(order).toEqual(['active', 'recovery', 'optional']);
+    expect(limiter.stats()).toMatchObject({ active: 0, queued: 0, acquisitions: 3 });
+  });
 });

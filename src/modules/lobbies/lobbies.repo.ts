@@ -117,6 +117,25 @@ export const lobbiesRepo = {
     `;
   },
 
+  async listOpenLobbiesForUsers(userIds: string[]): Promise<Map<string, LobbyWithJoinedAt[]>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    const lobbiesByUserId = new Map(uniqueUserIds.map((userId) => [userId, [] as LobbyWithJoinedAt[]]));
+    if (uniqueUserIds.length === 0) return lobbiesByUserId;
+
+    const rows = await sql<Array<LobbyWithJoinedAt & { session_user_id: string }>>`
+      SELECT lm.user_id AS session_user_id, l.*, lm.joined_at
+      FROM lobby_members lm
+      JOIN lobbies l ON l.id = lm.lobby_id
+      WHERE lm.user_id = ANY(${sql.array(uniqueUserIds)}::uuid[])
+        AND l.status IN ('waiting', 'active')
+      ORDER BY lm.user_id, lm.joined_at DESC
+    `;
+    for (const { session_user_id: userId, ...lobby } of rows) {
+      lobbiesByUserId.get(userId)?.push(lobby as LobbyWithJoinedAt);
+    }
+    return lobbiesByUserId;
+  },
+
   async setLobbyStatus(lobbyId: string, status: LobbyRow['status']): Promise<void> {
     await sql`
       UPDATE lobbies

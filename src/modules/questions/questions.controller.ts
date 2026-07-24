@@ -45,6 +45,7 @@ export const questionsController = {
         // game, but must never use this CMS route to enumerate drafts or run
         // the expensive admin-only search/image filters.
         status: isAdmin ? query.status : 'published',
+        rankedEligible: isAdmin ? undefined : true,
         difficulty: query.difficulty,
         type: query.type,
         mcqImage: isAdmin ? query.mcq_image : undefined,
@@ -74,7 +75,10 @@ export const questionsController = {
     const question = await questionsService.getById(id);
 
     // Return 404 rather than revealing that a draft/archived question exists.
-    if (req.user?.role !== 'admin' && question.status !== 'published') {
+    if (
+      req.user?.role !== 'admin'
+      && (question.status !== 'published' || question.ranked_eligible === false)
+    ) {
       throw new NotFoundError('Question not found');
     }
 

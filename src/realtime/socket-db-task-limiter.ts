@@ -26,6 +26,7 @@ interface Waiter {
   queuedAt: number;
   timer: NodeJS.Timeout;
   settled: boolean;
+  priority: boolean;
 }
 
 /**
@@ -70,7 +71,7 @@ export class SocketDbTaskLimiter {
   }
 
   async run<T>(operation: () => PromiseLike<T> | T): Promise<T> {
-    const release = await this.acquire();
+    const release = await this.acquire(false);
     try {
       return await operation();
     } finally {
@@ -78,7 +79,22 @@ export class SocketDbTaskLimiter {
     }
   }
 
-  private acquire(): Promise<() => void> {
+  /**
+   * Queue recovery work ahead of optional background hydration. This does not
+   * increase database concurrency; it only ensures an already-active match can
+   * rejoin promptly during a reconnect wave instead of expiring behind idle
+   * users' invite and replay lookups.
+   */
+  async runPriority<T>(operation: () => PromiseLike<T> | T): Promise<T> {
+    const release = await this.acquire(true);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private acquire(priority: boolean): Promise<() => void> {
     if (this.active < this.limit) {
       this.active += 1;
       this.acquisitions += 1;
@@ -95,6 +111,7 @@ export class SocketDbTaskLimiter {
         reject,
         queuedAt: performance.now(),
         settled: false,
+        priority,
         timer: setTimeout(() => {
           if (waiter.settled) return;
           waiter.settled = true;
@@ -106,7 +123,13 @@ export class SocketDbTaskLimiter {
         }, this.waitTimeoutMs),
       };
       waiter.timer.unref?.();
-      this.waiters.push(waiter);
+      if (priority) {
+        const firstOptional = this.waiters.findIndex((queued) => !queued.priority);
+        if (firstOptional === -1) this.waiters.push(waiter);
+        else this.waiters.splice(firstOptional, 0, waiter);
+      } else {
+        this.waiters.push(waiter);
+      }
       this.maxQueued = Math.max(this.maxQueued, this.waiters.length);
     });
   }
@@ -135,6 +158,13 @@ export class SocketDbTaskLimiter {
 
 // At most eight cleanup workflows per replica may generate DB work. The queue
 // can hold both lobby + match callbacks for a 5k-user fleet with headroom; a
-// 15s wait ceiling keeps cleanup inside the disconnect grace flow rather than
-// allowing stale work to accumulate indefinitely.
-export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 15_000);
+// 30s wait ceiling covers the measured 5k-user teardown while still bounding
+// stale cleanup to one disconnect-grace window.
+export const socketDbTaskLimiter = new SocketDbTaskLimiter(8, 12_000, 30_000);
+
+// Connection hydration is useful but optional background work: resume lookups,
+// pending invites, and last-result delivery. A reconnect/login wave must not
+// let thousands of those workflows enter the application DB admission queue at
+// once and crowd out foreground lobby commands. Keep this budget separate from
+// disconnect cleanup so a hydration backlog cannot delay match cleanup.
+export const postConnectDbTaskLimiter = new SocketDbTaskLimiter(4, 12_000, 30_000);

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { optionalAuthMiddleware } from '../middleware/auth.js';
 import {
   campaignQuizAnswerBodySchema,
   campaignQuizRatingBodySchema,
@@ -27,10 +27,11 @@ router.post(
   campaignQuizzesController.answer,
 );
 
-// Ratings are account-bound: one current rating per user and quiz.
+// Ratings do not require an account: signed-in visitors get one rating per
+// user, guests one per hashed client address.
 router.put(
   '/:slug/rating',
-  authMiddleware,
+  optionalAuthMiddleware,
   validate({
     params: campaignQuizSlugParamsSchema,
     body: campaignQuizRatingBodySchema,

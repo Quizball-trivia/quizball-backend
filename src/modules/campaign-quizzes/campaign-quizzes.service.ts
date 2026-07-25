@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { config } from '../../core/config.js';
 import { BadRequestError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -61,6 +62,16 @@ function parseCampaignQuestion(row: CampaignQuizQuestionRow): CampaignPayload {
 
 function stableHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * Identify a signed-out rater without storing their address. Salting with a
+ * server-only secret stops the stored digest from being reversed by hashing
+ * the (small) IPv4 space, and scoping by slug keeps the same visitor from
+ * being correlated across quizzes.
+ */
+function guestRatingKey(slug: string, clientIp: string): string {
+  return stableHash(`campaign-rating:${config.SUPABASE_JWT_SECRET}:${slug}:${clientIp}`);
 }
 
 function generatedAnswer(payload: CampaignPayload): string | null {
@@ -151,7 +162,9 @@ function toPublicQuestion(
             .map((clue) => localizedText(clue.content))
             .filter((clue): clue is string => Boolean(clue))
             .filter((clue) => clue !== prompt)
-        : [],
+        : payload.clubs
+            .map((club) => localizedText(club))
+            .filter((club): club is string => Boolean(club)),
     image_url: null,
     options: options.map((option) => ({
       id: option.id,
@@ -246,6 +259,28 @@ export const campaignQuizzesService = {
     if (!quiz) throw new NotFoundError('Campaign quiz not found');
 
     await campaignQuizzesRepo.upsertRating(slug, userId, rating);
+    return normalizeRating(await campaignQuizzesRepo.getRating(slug));
+  },
+
+  async rateAsGuest(
+    slug: string,
+    clientIp: string | undefined,
+    rating: number,
+  ): Promise<CampaignQuizRatingResponse> {
+    const quiz = await campaignQuizzesRepo.getPublishedQuiz(slug);
+    if (!quiz) throw new NotFoundError('Campaign quiz not found');
+
+    // Without a resolvable client address there is no way to hold a guest to
+    // one rating, so decline rather than accept unbounded anonymous votes.
+    if (!clientIp) {
+      throw new BadRequestError('Could not verify this rating request');
+    }
+
+    await campaignQuizzesRepo.upsertGuestRating(
+      slug,
+      guestRatingKey(slug, clientIp),
+      rating,
+    );
     return normalizeRating(await campaignQuizzesRepo.getRating(slug));
   },
 };

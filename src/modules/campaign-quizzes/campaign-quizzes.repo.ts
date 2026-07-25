@@ -93,7 +93,20 @@ export const campaignQuizzesRepo = {
     await sql`
       INSERT INTO campaign_quiz_ratings (quiz_slug, user_id, rating)
       VALUES (${slug}, ${userId}, ${rating})
-      ON CONFLICT (quiz_slug, user_id)
+      ON CONFLICT (quiz_slug, user_id) WHERE user_id IS NOT NULL
+      DO UPDATE SET rating = EXCLUDED.rating, updated_at = NOW()
+    `;
+  },
+
+  async upsertGuestRating(
+    slug: string,
+    guestKey: string,
+    rating: number,
+  ): Promise<void> {
+    await sql`
+      INSERT INTO campaign_quiz_ratings (quiz_slug, guest_key, rating)
+      VALUES (${slug}, ${guestKey}, ${rating})
+      ON CONFLICT (quiz_slug, guest_key) WHERE guest_key IS NOT NULL
       DO UPDATE SET rating = EXCLUDED.rating, updated_at = NOW()
     `;
   },

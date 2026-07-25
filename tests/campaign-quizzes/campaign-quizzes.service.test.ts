@@ -7,6 +7,7 @@ vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
     getPublishedQuestion: vi.fn(),
     getRating: vi.fn(),
     upsertRating: vi.fn(),
+    upsertGuestRating: vi.fn(),
   },
 }));
 
@@ -171,10 +172,76 @@ describe('campaignQuizzesService', () => {
     });
   });
 
+  it('exposes the club sequence for career-path questions', async () => {
+    const careerRows = [
+      { answer: 'Steven Gerrard', clubs: ['Liverpool', 'LA Galaxy'] },
+      { answer: 'Thierry Henry', clubs: ['Monaco', 'Juventus', 'Arsenal'] },
+      { answer: 'Patrick Vieira', clubs: ['Cannes', 'AC Milan', 'Arsenal'] },
+      { answer: 'Edgar Davids', clubs: ['Ajax', 'AC Milan', 'Juventus'] },
+    ].map((entry, index) => ({
+      ...question,
+      id: `6c6b8d10-8b8e-4d12-9a91-00000000000${index + 1}`,
+      display_order: index + 1,
+      prompt: { en: 'Guess the player' },
+      payload: {
+        type: 'career_path' as const,
+        clubs: entry.clubs.map((club) => ({ en: club })),
+        display_answer: { en: entry.answer },
+        accepted_answers: [entry.answer],
+      },
+    }));
+    vi.mocked(campaignQuizzesRepo.getPublishedQuestions).mockResolvedValue(careerRows);
+
+    const quiz = await campaignQuizzesService.getQuiz('career-path');
+
+    // The prompt alone ("Guess the player") carries no information, so the
+    // club sequence must reach the client or the question is unanswerable.
+    expect(quiz.questions[0]).toMatchObject({
+      type: 'career_path',
+      details: ['Liverpool', 'LA Galaxy'],
+    });
+    expect(quiz.questions[0].options).toHaveLength(4);
+    expect(JSON.stringify(quiz)).not.toContain('accepted_answers');
+  });
+
   it('rejects an option that does not belong to the question', async () => {
     await expect(
       campaignQuizzesService.answer('liverpool', question.id, 'not-an-option'),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('accepts a guest rating keyed by a hash rather than the raw address', async () => {
+    await expect(
+      campaignQuizzesService.rateAsGuest('liverpool', '203.0.113.7', 4),
+    ).resolves.toEqual({ average: 4.75, count: 12 });
+
+    expect(campaignQuizzesRepo.upsertGuestRating).toHaveBeenCalledTimes(1);
+    const [slug, guestKey, rating] = vi.mocked(
+      campaignQuizzesRepo.upsertGuestRating,
+    ).mock.calls[0];
+    expect(slug).toBe('liverpool');
+    expect(rating).toBe(4);
+    expect(guestKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(guestKey).not.toContain('203.0.113.7');
+  });
+
+  it('gives the same guest a stable key per quiz but not across quizzes', async () => {
+    await campaignQuizzesService.rateAsGuest('liverpool', '203.0.113.7', 4);
+    await campaignQuizzesService.rateAsGuest('liverpool', '203.0.113.7', 2);
+    await campaignQuizzesService.rateAsGuest('tottenham', '203.0.113.7', 5);
+
+    const keys = vi
+      .mocked(campaignQuizzesRepo.upsertGuestRating)
+      .mock.calls.map((call) => call[1]);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it('declines a guest rating when no client address can be resolved', async () => {
+    await expect(
+      campaignQuizzesService.rateAsGuest('liverpool', undefined, 5),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(campaignQuizzesRepo.upsertGuestRating).not.toHaveBeenCalled();
   });
 
   it('upserts one account-bound rating and returns the new aggregate', async () => {

@@ -83,3 +83,32 @@ export async function authMiddleware(
     next(error);
   }
 }
+
+/**
+ * Attach req.user when a valid session is present, but never reject the
+ * request. For public endpoints that behave differently for signed-in users —
+ * campaign quiz ratings are account-bound when possible and guest-keyed
+ * otherwise. An invalid or expired token is treated as a guest rather than an
+ * error, so a stale cookie cannot lock a visitor out of a page that is meant
+ * to work signed-out.
+ */
+export async function optionalAuthMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const token = selectAuthToken(req.headers.authorization, req.cookies?.qb_access_token);
+  if (!token) return next();
+
+  let failed: unknown;
+  await authMiddleware(req, res, (error?: unknown) => {
+    failed = error;
+  });
+
+  if (failed) {
+    logger.debug({ err: failed }, 'Ignoring invalid token on optional-auth route');
+    req.identity = undefined;
+    req.user = undefined;
+  }
+  next();
+}

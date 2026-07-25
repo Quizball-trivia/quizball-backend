@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { AuthenticationError } from '../../core/errors.js';
+import { resolveTrustedClientIp } from '../../http/client-ip.js';
 import type {
   CampaignQuizAnswerBody,
   CampaignQuizRatingBody,
@@ -28,7 +28,21 @@ export const campaignQuizzesController = {
   async rate(req: Request, res: Response): Promise<void> {
     const { slug } = req.validated.params as CampaignQuizSlugParams;
     const { rating } = req.validated.body as CampaignQuizRatingBody;
-    if (!req.user) throw new AuthenticationError();
-    res.json(await campaignQuizzesService.rate(slug, req.user.id, rating));
+
+    // These pages are playable without an account, so ratings are too. A
+    // signed-in rating stays account-bound; a guest rating is keyed by a
+    // hashed client address.
+    if (req.user) {
+      res.json(await campaignQuizzesService.rate(slug, req.user.id, rating));
+      return;
+    }
+
+    res.json(
+      await campaignQuizzesService.rateAsGuest(
+        slug,
+        resolveTrustedClientIp(req),
+        rating,
+      ),
+    );
   },
 };

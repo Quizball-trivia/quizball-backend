@@ -93,8 +93,8 @@ export function toUserResponse(user: {
 },
   /**
    * Nickname quota for the caller's own profile. Optional so the many callers
-   * that don't need it stay synchronous; defaults to "a change is available",
-   * which is what a fresh account sees.
+   * that don't need it stay synchronous. When omitted, both quota fields are
+   * absent from the response rather than defaulted to a plausible guess.
    */
   nicknameQuota?: { changesRemaining: number; nextChangeAt: string | null }
 ): UserResponse {

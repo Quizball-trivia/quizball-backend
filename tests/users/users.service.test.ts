@@ -21,6 +21,13 @@ const getUserStatsSummaryMock = vi.fn();
 const getHeadToHeadMock = vi.fn();
 const getRelationshipStatusesMock = vi.fn();
 const listInventoryWithProductsMock = vi.fn();
+const isNicknameReservedMock = vi.fn();
+const changeNicknameInTxMock = vi.fn();
+const getPublicNicknameHistoryMock = vi.fn();
+const getNicknameQuotaMock = vi.fn();
+const hasConsumedSignupNamingMock = vi.fn();
+const getIdentityDerivedNicknameMock = vi.fn();
+const recordIdentityDerivedNicknameMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -41,7 +48,17 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     requestDeletion: (...args: unknown[]) => requestDeletionMock(...args),
     cancelPendingDeletion: (...args: unknown[]) => cancelPendingDeletionMock(...args),
     createWithIdentity: (...args: unknown[]) => createWithIdentityMock(...args),
+    isNicknameReserved: (...args: unknown[]) => isNicknameReservedMock(...args),
+    changeNicknameInTx: (...args: unknown[]) => changeNicknameInTxMock(...args),
+    getPublicNicknameHistory: (...args: unknown[]) => getPublicNicknameHistoryMock(...args),
+    getNicknameQuota: (...args: unknown[]) => getNicknameQuotaMock(...args),
+    hasConsumedSignupNaming: (...args: unknown[]) => hasConsumedSignupNamingMock(...args),
+    getIdentityDerivedNickname: (...args: unknown[]) => getIdentityDerivedNicknameMock(...args),
+    recordIdentityDerivedNickname: (...args: unknown[]) => recordIdentityDerivedNicknameMock(...args),
   },
+  NICKNAME_FREE_CHANGES: 2,
+  NICKNAME_COOLDOWN_DAYS: 30,
+  NICKNAME_RESERVATION_DAYS: 30,
   isUserAccountInactive: (user: { is_deleted?: boolean; deleted_at?: string | null; pending_deletion_at?: string | null }) =>
     Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at),
 }));
@@ -158,6 +175,19 @@ describe('usersService.getPublicProfile', () => {
     getByIdMock.mockResolvedValue(MOCK_USER);
     updateMock.mockResolvedValue({ ...MOCK_USER, avatar_customization: { skin: 'skin_male_white' } });
     isNicknameTakenMock.mockResolvedValue(false);
+    // Nickname limits: default to "change allowed, nothing reserved, no history".
+    isNicknameReservedMock.mockResolvedValue(false);
+    hasConsumedSignupNamingMock.mockResolvedValue(true);
+    getIdentityDerivedNicknameMock.mockResolvedValue(null);
+    getPublicNicknameHistoryMock.mockResolvedValue([]);
+    getNicknameQuotaMock.mockResolvedValue({ countedChanges: 0, nextChangeAt: null });
+    changeNicknameInTxMock.mockImplementation(
+      async (params: { userId: string; newNickname: string }) => ({
+        ...MOCK_USER,
+        id: params.userId,
+        nickname: params.newNickname,
+      })
+    );
     listInventoryWithProductsMock.mockResolvedValue([]);
     getProfileMock.mockResolvedValue(MOCK_RANKED_PROFILE);
     getUserRankMock.mockImplementation((_userId: string, country?: string) =>
@@ -408,9 +438,14 @@ describe('usersService.getPublicProfile', () => {
     });
 
     expect(isNicknameTakenMock).toHaveBeenCalledWith('CleanName', 'user-target-id');
-    expect(updateMock).toHaveBeenCalledWith('user-target-id', {
-      nickname: 'CleanName',
-    });
+    // Nickname writes now go through changeNicknameInTx so the rename and its
+    // history row land in one transaction — usersRepo.update no longer sees it.
+    expect(changeNicknameInTxMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-target-id',
+        newNickname: 'CleanName',
+      })
+    );
   });
 });
 

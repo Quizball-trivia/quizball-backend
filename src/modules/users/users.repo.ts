@@ -1,6 +1,27 @@
-import { sql } from '../../db/index.js';
+import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json, User } from '../../db/types.js';
 import type { AvatarCustomization } from './avatar-customization.js';
+
+/** Free nickname changes before the cooldown applies. */
+export const NICKNAME_FREE_CHANGES = 2;
+/** Rolling cooldown between changes once the free allowance is spent. */
+export const NICKNAME_COOLDOWN_DAYS = 30;
+/** How long a vacated nickname stays reserved against other users. */
+export const NICKNAME_RESERVATION_DAYS = 30;
+
+export type NicknameChangeSource = 'user' | 'signup' | 'admin' | 'system';
+
+export interface NicknameHistoryEntry {
+  nickname: string;
+  changedAt: string;
+}
+
+export interface NicknameQuota {
+  /** Counted changes already spent. */
+  countedChanges: number;
+  /** When the cooldown lifts, or null when a change is available now. */
+  nextChangeAt: string | null;
+}
 
 export interface CreateUserData {
   email?: string | null;
@@ -83,6 +104,40 @@ export const usersRepo = {
           AND deleted_at IS NULL
           AND pending_deletion_at IS NULL
           ${excludeUserId ? sql`AND id <> ${excludeUserId}` : sql``}
+        LIMIT 1
+      ) AS exists
+    `;
+    return rows[0]?.exists ?? false;
+  },
+
+  /**
+   * Freed-name reservation: a nickname another user vacated within
+   * NICKNAME_RESERVATION_DAYS is not immediately claimable.
+   *
+   * Publishing rename history makes vacated names discoverable, so without this
+   * an attacker could watch a well-known player rename, grab the old name, and
+   * have the victim's own profile read "previously known as <attacker>".
+   *
+   * Scoped to OTHER users: the original holder can always reclaim their own
+   * former name (A held Foo -> B took and vacated Foo -> A may take Foo back).
+   */
+  async isNicknameReserved(nickname: string, requesterUserId: string): Promise<boolean> {
+    const trimmed = nickname.trim();
+    if (trimmed.length === 0) return false;
+    const rows = await sql<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM nickname_history AS other
+        WHERE lower(other.old_nickname) = lower(${trimmed})
+          AND other.user_id <> ${requesterUserId}
+          AND other.changed_at > now() - (${NICKNAME_RESERVATION_DAYS}::int * INTERVAL '1 day')
+          -- A name the requester themselves once held is always reclaimable,
+          -- even if someone else has since used and vacated it
+          -- (A holds Foo -> B takes and vacates Foo -> A may take Foo back).
+          AND NOT EXISTS (
+            SELECT 1 FROM nickname_history AS mine
+            WHERE mine.user_id = ${requesterUserId}
+              AND lower(mine.old_nickname) = lower(${trimmed})
+          )
         LIMIT 1
       ) AS exists
     `;
@@ -609,5 +664,145 @@ export const usersRepo = {
       );
       return rows[0]?.early_forfeit_count ?? 0;
     });
+  },
+
+  /**
+   * Current quota state, derived from nickname_history (the single source of
+   * truth — there are deliberately no counter columns on `users`).
+   * Read-only; used to shape responses and error payloads, never to authorize a
+   * change (that decision is made atomically in changeNicknameInTx).
+   */
+  async getNicknameQuota(userId: string): Promise<NicknameQuota> {
+    const rows = await sql<{ counted_changes: number; last_counted_at: Date | null }[]>`
+      SELECT
+        COUNT(*)::int AS counted_changes,
+        MAX(changed_at) AS last_counted_at
+      FROM nickname_history
+      WHERE user_id = ${userId} AND counted
+    `;
+    const countedChanges = rows[0]?.counted_changes ?? 0;
+    const lastCountedAt = rows[0]?.last_counted_at ?? null;
+
+    if (countedChanges < NICKNAME_FREE_CHANGES || !lastCountedAt) {
+      return { countedChanges, nextChangeAt: null };
+    }
+    const next = new Date(lastCountedAt.getTime() + NICKNAME_COOLDOWN_DAYS * 86_400_000);
+    return {
+      countedChanges,
+      nextChangeAt: next.getTime() > Date.now() ? next.toISOString() : null,
+    };
+  },
+
+  /** Publishable previous nicknames, newest first. */
+  async getPublicNicknameHistory(userId: string, limit = 10): Promise<NicknameHistoryEntry[]> {
+    const rows = await sql<{ nickname: string; changed_at: Date }[]>`
+      SELECT old_nickname AS nickname, changed_at
+      FROM nickname_history
+      WHERE user_id = ${userId}
+        AND counted
+        AND old_nickname IS NOT NULL
+      ORDER BY changed_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => ({
+      nickname: row.nickname,
+      changedAt: row.changed_at.toISOString(),
+    }));
+  },
+
+  /**
+   * Atomically apply a nickname change and log it.
+   *
+   * Enforcement lives in SQL, not JS: a read-then-write would let two concurrent
+   * PUT /users/me calls both observe `counted < FREE` and double-spend the
+   * quota (there is no rate limiting on that route). The row lock on `users`
+   * serializes same-user writers, so the second transaction only evaluates its
+   * gate after the first has committed its history row.
+   *
+   * Returns null when the quota gate rejected the change; the caller turns that
+   * into NICKNAME_CHANGE_COOLDOWN.
+   */
+  async changeNicknameInTx(params: {
+    userId: string;
+    oldNickname: string | null;
+    newNickname: string;
+    changedBy: NicknameChangeSource;
+    counted: boolean;
+  }): Promise<User | null> {
+    const { userId, oldNickname, newNickname, changedBy, counted } = params;
+    // User-driven renames are never identity-derived; only
+    // recordIdentityDerivedNickname writes those rows.
+    const identityDerived = false;
+
+    return sql.begin(async (tx: TransactionSql) => {
+      // Serializes concurrent renames of THIS user. Must come first: the gate
+      // below reads nickname_history, which this lock does not itself cover.
+      await tx.unsafe(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+
+      if (counted) {
+        const gated = await tx.unsafe<{ id: string }[]>(
+          `INSERT INTO nickname_history
+             (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
+           SELECT $1, $2, $3, $4, true, $5
+           WHERE (SELECT count(*) FROM nickname_history WHERE user_id = $1 AND counted) < $6
+              OR (SELECT max(changed_at) FROM nickname_history WHERE user_id = $1 AND counted)
+                 <= now() - ($7::int * INTERVAL '1 day')
+           RETURNING id`,
+          [userId, oldNickname, newNickname, changedBy, identityDerived,
+           NICKNAME_FREE_CHANGES, NICKNAME_COOLDOWN_DAYS]
+        );
+        // Gate rejected: no quota left and the cooldown has not elapsed.
+        if (gated.length === 0) return null;
+      } else {
+        await tx.unsafe(
+          `INSERT INTO nickname_history
+             (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
+           VALUES ($1, $2, $3, $4, false, $5)`,
+          [userId, oldNickname, newNickname, changedBy, identityDerived]
+        );
+      }
+
+      const rows = await tx.unsafe<User[]>(
+        `UPDATE users SET nickname = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+        [userId, newNickname]
+      );
+      return rows[0] ?? null;
+    });
+  },
+
+  /** True once the one-shot onboarding naming pass has been consumed. */
+  async hasConsumedSignupNaming(userId: string): Promise<boolean> {
+    const rows = await sql<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM nickname_history
+        WHERE user_id = ${userId} AND changed_by = 'signup'
+        LIMIT 1
+      ) AS exists
+    `;
+    return rows[0]?.exists ?? false;
+  },
+
+  /**
+   * Record the nickname an OAuth provider supplied at signup (identity.name —
+   * the user's real name). Stored uncounted so it never affects the quota; its
+   * only job is to mark that value unpublishable in later history rows.
+   */
+  async recordIdentityDerivedNickname(userId: string, nickname: string): Promise<void> {
+    await sql`
+      INSERT INTO nickname_history
+        (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
+      VALUES (${userId}, NULL, ${nickname}, 'system', false, true)
+    `;
+  },
+
+  /** The user's OAuth identity-derived name, if any — never publishable. */
+  async getIdentityDerivedNickname(userId: string): Promise<string | null> {
+    const rows = await sql<{ new_nickname: string }[]>`
+      SELECT new_nickname FROM nickname_history
+      WHERE user_id = ${userId} AND identity_derived
+      ORDER BY changed_at ASC
+      LIMIT 1
+    `;
+    return rows[0]?.new_nickname ?? null;
   },
 };

@@ -40,6 +40,13 @@ export const userResponseSchema = z.object({
   onboarding_complete: z.boolean(),
   progression: progressionResponseSchema,
   created_at: z.string().datetime(),
+  /**
+   * Nickname quota, present only on the caller's own /me responses. Omitted
+   * rather than defaulted elsewhere (onboarding, phone-link, admin actions):
+   * a plausible-but-wrong number is worse than an absent one.
+   */
+  nickname_changes_remaining: z.number().int().nonnegative().optional(),
+  nickname_next_change_at: z.string().datetime().nullable().optional(),
 });
 
 export type UserResponse = z.infer<typeof userResponseSchema>;
@@ -83,7 +90,14 @@ export function toUserResponse(user: {
   onboarding_complete: boolean;
   total_xp: number;
   created_at: string;
-}): UserResponse {
+},
+  /**
+   * Nickname quota for the caller's own profile. Optional so the many callers
+   * that don't need it stay synchronous; defaults to "a change is available",
+   * which is what a fresh account sees.
+   */
+  nicknameQuota?: { changesRemaining: number; nextChangeAt: string | null }
+): UserResponse {
   return {
     id: user.id,
     email: user.email,
@@ -99,6 +113,12 @@ export function toUserResponse(user: {
     onboarding_complete: user.onboarding_complete,
     progression: getProgressionFromTotalXp(user.total_xp),
     created_at: user.created_at,
+    ...(nicknameQuota
+      ? {
+          nickname_changes_remaining: nicknameQuota.changesRemaining,
+          nickname_next_change_at: nicknameQuota.nextChangeAt,
+        }
+      : {}),
   };
 }
 
@@ -130,6 +150,7 @@ export interface PublicProfileData {
   headToHead: HeadToHeadSummary | null;
   globalRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
   countryRank: Pick<RankedUserRankResult, 'rank' | 'total'> | null;
+  previousNicknames: Array<{ nickname: string; changedAt: string }>;
 }
 
 const rankPositionSchema = z.object({
@@ -150,6 +171,13 @@ export const publicProfileResponseSchema = z.object({
   headToHead: headToHeadResponseSchema.nullable(),
   globalRank: rankPositionSchema.nullable(),
   countryRank: rankPositionSchema.nullable(),
+  /** Previous nicknames, newest first (max 10), Steam-style. */
+  previousNicknames: z.array(
+    z.object({
+      nickname: z.string(),
+      changedAt: z.string().datetime(),
+    })
+  ),
 });
 
 export type PublicProfileResponse = z.infer<typeof publicProfileResponseSchema>;
@@ -186,6 +214,7 @@ export function toPublicProfileResponse(data: PublicProfileData) {
     headToHead: data.headToHead,
     globalRank: data.globalRank,
     countryRank: data.countryRank,
+    previousNicknames: data.previousNicknames,
   };
 }
 

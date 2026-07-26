@@ -1,7 +1,14 @@
 import type { User } from '../../db/types.js';
-import { isUserAccountInactive, isUserBanned, usersRepo, type UpdateUserData } from './users.repo.js';
+import {
+  isUserAccountInactive,
+  isUserBanned,
+  usersRepo,
+  NICKNAME_COOLDOWN_DAYS,
+  NICKNAME_FREE_CHANGES,
+  type UpdateUserData,
+} from './users.repo.js';
 import { identitiesRepo } from './identities.repo.js';
-import { AuthenticationError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
+import { AppError, AuthenticationError, BadRequestError, ConflictError, ErrorCode, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
 import { getRequestId } from '../../core/request-context.js';
@@ -84,6 +91,77 @@ function assertNicknameAllowed(nickname: string, userId?: string): void {
     field: 'nickname',
     reason: 'prohibited_content',
   });
+}
+
+function isPgUniqueViolation(error: unknown): error is { code: string } {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error as { code: unknown }).code === '23505';
+}
+
+/**
+ * Apply a nickname change, classify it against the quota, and log it —
+ * all in one transaction so a rename can never land unlogged.
+ *
+ * Uncounted (free) cases:
+ *  - the one-shot onboarding naming pass (`onboarding_complete = false` and no
+ *    'signup' row yet). Gated on an explicit marker rather than a row count,
+ *    because an uncounted row never increments the counted total, which would
+ *    otherwise leave EVERY pre-onboarding rename free.
+ *  - case/whitespace-only edits (`nika` -> `NIKA`), so nobody burns a free
+ *    change fixing their own capitalization.
+ */
+async function applyNicknameChange(
+  id: string,
+  currentUser: User,
+  change: { from: string | null; to: string }
+): Promise<User> {
+  const isCaseOnly =
+    change.from !== null && change.from.toLowerCase() === change.to.toLowerCase();
+
+  const isSignupPass =
+    !currentUser.onboarding_complete && !(await usersRepo.hasConsumedSignupNaming(id));
+
+  // Never publish an OAuth-derived real name (identity.name) as a previous
+  // nickname. The quota still counts; there is simply nothing to show.
+  const identityDerived = await usersRepo.getIdentityDerivedNickname(id);
+  const publishableFrom =
+    change.from && identityDerived && change.from.toLowerCase() === identityDerived.toLowerCase()
+      ? null
+      : change.from;
+
+  const counted = !isSignupPass && !isCaseOnly;
+
+  const updated = await usersRepo.changeNicknameInTx({
+    userId: id,
+    oldNickname: publishableFrom,
+    newNickname: change.to,
+    changedBy: isSignupPass ? 'signup' : 'user',
+    counted,
+  });
+
+  if (!updated) {
+    const quota = await usersRepo.getNicknameQuota(id);
+    const remainingSeconds = quota.nextChangeAt
+      ? Math.max(0, Math.ceil((Date.parse(quota.nextChangeAt) - Date.now()) / 1000))
+      : 0;
+    throw new AppError(
+      `You can change your nickname ${NICKNAME_FREE_CHANGES} times, then once every ${NICKNAME_COOLDOWN_DAYS} days.`,
+      400,
+      ErrorCode.NICKNAME_CHANGE_COOLDOWN,
+      {
+        field: 'nickname',
+        changeCount: quota.countedChanges,
+        nextAvailableAt: quota.nextChangeAt,
+        remainingSeconds,
+      }
+    );
+  }
+
+  logger.info(
+    { userId: id, counted, changedBy: isSignupPass ? 'signup' : 'user', caseOnly: isCaseOnly },
+    'Nickname changed'
+  );
+  return updated;
 }
 
 async function buildIdentityBackfill(
@@ -564,6 +642,9 @@ export const usersService = {
     await assertAvatarCustomizationAllowed(id, data.avatarCustomization, options);
 
     const updateData: typeof data = { ...data };
+    let nicknameChange: { from: string | null; to: string } | null = null;
+    let currentUser: User | null = null;
+
     if (typeof data.nickname === 'string') {
       const nickname = data.nickname.trim();
       if (nickname.length === 0) {
@@ -573,14 +654,59 @@ export const usersService = {
         });
       }
       assertNicknameAllowed(nickname, id);
-      const taken = await usersRepo.isNicknameTaken(nickname, id);
-      if (taken) {
-        throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+
+      currentUser = await usersRepo.getById(id);
+      if (!currentUser) {
+        throw new NotFoundError('User not found');
       }
-      updateData.nickname = nickname;
+      const currentNickname = currentUser.nickname?.trim() ?? null;
+
+      // Byte-identical resubmit (the client sends the whole profile): nothing to
+      // do. Not a change, so it must not consume quota or write history.
+      if (currentNickname === nickname) {
+        delete updateData.nickname;
+      } else {
+        const taken = await usersRepo.isNicknameTaken(nickname, id);
+        if (taken) {
+          throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+        }
+        if (await usersRepo.isNicknameReserved(nickname, id)) {
+          throw new ConflictError('Nickname is already taken', {
+            field: 'nickname',
+            reason: 'recently_released',
+          });
+        }
+        // Handled below, outside usersRepo.update, so the write and the history
+        // row land in one transaction.
+        delete updateData.nickname;
+        nicknameChange = { from: currentNickname, to: nickname };
+      }
     }
 
-    const user = await usersRepo.update(id, updateData);
+    // Rename first: it is the only step that can still reject (cooldown). Doing
+    // it before the other fields are written means a rejection leaves the whole
+    // request unapplied, instead of committing `country` and then throwing 400
+    // with a stale cache.
+    let user: User | null = null;
+    if (nicknameChange) {
+      try {
+        user = await applyNicknameChange(id, currentUser!, nicknameChange);
+      } catch (error) {
+        // isNicknameTaken above is a check-then-act, so two users racing for the
+        // same name both pass it and the loser trips uq_users_lower_nickname_real.
+        // Report that as the conflict it is, not a 500.
+        if (isPgUniqueViolation(error)) {
+          throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+        }
+        throw error;
+      }
+    }
+
+    if (Object.values(updateData).some((value) => value !== undefined)) {
+      user = await usersRepo.update(id, updateData);
+    } else if (!user) {
+      user = currentUser ?? (await usersRepo.getById(id));
+    }
 
     if (!user) {
       throw new NotFoundError('User not found');
@@ -598,6 +724,22 @@ export const usersService = {
   },
 
   /**
+   * Nickname quota for the caller's own profile, shaped for the /me response so
+   * the edit UI can show remaining changes / the unlock date before the user
+   * attempts a rename.
+   */
+  async getNicknameQuotaForResponse(
+    userId: string
+  ): Promise<{ changesRemaining: number; changesTotal: number; nextChangeAt: string | null }> {
+    const quota = await usersRepo.getNicknameQuota(userId);
+    return {
+      changesRemaining: Math.max(0, NICKNAME_FREE_CHANGES - quota.countedChanges),
+      changesTotal: NICKNAME_FREE_CHANGES,
+      nextChangeAt: quota.nextChangeAt,
+    };
+  },
+
+  /**
    * Get public profile for a target user, including ranked, stats, and H2H with the viewer.
    */
   async getPublicProfile(targetUserId: string, viewerUserId: string): Promise<PublicProfileData> {
@@ -606,17 +748,22 @@ export const usersService = {
       throw new NotFoundError('User not found');
     }
 
-    const [rankedProfile, statsSummary, headToHead, globalRank, countryRank] = await Promise.all([
-      rankedRepo.getProfile(targetUserId),
-      statsService.getUserStatsSummary(targetUserId),
-      viewerUserId !== targetUserId
-        ? statsService.getHeadToHead(viewerUserId, targetUserId)
-        : Promise.resolve(null),
-      rankedRepo.getUserRank(targetUserId),
-      user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
-    ]);
+    const [rankedProfile, statsSummary, headToHead, globalRank, countryRank, previousNicknames] =
+      await Promise.all([
+        rankedRepo.getProfile(targetUserId),
+        statsService.getUserStatsSummary(targetUserId),
+        viewerUserId !== targetUserId
+          ? statsService.getHeadToHead(viewerUserId, targetUserId)
+          : Promise.resolve(null),
+        rankedRepo.getUserRank(targetUserId),
+        user.country ? rankedRepo.getUserRank(targetUserId, user.country) : Promise.resolve(null),
+        // Banned accounts expose no rename history (inactive/pending-deletion
+        // users already 404 above).
+        isUserBanned(user) ? Promise.resolve([]) : usersRepo.getPublicNicknameHistory(targetUserId),
+      ]);
 
     return {
+      previousNicknames,
       user: {
         id: user.id,
         nickname: user.nickname,

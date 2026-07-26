@@ -41,7 +41,8 @@ export const usersController = {
     void maybeIdentifyUserProfile(user).catch((error) => {
       logger.warn({ error, userId: user.id }, 'maybeIdentifyUserProfile failed');
     });
-    res.json(toUserResponse(user));
+    const nicknameQuota = await usersService.getNicknameQuotaForResponse(user.id);
+    res.json(toUserResponse(user, nicknameQuota));
   },
 
   /**
@@ -63,7 +64,8 @@ export const usersController = {
       requesterRole: req.user!.role,
     });
 
-    res.json(toUserResponse(updatedUser));
+    const nicknameQuota = await usersService.getNicknameQuotaForResponse(userId);
+    res.json(toUserResponse(updatedUser, nicknameQuota));
   },
 
   /**

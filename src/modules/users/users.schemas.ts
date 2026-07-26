@@ -46,6 +46,7 @@ export const userResponseSchema = z.object({
    * a plausible-but-wrong number is worse than an absent one.
    */
   nickname_changes_remaining: z.number().int().nonnegative().optional(),
+  nickname_changes_total: z.number().int().nonnegative().optional(),
   nickname_next_change_at: z.string().datetime().nullable().optional(),
 });
 
@@ -96,7 +97,7 @@ export function toUserResponse(user: {
    * that don't need it stay synchronous. When omitted, both quota fields are
    * absent from the response rather than defaulted to a plausible guess.
    */
-  nicknameQuota?: { changesRemaining: number; nextChangeAt: string | null }
+  nicknameQuota?: { changesRemaining: number; changesTotal: number; nextChangeAt: string | null }
 ): UserResponse {
   return {
     id: user.id,
@@ -116,6 +117,7 @@ export function toUserResponse(user: {
     ...(nicknameQuota
       ? {
           nickname_changes_remaining: nicknameQuota.changesRemaining,
+          nickname_changes_total: nicknameQuota.changesTotal,
           nickname_next_change_at: nicknameQuota.nextChangeAt,
         }
       : {}),

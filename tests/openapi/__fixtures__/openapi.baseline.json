@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -1595,6 +1595,10 @@
             "format": "date-time"
           },
           "nickname_changes_remaining": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nickname_changes_total": {
             "type": "integer",
             "minimum": 0
           },
@@ -7939,6 +7943,10 @@
                       "format": "date-time"
                     },
                     "nickname_changes_remaining": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "nickname_changes_total": {
                       "type": "integer",
                       "minimum": 0
                     },

@@ -730,10 +730,11 @@ export const usersService = {
    */
   async getNicknameQuotaForResponse(
     userId: string
-  ): Promise<{ changesRemaining: number; nextChangeAt: string | null }> {
+  ): Promise<{ changesRemaining: number; changesTotal: number; nextChangeAt: string | null }> {
     const quota = await usersRepo.getNicknameQuota(userId);
     return {
       changesRemaining: Math.max(0, NICKNAME_FREE_CHANGES - quota.countedChanges),
+      changesTotal: NICKNAME_FREE_CHANGES,
       nextChangeAt: quota.nextChangeAt,
     };
   },

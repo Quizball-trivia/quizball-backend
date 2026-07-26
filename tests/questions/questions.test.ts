@@ -281,7 +281,14 @@ describe('Questions API', () => {
 
   describe('GET /api/v1/questions/:id', () => {
     it('should return question with payload', async () => {
-      (questionsRepo.getById as Mock).mockResolvedValue(mockQuestion);
+      // A non-admin caller only ever sees a published, ranked-eligible
+      // question: drafts and questions reserved for a public campaign page
+      // are 404ed so this route cannot enumerate them.
+      (questionsRepo.getById as Mock).mockResolvedValue({
+        ...mockQuestion,
+        status: 'published',
+        ranked_eligible: true,
+      });
 
       const response = await request(app).get(
         `/api/v1/questions/${mockQuestion.id}`
@@ -290,6 +297,20 @@ describe('Questions API', () => {
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(mockQuestion.id);
       expect(response.body.payload).toEqual(mockQuestion.payload);
+    });
+
+    it('hides a question reserved for a public campaign page', async () => {
+      (questionsRepo.getById as Mock).mockResolvedValue({
+        ...mockQuestion,
+        status: 'published',
+        ranked_eligible: false,
+      });
+
+      const response = await request(app).get(
+        `/api/v1/questions/${mockQuestion.id}`
+      );
+
+      expect(response.status).toBe(404);
     });
 
     it('should return 404 for non-existent question', async () => {

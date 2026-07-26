@@ -93,6 +93,11 @@ function assertNicknameAllowed(nickname: string, userId?: string): void {
   });
 }
 
+function isPgUniqueViolation(error: unknown): error is { code: string } {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error as { code: unknown }).code === '23505';
+}
+
 /**
  * Apply a nickname change, classify it against the quota, and log it —
  * all in one transaction so a rename can never land unlogged.
@@ -396,21 +401,6 @@ export const usersService = {
       }
     );
 
-    // Record the OAuth-provided name so it can never later be published as a
-    // "previously known as" entry — identity.name is the user's real
-    // Google/Facebook name, not a handle they chose. Best-effort: a failure here
-    // must not block signup.
-    if (proposedNickname) {
-      try {
-        await usersRepo.recordIdentityDerivedNickname(newUser.id, proposedNickname);
-      } catch (err) {
-        logger.warn(
-          { err, userId: newUser.id },
-          'Failed to record identity-derived nickname (non-fatal)'
-        );
-      }
-    }
-
     logger.info(
       { userId: newUser.id, provider: identity.provider, country: detectedCountry },
       'Created new user and identity'
@@ -699,7 +689,17 @@ export const usersService = {
     // with a stale cache.
     let user: User | null = null;
     if (nicknameChange) {
-      user = await applyNicknameChange(id, currentUser!, nicknameChange);
+      try {
+        user = await applyNicknameChange(id, currentUser!, nicknameChange);
+      } catch (error) {
+        // isNicknameTaken above is a check-then-act, so two users racing for the
+        // same name both pass it and the loser trips uq_users_lower_nickname_real.
+        // Report that as the conflict it is, not a 500.
+        if (isPgUniqueViolation(error)) {
+          throw new ConflictError('Nickname is already taken', { field: 'nickname' });
+        }
+        throw error;
+      }
     }
 
     if (Object.values(updateData).some((value) => value !== undefined)) {

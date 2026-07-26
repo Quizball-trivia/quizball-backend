@@ -27,7 +27,6 @@ const getPublicNicknameHistoryMock = vi.fn();
 const getNicknameQuotaMock = vi.fn();
 const hasConsumedSignupNamingMock = vi.fn();
 const getIdentityDerivedNicknameMock = vi.fn();
-const recordIdentityDerivedNicknameMock = vi.fn();
 
 vi.mock('../../src/core/index.js', () => ({
   logger: {
@@ -54,7 +53,6 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     getNicknameQuota: (...args: unknown[]) => getNicknameQuotaMock(...args),
     hasConsumedSignupNaming: (...args: unknown[]) => hasConsumedSignupNamingMock(...args),
     getIdentityDerivedNickname: (...args: unknown[]) => getIdentityDerivedNicknameMock(...args),
-    recordIdentityDerivedNickname: (...args: unknown[]) => recordIdentityDerivedNicknameMock(...args),
   },
   NICKNAME_FREE_CHANGES: 2,
   NICKNAME_COOLDOWN_DAYS: 30,

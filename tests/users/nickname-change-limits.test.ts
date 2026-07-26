@@ -267,6 +267,19 @@ describe('nickname change limits', () => {
       ).rejects.toMatchObject({ code: 'CONFLICT' });
       expect(changeNicknameInTxMock).not.toHaveBeenCalled();
     });
+
+    it('maps a lost unique-index race to a conflict, not a 500', async () => {
+      // isNicknameTaken is a check-then-act: two users claiming the same name
+      // both pass it and the loser trips uq_users_lower_nickname_real.
+      changeNicknameInTxMock.mockRejectedValue(
+        Object.assign(new Error('duplicate key value'), { code: '23505' })
+      );
+      const { usersService } = await import('../../src/modules/users/users.service.js');
+
+      await expect(
+        usersService.updateProfile(USER_ID, { nickname: 'Contested' })
+      ).rejects.toMatchObject({ code: 'CONFLICT', statusCode: 409 });
+    });
   });
 
   describe('partial-write safety on rejection', () => {

@@ -222,6 +222,20 @@ export const usersRepo = {
       );
       const user = result[0];
 
+      // An OAuth provider's identity.name is the user's real name, not a handle
+      // they chose. Mark it here, in the same transaction as the account, so it
+      // can never later be published as a "previously known as" entry. A
+      // best-effort write after the fact would leave accounts permanently
+      // unprotected whenever it failed.
+      if (userData.nickname) {
+        await tx.unsafe(
+          `INSERT INTO nickname_history
+             (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
+           VALUES ($1, NULL, $2, 'signup', false, true)`,
+          [user.id, userData.nickname]
+        );
+      }
+
       const identityResult = await tx.unsafe<{ user_id: string }[]>(
         `INSERT INTO user_identities (id, user_id, provider, subject, email)
          VALUES (gen_random_uuid(), $1, $2, $3, $4)
@@ -730,8 +744,8 @@ export const usersRepo = {
     counted: boolean;
   }): Promise<User | null> {
     const { userId, oldNickname, newNickname, changedBy, counted } = params;
-    // User-driven renames are never identity-derived; only
-    // recordIdentityDerivedNickname writes those rows.
+    // User-driven renames are never identity-derived; only createWithIdentity
+    // writes those rows.
     const identityDerived = false;
 
     return sql.begin(async (tx: TransactionSql) => {
@@ -780,19 +794,6 @@ export const usersRepo = {
       ) AS exists
     `;
     return rows[0]?.exists ?? false;
-  },
-
-  /**
-   * Record the nickname an OAuth provider supplied at signup (identity.name —
-   * the user's real name). Stored uncounted so it never affects the quota; its
-   * only job is to mark that value unpublishable in later history rows.
-   */
-  async recordIdentityDerivedNickname(userId: string, nickname: string): Promise<void> {
-    await sql`
-      INSERT INTO nickname_history
-        (user_id, old_nickname, new_nickname, changed_by, counted, identity_derived)
-      VALUES (${userId}, NULL, ${nickname}, 'system', false, true)
-    `;
   },
 
   /** The user's OAuth identity-derived name, if any — never publishable. */

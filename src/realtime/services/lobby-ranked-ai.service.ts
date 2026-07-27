@@ -133,6 +133,7 @@ export async function startRankedAiForUser(
       avatarUrl: aiProfile.avatarUrl,
       country: aiGeo.countryCode,
       isAi: true,
+      aiKind: 'ephemeral',
     });
     registerAiUserId(aiUser.id);
     const playerProfile = await rankedService.ensureProfile(userId);

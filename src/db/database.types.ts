@@ -268,6 +268,30 @@ export type Database = {
           },
         ]
       }
+      bot_model_params: {
+        Row: {
+          active: boolean
+          created_at: string
+          note: string | null
+          params: Json
+          version: number
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          note?: string | null
+          params: Json
+          version?: number
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          note?: string | null
+          params?: Json
+          version?: number
+        }
+        Relationships: []
+      }
       campaign_quiz_questions: {
         Row: {
           created_at: string
@@ -1770,6 +1794,80 @@ export type Database = {
           },
         ]
       }
+      question_stats: {
+        Row: {
+          answers_count: number
+          correct_count: number
+          format_stats: Json
+          log_time_sigma: number | null
+          median_time_ms: number | null
+          question_id: string
+          refreshed_at: string
+          smoothed_accuracy: number | null
+        }
+        Insert: {
+          answers_count?: number
+          correct_count?: number
+          format_stats?: Json
+          log_time_sigma?: number | null
+          median_time_ms?: number | null
+          question_id: string
+          refreshed_at?: string
+          smoothed_accuracy?: number | null
+        }
+        Update: {
+          answers_count?: number
+          correct_count?: number
+          format_stats?: Json
+          log_time_sigma?: number | null
+          median_time_ms?: number | null
+          question_id?: string
+          refreshed_at?: string
+          smoothed_accuracy?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "question_stats_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: true
+            referencedRelation: "questions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      question_stats_backoff: {
+        Row: {
+          answers_count: number
+          correct_count: number
+          log_time_sigma: number | null
+          median_time_ms: number | null
+          refreshed_at: string
+          scope: string
+          scope_key: string
+          smoothed_accuracy: number | null
+        }
+        Insert: {
+          answers_count?: number
+          correct_count?: number
+          log_time_sigma?: number | null
+          median_time_ms?: number | null
+          refreshed_at?: string
+          scope: string
+          scope_key: string
+          smoothed_accuracy?: number | null
+        }
+        Update: {
+          answers_count?: number
+          correct_count?: number
+          log_time_sigma?: number | null
+          median_time_ms?: number | null
+          refreshed_at?: string
+          scope?: string
+          scope_key?: string
+          smoothed_accuracy?: number | null
+        }
+        Relationships: []
+      }
       questions: {
         Row: {
           category_id: string
@@ -2436,6 +2534,133 @@ export type Database = {
           },
         ]
       }
+      synthetic_bot_reservations: {
+        Row: {
+          acquired_at: string
+          bot_user_id: string
+          expires_at: string
+          fence: number
+          heartbeat_at: string
+          holder: string
+          lobby_id: string
+          match_id: string | null
+        }
+        Insert: {
+          acquired_at?: string
+          bot_user_id: string
+          expires_at: string
+          fence?: number
+          heartbeat_at?: string
+          holder: string
+          lobby_id: string
+          match_id?: string | null
+        }
+        Update: {
+          acquired_at?: string
+          bot_user_id?: string
+          expires_at?: string
+          fence?: number
+          heartbeat_at?: string
+          holder?: string
+          lobby_id?: string
+          match_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synthetic_bot_reservations_bot_user_id_fkey"
+            columns: ["bot_user_id"]
+            isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      synthetic_player_profiles: {
+        Row: {
+          base_skill: number
+          category_affinities: Json
+          consistency: number
+          created_at: string
+          daily_cap: number
+          favorite_club: string | null
+          governor_adjustment: number
+          governor_updated_at: string | null
+          home_city: string | null
+          home_lat: number | null
+          home_lng: number | null
+          last_selected_at: string | null
+          matches_day: string | null
+          matches_today: number
+          personality_seed: number
+          rename_propensity: number
+          schedule: Json
+          speed_offset: number
+          status: string
+          updated_at: string
+          user_id: string
+          winrate_ema: number | null
+          winrate_samples: number
+        }
+        Insert: {
+          base_skill: number
+          category_affinities?: Json
+          consistency?: number
+          created_at?: string
+          daily_cap?: number
+          favorite_club?: string | null
+          governor_adjustment?: number
+          governor_updated_at?: string | null
+          home_city?: string | null
+          home_lat?: number | null
+          home_lng?: number | null
+          last_selected_at?: string | null
+          matches_day?: string | null
+          matches_today?: number
+          personality_seed: number
+          rename_propensity?: number
+          schedule?: Json
+          speed_offset?: number
+          status?: string
+          updated_at?: string
+          user_id: string
+          winrate_ema?: number | null
+          winrate_samples?: number
+        }
+        Update: {
+          base_skill?: number
+          category_affinities?: Json
+          consistency?: number
+          created_at?: string
+          daily_cap?: number
+          favorite_club?: string | null
+          governor_adjustment?: number
+          governor_updated_at?: string | null
+          home_city?: string | null
+          home_lat?: number | null
+          home_lng?: number | null
+          last_selected_at?: string | null
+          matches_day?: string | null
+          matches_today?: number
+          personality_seed?: number
+          rename_propensity?: number
+          schedule?: Json
+          speed_offset?: number
+          status?: string
+          updated_at?: string
+          user_id?: string
+          winrate_ema?: number | null
+          winrate_samples?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "synthetic_player_profiles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_achievements: {
         Row: {
           achievement_id: string
@@ -2772,6 +2997,7 @@ export type Database = {
       }
       users: {
         Row: {
+          ai_kind: string | null
           avatar_customization: Json | null
           avatar_url: string | null
           ban_metadata: Json | null
@@ -2804,6 +3030,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          ai_kind?: string | null
           avatar_customization?: Json | null
           avatar_url?: string | null
           ban_metadata?: Json | null
@@ -2836,6 +3063,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          ai_kind?: string | null
           avatar_customization?: Json | null
           avatar_url?: string | null
           ban_metadata?: Json | null

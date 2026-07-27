@@ -1073,6 +1073,7 @@ export const matchesService = {
         JOIN users u ON u.id = mp.user_id
         WHERE mp.match_id IN (SELECT id FROM matches_to_delete)
           AND u.is_ai = true
+          AND u.ai_kind IN ('ephemeral', 'auction')
           AND NOT EXISTS (
             SELECT 1 FROM match_players mp2
             WHERE mp2.user_id = mp.user_id

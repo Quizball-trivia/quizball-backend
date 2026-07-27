@@ -190,6 +190,7 @@ export const devRealtimeService = {
           nickname: aiProfile.username,
           avatarUrl: aiProfile.avatarUrl,
           isAi: true,
+          aiKind: 'ephemeral',
         });
         registerAiUserId(aiUser.id);
 

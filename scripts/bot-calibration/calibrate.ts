@@ -86,7 +86,12 @@ function makeRng(seed: number): () => number {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const isSmokeRun = args.limit != null && args.limit > 0;
-  const db = openReadOnlyDb();
+  // Ops overrides for long prod runs against the pooler:
+  //  - CALIBRATION_STATEMENT_TIMEOUT_MS: per-statement server timeout.
+  //  - CALIBRATION_MAX_ITERS: fit iteration cap (raise if a large fit needs it).
+  const statementTimeoutMs = Number(process.env.CALIBRATION_STATEMENT_TIMEOUT_MS ?? 120_000);
+  const fitOpts = { maxIters: Number(process.env.CALIBRATION_MAX_ITERS ?? 5000) };
+  const db = openReadOnlyDb({ statementTimeoutMs });
   try {
     const batch = await resolveBatch(db.query, { batchId: args.batchId, season: args.season });
     if (!batch) throw new Error('No matching ranked_reset_batches row (check --season / --batch-id)');
@@ -120,7 +125,7 @@ async function main(): Promise<void> {
     const holdout: LatentAnswer[] = [];
     for (const a of scoped) (rng() < 0.2 ? holdout : train).push(a);
 
-    const trainFit = fitLatentSkill(train);
+    const trainFit = fitLatentSkill(train, fitOpts);
 
     // Holdout validation on rows whose player+question are in the train design.
     const scored = holdout.filter((a) => trainFit.theta.has(a.playerId) && trainFit.beta.has(a.questionId));
@@ -164,11 +169,26 @@ async function main(): Promise<void> {
     const topTiming = logNormalTimeStats(topTimes);
 
     // REFIT on ALL scoped rows for the final theta/beta → f(RP).
-    const finalFit: LatentFitResult = fitLatentSkill(scoped);
-    if (!finalFit.converged && !isSmokeRun) {
-      throw new Error(
-        `Latent-skill fit did NOT converge (updateNorm=${finalFit.finalUpdateNorm.toExponential(2)} after ${finalFit.iters} iters). Refusing to emit params.`,
+    const finalFit: LatentFitResult = fitLatentSkill(scoped, fitOpts);
+    if (finalFit.excluded.players.length > 0 || finalFit.excluded.questions.length > 0) {
+      console.log(
+        `  degenerate params excluded from fit: ${finalFit.excluded.players.length} players, ${finalFit.excluded.questions.length} questions (0%/100% observed — kept in question_stats).`,
       );
+    }
+    if (!finalFit.converged && !isSmokeRun) {
+      // Print the diagnostics dump so the next pathology names itself.
+      console.error(
+        `Latent-skill fit did NOT converge (updateNorm=${finalFit.finalUpdateNorm.toExponential(2)} after ${finalFit.iters} iters).`,
+      );
+      if (finalFit.diagnostics && finalFit.diagnostics.length > 0) {
+        console.error('  Largest remaining per-parameter updates:');
+        for (const d of finalFit.diagnostics) {
+          console.error(
+            `    ${d.kind} ${d.id}: update=${d.update.toExponential(2)} value=${d.value.toFixed(3)} obsAcc=${(d.observedAccuracy * 100).toFixed(1)}% n=${d.answers}`,
+          );
+        }
+      }
+      throw new Error('Refusing to emit params on a non-converged fit.');
     }
 
     // f(RP): placed profiles ∩ final skill, percentile-anchored.

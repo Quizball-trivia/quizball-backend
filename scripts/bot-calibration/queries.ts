@@ -65,35 +65,73 @@ export interface BernoulliAnswerRow {
 }
 
 /**
+ * Number of players fetched per query batch. A single query streaming every
+ * placed player's answers can produce a multi-million-row result that the
+ * transaction pooler kills mid-stream; batching keeps each statement's result
+ * bounded and each runs in its own short READ ONLY transaction, which poolers
+ * tolerate. 50 is a safe default against the Supabase transaction pooler.
+ */
+const PLAYER_FETCH_BATCH = 50;
+
+/**
  * Season-1 Bernoulli answers for latent-skill fitting. Restricted to:
  *  - matches ended strictly before `s1Boundary` (Season-1 play only);
  *  - the placed S1 player set (`placedPlayerIds`);
  *  - Bernoulli kinds (mcq_single / true_false / input_text);
  *  - genuine answers (selected_index IS NOT NULL excludes backfills exactly);
  *  - completed non-dev ranked matches, non-AI/seed/deleted users.
- * `limit` caps rows for smoke runs.
+ *
+ * Fetched in PLAYER_FETCH_BATCH-sized player batches (see the constant) so a
+ * huge streamed result cannot be killed by the pooler. `limit` caps the total
+ * rows (smoke runs) and short-circuits once reached.
  */
+/** Transient network faults (pooler resets) between batches are recoverable:
+ * each batch is an independent READ ONLY transaction, so a plain retry cannot
+ * duplicate or lose rows. */
+async function withBatchRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (err) {
+      lastErr = err;
+      const msg = String((err as Error)?.message ?? err);
+      if (!/ECONNRESET|CONNECTION_CLOSED|ETIMEDOUT|EPIPE/i.test(msg)) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function fetchS1BernoulliAnswers(
   query: ReadOnlyRunner,
   opts: { s1Boundary: string; placedPlayerIds: readonly string[]; limit?: number },
 ): Promise<BernoulliAnswerRow[]> {
   if (opts.placedPlayerIds.length === 0) return [];
   const types = BERNOULLI_TYPES as unknown as string[];
-  const limit = opts.limit && opts.limit > 0 ? opts.limit : null;
-  return query<BernoulliAnswerRow[]>`
-    SELECT ma.user_id AS player_id, mq.question_id, ma.is_correct AS correct
-    FROM match_answers ma
-    JOIN matches m          ON m.id = ma.match_id
-    JOIN match_questions mq ON mq.match_id = ma.match_id AND mq.q_index = ma.q_index
-    JOIN questions q        ON q.id = mq.question_id
-    JOIN users u            ON u.id = ma.user_id
-    WHERE m.mode = 'ranked' AND m.status = 'completed' AND m.is_dev = false
-      AND m.ended_at IS NOT NULL AND m.ended_at < ${opts.s1Boundary}::timestamptz
-      AND ma.user_id = ANY(${opts.placedPlayerIds as string[]})
-      AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false AND u.deleted_at IS NULL
-      AND q.type = ANY(${types})
-      AND ma.selected_index IS NOT NULL
-    LIMIT ${limit}::int`;
+  const cap = opts.limit && opts.limit > 0 ? opts.limit : Number.POSITIVE_INFINITY;
+
+  const out: BernoulliAnswerRow[] = [];
+  for (let i = 0; i < opts.placedPlayerIds.length && out.length < cap; i += PLAYER_FETCH_BATCH) {
+    const batch = opts.placedPlayerIds.slice(i, i + PLAYER_FETCH_BATCH) as string[];
+    const batchCap = Number.isFinite(cap) ? cap - out.length : null;
+    const rows = await withBatchRetry(() => query<BernoulliAnswerRow[]>`
+      SELECT ma.user_id AS player_id, mq.question_id, ma.is_correct AS correct
+      FROM match_answers ma
+      JOIN matches m          ON m.id = ma.match_id
+      JOIN match_questions mq ON mq.match_id = ma.match_id AND mq.q_index = ma.q_index
+      JOIN questions q        ON q.id = mq.question_id
+      JOIN users u            ON u.id = ma.user_id
+      WHERE m.mode = 'ranked' AND m.status = 'completed' AND m.is_dev = false
+        AND m.ended_at IS NOT NULL AND m.ended_at < ${opts.s1Boundary}::timestamptz
+        AND ma.user_id = ANY(${batch})
+        AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false AND u.deleted_at IS NULL
+        AND q.type = ANY(${types})
+        AND ma.selected_index IS NOT NULL
+      LIMIT ${batchCap}::int`);
+    out.push(...rows);
+  }
+  return Number.isFinite(cap) ? out.slice(0, cap) : out;
 }
 
 export interface DifficultyAccuracyRow {

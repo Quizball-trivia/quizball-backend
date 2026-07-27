@@ -1,25 +1,25 @@
 /**
  * Latent-skill estimation from Season-1 Bernoulli answers.
  *
- * Rasch-style logit: P(correct | player p, question q, format f) =
- *   sigmoid(theta_p - beta_q + gamma_f)
- * where theta_p is player skill, beta_q is question difficulty, gamma_f is a
- * per-format easiness offset (mcq vs true_false vs input_text). We fit by
- * L2-regularized gradient ascent on the log-likelihood.
+ * Rasch model: P(correct | player p, question q) = sigmoid(theta_p - beta_q),
+ * where theta_p is player skill and beta_q is question difficulty. There is NO
+ * per-format term: each question has exactly ONE format, so a format offset is
+ * perfectly collinear with the beta_q of that format's questions (not
+ * identifiable). Per-format bot behaviour comes from the separate per-format
+ * models (question_stats.format_stats), not from this scale.
  *
- * Identifiability: the sum theta - beta + gamma has two flat directions — a
- * constant added to every theta (removed by subtracting from beta) and a
- * constant added to every gamma (also removable via beta). We pin BOTH by
- * mean-centering theta and gamma to 0 every step, leaving beta free under its
- * ridge. Crucially we do NOT re-inject the removed constant back into beta:
- * doing so accumulates an unbounded drift each iteration (gamma runs away while
- * theta collapses). After fitting we re-express gamma relative to a reference
- * format (subtract that format's value) purely for reporting — a
- * prediction-invariant relabel that is never fed back into the fit.
+ * Optimizer: coordinate-normalized gradient ascent on the L2-penalized
+ * log-likelihood. Each parameter's step divides its summed gradient by that
+ * parameter's OWN observation count, so a sparse (100-answer) player and a dense
+ * (10k-answer) question both take well-scaled steps regardless of the total row
+ * count — this fixes the theta-compression bug where a global 1/N learning rate
+ * froze sparse players near zero at production scale. Identifiability is fixed
+ * by anchoring mean(theta)=0 each step (the one remaining flat direction:
+ * add c to all theta, subtract c from all beta).
  *
- * No external ML dependency — the model is small and convex-ish under ridge, so
- * a few hundred full-batch gradient steps converge reliably. Validated by a
- * synthetic-recovery unit test where the true theta/beta are known.
+ * Convergence is a hard gate: `converged` is true only if the mean absolute
+ * per-parameter update fell below `tolerance`. Callers that emit production
+ * params MUST refuse to write when this is false.
  */
 
 import { sigmoid } from './math.js';
@@ -27,36 +27,33 @@ import { sigmoid } from './math.js';
 export interface LatentAnswer {
   playerId: string;
   questionId: string;
-  format: string;
   correct: 0 | 1;
 }
 
 export interface LatentFitOptions {
   learningRate?: number;
   maxIters?: number;
+  /** Convergence threshold on the mean absolute per-parameter update. */
   tolerance?: number;
   /** L2 ridge on theta and beta (keeps sparse players/questions identifiable). */
   ridge?: number;
-  /** L2 ridge on gamma (format offsets, usually well-sampled -> light). */
-  gammaRidge?: number;
 }
 
 export interface LatentFitResult {
   theta: Map<string, number>;
   beta: Map<string, number>;
-  gamma: Map<string, number>;
-  referenceFormat: string;
   iters: number;
   converged: boolean;
   finalLogLik: number;
+  /** Mean-abs per-parameter update on the final iteration (convergence measure). */
+  finalUpdateNorm: number;
 }
 
 const DEFAULTS: Required<LatentFitOptions> = {
-  learningRate: 0.5,
-  maxIters: 4000,
-  tolerance: 1e-7,
-  ridge: 1e-3,
-  gammaRidge: 1e-3,
+  learningRate: 1.0,
+  maxIters: 5000,
+  tolerance: 1e-4,
+  ridge: 1e-2,
 };
 
 export function fitLatentSkill(answers: readonly LatentAnswer[], options: LatentFitOptions = {}): LatentFitResult {
@@ -65,96 +62,92 @@ export function fitLatentSkill(answers: readonly LatentAnswer[], options: Latent
 
   const players = [...new Set(answers.map((a) => a.playerId))];
   const questions = [...new Set(answers.map((a) => a.questionId))];
-  const formats = [...new Set(answers.map((a) => a.format))].sort();
-  const referenceFormat = formats[0];
 
   const theta = new Map<string, number>(players.map((p) => [p, 0]));
   const beta = new Map<string, number>(questions.map((q) => [q, 0]));
-  const gamma = new Map<string, number>(formats.map((f) => [f, 0]));
 
-  let prevLL = -Infinity;
+  // Per-parameter observation counts for coordinate normalization.
+  const nTheta = new Map<string, number>(players.map((p) => [p, 0]));
+  const nBeta = new Map<string, number>(questions.map((q) => [q, 0]));
+  for (const a of answers) {
+    nTheta.set(a.playerId, nTheta.get(a.playerId)! + 1);
+    nBeta.set(a.questionId, nBeta.get(a.questionId)! + 1);
+  }
+
   let iter = 0;
   let converged = false;
+  let updateNorm = Infinity;
 
   for (; iter < opts.maxIters; iter += 1) {
     const gTheta = new Map<string, number>(players.map((p) => [p, 0]));
     const gBeta = new Map<string, number>(questions.map((q) => [q, 0]));
-    const gGamma = new Map<string, number>(formats.map((f) => [f, 0]));
 
     for (const a of answers) {
-      const t = theta.get(a.playerId)!;
-      const b = beta.get(a.questionId)!;
-      const g = gamma.get(a.format)!;
-      const pred = sigmoid(t - b + g);
+      const pred = sigmoid(theta.get(a.playerId)! - beta.get(a.questionId)!);
       const err = a.correct - pred; // dLL/dz
       gTheta.set(a.playerId, gTheta.get(a.playerId)! + err);
       gBeta.set(a.questionId, gBeta.get(a.questionId)! - err);
-      gGamma.set(a.format, gGamma.get(a.format)! + err);
     }
 
-    // Ridge pull toward 0.
-    for (const p of players) gTheta.set(p, gTheta.get(p)! - opts.ridge * theta.get(p)!);
-    for (const q of questions) gBeta.set(q, gBeta.get(q)! - opts.ridge * beta.get(q)!);
-    for (const f of formats) gGamma.set(f, gGamma.get(f)! - opts.gammaRidge * gamma.get(f)!);
+    let sumAbs = 0;
+    let count = 0;
 
-    const lr = opts.learningRate / answers.length;
-    for (const p of players) theta.set(p, theta.get(p)! + lr * gTheta.get(p)!);
-    for (const q of questions) beta.set(q, beta.get(q)! + lr * gBeta.get(q)!);
-    for (const f of formats) gamma.set(f, gamma.get(f)! + lr * gGamma.get(f)!);
+    for (const p of players) {
+      const n = nTheta.get(p)!;
+      // Coordinate-normalized gradient + ridge, divided by this parameter's own
+      // observation count (not the global N) so step size is scale-invariant.
+      const grad = (gTheta.get(p)! - opts.ridge * theta.get(p)!) / (n + opts.ridge);
+      const step = opts.learningRate * grad;
+      theta.set(p, theta.get(p)! + step);
+      sumAbs += Math.abs(step);
+      count += 1;
+    }
+    for (const q of questions) {
+      const n = nBeta.get(q)!;
+      const grad = (gBeta.get(q)! - opts.ridge * beta.get(q)!) / (n + opts.ridge);
+      const step = opts.learningRate * grad;
+      beta.set(q, beta.get(q)! + step);
+      sumAbs += Math.abs(step);
+      count += 1;
+    }
 
-    // Identifiability: pin mean(theta)=0 and mean(gamma)=0. NO re-injection into
-    // beta — that channel accumulates an unbounded per-iteration drift. beta
-    // floats under its ridge and absorbs the residual intercept naturally.
+    // Anchor mean(theta)=0 (absorb the constant into beta so predictions are
+    // unchanged): subtract mean theta from every theta AND every beta.
     const meanTheta = mean([...theta.values()]);
     for (const p of players) theta.set(p, theta.get(p)! - meanTheta);
+    for (const q of questions) beta.set(q, beta.get(q)! - meanTheta);
 
-    const meanGamma = mean([...gamma.values()]);
-    for (const f of formats) gamma.set(f, gamma.get(f)! - meanGamma);
-
-    const ll = logLikelihood(answers, theta, beta, gamma);
-    if (Math.abs(ll - prevLL) < opts.tolerance * Math.max(1, Math.abs(prevLL))) {
+    updateNorm = count > 0 ? sumAbs / count : 0;
+    if (updateNorm < opts.tolerance) {
       converged = true;
       iter += 1;
-      prevLL = ll;
       break;
     }
-    prevLL = ll;
   }
 
-  // Report gamma relative to the reference format (reference reads exactly 0).
-  // Pure relabel: predictions use gamma_f - gamma_ref, and beta already carries
-  // the compensating intercept from the fit, so this does not change any
-  // predictProb output for a (player, question, format) triple seen in fitting.
-  // We fold the reference offset into beta so predictions stay identical.
-  const refGamma = gamma.get(referenceFormat)!;
-  if (refGamma !== 0) {
-    for (const f of formats) gamma.set(f, gamma.get(f)! - refGamma);
-    for (const q of questions) beta.set(q, beta.get(q)! + refGamma);
-  }
-
-  return { theta, beta, gamma, referenceFormat, iters: iter, converged, finalLogLik: prevLL };
+  return {
+    theta,
+    beta,
+    iters: iter,
+    converged,
+    finalLogLik: logLikelihood(answers, theta, beta),
+    finalUpdateNorm: updateNorm,
+  };
 }
 
 export function predictProb(
-  fit: Pick<LatentFitResult, 'theta' | 'beta' | 'gamma'>,
-  answer: Pick<LatentAnswer, 'playerId' | 'questionId' | 'format'>,
+  fit: Pick<LatentFitResult, 'theta' | 'beta'>,
+  answer: Pick<LatentAnswer, 'playerId' | 'questionId'>,
 ): number {
   const t = fit.theta.get(answer.playerId) ?? 0;
   const b = fit.beta.get(answer.questionId) ?? 0;
-  const g = fit.gamma.get(answer.format) ?? 0;
-  return sigmoid(t - b + g);
+  return sigmoid(t - b);
 }
 
-function logLikelihood(
-  answers: readonly LatentAnswer[],
-  theta: Map<string, number>,
-  beta: Map<string, number>,
-  gamma: Map<string, number>,
-): number {
+function logLikelihood(answers: readonly LatentAnswer[], theta: Map<string, number>, beta: Map<string, number>): number {
   let ll = 0;
   for (const a of answers) {
-    const z = theta.get(a.playerId)! - beta.get(a.questionId)! + gamma.get(a.format)!;
-    const p = sigmoid(z);
+    const p = sigmoid(theta.get(a.playerId)! - beta.get(a.questionId)!);
     const clamped = Math.min(Math.max(p, 1e-12), 1 - 1e-12);
     ll += a.correct === 1 ? Math.log(clamped) : Math.log(1 - clamped);
   }

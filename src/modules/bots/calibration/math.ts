@@ -2,8 +2,7 @@
  * Pure calibration math — no DB, no IO. Unit-tested in isolation.
  */
 
-import type { MatchQuestionKind } from '../../../realtime/socket.types.js';
-import { BACKOFF_MIN_SAMPLE, FULL_DURATION_MS, SMOOTHING_PRIOR_N0 } from './constants.js';
+import { BACKOFF_MIN_SAMPLE, SMOOTHING_PRIOR_N0 } from './constants.js';
 
 /**
  * Bayesian shrinkage of an observed accuracy toward a prior mean. With n0
@@ -25,18 +24,24 @@ export function bayesianSmooth(
 }
 
 export interface ScopeStat {
+  /** Bernoulli answers backing the accuracy figure (excludes special formats). */
   answersCount: number;
   correctCount: number;
   smoothedAccuracy: number | null;
+  /** Clean-window timing samples — INDEPENDENT of answersCount. */
+  timingSamples: number;
   medianTimeMs: number | null;
   logTimeSigma: number | null;
 }
 
+export type BackoffScope = 'question' | 'category_type' | 'type' | 'global';
+
 /**
- * Hierarchical backoff. Given a per-question stat and progressively broader
- * scope stats (category+type, type, global), pick the first that has at least
- * `minSample` real answers. Precedence: question -> category_type -> type ->
- * global. `global` is assumed always populated and is the guaranteed floor.
+ * Field-level hierarchical backoff. Accuracy and timing are resolved
+ * INDEPENDENTLY, each against its own sample count, because a question can have
+ * plenty of accuracy answers (pre-window) but zero clean timing samples (or vice
+ * versa). Precedence for both: question -> category_type -> type -> global.
+ * `global` is the guaranteed floor.
  */
 export function resolveBackoff(
   perQuestion: ScopeStat | null,
@@ -44,18 +49,71 @@ export function resolveBackoff(
   type: ScopeStat | null,
   global: ScopeStat,
   minSample: number = BACKOFF_MIN_SAMPLE,
-): { scope: 'question' | 'category_type' | 'type' | 'global'; stat: ScopeStat } {
-  const candidates: Array<{ scope: 'question' | 'category_type' | 'type'; stat: ScopeStat | null }> = [
+): {
+  accuracyScope: BackoffScope;
+  smoothedAccuracy: number | null;
+  timingScope: BackoffScope;
+  medianTimeMs: number | null;
+  logTimeSigma: number | null;
+} {
+  const chain: Array<{ scope: BackoffScope; stat: ScopeStat | null }> = [
     { scope: 'question', stat: perQuestion },
     { scope: 'category_type', stat: categoryType },
     { scope: 'type', stat: type },
+    { scope: 'global', stat: global },
   ];
-  for (const c of candidates) {
+
+  let accuracyScope: BackoffScope = 'global';
+  let smoothedAccuracy: number | null = global.smoothedAccuracy;
+  for (const c of chain) {
     if (c.stat && c.stat.answersCount >= minSample && c.stat.smoothedAccuracy != null) {
-      return { scope: c.scope, stat: c.stat };
+      accuracyScope = c.scope;
+      smoothedAccuracy = c.stat.smoothedAccuracy;
+      break;
     }
   }
-  return { scope: 'global', stat: global };
+
+  let timingScope: BackoffScope = 'global';
+  let medianTimeMs: number | null = global.medianTimeMs;
+  let logTimeSigma: number | null = global.logTimeSigma;
+  for (const c of chain) {
+    if (c.stat && c.stat.timingSamples >= minSample && c.stat.medianTimeMs != null) {
+      timingScope = c.scope;
+      medianTimeMs = c.stat.medianTimeMs;
+      logTimeSigma = c.stat.logTimeSigma;
+      break;
+    }
+  }
+
+  return { accuracyScope, smoothedAccuracy, timingScope, medianTimeMs, logTimeSigma };
+}
+
+/** Numerically-safe logit (inverse sigmoid) with clamping. */
+export function logit(p: number): number {
+  const c = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+  return Math.log(c / (1 - c));
+}
+
+/** Ordinary-least-squares y = a + b·x. Returns intercept, slope, and R². */
+export function linearFit(xs: readonly number[], ys: readonly number[]): { intercept: number; slope: number; r2: number } {
+  const n = xs.length;
+  if (n < 2 || n !== ys.length) throw new Error('linearFit: need >= 2 matched points');
+  const mx = xs.reduce((s, x) => s + x, 0) / n;
+  const my = ys.reduce((s, y) => s + y, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    sxy += dx * dy;
+    sxx += dx * dx;
+    syy += dy * dy;
+  }
+  const slope = sxx === 0 ? 0 : sxy / sxx;
+  const intercept = my - slope * mx;
+  const r2 = sxx === 0 || syy === 0 ? 0 : (sxy * sxy) / (sxx * syy);
+  return { intercept, slope, r2 };
 }
 
 /**
@@ -249,18 +307,13 @@ export function calibrationCurve(
   return out;
 }
 
-/** Is a persisted answer row a timeout backfill? (pure predicate, mirrors SQL) */
-export function isTimeoutBackfill(row: {
-  selectedIndex: number | null;
-  isCorrect: boolean;
-  pointsEarned: number;
-  timeMs: number;
-  kind: MatchQuestionKind;
-}): boolean {
-  return (
-    row.selectedIndex === null &&
-    row.isCorrect === false &&
-    row.pointsEarned === 0 &&
-    row.timeMs === FULL_DURATION_MS[row.kind]
-  );
+/**
+ * Is a persisted Bernoulli (multiple-choice-kind) answer a timeout backfill?
+ * For mcq_single / true_false / input_text the resolver persists a real
+ * non-null selected_index for any genuine answer, so a NULL index is the exact,
+ * unambiguous backfill marker. This is only valid for the multiple-choice
+ * kinds; special formats (countdown/put-in-order/clues) never use this.
+ */
+export function isBernoulliBackfill(row: { selectedIndex: number | null }): boolean {
+  return row.selectedIndex === null;
 }

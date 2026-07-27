@@ -7,8 +7,12 @@
  * is NOT the scheduler path (there is none in this PR); it bypasses the
  * QUESTION_STATS_REFRESH_ENABLED flag deliberately.
  *
- *   npm run bot:refresh-question-stats            # full refresh (uses DATABASE_URL)
- *   npm run bot:refresh-question-stats -- --limit 50000   # smoke: cap answers scanned
+ *   npm run bot:refresh-question-stats            # full REPLACE (uses DATABASE_URL)
+ *   npm run bot:refresh-question-stats -- --limit 50000   # DRY RUN (computes, writes nothing)
+ *
+ * A full run does a complete latest-snapshot replace: upsert every current row
+ * AND delete obsolete question_stats / backoff rows, atomically. A --limit run
+ * is a DRY RUN — partial aggregates from a limited scan must never be written.
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -31,7 +35,7 @@ function parseLimit(): number | undefined {
 
 async function main(): Promise<void> {
   const limit = parseLimit();
-  console.log(`Refreshing question_stats${limit ? ` (limit ${limit})` : ''}...`);
+  console.log(limit ? `DRY RUN question_stats (limit ${limit}, no writes)...` : 'Refreshing question_stats (full replace)...');
   const summary = await refreshQuestionStats({ limit });
   console.log('Done:', JSON.stringify(summary, null, 2));
 }

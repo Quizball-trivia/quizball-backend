@@ -2,10 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { fitLatentSkill, predictProb, type LatentAnswer } from '../../src/modules/bots/calibration/latent-skill.js';
 import { pearson, rmse, sigmoid, rocAuc } from '../../src/modules/bots/calibration/math.js';
 
-/**
- * Deterministic mulberry32 (same algorithm as src/core/rng.ts) so the synthetic
- * data — and therefore the recovered fit — are reproducible.
- */
+/** Deterministic mulberry32 (same algorithm as src/core/rng.ts). */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return function next(): number {
@@ -20,15 +17,18 @@ function mulberry32(seed: number): () => number {
 interface Synthetic {
   answers: LatentAnswer[];
   trueTheta: Map<string, number>;
-  trueBeta: Map<string, number>;
   players: string[];
-  questions: string[];
 }
 
-function makeSynthetic(nPlayers: number, nQuestions: number, seed: number): Synthetic {
+/**
+ * Correct generative model (finding #3): each question has exactly ONE fixed
+ * difficulty (no per-observation format randomization). P(correct) =
+ * sigmoid(theta_p - beta_q). `answersPerPlayer` controls the per-player sample
+ * so we can exercise the sparse-at-scale regime.
+ */
+function makeSynthetic(nPlayers: number, nQuestions: number, answersPerPlayer: number, seed: number): Synthetic {
   const rng = mulberry32(seed);
   const gauss = (): number => {
-    // Box–Muller
     let u = 0;
     let v = 0;
     while (u === 0) u = rng();
@@ -41,75 +41,80 @@ function makeSynthetic(nPlayers: number, nQuestions: number, seed: number): Synt
   for (let i = 0; i < nPlayers; i += 1) {
     const id = `p${i}`;
     players.push(id);
-    trueTheta.set(id, gauss()); // skill ~ N(0,1)
+    trueTheta.set(id, gauss());
   }
-  const questions: string[] = [];
   const trueBeta = new Map<string, number>();
-  for (let j = 0; j < nQuestions; j += 1) {
-    const id = `q${j}`;
-    questions.push(id);
-    trueBeta.set(id, gauss() * 1.2); // difficulty ~ N(0, 1.2^2)
-  }
-
-  // Two formats with a known easiness gap; mcq is the reference (gamma=0).
-  const formatGamma: Record<string, number> = { mcq: 0, tf: 0.4 };
-  const formats = Object.keys(formatGamma);
+  for (let j = 0; j < nQuestions; j += 1) trueBeta.set(`q${j}`, gauss() * 1.2);
 
   const answers: LatentAnswer[] = [];
   for (const p of players) {
-    for (const q of questions) {
-      const fmt = formats[Math.floor(rng() * formats.length)];
-      const z = trueTheta.get(p)! - trueBeta.get(q)! + formatGamma[fmt];
-      const correct: 0 | 1 = rng() < sigmoid(z) ? 1 : 0;
-      answers.push({ playerId: p, questionId: q, format: fmt, correct });
+    for (let k = 0; k < answersPerPlayer; k += 1) {
+      const qId = `q${Math.floor(rng() * nQuestions)}`;
+      const z = trueTheta.get(p)! - trueBeta.get(qId)!;
+      answers.push({ playerId: p, questionId: qId, correct: rng() < sigmoid(z) ? 1 : 0 });
     }
   }
-  return { answers, trueTheta, trueBeta, players, questions };
+  return { answers, trueTheta, players };
 }
 
-describe('fitLatentSkill synthetic recovery', () => {
-  it('recovers known player skills from simulated Bernoulli answers', () => {
-    const { answers, trueTheta, players } = makeSynthetic(120, 60, 12345);
-    const fit = fitLatentSkill(answers, { maxIters: 3000, learningRate: 0.6, ridge: 1e-3 });
+function std(xs: number[]): number {
+  const m = xs.reduce((s, x) => s + x, 0) / xs.length;
+  return Math.sqrt(xs.reduce((s, x) => s + (x - m) * (x - m), 0) / xs.length);
+}
 
-    // Anchor the recovered skills the same way the fit does (mean 0), then
-    // compare to the true skills recentered to mean 0.
+describe('fitLatentSkill synthetic recovery (Rasch, no format term)', () => {
+  it('recovers known player skills from simulated Bernoulli answers', () => {
+    const { answers, trueTheta, players } = makeSynthetic(120, 60, 120, 12345);
+    const fit = fitLatentSkill(answers);
+
     const recovered = players.map((p) => fit.theta.get(p)!);
     const truthRaw = players.map((p) => trueTheta.get(p)!);
     const truthMean = truthRaw.reduce((s, x) => s + x, 0) / truthRaw.length;
     const truth = truthRaw.map((x) => x - truthMean);
 
-    const r = pearson(truth, recovered);
-    const err = rmse(truth, recovered);
-
-    // Recovery quality on a well-sampled design (120x60 = 7200 answers).
-    expect(r).toBeGreaterThan(0.9);
-    expect(err).toBeLessThan(0.35);
-    expect(fit.converged || fit.iters >= 1).toBe(true);
-  });
-
-  it('recovers the known format easiness gap (tf easier than reference mcq)', () => {
-    const { answers } = makeSynthetic(120, 60, 999);
-    const fit = fitLatentSkill(answers, { maxIters: 3000, learningRate: 0.6 });
-    expect(fit.gamma.get('mcq')).toBeCloseTo(0, 6); // reference pinned to 0
-    // true gap was +0.4; allow generous tolerance for finite-sample noise
-    expect(fit.gamma.get('tf')!).toBeGreaterThan(0.2);
-    expect(fit.gamma.get('tf')!).toBeLessThan(0.6);
+    expect(pearson(truth, recovered)).toBeGreaterThan(0.9);
+    expect(rmse(truth, recovered)).toBeLessThan(0.4);
+    expect(fit.converged).toBe(true);
   });
 
   it('produces well-calibrated holdout predictions (AUC well above chance)', () => {
-    const { answers } = makeSynthetic(120, 60, 42);
-    // 80/20 RANDOM holdout (a stride split aliases with the question grid and
-    // starves some questions out of the train design). Seeded for determinism.
+    const { answers } = makeSynthetic(120, 60, 120, 42);
     const split = mulberry32(7);
     const train: LatentAnswer[] = [];
     const test: LatentAnswer[] = [];
     for (const a of answers) (split() < 0.2 ? test : train).push(a);
-    const fit = fitLatentSkill(train, { maxIters: 3000, learningRate: 0.6 });
-    // Only score holdout rows whose player+question are in the train design.
+    const fit = fitLatentSkill(train);
     const scored = test.filter((a) => fit.theta.has(a.playerId) && fit.beta.has(a.questionId));
     const preds = scored.map((a) => predictProb(fit, a));
     const labels = scored.map((a) => a.correct);
-    expect(rocAuc(preds, labels)).toBeGreaterThan(0.72);
+    expect(rocAuc(preds, labels)).toBeGreaterThan(0.7);
+  });
+
+  /**
+   * Finding #4: at production scale (large TOTAL row count, but each player has
+   * only ~150 answers), a global 1/N learning rate froze theta near zero. The
+   * coordinate-normalized optimizer must recover a theta spread comparable to
+   * the true spread and NOT compress. 1500 players × 150 answers = 225k rows.
+   */
+  it('does NOT compress theta at realistic scale (225k obs, 150-answer players)', () => {
+    const { answers, trueTheta, players } = makeSynthetic(1500, 300, 150, 2024);
+    const fit = fitLatentSkill(answers, { maxIters: 500 });
+
+    const recovered = players.map((p) => fit.theta.get(p)!);
+    const truthRaw = players.map((p) => trueTheta.get(p)!);
+    const truthMean = truthRaw.reduce((s, x) => s + x, 0) / truthRaw.length;
+    const truth = truthRaw.map((x) => x - truthMean);
+
+    // The recovered spread must be a substantial fraction of the true spread —
+    // NOT compressed toward 0 (the old 1/N optimizer gave ~0.2 vs true ~1.0).
+    expect(std(recovered)).toBeGreaterThan(0.6 * std(truth));
+    expect(pearson(truth, recovered)).toBeGreaterThan(0.9);
+  }, 60000);
+
+  it('reports non-convergence honestly when starved of iterations', () => {
+    const { answers } = makeSynthetic(60, 40, 60, 5);
+    const fit = fitLatentSkill(answers, { maxIters: 1, tolerance: 1e-9 });
+    expect(fit.converged).toBe(false);
+    expect(fit.finalUpdateNorm).toBeGreaterThan(0);
   });
 });

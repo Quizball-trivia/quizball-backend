@@ -7,10 +7,11 @@ import {
   percentileRankOf,
   buildFCurve,
   evalFCurve,
-  isTimeoutBackfill,
+  isBernoulliBackfill,
+  logit,
+  linearFit,
   type ScopeStat,
 } from '../../src/modules/bots/calibration/math.js';
-import { FULL_DURATION_MS } from '../../src/modules/bots/calibration/constants.js';
 
 describe('bayesianSmooth', () => {
   it('returns the prior mean when there are no observations', () => {
@@ -34,42 +35,61 @@ describe('bayesianSmooth', () => {
 });
 
 describe('resolveBackoff', () => {
-  const stat = (answersCount: number, acc: number): ScopeStat => ({
+  const stat = (
+    answersCount: number,
+    acc: number | null,
+    timingSamples = answersCount,
+    median: number | null = 5000,
+  ): ScopeStat => ({
     answersCount,
-    correctCount: Math.round(answersCount * acc),
+    correctCount: acc == null ? 0 : Math.round(answersCount * acc),
     smoothedAccuracy: acc,
-    medianTimeMs: 5000,
-    logTimeSigma: 0.4,
+    timingSamples,
+    medianTimeMs: median,
+    logTimeSigma: median == null ? null : 0.4,
   });
   const global = stat(100000, 0.55);
 
-  it('uses the per-question stat when it has enough sample', () => {
+  it('uses the per-question stat when it has enough accuracy sample', () => {
     const r = resolveBackoff(stat(50, 0.7), stat(200, 0.6), stat(1000, 0.58), global, 30);
-    expect(r.scope).toBe('question');
-    expect(r.stat.smoothedAccuracy).toBe(0.7);
+    expect(r.accuracyScope).toBe('question');
+    expect(r.smoothedAccuracy).toBe(0.7);
   });
 
   it('descends to category_type when the question is sparse', () => {
     const r = resolveBackoff(stat(5, 0.7), stat(200, 0.6), stat(1000, 0.58), global, 30);
-    expect(r.scope).toBe('category_type');
-    expect(r.stat.smoothedAccuracy).toBe(0.6);
+    expect(r.accuracyScope).toBe('category_type');
+    expect(r.smoothedAccuracy).toBe(0.6);
   });
 
   it('descends to type when question and category_type are both sparse', () => {
     const r = resolveBackoff(stat(5, 0.7), stat(10, 0.6), stat(1000, 0.58), global, 30);
-    expect(r.scope).toBe('type');
-    expect(r.stat.smoothedAccuracy).toBe(0.58);
+    expect(r.accuracyScope).toBe('type');
+    expect(r.smoothedAccuracy).toBe(0.58);
   });
 
   it('falls through to global when everything is sparse', () => {
     const r = resolveBackoff(stat(1, 0.7), stat(2, 0.6), stat(3, 0.58), global, 30);
-    expect(r.scope).toBe('global');
-    expect(r.stat.smoothedAccuracy).toBe(0.55);
+    expect(r.accuracyScope).toBe('global');
+    expect(r.smoothedAccuracy).toBe(0.55);
   });
 
   it('treats a null per-question stat as absent', () => {
     const r = resolveBackoff(null, stat(200, 0.6), stat(1000, 0.58), global, 30);
-    expect(r.scope).toBe('category_type');
+    expect(r.accuracyScope).toBe('category_type');
+  });
+
+  it('resolves timing INDEPENDENTLY of accuracy', () => {
+    // Question has plenty of accuracy answers but ZERO clean timing samples;
+    // category_type has the timing. Accuracy stays at question scope; timing
+    // backs off to category_type.
+    const q = stat(100, 0.7, 0, null); // 100 accuracy answers, no timing
+    const ct = stat(500, 0.6, 500, 4200); // timing available here
+    const r = resolveBackoff(q, ct, stat(1000, 0.58), global, 30);
+    expect(r.accuracyScope).toBe('question');
+    expect(r.smoothedAccuracy).toBe(0.7);
+    expect(r.timingScope).toBe('category_type');
+    expect(r.medianTimeMs).toBe(4200);
   });
 });
 
@@ -140,34 +160,39 @@ describe('buildFCurve / evalFCurve', () => {
   });
 });
 
-describe('isTimeoutBackfill', () => {
-  it('flags a backfilled MCQ (null index, full duration, 0 points, wrong)', () => {
-    expect(
-      isTimeoutBackfill({ selectedIndex: null, isCorrect: false, pointsEarned: 0, timeMs: FULL_DURATION_MS.multipleChoice, kind: 'multipleChoice' }),
-    ).toBe(true);
+describe('isBernoulliBackfill', () => {
+  it('flags a null-index (backfill) answer', () => {
+    expect(isBernoulliBackfill({ selectedIndex: null })).toBe(true);
   });
-
-  it('does NOT flag a real wrong buzzer-beater MCQ (non-null index at full duration)', () => {
-    expect(
-      isTimeoutBackfill({ selectedIndex: 2, isCorrect: false, pointsEarned: 0, timeMs: FULL_DURATION_MS.multipleChoice, kind: 'multipleChoice' }),
-    ).toBe(false);
+  it('does NOT flag a real answer with any selected index (incl. a buzzer-beater)', () => {
+    expect(isBernoulliBackfill({ selectedIndex: 0 })).toBe(false);
+    expect(isBernoulliBackfill({ selectedIndex: 3 })).toBe(false);
   });
+});
 
-  it('does NOT flag a real correct slow answer', () => {
-    expect(
-      isTimeoutBackfill({ selectedIndex: 1, isCorrect: true, pointsEarned: 70, timeMs: FULL_DURATION_MS.multipleChoice, kind: 'multipleChoice' }),
-    ).toBe(false);
+describe('logit', () => {
+  it('is the inverse of sigmoid on [0,1] and clamps the extremes', () => {
+    expect(logit(0.5)).toBeCloseTo(0, 10);
+    expect(logit(0.7315)).toBeCloseTo(1, 2);
+    expect(Number.isFinite(logit(0))).toBe(true); // clamped, not -Infinity
+    expect(Number.isFinite(logit(1))).toBe(true);
+    expect(logit(0)).toBeLessThan(logit(1));
   });
+});
 
-  it('flags backfilled special formats at their own full durations', () => {
-    expect(isTimeoutBackfill({ selectedIndex: null, isCorrect: false, pointsEarned: 0, timeMs: FULL_DURATION_MS.countdown, kind: 'countdown' })).toBe(true);
-    expect(isTimeoutBackfill({ selectedIndex: null, isCorrect: false, pointsEarned: 0, timeMs: FULL_DURATION_MS.putInOrder, kind: 'putInOrder' })).toBe(true);
-    expect(isTimeoutBackfill({ selectedIndex: null, isCorrect: false, pointsEarned: 0, timeMs: FULL_DURATION_MS.clues, kind: 'clues' })).toBe(true);
+describe('linearFit', () => {
+  it('recovers a known line and R²=1 on noise-free points', () => {
+    const xs = [0, 1, 2, 3, 4];
+    const ys = xs.map((x) => 2 + 3 * x); // intercept 2, slope 3
+    const f = linearFit(xs, ys);
+    expect(f.intercept).toBeCloseTo(2, 10);
+    expect(f.slope).toBeCloseTo(3, 10);
+    expect(f.r2).toBeCloseTo(1, 10);
   });
-
-  it('does NOT flag a null-index answer whose time is below the full duration', () => {
-    expect(
-      isTimeoutBackfill({ selectedIndex: null, isCorrect: false, pointsEarned: 0, timeMs: 9000, kind: 'multipleChoice' }),
-    ).toBe(false);
+  it('recovers a negative slope (difficulty link direction)', () => {
+    const xs = [-2, -1, 0, 1, 2];
+    const ys = xs.map((x) => 1 - 0.8 * x);
+    const f = linearFit(xs, ys);
+    expect(f.slope).toBeCloseTo(-0.8, 10);
   });
 });

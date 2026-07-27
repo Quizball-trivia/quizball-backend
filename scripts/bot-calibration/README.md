@@ -64,12 +64,35 @@ latent-skill logit (opponent-relative `is_correct`). The exclusion rules live in
 
 ## Method (short)
 
-- **Latent skill**: Rasch-style logit `P(correct)=sigmoid(θ_player − β_question +
-  γ_format)` fit by L2-regularized gradient ascent (mean-anchored θ and γ). Only
-  players with `≥ --min-answers` are estimated. Validated on an 80/20 holdout
-  (AUC + calibration curve).
+- **S1 scoping**: the fit set is Bernoulli answers from matches that ended
+  BEFORE the reset batch (Season-1 only), by players who hold a **placed** S1
+  archived profile. The placed intersection happens BEFORE fitting, anchoring,
+  and top-cohort selection (not just at percentile-mapping time).
+- **Bernoulli only**: only mcq_single / true_false / input_text (engine kind
+  `multipleChoice`) feed the logit and smoothed accuracy. A backfill is exactly
+  `selected_index IS NULL`. countdown / put-in-order / clues are modelled via
+  payload-aware `format_stats` distributions, never the accuracy prior/logit.
+- **Latent skill**: Rasch logit `P(correct)=sigmoid(θ_player − β_question)` (NO
+  format term — β absorbs per-format difficulty; each question has one format).
+  Optimizer is coordinate-normalized gradient ascent (per-parameter observation
+  counts), so θ does not compress at production scale. **Convergence is
+  enforced**: the script REFUSES to emit params if the refit did not converge.
+- **Ceiling (no leakage)**: the top-10 cohort is selected on TRAIN θ; its ceiling
+  accuracy is measured on HOLDOUT answers only; the final f(RP) then refits on
+  ALL scoped rows. Both holdout and in-sample numbers are reported.
 - **f(RP)**: percentile-anchors S2 RP onto the **fixed** S1 latent-skill
   distribution using **placed** S1 profiles (never live S2 percentiles).
-- **Ceiling**: top-10 players by latent skill → aggregate accuracy − margin =
-  the frozen `S1_CEILING_ACCURACY`; their clean-window answer-time percentiles →
-  the speed floor.
+- **Difficulty link**: a holdout-validated regression `β ≈ intercept + slope ·
+  logit(question_stats.smoothed_accuracy)` so PR8 can recover β from
+  question_stats and reproduce `sigmoid(θ − β)`.
+- **Schema**: params.json is validated against the zod schema in
+  `src/modules/bots/calibration/params-schema.ts` (PR8 imports it) BEFORE any
+  file is written. It carries the θ-anchoring convention and the explicit clamps
+  (final probability cap, skill cap, min answer time).
+
+## Refresh job (`bot:refresh-question-stats`)
+
+A full run does a complete latest-snapshot REPLACE: upsert every current row AND
+delete obsolete question_stats / backoff rows atomically (delete-not-present).
+`--limit` is a DRY RUN (computes a summary, writes nothing) — a limited scan
+would otherwise persist arbitrary partial aggregates.

@@ -51,6 +51,14 @@ export function assertSelectOnly(sqlText: string): void {
 export interface ReadOnlyDb {
   /** Tagged-template query, screened + run inside the READ ONLY transaction. */
   query: ReadOnlyRunner;
+  /**
+   * The underlying postgres client for code that needs the full `sql` API
+   * (fragments, sql.json, generics) — e.g. the SHARED aggregateQuestionStats.
+   * The session is opened with default_transaction_read_only=on, so the SERVER
+   * rejects any write regardless; this bypasses only the local SELECT screen,
+   * not the server-enforced read-only guarantee.
+   */
+  sql: import('postgres').Sql;
   end: () => Promise<void>;
 }
 
@@ -90,6 +98,7 @@ export function openReadOnlyDb(options: { statementTimeoutMs?: number } = {}): R
 
   return {
     query: query as ReadOnlyRunner,
+    sql,
     end: () => sql.end({ timeout: 5 }),
   };
 }

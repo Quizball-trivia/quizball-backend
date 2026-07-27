@@ -37,6 +37,7 @@ const ids: {
   categoryId?: string;
   questionMcq?: string; // heavily-answered mcq
   questionSparse?: string; // few answers -> shrinks toward global
+  questionCountdown?: string; // special format -> format_stats, NOT accuracy
   humanA?: string;
   humanB?: string;
   aiUser?: string;
@@ -62,19 +63,25 @@ async function seedUser(kind: 'human' | 'ai' | 'seed'): Promise<string> {
   return row.id;
 }
 
-async function seedQuestion(difficulty: string): Promise<string> {
+async function seedQuestion(difficulty: string, type = 'mcq_single'): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     INSERT INTO questions (category_id, type, difficulty, status, prompt)
-    VALUES (${ids.categoryId!}, 'mcq_single', ${difficulty}, 'published', ${{ en: `${TAG} ${difficulty}` }}::jsonb)
+    VALUES (${ids.categoryId!}, ${type}, ${difficulty}, 'published', ${{ en: `${TAG} ${difficulty} ${type}` }}::jsonb)
     RETURNING id
   `;
   return row.id;
 }
 
 async function seedMatch(isDev: boolean): Promise<string> {
+  // Dev matches are seeded as status='active' so cleanupOldDevMatches (which
+  // only targets completed/abandoned dev matches, globally) can never race-
+  // delete them under the shared test DB. Our eligibility query excludes them
+  // by BOTH is_dev=false AND status='completed', so an active dev match still
+  // exercises the exclusion path. Non-dev matches stay 'completed'.
+  const status = isDev ? 'active' : 'completed';
   const [row] = await sql<{ id: string }[]>`
-    INSERT INTO matches (mode, status, is_dev, ended_at)
-    VALUES ('ranked', 'completed', ${isDev}, NOW())
+    INSERT INTO matches (mode, status, is_dev, started_at, ended_at)
+    VALUES ('ranked', ${status}, ${isDev}, '2000-01-01T00:00:00Z'::timestamptz, NOW())
     RETURNING id
   `;
   return row.id;
@@ -96,6 +103,7 @@ interface AnswerSpec {
   timeMs: number;
   pointsEarned: number;
   answeredAt: string;
+  payload?: Record<string, unknown>;
 }
 
 async function seedAnswer(a: AnswerSpec): Promise<void> {
@@ -104,7 +112,7 @@ async function seedAnswer(a: AnswerSpec): Promise<void> {
       (match_id, q_index, user_id, selected_index, is_correct, time_ms, points_earned, answered_at, answer_payload)
     VALUES (
       ${a.matchId}, ${a.qIndex}, ${a.userId}, ${a.selectedIndex}, ${a.isCorrect},
-      ${a.timeMs}, ${a.pointsEarned}, ${a.answeredAt}::timestamptz, '{}'::jsonb
+      ${a.timeMs}, ${a.pointsEarned}, ${a.answeredAt}::timestamptz, ${sql.json(a.payload ?? {})}
     )
   `;
 }
@@ -130,6 +138,7 @@ beforeAll(async () => {
 
   ids.questionMcq = await seedQuestion('easy');
   ids.questionSparse = await seedQuestion('hard');
+  ids.questionCountdown = await seedQuestion('medium', 'countdown_list');
   ids.humanA = await seedUser('human');
   ids.humanB = await seedUser('human');
   ids.aiUser = await seedUser('ai');
@@ -164,6 +173,15 @@ beforeAll(async () => {
 
   // questionSparse (ranked): a single wrong human answer, clean window.
   await seedAnswer({ matchId: ids.rankedMatch, qIndex: 1, userId: ids.humanA, selectedIndex: 2, isCorrect: false, timeMs: 8000, pointsEarned: 0, answeredAt: CLEAN });
+
+  // Countdown (special format): opponent-relative is_correct, carries a found-count
+  // payload. Must NOT contribute to accuracy/global-prior; only to format_stats.
+  // Persisted like the resolver does: selected_index = null for non-MCQ kinds.
+  await linkQuestion(ids.rankedMatch, 2, ids.questionCountdown);
+  await linkQuestion(ids.rankedMatch2, 2, ids.questionCountdown);
+  await seedAnswer({ matchId: ids.rankedMatch, qIndex: 2, userId: ids.humanA, selectedIndex: null, isCorrect: true, timeMs: 12000, pointsEarned: 50, answeredAt: CLEAN, payload: { questionKind: 'countdown', foundCount: 3, foundAnswerIds: ['a', 'b', 'c'] } });
+  await seedAnswer({ matchId: ids.rankedMatch, qIndex: 2, userId: ids.humanB, selectedIndex: null, isCorrect: false, timeMs: 15000, pointsEarned: 20, answeredAt: CLEAN, payload: { questionKind: 'countdown', foundCount: 1, foundAnswerIds: ['a'] } });
+  await seedAnswer({ matchId: ids.rankedMatch2, qIndex: 2, userId: ids.humanA, selectedIndex: null, isCorrect: false, timeMs: 15000, pointsEarned: 20, answeredAt: CLEAN, payload: { questionKind: 'countdown', foundCount: 1, foundAnswerIds: ['a'] } });
 });
 
 afterAll(async () => {
@@ -174,12 +192,13 @@ afterAll(async () => {
   await sql`DELETE FROM match_answers WHERE match_id = ANY(${[ids.rankedMatch, ids.rankedMatch2, ids.devMatch].filter(Boolean)}::uuid[])`;
   await sql`DELETE FROM match_questions WHERE match_id = ANY(${[ids.rankedMatch, ids.rankedMatch2, ids.devMatch].filter(Boolean)}::uuid[])`;
   await sql`DELETE FROM matches WHERE id = ANY(${[ids.rankedMatch, ids.rankedMatch2, ids.devMatch].filter(Boolean)}::uuid[])`;
-  await sql`DELETE FROM question_stats WHERE question_id = ANY(${[ids.questionMcq, ids.questionSparse].filter(Boolean)}::uuid[])`;
-  await sql`DELETE FROM questions WHERE id = ANY(${[ids.questionMcq, ids.questionSparse].filter(Boolean)}::uuid[])`;
+  const allQ = [ids.questionMcq, ids.questionSparse, ids.questionCountdown].filter(Boolean) as string[];
+  await sql`DELETE FROM question_stats WHERE question_id = ANY(${allQ}::uuid[])`;
+  await sql`DELETE FROM questions WHERE id = ANY(${allQ}::uuid[])`;
   await sql`DELETE FROM categories WHERE id = ${ids.categoryId!}`;
   await sql`DELETE FROM users WHERE id = ANY(${[ids.humanA, ids.humanB, ids.aiUser, ids.seedUser].filter(Boolean)}::uuid[])`;
-  // Remove backoff rows this suite's category/type produced (namespaced key).
-  await sql`DELETE FROM question_stats_backoff WHERE scope_key = ${`${TAG}-cat:mcq_single`}`;
+  // Remove backoff rows this suite's category/type produced (namespaced keys).
+  await sql`DELETE FROM question_stats_backoff WHERE scope_key IN (${`${TAG}-cat:mcq_single`}, ${`${TAG}-cat:countdown_list`})`;
 });
 
 describe('question_stats refresh job', () => {
@@ -210,6 +229,38 @@ describe('question_stats refresh job', () => {
     expect(mcq.smoothed_accuracy).toBeLessThan(1);
   });
 
+  it('keeps special formats OUT of accuracy and models them in format_stats', async () => {
+    if (!dbAvailable) return;
+    await refreshQuestionStats();
+    const [cd] = await sql<
+      { answers_count: number; correct_count: number; smoothed_accuracy: number | null; format_stats: Record<string, unknown> }[]
+    >`SELECT answers_count, correct_count, smoothed_accuracy, format_stats
+      FROM question_stats WHERE question_id = ${ids.questionCountdown!}`;
+    // Countdown contributes NO accuracy (answers_count/correct_count stay 0, acc null).
+    expect(cd.answers_count).toBe(0);
+    expect(cd.correct_count).toBe(0);
+    expect(cd.smoothed_accuracy).toBeNull();
+    // ...but it carries a found-count distribution built from the payload.
+    const dist = cd.format_stats.countdownFoundCountDistribution as Record<string, number> | undefined;
+    expect(dist).toBeTruthy();
+    // foundCounts seeded: 3 (once), 1 (twice) -> {"1":2,"3":1}
+    expect(dist!['3']).toBe(1);
+    expect(dist!['1']).toBe(2);
+
+    // The countdown answers must not have contaminated the category_type mcq
+    // accuracy (only Bernoulli rows count there).
+    const [ct] = await sql<{ answers_count: number }[]>`
+      SELECT answers_count FROM question_stats_backoff
+      WHERE scope = 'category_type' AND scope_key = ${`${TAG}-cat:mcq_single`}`;
+    expect(ct.answers_count).toBe(4); // unchanged by the 3 countdown answers
+    const cdCt = await sql<{ answers_count: number }[]>`
+      SELECT answers_count FROM question_stats_backoff
+      WHERE scope = 'category_type' AND scope_key = ${`${TAG}-cat:countdown_list`}`;
+    // countdown_list produces no accuracy backoff row (0 Bernoulli answers) OR a
+    // row with 0 answers — either way its answers_count is 0 if present.
+    if (cdCt.length > 0) expect(cdCt[0].answers_count).toBe(0);
+  });
+
   it('produces backoff rows at every scope', async () => {
     if (!dbAvailable) return;
     const catType = await sql<{ answers_count: number }[]>`
@@ -234,5 +285,34 @@ describe('question_stats refresh job', () => {
       SELECT answers_count, correct_count FROM question_stats WHERE question_id = ${ids.questionMcq!}`;
     expect(after[0].answers_count).toBe(before[0].answers_count);
     expect(after[0].correct_count).toBe(before[0].correct_count);
+  });
+
+  it('delete-not-present drops a question_stats row that lost all eligible answers', async () => {
+    if (!dbAvailable) return;
+    // questionSparse currently has 1 eligible answer -> a row exists.
+    const present = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM question_stats WHERE question_id = ${ids.questionSparse!}`;
+    expect(present[0].n).toBe(1);
+    // Make that lone answer ineligible by flipping the match out of 'completed'
+    // (the query requires status='completed'). Avoid toggling is_dev, which would
+    // create a completed dev match that races cleanupOldDevMatches on the shared DB.
+    await sql`UPDATE matches SET status = 'active' WHERE id = ${ids.rankedMatch!}`;
+    try {
+      await refreshQuestionStats();
+      const gone = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM question_stats WHERE question_id = ${ids.questionSparse!}`;
+      expect(gone[0].n).toBe(0); // obsolete row deleted, not left stale
+    } finally {
+      await sql`UPDATE matches SET status = 'completed' WHERE id = ${ids.rankedMatch!}`;
+      await refreshQuestionStats(); // restore state for any later assertions
+    }
+  });
+
+  it('--limit is a DRY RUN — computes a summary but writes nothing', async () => {
+    if (!dbAvailable) return;
+    const before = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM question_stats`;
+    const summary = await refreshQuestionStats({ limit: 1 });
+    expect(summary.dryRun).toBe(true);
+    expect(summary.questionRowsDeleted).toBe(0);
+    const after = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM question_stats`;
+    expect(after[0].n).toBe(before[0].n); // untouched
   });
 });

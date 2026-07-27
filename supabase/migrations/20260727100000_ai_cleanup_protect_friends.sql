@@ -75,6 +75,19 @@ BEGIN
               OR fr.receiver_user_id = u.id
             )
         )
+        -- Never delete a bot that is mid-match: the protected-matches window
+        -- only covers completed/abandoned, so an old bot playing an active
+        -- match right now would otherwise be deleted under its opponent. The
+        -- started_at bound keeps orphaned stuck-'active' matches (known prod
+        -- issue) from protecting their bots forever.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.match_players amp
+          JOIN public.matches am ON am.id = amp.match_id
+          WHERE amp.user_id = u.id
+            AND am.status = 'active'
+            AND am.started_at > NOW() - INTERVAL '1 day'
+        )
       LIMIT 250
       -- Lock victims for the rest of this transaction. acceptRequest locks both
       -- users FOR UPDATE before inserting a friendship, so an in-flight accept

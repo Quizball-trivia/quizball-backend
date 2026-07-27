@@ -19,7 +19,11 @@ import {
 } from './match-cache.js';
 import { getRedisClient } from './redis.js';
 import { questionTimerKey, countdownPlayerKey } from './match-keys.js';
-import { cancelRealtimeTimer, scheduleRealtimeTimer } from './realtime-timer-scheduler.js';
+import {
+  cancelRealtimeTimer,
+  getRealtimeTimerPayload,
+  scheduleRealtimeTimer,
+} from './realtime-timer-scheduler.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchPhaseKind, MatchQuestionKind } from './socket.types.js';
 import { clamp, calculatePoints, calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from './scoring.js';
@@ -266,7 +270,12 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     }
   ): Promise<void> {
     const key = questionTimerKey(matchId, qIndex);
-    clearAiAnswerTimer(matchId, qIndex);
+    // Reconnect/resume can re-arm the same question. Preserve the original
+    // planned outcome instead of drawing a new random result. Read before
+    // cancelling: the durable payload may still exist even if its due ZSET
+    // member has already been popped by another replica.
+    const existingPlan = await getRealtimeTimerPayload('possession_ai_answer', key);
+    await cancelRealtimeTimer('possession_ai_answer', key);
     const cache = await getMatchCacheOrRebuild(matchId);
     if (!cache || cache.status !== 'active') {
       logger.warn(
@@ -327,15 +336,17 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const aiSettings = await resolveAiSettingsForMatch(matchId);
     const questionDifficulty = cache.currentQuestion.questionDTO.difficulty;
     const aiCorrectness = difficultyAdjustedCorrectness(aiSettings.aiCorrectness, questionDifficulty);
-    const plannedIsCorrect = options.questionKind === 'countdown'
-      ? false
-      : getRandom() < aiCorrectness;
+    const plannedIsCorrect = existingPlan?.plannedIsCorrect
+      ?? (options.questionKind === 'countdown'
+        ? false
+        : getRandom() < aiCorrectness);
     const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
       ? options.evaluation.clues.length
       : undefined;
-    const plannedClueIndex = typeof clueCountForDelay === 'number'
-      ? getAiClueIndex(clueCountForDelay, aiCorrectness)
-      : null;
+    const plannedClueIndex = existingPlan?.plannedClueIndex
+      ?? (typeof clueCountForDelay === 'number'
+        ? getAiClueIndex(clueCountForDelay, aiCorrectness)
+        : null);
     const questionTimeMsForDelay = hasAuthoritativeWindow
       ? Math.max(0, (deadlineAtMs as number) - (playableAtMs as number))
       : getQuestionDurationMs(options.questionKind, clueCountForDelay);
@@ -346,16 +357,18 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       isCorrect: plannedIsCorrect,
       questionTimeMs: questionTimeMsForDelay,
     });
-    let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
-      ? (() => {
-          const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
-          return clamp(
-            Math.round(clueSliceMs * plannedClueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
-            0,
-            questionTimeMsForDelay
-          );
-        })()
-      : clamp(aiThinkTimeMs, 0, questionTimeMsForDelay);
+    let plannedAnswerTimeMs = existingPlan
+      ? clamp(existingPlan.plannedAnswerTimeMs, 0, questionTimeMsForDelay)
+      : plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
+        ? (() => {
+            const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
+            return clamp(
+              Math.round(clueSliceMs * plannedClueIndex + Math.min(clueSliceMs - 250, aiThinkTimeMs)),
+              0,
+              questionTimeMsForDelay
+            );
+          })()
+        : clamp(aiThinkTimeMs, 0, questionTimeMsForDelay);
     let dueAtMs = nowMs + preAnswerDelayMs + plannedAnswerTimeMs;
     if (hasAuthoritativeWindow) {
       const latestDueAtMs = Math.max(nowMs + AI_ANSWER_MIN_RESUME_DELAY_MS, (deadlineAtMs as number) - AI_ANSWER_TIMEOUT_BUFFER_MS);
@@ -390,6 +403,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         plannedAnswerTimeMs,
         plannedClueIndex,
         plannedIsCorrect,
+        reusedExistingPlan: existingPlan !== null,
         playableAt: hasAuthoritativeWindow ? new Date(playableAtMs as number).toISOString() : null,
         dueAt: new Date(dueAtMs).toISOString(),
         deadlineAt: hasAuthoritativeWindow ? new Date(deadlineAtMs as number).toISOString() : null,

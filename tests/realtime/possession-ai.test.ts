@@ -224,6 +224,51 @@ describe('possession AI timer scheduling', () => {
     }
   });
 
+  it('preserves the planned outcome when reconnect re-arms the same question', async () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      getMatchCacheOrRebuildMock.mockResolvedValue(createCache());
+      const { createPossessionAi } = await import('../../src/realtime/possession-ai.js');
+      const ai = createPossessionAi(vi.fn());
+      const options = {
+        questionKind: 'multipleChoice' as const,
+        evaluation: { kind: 'multipleChoice' as const, correctIndex: 2 },
+        phaseKind: 'normal' as const,
+        phaseRound: 1,
+        shooterSeat: null,
+      };
+
+      await ai.schedulePossessionAiAnswer(
+        {} as QuizballServer,
+        'm1',
+        0,
+        options
+      );
+      expect(
+        redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0')
+      ).toContain('"plannedIsCorrect":true');
+
+      // A fresh draw would now miss, but reconnect must reuse the first plan.
+      randomSpy.mockReturnValue(1);
+      await ai.schedulePossessionAiAnswer(
+        {} as QuizballServer,
+        'm1',
+        0,
+        {
+          ...options,
+          playableAt: new Date(Date.now()),
+          deadlineAt: new Date(Date.now() + 10_000),
+        }
+      );
+
+      expect(
+        redis.values.get('realtime:timer:payload:possession_ai_answer:m1:0')
+      ).toContain('"plannedIsCorrect":true');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('reloads current state before committing a due AI answer', async () => {
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {

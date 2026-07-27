@@ -283,22 +283,36 @@ describe('matchesService.cleanupOldDevMatches — integration', () => {
       isAi: true,
       aiKind: 'persistent',
     });
+    // Twin ephemeral bot in the IDENTICAL orphan position: it must be deleted,
+    // proving the orphan condition fires and only ai_kind spares the roster bot.
+    const ephemeralBot = await seedUser({
+      nickname: 'cleanup_ephemeral_twin',
+      isAi: true,
+      aiKind: 'ephemeral',
+    });
+    const fillerOpponent = await seedUser({ nickname: 'cleanup_filler_opp' });
 
-    // Old dev match where the roster bot appears ONLY here — the orphan
-    // condition that deletes an ephemeral bot must still spare a persistent one.
-    const oldDev = await seedMatch({
+    // Old dev matches where each bot appears ONLY here (genuinely orphaned).
+    const oldDevRoster = await seedMatch({
       hostUserId: human,
       opponentUserId: rosterBot,
       isDev: true,
       status: 'completed',
       startedAt: new Date(Date.now() - 30 * 86_400_000),
     });
-    // A newer dev match fills the keep=1 slot so oldDev is actually eligible
-    // even when this is the only suite that has seeded dev matches. Kept 3 days
-    // old so it can never outrank the sibling test's "recent" fixture.
+    const oldDevEphemeral = await seedMatch({
+      hostUserId: human,
+      opponentUserId: ephemeralBot,
+      isDev: true,
+      status: 'completed',
+      startedAt: new Date(Date.now() - 29 * 86_400_000),
+    });
+    // A newer dev match (bot-free) fills the keep=1 slot so the old ones are
+    // eligible even when this is the only suite that has seeded dev matches.
+    // Kept 3 days old so it can never outrank the sibling test's "recent" fixture.
     await seedMatch({
       hostUserId: human,
-      opponentUserId: rosterBot,
+      opponentUserId: fillerOpponent,
       isDev: true,
       status: 'completed',
       startedAt: new Date(Date.now() - 3 * 86_400_000),
@@ -307,12 +321,12 @@ describe('matchesService.cleanupOldDevMatches — integration', () => {
     await matchesService.cleanupOldDevMatches(1);
 
     const matches = await sql<{ id: string }[]>`
-      SELECT id FROM matches WHERE id = ${oldDev}
+      SELECT id FROM matches WHERE id = ANY(${[oldDevRoster, oldDevEphemeral]}::uuid[])
     `;
     expect(matches).toEqual([]);
 
     const bots = await sql<{ id: string }[]>`
-      SELECT id FROM users WHERE id = ${rosterBot}
+      SELECT id FROM users WHERE id = ANY(${[rosterBot, ephemeralBot]}::uuid[])
     `;
     expect(bots.map((r) => r.id)).toEqual([rosterBot]);
   });

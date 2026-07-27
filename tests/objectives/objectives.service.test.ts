@@ -306,4 +306,50 @@ describe('objectivesService', () => {
       }),
     );
   });
+
+  it('creates ZERO progress/event rows for AI facts (any kind) — persistent bots included', async () => {
+    const ensureProgressBatchMock = vi.fn(async () => []);
+    const insertEventsBatchMock = vi.fn(async () => new Set<string>());
+    const getRankedWinStreakMock = vi.fn(async () => 0);
+
+    runInTransactionMock.mockImplementation(async (callback: (txRepo: object) => Promise<unknown>) =>
+      callback({
+        ensureProgressBatch: ensureProgressBatchMock,
+        insertEventsBatch: insertEventsBatchMock,
+        getRankedWinStreakForPeriod: getRankedWinStreakMock,
+        // Any other row-creating method here would be a bug — the loop must skip
+        // AI facts before touching the DB at all.
+      }),
+    );
+
+    // A ranked win by an AI player. isDev covers the dev-account case; both must
+    // short-circuit before any bookkeeping row is created.
+    getMatchFactsMock.mockResolvedValue([
+      {
+        matchId: 'match-ai',
+        userId: 'bot-1',
+        opponentUserId: 'user-2',
+        mode: 'ranked',
+        variant: 'ranked_sim',
+        isWinner: true,
+        correctAnswers: 15,
+        goalsFor: 2,
+        goalsAgainst: 0,
+        penaltyGoalsAgainst: 0,
+        isDev: false,
+        isAi: true,
+        secondHalfGoals: 1,
+        correctByCategory: {},
+        playedWithFriend: false,
+      },
+    ]);
+
+    const { objectivesService } = await import('../../src/modules/objectives/objectives.service.js');
+    const completed = await objectivesService.evaluateForMatch('match-ai');
+
+    expect(completed).toEqual({});
+    expect(ensureProgressBatchMock).not.toHaveBeenCalled();
+    expect(insertEventsBatchMock).not.toHaveBeenCalled();
+    expect(getRankedWinStreakMock).not.toHaveBeenCalled();
+  });
 });

@@ -22,6 +22,13 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     Boolean(user.is_deleted || user.deleted_at || user.pending_deletion_at),
 }));
 
+const notifyMock = vi.fn();
+vi.mock('../../src/modules/notifications/notifications.service.js', () => ({
+  notificationsService: {
+    notify: (...args: unknown[]) => notifyMock(...args),
+  },
+}));
+
 vi.mock('../../src/modules/friends/friends.repo.js', () => ({
   friendsRepo: {
     listFriends: (...args: unknown[]) => listFriendsMock(...args),
@@ -42,8 +49,8 @@ describe('friendsService', () => {
     vi.clearAllMocks();
   });
 
-  it('creates a pending request for an existing non-friend user', async () => {
-    getByIdMock.mockResolvedValue({ id: 'target-user-id' });
+  it('creates a pending request for an existing non-friend user and notifies them', async () => {
+    getByIdMock.mockResolvedValue({ id: 'target-user-id', is_ai: false });
     friendshipExistsMock.mockResolvedValue(false);
     getPendingRequestBetweenMock.mockResolvedValue(null);
     createFriendRequestMock.mockResolvedValue({ id: 'request-id' });
@@ -55,6 +62,25 @@ describe('friendsService', () => {
       status: 'pending',
     });
     expect(createFriendRequestMock).toHaveBeenCalledWith('sender-id', 'target-user-id');
+    expect(notifyMock).toHaveBeenCalledWith('target-user-id', expect.objectContaining({ type: 'friend_request' }));
+  });
+
+  it('creates the request for a bot target but SKIPS the notification insert', async () => {
+    // The friend request itself must land (the live 30/70 responder worker acts
+    // on it); only the feed notification is suppressed (notifications stay AI).
+    getByIdMock.mockResolvedValue({ id: 'bot-target-id', is_ai: true, ai_kind: 'persistent' });
+    friendshipExistsMock.mockResolvedValue(false);
+    getPendingRequestBetweenMock.mockResolvedValue(null);
+    createFriendRequestMock.mockResolvedValue({ id: 'bot-request-id' });
+
+    const { friendsService } = await import('../../src/modules/friends/friends.service.js');
+
+    await expect(friendsService.createRequest('sender-id', 'bot-target-id')).resolves.toEqual({
+      requestId: 'bot-request-id',
+      status: 'pending',
+    });
+    expect(createFriendRequestMock).toHaveBeenCalledWith('sender-id', 'bot-target-id');
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it('rejects self-requests', async () => {

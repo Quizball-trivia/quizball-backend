@@ -792,7 +792,9 @@ export const usersService = {
   },
 
   /**
-   * Search users by nickname substring. Excludes AI bots and the requester.
+   * Search users by nickname substring. Persistent roster bots are searchable
+   * like real users (public masking); ephemeral/auction bots and the requester
+   * are excluded.
    */
   async searchByNickname(query: string, excludeUserId: string) {
     const rows = await usersRepo.searchByNickname(query, excludeUserId);

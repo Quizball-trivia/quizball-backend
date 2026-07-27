@@ -340,6 +340,13 @@ export const objectivesService = {
 
     await objectivesRepo.runInTransaction(async (txRepo) => {
       for (const fact of facts) {
+        // Skip AI (any kind) and dev facts entirely: they earn zero objective
+        // credit (getDeltaForFact), so creating user_objective_progress /
+        // user_objective_events bookkeeping rows for them is pure noise. Gating
+        // the evaluator INPUT — not just the delta — means AI users produce ZERO
+        // rows. Persistent bots are AI here (capability matrix: objectives are a
+        // human-only reward surface).
+        if (fact.isDev || fact.isAi) continue;
         // One multi-row upsert covers ensureCurrentRows AND the per-definition
         // ensureProgress below (db-optimize.md #5: this loop used to issue
         // ~2 x M individual INSERT .. ON CONFLICT per player per match).

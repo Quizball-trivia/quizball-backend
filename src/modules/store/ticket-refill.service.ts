@@ -41,12 +41,11 @@ export function toStoreWalletResponse(wallet: Pick<WalletStateRow, 'coins' | 'ti
 /**
  * Normalize a wallet's ticket count to the valid range [0, MAX_TICKETS].
  *
- * Refills are now granted by the global `refill-tickets-every-4h` cron (one
- * ticket for every user under MAX, at a fixed wall-clock cadence), NOT lazily on
- * read. So this no longer adds tickets from elapsed time — it only clamps a
- * stored value back into range (defensive: a stale/corrupt row, or a future
- * write that overshoots). `tickets_refill_started_at` is now inert and is left
- * untouched so existing rows are not churned; a later migration can drop it.
+ * Refills are granted by the global `refill-tickets-every-4h` cron, NOT lazily
+ * on read. This helper only clamps a stored value back into range (defensive: a
+ * stale/corrupt row, or a future write that overshoots). The cron uses
+ * `tickets_refill_started_at` to skip wallets whose four-hour interval is not
+ * due yet, so reads preserve the anchor unchanged.
  *
  * `nowInput` is accepted for signature compatibility with existing callers and
  * is otherwise unused.

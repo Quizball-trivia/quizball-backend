@@ -5,8 +5,17 @@
  *   sigmoid(theta_p - beta_q + gamma_f)
  * where theta_p is player skill, beta_q is question difficulty, gamma_f is a
  * per-format easiness offset (mcq vs true_false vs input_text). We fit by
- * L2-regularized gradient ascent on the log-likelihood, anchoring mean(theta)=0
- * and gamma of the reference format = 0 for identifiability.
+ * L2-regularized gradient ascent on the log-likelihood.
+ *
+ * Identifiability: the sum theta - beta + gamma has two flat directions — a
+ * constant added to every theta (removed by subtracting from beta) and a
+ * constant added to every gamma (also removable via beta). We pin BOTH by
+ * mean-centering theta and gamma to 0 every step, leaving beta free under its
+ * ridge. Crucially we do NOT re-inject the removed constant back into beta:
+ * doing so accumulates an unbounded drift each iteration (gamma runs away while
+ * theta collapses). After fitting we re-express gamma relative to a reference
+ * format (subtract that format's value) purely for reporting — a
+ * prediction-invariant relabel that is never fed back into the fit.
  *
  * No external ML dependency — the model is small and convex-ish under ridge, so
  * a few hundred full-batch gradient steps converge reliably. Validated by a
@@ -44,10 +53,10 @@ export interface LatentFitResult {
 
 const DEFAULTS: Required<LatentFitOptions> = {
   learningRate: 0.5,
-  maxIters: 2000,
-  tolerance: 1e-6,
+  maxIters: 4000,
+  tolerance: 1e-7,
   ridge: 1e-3,
-  gammaRidge: 1e-4,
+  gammaRidge: 1e-3,
 };
 
 export function fitLatentSkill(answers: readonly LatentAnswer[], options: LatentFitOptions = {}): LatentFitResult {
@@ -93,17 +102,14 @@ export function fitLatentSkill(answers: readonly LatentAnswer[], options: Latent
     for (const q of questions) beta.set(q, beta.get(q)! + lr * gBeta.get(q)!);
     for (const f of formats) gamma.set(f, gamma.get(f)! + lr * gGamma.get(f)!);
 
-    // Identifiability: anchor mean(theta)=0 (absorb into beta) and pin the
-    // reference format's gamma to 0 (absorb into beta).
+    // Identifiability: pin mean(theta)=0 and mean(gamma)=0. NO re-injection into
+    // beta — that channel accumulates an unbounded per-iteration drift. beta
+    // floats under its ridge and absorbs the residual intercept naturally.
     const meanTheta = mean([...theta.values()]);
     for (const p of players) theta.set(p, theta.get(p)! - meanTheta);
-    for (const q of questions) beta.set(q, beta.get(q)! - meanTheta);
 
-    const refGamma = gamma.get(referenceFormat)!;
-    if (refGamma !== 0) {
-      for (const f of formats) gamma.set(f, gamma.get(f)! - refGamma);
-      for (const q of questions) beta.set(q, beta.get(q)! + refGamma);
-    }
+    const meanGamma = mean([...gamma.values()]);
+    for (const f of formats) gamma.set(f, gamma.get(f)! - meanGamma);
 
     const ll = logLikelihood(answers, theta, beta, gamma);
     if (Math.abs(ll - prevLL) < opts.tolerance * Math.max(1, Math.abs(prevLL))) {
@@ -113,6 +119,17 @@ export function fitLatentSkill(answers: readonly LatentAnswer[], options: Latent
       break;
     }
     prevLL = ll;
+  }
+
+  // Report gamma relative to the reference format (reference reads exactly 0).
+  // Pure relabel: predictions use gamma_f - gamma_ref, and beta already carries
+  // the compensating intercept from the fit, so this does not change any
+  // predictProb output for a (player, question, format) triple seen in fitting.
+  // We fold the reference offset into beta so predictions stay identical.
+  const refGamma = gamma.get(referenceFormat)!;
+  if (refGamma !== 0) {
+    for (const f of formats) gamma.set(f, gamma.get(f)! - refGamma);
+    for (const q of questions) beta.set(q, beta.get(q)! + refGamma);
   }
 
   return { theta, beta, gamma, referenceFormat, iters: iter, converged, finalLogLik: prevLL };

@@ -82,12 +82,23 @@ export interface ClubPatterns {
 
 export interface ActivityPatterns {
   source: DistributionSource;
-  /** Hourly match-start histogram, Asia/Tbilisi (24 buckets, weights). */
+  /**
+   * Raw hourly match-start histogram, Asia/Tbilisi (24 buckets). Retained for
+   * report disclosure only; the archetypes below are learned per-user, NOT from
+   * this aggregate (§1.3: an aggregate histogram cannot yield per-user patterns).
+   */
   hourlyHistogram: number[];
-  /** Daily match-cap sampled by empirical quantiles: [cumulativeProb, value]. */
-  dailyCapQuantiles: [number, number][];
-  /** Distinct schedule archetypes with selection weights. */
+  /**
+   * Schedule archetypes CLUSTERED from per-user activity: each real player's
+   * match-start sequence is segmented into sessions on 20-minute gaps, then a
+   * per-user (peak-hour, sessions/day, session-length, matches/day) tuple is
+   * assigned to the nearest archetype. Weights are the share of users in each
+   * cluster. Daily cap is carried on the archetype so (schedule, cap) are
+   * JOINTLY sampled — a night-owl can never draw a 15-match cap.
+   */
   scheduleArchetypes: ScheduleArchetype[];
+  /** Number of real users the per-user clustering was computed over. */
+  usersClustered: number;
 }
 
 export interface ScheduleArchetype {
@@ -98,6 +109,12 @@ export interface ScheduleArchetype {
   endHour: number;
   /** Typical session length in matches [min,max]. */
   sessionLength: [number, number];
+  /**
+   * Daily-cap distribution for THIS archetype, as empirical quantiles
+   * [cumulativeProb, cap]. Sampled jointly with the archetype so caps stay
+   * consistent with the window (night-owls get small caps).
+   */
+  dailyCapQuantiles: [number, number][];
 }
 
 export interface RenamePatterns {
@@ -140,6 +157,14 @@ export interface RosterPatterns {
     /** The lowercased names themselves (sorted). */
     names: string[];
   };
+  /**
+   * FROZEN list of real, active category slugs measured from the DB (hyphenated,
+   * e.g. 'world-cup', 'premier-league'). Category affinities are sampled from
+   * THESE so stored affinity keys are live slugs, not invented underscore names.
+   * Daily-challenge format sub-categories are excluded (they are quiz formats,
+   * not skill domains).
+   */
+  categorySlugs: string[];
   name: NameStructurePatterns;
   avatar: AvatarPatterns;
   country: CountryPatterns;

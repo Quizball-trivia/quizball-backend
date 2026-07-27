@@ -15,6 +15,15 @@
  *
  * mulberry32 is a small, fast, well-distributed 32-bit generator — ample for
  * name/attribute sampling and identical across platforms (pure integer math).
+ *
+ * EFFECTIVE SEED SPACE IS 2^32. Both the master seed and every derived stream
+ * are reduced to 32 bits before use, so masterSeed values that are congruent
+ * mod 2^32 (e.g. 1 and 4294967297) produce the identical roster. The CLI
+ * restricts --seed to a non-negative JS-safe integer for personality_seed
+ * storage, but the DISTINCT-roster guarantee only holds within [0, 2^32). This
+ * is documented rather than widened: 2^32 distinct rosters is far more than we
+ * will ever generate, and the approved-report hash — not the seed alone — is the
+ * binding artifact.
  */
 
 export type Rng = () => number;

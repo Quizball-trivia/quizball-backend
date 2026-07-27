@@ -11,7 +11,6 @@
  *     [--out-dir scripts/persistent-bot-roster/out]
  */
 
-import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +20,7 @@ import { generateRoster } from './roster.js';
 import { buildCandidate } from './name-generator.js';
 import { fieldRng } from './prng.js';
 import { renderCsv, renderReport } from './report.js';
+import { rosterDigest, sha256, type RosterManifest } from './manifest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,7 +63,7 @@ function main() {
 
   const patternsRaw = readFileSync(patternsPath, 'utf8');
   const patterns = JSON.parse(patternsRaw) as RosterPatterns;
-  const patternsSha = createHash('sha256').update(patternsRaw).digest('hex');
+  const patternsSha = sha256(patternsRaw);
 
   const bots = generateRoster({ seed, count, patterns });
 
@@ -77,38 +77,37 @@ function main() {
     keys.add(k);
   }
 
+  const rosterSha = rosterDigest(bots);
   const effectiveSpaceProbe = probeEffectiveSpace(patterns);
-  const report = renderReport({ seed, count, patterns, bots, effectiveSpaceProbe });
-  const reportSha = createHash('sha256').update(report).digest('hex');
+  const report = renderReport({ seed, count, patterns, bots, effectiveSpaceProbe, rosterSha });
+  const reportSha = sha256(report);
   const csv = renderCsv(bots);
 
   const reportPath = path.join(outDir, 'REPORT.md');
   const csvPath = path.join(outDir, 'roster.csv');
   const manifestPath = path.join(outDir, 'roster.manifest.json');
 
+  const manifest: RosterManifest = {
+    schemaVersion: 2,
+    seed,
+    count,
+    reportSha256: reportSha,
+    patternsSha256: patternsSha,
+    exclusionSha256: patterns.exclusion.sha256,
+    rosterSha256: rosterSha,
+    generatedAt: new Date().toISOString(),
+    maxNameAttempts: Math.max(...bots.map((b) => b.nameAttempts)),
+  };
+
   writeFileSync(reportPath, report);
   writeFileSync(csvPath, csv);
-  writeFileSync(
-    manifestPath,
-    JSON.stringify(
-      {
-        seed,
-        count,
-        reportSha256: reportSha,
-        patternsSha256: patternsSha,
-        exclusionSha256: patterns.exclusion.sha256,
-        generatedAt: new Date().toISOString(),
-        maxNameAttempts: Math.max(...bots.map((b) => b.nameAttempts)),
-      },
-      null,
-      2,
-    ) + '\n',
-  );
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
   process.stdout.write(`Wrote ${reportPath}\n`);
   process.stdout.write(`Wrote ${csvPath}\n`);
   process.stdout.write(`Wrote ${manifestPath}\n`);
   process.stdout.write(`\nREPORT sha256 (pass to create.ts --approved-report):\n  ${reportSha}\n`);
+  process.stdout.write(`Roster digest (bound in manifest): ${rosterSha}\n`);
   process.stdout.write(`Seed: ${seed}\n`);
   process.stdout.write(`Max name-generation attempts for any bot: ${Math.max(...bots.map((b) => b.nameAttempts))}\n`);
   process.stdout.write(`Effective name space probe: ${effectiveSpaceProbe.distinctSampled}/${effectiveSpaceProbe.sampleSize} unique\n`);

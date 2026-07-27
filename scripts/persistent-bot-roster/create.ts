@@ -1,102 +1,155 @@
 /**
- * Roster CREATION script — approval-gated. NOT run in PR5; runs on STAGING first
- * after a human approves the dry-run report.
+ * Roster CREATION script — manifest-gated, atomic. NOT run in PR5; runs on
+ * STAGING first after a human approves the dry-run report.
  *
- * Refusals (all hard):
- *   - without --approved-report <sha256> matching the sha256 of the report file
- *   - without --seed matching the seed embedded in the report's manifest
- *   - if the frozen exclusion set in patterns.json fails a live collision check
- *     (a separate post-pass; the frozen set drives the deterministic sequence,
- *     but we still verify no name became taken since measurement)
+ * Single source of truth: the MANIFEST (finding #1). It binds report sha256,
+ * patterns sha256, seed, count, exclusion snapshot, and a digest of ALL rows.
+ * There are no independent --patterns/--count inputs that determine identities.
  *
- * Writes (batched, idempotent by nickname):
- *   - users            is_ai=true, ai_kind='persistent', coins=0, tickets=0,
- *                      tickets_refill_started_at=NULL (neutralized refill)
- *   - ranked_profiles  rp=450, tier='Youth Prospect', placement_status='unplaced'
- *                      (matches ranked.repo.ensureProfile defaults exactly)
- *   - synthetic_player_profiles  all fields incl. schedule/daily_cap/
- *                      rename_propensity/personality_seed + generation batch tag
+ * Refusals (all fail-closed):
+ *   - report bytes must hash to --approved-report AND to manifest.reportSha256
+ *   - the supplied patterns.json must hash to manifest.patternsSha256
+ *   - regenerating from (manifest.seed, manifest.count, patterns) must reproduce
+ *     manifest.rosterSha256 and manifest.exclusionSha256
+ *   - the app's nickname moderator must pass for every one of the 1,000 names
+ *   - inside ONE transaction (findings #2/#3): any foreign collision against
+ *     current users.nickname OR nickname_history aborts the WHOLE roster, listing
+ *     the colliding names. No warn-and-skip, no partial roster.
  *
- * A generation batch tag is stored in synthetic_player_profiles.schedule.batch so
- * the rollback script can delete exactly this batch.
+ * Rerun semantics (finding #3): creation is atomic, so the only legitimate
+ * "already exists" state is a fully-created roster.
+ *   - all manifest nicknames already exist as this batch's persistent bots → no-op success
+ *   - some exist → abort with the diff (that state implies manual tampering)
  *
- * Usage:
- *   DATABASE_URL=postgres://... tsx scripts/persistent-bot-roster/create.ts \
- *     --approved-report <sha256> --seed <int> \
- *     --patterns scripts/persistent-bot-roster/patterns.json \
- *     --report scripts/persistent-bot-roster/out/REPORT.md \
- *     --batch roster-2026-07-27 [--count 1000] [--batch-size 100] [--dry]
+ * Writes (finding #4 provenance): each bot's synthetic_player_profiles.schedule
+ * carries {batch, manifestDigest}. After commit, a RECEIPT file lists the created
+ * user ids + the manifest digest, so rollback deletes exactly those ids.
+ *
+ * Connection: prepare:false + the app's pooler-safe settings (finding #10).
  */
 
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import postgres from 'postgres';
 
 import type { RosterPatterns } from './patterns.js';
 import type { SqlLike, Tx } from './db-types.js';
+import { rosterDigest, sha256, type RosterManifest } from './manifest.js';
 import { generateRoster, normalizeForExclusion, type GeneratedBot } from './roster.js';
+import { isNicknameAllowed } from '../../src/modules/moderation/text-moderation.js';
 
-function argVal(flag: string, fallback?: string): string | undefined {
+function argVal(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
-  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : undefined;
 }
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
 }
 
 export interface CreateConfig {
-  seed: number;
-  count: number;
-  batch: string;
-  batchSize: number;
+  manifestPath: string;
+  reportPath: string;
   patternsPath: string;
-  reportPath?: string;
-  approvedReport?: string;
+  approvedReport: string;
+  batch: string;
+  receiptPath: string;
   dry: boolean;
 }
 
 export function parseConfig(): CreateConfig {
-  const seedRaw = argVal('--seed');
-  if (!seedRaw) throw new Error('--seed is required');
-  const seed = Number(seedRaw);
-  if (!Number.isInteger(seed) || seed < 0 || seed > Number.MAX_SAFE_INTEGER) {
-    throw new Error('--seed must be a non-negative safe integer');
-  }
+  const manifestPath = argVal('--manifest');
+  const reportPath = argVal('--report');
+  const patternsPath = argVal('--patterns');
+  const approvedReport = argVal('--approved-report');
   const batch = argVal('--batch');
-  if (!batch) throw new Error('--batch <tag> is required (used by the rollback script)');
-  const patternsPath = path.resolve(process.cwd(), argVal('--patterns') ?? '');
-  if (!argVal('--patterns')) throw new Error('--patterns <patterns.json> is required');
+  if (!manifestPath) throw new Error('--manifest <roster.manifest.json> is required');
+  if (!reportPath) throw new Error('--report <REPORT.md> is required');
+  if (!patternsPath) throw new Error('--patterns <patterns.json> is required');
+  if (!approvedReport) throw new Error('--approved-report <sha256> is required');
+  if (!batch) throw new Error('--batch <unique-id> is required');
+  const resolvedManifest = path.resolve(process.cwd(), manifestPath);
   return {
-    seed,
-    count: Number(argVal('--count', '1000')),
+    manifestPath: resolvedManifest,
+    reportPath: path.resolve(process.cwd(), reportPath),
+    patternsPath: path.resolve(process.cwd(), patternsPath),
+    approvedReport,
     batch,
-    batchSize: Number(argVal('--batch-size', '100')),
-    patternsPath,
-    reportPath: argVal('--report'),
-    approvedReport: argVal('--approved-report'),
+    receiptPath: path.resolve(
+      process.cwd(),
+      argVal('--receipt') ?? path.join(path.dirname(resolvedManifest), `receipt-${batch}.json`),
+    ),
     dry: hasFlag('--dry'),
   };
 }
 
-/** Verify the approval gate. Throws on any mismatch. */
-export function verifyApproval(cfg: CreateConfig): void {
-  if (!cfg.reportPath) throw new Error('--report <REPORT.md> is required to verify --approved-report');
-  if (!cfg.approvedReport) throw new Error('--approved-report <sha256> is required');
-  const report = readFileSync(path.resolve(process.cwd(), cfg.reportPath), 'utf8');
-  const actualSha = createHash('sha256').update(report).digest('hex');
-  if (actualSha !== cfg.approvedReport) {
-    throw new Error(
-      `Approval mismatch: --approved-report ${cfg.approvedReport} != actual report sha256 ${actualSha}. ` +
-        'Refusing to create the roster.',
-    );
+export interface VerifiedPlan {
+  manifest: RosterManifest;
+  bots: GeneratedBot[];
+  manifestDigest: string;
+}
+
+/**
+ * Verify the full approval chain and regenerate the roster. Throws on any
+ * mismatch. Returns the verified bots + a digest of the manifest itself (the
+ * receipt/rollback provenance key).
+ */
+export function verifyAndRegenerate(cfg: {
+  manifestPath: string;
+  reportPath: string;
+  patternsPath: string;
+  approvedReport: string;
+}): VerifiedPlan {
+  const manifestRaw = readFileSync(cfg.manifestPath, 'utf8');
+  const manifest = JSON.parse(manifestRaw) as RosterManifest;
+  if (manifest.schemaVersion !== 2) {
+    throw new Error(`Unsupported manifest schemaVersion ${manifest.schemaVersion}; expected 2`);
   }
-  // The report embeds the seed on a line "- **Seed:** `<n>`".
-  const m = report.match(/\*\*Seed:\*\*\s*`(\d+)`/);
-  if (!m) throw new Error('Could not find the embedded seed in the report; refusing.');
-  if (Number(m[1]) !== cfg.seed) {
-    throw new Error(`--seed ${cfg.seed} does not match the report's embedded seed ${m[1]}; refusing.`);
+
+  // (a) report bytes must hash to --approved-report AND manifest.reportSha256.
+  const report = readFileSync(cfg.reportPath, 'utf8');
+  const reportSha = sha256(report);
+  if (reportSha !== cfg.approvedReport) {
+    throw new Error(`Approval mismatch: --approved-report != actual report sha256 ${reportSha}. Refusing.`);
+  }
+  if (reportSha !== manifest.reportSha256) {
+    throw new Error(`Report/manifest mismatch: report sha256 ${reportSha} != manifest.reportSha256 ${manifest.reportSha256}. Refusing.`);
+  }
+
+  // (b) supplied patterns.json must hash to manifest.patternsSha256.
+  const patternsRaw = readFileSync(cfg.patternsPath, 'utf8');
+  const patternsSha = sha256(patternsRaw);
+  if (patternsSha !== manifest.patternsSha256) {
+    throw new Error(`Patterns mismatch: patterns.json sha256 ${patternsSha} != manifest.patternsSha256 ${manifest.patternsSha256}. Refusing.`);
+  }
+  const patterns = JSON.parse(patternsRaw) as RosterPatterns;
+  if (patterns.exclusion.sha256 !== manifest.exclusionSha256) {
+    throw new Error('Exclusion snapshot mismatch between patterns.json and manifest. Refusing.');
+  }
+
+  // (c) regenerate and match the roster digest bit-for-bit.
+  const bots = generateRoster({ seed: manifest.seed, count: manifest.count, patterns });
+  if (bots.length !== manifest.count) {
+    throw new Error(`Regenerated ${bots.length} bots but manifest.count is ${manifest.count}. Refusing.`);
+  }
+  const regenDigest = rosterDigest(bots);
+  if (regenDigest !== manifest.rosterSha256) {
+    throw new Error(`Roster digest mismatch: regenerated ${regenDigest} != manifest.rosterSha256 ${manifest.rosterSha256}. Refusing.`);
+  }
+
+  // (d) moderator gate over every name (finding #8).
+  const flagged = bots.filter((b) => !isNicknameAllowed(b.nickname)).map((b) => b.nickname);
+  if (flagged.length > 0) {
+    throw new Error(`Nickname moderator flagged ${flagged.length} names: ${flagged.slice(0, 20).join(', ')}. Refusing.`);
+  }
+
+  return { manifest, bots, manifestDigest: sha256(manifestRaw) };
+}
+
+export class RosterCollisionError extends Error {
+  constructor(public readonly collisions: string[]) {
+    super(`Roster aborted: ${collisions.length} foreign nickname collision(s): ${collisions.slice(0, 20).join(', ')}`);
+    this.name = 'RosterCollisionError';
   }
 }
 
@@ -106,21 +159,19 @@ export interface InvariantResult {
   counts: Record<string, number>;
 }
 
-/** Post-write invariant check. Exported for the integration test. */
+/** Post-write invariant check. Always requires the manifest count exactly. */
 export async function checkInvariants(
   sql: SqlLike,
   batch: string,
-  expectedCount: number,
+  manifestCount: number,
 ): Promise<InvariantResult> {
   const problems: string[] = [];
   const [row] = await sql<{
-    users: number; persistent: number; wrong_kind: number; nonzero_bal: number;
-    with_identity: number; profiles: number; unplaced: number; synth: number;
+    synth: number; users: number; persistent: number; wrong_kind: number; nonzero_bal: number;
+    with_identity: number; profiles: number; unplaced: number;
   }[]>`
     WITH batch_users AS (
-      SELECT spp.user_id
-      FROM synthetic_player_profiles spp
-      WHERE spp.schedule->>'batch' = ${batch}
+      SELECT spp.user_id FROM synthetic_player_profiles spp WHERE spp.schedule->>'batch' = ${batch}
     )
     SELECT
       (SELECT count(*)::int FROM batch_users) AS synth,
@@ -133,14 +184,14 @@ export async function checkInvariants(
       (SELECT count(*)::int FROM ranked_profiles rp JOIN batch_users b ON b.user_id = rp.user_id WHERE rp.placement_status = 'unplaced' AND rp.rp = 450) AS unplaced
   `;
   const c = row!;
-  if (c.synth !== expectedCount) problems.push(`synthetic_player_profiles count ${c.synth} != ${expectedCount}`);
-  if (c.users !== expectedCount) problems.push(`users count ${c.users} != ${expectedCount}`);
-  if (c.persistent !== expectedCount) problems.push(`persistent-classified users ${c.persistent} != ${expectedCount}`);
+  if (c.synth !== manifestCount) problems.push(`synthetic_player_profiles count ${c.synth} != ${manifestCount}`);
+  if (c.users !== manifestCount) problems.push(`users count ${c.users} != ${manifestCount}`);
+  if (c.persistent !== manifestCount) problems.push(`persistent-classified users ${c.persistent} != ${manifestCount}`);
   if (c.wrong_kind !== 0) problems.push(`${c.wrong_kind} users are not is_ai/persistent`);
   if (c.nonzero_bal !== 0) problems.push(`${c.nonzero_bal} users have non-zero balances or a live refill anchor`);
   if (c.with_identity !== 0) problems.push(`${c.with_identity} users have auth identities (must be zero)`);
-  if (c.profiles !== expectedCount) problems.push(`ranked_profiles count ${c.profiles} != ${expectedCount}`);
-  if (c.unplaced !== expectedCount) problems.push(`unplaced/rp=450 profiles ${c.unplaced} != ${expectedCount}`);
+  if (c.profiles !== manifestCount) problems.push(`ranked_profiles count ${c.profiles} != ${manifestCount}`);
+  if (c.unplaced !== manifestCount) problems.push(`unplaced/rp=450 profiles ${c.unplaced} != ${manifestCount}`);
   return {
     ok: problems.length === 0,
     problems,
@@ -151,30 +202,69 @@ export async function checkInvariants(
   };
 }
 
-/** Insert one batch of bots idempotently (skip nicknames that already exist). */
-export async function insertBatch(
-  sql: SqlLike,
-  bots: GeneratedBot[],
-  batch: string,
-): Promise<{ inserted: number; skipped: number }> {
-  let inserted = 0;
-  let skipped = 0;
-  await sql.begin(async (rawTx) => {
+export interface CreateOutcome {
+  status: 'created' | 'already-created';
+  createdIds: string[];
+  manifestDigest: string;
+}
+
+/**
+ * Insert the entire roster in ONE transaction (findings #2/#3), fail-closed on
+ * any foreign collision (current users.nickname OR nickname_history). Returns the
+ * created user ids for the receipt. If the roster already fully exists as this
+ * batch's persistent bots, it is a no-op success; a partial pre-existing state
+ * aborts (throws RosterCollisionError).
+ */
+export async function createRoster(sql: SqlLike, plan: VerifiedPlan, batch: string): Promise<CreateOutcome> {
+  const { bots, manifestDigest } = plan;
+  const keys = bots.map((b) => normalizeForExclusion(b.nickname));
+
+  return (await sql.begin(async (rawTx) => {
     const tx = rawTx as unknown as Tx;
+
+    // Classify pre-existing current names: which of ours already exist, as what.
+    const existing = await tx<{ x: string; is_ai: boolean; ai_kind: string | null; batch: string | null }[]>`
+      SELECT lower(u.nickname) x, u.is_ai, u.ai_kind, spp.schedule->>'batch' AS batch
+      FROM users u
+      LEFT JOIN synthetic_player_profiles spp ON spp.user_id = u.id
+      WHERE lower(u.nickname) = ANY(${keys})
+    `;
+
+    // Rerun semantics: if ALL our names exist as THIS batch's persistent bots
+    // and the batch is complete → no-op success.
+    const oursThisBatch = existing.filter((e) => e.is_ai && e.ai_kind === 'persistent' && e.batch === batch);
+    if (existing.length === bots.length && oursThisBatch.length === bots.length) {
+      const ids = (await tx<{ id: string }[]>`
+        SELECT u.id FROM users u JOIN synthetic_player_profiles spp ON spp.user_id = u.id
+        WHERE spp.schedule->>'batch' = ${batch}
+      `).map((r) => r.id);
+      return { status: 'already-created' as const, createdIds: ids, manifestDigest };
+    }
+
+    // Any pre-existing current name that is NOT ours-this-batch is a foreign
+    // collision. History-reservation collisions (a name freed within retention)
+    // are also foreign. Fail closed with the full sorted list.
+    const foreign = existing
+      .filter((e) => !(e.is_ai && e.ai_kind === 'persistent' && e.batch === batch))
+      .map((e) => e.x);
+    const history = (await tx<{ x: string }[]>`
+      SELECT DISTINCT lower(nickname) x FROM (
+        SELECT old_nickname AS nickname FROM nickname_history WHERE old_nickname IS NOT NULL
+        UNION SELECT new_nickname FROM nickname_history WHERE new_nickname IS NOT NULL
+      ) h WHERE lower(nickname) = ANY(${keys})
+    `).map((r) => r.x);
+    const collisions = [...new Set([...foreign, ...history])].sort();
+    if (collisions.length > 0) {
+      throw new RosterCollisionError(collisions);
+    }
+
+    // Clean state → insert every row inside this one transaction.
+    const createdIds: string[] = [];
     for (const b of bots) {
-      // Idempotency: skip if this nickname already exists (case-insensitive).
-      const [existing] = await tx<{ id: string }[]>`
-        SELECT id FROM users WHERE lower(nickname) = ${normalizeForExclusion(b.nickname)} LIMIT 1
-      `;
-      if (existing) {
-        skipped++;
-        continue;
-      }
       const [user] = await tx<{ id: string }[]>`
         INSERT INTO users (
           id, email, nickname, country, avatar_url, avatar_customization,
-          onboarding_complete, is_ai, ai_kind, coins, tickets, tickets_refill_started_at,
-          favorite_club
+          onboarding_complete, is_ai, ai_kind, coins, tickets, tickets_refill_started_at, favorite_club
         ) VALUES (
           gen_random_uuid(), NULL, ${b.nickname}, ${b.country}, NULL,
           ${b.avatarCustomization ? tx.json(b.avatarCustomization as unknown as postgres.JSONValue) : null},
@@ -183,20 +273,13 @@ export async function insertBatch(
         RETURNING id
       `;
       const userId = user!.id;
-
-      // ranked_profiles: byte-for-byte the ensureProfile unplaced defaults.
       await tx`
         INSERT INTO ranked_profiles (
           user_id, rp, tier, placement_status, placement_required, placement_played,
           placement_wins, placement_seed_rp, placement_perf_sum, placement_points_for_sum,
           placement_points_against_sum, current_win_streak, last_ranked_match_at
-        ) VALUES (
-          ${userId}, 450, 'Youth Prospect', 'unplaced', 3, 0, 0, NULL, 0, 0, 0, 0, NULL
-        )
-        ON CONFLICT (user_id) DO NOTHING
+        ) VALUES (${userId}, 450, 'Youth Prospect', 'unplaced', 3, 0, 0, NULL, 0, 0, 0, 0, NULL)
       `;
-
-      // synthetic_player_profiles: batch tag lives in schedule.batch for rollback.
       await tx`
         INSERT INTO synthetic_player_profiles (
           user_id, status, base_skill, consistency, speed_offset, category_affinities,
@@ -205,73 +288,85 @@ export async function insertBatch(
         ) VALUES (
           ${userId}, 'active', ${b.baseSkill}, ${b.consistency}, ${b.speedOffset},
           ${tx.json(b.categoryAffinities as unknown as postgres.JSONValue)},
-          ${tx.json({ ...b.schedule, batch, band: b.skillBand, willRename: b.willRename } as unknown as postgres.JSONValue)},
+          ${tx.json({ ...b.schedule, batch, manifestDigest, band: b.skillBand, willRename: b.willRename } as unknown as postgres.JSONValue)},
           ${b.dailyCap}, ${b.homeCity}, ${b.homeLat}, ${b.homeLng}, ${b.favoriteClub},
           ${b.renamePropensity}, ${b.personalitySeed}
         )
-        ON CONFLICT (user_id) DO NOTHING
       `;
-      inserted++;
+      createdIds.push(userId);
     }
+    return { status: 'created' as const, createdIds, manifestDigest };
+  })) as CreateOutcome;
+}
+
+/** Pooler-safe connection, matching the app's settings for the same topology. */
+function openWriteDb(): postgres.Sql {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required (staging first)');
+  return postgres(databaseUrl, {
+    max: 4,
+    prepare: false, // Supavisor pooler cache-invalidates prepared statements.
+    onnotice: () => {},
+    connection: { application_name: 'roster-create', statement_timeout: 120_000 },
   });
-  return { inserted, skipped };
 }
 
 async function main() {
   const cfg = parseConfig();
-  verifyApproval(cfg);
+  const plan = verifyAndRegenerate(cfg);
+  process.stdout.write(`Approval verified: ${plan.bots.length} bots, roster digest matches manifest.\n`);
 
-  const patternsRaw = readFileSync(cfg.patternsPath, 'utf8');
-  const patterns = JSON.parse(patternsRaw) as RosterPatterns;
-  const bots = generateRoster({ seed: cfg.seed, count: cfg.count, patterns });
+  if (cfg.dry) {
+    process.stdout.write(`[--dry] Would create ${plan.bots.length} bots in batch "${cfg.batch}" (atomic).\n`);
+    return;
+  }
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error('DATABASE_URL is required (staging first)');
-  const sql = postgres(databaseUrl, { max: 4 });
+  const sql = openWriteDb();
   try {
-    // Live final-collision check (separate pass; frozen set already drove gen).
-    const keys = bots.map((b) => normalizeForExclusion(b.nickname));
-    const live = await sql<{ x: string }[]>`
-      SELECT lower(nickname) x FROM users WHERE lower(nickname) = ANY(${keys})
-      UNION SELECT lower(old_nickname) FROM nickname_history WHERE lower(old_nickname) = ANY(${keys})
-      UNION SELECT lower(new_nickname) FROM nickname_history WHERE lower(new_nickname) = ANY(${keys})
-    `;
-    if (live.length > 0) {
-      process.stderr.write(
-        `WARNING: ${live.length} generated names became taken since measurement: ${live.map((r) => r.x).slice(0, 10).join(', ')}\n` +
-          'These will be SKIPPED by the idempotent insert; re-measure + re-approve to fill the gap.\n',
-      );
+    let outcome: CreateOutcome;
+    try {
+      outcome = await createRoster(sql, plan, cfg.batch);
+    } catch (err) {
+      if (err instanceof RosterCollisionError) {
+        process.stderr.write(`ABORTED (fail-closed): ${err.collisions.length} foreign nickname collision(s).\n`);
+        process.stderr.write(`Colliding names: ${err.collisions.join(', ')}\n`);
+        process.stderr.write('No rows were written (single transaction rolled back). Re-measure + re-approve.\n');
+        process.exit(3);
+      }
+      throw err;
     }
 
-    if (cfg.dry) {
-      process.stdout.write(`[--dry] Approval verified. Would create ${bots.length} bots in batch "${cfg.batch}".\n`);
-      return;
+    if (outcome.status === 'already-created') {
+      process.stdout.write(`No-op: all ${outcome.createdIds.length} bots already exist as batch "${cfg.batch}".\n`);
+    } else {
+      process.stdout.write(`Created ${outcome.createdIds.length} bots in batch "${cfg.batch}".\n`);
     }
 
-    let inserted = 0;
-    let skipped = 0;
-    for (let i = 0; i < bots.length; i += cfg.batchSize) {
-      const slice = bots.slice(i, i + cfg.batchSize);
-      const r = await insertBatch(sql, slice, cfg.batch);
-      inserted += r.inserted;
-      skipped += r.skipped;
-      process.stdout.write(`  batch ${i / cfg.batchSize + 1}: +${r.inserted} inserted, ${r.skipped} skipped\n`);
-    }
-    process.stdout.write(`\nDone: ${inserted} inserted, ${skipped} skipped.\n`);
-
-    const inv = await checkInvariants(sql, cfg.batch, cfg.count - skipped);
+    const inv = await checkInvariants(sql, cfg.batch, plan.manifest.count);
     process.stdout.write(`Invariant check: ${JSON.stringify(inv.counts)}\n`);
     if (!inv.ok) {
       process.stderr.write(`INVARIANT FAILURES:\n - ${inv.problems.join('\n - ')}\n`);
       process.exit(2);
     }
-    process.stdout.write('All invariants passed.\n');
+
+    // Receipt (finding #4): per-environment provenance for rollback.
+    const receipt = {
+      schemaVersion: 1,
+      batch: cfg.batch,
+      manifestDigest: plan.manifestDigest,
+      rosterSha256: plan.manifest.rosterSha256,
+      count: plan.manifest.count,
+      createdAt: new Date().toISOString(),
+      userIds: outcome.createdIds.slice().sort(),
+    };
+    writeFileSync(cfg.receiptPath, JSON.stringify(receipt, null, 2) + '\n');
+    process.stdout.write(`All invariants passed. Receipt written: ${cfg.receiptPath}\n`);
+    process.stdout.write('NOTE: the receipt is a PER-ENVIRONMENT artifact — keep staging and prod receipts separate.\n');
   } finally {
     await sql.end({ timeout: 5 });
   }
 }
 
-// Only run when invoked directly (not when imported by the integration test).
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => {
     process.stderr.write(`create failed: ${err instanceof Error ? err.stack : String(err)}\n`);

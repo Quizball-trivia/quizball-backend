@@ -18,6 +18,7 @@ import {
   FIRST_NAMES_F,
   FIRST_NAMES_M,
   FOOTBALL_TOKENS,
+  PROTECTED_ATHLETE_TOKENS,
   SURNAME_STEMS,
   SURNAME_SUFFIXES,
   TRANSLIT_VARIANTS,
@@ -113,6 +114,9 @@ export function buildCandidate(ctx: NameBuildContext): string {
   const wantTwoWord = rng() < p.twoWordRate;
 
   let core: string;
+  // Set when a protected athlete token already forced its own decoration, so the
+  // final digit pass doesn't need to (and casing stays intact).
+  let forcedDecorated = false;
   if (wantTwoWord) {
     // Real first+last names appear both TitleCase ("Giorgi Darakhvelidze") and
     // all-lowercase ("luka kalatozi", "zuka arsenishvili"), so casing applies to
@@ -124,7 +128,14 @@ export function buildCandidate(ctx: NameBuildContext): string {
     // space). A first name, football token, or bare surname, then an optional
     // diminutive/initial suffix — all space-free, so this stays single-word.
     const roll = rng();
-    if (roll < 0.12) {
+    if (roll < 0.06) {
+      // Protected famous-athlete token: NEVER bare (finding #8). Always take a
+      // digit or diminutive so it reads as a fan handle, not an impersonation.
+      core = pick(rng, PROTECTED_ATHLETE_TOKENS);
+      if (rng() < 0.5) core += digitTokenFrom(rng, p.trailingDigitTokens, Math.max(attempt, 1));
+      else core += pick(rng, DIMINUTIVE_SUFFIXES);
+      forcedDecorated = true;
+    } else if (roll < 0.12) {
       core = pick(rng, FOOTBALL_TOKENS);
     } else if (roll < 0.2) {
       core = buildSurname(rng);
@@ -162,7 +173,9 @@ export function buildCandidate(ctx: NameBuildContext): string {
   // rate lands near the measured overall digitRate.
   const baseDigitP = wantTwoWord ? p.digitRate * 0.25 : Math.min(p.digitRate * 1.5, 0.3);
   const digitP = attempt >= 1 ? Math.min(baseDigitP * 1.6, 0.5) : baseDigitP;
-  if (chance(rng, digitP)) {
+  // Skip the digit pass if a protected athlete token already forced decoration
+  // (avoids "ronaldo0912" pile-ups); it is already guaranteed non-bare.
+  if (!forcedDecorated && chance(rng, digitP)) {
     core += digitTokenFrom(rng, p.trailingDigitTokens, attempt);
   }
 

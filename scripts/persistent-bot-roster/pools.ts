@@ -97,13 +97,24 @@ export const SURNAME_SUFFIXES: { value: string; weight: number }[] = [
 export const DIMINUTIVE_SUFFIXES: string[] = ['o', 'a', 'ika', 'ka', 'iko', 'ushka', 'una'];
 
 /**
- * Football-reference tokens seen among real names (players, "Real"/"CF"
- * prefixes, club echoes). Used at a low, measured rate.
+ * Exact famous-athlete tokens (finding #8). Real players DO use these
+ * (hamsik971 was measured), but a bare `ronaldo` reads as impersonation, so the
+ * name generator NEVER emits these unmodified — they ALWAYS take decoration
+ * (digits/diminutive/suffix), mirroring how the real cohort uses them.
+ */
+export const PROTECTED_ATHLETE_TOKENS: string[] = [
+  'messi', 'ronaldo', 'cr7', 'neymar', 'mbappe', 'pele', 'maradona', 'zlatan',
+  'vidal', 'arteta', 'ramos', 'hamsik', 'kaka',
+];
+
+/**
+ * Generic football-reference tokens seen among real names (roles, echoes). Used
+ * at a low, measured rate. Bare <=2-letter tokens (cf, fc, gk) are deliberately
+ * excluded — they read as obviously synthetic (finding #8).
  */
 export const FOOTBALL_TOKENS: string[] = [
-  'messi', 'ronaldo', 'cr7', 'vidal', 'arteta', 'costa', 'belardi', 'kaka',
-  'zlatan', 'neymar', 'mbappe', 'pele', 'maradona', 'hamsik', 'ramos',
-  'goat', 'real', 'cf', 'fc', 'gk', 'baller', 'striker', 'kaisa',
+  'costa', 'belardi', 'goat', 'baller', 'striker', 'kaisa', 'golden', 'legend',
+  'maestro', 'trequarti', 'libero', 'catenaccio',
 ];
 
 /**

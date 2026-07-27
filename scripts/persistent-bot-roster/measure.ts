@@ -193,45 +193,26 @@ async function measure(): Promise<RosterPatterns> {
       distribution: clubTop.map((r) => ({ value: r.fc, weight: r.n })),
     };
 
-    // Activity ---------------------------------------------------------
-    const hourly = await q<{ h: number; n: number }[]>(`
-      SELECT EXTRACT(hour FROM (m.started_at AT TIME ZONE 'Asia/Tbilisi'))::int h, count(*)::int n
+    // Activity — per-user sessionization (§1.3) -------------------------
+    // Pull each real player's match-start timestamps (epoch seconds, Tbilisi
+    // local hour + local day), then segment into sessions on 20-minute gaps and
+    // build a per-user tuple in JS. An aggregate histogram cannot yield per-user
+    // patterns, so the clustering happens over per-user tuples, not the hist.
+    const starts = await q<{ user_id: string; epoch: number; hour: number; day: string }[]>(`
+      SELECT mp.user_id,
+             extract(epoch FROM m.started_at)::bigint AS epoch,
+             extract(hour FROM (m.started_at AT TIME ZONE 'Asia/Tbilisi'))::int AS hour,
+             (m.started_at AT TIME ZONE 'Asia/Tbilisi')::date::text AS day
       FROM matches m JOIN match_players mp ON mp.match_id = m.id JOIN users u ON u.id = mp.user_id
       WHERE u.is_ai = false AND u.is_seed = false AND m.is_dev = false
-        AND m.started_at IS NOT NULL AND m.started_at > now() - interval '30 days'
-      GROUP BY 1 ORDER BY 1
+        AND m.started_at IS NOT NULL AND m.started_at > now() - interval '60 days'
+      ORDER BY mp.user_id, m.started_at
     `);
+    // Retain the raw histogram purely for report disclosure.
     const hist = new Array(24).fill(0);
-    for (const r of hourly) hist[r.h] = r.n;
+    for (const r of starts) hist[r.hour] = (hist[r.hour] ?? 0) + 1;
 
-    const [mpd] = await q<{ p50: number; p75: number; p90: number; p99: number; mx: number }[]>(`
-      WITH pd AS (
-        SELECT mp.user_id, (m.started_at AT TIME ZONE 'Asia/Tbilisi')::date d, count(*)::int c
-        FROM matches m JOIN match_players mp ON mp.match_id = m.id JOIN users u ON u.id = mp.user_id
-        WHERE u.is_ai = false AND u.is_seed = false AND m.is_dev = false
-          AND m.started_at > now() - interval '30 days'
-        GROUP BY 1, 2
-      )
-      SELECT
-        percentile_disc(0.5) WITHIN GROUP (ORDER BY c)::int p50,
-        percentile_disc(0.75) WITHIN GROUP (ORDER BY c)::int p75,
-        percentile_disc(0.9) WITHIN GROUP (ORDER BY c)::int p90,
-        percentile_disc(0.99) WITHIN GROUP (ORDER BY c)::int p99,
-        max(c)::int mx
-      FROM pd
-    `);
-    const activity: ActivityPatterns = {
-      source: 'measured',
-      hourlyHistogram: hist,
-      dailyCapQuantiles: [
-        [0.5, Math.max(mpd!.p50, 2)],
-        [0.75, Math.max(mpd!.p75, 3)],
-        [0.9, Math.max(mpd!.p90, 8)],
-        [0.99, Math.max(mpd!.p99, 14)],
-        [1.0, Math.max(mpd!.mx, 20)],
-      ],
-      scheduleArchetypes: deriveArchetypes(hist),
-    };
+    const activity: ActivityPatterns = buildActivityModel(starts, hist);
 
     // Rename -----------------------------------------------------------
     const [rn] = await q<{ renamed_users: number }[]>(`
@@ -256,6 +237,17 @@ async function measure(): Promise<RosterPatterns> {
       ],
     };
 
+    // Category slugs (real, active, non-format) -----------------------
+    // Skill affinities must key on LIVE slugs (hyphenated). Exclude the
+    // daily-challenge FORMAT sub-categories — they are quiz formats, not skill
+    // domains — and any inactive category.
+    const catRows = await q<{ slug: string }[]>(`
+      SELECT slug FROM categories
+      WHERE is_active = true AND slug NOT LIKE 'daily-challenges%'
+      ORDER BY slug
+    `);
+    const categorySlugs = catRows.map((r) => r.slug);
+
     // Frozen exclusion set --------------------------------------------
     const exclusionRows = await q<{ x: string }[]>(`
       SELECT DISTINCT lower(x) x FROM (
@@ -278,6 +270,7 @@ async function measure(): Promise<RosterPatterns> {
         everPlayed: cohort!.ever_played,
       },
       exclusion: { count: names.length, sha256: exclusionSha, names },
+      categorySlugs,
       name,
       avatar,
       country,
@@ -295,32 +288,142 @@ function rebalanceHair(raw: WeightedString[]): WeightedString[] {
   return sorted.map((h, i) => ({ value: h.value, weight: i === 0 ? 35 : Math.max(h.weight, 8) }));
 }
 
-function deriveArchetypes(hist: number[]): ActivityPatterns['scheduleArchetypes'] {
-  // Sum hist over the half-open hour window [a, b) with wraparound. `count` is
-  // the number of hours to walk, so the loop always terminates (an `h !== b`
-  // condition would spin forever when b wraps, e.g. mass(17, 24)).
-  const mass = (a: number, count: number) => {
-    let s = 0;
-    for (let i = 0; i < count; i++) s += hist[(a + i) % 24] ?? 0;
-    return s;
+interface StartRow {
+  user_id: string;
+  epoch: number;
+  hour: number;
+  day: string;
+}
+
+/** Per-user activity profile derived from that user's match-start sequence. */
+interface UserProfile {
+  peakHour: number; // modal local start hour
+  medianSessionLen: number; // matches per session (20-min-gap segmentation)
+  peakDayCap: number; // busiest single day's match count
+}
+
+const SESSION_GAP_SECONDS = 20 * 60; // §1.3: gaps < 20min are the same session
+
+/**
+ * Build the activity model by PER-USER sessionization + clustering (§1.3):
+ *   1. For each user, segment their ordered match-starts into sessions on
+ *      20-minute gaps; record modal hour, median session length, and busiest-day
+ *      match count.
+ *   2. Assign each user to one of four hour-band archetypes by modal hour, with
+ *      night-owl fixed to the plan's 07:00–01:23 window (night = 00:00–01:23 or
+ *      the pre-dawn tail). Archetype weight = share of users.
+ *   3. Per archetype, derive the daily-cap quantiles from ITS members' peak-day
+ *      counts — so (schedule, cap) are jointly consistent (night-owls, whose
+ *      windows are short, cannot draw a 15-match cap).
+ */
+function buildActivityModel(starts: StartRow[], hist: number[]): ActivityPatterns {
+  // Group by user, preserving the query's per-user time order.
+  const byUser = new Map<string, StartRow[]>();
+  for (const r of starts) {
+    const arr = byUser.get(r.user_id);
+    if (arr) arr.push(r);
+    else byUser.set(r.user_id, [r]);
+  }
+
+  const profiles: UserProfile[] = [];
+  for (const rows of byUser.values()) {
+    if (rows.length === 0) continue;
+    // Modal hour.
+    const hourCounts = new Array(24).fill(0);
+    for (const r of rows) hourCounts[r.hour]++;
+    let peakHour = 0;
+    for (let h = 1; h < 24; h++) if (hourCounts[h] > hourCounts[peakHour]) peakHour = h;
+
+    // Sessionize on 20-min gaps; collect session lengths.
+    const sessionLens: number[] = [];
+    let curLen = 1;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i]!.epoch - rows[i - 1]!.epoch <= SESSION_GAP_SECONDS) {
+        curLen++;
+      } else {
+        sessionLens.push(curLen);
+        curLen = 1;
+      }
+    }
+    sessionLens.push(curLen);
+    const medianSessionLen = median(sessionLens);
+
+    // Busiest single day's match count = a per-user cap proxy.
+    const dayCounts = new Map<string, number>();
+    for (const r of rows) dayCounts.set(r.day, (dayCounts.get(r.day) ?? 0) + 1);
+    const peakDayCap = Math.max(...dayCounts.values());
+
+    profiles.push({ peakHour, medianSessionLen, peakDayCap });
+  }
+
+  // Archetype assignment by modal hour band.
+  const archetypeOf = (peakHour: number): 'evening' | 'daytime' | 'morning' | 'night_owl' => {
+    if (peakHour >= 17 && peakHour <= 23) return 'evening';
+    if (peakHour >= 11 && peakHour <= 16) return 'daytime';
+    if (peakHour >= 6 && peakHour <= 10) return 'morning';
+    return 'night_owl'; // 00:00–05:59, the small pre-dawn/late minority
   };
-  // Non-overlapping day windows for the three mainstream archetypes.
-  const evening = mass(17, 7); // 17:00-23:59
-  const daytime = mass(11, 6); // 11:00-16:59
-  const morning = mass(6, 5); // 06:00-10:59
-  const total = Math.max(evening + daytime + morning, 1);
-  const w = (x: number) => Math.max(Math.round((x / total) * 97), 3);
-  // Night-owl is deliberately a small MINORITY archetype (~2-3%, plan §1.3): the
-  // aggregate 00:00-05:00 histogram mass is inflated by a handful of very active
-  // night players, so weighting the archetype by raw mass would badly overstate
-  // how many bots are night-owls. Fixed small weight; per-user preference, not
-  // population match volume, is what this archetype models.
-  return [
-    { key: 'evening', weight: w(evening), startHour: 17, endHour: 25, sessionLength: [2, 5] },
-    { key: 'daytime', weight: w(daytime), startHour: 11, endHour: 17, sessionLength: [1, 4] },
-    { key: 'morning', weight: w(morning), startHour: 7, endHour: 11, sessionLength: [1, 3] },
-    { key: 'night_owl', weight: 3, startHour: 0, endHour: 2, sessionLength: [1, 4] },
-  ];
+
+  const buckets: Record<string, UserProfile[]> = { evening: [], daytime: [], morning: [], night_owl: [] };
+  for (const p of profiles) buckets[archetypeOf(p.peakHour)]!.push(p);
+
+  const totalUsers = Math.max(profiles.length, 1);
+  const windows: Record<string, { startHour: number; endHour: number }> = {
+    // Night window ends 01:23 per plan §1.3 (encoded as endHour 25.38 ≈ 01:23 next day).
+    evening: { startHour: 17, endHour: 25 },
+    daytime: { startHour: 11, endHour: 17 },
+    morning: { startHour: 7, endHour: 11 },
+    night_owl: { startHour: 22, endHour: 25.38 },
+  };
+
+  const archetypes = (['evening', 'daytime', 'morning', 'night_owl'] as const).map((key) => {
+    const members = buckets[key]!;
+    const share = members.length / totalUsers;
+    const sessionLens = members.map((m) => m.medianSessionLen).sort((a, b) => a - b);
+    const caps = members.map((m) => m.peakDayCap).sort((a, b) => a - b);
+    // Session length band = [p25, p90] of this cluster's median session lengths.
+    const loLen = Math.max(1, Math.round(quantileOf(sessionLens, 0.25) || 1));
+    const hiLen = Math.max(loLen, Math.round(quantileOf(sessionLens, 0.9) || 3));
+    // Joint cap quantiles from THIS cluster's peak-day counts (never the global).
+    const capQ: [number, number][] = caps.length
+      ? [
+          [0.5, Math.max(1, quantileOf(caps, 0.5))],
+          [0.75, Math.max(1, quantileOf(caps, 0.75))],
+          [0.9, Math.max(1, quantileOf(caps, 0.9))],
+          [0.99, Math.max(1, quantileOf(caps, 0.99))],
+          [1.0, Math.max(1, caps[caps.length - 1]!)],
+        ]
+      : [[1.0, 3]];
+    return {
+      key,
+      weight: Math.max(Math.round(share * 100), key === 'night_owl' ? 2 : 3),
+      startHour: windows[key]!.startHour,
+      endHour: windows[key]!.endHour,
+      sessionLength: [loLen, hiLen] as [number, number],
+      dailyCapQuantiles: capQ,
+    };
+  });
+
+  return {
+    source: 'measured',
+    hourlyHistogram: hist,
+    scheduleArchetypes: archetypes,
+    usersClustered: profiles.length,
+  };
+}
+
+function median(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+}
+
+/** Discrete quantile of a PRE-SORTED ascending array. */
+function quantileOf(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[idx]!;
 }
 
 function maskDsn(dsn: string): string {

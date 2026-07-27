@@ -3,12 +3,15 @@
  * the creation script can rebuild the EXACT roster the report was approved for.
  *
  * Determinism contract:
- *   - One master seed. Each bot attribute draws from its own per-(bot,field)
- *     sub-stream (see prng.ts), so variable-length consumption in one attribute
- *     never shifts another — of the same or any other bot.
- *   - Uniqueness is the ONLY cross-bot dependency: an ordered pass i=0..N-1,
- *     each bot's name checked against the FROZEN exclusion set ∪ names emitted
- *     so far. Iteration order is fixed by index, so the sequence is reproducible.
+ *   - One master seed (effective seed space 2^32 — see prng.ts). Each bot
+ *     attribute draws from its OWN per-(bot,field) sub-stream (see prng.ts), so
+ *     variable-length consumption in one attribute never shifts another — of the
+ *     same or any other bot. No two attributes share a stream.
+ *   - The name-generation `taken` set is the ONE intentional cross-bot
+ *     dependency: an ordered pass i=0..N-1, each bot's name checked against the
+ *     FROZEN exclusion set ∪ names emitted by earlier indices. Iteration order is
+ *     fixed by index, so the whole sequence is reproducible. A golden-digest test
+ *     (fixed seed → sha256 of the canonicalized roster) guards cross-version drift.
  */
 
 import type { RosterPatterns, ScheduleArchetype } from './patterns.js';
@@ -65,16 +68,12 @@ export interface GenerateOptions {
   seed: number;
   count: number;
   patterns: RosterPatterns;
-  /** Category slugs bots may have affinities for. */
-  categories?: string[];
 }
 
-const DEFAULT_CATEGORIES = [
-  'champions_league', 'world_cup', 'transfers', 'legends', 'georgian_football',
-  'premier_league', 'la_liga', 'serie_a', 'bundesliga', 'national_teams',
-];
-
 const MAX_NAME_ATTEMPTS = 40;
+
+/** Minimum category count needed to sample 2-4 strengths + 2-4 weaknesses. */
+const MIN_CATEGORIES = 8;
 
 function normalizeForExclusion(name: string): string {
   // Locale-independent casefold; NFC to keep Georgian composed. Never use
@@ -171,7 +170,15 @@ function sampleSchedule(rng: Rng, archetypes: ScheduleArchetype[]): ScheduleArch
 
 export function generateRoster(options: GenerateOptions): GeneratedBot[] {
   const { seed, count, patterns } = options;
-  const categories = options.categories ?? DEFAULT_CATEGORIES;
+  // Finding #5: affinities key on the FROZEN real category slugs from
+  // patterns.json (hyphenated live slugs), never invented underscore names.
+  const categories = patterns.categorySlugs ?? [];
+  if (categories.length < MIN_CATEGORIES) {
+    throw new Error(
+      `patterns.json has only ${categories.length} category slugs; need >= ${MIN_CATEGORIES}. ` +
+        'Re-run the measurement script against a DB with the real categories table.',
+    );
+  }
 
   // Frozen exclusion set (already lowercased + sorted in patterns.json).
   const taken = new Set<string>(patterns.exclusion.names);
@@ -180,15 +187,21 @@ export function generateRoster(options: GenerateOptions): GeneratedBot[] {
   for (let i = 0; i < count; i++) {
     const { nickname, attempts } = generateName(seed, i, patterns, taken);
 
+    // Finding #7: EVERY attribute draws from its OWN sub-seeded stream, so
+    // adding a draw to one attribute can never shift another (of this bot or any
+    // other). The name-generation `taken` set is the ONE intentional cross-bot
+    // dependency (documented in the module header).
     const avatarRng = fieldRng(seed, i, 'avatar');
     const geoRng = fieldRng(seed, i, 'geo');
     const clubRng = fieldRng(seed, i, 'club');
     const skillRng = fieldRng(seed, i, 'skill');
     const affinityRng = fieldRng(seed, i, 'affinity');
-    const speedRng = fieldRng(seed, i, 'speed');
+    const consistencyRng = fieldRng(seed, i, 'consistency');
+    const speedOffsetRng = fieldRng(seed, i, 'speedOffset');
     const schedRng = fieldRng(seed, i, 'schedule');
-    const capRng = fieldRng(seed, i, 'dailycap');
-    const renameRng = fieldRng(seed, i, 'rename');
+    const capRng = fieldRng(seed, i, 'dailyCap');
+    const renamePropensityRng = fieldRng(seed, i, 'renamePropensity');
+    const willRenameRng = fieldRng(seed, i, 'willRename');
 
     const avatar = sampleAvatar(avatarRng, patterns);
     const { country, city, lat, lng } = sampleCountryCity(geoRng, patterns);
@@ -197,12 +210,14 @@ export function generateRoster(options: GenerateOptions): GeneratedBot[] {
       : null;
     const { band, baseSkill } = sampleSkillBand(skillRng, patterns);
     const affinities = sampleAffinities(affinityRng, categories);
-    const consistency = +(0.35 + speedRng() * 0.5).toFixed(3); // 0.35..0.85
-    const speedOffset = +((speedRng() - 0.5) * 0.6).toFixed(3); // -0.30..+0.30
+    const consistency = +(0.35 + consistencyRng() * 0.5).toFixed(3); // 0.35..0.85
+    const speedOffset = +((speedOffsetRng() - 0.5) * 0.6).toFixed(3); // -0.30..+0.30
     const archetype = sampleSchedule(schedRng, patterns.activity.scheduleArchetypes);
-    const dailyCap = quantileSample(capRng, patterns.activity.dailyCapQuantiles);
-    const renamePropensity = +(patterns.rename.lifetimeRate * (0.5 + renameRng())).toFixed(3);
-    const willRename = chance(renameRng, patterns.rename.lifetimeRate);
+    // Cap is drawn JOINTLY with the archetype (finding #6): from THIS archetype's
+    // own cap quantiles, so a night-owl can never get a 15-match cap.
+    const dailyCap = quantileSample(capRng, archetype.dailyCapQuantiles);
+    const renamePropensity = +(patterns.rename.lifetimeRate * (0.5 + renamePropensityRng())).toFixed(3);
+    const willRename = chance(willRenameRng, patterns.rename.lifetimeRate);
 
     bots.push({
       index: i,

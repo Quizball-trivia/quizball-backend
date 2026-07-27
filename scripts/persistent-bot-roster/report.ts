@@ -77,6 +77,8 @@ export interface ReportInputs {
   patterns: RosterPatterns;
   bots: GeneratedBot[];
   effectiveSpaceProbe?: { distinctSampled: number; sampleSize: number };
+  /** Digest of the full canonicalized roster, bound in the manifest. */
+  rosterSha?: string;
 }
 
 export function renderReport(input: ReportInputs): string {
@@ -86,21 +88,29 @@ export function renderReport(input: ReportInputs): string {
   out.push('# Persistent Bot Roster — DRY-RUN REPORT');
   out.push('');
   out.push('> **APPROVAL REQUIRED.** Nothing has been written to any database. Review this');
-  out.push('> report in full. To create this exact roster, run the creation script with the');
-  out.push('> report hash and the seed below:');
+  out.push('> report in full. To create this exact roster, approve it by passing this file\'s');
+  out.push('> sha256 to the creation script, which consumes the accompanying manifest as its');
+  out.push('> single source of truth:');
   out.push('>');
   out.push('> ```');
   out.push('> tsx scripts/persistent-bot-roster/create.ts \\');
+  out.push('>   --manifest scripts/persistent-bot-roster/out/roster.manifest.json \\');
+  out.push('>   --report  scripts/persistent-bot-roster/out/REPORT.md \\');
+  out.push('>   --patterns scripts/persistent-bot-roster/patterns.json \\');
   out.push('>   --approved-report <sha256-of-THIS-file> \\');
-  out.push(`>   --seed ${seed} \\`);
-  out.push('>   --patterns scripts/persistent-bot-roster/patterns.json');
+  out.push('>   --batch <unique-batch-id>');
   out.push('> ```');
   out.push('>');
-  out.push('> The creation script recomputes this file\'s sha256 and refuses to run unless it');
-  out.push('> matches `--approved-report`, and refuses unless `--seed` matches the seed the');
-  out.push('> report was generated with. The approved report hash + seed + the checked-in');
-  out.push('> patterns.json reproduce this identical roster.');
+  out.push('> The manifest binds the report hash, patterns hash, seed, count, exclusion');
+  out.push('> snapshot, and a digest of ALL rows. Creation refuses to run unless (a) the report');
+  out.push('> bytes hash to `--approved-report` AND to `manifest.reportSha256`, (b) the supplied');
+  out.push('> patterns.json hashes to `manifest.patternsSha256`, and (c) regenerating from the');
+  out.push('> manifest seed/count reproduces `manifest.rosterSha256`. There are no independent');
+  out.push('> patterns/count inputs that could pair an approved report with a different roster.');
   out.push('');
+  if (input.rosterSha) {
+    out.push(`- **Roster digest (manifest.rosterSha256):** \`${input.rosterSha}\``);
+  }
   out.push(`- **Seed:** \`${seed}\``);
   out.push(`- **Roster size:** ${count}`);
   out.push(`- **patterns.json measured against:** ${patterns.measuredAgainst}`);
@@ -200,25 +210,37 @@ export function renderReport(input: ReportInputs): string {
   out.push('');
 
   // Schedules
-  out.push('### Schedule archetypes');
+  out.push('### Schedule archetypes (per-user sessionization, §1.3)');
+  out.push('');
+  out.push(`Archetypes are clustered from **per-user** activity: each of the`);
+  out.push(`${patterns.activity.usersClustered} real players' match-start sequences was segmented into sessions`);
+  out.push('on 20-minute gaps, and each user assigned to an hour-band archetype by modal hour. The');
+  out.push('daily cap is drawn JOINTLY from the chosen archetype\'s own cap quantiles, so a night-owl');
+  out.push('can never receive a high day cap. The aggregate histogram (below) is disclosure only.');
   out.push('');
   const schedGen = tally(bots, (b) => b.schedule.archetype);
   const schedTotalW = patterns.activity.scheduleArchetypes.reduce((a, s) => a + s.weight, 0);
-  out.push('| archetype | target | generated |');
-  out.push('|---|---|---|');
+  out.push('| archetype | window | target | generated | cap p50/p90 |');
+  out.push('|---|---|---|---|---|');
   for (const s of patterns.activity.scheduleArchetypes) {
-    out.push(`| ${s.key} (${s.startHour}:00–${s.endHour % 24}:00) | ${((s.weight / schedTotalW) * 100).toFixed(1)}% | ${pct(schedGen.get(s.key) ?? 0, count)} |`);
+    const p50 = s.dailyCapQuantiles.find(([c]) => c >= 0.5)?.[1] ?? '';
+    const p90 = s.dailyCapQuantiles.find(([c]) => c >= 0.9)?.[1] ?? '';
+    const endLabel = s.endHour >= 24 ? `0${Math.floor(s.endHour) - 24}:${String(Math.round((s.endHour % 1) * 60)).padStart(2, '0')}` : `${s.endHour}:00`;
+    out.push(`| ${s.key} | ${s.startHour}:00–${endLabel} | ${((s.weight / schedTotalW) * 100).toFixed(1)}% | ${pct(schedGen.get(s.key) ?? 0, count)} | ${p50}/${p90} |`);
   }
   out.push('');
 
-  // Daily cap distribution
-  out.push('### Daily match cap');
+  // Joint cap-by-archetype: prove night-owls never get high caps.
+  out.push('### Daily match cap by archetype (joint sampling check)');
   out.push('');
-  const capGen = tally(bots, (b) => String(b.dailyCap));
-  out.push('| cap | generated |');
-  out.push('|---|---|');
-  for (const [cap, n] of [...capGen.entries()].sort((a, b) => Number(a[0]) - Number(b[0]))) {
-    out.push(`| ${cap} | ${pct(n, count)} |`);
+  out.push('| archetype | max generated cap | mean cap |');
+  out.push('|---|---|---|');
+  for (const s of patterns.activity.scheduleArchetypes) {
+    const members = bots.filter((b) => b.schedule.archetype === s.key);
+    const caps = members.map((b) => b.dailyCap);
+    const maxCap = caps.length ? Math.max(...caps) : 0;
+    const meanCap = caps.length ? (caps.reduce((a, b) => a + b, 0) / caps.length).toFixed(1) : '—';
+    out.push(`| ${s.key} | ${maxCap} | ${meanCap} |`);
   }
   out.push('');
 

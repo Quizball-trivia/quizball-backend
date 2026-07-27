@@ -216,10 +216,16 @@ export const matchesRepo = {
    *
    * Service layer drives the transaction; this just executes the write.
    */
+  /**
+   * @param endedAt  Optional backdated completion timestamp. Defaults to NOW()
+   *   so the LIVE completion path is unchanged; ONLY the one-time persistent-bot
+   *   burn-in writer passes an explicit historical value.
+   */
   async markMatchCompleted(
     tx: TransactionSql,
     matchId: string,
     winnerId: string | null,
+    endedAt?: Date,
   ): Promise<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'> | null> {
     // tx.unsafe pattern matches other tx-aware repos in this codebase
     // (TransactionSql doesn't expose the tagged-template call signature
@@ -227,11 +233,11 @@ export const matchesRepo = {
     const rows = await tx.unsafe<Pick<MatchRow, 'id' | 'mode' | 'ended_at' | 'is_dev'>[]>(
       `
       UPDATE matches
-      SET status = 'completed', winner_user_id = $2, ended_at = NOW()
+      SET status = 'completed', winner_user_id = $2, ended_at = COALESCE($3::timestamptz, NOW())
       WHERE id = $1 AND status = 'active'
       RETURNING id, mode, ended_at, is_dev
       `,
-      [matchId, winnerId],
+      [matchId, winnerId, endedAt ?? null],
     );
     return rows[0] ?? null;
   },

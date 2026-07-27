@@ -8,6 +8,10 @@ export interface GrantXpInput {
   sourceKey: string;
   xpDelta: number;
   metadata?: Json | null;
+  // Optional backdated event timestamp. Defaults to the column default (now())
+  // so the LIVE XP path is unchanged; ONLY the one-time persistent-bot burn-in
+  // writer passes an explicit historical value.
+  occurredAt?: Date;
 }
 
 export interface GrantXpResult {
@@ -37,9 +41,10 @@ export const progressionRepo = {
           source_type,
           source_key,
           xp_delta,
-          metadata
+          metadata,
+          created_at
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb)
+        VALUES ($1, $2, $3, $4, $5::jsonb, COALESCE($6::timestamptz, NOW()))
         ON CONFLICT (user_id, source_type, source_key) DO NOTHING
         RETURNING xp_delta
       ),
@@ -60,6 +65,7 @@ export const progressionRepo = {
         input.sourceKey,
         input.xpDelta,
         JSON.stringify(input.metadata ?? null),
+        input.occurredAt ?? null,
       ]
     );
 

@@ -376,7 +376,10 @@ export const rankedService = {
     };
   },
 
-  async settleCompletedRankedMatch(matchId: string): Promise<RankedMatchOutcome | null> {
+  async settleCompletedRankedMatch(
+    matchId: string,
+    occurredAt?: Date,
+  ): Promise<RankedMatchOutcome | null> {
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.mode !== 'ranked' || match.status !== 'completed') {
       logger.debug({ matchId, mode: match?.mode, status: match?.status }, 'Ranked settlement skipped: match not eligible');
@@ -657,7 +660,7 @@ export const rankedService = {
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
-    })));
+    })), occurredAt);
     await invalidateUserRankCaches(settlementEntries.map((entry) => ({
       userId: entry.outcome.userId,
       country: entry.profile.country,

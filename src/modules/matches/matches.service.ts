@@ -946,9 +946,9 @@ export const matchesService = {
    * were business rules previously living in matches.repo.completeMatch,
    * which violated the "repos = data writes only" boundary.
    */
-  async completeMatch(matchId: string, winnerId: string | null): Promise<void> {
+  async completeMatch(matchId: string, winnerId: string | null, occurredAt?: Date): Promise<void> {
     await sql.begin(async (tx) => {
-      const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId);
+      const completed = await matchesRepo.markMatchCompleted(tx, matchId, winnerId, occurredAt);
       if (!completed) {
         // Already completed/abandoned — nothing to do.
         return;

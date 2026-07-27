@@ -295,7 +295,7 @@ export async function startRankedAiForUser(
           lobbyId: lobby.id,
           userId,
           aiUser,
-          aiProfile,
+          aiProfile: resolvedProfile,
           aiGeo: resolvedGeo,
           rankedContext,
           opponentRp,
@@ -308,7 +308,6 @@ export async function startRankedAiForUser(
         }),
       searchDurationMs
     );
-    void resolvedProfile;
   });
 }
 

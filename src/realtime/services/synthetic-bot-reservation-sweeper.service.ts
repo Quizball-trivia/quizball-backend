@@ -61,20 +61,11 @@ async function reconcileOne(reservation: {
     return;
   }
 
-  // Lobby-keyed reservation (no match yet).
-  const lobby = await lobbiesRepo.getById(lobbyId);
-  if (lobby) {
-    // Lobby still exists — the pre-match flow may simply be slow. Extend, keep.
-    await syntheticBotsRepo.heartbeatReservation({
-      botUserId,
-      expiresAt: new Date(Date.now() + LIVE_HEARTBEAT_EXTENSION_SEC * 1000),
-    });
-    appMetrics.persistentBotSweeperActions.add(1, { action: 'skipped_live' });
-    return;
-  }
-
-  // Lobby gone. Recover a crash between match creation and the reservation
-  // transfer via matches.lobby_id lineage.
+  // Lobby-keyed reservation (no match_id yet). Recover a crash between match
+  // creation and the reservation transfer FIRST, via matches.lobby_id lineage —
+  // the lobby row may still exist at this point (transfer hadn't run), so the
+  // active-match check must come before the lobby-existence check to avoid
+  // stranding a reservation whose match already exists.
   const activeMatch = await matchesRepo.getActiveMatchForLobby(lobbyId);
   if (activeMatch) {
     const rekeyed = await syntheticBotsRepo.rekeyReservationToMatch({
@@ -88,6 +79,18 @@ async function reconcileOne(reservation: {
     });
     appMetrics.persistentBotSweeperActions.add(1, { action: 'rekey' });
     logger.info({ botUserId, lobbyId, matchId: activeMatch.id, rekeyed }, 'reservation sweeper re-keyed stranded lobby reservation onto live match');
+    return;
+  }
+
+  const lobby = await lobbiesRepo.getById(lobbyId);
+  if (lobby) {
+    // Lobby still exists, no match yet — the pre-match flow may simply be slow
+    // (or wedged shorter than a teardown hook can fire). Extend, never reclaim.
+    await syntheticBotsRepo.heartbeatReservation({
+      botUserId,
+      expiresAt: new Date(Date.now() + LIVE_HEARTBEAT_EXTENSION_SEC * 1000),
+    });
+    appMetrics.persistentBotSweeperActions.add(1, { action: 'skipped_live' });
     return;
   }
 

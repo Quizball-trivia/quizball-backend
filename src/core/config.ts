@@ -71,6 +71,14 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("true")
     .transform((val) => val !== "false" && val !== "0"),
+  // Persistent-bot question_stats refresh job. Ships DISABLED: no scheduler is
+  // wired to it in this PR. When a later PR adds a worker/pg_cron trigger, it
+  // must gate on this flag. The manual `npm run bot:refresh-question-stats`
+  // entrypoint runs regardless (it is invoked by a human, not the scheduler).
+  QUESTION_STATS_REFRESH_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

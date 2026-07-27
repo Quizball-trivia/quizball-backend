@@ -1,0 +1,4 @@
+# Generated calibration artifacts (params.json, REPORT.md, *.insert.sql) are
+# run outputs, not source. Keep the directory, ignore its contents.
+*
+!.gitignore

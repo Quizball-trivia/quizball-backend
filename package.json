@@ -49,7 +49,9 @@
     "api:export": "tsx scripts/export-openapi.ts",
     "moderate:nicknames": "tsx scripts/moderate-nicknames.ts",
     "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
-    "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply"
+    "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
+    "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
+    "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts"
   },
   "keywords": [],
   "author": "",

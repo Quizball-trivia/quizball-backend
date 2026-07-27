@@ -66,10 +66,10 @@ export function eligibleAnswersQuery(
         AND ma.is_correct = false
         AND ma.points_earned = 0
         AND ma.time_ms = CASE
-          WHEN q.type = 'put_in_order'   THEN ${FULL_DURATION_MS.putInOrder}
-          WHEN q.type = 'countdown_list' THEN ${FULL_DURATION_MS.countdown}
-          WHEN q.type = 'clue_chain'     THEN ${FULL_DURATION_MS.clues}
-          ELSE ${FULL_DURATION_MS.multipleChoice}
+          WHEN q.type = 'put_in_order'   THEN ${FULL_DURATION_MS.putInOrder}::int
+          WHEN q.type = 'countdown_list' THEN ${FULL_DURATION_MS.countdown}::int
+          WHEN q.type = 'clue_chain'     THEN ${FULL_DURATION_MS.clues}::int
+          ELSE ${FULL_DURATION_MS.multipleChoice}::int
         END
       )                                               AS "isTimeoutBackfill",
       (ma.answered_at >= ${TIMING_CLEAN_WINDOW_START}::timestamptz) AS "inTimingWindow"

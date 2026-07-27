@@ -44,6 +44,11 @@ scripts/*
 !scripts/chaos/**
 !scripts/load/
 !scripts/load/**
+# Persistent-bot calibration pipeline + question_stats refresh runner (code only;
+# the offline calibration script is read-only and reads its DSN from env).
+!scripts/refresh-question-stats.ts
+!scripts/bot-calibration/
+!scripts/bot-calibration/**
 
 # Local agent instructions (not shared)
 CLAUDE.md

@@ -31,12 +31,12 @@ export async function resolveBatch(
     const rows = await query<BatchRow[]>`
       SELECT id, season_number, completed_at FROM ranked_reset_batches
       WHERE season_number = ${opts.season}
-      ORDER BY completed_at NULLS LAST LIMIT 1`;
+      ORDER BY season_number DESC NULLS LAST, completed_at DESC NULLS LAST LIMIT 1`;
     return rows[0] ?? null;
   }
   const rows = await query<BatchRow[]>`
     SELECT id, season_number, completed_at FROM ranked_reset_batches
-    ORDER BY completed_at NULLS LAST LIMIT 1`;
+    ORDER BY season_number DESC NULLS LAST, completed_at DESC NULLS LAST LIMIT 1`;
   return rows[0] ?? null;
 }
 
@@ -88,7 +88,7 @@ const PLAYER_FETCH_BATCH = 50;
 /** Transient network faults (pooler resets) between batches are recoverable:
  * each batch is an independent READ ONLY transaction, so a plain retry cannot
  * duplicate or lose rows. */
-async function withBatchRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+export async function withBatchRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {

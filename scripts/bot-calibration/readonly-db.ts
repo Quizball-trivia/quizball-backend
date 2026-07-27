@@ -75,13 +75,14 @@ export function openReadOnlyDb(options: { statementTimeoutMs?: number } = {}): R
     );
   }
 
+  const timeoutMs = options.statementTimeoutMs ?? 120_000;
   const sql = postgres(dsn, {
     max: 2,
     idle_timeout: 20,
     connection: {
       // Belt-and-suspenders: mark the whole session read-only at the server too.
       default_transaction_read_only: 'on',
-      statement_timeout: String(options.statementTimeoutMs ?? 120_000),
+      statement_timeout: String(timeoutMs),
     },
   });
 
@@ -91,13 +92,23 @@ export function openReadOnlyDb(options: { statementTimeoutMs?: number } = {}): R
     // Run inside an explicit READ ONLY transaction: a write would error at the
     // server even if the local screen were somehow bypassed.
     return sql.begin('read only', async (tx) => {
+      // Role-level GUCs (prod: postgres has statement_timeout=30s) override
+      // connection startup parameters; only a session/txn-level SET wins.
+      await tx.unsafe(`SET LOCAL statement_timeout = '${timeoutMs}ms'`);
       const runner = tx as unknown as typeof sql;
       return runner(strings, ...params);
     }) as unknown as Promise<Parameters<ReadOnlyRunner>[0] extends never ? never : any>;
   };
 
+  const beginReadOnly = async <T>(fn: (tx: typeof sql) => Promise<T>): Promise<T> =>
+    sql.begin('read only', async (tx) => {
+      await tx.unsafe(`SET LOCAL statement_timeout = '${timeoutMs}ms'`);
+      return fn(tx as unknown as typeof sql);
+    }) as Promise<T>;
+
   return {
     query: query as ReadOnlyRunner,
+    beginReadOnly,
     sql,
     end: () => sql.end({ timeout: 5 }),
   };

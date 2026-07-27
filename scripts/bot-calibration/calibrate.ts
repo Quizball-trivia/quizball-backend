@@ -26,14 +26,14 @@
  *  9. Emit schema-validated params.json (refuse if the refit did not converge).
  */
 
-import { config as loadEnv } from 'dotenv';
+import { withBatchRetry, config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 loadEnv();
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { openReadOnlyDb } from './readonly-db.js';
-import { resolveBatch, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, fetchAccuracyByDifficulty } from './queries.js';
+import { withBatchRetry, resolveBatch, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, fetchAccuracyByDifficulty } from './queries.js';
 import { fitLatentSkill, predictProb, type LatentAnswer, type LatentFitResult } from '../../src/modules/bots/calibration/latent-skill.js';
 import { buildFCurve, percentile, rocAuc, calibrationCurve, logNormalTimeStats, linearFit, logit } from '../../src/modules/bots/calibration/math.js';
 import { aggregateQuestionStats } from '../../src/modules/bots/calibration/aggregate.js';
@@ -164,11 +164,11 @@ async function main(): Promise<void> {
     const ceilingAccuracy = Math.max(0, ceilingBase - args.marginPp / 100);
 
     // Speed floor from top-cohort clean-window times.
-    const topTimes = await fetchS1CleanTimesForPlayers(db.query, {
+    const topTimes = await withBatchRetry(() => fetchS1CleanTimesForPlayers(db.query, {
       s1Boundary,
       playerIds: topIds,
       cleanWindowStart: TIMING_CLEAN_WINDOW_START,
-    });
+    }));
     const topTimesSorted = [...topTimes].sort((a, b) => a - b);
     const speedFloor = topTimesSorted.length > 0
       ? SPEED_FLOOR_PERCENTILES.map((p) => ({ percentile: p, timeMs: Math.round(percentile(topTimesSorted, p)) }))
@@ -210,9 +210,9 @@ async function main(): Promise<void> {
     // Explicit READ ONLY transaction: transaction poolers (Supabase 6543) ignore
     // the default_transaction_read_only startup parameter, so the per-call BEGIN
     // is the guarantee that holds everywhere.
-    const agg = await db.sql.begin('read only', async (tx) =>
-      aggregateQuestionStats(tx as unknown as typeof db.sql, { limit: args.limit })
-    );
+    const agg = await withBatchRetry(() => db.beginReadOnly((tx) =>
+      aggregateQuestionStats(tx, { limit: args.limit })
+    ));
 
     // difficultyLink: regress refit beta on logit(smoothed_accuracy), holdout-validated.
     const accByQuestion = new Map<string, number>();
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       source: {
         batchId: batch.id,
         seasonNumber: batch.season_number,
-        batchCompletedAt: batch.completed_at,
+        batchCompletedAt: new Date(batch.completed_at as unknown as string | Date).toISOString(),
         isSmokeRun,
       },
       thetaAnchoring: { convention: 'mean-zero-over-fitted-s1-cohort', cohortSize: skillByPlayer.size },

@@ -1,0 +1,9 @@
+{
+  "seed": 20260727,
+  "count": 1000,
+  "reportSha256": "4dd16ad7701facedee856f41655b57d9a83f33f91f265676a1d819c64903fd1d",
+  "patternsSha256": "00855012a841d2a32581dc9d3a9439cb4a3d2d0810f304e165ebb4a797125ddf",
+  "exclusionSha256": "de7ea7c59a59b57fa7a62b754e0280edd79da96e65ebbcfcdf9b28b33f7f1dd9",
+  "generatedAt": "2026-07-27T19:11:53.646Z",
+  "maxNameAttempts": 4
+}

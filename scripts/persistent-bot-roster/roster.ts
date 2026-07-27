@@ -1,0 +1,238 @@
+/**
+ * Deterministic roster generation. Pure (no I/O) so it is unit-testable and so
+ * the creation script can rebuild the EXACT roster the report was approved for.
+ *
+ * Determinism contract:
+ *   - One master seed. Each bot attribute draws from its own per-(bot,field)
+ *     sub-stream (see prng.ts), so variable-length consumption in one attribute
+ *     never shifts another — of the same or any other bot.
+ *   - Uniqueness is the ONLY cross-bot dependency: an ordered pass i=0..N-1,
+ *     each bot's name checked against the FROZEN exclusion set ∪ names emitted
+ *     so far. Iteration order is fixed by index, so the sequence is reproducible.
+ */
+
+import type { RosterPatterns, ScheduleArchetype } from './patterns.js';
+import { COUNTRY_CITIES } from './pools.js';
+import { buildCandidate } from './name-generator.js';
+import {
+  chance,
+  fieldRng,
+  personalitySeed,
+  pick,
+  quantileSample,
+  randInt,
+  weightedPick,
+  type Rng,
+} from './prng.js';
+
+export interface AvatarCustomization {
+  hair: string;
+  jersey: string;
+  skin: string;
+  facialHair?: string;
+  glasses?: string;
+}
+
+export interface GeneratedBot {
+  index: number;
+  nickname: string;
+  country: string;
+  homeCity: string | null;
+  homeLat: number | null;
+  homeLng: number | null;
+  favoriteClub: string | null;
+  avatarCustomization: AvatarCustomization | null;
+  personalitySeed: bigint;
+  baseSkill: number;
+  skillBand: number; // 0..4 (bottom→top)
+  consistency: number;
+  speedOffset: number;
+  categoryAffinities: Record<string, number>;
+  schedule: {
+    archetype: string;
+    startHour: number;
+    endHour: number;
+    sessionLength: [number, number];
+  };
+  dailyCap: number;
+  renamePropensity: number;
+  willRename: boolean;
+  /** Attempts the name generator needed (for the effective-space report). */
+  nameAttempts: number;
+}
+
+export interface GenerateOptions {
+  seed: number;
+  count: number;
+  patterns: RosterPatterns;
+  /** Category slugs bots may have affinities for. */
+  categories?: string[];
+}
+
+const DEFAULT_CATEGORIES = [
+  'champions_league', 'world_cup', 'transfers', 'legends', 'georgian_football',
+  'premier_league', 'la_liga', 'serie_a', 'bundesliga', 'national_teams',
+];
+
+const MAX_NAME_ATTEMPTS = 40;
+
+function normalizeForExclusion(name: string): string {
+  // Locale-independent casefold; NFC to keep Georgian composed. Never use
+  // toLocaleLowerCase (Turkish-i / Mtavruli hazards).
+  return name.normalize('NFC').toLowerCase();
+}
+
+function generateName(
+  masterSeed: number,
+  index: number,
+  patterns: RosterPatterns,
+  taken: Set<string>,
+): { nickname: string; attempts: number } {
+  const rng = fieldRng(masterSeed, index, 'name');
+  for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt++) {
+    const candidate = buildCandidate({ rng, patterns: patterns.name, attempt });
+    const key = normalizeForExclusion(candidate);
+    // `taken` is pre-seeded with the frozen exclusion set (lowercased) plus every
+    // name emitted so far, so one membership check covers both.
+    if (!key || taken.has(key)) continue;
+    taken.add(key);
+    return { nickname: candidate, attempts: attempt + 1 };
+  }
+  throw new Error(
+    `Failed to generate a unique nickname for bot #${index} after ${MAX_NAME_ATTEMPTS} attempts — ` +
+      'the reachable name space is too small relative to the roster + exclusion set. ' +
+      'Expand the curated pools.',
+  );
+}
+
+function sampleAvatar(rng: Rng, patterns: RosterPatterns): AvatarCustomization | null {
+  if (!chance(rng, patterns.avatar.presenceRate)) return null;
+  const a = patterns.avatar;
+  const av: AvatarCustomization = {
+    hair: weightedPick(rng, a.hair.map((x) => x.value), a.hair.map((x) => x.weight)),
+    jersey: weightedPick(rng, a.jersey.map((x) => x.value), a.jersey.map((x) => x.weight)),
+    skin: weightedPick(rng, a.skin.map((x) => x.value), a.skin.map((x) => x.weight)),
+  };
+  if (a.facialHair.length > 0 && chance(rng, a.facialHairRate)) {
+    av.facialHair = weightedPick(rng, a.facialHair.map((x) => x.value), a.facialHair.map((x) => x.weight));
+  }
+  if (a.glasses.length > 0 && chance(rng, a.glassesRate)) {
+    av.glasses = weightedPick(rng, a.glasses.map((x) => x.value), a.glasses.map((x) => x.weight));
+  }
+  return av;
+}
+
+function sampleCountryCity(
+  rng: Rng,
+  patterns: RosterPatterns,
+): { country: string; city: string | null; lat: number | null; lng: number | null } {
+  const country = weightedPick(
+    rng,
+    patterns.country.distribution.map((x) => x.value),
+    patterns.country.distribution.map((x) => x.weight),
+  );
+  const cities = COUNTRY_CITIES[country] ?? [];
+  if (cities.length === 0) return { country, city: null, lat: null, lng: null };
+  const c = pick(rng, cities);
+  return { country, city: c.name, lat: c.lat, lng: c.lng };
+}
+
+function sampleSkillBand(rng: Rng, patterns: RosterPatterns): { band: number; baseSkill: number } {
+  const weights = patterns.skill.bandWeights;
+  const band = weightedPick(rng, weights.map((_, i) => i), weights);
+  const [lo, hi] = patterns.skill.bandRanges[band]!;
+  const baseSkill = lo + rng() * (hi - lo);
+  return { band, baseSkill };
+}
+
+function sampleAffinities(rng: Rng, categories: string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  const shuffled = [...categories];
+  // Fisher-Yates using the provided rng (fixed length => fixed draw count).
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  const nStrength = randInt(rng, 2, 4);
+  const nWeakness = randInt(rng, 2, 4);
+  let k = 0;
+  for (let s = 0; s < nStrength && k < shuffled.length; s++, k++) {
+    out[shuffled[k]!] = +(0.05 + rng() * 0.15).toFixed(3); // +0.05..+0.20
+  }
+  for (let w = 0; w < nWeakness && k < shuffled.length; w++, k++) {
+    out[shuffled[k]!] = +(-(0.05 + rng() * 0.15)).toFixed(3); // -0.05..-0.20
+  }
+  return out;
+}
+
+function sampleSchedule(rng: Rng, archetypes: ScheduleArchetype[]): ScheduleArchetype {
+  return weightedPick(rng, archetypes, archetypes.map((a) => a.weight));
+}
+
+export function generateRoster(options: GenerateOptions): GeneratedBot[] {
+  const { seed, count, patterns } = options;
+  const categories = options.categories ?? DEFAULT_CATEGORIES;
+
+  // Frozen exclusion set (already lowercased + sorted in patterns.json).
+  const taken = new Set<string>(patterns.exclusion.names);
+  const bots: GeneratedBot[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const { nickname, attempts } = generateName(seed, i, patterns, taken);
+
+    const avatarRng = fieldRng(seed, i, 'avatar');
+    const geoRng = fieldRng(seed, i, 'geo');
+    const clubRng = fieldRng(seed, i, 'club');
+    const skillRng = fieldRng(seed, i, 'skill');
+    const affinityRng = fieldRng(seed, i, 'affinity');
+    const speedRng = fieldRng(seed, i, 'speed');
+    const schedRng = fieldRng(seed, i, 'schedule');
+    const capRng = fieldRng(seed, i, 'dailycap');
+    const renameRng = fieldRng(seed, i, 'rename');
+
+    const avatar = sampleAvatar(avatarRng, patterns);
+    const { country, city, lat, lng } = sampleCountryCity(geoRng, patterns);
+    const favoriteClub = chance(clubRng, patterns.club.nonNullRate)
+      ? weightedPick(clubRng, patterns.club.distribution.map((x) => x.value), patterns.club.distribution.map((x) => x.weight))
+      : null;
+    const { band, baseSkill } = sampleSkillBand(skillRng, patterns);
+    const affinities = sampleAffinities(affinityRng, categories);
+    const consistency = +(0.35 + speedRng() * 0.5).toFixed(3); // 0.35..0.85
+    const speedOffset = +((speedRng() - 0.5) * 0.6).toFixed(3); // -0.30..+0.30
+    const archetype = sampleSchedule(schedRng, patterns.activity.scheduleArchetypes);
+    const dailyCap = quantileSample(capRng, patterns.activity.dailyCapQuantiles);
+    const renamePropensity = +(patterns.rename.lifetimeRate * (0.5 + renameRng())).toFixed(3);
+    const willRename = chance(renameRng, patterns.rename.lifetimeRate);
+
+    bots.push({
+      index: i,
+      nickname,
+      country,
+      homeCity: city,
+      homeLat: lat,
+      homeLng: lng,
+      favoriteClub,
+      avatarCustomization: avatar,
+      personalitySeed: personalitySeed(seed, i),
+      baseSkill: +baseSkill.toFixed(3),
+      skillBand: band,
+      consistency,
+      speedOffset,
+      categoryAffinities: affinities,
+      schedule: {
+        archetype: archetype.key,
+        startHour: archetype.startHour,
+        endHour: archetype.endHour,
+        sessionLength: archetype.sessionLength,
+      },
+      dailyCap,
+      renamePropensity,
+      willRename,
+      nameAttempts: attempts,
+    });
+  }
+
+  return bots;
+}
+
+export { normalizeForExclusion, MAX_NAME_ATTEMPTS };

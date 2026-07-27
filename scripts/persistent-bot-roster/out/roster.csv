@@ -1,0 +1,1001 @@
+index,nickname,country,city,club,band,daily_cap,schedule,rename_flag,base_skill,consistency,speed_offset,affinities,has_avatar,personality_seed
+0,sopho vashaliani,GE,Poti,,B1 (bottom),15,morning,yes,0.197,0.83,0.178,premier_league:0.108 transfers:0.169 serie_a:0.131 world_cup:0.135 legends:-0.141 la_liga:-0.168 georgian_football:-0.174,no,820946252693096
+1,ზუკა,GE,Poti,,B1 (bottom),2,daytime,no,0.19,0.447,-0.219,national_teams:0.107 premier_league:0.101 legends:0.166 serie_a:0.16 world_cup:-0.103 la_liga:-0.134,no,2600807395629580
+2,temuria,GE,Akhaltsikhe,,B4,2,night_owl,yes,0.665,0.378,0.247,georgian_football:0.081 national_teams:0.108 transfers:-0.122 serie_a:-0.19 champions_league:-0.171 legends:-0.072,no,3616937601081053
+3,KakhaR,GE,Batumi,,B4,3,evening,no,0.635,0.526,-0.206,serie_a:0.161 la_liga:0.186 georgian_football:-0.091 legends:-0.092,no,3174165138850207
+4,Temur Onianiidze39,GE,Zugdidi,,B1 (bottom),15,night_owl,no,0.069,0.805,-0.28,georgian_football:0.082 serie_a:0.143 world_cup:0.142 premier_league:-0.081 national_teams:-0.137,no,3339145726454603
+5,Tengo111,GE,Telavi,,B3,15,daytime,no,0.522,0.44,-0.061,national_teams:0.112 world_cup:0.097 legends:0.152 champions_league:0.122 la_liga:-0.129 serie_a:-0.17,no,194829368175918
+6,Nana Shengelashvili,GE,Poti,,B4,10,evening,no,0.674,0.731,-0.224,la_liga:0.196 transfers:0.18 serie_a:-0.163 premier_league:-0.156 national_teams:-0.165 champions_league:-0.169,no,333965487791114
+7,Toko Lezhaviani,GE,Poti,Arsenal FC,B2,21,daytime,no,0.267,0.613,-0.081,bundesliga:0.163 serie_a:0.192 la_liga:0.086 premier_league:-0.109 georgian_football:-0.184 national_teams:-0.191 champions_league:-0.064,no,3971637809885712
+8,Kaki Kublasheli,GE,Kutaisi,,B2,2,evening,yes,0.254,0.453,0.068,transfers:0.163 premier_league:0.129 la_liga:0.084 serie_a:0.137 bundesliga:-0.112 national_teams:-0.128 world_cup:-0.186 champions_league:-0.106,no,2528122906734996
+9,ლუკა,GE,Gori,,B1 (bottom),3,evening,no,0.23,0.78,0.281,georgian_football:0.167 premier_league:0.136 world_cup:0.15 serie_a:-0.188 transfers:-0.18,no,3422050034058141
+10,makam,GE,Tbilisi,,B1 (bottom),2,evening,no,0.22,0.492,0.178,world_cup:0.105 legends:0.101 champions_league:0.067 serie_a:-0.122 georgian_football:-0.052 bundesliga:-0.191 national_teams:-0.052,no,4356698485214173
+11,Anaiko,GE,Gori,,B3,10,morning,no,0.533,0.649,-0.253,serie_a:0.061 national_teams:0.083 world_cup:0.163 la_liga:0.185 legends:-0.1 georgian_football:-0.123 transfers:-0.189 champions_league:-0.183,no,1720051555643104
+12,pridon okropashvili,GE,Telavi,,B3,3,daytime,no,0.528,0.74,0.171,georgian_football:0.063 legends:0.059 serie_a:0.09 world_cup:-0.177 transfers:-0.095 champions_league:-0.069 la_liga:-0.128,no,2298797779399578
+13,mbappe1,GE,Batumi,,B2,2,daytime,no,0.329,0.667,0.171,la_liga:0.144 premier_league:0.053 georgian_football:0.084 champions_league:0.079 world_cup:-0.142 serie_a:-0.144 national_teams:-0.121,no,3401819241164983
+14,messi5,GE,Ozurgeti,,B2,2,daytime,no,0.415,0.656,0.138,bundesliga:0.105 la_liga:0.161 world_cup:0.091 transfers:-0.053 premier_league:-0.168,no,3117128200900117
+15,Datunaushka,GE,Poti,,B4,2,daytime,no,0.707,0.816,0.22,national_teams:0.165 la_liga:0.164 serie_a:-0.15 transfers:-0.108 georgian_football:-0.141 champions_league:-0.073,no,1437426493518184
+16,Miqa Chkhartshvili,GE,Tbilisi,,B3,2,daytime,no,0.515,0.435,0.092,world_cup:0.075 georgian_football:0.07 legends:-0.072 champions_league:-0.149 premier_league:-0.11,no,905727017971576
+17,Niko Bakurava,GE,Ozurgeti,FC Barcelona,B1 (bottom),15,evening,no,0.245,0.468,-0.059,serie_a:0.057 la_liga:0.144 world_cup:0.056 legends:-0.137 transfers:-0.147 premier_league:-0.052,no,1722459283497418
+18,Khatia Chanturishvili,GE,Kutaisi,,B2,2,evening,no,0.251,0.541,-0.169,serie_a:0.166 georgian_football:0.07 legends:0.073 premier_league:0.177 bundesliga:-0.169 la_liga:-0.154,no,2126683907713055
+19,VatoB15,GE,Batumi,,B1 (bottom),10,evening,no,0.116,0.411,-0.086,georgian_football:0.153 premier_league:0.179 transfers:0.187 la_liga:-0.127 champions_league:-0.178,no,591505402948915
+20,IrakayL,GE,Rustavi,,B2,3,evening,no,0.35,0.37,-0.09,serie_a:0.188 world_cup:0.11 georgian_football:-0.058 legends:-0.087,no,155510110890500
+21,maradona,GE,Ozurgeti,,B2,2,daytime,yes,0.413,0.724,0.061,georgian_football:0.175 la_liga:0.076 premier_league:-0.158 bundesliga:-0.136,no,522247207226705
+22,Gogichava.cr7,GE,Rustavi,,B1 (bottom),15,daytime,no,0.066,0.408,-0.158,serie_a:0.099 premier_league:0.152 world_cup:-0.182 transfers:-0.053,no,3039868774402993
+23,Tako,GE,Gori,,B3,3,morning,yes,0.503,0.624,-0.009,georgian_football:0.112 premier_league:0.054 bundesliga:0.15 national_teams:-0.054 champions_league:-0.129 world_cup:-0.154,no,4420008132952776
+24,Sergo Samkhariani,GR,Athens,,B1 (bottom),2,daytime,no,0.244,0.636,0.256,premier_league:0.162 world_cup:0.141 legends:0.194 national_teams:0.087 bundesliga:-0.197 serie_a:-0.177 champions_league:-0.154 georgian_football:-0.124,no,3214188336827849
+25,Sopho Eliashidze359,GE,Gori,,B2,3,morning,no,0.359,0.729,-0.067,champions_league:0.193 georgian_football:0.127 national_teams:0.107 premier_league:-0.173 transfers:-0.099 la_liga:-0.128 serie_a:-0.124,no,3492189277463125
+26,Eldar Tsagurishvili,ES,Barcelona,,B2,2,morning,no,0.439,0.67,0.149,premier_league:0.075 serie_a:0.156 bundesliga:-0.187 legends:-0.11,no,1741398872419064
+27,Grishaika,GE,Zugdidi,,B1 (bottom),3,daytime,no,0.228,0.414,-0.045,georgian_football:0.173 la_liga:0.118 national_teams:0.151 transfers:-0.124 bundesliga:-0.107,yes,2782299874618240
+28,temur jugelidze111,GE,Batumi,,B4,2,night_owl,no,0.746,0.751,-0.284,la_liga:0.175 national_teams:0.077 champions_league:-0.073 bundesliga:-0.096 serie_a:-0.117 premier_league:-0.095,no,3433100113896944
+29,Paatao,GE,Rustavi,,B2,15,evening,no,0.388,0.383,-0.031,bundesliga:0.113 legends:0.11 champions_league:0.19 premier_league:0.095 serie_a:-0.188 world_cup:-0.096 transfers:-0.053,no,3318045048107786
+30,ilia chkhartashvili,GE,Ozurgeti,,B5 (top),2,evening,no,0.815,0.605,-0.158,champions_league:0.191 transfers:0.144 georgian_football:0.07 national_teams:-0.058 la_liga:-0.179,no,686732673718305
+31,Ucha,GE,Tbilisi,,B3,3,evening,no,0.586,0.396,-0.155,la_liga:0.151 transfers:0.074 premier_league:0.086 georgian_football:-0.085 world_cup:-0.063 national_teams:-0.122,no,967844025313015
+32,Rezi Dvalishvili,GE,Poti,,B1 (bottom),2,evening,no,0.197,0.779,-0.094,bundesliga:0.135 la_liga:0.104 world_cup:0.113 georgian_football:-0.193 transfers:-0.129,no,1403740124835235
+33,IuriT,GE,Tbilisi,,B2,2,evening,no,0.313,0.402,-0.04,georgian_football:0.095 world_cup:0.084 transfers:0.151 serie_a:-0.157 champions_league:-0.13 national_teams:-0.06,no,3799938374073423
+34,mari zarkshvili,GE,Zugdidi,,B4,2,evening,no,0.697,0.434,0.037,bundesliga:0.181 serie_a:0.152 legends:0.054 world_cup:-0.113 champions_league:-0.138,no,29394396745690
+35,Vova,GE,Zugdidi,,B4,2,daytime,no,0.618,0.423,-0.212,premier_league:0.162 bundesliga:0.07 national_teams:0.163 transfers:0.114 champions_league:-0.06 serie_a:-0.173 la_liga:-0.113 georgian_football:-0.144,no,1044405577068155
+36,Nugzar Papavshvili,GE,Kutaisi,,B2,2,evening,no,0.275,0.356,0.119,legends:0.141 champions_league:0.051 serie_a:-0.079 bundesliga:-0.146 world_cup:-0.087 national_teams:-0.101,no,1313890482399335
+37,Guga Ruradshvili,GE,Zugdidi,,B1 (bottom),2,evening,no,0.054,0.364,0.266,champions_league:0.197 serie_a:0.17 georgian_football:-0.143 transfers:-0.098 bundesliga:-0.055 la_liga:-0.143,no,906907306255903
+38,Roinika472,GB,London,,B1 (bottom),10,morning,no,0.093,0.498,-0.047,georgian_football:0.074 premier_league:0.149 serie_a:0.147 national_teams:0.092 la_liga:-0.076 transfers:-0.182 legends:-0.097 bundesliga:-0.2,no,3128871062513366
+39,Miqa Maisurshvili,GE,Rustavi,,B4,3,evening,no,0.697,0.567,-0.273,national_teams:0.091 georgian_football:0.167 premier_league:0.087 legends:0.188 serie_a:-0.15 la_liga:-0.068 bundesliga:-0.103 champions_league:-0.156,no,3985491884590902
+40,Temur Mgelshvili,GE,Akhaltsikhe,,B3,10,daytime,no,0.537,0.699,0.044,premier_league:0.079 legends:0.083 georgian_football:-0.086 transfers:-0.094 national_teams:-0.173 champions_league:-0.119,no,3357112808510963
+41,Bachanaiko.maradona,GE,Gori,,B2,3,daytime,no,0.447,0.354,-0.133,serie_a:0.088 champions_league:0.184 world_cup:-0.095 premier_league:-0.168 transfers:-0.064,no,2572154523301240
+42,arteta,GE,Zugdidi,,B2,2,evening,no,0.325,0.42,-0.083,world_cup:0.183 national_teams:0.187 premier_league:0.124 georgian_football:-0.119 serie_a:-0.181 transfers:-0.155 bundesliga:-0.105,no,4196651236300155
+43,lukaa,ES,Barcelona,,B2,21,daytime,no,0.422,0.689,-0.257,georgian_football:0.127 serie_a:0.078 legends:-0.099 bundesliga:-0.133 la_liga:-0.053,no,2091555753436886
+44,jemal sanikadze,GE,Telavi,Manchester United,B2,15,daytime,no,0.418,0.815,0.183,bundesliga:0.111 world_cup:0.195 serie_a:-0.171 premier_league:-0.109 la_liga:-0.109 transfers:-0.171,no,3892023533042124
+45,KUKURI,ES,Madrid,,B5 (top),10,evening,no,0.782,0.729,-0.242,world_cup:0.065 la_liga:0.108 bundesliga:0.199 serie_a:0.161 national_teams:-0.068 premier_league:-0.17,no,2805152116183131
+46,irakli turashava,TR,Istanbul,,B3,3,daytime,no,0.461,0.449,-0.232,serie_a:0.151 georgian_football:0.066 la_liga:0.165 world_cup:-0.123 transfers:-0.102 champions_league:-0.088 legends:-0.162,no,3595989458818738
+47,Mikheil Meladzeli,US,Los Angeles,,B4,2,daytime,no,0.651,0.532,-0.201,transfers:0.169 serie_a:0.16 la_liga:-0.16 world_cup:-0.127,no,565951702809001
+48,datuna eliashidze,GE,Ozurgeti,,B2,2,evening,no,0.271,0.47,-0.111,premier_league:0.076 transfers:0.087 la_liga:0.143 national_teams:0.148 georgian_football:-0.147 bundesliga:-0.127 legends:-0.095 champions_league:-0.165,no,645644660330714
+49,Natiaushka.vidal,GE,Tbilisi,,B2,15,daytime,no,0.284,0.42,-0.036,transfers:0.085 georgian_football:0.095 premier_league:0.12 champions_league:0.117 legends:-0.118 national_teams:-0.06 bundesliga:-0.162 world_cup:-0.148,no,332531720099506
+50,Lekso23,GB,Manchester,,B1 (bottom),15,evening,no,0.14,0.538,-0.249,premier_league:0.189 la_liga:0.112 legends:0.146 serie_a:0.056 national_teams:-0.191 world_cup:-0.103 transfers:-0.194,no,2396920624422016
+51,MerabZ,GE,Rustavi,,B4,3,morning,no,0.675,0.54,-0.296,national_teams:0.132 bundesliga:0.177 transfers:-0.182 georgian_football:-0.152 legends:-0.103 premier_league:-0.135,no,714113848007844
+52,Sergoa,GE,Ozurgeti,,B2,2,daytime,no,0.397,0.655,0.253,world_cup:0.069 national_teams:0.135 legends:0.128 serie_a:-0.175 la_liga:-0.19,no,4358708052785003
+53,GogaM,GE,Poti,,B2,3,daytime,no,0.361,0.528,-0.141,legends:0.114 serie_a:0.093 georgian_football:0.116 bundesliga:-0.093 national_teams:-0.1 world_cup:-0.083,no,2975929599697275
+54,grisha peikrishua,GE,Kutaisi,,B3,2,daytime,no,0.566,0.401,0.223,legends:0.162 premier_league:0.129 la_liga:0.19 bundesliga:-0.106 serie_a:-0.107,no,4462342235442743
+55,RevazN,GE,Gori,,B3,2,evening,yes,0.513,0.739,0.107,serie_a:0.086 legends:0.112 national_teams:0.121 premier_league:0.115 la_liga:-0.172 champions_league:-0.05 transfers:-0.107,no,428578991944740
+56,Tengo Peikrishvili,GE,Zugdidi,,B1 (bottom),10,evening,no,0.088,0.543,0.249,world_cup:0.058 georgian_football:0.192 bundesliga:0.178 transfers:-0.135 legends:-0.196 champions_league:-0.093 la_liga:-0.185,no,1422852610135659
+57,Nugzara,ES,Barcelona,,B3,2,evening,yes,0.531,0.525,0.036,serie_a:0.11 la_liga:0.122 transfers:-0.052 world_cup:-0.128,no,3246720057101228
+58,Koka Tomadshvili,GE,Zugdidi,,B2,3,evening,no,0.252,0.504,-0.231,premier_league:0.12 national_teams:0.185 la_liga:-0.15 serie_a:-0.161,no,3932212301583350
+59,pridon qavtarshvili,GE,Rustavi,,B3,2,evening,no,0.5,0.701,0.021,premier_league:0.124 la_liga:0.164 national_teams:0.131 bundesliga:0.159 world_cup:-0.084 legends:-0.153 champions_league:-0.118,no,1204334541619016
+60,Tornik,GE,Poti,,B3,3,evening,no,0.59,0.399,-0.293,serie_a:0.088 georgian_football:0.177 premier_league:-0.193 world_cup:-0.111 bundesliga:-0.131 transfers:-0.09,no,25899194824364
+61,BachanaB,GE,Batumi,,B1 (bottom),2,night_owl,no,0.061,0.424,0.166,champions_league:0.161 world_cup:0.128 national_teams:-0.156 legends:-0.149 premier_league:-0.187,no,2859226191786983
+62,Bacho Ugrelieli,US,New York,,B2,2,daytime,no,0.312,0.38,0.095,legends:0.175 bundesliga:0.136 premier_league:0.118 national_teams:-0.161 transfers:-0.135,no,1774419621413317
+63,tornikiko,GE,Poti,,B3,2,evening,no,0.593,0.781,-0.054,bundesliga:0.16 national_teams:0.075 transfers:0.183 georgian_football:0.088 serie_a:-0.098 legends:-0.051,no,3471624257235229
+64,Nutsauna69,GE,Rustavi,,B2,2,daytime,no,0.443,0.717,0.125,legends:0.069 world_cup:0.156 champions_league:-0.194 georgian_football:-0.12 la_liga:-0.121,no,334473951563489
+65,BachoT22,GE,Ozurgeti,,B4,10,daytime,no,0.74,0.755,0.206,national_teams:0.053 transfers:0.101 world_cup:-0.102 legends:-0.06 champions_league:-0.133,no,1487195816254554
+66,Lado Qoridshvili,GE,Tbilisi,,B2,10,morning,no,0.254,0.518,-0.066,bundesliga:0.121 georgian_football:0.099 champions_league:-0.187 serie_a:-0.157 premier_league:-0.195,no,976999201148620
+67,Nugoka09,GE,Akhaltsikhe,,B4,3,daytime,no,0.626,0.568,-0.022,champions_league:0.059 la_liga:0.11 georgian_football:0.074 serie_a:-0.084 national_teams:-0.177 bundesliga:-0.054,no,3163049916919479
+68,Leksoka,GE,Zugdidi,,B1 (bottom),15,evening,no,0.187,0.355,-0.051,transfers:0.086 georgian_football:0.132 national_teams:-0.073 legends:-0.14,no,2706783340432427
+69,Jemal Dgebshvili,GE,Rustavi,,B5 (top),3,evening,no,0.847,0.789,-0.008,national_teams:0.178 georgian_football:0.108 transfers:-0.112 la_liga:-0.121 premier_league:-0.152 serie_a:-0.169,no,1106471325104660
+70,Lukas Purtseladze,GE,Zugdidi,,B3,2,daytime,yes,0.575,0.649,0.032,premier_league:0.138 serie_a:0.063 bundesliga:0.152 world_cup:-0.154 legends:-0.191 champions_league:-0.129 la_liga:-0.198,no,1882050536041718
+71,real,GE,Akhaltsikhe,,B2,10,evening,no,0.443,0.649,-0.277,national_teams:0.135 champions_league:0.076 world_cup:-0.146 la_liga:-0.174 transfers:-0.143 legends:-0.13,no,4002509317073310
+72,givi,GE,Ozurgeti,,B1 (bottom),3,morning,no,0.113,0.499,0.067,georgian_football:0.126 la_liga:0.164 national_teams:-0.075 champions_league:-0.181,no,618692300873795
+73,Lukas Talakhadze,GE,Gori,,B3,2,evening,no,0.476,0.786,0.161,transfers:0.092 champions_league:0.076 legends:0.052 la_liga:0.183 georgian_football:-0.148 national_teams:-0.098,no,1822761694757491
+74,VovaN7,GE,Telavi,,B3,21,evening,yes,0.598,0.71,0.106,legends:0.059 national_teams:0.197 champions_league:0.184 la_liga:-0.185 georgian_football:-0.127,no,2602353406221717
+75,ronaldo,GE,Batumi,,B3,15,evening,no,0.534,0.473,0.157,national_teams:0.14 legends:0.088 champions_league:-0.094 serie_a:-0.084 bundesliga:-0.13 transfers:-0.144,yes,785130271349544
+76,sopho,GE,Tbilisi,,B1 (bottom),10,daytime,no,0.213,0.544,-0.189,la_liga:0.091 georgian_football:0.098 champions_league:-0.153 transfers:-0.099 world_cup:-0.062,no,2425628594713014
+77,Sopo Vephkhvshvili,GE,Rustavi,,B4,2,evening,no,0.713,0.695,-0.153,world_cup:0.104 premier_league:0.177 georgian_football:0.058 bundesliga:-0.198 national_teams:-0.062,no,2658902375697824
+78,Likaushka,GE,Gori,,B2,2,daytime,no,0.302,0.513,-0.119,georgian_football:0.177 bundesliga:0.071 champions_league:-0.098 world_cup:-0.081 serie_a:-0.059 premier_league:-0.088,no,804891517232542
+79,Jemal111,GE,Rustavi,,B3,10,daytime,no,0.562,0.618,0.191,world_cup:0.171 champions_league:0.17 national_teams:0.109 serie_a:-0.162 georgian_football:-0.17 la_liga:-0.109,no,1942000201521878
+80,MerabZ14,GE,Kutaisi,,B1 (bottom),2,evening,yes,0.119,0.734,-0.034,la_liga:0.071 national_teams:0.174 serie_a:-0.114 world_cup:-0.062,no,713439116557054
+81,nikushaiko,GB,Manchester,,B3,3,daytime,no,0.55,0.543,0.204,legends:0.101 georgian_football:0.162 bundesliga:0.169 la_liga:-0.127 world_cup:-0.159 transfers:-0.125 premier_league:-0.088,no,4030493300894404
+82,kakiiko.striker,GE,Rustavi,,B4,2,morning,no,0.605,0.764,-0.23,bundesliga:0.095 serie_a:0.116 premier_league:0.074 la_liga:0.193 champions_league:-0.182 transfers:-0.103,no,4349582922866355
+83,eldar tomadshvili,GE,Batumi,,B5 (top),2,daytime,no,0.86,0.491,0.037,champions_league:0.055 bundesliga:0.066 national_teams:0.191 world_cup:0.093 la_liga:-0.11 georgian_football:-0.121 serie_a:-0.055 legends:-0.199,yes,3267408738175818
+84,PridonD9,GE,Zugdidi,,B3,15,evening,no,0.511,0.799,-0.078,bundesliga:0.181 champions_league:0.181 serie_a:0.123 la_liga:-0.15 world_cup:-0.068 georgian_football:-0.08,no,3434839904682849
+85,Vaskaiko,GE,Kutaisi,,B1 (bottom),2,evening,no,0.236,0.64,0.239,national_teams:0.145 legends:0.19 la_liga:0.199 georgian_football:0.114 premier_league:-0.122 champions_league:-0.151 serie_a:-0.117 world_cup:-0.174,no,52714103456233
+86,ლევანი,GE,Akhaltsikhe,,B2,2,evening,no,0.316,0.453,-0.231,world_cup:0.194 bundesliga:0.138 la_liga:-0.152 transfers:-0.057 premier_league:-0.198,no,1137548313865445
+87,belardi,ES,Madrid,,B3,2,daytime,no,0.529,0.623,0.03,bundesliga:0.066 serie_a:0.085 premier_league:0.067 legends:0.07 national_teams:-0.113 la_liga:-0.076,no,2735683738238594
+88,Vato,GE,Zugdidi,,B2,2,daytime,no,0.33,0.702,-0.078,la_liga:0.199 georgian_football:0.109 legends:0.187 serie_a:-0.121 transfers:-0.127 premier_league:-0.102,no,3740576826455729
+89,Tamtaiko,GE,Akhaltsikhe,,B1 (bottom),3,daytime,no,0.068,0.362,0.291,world_cup:0.085 premier_league:0.127 legends:0.074 georgian_football:-0.109 serie_a:-0.088 national_teams:-0.16,no,2951670523178657
+90,DatunaK,GE,Poti,,B3,2,daytime,yes,0.495,0.565,0.25,serie_a:0.121 premier_league:0.124 champions_league:0.106 la_liga:0.132 legends:-0.198 bundesliga:-0.171 world_cup:-0.088 national_teams:-0.092,no,1585674288099167
+91,Besoka,GB,Birmingham,,B1 (bottom),3,evening,no,0.234,0.362,-0.196,serie_a:0.058 national_teams:0.146 transfers:-0.057 bundesliga:-0.152,no,3241841257293325
+92,SophoR,GE,Zugdidi,,B2,3,evening,no,0.419,0.467,-0.003,world_cup:0.095 transfers:0.156 premier_league:0.135 champions_league:0.175 georgian_football:-0.135 legends:-0.102 serie_a:-0.134,no,1454375989408349
+93,kaisa,GE,Telavi,,B3,10,evening,no,0.498,0.572,0.211,world_cup:0.1 georgian_football:0.182 bundesliga:0.11 premier_league:-0.173 national_teams:-0.183 la_liga:-0.142,no,278879891178016
+94,NugzarL,GE,Kutaisi,,B2,3,evening,no,0.267,0.591,0.045,premier_league:0.097 transfers:0.198 georgian_football:0.192 serie_a:-0.079 bundesliga:-0.135 world_cup:-0.09,no,2243618503505474
+95,TornikR,GE,Ozurgeti,,B4,2,evening,yes,0.648,0.646,0.002,world_cup:0.13 national_teams:0.08 serie_a:-0.175 transfers:-0.057 georgian_football:-0.079 premier_league:-0.195,no,328018961438157
+96,Sopho Ubilshvili,GE,Ozurgeti,,B4,3,daytime,no,0.631,0.799,-0.273,bundesliga:0.195 transfers:0.1 legends:0.054 premier_league:-0.112 champions_league:-0.116,no,704330777478452
+97,Ilia Qavtarshvili,GE,Tbilisi,,B3,2,daytime,no,0.553,0.652,-0.089,serie_a:0.2 premier_league:0.075 legends:-0.136 champions_league:-0.17,no,1544770377129015
+98,Davitka,GE,Rustavi,,B1 (bottom),3,evening,no,0.23,0.57,0.04,champions_league:0.109 serie_a:0.062 world_cup:0.172 la_liga:0.104 premier_league:-0.177 national_teams:-0.058 bundesliga:-0.133 georgian_football:-0.13,no,1085378851331033
+99,striker,GE,Rustavi,,B3,15,morning,no,0.578,0.389,-0.116,transfers:0.096 premier_league:0.11 georgian_football:0.065 legends:0.193 la_liga:-0.061 champions_league:-0.066,no,572612137374742
+100,SABA UGRELISHVILI,GE,Kutaisi,,B1 (bottom),15,evening,yes,0.078,0.636,-0.016,legends:0.087 la_liga:0.188 champions_league:0.194 bundesliga:-0.18 transfers:-0.063,no,4395482534446357
+101,Ika Nachkebava,GE,Telavi,,B3,15,evening,no,0.489,0.667,-0.138,national_teams:0.098 premier_league:0.096 transfers:0.165 bundesliga:-0.173 world_cup:-0.063 champions_league:-0.058 georgian_football:-0.051,no,1851362492173989
+102,temol23,DE,Berlin,,B4,2,evening,no,0.696,0.838,-0.018,la_liga:0.051 legends:0.063 transfers:0.123 champions_league:0.12 serie_a:-0.123 national_teams:-0.08 georgian_football:-0.179,no,1742894636818405
+103,salomeg47,GE,Telavi,,B2,3,daytime,no,0.444,0.724,0.125,georgian_football:0.181 champions_league:0.125 bundesliga:0.058 premier_league:-0.058 legends:-0.088,no,2982624599028979
+104,davitiko,GE,Batumi,,B1 (bottom),3,evening,no,0.234,0.686,-0.277,la_liga:0.088 transfers:0.089 bundesliga:0.197 national_teams:-0.129 serie_a:-0.171 georgian_football:-0.132 champions_league:-0.159,no,576354567629909
+105,Nodar14,GE,Zugdidi,,B3,2,evening,no,0.593,0.578,-0.064,premier_league:0.14 serie_a:0.18 la_liga:-0.108 champions_league:-0.113 national_teams:-0.153,no,4445892757718867
+106,NugzarR14,GE,Kutaisi,,B3,2,daytime,no,0.466,0.615,-0.195,champions_league:0.174 legends:0.061 premier_league:0.085 serie_a:-0.098 georgian_football:-0.133 la_liga:-0.093 transfers:-0.108,no,370353109134873
+107,TatoK,GE,Poti,,B2,2,night_owl,no,0.385,0.478,-0.212,la_liga:0.052 bundesliga:0.097 champions_league:0.119 transfers:0.09 legends:-0.176 premier_league:-0.154,yes,1929246127242335
+108,badri skangidze,GE,Gori,,B2,15,morning,no,0.42,0.744,-0.076,national_teams:0.127 bundesliga:0.187 premier_league:-0.176 champions_league:-0.096 la_liga:-0.105 georgian_football:-0.149,yes,1060615576070189
+109,purtseladze,GE,Kutaisi,,B1 (bottom),2,night_owl,no,0.072,0.669,-0.113,national_teams:0.092 bundesliga:0.147 world_cup:-0.069 premier_league:-0.079 la_liga:-0.104 serie_a:-0.123,no,2438078876442625
+110,Nodaro23,GE,Akhaltsikhe,,B2,3,daytime,yes,0.406,0.612,0.063,georgian_football:0.08 legends:0.056 transfers:0.059 national_teams:0.05 la_liga:-0.186 premier_league:-0.151 serie_a:-0.127 champions_league:-0.175,no,1840682544802873
+111,gocha matchavarshvili,GE,Batumi,,B1 (bottom),10,evening,no,0.147,0.367,-0.283,legends:0.133 bundesliga:0.15 world_cup:0.183 transfers:-0.199 champions_league:-0.16 national_teams:-0.096,yes,960790747984944
+112,Anano1,GE,Poti,,B1 (bottom),15,daytime,no,0.135,0.52,0.213,transfers:0.076 premier_league:0.101 la_liga:0.062 national_teams:-0.127 legends:-0.055 champions_league:-0.059,no,1278192647899153
+113,lukasuna,GE,Akhaltsikhe,,B4,3,daytime,no,0.731,0.711,0.102,champions_league:0.051 transfers:0.163 bundesliga:0.091 serie_a:-0.145 world_cup:-0.097 national_teams:-0.076 premier_league:-0.07,no,4131642778830612
+114,bacho tabagshvili15,GE,Batumi,,B1 (bottom),2,evening,no,0.203,0.448,0.141,bundesliga:0.176 transfers:0.052 world_cup:-0.124 serie_a:-0.184 premier_league:-0.141,no,1882051644873641
+115,Mari Arakishvili,GE,Telavi,,B3,15,daytime,no,0.529,0.586,0.271,national_teams:0.065 transfers:0.158 la_liga:-0.193 premier_league:-0.15 legends:-0.139,no,293912242086932
+116,NACHKEBIANI,GE,Zugdidi,,B1 (bottom),10,evening,no,0.208,0.508,0.193,premier_league:0.146 world_cup:0.184 legends:-0.12 serie_a:-0.154 georgian_football:-0.167 la_liga:-0.15,no,823882389877422
+117,Lukaushka,DE,Munich,,B2,2,morning,no,0.366,0.551,0.219,serie_a:0.197 bundesliga:0.126 la_liga:-0.052 premier_league:-0.106,no,2946656737014504
+118,Zaal Gugeshvili,GE,Tbilisi,,B5 (top),2,morning,yes,0.851,0.43,0.138,premier_league:0.089 champions_league:0.138 world_cup:0.094 serie_a:-0.152 national_teams:-0.166 georgian_football:-0.142,no,2103797684687128
+119,gk,US,New York,,B2,3,daytime,no,0.421,0.354,-0.034,georgian_football:0.185 bundesliga:0.154 world_cup:-0.105 la_liga:-0.175,no,4197157505545449
+120,VAKHTANGL.kaisa,GE,Kutaisi,,B2,2,morning,no,0.343,0.743,-0.094,premier_league:0.124 la_liga:0.099 georgian_football:0.196 transfers:0.089 national_teams:-0.109 champions_league:-0.096 serie_a:-0.147,no,1012079399035916
+121,sopho kalatozava,GE,Kutaisi,,B4,2,evening,no,0.611,0.401,0.136,legends:0.053 serie_a:0.167 georgian_football:0.192 world_cup:0.089 la_liga:-0.133 bundesliga:-0.142 national_teams:-0.116,no,829685258108190
+122,Ratia,TR,Ankara,,B2,2,daytime,no,0.341,0.352,0.197,la_liga:0.193 serie_a:0.12 world_cup:0.199 champions_league:0.129 transfers:-0.071 legends:-0.103 national_teams:-0.151 premier_league:-0.16,no,977189686220086
+123,Temol14,GE,Batumi,,B3,2,evening,no,0.528,0.714,0.256,bundesliga:0.113 georgian_football:0.16 national_teams:0.174 champions_league:-0.126 premier_league:-0.05 legends:-0.153,no,2357576458976934
+124,medea beberadze,GE,Batumi,,B2,10,night_owl,no,0.398,0.778,0.105,serie_a:0.154 premier_league:0.088 champions_league:-0.109 transfers:-0.16,no,3088866421817316
+125,Shota Turashvili,GE,Gori,,B3,2,morning,no,0.572,0.765,-0.118,premier_league:0.094 transfers:0.066 world_cup:0.064 serie_a:0.13 legends:-0.199 bundesliga:-0.085 georgian_football:-0.075,no,201863695484241
+126,merabushka,GE,Rustavi,,B2,2,evening,no,0.256,0.549,-0.058,world_cup:0.123 champions_league:0.118 georgian_football:0.146 la_liga:0.133 national_teams:-0.166 transfers:-0.186,no,2671300936771033
+127,MerabS,GE,Rustavi,,B2,3,daytime,no,0.299,0.693,0.23,legends:0.151 world_cup:0.154 bundesliga:0.083 georgian_football:0.181 national_teams:-0.193 serie_a:-0.184 premier_league:-0.089,no,2183024096437953
+128,elgujaz,GE,Batumi,,B1 (bottom),3,evening,no,0.098,0.539,-0.005,transfers:0.116 premier_league:0.093 national_teams:-0.052 bundesliga:-0.157 champions_league:-0.138,no,3172400544432599
+129,Onianiava,GE,Akhaltsikhe,,B1 (bottom),3,evening,no,0.189,0.823,0,world_cup:0.163 serie_a:0.084 national_teams:0.105 georgian_football:0.07 bundesliga:-0.119 premier_league:-0.156,no,3261570813780894
+130,Tato Ruradshvili,GE,Rustavi,,B1 (bottom),2,evening,no,0.13,0.389,0.021,bundesliga:0.139 world_cup:0.166 premier_league:-0.054 georgian_football:-0.073,no,1833407743341140
+131,დათო,ES,Barcelona,,B1 (bottom),2,evening,no,0.221,0.664,-0.109,serie_a:0.09 bundesliga:0.052 georgian_football:0.121 national_teams:-0.08 premier_league:-0.052 transfers:-0.146 la_liga:-0.05,no,417020533361932
+132,zaza inasaridze,GE,Telavi,,B2,2,morning,no,0.337,0.503,-0.132,national_teams:0.151 la_liga:0.078 transfers:0.15 serie_a:0.087 georgian_football:-0.172 champions_league:-0.182 premier_league:-0.053,no,2300908764646951
+133,Vakhtangiko,GE,Poti,,B3,3,evening,no,0.546,0.782,-0.228,champions_league:0.068 legends:0.103 world_cup:0.101 national_teams:0.053 premier_league:-0.121 transfers:-0.133 bundesliga:-0.063 georgian_football:-0.086,no,510917655865274
+134,Paata,GE,Gori,,B2,10,evening,yes,0.435,0.418,0.254,georgian_football:0.186 transfers:0.064 bundesliga:0.125 la_liga:-0.19 legends:-0.13 serie_a:-0.131,no,854273175506724
+135,sergo,US,Los Angeles,,B1 (bottom),2,daytime,no,0.2,0.561,-0.11,la_liga:0.126 national_teams:0.164 premier_league:0.146 legends:-0.188 transfers:-0.122,no,3431685326451526
+136,KoteB,ES,Madrid,,B3,10,evening,no,0.527,0.597,-0.183,legends:0.182 premier_league:0.051 transfers:-0.196 champions_league:-0.097 la_liga:-0.106 national_teams:-0.083,no,3369082021222746
+137,Ucha Tsalugelidze,GE,Tbilisi,,B2,2,evening,no,0.383,0.531,-0.029,premier_league:0.119 national_teams:0.142 la_liga:-0.098 bundesliga:-0.168,no,4242189422521245
+138,pavle zhvanshvili,GE,Rustavi,,B3,2,evening,no,0.537,0.646,-0.097,champions_league:0.117 la_liga:0.162 serie_a:0.178 bundesliga:0.135 world_cup:-0.125 georgian_football:-0.19 national_teams:-0.113 premier_league:-0.127,no,1973638085989644
+139,zaza dgebshvili,GE,Ozurgeti,,B3,10,daytime,no,0.559,0.706,0.144,legends:0.127 la_liga:0.143 national_teams:0.173 serie_a:0.185 champions_league:-0.125 premier_league:-0.194 georgian_football:-0.091,no,4264971014130613
+140,Lelauna15,GE,Kutaisi,,B2,3,daytime,no,0.443,0.556,0.243,bundesliga:0.167 national_teams:0.153 serie_a:0.1 champions_league:-0.116 georgian_football:-0.15,no,1535229853499777
+141,vaso rustavashvili,GE,Akhaltsikhe,,B1 (bottom),2,evening,no,0.157,0.77,0.154,world_cup:0.095 la_liga:0.194 national_teams:-0.142 georgian_football:-0.079,no,4398935685750280
+142,grigol,GE,Gori,,B3,3,daytime,no,0.539,0.628,0.289,georgian_football:0.092 premier_league:0.053 bundesliga:0.079 transfers:-0.111 champions_league:-0.109 serie_a:-0.076,no,496938732326381
+143,kaka23,GE,Akhaltsikhe,,B1 (bottom),10,morning,no,0.119,0.77,-0.19,la_liga:0.073 world_cup:0.167 champions_league:0.141 premier_league:0.079 transfers:-0.136 national_teams:-0.075,no,1091181974792300
+144,kako amiranidze,GE,Tbilisi,,B2,10,daytime,no,0.295,0.498,-0.007,georgian_football:0.131 transfers:0.117 national_teams:-0.158 champions_league:-0.075 la_liga:-0.063 world_cup:-0.152,no,2647323503699723
+145,Tazo Chanturishvili,ES,Madrid,,B4,3,daytime,no,0.646,0.413,-0.102,serie_a:0.133 bundesliga:0.094 georgian_football:-0.17 la_liga:-0.182 world_cup:-0.08 premier_league:-0.188,no,3226147198208201
+146,Mirian14,GE,Kutaisi,,B3,21,evening,no,0.587,0.694,0.155,la_liga:0.088 world_cup:0.16 georgian_football:-0.093 national_teams:-0.187,no,3045186772603399
+147,chanturishvili,GE,Ozurgeti,,B1 (bottom),15,night_owl,no,0.064,0.59,-0.297,georgian_football:0.176 premier_league:0.101 transfers:0.146 legends:0.064 world_cup:-0.113 champions_league:-0.06 serie_a:-0.185,no,322955576514371
+148,ramaz73,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.099,0.651,0.16,legends:0.175 world_cup:0.063 transfers:-0.057 national_teams:-0.196 georgian_football:-0.151 champions_league:-0.09,no,3021200393444011
+149,Kaki Maisuradze,GE,Tbilisi,,B5 (top),3,evening,yes,0.858,0.753,0.085,champions_league:0.052 transfers:0.167 georgian_football:-0.067 la_liga:-0.106 premier_league:-0.193,no,96658850862029
+150,Tengiza,GE,Rustavi,,B3,2,morning,no,0.558,0.387,0.156,legends:0.082 georgian_football:0.085 transfers:0.083 serie_a:0.059 national_teams:-0.152 bundesliga:-0.159 world_cup:-0.069 premier_league:-0.133,yes,3913673786058597
+151,kakoiko,GE,Telavi,,B5 (top),15,daytime,no,0.789,0.836,0.098,legends:0.177 transfers:0.143 la_liga:0.091 serie_a:-0.066 national_teams:-0.163 champions_league:-0.07,no,3876016858582620
+152,eldaro,GE,Tbilisi,,B4,10,evening,no,0.651,0.462,-0.073,bundesliga:0.189 serie_a:0.116 premier_league:-0.191 world_cup:-0.193,no,980115390180154
+153,lukas bagratava,GE,Rustavi,,B1 (bottom),3,daytime,no,0.177,0.823,-0.184,georgian_football:0.17 la_liga:0.132 national_teams:-0.141 legends:-0.145 champions_league:-0.137,no,2069777681580806
+154,Luka Samkharashvili,GE,Ozurgeti,,B2,2,evening,no,0.447,0.71,0.085,georgian_football:0.056 national_teams:0.054 serie_a:0.197 bundesliga:0.124 world_cup:-0.151 champions_league:-0.14,no,4006345487162244
+155,SopoT1,GE,Batumi,,B3,2,evening,no,0.598,0.541,0.193,georgian_football:0.064 world_cup:0.13 champions_league:0.153 legends:0.156 bundesliga:-0.141 national_teams:-0.116 premier_league:-0.082 transfers:-0.13,no,1205572469851678
+156,sandro okropshvili,GE,Poti,,B1 (bottom),2,evening,no,0.22,0.367,-0.206,legends:0.066 national_teams:0.197 la_liga:-0.053 bundesliga:-0.196 premier_league:-0.139,no,254016647244293
+157,gigi rustavshvili,GR,Athens,,B4,3,evening,no,0.671,0.529,-0.155,world_cup:0.066 la_liga:0.156 national_teams:0.052 legends:0.2 bundesliga:-0.129 champions_league:-0.158,no,2403562211229148
+158,ugreliadze,GE,Kutaisi,,B3,3,evening,yes,0.523,0.68,0.014,la_liga:0.077 georgian_football:0.171 bundesliga:0.181 legends:-0.07 world_cup:-0.144,no,1955099339531569
+159,Valeri Japarshvili09,ES,Madrid,,B2,2,evening,no,0.3,0.373,-0.13,bundesliga:0.099 georgian_football:0.141 la_liga:-0.127 transfers:-0.059 serie_a:-0.178 premier_league:-0.054,no,1153298150876120
+160,Davit Dolidzshvili23,GE,Rustavi,,B5 (top),2,daytime,no,0.791,0.689,-0.009,premier_league:0.181 legends:0.084 la_liga:0.118 transfers:0.19 georgian_football:-0.065 serie_a:-0.072 world_cup:-0.056 bundesliga:-0.078,no,1372297005451927
+161,Nutsaika,GE,Gori,,B2,10,daytime,no,0.351,0.387,0.131,serie_a:0.078 world_cup:0.182 champions_league:0.17 transfers:-0.094 premier_league:-0.163 legends:-0.166,no,3779672814052147
+162,TemuriL69,GE,Batumi,,B2,10,daytime,no,0.387,0.61,-0.044,serie_a:0.197 premier_league:0.109 georgian_football:0.2 world_cup:-0.18 legends:-0.19 la_liga:-0.105,no,1948751740124352
+163,nikas,GE,Telavi,,B4,2,evening,no,0.63,0.383,-0.045,world_cup:0.184 national_teams:0.09 transfers:-0.088 georgian_football:-0.15 premier_league:-0.135 legends:-0.102,no,1870195545992458
+164,Giga Odishadze,GE,Poti,,B2,2,daytime,no,0.252,0.403,-0.296,legends:0.116 premier_league:0.13 world_cup:0.19 georgian_football:-0.131 transfers:-0.122 bundesliga:-0.145 la_liga:-0.119,no,1684775256778464
+165,temuruna22,GE,Gori,,B4,2,evening,no,0.666,0.618,0.086,bundesliga:0.082 legends:0.183 georgian_football:-0.087 la_liga:-0.102 premier_league:-0.077,no,3118860429001436
+166,emzar ubilshvili,GE,Ozurgeti,,B3,3,evening,yes,0.494,0.595,0.095,transfers:0.069 champions_league:0.087 national_teams:-0.09 la_liga:-0.078 serie_a:-0.09,no,3425023220780626
+167,Medeaa,GE,Batumi,,B2,2,evening,no,0.355,0.612,0.021,georgian_football:0.143 national_teams:0.126 legends:0.076 champions_league:-0.079 bundesliga:-0.13 premier_league:-0.146 serie_a:-0.07,no,3250552543357903
+168,iliaka,GE,Zugdidi,,B1 (bottom),3,evening,no,0.191,0.635,-0.229,premier_league:0.121 world_cup:0.2 champions_league:-0.198 bundesliga:-0.073 la_liga:-0.088 legends:-0.185,no,2751557929762753
+169,zumbulshvili,GE,Poti,,B4,2,night_owl,no,0.692,0.759,-0.078,champions_league:0.199 la_liga:0.064 serie_a:0.093 georgian_football:-0.179 transfers:-0.14,no,1282643048275925
+170,BubaN10,GE,Tbilisi,,B3,3,evening,no,0.453,0.531,0.194,legends:0.15 transfers:0.109 world_cup:0.123 bundesliga:0.079 la_liga:-0.188 serie_a:-0.167,no,4014917829337097
+171,Gogi Peikrishashvili1,TR,Istanbul,,B4,3,morning,no,0.654,0.54,-0.283,world_cup:0.158 national_teams:0.102 bundesliga:0.196 legends:-0.087 transfers:-0.198 georgian_football:-0.196,no,982969106181853
+172,zaal gvaramshvili,GE,Telavi,,B5 (top),3,evening,yes,0.831,0.376,-0.201,serie_a:0.119 georgian_football:0.079 premier_league:0.182 world_cup:-0.198 champions_league:-0.07 national_teams:-0.103,no,4421362486554799
+173,sophoka,GE,Gori,,B3,2,daytime,no,0.511,0.504,-0.266,legends:0.106 bundesliga:0.077 la_liga:0.191 serie_a:0.125 transfers:-0.174 national_teams:-0.169,yes,439956692799564
+174,goat,GE,Batumi,,B1 (bottom),10,daytime,no,0.151,0.773,-0.238,national_teams:0.109 champions_league:0.164 georgian_football:0.079 legends:0.107 la_liga:-0.078 premier_league:-0.123 world_cup:-0.2,no,1113231526330413
+175,Dgebshvili,GE,Akhaltsikhe,,B4,10,daytime,no,0.632,0.471,-0.136,national_teams:0.086 premier_league:0.175 champions_league:0.117 bundesliga:0.161 la_liga:-0.173 georgian_football:-0.182,no,3035271321148081
+176,ბექა,GE,Rustavi,,B2,2,evening,no,0.295,0.378,-0.179,serie_a:0.185 la_liga:0.179 bundesliga:0.078 legends:0.173 transfers:-0.181 national_teams:-0.102 world_cup:-0.087 champions_league:-0.187,no,2986548109926666
+177,fc,GE,Zugdidi,,B3,3,evening,no,0.493,0.475,0.156,serie_a:0.145 transfers:0.141 legends:0.107 premier_league:-0.081 world_cup:-0.057 bundesliga:-0.122,no,2693155870547974
+178,ZuraG09,TR,Istanbul,,B3,15,night_owl,no,0.485,0.819,0.093,national_teams:0.134 serie_a:0.115 legends:0.157 world_cup:0.129 premier_league:-0.173 champions_league:-0.19 bundesliga:-0.075,no,98306477858320
+179,Temol Darakhvelshvili,GE,Akhaltsikhe,,B2,2,daytime,no,0.393,0.438,-0.033,la_liga:0.146 bundesliga:0.055 serie_a:0.076 world_cup:-0.175 national_teams:-0.127 georgian_football:-0.131 champions_league:-0.16,no,2768533217643186
+180,Mirian Beridze,GE,Rustavi,,B1 (bottom),10,morning,no,0.205,0.41,-0.051,bundesliga:0.193 georgian_football:0.09 serie_a:-0.149 champions_league:-0.171,no,1462940744749277
+181,zukas,GE,Rustavi,,B4,2,daytime,no,0.706,0.649,0.061,champions_league:0.192 legends:0.137 la_liga:-0.161 transfers:-0.105 premier_league:-0.171 serie_a:-0.167,no,2873810121201232
+182,grigol meladzidze,GE,Kutaisi,,B4,2,evening,no,0.742,0.355,0.048,bundesliga:0.138 premier_league:0.177 national_teams:-0.177 legends:-0.102 la_liga:-0.151 georgian_football:-0.098,no,914621578802128
+183,KakhaK14,GE,Batumi,,B4,2,evening,no,0.693,0.467,-0.013,bundesliga:0.094 la_liga:0.053 legends:0.076 transfers:0.114 world_cup:-0.165 premier_league:-0.089,no,1870025716994477
+184,Mariam Eliashidze,GE,Akhaltsikhe,,B4,2,daytime,no,0.692,0.516,-0.201,serie_a:0.071 georgian_football:0.156 legends:-0.197 bundesliga:-0.166 premier_league:-0.137 transfers:-0.195,no,2446222968726601
+185,Vakhoa,GE,Rustavi,,B2,15,evening,yes,0.435,0.821,0.126,la_liga:0.12 georgian_football:0.056 world_cup:0.123 serie_a:0.15 national_teams:-0.151 premier_league:-0.104,no,1150170935129631
+186,SHOTA KAPANIDZE,GE,Telavi,,B2,2,morning,yes,0.414,0.546,0.113,bundesliga:0.147 world_cup:0.117 premier_league:-0.051 national_teams:-0.103 transfers:-0.12,no,3436450884585082
+187,IrakayR1,GE,Rustavi,,B2,2,daytime,no,0.372,0.495,0.028,world_cup:0.199 national_teams:0.193 legends:0.176 la_liga:0.162 transfers:-0.108 champions_league:-0.165,no,732421195173051
+188,Irakayo,GE,Poti,,B1 (bottom),2,morning,no,0.136,0.803,0.25,la_liga:0.07 legends:0.169 champions_league:-0.086 transfers:-0.081,no,2411279122871274
+189,Lukas Kemoklua,GE,Telavi,,B2,3,daytime,no,0.402,0.558,-0.132,la_liga:0.151 georgian_football:0.197 premier_league:-0.164 national_teams:-0.085,no,4391713014785295
+190,PEIKRISHADZE,GE,Gori,,B1 (bottom),15,evening,no,0.187,0.59,-0.007,georgian_football:0.053 premier_league:0.154 champions_league:0.124 legends:-0.081 national_teams:-0.137 serie_a:-0.152 world_cup:-0.132,no,1139687520778148
+191,natiaka,GE,Kutaisi,,B4,2,daytime,no,0.678,0.552,0.183,la_liga:0.197 transfers:0.084 premier_league:0.187 national_teams:0.13 bundesliga:-0.105 champions_league:-0.098 legends:-0.186 world_cup:-0.172,no,3668546450323470
+192,Sophoushka1,GE,Kutaisi,,B2,2,daytime,no,0.325,0.462,-0.004,champions_league:0.187 legends:0.108 serie_a:0.147 bundesliga:-0.116 premier_league:-0.059 world_cup:-0.075 georgian_football:-0.154,no,2431832304870346
+193,merabr,GE,Batumi,,B2,2,daytime,no,0.353,0.486,-0.184,la_liga:0.073 bundesliga:0.199 national_teams:-0.157 world_cup:-0.147 premier_league:-0.166,no,787383318908670
+194,Daviti,GE,Rustavi,,B2,15,evening,no,0.258,0.781,0.267,world_cup:0.119 serie_a:0.1 national_teams:-0.094 bundesliga:-0.16 legends:-0.165 georgian_football:-0.119,no,846188334393907
+195,Kakhi,GE,Kutaisi,,B3,2,daytime,no,0.451,0.777,-0.119,bundesliga:0.179 legends:0.124 transfers:0.065 serie_a:0.095 world_cup:-0.101 national_teams:-0.154,no,3206041940393349
+196,Bekaka,GE,Tbilisi,,B4,2,evening,no,0.696,0.621,0.196,transfers:0.156 serie_a:0.139 champions_league:0.053 bundesliga:0.149 legends:-0.109 georgian_football:-0.061 premier_league:-0.146 la_liga:-0.185,no,202495459474224
+197,eldaruna755,GE,Ozurgeti,,B1 (bottom),10,evening,no,0.114,0.499,-0.168,transfers:0.14 bundesliga:0.101 legends:0.082 champions_league:0.199 premier_league:-0.145 national_teams:-0.057,no,981808107305411
+198,Koka Eliashvili,GE,Tbilisi,,B5 (top),2,daytime,no,0.87,0.793,0.22,bundesliga:0.167 serie_a:0.192 premier_league:-0.084 champions_league:-0.118 legends:-0.171,no,1114466202340064
+199,Bachanaa,ES,Barcelona,,B4,2,daytime,yes,0.697,0.766,0.205,la_liga:0.198 legends:0.126 transfers:-0.171 serie_a:-0.095,no,313170345393447
+200,Kldiashua,GE,Rustavi,,B4,2,daytime,no,0.708,0.545,-0.01,world_cup:0.086 champions_league:0.058 transfers:0.123 la_liga:-0.068 georgian_football:-0.117 premier_league:-0.071,no,3375179172965781
+201,Otari16,GE,Tbilisi,,B4,2,daytime,no,0.638,0.539,0.148,national_teams:0.061 serie_a:0.151 georgian_football:0.136 legends:-0.072 bundesliga:-0.192 world_cup:-0.084,no,4277059016271116
+202,Makoiko,GE,Tbilisi,AC Milan,B1 (bottom),2,evening,no,0.181,0.427,-0.292,transfers:0.067 bundesliga:0.134 national_teams:0.052 premier_league:-0.154 la_liga:-0.08,no,2494273795861685
+203,Otoa771,GE,Tbilisi,,B4,2,evening,no,0.682,0.354,-0.169,world_cup:0.131 champions_league:0.104 legends:0.126 bundesliga:-0.163 national_teams:-0.084 transfers:-0.199 georgian_football:-0.138,no,4166944388271086
+204,pavle,GE,Gori,,B3,3,daytime,no,0.538,0.492,0.071,premier_league:0.169 legends:0.108 national_teams:-0.127 transfers:-0.153 serie_a:-0.129 bundesliga:-0.144,no,2791919392444855
+205,Pridonushka,GE,Zugdidi,,B2,3,evening,no,0.428,0.401,0.046,la_liga:0.078 champions_league:0.134 bundesliga:0.102 legends:-0.173 world_cup:-0.177 georgian_football:-0.156 transfers:-0.145,no,656706895319789
+206,Lela Gvaramava,GE,Zugdidi,,B1 (bottom),10,evening,no,0.168,0.704,-0.3,georgian_football:0.182 world_cup:0.151 national_teams:-0.107 champions_league:-0.067 serie_a:-0.123,no,2693909627170731
+207,Zezvao,GE,Gori,,B3,3,daytime,no,0.465,0.763,-0.061,premier_league:0.196 serie_a:0.084 national_teams:0.06 champions_league:0.075 world_cup:-0.18 bundesliga:-0.144 la_liga:-0.186 legends:-0.197,no,4209656398287364
+208,datuna zumbulshvili,GE,Telavi,,B4,2,daytime,no,0.607,0.392,-0.246,transfers:0.146 champions_league:0.105 premier_league:-0.172 national_teams:-0.122,no,594309294303095
+209,oto chadunshvili,GE,Akhaltsikhe,,B3,2,daytime,no,0.577,0.422,-0.204,transfers:0.17 world_cup:0.092 la_liga:0.103 premier_league:-0.069 legends:-0.052 georgian_football:-0.18,no,1295578927058191
+210,Datoiko,GE,Gori,,B4,2,daytime,no,0.74,0.428,-0.215,transfers:0.108 champions_league:0.173 georgian_football:-0.135 serie_a:-0.168 legends:-0.104 premier_league:-0.114,no,2314338486778550
+211,Gogi Ugulshvili,GE,Batumi,,B2,2,evening,no,0.399,0.673,0.18,serie_a:0.101 champions_league:0.059 premier_league:-0.178 la_liga:-0.116,no,2519949147029603
+212,tsagurishvili,GE,Telavi,,B1 (bottom),2,morning,no,0.207,0.675,-0.144,champions_league:0.063 georgian_football:0.11 serie_a:-0.133 world_cup:-0.184 bundesliga:-0.139 national_teams:-0.148,no,521466581534305
+213,Sopo131,GE,Ozurgeti,,B1 (bottom),2,night_owl,no,0.201,0.775,-0.241,world_cup:0.176 legends:0.069 bundesliga:-0.11 premier_league:-0.173 champions_league:-0.155 transfers:-0.141,no,2749323769166368
+214,mbappe,GE,Zugdidi,,B1 (bottom),3,evening,no,0.187,0.783,0.096,world_cup:0.113 serie_a:0.146 la_liga:0.099 champions_league:-0.116 legends:-0.058,no,1392449333916711
+215,marjanab,GE,Poti,,B2,2,evening,no,0.435,0.591,0.287,national_teams:0.082 legends:0.174 bundesliga:-0.144 premier_league:-0.08 champions_league:-0.123 serie_a:-0.061,no,1944995663235860
+216,nana09,GE,Rustavi,,B3,2,evening,no,0.477,0.414,-0.194,bundesliga:0.078 georgian_football:0.167 champions_league:0.078 world_cup:0.072 serie_a:-0.052 legends:-0.092 la_liga:-0.164,no,250507286853938
+217,Guram Ubilava,TR,Istanbul,,B2,2,daytime,no,0.359,0.683,-0.075,serie_a:0.066 la_liga:0.187 premier_league:0.131 transfers:0.12 legends:-0.122 national_teams:-0.171 bundesliga:-0.139 champions_league:-0.161,no,4090482762672558
+218,vova gvaramashvili,GE,Gori,,B3,2,evening,no,0.567,0.747,0.089,legends:0.194 la_liga:0.097 bundesliga:0.163 premier_league:-0.09 champions_league:-0.122 serie_a:-0.077 world_cup:-0.187,no,1951985161593804
+219,Buba Chanturieli,GE,Zugdidi,,B5 (top),2,daytime,no,0.855,0.371,0.299,premier_league:0.053 legends:0.167 serie_a:0.099 georgian_football:-0.056 national_teams:-0.154 la_liga:-0.15 bundesliga:-0.09,yes,2925616664076807
+220,valerio,GE,Ozurgeti,,B3,3,morning,no,0.507,0.527,-0.077,serie_a:0.112 world_cup:0.093 champions_league:-0.088 premier_league:-0.107,no,2357762668426748
+221,Nugo0,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.243,0.451,0.252,la_liga:0.079 champions_league:0.102 serie_a:0.173 national_teams:0.106 bundesliga:-0.189 premier_league:-0.167,no,326167339042891
+222,otar odishvili,GE,Rustavi,,B3,2,evening,no,0.451,0.684,0.032,transfers:0.134 georgian_football:0.185 la_liga:0.188 world_cup:0.161 premier_league:-0.051 bundesliga:-0.151,no,2023771796544559
+223,koka dvalishvili,GE,Kutaisi,,B1 (bottom),2,evening,no,0.135,0.659,0.093,legends:0.107 world_cup:0.123 serie_a:0.073 georgian_football:-0.151 champions_league:-0.082,no,2114802409966307
+224,janos,GR,Athens,,B3,2,daytime,no,0.562,0.734,0.032,la_liga:0.135 national_teams:0.196 georgian_football:-0.141 champions_league:-0.053 legends:-0.171,yes,946281888508388
+225,Eldar Zumbuladze,GE,Akhaltsikhe,,B1 (bottom),2,daytime,no,0.235,0.536,0.173,champions_league:0.082 serie_a:0.134 premier_league:-0.165 bundesliga:-0.127 georgian_football:-0.164,no,721855065516354
+226,bachana bakurua,GB,Manchester,,B5 (top),2,evening,no,0.781,0.782,0.069,champions_league:0.184 serie_a:0.096 georgian_football:0.196 national_teams:-0.145 premier_league:-0.094 transfers:-0.099 bundesliga:-0.165,no,2771050406634333
+227,Samkharidze,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.112,0.829,0.043,georgian_football:0.061 la_liga:0.157 transfers:0.082 premier_league:-0.086 legends:-0.184 serie_a:-0.175,no,1327275752702177
+228,kako kemoklidze,TR,Istanbul,,B1 (bottom),3,night_owl,no,0.12,0.673,-0.236,georgian_football:0.184 legends:0.086 premier_league:0.153 transfers:0.2 world_cup:-0.164 national_teams:-0.112 bundesliga:-0.102,no,1121568328911074
+229,Pavle Ratianshvili,ES,Barcelona,,B3,2,evening,no,0.592,0.749,0.286,georgian_football:0.085 serie_a:0.156 champions_league:0.084 national_teams:-0.124 bundesliga:-0.087,no,863923882989170
+230,გუგა,GE,Zugdidi,,B4,2,evening,yes,0.616,0.47,-0.056,transfers:0.072 legends:0.111 la_liga:0.19 bundesliga:-0.137 serie_a:-0.109 national_teams:-0.157 premier_league:-0.114,no,2117547967088836
+231,cf,GE,Ozurgeti,,B2,2,daytime,yes,0.405,0.721,-0.105,world_cup:0.093 premier_league:0.094 transfers:-0.2 champions_league:-0.067 la_liga:-0.151 national_teams:-0.093,no,3443312884465473
+232,Zurikouna,GE,Rustavi,,B3,10,daytime,no,0.48,0.375,0.239,serie_a:0.16 legends:0.167 transfers:0.081 world_cup:-0.139 champions_league:-0.089,no,382379832869138
+233,lasha tabagshvili,GE,Akhaltsikhe,,B2,10,daytime,no,0.317,0.368,-0.169,premier_league:0.19 champions_league:0.051 world_cup:-0.119 transfers:-0.063 national_teams:-0.194,no,2631143350078135
+234,salomeuna,ES,Madrid,,B5 (top),3,evening,yes,0.806,0.455,0.101,bundesliga:0.177 serie_a:0.097 transfers:0.144 national_teams:0.098 premier_league:-0.138 world_cup:-0.104 georgian_football:-0.089 champions_league:-0.167,no,1275909125240465
+235,vakhtangb,GE,Gori,,B1 (bottom),10,evening,no,0.205,0.703,-0.019,la_liga:0.105 national_teams:0.136 bundesliga:0.088 world_cup:-0.108 serie_a:-0.093,no,2101281172177000
+236,LaliK14,GE,Batumi,,B2,15,evening,no,0.281,0.535,0.21,national_teams:0.058 premier_league:0.149 bundesliga:-0.16 transfers:-0.166 georgian_football:-0.072,no,1954310410677122
+237,Nugo Nadireli,GE,Poti,,B5 (top),2,evening,no,0.789,0.507,-0.021,champions_league:0.096 la_liga:0.138 serie_a:0.084 legends:-0.173 georgian_football:-0.078,no,4121148445231244
+238,Data,GB,Birmingham,,B2,2,evening,yes,0.327,0.781,0.193,premier_league:0.118 champions_league:0.173 national_teams:0.141 georgian_football:0.151 serie_a:-0.157 legends:-0.192 bundesliga:-0.082 la_liga:-0.056,no,336580220212217
+239,sandrouna23,GE,Akhaltsikhe,,B2,3,daytime,no,0.292,0.392,-0.243,premier_league:0.157 georgian_football:0.075 legends:-0.155 la_liga:-0.14 world_cup:-0.188,no,4050745504313124
+240,koka lordkipashvili,GE,Poti,,B3,2,morning,no,0.463,0.375,0.014,la_liga:0.131 georgian_football:0.066 serie_a:0.187 national_teams:-0.197 bundesliga:-0.078,no,3480053186960114
+241,GioL,TR,Izmir,AC Milan,B4,2,evening,no,0.707,0.759,-0.265,la_liga:0.152 premier_league:0.091 georgian_football:0.191 national_teams:-0.185 champions_league:-0.126,no,4166566386929594
+242,Data Ugrelishvili,GE,Batumi,,B2,10,daytime,no,0.302,0.742,-0.128,national_teams:0.145 legends:0.16 georgian_football:0.151 la_liga:0.121 transfers:-0.084 bundesliga:-0.067 serie_a:-0.079,no,1102640133881139
+243,mishaiko,GE,Telavi,,B3,2,daytime,no,0.592,0.547,-0.17,legends:0.093 national_teams:0.068 premier_league:0.188 transfers:0.075 georgian_football:-0.129 serie_a:-0.11 champions_league:-0.1 la_liga:-0.173,no,2238202170824365
+244,baller8,GE,Kutaisi,,B2,2,evening,no,0.278,0.36,0.048,world_cup:0.153 bundesliga:0.115 premier_league:0.161 la_liga:-0.154 legends:-0.055 national_teams:-0.181,no,396636137099758
+245,nugo zarkeli,GE,Rustavi,,B1 (bottom),3,evening,yes,0.186,0.439,0.24,bundesliga:0.056 transfers:0.07 la_liga:-0.075 georgian_football:-0.063 serie_a:-0.058,no,1769368858122327
+246,Tato Peikrishashvili,GE,Poti,,B4,2,evening,no,0.637,0.509,-0.204,serie_a:0.078 bundesliga:0.149 legends:-0.066 national_teams:-0.147,no,2091920694014843
+247,Mariushka,GE,Ozurgeti,,B4,15,evening,no,0.665,0.51,0.013,la_liga:0.086 premier_league:0.126 georgian_football:0.077 serie_a:-0.172 transfers:-0.135 champions_league:-0.106 national_teams:-0.052,no,838027827053064
+248,Mirianiko14,ES,Barcelona,,B3,10,daytime,no,0.548,0.51,-0.101,premier_league:0.163 serie_a:0.184 world_cup:0.182 bundesliga:-0.099 legends:-0.137 champions_league:-0.146,no,4305628306466908
+249,Dato Bebershvili,GE,Zugdidi,,B3,2,daytime,no,0.599,0.382,-0.152,champions_league:0.142 la_liga:0.143 bundesliga:0.054 serie_a:0.171 transfers:-0.109 national_teams:-0.153 legends:-0.068,no,3361729636161926
+250,vidal,GE,Zugdidi,,B3,2,daytime,no,0.553,0.813,-0.235,premier_league:0.153 la_liga:0.094 national_teams:-0.116 transfers:-0.081 champions_league:-0.194 world_cup:-0.108,no,2234829661929044
+251,Vephkhviani,GE,Batumi,,B5 (top),2,daytime,no,0.888,0.537,0.108,world_cup:0.136 champions_league:0.13 transfers:0.195 legends:-0.102 national_teams:-0.163,no,627453986107417
+252,tokon,GE,Ozurgeti,,B3,2,morning,no,0.52,0.451,0.252,legends:0.088 national_teams:0.086 world_cup:0.081 premier_league:0.079 champions_league:-0.086 serie_a:-0.196 georgian_football:-0.118,no,735026871437075
+253,Bubao,GE,Ozurgeti,,B2,2,evening,no,0.292,0.543,0.154,legends:0.12 premier_league:0.1 georgian_football:0.16 la_liga:-0.069 national_teams:-0.115 transfers:-0.052,no,1066169227950959
+254,TakoS22,GE,Zugdidi,,B2,21,daytime,no,0.419,0.59,0.119,serie_a:0.051 premier_league:0.128 la_liga:0.112 world_cup:-0.144 legends:-0.188 transfers:-0.185 national_teams:-0.1,no,3203488570293261
+255,Jemal Elizbareli,GE,Zugdidi,,B3,10,daytime,no,0.494,0.616,-0.298,transfers:0.064 la_liga:0.066 georgian_football:0.132 bundesliga:0.171 national_teams:-0.185 serie_a:-0.06,no,1608242393897697
+256,Gogaiko,GE,Zugdidi,,B2,15,evening,yes,0.278,0.397,0.166,world_cup:0.121 champions_league:0.062 premier_league:-0.154 serie_a:-0.194 bundesliga:-0.061 la_liga:-0.185,no,3964192852835943
+257,roin,GE,Poti,,B3,15,daytime,no,0.553,0.542,-0.109,legends:0.148 world_cup:0.129 serie_a:0.19 champions_league:0.166 bundesliga:-0.102 georgian_football:-0.18 la_liga:-0.121 transfers:-0.145,no,1978749367884072
+258,MalkhazA,GE,Ozurgeti,,B3,2,evening,no,0.453,0.707,-0.234,georgian_football:0.192 bundesliga:0.07 champions_league:0.138 premier_league:0.182 transfers:-0.054 legends:-0.126,no,2718875227260121
+259,elene lordkipaidze,GE,Poti,,B2,10,evening,no,0.434,0.582,0.01,transfers:0.157 world_cup:0.181 legends:0.153 la_liga:-0.129 national_teams:-0.191 premier_league:-0.104,no,115791834782515
+260,mananaushka,GE,Telavi,,B1 (bottom),10,evening,no,0.076,0.353,0.127,serie_a:0.076 bundesliga:0.182 national_teams:0.167 premier_league:-0.114 legends:-0.081 champions_league:-0.058 world_cup:-0.118,no,670992789781494
+261,Mirianiko22,GE,Rustavi,,B3,2,evening,no,0.542,0.421,-0.219,legends:0.164 premier_league:0.183 champions_league:0.148 national_teams:0.174 georgian_football:-0.091 world_cup:-0.176 bundesliga:-0.135 serie_a:-0.122,no,3930780323672787
+262,ketika,GE,Poti,,B3,2,daytime,no,0.475,0.745,0.14,georgian_football:0.051 champions_league:0.188 serie_a:0.079 legends:0.136 la_liga:-0.068 premier_league:-0.194,no,260077536255288
+263,gagoshvili526,GE,Telavi,,B1 (bottom),2,night_owl,no,0.134,0.567,0.175,premier_league:0.195 legends:0.132 georgian_football:0.088 la_liga:0.18 champions_league:-0.139 national_teams:-0.123,no,291113969921837
+264,MishaB,GE,Batumi,,B3,2,daytime,no,0.519,0.386,-0.142,bundesliga:0.184 world_cup:0.174 transfers:-0.173 premier_league:-0.152 national_teams:-0.098 champions_league:-0.189,no,226196847016027
+265,Vova Mikashvili,GE,Kutaisi,,B2,2,evening,no,0.444,0.613,0.133,premier_league:0.185 legends:0.121 world_cup:0.112 national_teams:0.092 champions_league:-0.183 transfers:-0.052 bundesliga:-0.174 serie_a:-0.064,no,198281191367485
+266,Lela Kalatozshvili,GE,Ozurgeti,,B5 (top),2,daytime,no,0.897,0.611,0.098,champions_league:0.142 transfers:0.117 world_cup:0.174 serie_a:-0.104 georgian_football:-0.174 premier_league:-0.199 bundesliga:-0.12,no,3653037098619619
+267,zuraz,GE,Rustavi,,B2,2,night_owl,no,0.258,0.731,0.293,world_cup:0.101 champions_league:0.081 transfers:0.102 la_liga:-0.183 national_teams:-0.195 bundesliga:-0.11 legends:-0.079,no,889281573813529
+268,merabl,GE,Batumi,FC Barcelona,B1 (bottom),2,daytime,no,0.236,0.793,0.152,world_cup:0.06 serie_a:0.137 georgian_football:0.082 champions_league:-0.118 legends:-0.056 transfers:-0.147 la_liga:-0.162,no,1322294302890976
+269,ekaa.neymar54,GE,Tbilisi,,B3,2,evening,no,0.475,0.762,-0.264,georgian_football:0.063 legends:0.172 serie_a:-0.057 transfers:-0.089 premier_league:-0.071,no,1192633647001855
+270,kaki maisurshvili,GE,Tbilisi,,B4,2,evening,no,0.64,0.535,-0.248,serie_a:0.175 world_cup:0.083 transfers:-0.1 champions_league:-0.187,no,1286329808892085
+271,Kukurio,GE,Rustavi,,B2,2,evening,no,0.291,0.609,0.117,bundesliga:0.124 national_teams:0.173 champions_league:0.159 georgian_football:0.192 transfers:-0.095 legends:-0.097 world_cup:-0.177,no,22938482778407
+272,japarshvili,GE,Gori,,B4,3,daytime,no,0.748,0.675,-0.019,georgian_football:0.089 bundesliga:0.197 premier_league:0.137 legends:-0.138 la_liga:-0.142 champions_league:-0.191,no,841004453399634
+273,MalkhazT,GE,Rustavi,,B3,2,evening,no,0.531,0.484,0.137,la_liga:0.144 champions_league:0.066 bundesliga:0.056 georgian_football:0.11 premier_league:-0.143 transfers:-0.141,no,2854380506669363
+274,eliasheli,GE,Telavi,,B3,2,daytime,no,0.599,0.383,0.273,georgian_football:0.062 la_liga:0.167 legends:0.149 world_cup:0.16 champions_league:-0.177 premier_league:-0.192,no,3993733549439238
+275,misha,GE,Akhaltsikhe,,B1 (bottom),3,daytime,no,0.09,0.593,0.113,premier_league:0.125 champions_league:0.06 la_liga:-0.062 bundesliga:-0.128 serie_a:-0.102 legends:-0.153,no,906775968543178
+276,Tazo Darakhveladze,GE,Ozurgeti,,B3,15,evening,no,0.473,0.823,-0.281,legends:0.14 world_cup:0.157 serie_a:0.08 champions_league:-0.168 national_teams:-0.095 bundesliga:-0.136,no,3541250064179645
+277,kako tabagua,GR,Athens,,B1 (bottom),2,daytime,no,0.211,0.416,0.082,legends:0.165 world_cup:0.098 premier_league:0.095 transfers:0.182 bundesliga:-0.115 la_liga:-0.071 serie_a:-0.103 national_teams:-0.061,no,1385013754306965
+278,tornike arakiidze,GE,Poti,,B4,10,evening,yes,0.638,0.838,-0.246,legends:0.194 georgian_football:0.07 serie_a:0.082 champions_league:0.058 la_liga:-0.056 national_teams:-0.122,no,2232021884258974
+279,Tokoka.cf,GE,Tbilisi,,B3,3,morning,no,0.532,0.47,-0.084,premier_league:0.088 georgian_football:0.107 national_teams:-0.092 la_liga:-0.151,no,830637161920029
+280,Tato,GE,Akhaltsikhe,,B3,3,morning,yes,0.484,0.593,-0.237,champions_league:0.157 world_cup:0.071 la_liga:0.071 transfers:-0.057 legends:-0.178,no,290356915400031
+281,gugaiko,GE,Gori,,B3,10,evening,no,0.467,0.744,0.121,la_liga:0.164 bundesliga:0.182 champions_league:-0.121 georgian_football:-0.093 transfers:-0.073,no,3590562197593340
+282,anano tsereteliava,GE,Poti,,B4,2,evening,no,0.67,0.657,0.006,la_liga:0.106 world_cup:0.14 champions_league:-0.182 bundesliga:-0.099 transfers:-0.121 serie_a:-0.155,no,1660690991087754
+283,Mamukaika,GE,Rustavi,,B2,2,morning,no,0.383,0.492,-0.104,legends:0.073 premier_league:0.172 world_cup:-0.143 champions_league:-0.13,no,1423169518063548
+284,temuri,US,Chicago,,B4,10,evening,no,0.689,0.544,-0.004,premier_league:0.127 serie_a:0.122 la_liga:0.186 transfers:0.101 champions_league:-0.092 bundesliga:-0.083 national_teams:-0.108,no,1195393174842621
+285,Mirian Lordkipaidze,GE,Gori,,B2,10,evening,yes,0.394,0.508,-0.286,world_cup:0.106 legends:0.147 champions_league:0.197 national_teams:0.178 georgian_football:-0.075 serie_a:-0.165 bundesliga:-0.083,no,2927889973245665
+286,Ioseb Gvaramadze,GB,London,,B2,2,evening,no,0.308,0.446,0.164,legends:0.144 bundesliga:0.174 georgian_football:0.129 premier_league:-0.055 national_teams:-0.175,no,1556886408750248
+287,Turashidze,GE,Rustavi,,B1 (bottom),2,morning,no,0.103,0.597,0.195,world_cup:0.195 national_teams:0.196 la_liga:0.103 serie_a:-0.093 transfers:-0.16 premier_league:-0.161,no,2324129799009685
+288,ZURABUNA.striker,GE,Kutaisi,,B3,3,night_owl,no,0.451,0.743,0.155,world_cup:0.066 georgian_football:0.159 national_teams:0.116 transfers:0.09 bundesliga:-0.154 champions_league:-0.09,no,319947025641372
+289,Koteiko,GE,Batumi,,B2,2,morning,no,0.326,0.562,-0.299,legends:0.116 premier_league:0.163 champions_league:-0.079 national_teams:-0.126 bundesliga:-0.157,no,2228180296140264
+290,guram samkharashvili,GE,Batumi,,B4,2,evening,no,0.694,0.473,0.138,premier_league:0.2 la_liga:0.102 champions_league:-0.133 legends:-0.093 serie_a:-0.094 transfers:-0.061,no,2298811432881010
+291,Guramuna1,US,Los Angeles,,B4,10,evening,no,0.629,0.546,0.218,world_cup:0.178 premier_league:0.195 la_liga:-0.152 bundesliga:-0.06,no,2020456074696229
+292,gubazr,GE,Ozurgeti,,B1 (bottom),15,evening,no,0.25,0.573,-0.235,world_cup:0.185 georgian_football:0.129 national_teams:0.098 champions_league:-0.11 premier_league:-0.074 serie_a:-0.086,no,2358441474887394
+293,zlatan,GE,Batumi,,B2,2,evening,no,0.332,0.592,-0.223,legends:0.169 serie_a:0.142 national_teams:0.197 world_cup:-0.162 georgian_football:-0.183,no,2221604498688621
+294,lasha tomadashvili,GE,Rustavi,,B1 (bottom),2,evening,no,0.218,0.695,-0.266,serie_a:0.061 georgian_football:0.061 national_teams:-0.096 premier_league:-0.107,yes,1898444264492352
+295,Tokoka,GE,Kutaisi,,B1 (bottom),2,evening,no,0.23,0.581,0.06,serie_a:0.088 transfers:0.134 champions_league:0.082 la_liga:0.084 georgian_football:-0.076 bundesliga:-0.172 legends:-0.179 premier_league:-0.072,no,2511938297041609
+296,Vato Abasheli,GE,Rustavi,,B3,2,daytime,no,0.596,0.592,-0.294,bundesliga:0.2 serie_a:0.06 national_teams:0.153 georgian_football:-0.158 transfers:-0.172 legends:-0.164 la_liga:-0.153,no,2197653174567860
+297,Reziika.baller,GE,Zugdidi,,B5 (top),2,evening,no,0.807,0.532,-0.032,la_liga:0.15 national_teams:0.173 legends:-0.065 bundesliga:-0.197 georgian_football:-0.114,no,1934240175410224
+298,Meladzshvili,GE,Kutaisi,,B1 (bottom),2,evening,no,0.082,0.38,-0.01,bundesliga:0.195 serie_a:0.08 legends:0.071 world_cup:0.075 transfers:-0.149 premier_league:-0.2 la_liga:-0.058,no,2676294898915994
+299,NodarN1,GE,Rustavi,,B2,2,morning,no,0.366,0.444,-0.125,serie_a:0.102 national_teams:0.16 la_liga:0.07 champions_league:0.09 premier_league:-0.182 world_cup:-0.086,no,1601100716866678
+300,Lukas,GE,Zugdidi,,B1 (bottom),10,daytime,no,0.091,0.365,0.279,bundesliga:0.133 georgian_football:0.149 world_cup:0.174 la_liga:0.145 national_teams:-0.084 premier_league:-0.07 champions_league:-0.15,no,2324476477364422
+301,Tengiziko,GE,Tbilisi,,B1 (bottom),15,evening,yes,0.121,0.635,-0.162,la_liga:0.06 champions_league:0.072 world_cup:-0.094 national_teams:-0.181 transfers:-0.107,no,2006818490605203
+302,ika dolidze,GE,Poti,,B3,2,evening,no,0.475,0.742,-0.135,serie_a:0.198 bundesliga:0.097 champions_league:-0.111 la_liga:-0.161 georgian_football:-0.063,no,4134953377648293
+303,Pridon Eliashiani,GE,Ozurgeti,,B4,15,evening,no,0.604,0.451,0.225,premier_league:0.114 bundesliga:0.08 la_liga:-0.197 georgian_football:-0.118 serie_a:-0.105 transfers:-0.118,no,2788930263216117
+304,gocha tsereteliiani,GE,Batumi,,B3,10,daytime,no,0.55,0.809,-0.116,bundesliga:0.148 legends:0.171 premier_league:0.146 national_teams:0.182 la_liga:-0.077 serie_a:-0.052,no,601447908811375
+305,ika,GE,Rustavi,,B2,2,evening,no,0.418,0.699,0.094,transfers:0.057 georgian_football:0.141 legends:0.154 la_liga:0.136 champions_league:-0.158 bundesliga:-0.118 national_teams:-0.177,no,3709210958572304
+306,Zarkidze,GE,Zugdidi,,B2,10,daytime,no,0.339,0.72,0.218,serie_a:0.081 bundesliga:0.148 legends:-0.117 transfers:-0.064 world_cup:-0.143 champions_league:-0.143,yes,2703807511927945
+307,Koteo,GE,Zugdidi,,B3,2,morning,no,0.526,0.567,-0.091,bundesliga:0.136 legends:0.083 georgian_football:0.148 world_cup:-0.119 premier_league:-0.185,no,1416690919055149
+308,Gugaa,GE,Gori,,B2,2,morning,no,0.339,0.696,-0.016,world_cup:0.173 la_liga:0.181 premier_league:0.157 transfers:0.18 legends:-0.113 champions_league:-0.09,yes,3522581267773734
+309,Paata Mgeli,GE,Akhaltsikhe,,B4,2,daytime,no,0.606,0.536,-0.169,transfers:0.169 la_liga:0.069 legends:-0.101 premier_league:-0.123 serie_a:-0.13 bundesliga:-0.089,no,1932976342787140
+310,Mikheilika,GE,Gori,,B2,15,daytime,no,0.412,0.691,-0.224,national_teams:0.109 la_liga:0.068 serie_a:0.092 bundesliga:0.092 transfers:-0.184 georgian_football:-0.167 premier_league:-0.109 champions_league:-0.062,no,3829521385914156
+311,Roin22,GE,Gori,,B1 (bottom),2,evening,no,0.113,0.694,-0.281,bundesliga:0.148 transfers:0.081 premier_league:-0.13 georgian_football:-0.138 world_cup:-0.185,no,440928661843887
+312,Guram,GE,Zugdidi,,B2,2,daytime,no,0.347,0.647,0.265,transfers:0.065 la_liga:0.177 champions_league:-0.131 georgian_football:-0.159 legends:-0.138 serie_a:-0.144,no,4226695806710164
+313,Zuraka,DE,Berlin,,B4,3,morning,no,0.677,0.366,0.25,transfers:0.192 national_teams:0.108 champions_league:0.093 legends:0.108 world_cup:-0.162 serie_a:-0.111 la_liga:-0.143 bundesliga:-0.183,no,976995069049416
+314,Uguladze21,GE,Telavi,,B1 (bottom),15,evening,no,0.133,0.61,-0.013,bundesliga:0.105 world_cup:0.163 premier_league:-0.157 national_teams:-0.085 serie_a:-0.073 champions_league:-0.081,no,905577604367137
+315,ZUKA,GE,Rustavi,,B3,2,daytime,no,0.484,0.572,-0.182,world_cup:0.161 bundesliga:0.154 legends:-0.143 georgian_football:-0.08 champions_league:-0.065,no,1662250918104861
+316,Irakli Darakhvelshvili,GE,Poti,,B3,2,daytime,no,0.57,0.521,-0.06,serie_a:0.076 world_cup:0.121 bundesliga:-0.1 premier_league:-0.153 champions_league:-0.121 legends:-0.054,no,4204571073429175
+317,Vakho Okropeli,GE,Tbilisi,,B2,2,evening,no,0.312,0.654,0.119,champions_league:0.169 world_cup:0.097 legends:0.172 la_liga:0.117 national_teams:-0.118 georgian_football:-0.081 bundesliga:-0.16,no,1650895606999635
+318,AnanoM,GE,Rustavi,,B2,2,evening,no,0.314,0.395,0.176,la_liga:0.112 legends:0.18 champions_league:-0.097 transfers:-0.118 serie_a:-0.052,no,645984343627616
+319,anano sanikadze,TR,Ankara,,B4,2,daytime,no,0.638,0.626,-0.212,premier_league:0.098 bundesliga:0.132 transfers:-0.188 national_teams:-0.127,no,1397658684672195
+320,Mikashvili,GE,Akhaltsikhe,,B2,21,daytime,no,0.42,0.596,0.23,world_cup:0.195 serie_a:0.19 bundesliga:0.159 legends:-0.06 transfers:-0.069,no,1075687301438661
+321,Temol Arakiadze,GE,Telavi,,B1 (bottom),2,evening,no,0.073,0.66,-0.073,premier_league:0.153 world_cup:0.164 la_liga:-0.1 bundesliga:-0.08 serie_a:-0.139,no,2705699935880858
+322,Likao,GE,Ozurgeti,,B1 (bottom),2,daytime,no,0.094,0.363,-0.108,bundesliga:0.167 georgian_football:0.09 premier_league:0.175 legends:0.128 la_liga:-0.105 champions_league:-0.056 world_cup:-0.088 serie_a:-0.118,no,3550722985991738
+323,valerio.mbappe,GE,Kutaisi,,B3,2,morning,no,0.563,0.643,-0.214,la_liga:0.188 transfers:0.149 national_teams:0.142 world_cup:0.19 champions_league:-0.175 serie_a:-0.159,no,1948739534832905
+324,LelaT,GE,Telavi,,B1 (bottom),2,daytime,no,0.08,0.522,-0.059,serie_a:0.166 la_liga:0.174 national_teams:-0.19 world_cup:-0.113,no,1003577245974768
+325,Nikoloz Chadunshvili,GE,Kutaisi,,B3,2,evening,no,0.514,0.643,-0.251,transfers:0.103 bundesliga:0.115 georgian_football:0.109 world_cup:-0.116 serie_a:-0.059 premier_league:-0.1,no,2212977894969720
+326,Sulkhan Zumbuladze,GE,Akhaltsikhe,,B2,3,evening,no,0.341,0.799,-0.225,bundesliga:0.102 legends:0.053 world_cup:0.176 la_liga:0.147 premier_league:-0.147 national_teams:-0.087 georgian_football:-0.09 champions_league:-0.176,no,1851394414916802
+327,ilian,GE,Zugdidi,,B1 (bottom),3,morning,no,0.062,0.45,0.233,world_cup:0.132 national_teams:0.056 champions_league:0.106 georgian_football:-0.123 legends:-0.09 la_liga:-0.063 bundesliga:-0.087,no,1170631445332348
+328,Guramka,GE,Batumi,,B3,2,evening,no,0.583,0.796,0.136,world_cup:0.106 transfers:0.131 la_liga:-0.101 serie_a:-0.102 legends:-0.147 premier_league:-0.159,no,3592175071050376
+329,Oto,GE,Akhaltsikhe,,B5 (top),2,morning,no,0.83,0.45,0.122,premier_league:0.054 national_teams:0.095 serie_a:0.103 champions_league:0.128 world_cup:-0.129 la_liga:-0.075 transfers:-0.062,no,2400562075673045
+330,koka samkharidze,GE,Kutaisi,,B2,2,daytime,no,0.329,0.698,0.105,world_cup:0.168 georgian_football:0.171 champions_league:-0.114 legends:-0.137,no,3637740420789365
+331,sopho bagratua,GE,Gori,,B2,2,daytime,no,0.432,0.825,-0.244,serie_a:0.096 la_liga:0.138 world_cup:-0.186 legends:-0.086,no,993579562740223
+332,mikheil,ES,Madrid,,B2,2,evening,no,0.271,0.797,0.201,national_teams:0.078 premier_league:0.09 serie_a:0.182 la_liga:-0.123 world_cup:-0.16 legends:-0.111 georgian_football:-0.166,yes,2455513494197121
+333,lado lezhavshvili,ES,Madrid,,B3,15,morning,no,0.479,0.494,0.119,world_cup:0.145 serie_a:0.181 georgian_football:0.134 legends:0.145 la_liga:-0.101 premier_league:-0.14 transfers:-0.122,no,1761801609284217
+334,janon,DE,Berlin,,B1 (bottom),10,daytime,no,0.159,0.481,0.092,bundesliga:0.113 national_teams:0.074 serie_a:0.192 georgian_football:0.161 champions_league:-0.071 la_liga:-0.188 transfers:-0.142,no,2105604400180975
+335,Ushangika,GE,Tbilisi,,B4,15,daytime,yes,0.733,0.586,0.045,national_teams:0.157 champions_league:0.066 bundesliga:-0.087 premier_league:-0.097,no,2825406789180394
+336,Soso,ES,Barcelona,,B3,2,evening,no,0.58,0.671,0.281,national_teams:0.171 legends:0.074 bundesliga:-0.122 transfers:-0.051 champions_league:-0.082 la_liga:-0.108,no,990282938846976
+337,costa,GE,Akhaltsikhe,,B2,2,evening,no,0.289,0.766,0.043,bundesliga:0.083 national_teams:0.119 world_cup:-0.113 la_liga:-0.143 legends:-0.096,no,1517644112138059
+338,Beso,GE,Ozurgeti,,B2,3,evening,no,0.329,0.692,0.249,world_cup:0.107 national_teams:0.095 serie_a:0.137 champions_league:-0.128 premier_league:-0.079 georgian_football:-0.112,no,4340820859260128
+339,Vakho,GE,Ozurgeti,,B3,2,evening,no,0.484,0.528,-0.152,champions_league:0.131 serie_a:0.187 la_liga:0.151 bundesliga:0.063 premier_league:-0.054 georgian_football:-0.193 legends:-0.085,no,1045929535974278
+340,Ucha Darakhvelshvili,GE,Batumi,,B4,15,evening,no,0.661,0.356,0.046,la_liga:0.114 national_teams:0.178 champions_league:0.129 world_cup:0.142 serie_a:-0.115 transfers:-0.101 legends:-0.118,no,1101410097876985
+341,vato kublashidze,GE,Zugdidi,,B2,3,evening,no,0.425,0.416,0.037,transfers:0.193 champions_league:0.089 georgian_football:0.194 legends:0.14 national_teams:-0.14 serie_a:-0.117,no,1263685604800102
+342,Sergo Darakhveli,GE,Gori,,B5 (top),2,evening,yes,0.873,0.436,-0.064,national_teams:0.137 champions_league:0.085 legends:0.152 bundesliga:-0.178 la_liga:-0.055,no,334707098316260
+343,MirianT,GE,Batumi,,B3,2,evening,no,0.488,0.68,0.095,transfers:0.174 la_liga:0.062 legends:0.176 world_cup:0.164 serie_a:-0.126 premier_league:-0.117,no,260635627226008
+344,nika gagoshashvili,TR,Ankara,,B4,3,evening,no,0.709,0.665,-0.2,bundesliga:0.157 champions_league:0.142 premier_league:0.119 la_liga:0.053 world_cup:-0.086 georgian_football:-0.114 legends:-0.069 national_teams:-0.175,no,463500803927810
+345,Iuri,GE,Zugdidi,,B3,2,daytime,no,0.488,0.721,-0.103,serie_a:0.182 legends:0.159 champions_league:0.163 la_liga:-0.119 world_cup:-0.193 national_teams:-0.193,no,4265608146925990
+346,Gubaz Gelashidze,GE,Batumi,Liverpool FC,B3,2,evening,no,0.462,0.599,0.269,la_liga:0.142 champions_league:0.199 bundesliga:0.105 national_teams:-0.055 premier_league:-0.171 serie_a:-0.161 world_cup:-0.131,no,3012017945375688
+347,Janjgavidze,GE,Batumi,,B3,2,evening,no,0.48,0.505,-0.294,champions_league:0.084 world_cup:0.123 transfers:0.1 bundesliga:0.135 premier_league:-0.175 la_liga:-0.176 national_teams:-0.112 georgian_football:-0.19,no,308914364009567
+348,Zezva Talakheli,GE,Gori,,B4,2,daytime,no,0.637,0.625,-0.19,georgian_football:0.198 legends:0.149 transfers:0.108 national_teams:0.123 world_cup:-0.054 serie_a:-0.197,no,2272872472335183
+349,otar chkhikvshvili,GE,Telavi,,B3,2,evening,no,0.453,0.358,-0.218,serie_a:0.166 la_liga:0.192 transfers:-0.142 bundesliga:-0.181 national_teams:-0.115,no,2394610257290379
+350,Mikheilika1,US,Chicago,,B2,2,daytime,no,0.41,0.696,-0.286,legends:0.125 world_cup:0.16 la_liga:-0.107 serie_a:-0.084 national_teams:-0.055,no,3569632094352136
+351,Ioseb Imnadzshvili,GE,Akhaltsikhe,,B3,2,evening,no,0.536,0.841,-0.287,bundesliga:0.136 transfers:0.061 la_liga:0.156 world_cup:0.187 national_teams:-0.064 serie_a:-0.167 legends:-0.088 premier_league:-0.161,no,4089788782540599
+352,anaushka86,GE,Tbilisi,,B4,2,daytime,no,0.718,0.619,0.011,la_liga:0.112 serie_a:0.12 national_teams:0.17 georgian_football:-0.183 premier_league:-0.129 bundesliga:-0.082,no,327817323218047
+353,Ninoiko,GE,Akhaltsikhe,,B2,2,evening,no,0.389,0.53,0.238,serie_a:0.185 world_cup:0.072 premier_league:0.079 champions_league:0.163 bundesliga:-0.14 national_teams:-0.125 legends:-0.136 georgian_football:-0.124,no,215005318664924
+354,Zukaushka,GE,Poti,,B2,10,evening,no,0.35,0.478,0.136,serie_a:0.096 bundesliga:0.175 transfers:0.086 georgian_football:0.118 la_liga:-0.06 national_teams:-0.161 world_cup:-0.062 legends:-0.124,no,3522178372274961
+355,DavitiK111,GE,Kutaisi,,B1 (bottom),10,daytime,no,0.065,0.724,0.05,la_liga:0.119 georgian_football:0.156 premier_league:0.102 world_cup:0.194 national_teams:-0.076 champions_league:-0.184 legends:-0.143 serie_a:-0.129,no,2422215150708012
+356,RoinT,GE,Zugdidi,,B2,2,daytime,no,0.259,0.564,0.252,serie_a:0.054 bundesliga:0.107 world_cup:-0.121 transfers:-0.17 georgian_football:-0.094,no,314521156288755
+357,TengoT,GE,Batumi,,B1 (bottom),3,evening,no,0.121,0.712,-0.158,world_cup:0.051 transfers:0.185 la_liga:0.087 serie_a:0.16 georgian_football:-0.118 legends:-0.156,no,65707732433139
+358,Ilia Dvaliidze,GE,Telavi,,B3,15,evening,no,0.513,0.791,-0.004,bundesliga:0.121 national_teams:0.1 serie_a:0.144 champions_league:0.179 georgian_football:-0.143 la_liga:-0.126,no,3050099915094693
+359,Manana5,GE,Rustavi,,B3,2,evening,no,0.51,0.495,-0.086,national_teams:0.117 serie_a:0.132 transfers:0.058 champions_league:0.07 legends:-0.194 premier_league:-0.125,no,46847811606970
+360,messi69,GB,Manchester,,B1 (bottom),2,morning,no,0.199,0.356,-0.19,bundesliga:0.066 premier_league:0.13 world_cup:-0.133 champions_league:-0.155 legends:-0.199,no,473194165634773
+361,Gigi,GR,Thessaloniki,,B2,3,morning,yes,0.351,0.449,0.017,world_cup:0.132 national_teams:0.06 champions_league:0.067 legends:-0.099 la_liga:-0.117 serie_a:-0.071 premier_league:-0.141,no,2657917564548067
+362,Miqa Dvalishvili,GE,Zugdidi,,B3,2,daytime,no,0.564,0.785,-0.024,transfers:0.067 serie_a:0.067 la_liga:0.097 champions_league:-0.132 premier_league:-0.076,no,45938614976599
+363,Vakhoiko,ES,Barcelona,,B2,2,evening,no,0.334,0.752,-0.112,georgian_football:0.196 world_cup:0.195 legends:0.135 national_teams:-0.129 champions_league:-0.199,no,2601337236109030
+364,LukaB,GE,Rustavi,,B1 (bottom),3,evening,no,0.116,0.441,-0.19,legends:0.198 la_liga:0.122 transfers:0.09 serie_a:0.182 bundesliga:-0.076 georgian_football:-0.05 premier_league:-0.07 national_teams:-0.123,yes,261894913980842
+365,ლევანი09,GE,Rustavi,,B4,10,evening,no,0.632,0.813,0.121,legends:0.104 bundesliga:0.154 champions_league:0.118 world_cup:0.163 la_liga:-0.077 national_teams:-0.195 transfers:-0.171 georgian_football:-0.1,no,2916746333721139
+366,Tea Gvaramidze,GE,Rustavi,,B1 (bottom),2,evening,no,0.098,0.652,-0.14,bundesliga:0.091 serie_a:0.143 transfers:0.189 champions_league:-0.099 la_liga:-0.087 legends:-0.059,no,3955004924248783
+367,Otari Shengeliani,GE,Zugdidi,,B2,2,evening,no,0.267,0.818,0.029,serie_a:0.092 bundesliga:0.096 world_cup:0.134 legends:0.18 la_liga:-0.099 georgian_football:-0.092,yes,3554677335568301
+368,Grigol Ugrelishvili,GE,Batumi,,B2,2,evening,no,0.343,0.763,0.237,georgian_football:0.157 world_cup:0.18 champions_league:0.083 transfers:0.114 national_teams:-0.112 bundesliga:-0.157 la_liga:-0.08,no,3767446205858367
+369,valeri lezhavshvili,GE,Kutaisi,,B2,2,daytime,no,0.27,0.591,0.055,bundesliga:0.104 champions_league:0.164 transfers:0.141 la_liga:0.149 premier_league:-0.075 legends:-0.107,no,377586151245615
+370,LashaR,GE,Zugdidi,,B1 (bottom),2,evening,no,0.126,0.676,0.268,la_liga:0.165 georgian_football:0.136 champions_league:-0.131 world_cup:-0.103 legends:-0.056 serie_a:-0.056,no,834305563960191
+371,anano natenadidze,GE,Batumi,,B2,2,daytime,yes,0.306,0.655,0.182,georgian_football:0.16 national_teams:0.152 bundesliga:-0.144 world_cup:-0.146 transfers:-0.199 la_liga:-0.053,no,1973404964688682
+372,tornik odishidze,GE,Akhaltsikhe,,B2,3,daytime,no,0.292,0.775,0.122,bundesliga:0.089 georgian_football:0.15 la_liga:0.153 champions_league:0.123 serie_a:-0.097 world_cup:-0.171 legends:-0.067,no,111136416877344
+373,Shalva Odisheli,GE,Gori,,B1 (bottom),2,evening,yes,0.138,0.356,-0.282,premier_league:0.175 champions_league:0.099 world_cup:-0.194 georgian_football:-0.109 transfers:-0.112,no,4011033922648659
+374,emzar japarshvili,GE,Ozurgeti,,B1 (bottom),15,daytime,no,0.098,0.825,0.183,champions_league:0.079 legends:0.1 national_teams:-0.069 la_liga:-0.148 premier_league:-0.132 transfers:-0.13,no,4434718715240906
+375,SulkhanS,GE,Tbilisi,,B1 (bottom),2,daytime,no,0.207,0.602,-0.223,world_cup:0.179 premier_league:0.156 champions_league:0.187 national_teams:0.054 la_liga:-0.165 serie_a:-0.175 georgian_football:-0.198,no,1464085569350308
+376,Gega14,GE,Batumi,Arsenal FC,B4,2,evening,no,0.687,0.792,0.167,serie_a:0.199 georgian_football:0.138 premier_league:-0.07 bundesliga:-0.082 la_liga:-0.181 world_cup:-0.125,no,3704638340593113
+377,kaka,GE,Tbilisi,,B1 (bottom),2,daytime,no,0.096,0.825,-0.05,champions_league:0.081 serie_a:0.178 la_liga:0.199 bundesliga:0.085 georgian_football:-0.108 premier_league:-0.186 legends:-0.092 transfers:-0.157,no,4183189870516985
+378,Bachana Vashalshvili,GE,Tbilisi,,B2,2,evening,no,0.307,0.782,0.18,national_teams:0.152 georgian_football:0.148 serie_a:0.125 premier_league:-0.148 la_liga:-0.07 legends:-0.093 bundesliga:-0.137,no,3421448911011156
+379,Ioseb7,GE,Gori,,B5 (top),2,evening,no,0.828,0.727,-0.22,bundesliga:0.141 la_liga:0.145 legends:0.089 national_teams:-0.192 georgian_football:-0.056 champions_league:-0.116,no,256797604955819
+380,jabaz1,GE,Poti,,B2,10,daytime,no,0.4,0.829,0.207,la_liga:0.119 premier_league:0.151 serie_a:-0.146 world_cup:-0.159,no,3041545530857412
+381,baller,GE,Akhaltsikhe,,B2,2,evening,no,0.286,0.747,0.026,premier_league:0.135 transfers:0.188 bundesliga:-0.177 legends:-0.089,no,2262726849534489
+382,NikushaG,GE,Telavi,,B5 (top),15,evening,no,0.868,0.379,-0.12,national_teams:0.074 world_cup:0.075 serie_a:0.145 bundesliga:0.194 premier_league:-0.098 georgian_football:-0.151,no,482701846117329
+383,Mari.goat,GE,Zugdidi,,B2,2,evening,no,0.384,0.451,-0.114,georgian_football:0.065 world_cup:0.163 champions_league:-0.056 premier_league:-0.154 national_teams:-0.116 la_liga:-0.087,no,3571513916534270
+384,Merabushka111,GE,Zugdidi,,B1 (bottom),3,daytime,no,0.191,0.614,-0.159,legends:0.123 serie_a:0.151 transfers:-0.193 georgian_football:-0.069,no,2320153777261041
+385,Meladzshvili14,GE,Kutaisi,,B5 (top),2,daytime,no,0.814,0.82,-0.09,premier_league:0.069 la_liga:0.146 bundesliga:-0.051 serie_a:-0.066,no,839749800502547
+386,MikheilL,GE,Rustavi,,B4,3,night_owl,no,0.618,0.493,0.064,premier_league:0.093 champions_league:0.084 world_cup:-0.092 bundesliga:-0.108 transfers:-0.176,no,3961010064827746
+387,Zezvauna,GE,Gori,,B1 (bottom),2,evening,no,0.225,0.707,0.24,national_teams:0.19 georgian_football:0.16 legends:0.117 transfers:0.09 champions_league:-0.133 premier_league:-0.068,no,110235451469549
+388,temo bakurshvili,GE,Tbilisi,,B2,2,daytime,no,0.363,0.594,0.295,transfers:0.08 bundesliga:0.138 champions_league:-0.15 serie_a:-0.056 premier_league:-0.146,no,320729322824246
+389,Zazaiko,GE,Poti,,B1 (bottom),3,daytime,no,0.083,0.475,-0.091,la_liga:0.171 bundesliga:0.079 legends:-0.058 georgian_football:-0.146 transfers:-0.168 serie_a:-0.06,no,46256143608761
+390,Irakayuna,GE,Kutaisi,,B2,10,evening,no,0.27,0.594,0.214,national_teams:0.148 serie_a:0.144 transfers:0.058 premier_league:0.127 georgian_football:-0.098 champions_league:-0.106 bundesliga:-0.105 legends:-0.16,no,846947228873386
+391,Shota Ekhvaishvili,GE,Poti,,B4,2,daytime,no,0.611,0.549,0.297,national_teams:0.173 bundesliga:0.152 georgian_football:-0.142 legends:-0.067 la_liga:-0.183 premier_league:-0.137,no,4386828480723938
+392,pele,GE,Zugdidi,,B2,2,evening,no,0.281,0.487,-0.012,serie_a:0.189 national_teams:0.192 bundesliga:0.061 world_cup:0.091 transfers:-0.154 georgian_football:-0.111,no,2805794774745751
+393,Bacho,GR,Athens,,B5 (top),2,daytime,no,0.774,0.803,-0.22,world_cup:0.119 national_teams:0.084 bundesliga:0.117 premier_league:-0.178 la_liga:-0.142 transfers:-0.09 legends:-0.089,no,1979320259404213
+394,ZaalZ,GE,Batumi,,B2,2,evening,yes,0.317,0.732,0.249,la_liga:0.164 bundesliga:0.118 national_teams:0.185 georgian_football:-0.103 transfers:-0.068 champions_league:-0.179,no,1271480457857274
+395,TeaG,GE,Rustavi,,B2,2,evening,no,0.349,0.439,0.263,national_teams:0.192 legends:0.141 transfers:0.15 premier_league:0.155 serie_a:-0.119 bundesliga:-0.114,no,4370473678900225
+396,Iuri Mamulidze,GE,Telavi,,B1 (bottom),10,evening,no,0.168,0.441,0.225,georgian_football:0.111 legends:0.105 world_cup:-0.182 la_liga:-0.09,no,3198320284826722
+397,Elenea,GE,Zugdidi,,B4,10,evening,yes,0.739,0.817,-0.225,legends:0.16 serie_a:0.067 national_teams:0.105 transfers:0.053 georgian_football:-0.192 world_cup:-0.177 la_liga:-0.091 premier_league:-0.11,no,1263260073471691
+398,IrakayK09,GE,Akhaltsikhe,,B2,2,evening,no,0.282,0.833,-0.011,champions_league:0.113 georgian_football:0.092 la_liga:0.097 bundesliga:-0.193 national_teams:-0.086 premier_league:-0.17,no,264496672825982
+399,Irakli Avalshvili,GE,Gori,,B3,3,morning,yes,0.596,0.643,0.263,georgian_football:0.189 legends:0.161 national_teams:0.172 bundesliga:-0.166 world_cup:-0.089,no,86021524732765
+400,EldarA15,GE,Telavi,,B3,2,daytime,no,0.562,0.715,-0.159,transfers:0.073 legends:0.09 champions_league:0.108 bundesliga:-0.169 serie_a:-0.097,no,4097754111807252
+401,GuguK14,GE,Zugdidi,,B3,2,evening,no,0.537,0.49,-0.104,legends:0.139 national_teams:0.134 world_cup:0.093 serie_a:0.179 transfers:-0.163 champions_league:-0.065 bundesliga:-0.128 premier_league:-0.148,no,1074546833069310
+402,zhvaniani,GE,Telavi,,B1 (bottom),2,daytime,no,0.182,0.842,-0.28,world_cup:0.195 champions_league:0.102 transfers:-0.056 national_teams:-0.09 legends:-0.115,no,4313724254828208
+403,jugelshvili,GE,Tbilisi,,B4,2,daytime,no,0.665,0.597,-0.235,national_teams:0.133 georgian_football:0.154 legends:-0.11 serie_a:-0.14 la_liga:-0.184,yes,935364826847212
+404,NikolozR,GE,Ozurgeti,,B4,2,evening,no,0.652,0.717,0.28,serie_a:0.087 national_teams:0.084 premier_league:0.158 bundesliga:-0.112 champions_league:-0.09 world_cup:-0.1,no,2577043793115673
+405,Vakhoa14,GE,Kutaisi,,B4,2,daytime,no,0.707,0.577,-0.141,legends:0.197 georgian_football:0.2 transfers:-0.195 la_liga:-0.142 bundesliga:-0.174,no,2636426994853567
+406,Gigi Ratianidze,GE,Rustavi,,B2,2,evening,no,0.376,0.639,-0.125,georgian_football:0.09 national_teams:0.196 la_liga:0.112 transfers:0.159 premier_league:-0.114 serie_a:-0.176 legends:-0.101 world_cup:-0.059,no,692825718366903
+407,besom,GE,Poti,,B1 (bottom),2,evening,yes,0.118,0.59,-0.221,champions_league:0.053 legends:0.108 national_teams:0.177 world_cup:-0.199 la_liga:-0.196 serie_a:-0.061,no,1744461797169077
+408,vova tsaguriidze,GE,Poti,,B2,2,evening,yes,0.295,0.378,0.274,georgian_football:0.106 world_cup:0.121 transfers:-0.126 serie_a:-0.13,no,3157920079330982
+409,Rezo Chiradidze,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.13,0.459,-0.274,national_teams:0.074 world_cup:0.091 legends:0.198 transfers:0.103 georgian_football:-0.196 bundesliga:-0.1 champions_league:-0.186 serie_a:-0.074,yes,4140050904374777
+410,Datuna Ugreliadze,GE,Ozurgeti,,B2,2,evening,no,0.444,0.503,-0.114,national_teams:0.065 champions_league:0.107 premier_league:-0.078 serie_a:-0.08,no,281228815392703
+411,Paata Ekhvaishvili,GE,Poti,,B1 (bottom),3,daytime,yes,0.209,0.75,0.072,world_cup:0.13 transfers:0.151 la_liga:0.188 legends:-0.087 premier_league:-0.094,no,3820110124442357
+412,Ninoushka,GE,Akhaltsikhe,,B2,10,night_owl,no,0.397,0.532,-0.049,serie_a:0.118 transfers:0.123 legends:-0.14 premier_league:-0.183 la_liga:-0.17 champions_league:-0.159,no,2254215459924017
+413,vasot,GE,Poti,,B2,3,daytime,no,0.29,0.611,-0.058,premier_league:0.165 serie_a:0.154 transfers:-0.108 world_cup:-0.058 champions_league:-0.069 la_liga:-0.148,no,1543814417274282
+414,datal,GE,Batumi,,B3,10,daytime,no,0.562,0.479,0.186,bundesliga:0.067 champions_league:0.188 premier_league:-0.175 georgian_football:-0.06 serie_a:-0.096,no,1860170665554490
+415,TemurK,GE,Telavi,,B3,10,evening,no,0.59,0.582,-0.131,serie_a:0.118 premier_league:0.111 transfers:0.055 champions_league:0.13 bundesliga:-0.101 la_liga:-0.177 legends:-0.11 georgian_football:-0.148,no,3832184201988783
+416,neymar,GE,Tbilisi,,B1 (bottom),2,evening,yes,0.095,0.809,-0.192,premier_league:0.139 georgian_football:0.156 champions_league:0.132 serie_a:-0.129 national_teams:-0.177,no,3388816411418086
+417,Valeri Vephkhvshvili,GE,Akhaltsikhe,,B3,2,evening,no,0.452,0.638,0.192,georgian_football:0.094 champions_league:0.105 world_cup:0.085 serie_a:0.05 premier_league:-0.147 national_teams:-0.126 bundesliga:-0.075,no,4067094933057459
+418,Tsereteliashvili,GE,Rustavi,,B3,3,evening,no,0.494,0.807,-0.158,transfers:0.198 world_cup:0.075 national_teams:-0.197 la_liga:-0.098 legends:-0.186,no,2144292576606962
+419,Jano Ratianshvili,GE,Tbilisi,,B2,3,evening,no,0.275,0.372,0.042,la_liga:0.179 transfers:0.137 bundesliga:0.069 champions_league:0.115 national_teams:-0.109 premier_league:-0.17 world_cup:-0.137 serie_a:-0.151,no,809700281212048
+420,luka japaradze,GE,Ozurgeti,,B2,2,morning,no,0.423,0.788,-0.217,transfers:0.097 legends:0.058 world_cup:-0.079 national_teams:-0.189,no,2955565589520205
+421,Vaso23,ES,Madrid,,B2,2,evening,no,0.432,0.525,-0.095,champions_league:0.097 serie_a:0.13 national_teams:-0.056 bundesliga:-0.11 la_liga:-0.145 transfers:-0.167,no,2214216616081810
+422,ramaz,GE,Telavi,,B3,3,evening,no,0.455,0.703,-0.042,legends:0.194 bundesliga:0.052 transfers:0.089 serie_a:0.065 world_cup:-0.063 la_liga:-0.134 georgian_football:-0.14,no,3787815360582453
+423,Sulkhanka,GR,Athens,,B3,15,daytime,no,0.539,0.468,-0.163,transfers:0.148 premier_league:0.179 national_teams:0.189 legends:0.051 champions_league:-0.145 georgian_football:-0.07 serie_a:-0.092,no,3829135656601725
+424,Jaba Peikrishvili,GE,Akhaltsikhe,,B1 (bottom),10,night_owl,no,0.184,0.361,0.228,georgian_football:0.104 champions_league:0.067 national_teams:-0.081 transfers:-0.062 world_cup:-0.149,no,2155198545845039
+425,Vato Samkharshvili,GE,Rustavi,,B3,10,evening,no,0.581,0.617,-0.174,georgian_football:0.128 champions_league:0.093 premier_league:-0.176 transfers:-0.164 serie_a:-0.132,no,1495163606892686
+426,Ioseb Sanikadze,GE,Ozurgeti,,B2,3,evening,no,0.449,0.683,0.226,georgian_football:0.167 transfers:0.174 premier_league:-0.062 legends:-0.109 la_liga:-0.091 serie_a:-0.099,no,4369812176110982
+427,Otariiko,GR,Thessaloniki,,B3,2,daytime,no,0.563,0.827,-0.11,la_liga:0.186 legends:0.105 world_cup:-0.174 champions_league:-0.197 georgian_football:-0.175 bundesliga:-0.054,no,562394747058132
+428,zviad1,GE,Ozurgeti,,B3,3,evening,no,0.599,0.819,0.271,bundesliga:0.139 transfers:0.148 la_liga:0.113 georgian_football:-0.057 champions_league:-0.17 world_cup:-0.093 national_teams:-0.097,no,430598883088827
+429,Roin Ubilua,GE,Gori,,B1 (bottom),2,evening,no,0.108,0.394,-0.061,bundesliga:0.188 serie_a:0.195 premier_league:0.122 la_liga:0.1 transfers:-0.179 world_cup:-0.079 champions_league:-0.175,no,2902800265714700
+430,TengizB,GE,Akhaltsikhe,,B2,2,morning,no,0.339,0.824,-0.17,premier_league:0.122 world_cup:0.199 legends:0.051 national_teams:-0.103 champions_league:-0.052,no,1806151318724619
+431,sandro nadirshvili,GE,Kutaisi,,B4,2,evening,no,0.606,0.762,-0.049,premier_league:0.057 champions_league:0.104 transfers:0.196 legends:0.177 georgian_football:-0.153 la_liga:-0.181 serie_a:-0.187 world_cup:-0.191,no,438605511551831
+432,Datuna Khubulidze,GE,Zugdidi,,B4,10,evening,no,0.715,0.368,0.084,georgian_football:0.082 legends:0.058 bundesliga:0.142 champions_league:0.164 world_cup:-0.096 premier_league:-0.195,no,1606706739924598
+433,Grigol Abashidze,GE,Telavi,,B3,10,evening,no,0.544,0.762,-0.268,transfers:0.161 serie_a:0.121 bundesliga:0.165 georgian_football:0.077 national_teams:-0.193 legends:-0.17 champions_league:-0.065 world_cup:-0.19,no,2899565998402427
+434,Zezva,GE,Tbilisi,,B3,2,morning,yes,0.586,0.474,-0.212,serie_a:0.175 premier_league:0.054 bundesliga:-0.109 legends:-0.125 world_cup:-0.063,no,3637582175581991
+435,Tazo,GE,Ozurgeti,,B3,10,evening,no,0.535,0.526,-0.24,premier_league:0.066 georgian_football:0.064 serie_a:0.195 national_teams:0.05 bundesliga:-0.164 legends:-0.174 champions_league:-0.068 la_liga:-0.122,no,816252949590308
+436,Gugu,US,New York,,B4,3,evening,no,0.708,0.504,-0.223,legends:0.147 world_cup:0.171 premier_league:-0.151 la_liga:-0.108 transfers:-0.136,no,4418272508743478
+437,ElisoB,GE,Tbilisi,,B2,15,evening,no,0.386,0.559,0.046,serie_a:0.073 la_liga:0.056 bundesliga:-0.16 champions_league:-0.087,no,2171475319589402
+438,KhatiaL,GE,Akhaltsikhe,,B4,3,daytime,no,0.651,0.557,-0.064,national_teams:0.069 bundesliga:0.178 legends:0.173 serie_a:0.138 transfers:-0.175 premier_league:-0.109,no,2943626553205851
+439,KakoB,GE,Zugdidi,,B1 (bottom),15,evening,no,0.117,0.604,-0.048,world_cup:0.166 national_teams:0.165 la_liga:-0.07 champions_league:-0.102,no,1226773664172305
+440,Kakiushka,GE,Rustavi,,B2,3,daytime,no,0.331,0.454,0.186,world_cup:0.195 premier_league:0.121 serie_a:0.13 champions_league:-0.103 georgian_football:-0.167,no,1815884509076315
+441,nikoloz ugrelishvili,TR,Istanbul,,B2,2,daytime,no,0.421,0.445,0.009,georgian_football:0.161 legends:0.075 bundesliga:-0.188 world_cup:-0.076 national_teams:-0.188 premier_league:-0.131,no,1774621766119081
+442,Tazo Chkhikvua,GE,Poti,,B3,2,evening,no,0.538,0.742,-0.151,georgian_football:0.129 champions_league:0.073 bundesliga:0.052 world_cup:0.155 premier_league:-0.152 transfers:-0.065 legends:-0.135,no,1525121084715726
+443,gegao,GE,Ozurgeti,,B1 (bottom),3,night_owl,no,0.08,0.379,0.088,national_teams:0.18 premier_league:0.05 legends:0.165 georgian_football:-0.107 bundesliga:-0.096 champions_league:-0.102 serie_a:-0.167,no,785386307654120
+444,lukan,GE,Gori,,B4,3,night_owl,no,0.646,0.66,0.086,georgian_football:0.142 transfers:0.191 bundesliga:0.199 national_teams:-0.101 world_cup:-0.197 la_liga:-0.098,no,597119891268065
+445,tornikeiko,GE,Gori,,B2,3,daytime,no,0.3,0.669,-0.001,premier_league:0.076 la_liga:0.156 legends:-0.054 transfers:-0.141,no,2714582039990104
+446,Lashaiko,TR,Istanbul,,B2,3,evening,yes,0.409,0.672,0.043,georgian_football:0.173 la_liga:0.12 national_teams:0.153 world_cup:0.09 champions_league:-0.086 legends:-0.104,no,2220371392001918
+447,Nikoa,GE,Zugdidi,,B3,15,daytime,no,0.51,0.639,0.019,world_cup:0.158 champions_league:0.119 national_teams:0.104 legends:-0.199 transfers:-0.098,no,1543006397807964
+448,Mamuka Samkharshvili,GE,Gori,,B2,3,evening,no,0.423,0.767,-0.067,legends:0.161 bundesliga:0.089 transfers:0.082 georgian_football:0.117 national_teams:-0.17 premier_league:-0.13,no,320564169937827
+449,lasha,GE,Kutaisi,,B3,2,evening,no,0.484,0.768,-0.125,la_liga:0.088 legends:0.146 georgian_football:0.168 serie_a:-0.116 transfers:-0.193 national_teams:-0.108 world_cup:-0.077,no,2825062831355529
+450,TamarK,GE,Telavi,,B5 (top),2,evening,no,0.8,0.544,-0.19,bundesliga:0.107 legends:0.074 transfers:-0.157 champions_league:-0.072 world_cup:-0.073,no,2333120391203603
+451,Botchorava,GE,Kutaisi,,B3,3,evening,no,0.485,0.699,0.278,national_teams:0.09 world_cup:0.195 transfers:0.133 la_liga:0.173 champions_league:-0.187 legends:-0.133,no,4177858268145606
+452,Gega Dolidzshvili,GE,Rustavi,,B3,2,evening,no,0.465,0.703,-0.146,world_cup:0.146 georgian_football:0.18 la_liga:-0.087 transfers:-0.094,no,3822168219646227
+453,ramos,GE,Akhaltsikhe,,B1 (bottom),10,daytime,no,0.135,0.431,-0.074,national_teams:0.115 la_liga:0.189 georgian_football:0.098 champions_league:-0.057 serie_a:-0.075 premier_league:-0.093,no,2101054841355477
+454,GioN,GE,Telavi,,B4,15,daytime,no,0.674,0.481,0.128,world_cup:0.179 champions_league:0.058 la_liga:0.183 bundesliga:0.121 national_teams:-0.074 transfers:-0.14,no,711022900343690
+455,Valeriiko,GE,Poti,,B5 (top),10,daytime,yes,0.894,0.437,0.204,la_liga:0.098 premier_league:0.065 world_cup:-0.106 champions_league:-0.107,no,3064956019656293
+456,Mikaiani,GE,Tbilisi,,B4,2,evening,no,0.663,0.437,-0.041,bundesliga:0.171 champions_league:0.151 transfers:0.103 legends:-0.141 georgian_football:-0.063 premier_league:-0.129 la_liga:-0.156,no,3146769557984230
+457,nikoo,GE,Ozurgeti,,B1 (bottom),3,daytime,no,0.204,0.683,0.247,legends:0.145 georgian_football:0.082 la_liga:-0.165 transfers:-0.137,no,532000745462661
+458,Gio Odishidze,GE,Kutaisi,,B1 (bottom),2,evening,no,0.078,0.522,-0.237,legends:0.154 serie_a:0.166 georgian_football:-0.168 premier_league:-0.181 champions_league:-0.188,no,3751370435783513
+459,ZurikoS,GE,Ozurgeti,,B1 (bottom),10,daytime,no,0.144,0.556,-0.22,national_teams:0.156 serie_a:0.173 premier_league:0.075 world_cup:-0.055 bundesliga:-0.157,no,234284280638307
+460,goat842,GE,Kutaisi,,B3,2,evening,no,0.561,0.428,0.167,georgian_football:0.055 bundesliga:0.162 serie_a:-0.12 champions_league:-0.053 premier_league:-0.113 national_teams:-0.114,no,751738326779509
+461,ania chkhartshvili,ES,Barcelona,,B4,2,evening,no,0.622,0.564,0.164,world_cup:0.084 la_liga:0.186 transfers:-0.161 national_teams:-0.133 bundesliga:-0.149 legends:-0.162,no,2131598788759950
+462,Ilia Rustavadze,GE,Kutaisi,,B4,3,evening,yes,0.739,0.713,-0.133,transfers:0.069 national_teams:0.078 la_liga:0.103 legends:0.064 serie_a:-0.131 bundesliga:-0.092 georgian_football:-0.111,no,652852931964805
+463,TakoM,GE,Tbilisi,,B3,3,evening,no,0.594,0.51,0.286,legends:0.179 transfers:0.078 premier_league:0.051 georgian_football:-0.182 world_cup:-0.079 la_liga:-0.112 bundesliga:-0.134,no,807613776012147
+464,Natiaushka,GE,Akhaltsikhe,,B3,3,evening,no,0.492,0.587,0.016,premier_league:0.169 la_liga:0.112 champions_league:0.13 legends:-0.156 transfers:-0.155 bundesliga:-0.188,no,3810155658047066
+465,ShotaN,GE,Ozurgeti,,B4,10,daytime,no,0.718,0.689,0.015,world_cup:0.191 bundesliga:0.18 georgian_football:0.059 serie_a:0.141 national_teams:-0.103 champions_league:-0.099 la_liga:-0.135,no,494642478264464
+466,lekso chkhikviani,GE,Rustavi,,B2,10,daytime,no,0.306,0.356,0.14,world_cup:0.051 georgian_football:0.136 champions_league:-0.135 transfers:-0.193 la_liga:-0.159,no,3069768837491735
+467,Keti Jugelidze,GB,Birmingham,,B2,2,morning,no,0.257,0.395,-0.264,premier_league:0.192 transfers:0.119 legends:-0.172 world_cup:-0.169,no,2730826365633216
+468,Makoka290,GE,Akhaltsikhe,,B4,2,daytime,no,0.706,0.76,0.142,world_cup:0.084 legends:0.14 la_liga:-0.194 premier_league:-0.154,no,1052727216570644
+469,Kakha Bagratidze,GE,Gori,,B2,10,daytime,no,0.353,0.441,-0.179,bundesliga:0.197 world_cup:0.157 legends:-0.134 premier_league:-0.197,no,3422300458865903
+470,Vasouna,GE,Poti,,B1 (bottom),2,evening,yes,0.132,0.375,0.14,premier_league:0.169 serie_a:0.102 legends:0.122 national_teams:-0.199 la_liga:-0.15 transfers:-0.18,no,353201876144243
+471,Kakhi Tsalugeli,GE,Zugdidi,,B4,2,evening,no,0.738,0.709,0.081,world_cup:0.074 georgian_football:0.131 national_teams:0.118 serie_a:0.08 transfers:-0.074 bundesliga:-0.196 premier_league:-0.176 la_liga:-0.174,no,3965072593473690
+472,Badri Iashvili,GE,Kutaisi,,B3,3,daytime,no,0.529,0.697,0.149,la_liga:0.06 world_cup:0.133 national_teams:0.199 premier_league:0.055 champions_league:-0.146 legends:-0.143,no,1669055697379616
+473,Sopho Chkhikvadze,GE,Akhaltsikhe,,B5 (top),15,daytime,no,0.832,0.654,-0.27,georgian_football:0.172 premier_league:0.175 legends:0.167 national_teams:0.167 world_cup:-0.091 serie_a:-0.088 champions_league:-0.146 transfers:-0.101,no,4163214720319677
+474,cr7,GE,Telavi,,B3,2,morning,no,0.596,0.521,0.273,champions_league:0.11 national_teams:0.119 la_liga:-0.055 legends:-0.17 world_cup:-0.152 transfers:-0.128,no,151059626721696
+475,Gubaz Ugulshvili,GE,Tbilisi,,B4,3,evening,no,0.717,0.681,-0.234,premier_league:0.179 serie_a:0.162 legends:0.152 world_cup:-0.102 bundesliga:-0.133 georgian_football:-0.124,no,838832177215206
+476,pridona,GE,Akhaltsikhe,,B1 (bottom),2,morning,no,0.088,0.522,-0.147,serie_a:0.154 world_cup:0.1 national_teams:-0.066 la_liga:-0.144 premier_league:-0.112 legends:-0.13,no,2685812156839383
+477,irakay maisuradze1,TR,Izmir,,B3,2,evening,no,0.45,0.53,-0.067,transfers:0.084 bundesliga:0.143 la_liga:0.126 champions_league:0.197 national_teams:-0.114 legends:-0.195,no,80329209423499
+478,Tengizika,GE,Kutaisi,,B3,2,evening,no,0.468,0.695,-0.274,la_liga:0.088 national_teams:0.122 georgian_football:0.149 premier_league:0.164 legends:-0.091 transfers:-0.108 world_cup:-0.1 champions_league:-0.112,no,764602800350150
+479,Kako Sanikidze,GE,Tbilisi,,B3,2,daytime,no,0.458,0.747,-0.207,champions_league:0.162 la_liga:0.101 serie_a:-0.067 transfers:-0.056 bundesliga:-0.108 georgian_football:-0.153,yes,3393789912414794
+480,temur lesgshvili,GE,Zugdidi,,B1 (bottom),2,evening,no,0.071,0.557,-0.277,premier_league:0.184 bundesliga:0.123 world_cup:0.106 champions_league:-0.174 la_liga:-0.061 transfers:-0.101,no,1373744563618440
+481,GigiA,GE,Kutaisi,,B2,2,morning,no,0.409,0.538,-0.11,national_teams:0.139 georgian_football:0.123 legends:-0.183 champions_league:-0.101 world_cup:-0.175,no,594600108662061
+482,pavlea1,GE,Poti,,B5 (top),2,morning,no,0.765,0.833,-0.008,national_teams:0.082 bundesliga:0.074 world_cup:0.197 georgian_football:-0.053 serie_a:-0.159 la_liga:-0.144 legends:-0.16,no,3344762911639884
+483,zura purtselidze,GE,Zugdidi,,B4,3,evening,no,0.713,0.4,-0.248,legends:0.16 bundesliga:0.094 world_cup:-0.189 national_teams:-0.156,no,791648335042357
+484,gigauna,GE,Telavi,,B2,10,daytime,no,0.26,0.484,0.052,national_teams:0.053 serie_a:0.142 bundesliga:-0.163 la_liga:-0.18,no,2603836615940599
+485,Giga Rustavshvili,GE,Zugdidi,,B1 (bottom),10,morning,no,0.225,0.533,0.19,champions_league:0.107 legends:0.13 georgian_football:-0.154 transfers:-0.091 premier_league:-0.051 bundesliga:-0.114,no,2954657120634645
+486,Grisha810,GE,Tbilisi,,B2,15,daytime,no,0.314,0.662,0.095,world_cup:0.191 serie_a:0.096 georgian_football:-0.159 la_liga:-0.105 national_teams:-0.136 champions_league:-0.106,no,2686451960249096
+487,giorgi iremashvili,GE,Poti,,B2,2,evening,no,0.264,0.762,-0.139,serie_a:0.118 legends:0.074 national_teams:0.199 georgian_football:0.189 bundesliga:-0.155 champions_league:-0.153 world_cup:-0.188,no,4270064455178807
+488,tornike,GE,Tbilisi,,B1 (bottom),2,morning,no,0.175,0.832,0.256,national_teams:0.152 serie_a:0.074 bundesliga:0.057 world_cup:-0.192 premier_league:-0.127 la_liga:-0.124 transfers:-0.121,no,4338962779316373
+489,Kukuriushka,GE,Zugdidi,,B1 (bottom),3,daytime,yes,0.053,0.674,-0.08,premier_league:0.134 legends:0.14 national_teams:0.117 champions_league:-0.066 bundesliga:-0.071 georgian_football:-0.161,no,3189256758485523
+490,niko phkhovelshvili87,GE,Zugdidi,,B2,2,evening,no,0.273,0.477,-0.014,transfers:0.143 premier_league:0.192 serie_a:0.149 world_cup:0.158 legends:-0.193 national_teams:-0.132 champions_league:-0.089 bundesliga:-0.146,no,4102167243733549
+491,jemal beberadze,GE,Tbilisi,,B3,10,evening,no,0.464,0.802,-0.178,legends:0.185 transfers:0.168 georgian_football:-0.084 premier_league:-0.146,no,3242157389282115
+492,Pavleka,GE,Rustavi,,B3,3,evening,no,0.473,0.613,-0.04,world_cup:0.056 premier_league:0.06 national_teams:-0.148 la_liga:-0.141 serie_a:-0.07 legends:-0.158,no,2111061367722794
+493,Lali Gugeshua,GE,Tbilisi,,B1 (bottom),10,daytime,no,0.154,0.819,0.077,world_cup:0.189 georgian_football:0.192 premier_league:-0.189 la_liga:-0.126 champions_league:-0.072,no,1804221740304769
+494,Abashadze,GE,Batumi,,B3,2,evening,no,0.581,0.605,0.021,national_teams:0.189 legends:0.186 champions_league:0.096 premier_league:0.168 bundesliga:-0.055 transfers:-0.196,no,1428771257482959
+495,Koka69,GE,Akhaltsikhe,,B1 (bottom),2,daytime,no,0.121,0.627,0.213,la_liga:0.125 champions_league:0.169 bundesliga:-0.121 premier_league:-0.127,no,2680915893675963
+496,LelaS,GE,Ozurgeti,,B3,3,daytime,no,0.583,0.747,0.217,serie_a:0.126 premier_league:0.163 georgian_football:0.05 national_teams:0.17 bundesliga:-0.053 champions_league:-0.153 la_liga:-0.164 transfers:-0.097,no,674819138710468
+497,ElisoA,GE,Gori,,B2,2,morning,no,0.274,0.779,0.277,world_cup:0.103 legends:0.179 transfers:0.142 premier_league:-0.091 georgian_football:-0.127 bundesliga:-0.112 la_liga:-0.193,no,221590572642960
+498,Kakoka,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.059,0.788,-0.235,bundesliga:0.177 georgian_football:0.061 legends:0.052 national_teams:-0.166 serie_a:-0.181 transfers:-0.076,no,2550044582595596
+499,MariG,GE,Kutaisi,,B2,2,daytime,no,0.347,0.728,0.232,bundesliga:0.171 transfers:0.1 champions_league:0.078 national_teams:-0.068 world_cup:-0.085 serie_a:-0.132 georgian_football:-0.083,no,3647213196416251
+500,Toko,GE,Rustavi,,B1 (bottom),2,evening,no,0.189,0.656,0.001,champions_league:0.192 premier_league:0.067 national_teams:0.188 la_liga:0.165 bundesliga:-0.056 legends:-0.129,no,222932776258775
+501,Lali Tseretelishvili,GE,Akhaltsikhe,,B3,2,evening,no,0.525,0.538,0.205,bundesliga:0.119 la_liga:0.061 world_cup:0.155 serie_a:-0.125 transfers:-0.181,no,15816975750139
+502,kraveishua,GE,Akhaltsikhe,,B4,3,evening,no,0.683,0.707,0.029,transfers:0.07 serie_a:0.189 bundesliga:0.159 georgian_football:0.178 world_cup:-0.088 premier_league:-0.183 la_liga:-0.194 champions_league:-0.1,no,2715627987168766
+503,tornike chanturishvili,GE,Kutaisi,,B2,3,evening,no,0.327,0.549,-0.17,legends:0.135 serie_a:0.113 bundesliga:0.119 national_teams:0.128 georgian_football:-0.092 transfers:-0.158,no,3656721100161186
+504,vasoo,GE,Batumi,,B1 (bottom),2,evening,no,0.091,0.398,-0.236,la_liga:0.184 champions_league:0.108 national_teams:-0.1 bundesliga:-0.133 serie_a:-0.07 world_cup:-0.14,no,1582296217946131
+505,UchaT,GE,Zugdidi,,B1 (bottom),3,evening,no,0.175,0.536,-0.031,bundesliga:0.127 national_teams:0.164 legends:-0.181 transfers:-0.091,no,1256165105200567
+506,NikushaT,GE,Zugdidi,,B2,2,evening,no,0.443,0.795,-0.087,national_teams:0.083 premier_league:0.183 la_liga:0.159 world_cup:-0.173 bundesliga:-0.126,no,2883526577525287
+507,tengo,GE,Poti,,B1 (bottom),10,evening,no,0.203,0.737,-0.155,georgian_football:0.081 serie_a:0.161 national_teams:-0.143 premier_league:-0.188 transfers:-0.145 legends:-0.161,no,2432117346188985
+508,rezo ubilshvili,GE,Poti,,B3,2,morning,no,0.554,0.35,0.285,champions_league:0.068 premier_league:0.162 serie_a:-0.195 transfers:-0.197 legends:-0.075 world_cup:-0.1,no,982103435040166
+509,luka ugulidze,GE,Kutaisi,,B5 (top),10,evening,no,0.826,0.658,0.258,premier_league:0.154 national_teams:0.157 champions_league:-0.171 world_cup:-0.093,no,372550006658929
+510,Pavle Skangshvili,GE,Poti,,B2,2,evening,no,0.423,0.642,0.258,champions_league:0.097 premier_league:0.126 georgian_football:0.106 bundesliga:-0.196 serie_a:-0.117 national_teams:-0.125 world_cup:-0.054,no,4450443403119610
+511,otar lobzhshvili,GE,Ozurgeti,,B1 (bottom),2,daytime,no,0.246,0.391,-0.247,serie_a:0.141 transfers:0.185 georgian_football:-0.119 premier_league:-0.19,yes,294891641478718
+512,Kukuri Chkhikvidze,GE,Zugdidi,,B4,3,evening,no,0.721,0.394,0.058,serie_a:0.054 national_teams:0.113 world_cup:-0.136 la_liga:-0.179 legends:-0.148,no,3907511900774927
+513,Anano,GE,Tbilisi,,B2,15,daytime,no,0.294,0.773,0.05,la_liga:0.157 premier_league:0.148 serie_a:0.05 legends:-0.178 national_teams:-0.057,no,924367973480500
+514,Goga Tsaguriashvili,GE,Ozurgeti,,B4,3,evening,no,0.644,0.425,-0.19,legends:0.127 georgian_football:0.055 world_cup:-0.131 champions_league:-0.139 serie_a:-0.057,no,2395365703504327
+515,Eldar,GE,Poti,,B3,2,daytime,no,0.512,0.638,0.169,champions_league:0.114 world_cup:0.176 national_teams:0.17 la_liga:0.155 bundesliga:-0.136 serie_a:-0.058 premier_league:-0.193,no,4172759455565838
+516,Rezi Iremashidze,GE,Gori,,B3,3,night_owl,no,0.552,0.62,0.032,national_teams:0.055 legends:0.139 world_cup:0.184 la_liga:-0.119 serie_a:-0.175 bundesliga:-0.192 georgian_football:-0.1,no,807926322052302
+517,ნიკა,GE,Gori,,B3,10,daytime,no,0.491,0.562,-0.092,legends:0.168 la_liga:0.054 bundesliga:0.163 premier_league:-0.198 world_cup:-0.118,no,1955829345720748
+518,GegaB,GE,Ozurgeti,,B2,2,morning,yes,0.264,0.727,-0.066,georgian_football:0.092 bundesliga:0.062 premier_league:0.136 legends:0.052 serie_a:-0.186 national_teams:-0.112 world_cup:-0.075 champions_league:-0.076,no,4034362873956727
+519,mari elizbaridze,DE,Munich,,B2,2,daytime,no,0.295,0.543,-0.118,world_cup:0.185 serie_a:0.126 transfers:0.183 legends:-0.186 georgian_football:-0.11 premier_league:-0.167 national_teams:-0.065,no,4447750129354299
+520,Giouna,GE,Kutaisi,,B2,2,evening,no,0.446,0.774,0.278,world_cup:0.102 serie_a:0.133 legends:0.081 transfers:-0.113 bundesliga:-0.119,no,2889773352427515
+521,marjanar,GE,Zugdidi,,B1 (bottom),3,evening,no,0.096,0.579,0.198,bundesliga:0.131 champions_league:0.198 serie_a:-0.153 la_liga:-0.199 legends:-0.193,no,1079644251790873
+522,gk1,GE,Tbilisi,,B1 (bottom),2,evening,yes,0.234,0.511,-0.181,la_liga:0.157 national_teams:0.118 legends:0.139 world_cup:0.161 georgian_football:-0.188 premier_league:-0.148 transfers:-0.054,no,2775287991371791
+523,SopoR,GE,Telavi,,B2,2,evening,no,0.301,0.716,-0.222,georgian_football:0.168 transfers:0.119 legends:0.151 serie_a:-0.094 premier_league:-0.137,no,859479428861375
+524,mirian ubilshvili,GE,Kutaisi,Real Madrid,B2,2,morning,no,0.284,0.583,0.144,bundesliga:0.113 transfers:0.143 legends:0.177 serie_a:0.151 champions_league:-0.146 georgian_football:-0.069 la_liga:-0.155,no,3547026937921523
+525,Teimuraz Chkhartshvili,GE,Ozurgeti,,B2,10,evening,yes,0.4,0.794,0.253,la_liga:0.145 legends:0.177 serie_a:0.082 georgian_football:0.07 world_cup:-0.158 premier_league:-0.074,no,1341960694488224
+526,ushangi inasarshvili,GE,Tbilisi,,B3,2,night_owl,no,0.506,0.678,-0.252,world_cup:0.186 transfers:0.112 legends:-0.18 champions_league:-0.167,no,1626187470796125
+527,tengo zumbulshvili,GE,Gori,,B3,2,evening,no,0.457,0.834,-0.094,champions_league:0.086 georgian_football:0.165 premier_league:0.189 bundesliga:0.184 la_liga:-0.188 world_cup:-0.193,no,937545931357893
+528,კოკა,GE,Poti,,B2,15,evening,no,0.294,0.491,0.254,bundesliga:0.186 national_teams:0.086 la_liga:-0.058 serie_a:-0.11 premier_league:-0.191 georgian_football:-0.073,no,2121030069430923
+529,iurika09,GE,Poti,,B1 (bottom),10,morning,no,0.177,0.414,-0.291,champions_league:0.12 world_cup:0.051 la_liga:0.135 transfers:0.134 legends:-0.11 georgian_football:-0.094 premier_league:-0.097,no,2349961093430994
+530,DatunaS,GB,Manchester,,B3,2,morning,no,0.545,0.799,-0.048,la_liga:0.171 serie_a:0.125 national_teams:-0.182 legends:-0.059 champions_league:-0.171,no,635503655781228
+531,Ruradeli,GE,Rustavi,,B2,3,evening,no,0.439,0.567,-0.067,transfers:0.171 georgian_football:0.149 serie_a:0.149 national_teams:-0.181 premier_league:-0.174 bundesliga:-0.074 legends:-0.147,yes,602135216078176
+532,nanas,GE,Batumi,,B3,15,daytime,no,0.547,0.527,-0.017,la_liga:0.131 champions_league:0.119 serie_a:0.198 bundesliga:0.195 national_teams:-0.189 georgian_football:-0.105 transfers:-0.104,no,3513501013040610
+533,Nika Chkhartshvili,GE,Zugdidi,,B3,15,evening,no,0.519,0.768,-0.001,georgian_football:0.102 transfers:0.155 national_teams:0.095 premier_league:0.197 world_cup:-0.123 bundesliga:-0.105 serie_a:-0.133,no,1677879294164796
+534,Lashaika,GE,Telavi,,B3,3,evening,yes,0.586,0.495,0.274,la_liga:0.077 premier_league:0.069 national_teams:0.095 transfers:0.171 georgian_football:-0.19 bundesliga:-0.158 champions_league:-0.157 world_cup:-0.068,no,3355019503120425
+535,ketim,GE,Tbilisi,,B2,10,evening,no,0.319,0.615,0.225,georgian_football:0.127 transfers:0.175 bundesliga:0.147 serie_a:-0.072 champions_league:-0.069,no,1522446595080910
+536,malkhazika,ES,Madrid,,B4,15,daytime,no,0.688,0.606,0.168,legends:0.127 la_liga:0.125 national_teams:-0.109 world_cup:-0.084 georgian_football:-0.154,no,460294648362735
+537,teimuraziko,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.249,0.515,-0.238,champions_league:0.115 premier_league:0.182 national_teams:-0.197 legends:-0.142,no,4245764576910163
+538,sulkhan darakhvelshvili,GR,Thessaloniki,,B2,15,night_owl,no,0.259,0.534,0.277,world_cup:0.142 serie_a:0.105 transfers:-0.199 legends:-0.103 la_liga:-0.073,no,3964815746180313
+539,rati nachkebua,GE,Ozurgeti,,B3,2,daytime,no,0.563,0.804,0.205,transfers:0.142 legends:0.065 la_liga:0.129 premier_league:-0.15 georgian_football:-0.058 champions_league:-0.092,no,1242300423595644
+540,soso14,GE,Tbilisi,AC Milan,B1 (bottom),10,evening,no,0.131,0.75,0.025,la_liga:0.065 bundesliga:0.091 transfers:0.051 national_teams:0.172 legends:-0.175 serie_a:-0.143 world_cup:-0.162 georgian_football:-0.17,no,3344867261956607
+541,Mirian,GE,Zugdidi,,B1 (bottom),2,morning,no,0.223,0.651,0.178,legends:0.054 national_teams:0.137 transfers:0.171 serie_a:0.106 la_liga:-0.075 bundesliga:-0.098,no,1371519724552713
+542,Ladoo22,GE,Zugdidi,,B1 (bottom),2,morning,no,0.051,0.379,-0.027,la_liga:0.101 premier_league:0.107 world_cup:0.134 champions_league:-0.135 bundesliga:-0.063,no,3404705986964968
+543,LevanR,GE,Poti,,B1 (bottom),2,evening,yes,0.193,0.82,-0.138,la_liga:0.125 georgian_football:0.182 champions_league:0.112 premier_league:0.137 world_cup:-0.091 legends:-0.156 transfers:-0.057 serie_a:-0.2,no,2309324652264985
+544,Peikrishvili10,GE,Batumi,,B2,10,daytime,no,0.41,0.537,-0.16,la_liga:0.125 transfers:0.078 legends:-0.191 national_teams:-0.068 champions_league:-0.103,no,1717222131155327
+545,Nutsa Mgelidze,GE,Rustavi,,B4,2,night_owl,yes,0.671,0.724,0.143,transfers:0.19 la_liga:0.11 national_teams:-0.136 serie_a:-0.065 georgian_football:-0.181,no,4190130591439229
+546,VatoM,GE,Tbilisi,,B3,2,daytime,no,0.491,0.531,-0.269,champions_league:0.152 serie_a:0.175 transfers:-0.073 world_cup:-0.162,no,50314516614820
+547,Amiranshvili,GE,Kutaisi,,B1 (bottom),3,night_owl,no,0.197,0.411,0.113,la_liga:0.101 champions_league:0.098 national_teams:-0.181 bundesliga:-0.171,no,3231389475080666
+548,Daviti Onianishvili,GE,Tbilisi,,B2,3,evening,no,0.336,0.379,-0.025,national_teams:0.17 georgian_football:0.176 premier_league:0.165 champions_league:0.143 la_liga:-0.076 world_cup:-0.116 serie_a:-0.162,no,3569101651052117
+549,fc1,GE,Zugdidi,,B2,15,evening,no,0.305,0.693,-0.046,champions_league:0.068 serie_a:0.154 la_liga:-0.059 national_teams:-0.059,no,3268846194347399
+550,DAVITIO,GE,Tbilisi,,B4,2,daytime,yes,0.644,0.483,-0.246,champions_league:0.155 premier_league:0.105 la_liga:0.083 bundesliga:-0.074 national_teams:-0.179 serie_a:-0.076,yes,1708734449679688
+551,pavleuna,GE,Batumi,,B3,2,evening,no,0.531,0.687,-0.041,transfers:0.083 champions_league:0.156 premier_league:0.195 world_cup:-0.159 legends:-0.192 georgian_football:-0.05,yes,531963113817179
+552,Miqa Avalshvili,GE,Kutaisi,,B2,2,daytime,no,0.399,0.706,-0.223,la_liga:0.172 champions_league:0.172 transfers:0.104 bundesliga:0.12 national_teams:-0.057 serie_a:-0.145,yes,1980973026232862
+553,Giorgi Arsenshvili,GE,Ozurgeti,,B1 (bottom),3,daytime,no,0.093,0.727,0.207,world_cup:0.148 legends:0.105 premier_league:-0.176 serie_a:-0.11,no,2419654973455424
+554,hamsik,GE,Kutaisi,,B1 (bottom),3,daytime,no,0.15,0.617,-0.112,serie_a:0.073 georgian_football:0.132 world_cup:0.169 premier_league:0.152 national_teams:-0.059 bundesliga:-0.121 la_liga:-0.137,no,651144846547913
+555,Lashauna,ES,Barcelona,,B5 (top),10,daytime,no,0.782,0.766,-0.226,transfers:0.125 world_cup:0.149 bundesliga:0.082 serie_a:0.144 legends:-0.183 georgian_football:-0.101,no,405589190404234
+556,Rati,GE,Telavi,,B3,3,morning,no,0.467,0.664,-0.246,champions_league:0.12 serie_a:0.064 bundesliga:0.079 world_cup:-0.133 transfers:-0.13,no,1472324909065361
+557,Ekaka,GE,Kutaisi,,B3,2,morning,no,0.591,0.67,-0.044,world_cup:0.101 georgian_football:0.073 legends:0.178 la_liga:0.067 transfers:-0.055 champions_league:-0.177 serie_a:-0.152 national_teams:-0.111,no,1040185952428159
+558,revazg,GE,Ozurgeti,,B5 (top),2,evening,no,0.869,0.559,0.026,premier_league:0.106 la_liga:0.053 transfers:0.102 georgian_football:-0.077 legends:-0.151,no,2333761868092600
+559,Nodarika,GE,Ozurgeti,,B3,10,daytime,no,0.54,0.476,-0.257,national_teams:0.164 bundesliga:0.059 premier_league:0.163 la_liga:-0.085 transfers:-0.164,no,900834671564583
+560,TEMOL GVARAMSHVILI,GE,Zugdidi,,B1 (bottom),10,morning,no,0.104,0.575,-0.064,champions_league:0.062 la_liga:0.087 premier_league:0.117 transfers:0.078 georgian_football:-0.081 legends:-0.174,no,3567222178723252
+561,tornike ubiliani,GE,Zugdidi,,B3,2,evening,no,0.572,0.484,0.284,champions_league:0.133 la_liga:0.053 bundesliga:0.181 georgian_football:-0.152 legends:-0.14 world_cup:-0.085,no,4436937392747009
+562,natia darakhvelidze,GB,Birmingham,,B3,2,daytime,no,0.585,0.774,-0.118,premier_league:0.066 georgian_football:0.184 champions_league:0.138 legends:-0.184 national_teams:-0.125,yes,4324362886880944
+563,Sulkhan Dolidzshvili,GE,Poti,,B3,10,evening,yes,0.488,0.397,-0.029,serie_a:0.18 georgian_football:0.082 premier_league:0.156 transfers:0.076 world_cup:-0.105 legends:-0.055,yes,3412857717128004
+564,Marjana Avalidze,GE,Akhaltsikhe,,B3,3,daytime,no,0.513,0.789,0.209,georgian_football:0.128 world_cup:0.084 legends:-0.116 serie_a:-0.101 transfers:-0.169 bundesliga:-0.082,no,911198047308922
+565,lekso,GE,Rustavi,,B2,2,evening,no,0.395,0.39,-0.079,serie_a:0.061 national_teams:0.14 georgian_football:-0.125 la_liga:-0.167,no,1864433005337939
+566,Lezhavidze,GE,Telavi,,B2,2,daytime,no,0.395,0.497,-0.137,transfers:0.121 world_cup:0.136 la_liga:-0.05 champions_league:-0.133,no,3835852756348216
+567,Zaza Ugulshvili,GE,Poti,,B4,21,evening,no,0.72,0.664,0.196,world_cup:0.171 legends:0.147 transfers:-0.147 champions_league:-0.072,no,2780862075365771
+568,vidal1,GE,Batumi,,B3,2,evening,no,0.539,0.559,0,world_cup:0.108 transfers:0.107 georgian_football:0.153 legends:-0.198 serie_a:-0.139 premier_league:-0.108 champions_league:-0.193,no,1703527723824605
+569,irakli arakiidze,GE,Zugdidi,,B3,3,daytime,yes,0.498,0.603,-0.013,premier_league:0.065 la_liga:0.09 georgian_football:-0.051 champions_league:-0.182 legends:-0.141 transfers:-0.185,no,3210531593751384
+570,ushangia311,GE,Rustavi,,B4,2,daytime,no,0.651,0.478,-0.212,serie_a:0.131 georgian_football:0.092 la_liga:-0.159 champions_league:-0.183 bundesliga:-0.083 legends:-0.111,no,721746661926257
+571,Gochaka,GE,Rustavi,,B1 (bottom),10,evening,no,0.071,0.756,-0.044,premier_league:0.138 la_liga:0.089 transfers:-0.175 legends:-0.073,no,609251753027399
+572,Mamuka Natenadava,GE,Gori,,B3,2,morning,no,0.547,0.698,-0.113,premier_league:0.122 legends:0.139 georgian_football:0.107 champions_league:0.117 la_liga:-0.109 transfers:-0.146 bundesliga:-0.077 serie_a:-0.115,no,3035401787350783
+573,odishidze15,GE,Batumi,,B4,10,evening,no,0.641,0.708,-0.15,transfers:0.055 premier_league:0.161 bundesliga:0.174 la_liga:-0.186 georgian_football:-0.188 national_teams:-0.097 champions_league:-0.112,yes,4351647496787164
+574,Sanikidze,GE,Poti,,B1 (bottom),2,evening,no,0.107,0.484,0.038,bundesliga:0.183 champions_league:0.178 serie_a:0.052 premier_league:0.15 legends:-0.147 world_cup:-0.165 national_teams:-0.146 la_liga:-0.068,no,1921909028809299
+575,guga talakhidze,GE,Poti,,B4,2,night_owl,no,0.683,0.398,-0.145,bundesliga:0.185 premier_league:0.111 la_liga:0.114 transfers:-0.082 georgian_football:-0.102 serie_a:-0.137,no,2536893111237646
+576,Konstantine.cr7,GE,Ozurgeti,,B2,2,evening,no,0.39,0.589,0.174,georgian_football:0.146 transfers:0.174 champions_league:0.148 serie_a:-0.066 national_teams:-0.09,no,3632453095389772
+577,grigolka,GE,Tbilisi,,B3,3,evening,no,0.527,0.603,0.284,legends:0.193 georgian_football:0.111 transfers:0.143 la_liga:0.149 national_teams:-0.112 bundesliga:-0.092 champions_league:-0.067,no,16630166738707
+578,SulkhanL69,GE,Zugdidi,,B2,3,daytime,yes,0.393,0.823,-0.21,legends:0.2 premier_league:0.134 national_teams:-0.17 world_cup:-0.179 bundesliga:-0.116 georgian_football:-0.094,no,3237565902572850
+579,nodar exvaiua,GE,Ozurgeti,,B3,2,daytime,no,0.552,0.787,-0.143,bundesliga:0.169 legends:0.093 la_liga:0.06 premier_league:-0.183 georgian_football:-0.104,no,876203816489238
+580,Gigi Chadunadze,GE,Akhaltsikhe,,B3,2,evening,no,0.6,0.845,-0.067,serie_a:0.069 transfers:0.07 national_teams:-0.062 world_cup:-0.147,no,2840528283967482
+581,tato ubilshvili,GB,London,,B2,2,daytime,no,0.356,0.594,-0.033,world_cup:0.188 serie_a:0.11 legends:0.129 champions_league:-0.129 transfers:-0.113 la_liga:-0.17,no,4487912102883969
+582,Zarkeli69,GE,Rustavi,,B1 (bottom),3,evening,no,0.239,0.799,0.263,bundesliga:0.146 la_liga:0.184 georgian_football:0.092 champions_league:0.138 legends:-0.155 serie_a:-0.072 transfers:-0.089 national_teams:-0.067,no,1690409583552202
+583,Tabagua,GE,Zugdidi,,B3,15,daytime,no,0.468,0.788,-0.207,transfers:0.157 legends:0.081 national_teams:0.124 world_cup:-0.2 champions_league:-0.172,no,2593819866518122
+584,vaso ubilshvili,GE,Poti,,B4,2,evening,no,0.644,0.61,0.038,world_cup:0.051 serie_a:0.177 transfers:0.169 georgian_football:-0.097 bundesliga:-0.152 national_teams:-0.194,no,526337373236765
+585,Nikushao,GE,Akhaltsikhe,,B1 (bottom),3,daytime,no,0.15,0.836,-0.017,legends:0.067 georgian_football:0.101 transfers:0.14 serie_a:0.193 national_teams:-0.168 la_liga:-0.108 bundesliga:-0.127,no,659850259035679
+586,data chadunshvili,GE,Poti,,B1 (bottom),3,evening,no,0.106,0.453,-0.066,bundesliga:0.141 world_cup:0.072 legends:0.088 champions_league:0.11 transfers:-0.154 national_teams:-0.13 georgian_football:-0.125 premier_league:-0.087,no,3069756748796810
+587,giga imnadzua,GE,Tbilisi,,B1 (bottom),2,evening,no,0.132,0.71,-0.232,national_teams:0.199 transfers:0.116 legends:0.093 premier_league:0.148 world_cup:-0.075 serie_a:-0.106,no,2217986022818496
+588,eldar mamuleli,GB,Manchester,,B3,3,daytime,no,0.495,0.791,-0.068,serie_a:0.178 national_teams:0.107 bundesliga:0.15 georgian_football:0.146 la_liga:-0.17 legends:-0.096 world_cup:-0.149 premier_league:-0.124,no,4009059724325
+589,Gelasheli,GE,Poti,,B1 (bottom),3,daytime,no,0.096,0.394,0.077,champions_league:0.17 georgian_football:0.097 world_cup:0.166 bundesliga:-0.104 transfers:-0.103 serie_a:-0.057,no,3223413486693631
+590,pridon lordkipashvili,GE,Akhaltsikhe,,B4,2,evening,no,0.734,0.539,0.026,transfers:0.188 la_liga:0.127 georgian_football:0.177 bundesliga:-0.131 world_cup:-0.167,no,3103665054913676
+591,GubazM,GE,Rustavi,,B2,10,evening,no,0.433,0.352,0.118,transfers:0.156 national_teams:0.194 la_liga:0.052 champions_league:-0.175 world_cup:-0.1 bundesliga:-0.184,no,3155316203545380
+592,PridonN31,GE,Ozurgeti,,B2,2,daytime,yes,0.283,0.848,0.062,national_teams:0.064 transfers:0.071 georgian_football:0.115 champions_league:0.066 premier_league:-0.078 world_cup:-0.089,no,3350442516154705
+593,hamsik55,GE,Tbilisi,,B2,10,daytime,no,0.369,0.642,0.132,world_cup:0.089 transfers:0.114 georgian_football:0.068 serie_a:-0.108 la_liga:-0.188 premier_league:-0.113,no,4350607956693297
+594,Ramaz Tsagurishvili,GE,Tbilisi,,B2,2,evening,no,0.344,0.494,0.03,georgian_football:0.083 la_liga:0.14 premier_league:0.058 bundesliga:0.171 world_cup:-0.067 national_teams:-0.097,no,357406036110628
+595,Pavle Bakuradze,GE,Ozurgeti,,B4,2,morning,yes,0.623,0.604,0.09,transfers:0.108 champions_league:0.063 la_liga:0.132 serie_a:0.113 legends:-0.177 georgian_football:-0.062 national_teams:-0.176 premier_league:-0.128,no,366028983992735
+596,niko talakheli,GE,Poti,,B3,2,evening,no,0.458,0.441,-0.03,legends:0.149 serie_a:0.189 bundesliga:0.072 la_liga:0.061 transfers:-0.093 champions_league:-0.051,no,3489451087654429
+597,Zezva Tsalugelidze14,GE,Poti,,B3,2,daytime,no,0.562,0.596,0.07,la_liga:0.066 georgian_football:0.172 serie_a:0.166 legends:0.11 premier_league:-0.157 national_teams:-0.17 champions_league:-0.086 world_cup:-0.061,no,1716689102197725
+598,tazol,GE,Telavi,,B2,2,daytime,no,0.28,0.702,-0.283,world_cup:0.165 legends:0.099 national_teams:0.187 la_liga:-0.069 serie_a:-0.119 transfers:-0.19,no,4379220604326680
+599,shota chadunashvili,GE,Telavi,,B4,2,daytime,yes,0.654,0.636,0.181,georgian_football:0.108 serie_a:0.188 premier_league:0.067 champions_league:-0.194 la_liga:-0.066,no,1528721183044323
+600,zaza,GE,Batumi,,B2,2,daytime,no,0.254,0.684,-0.072,bundesliga:0.14 world_cup:0.105 serie_a:-0.056 legends:-0.195 champions_league:-0.13 premier_league:-0.088,no,1093789309582894
+601,kako tabagshvili,GE,Tbilisi,,B2,10,evening,yes,0.337,0.789,-0.116,legends:0.103 serie_a:0.079 premier_league:0.117 transfers:0.077 national_teams:-0.148 georgian_football:-0.165 world_cup:-0.191,no,1822175938235272
+602,maka,GE,Batumi,,B2,10,daytime,no,0.38,0.671,-0.111,premier_league:0.118 la_liga:0.198 georgian_football:-0.123 serie_a:-0.17 transfers:-0.187 bundesliga:-0.153,no,4445640250945450
+603,Gelashadze22,GE,Kutaisi,,B5 (top),2,evening,no,0.783,0.374,0.162,world_cup:0.082 legends:0.075 la_liga:-0.162 serie_a:-0.057,no,4090962426117801
+604,ramos69,GE,Zugdidi,,B4,10,daytime,no,0.742,0.486,-0.021,premier_league:0.148 serie_a:0.143 national_teams:0.111 transfers:0.103 champions_league:-0.11 bundesliga:-0.096 georgian_football:-0.169,no,3596940617626466
+605,ოთო,ES,Barcelona,,B2,2,evening,no,0.359,0.53,0.277,legends:0.056 champions_league:0.065 bundesliga:0.124 transfers:0.13 world_cup:-0.133 national_teams:-0.132 georgian_football:-0.196,no,747052956422822
+606,gocha arseneli,GE,Ozurgeti,,B2,3,daytime,no,0.412,0.496,-0.025,bundesliga:0.079 georgian_football:0.063 serie_a:0.131 premier_league:-0.099 legends:-0.051 la_liga:-0.052 champions_league:-0.125,no,1571879797093449
+607,PaataA,GE,Ozurgeti,,B4,3,evening,no,0.687,0.566,-0.257,champions_league:0.106 world_cup:0.084 legends:-0.083 premier_league:-0.152 georgian_football:-0.131 transfers:-0.176,no,3916172423162978
+608,Zurikoo,GE,Ozurgeti,,B5 (top),3,evening,no,0.765,0.714,0.021,la_liga:0.151 serie_a:0.077 legends:-0.064 champions_league:-0.086 premier_league:-0.158,no,324814670352902
+609,Mako Peikrishidze345,GE,Gori,,B1 (bottom),15,evening,no,0.242,0.798,-0.272,premier_league:0.143 la_liga:0.126 bundesliga:0.183 serie_a:-0.055 national_teams:-0.13 legends:-0.163 world_cup:-0.157,no,3098532407109326
+610,Gela Ekhvaiashvili,GE,Zugdidi,,B3,2,daytime,no,0.557,0.386,-0.122,bundesliga:0.078 premier_league:0.196 legends:0.086 champions_league:-0.104 georgian_football:-0.068,no,4414385014239398
+611,kakoa,GE,Gori,,B2,2,evening,no,0.369,0.532,-0.03,bundesliga:0.142 serie_a:0.092 transfers:0.141 premier_league:0.063 world_cup:-0.069 la_liga:-0.158 georgian_football:-0.084 champions_league:-0.076,no,2957439814946813
+612,konstantine bochoridze,GE,Rustavi,,B2,2,morning,no,0.408,0.493,-0.275,bundesliga:0.197 georgian_football:0.099 serie_a:0.139 legends:0.182 national_teams:-0.197 premier_league:-0.11 champions_league:-0.153,no,654412903005384
+613,levant,GB,London,,B2,10,evening,no,0.422,0.58,0.043,transfers:0.106 serie_a:0.083 national_teams:-0.122 world_cup:-0.162 premier_league:-0.198,no,3443638084311995
+614,ekhvaiava,GE,Ozurgeti,,B4,2,daytime,yes,0.743,0.46,0.023,bundesliga:0.149 georgian_football:0.156 legends:0.107 premier_league:0.054 national_teams:-0.082 la_liga:-0.093 serie_a:-0.158,no,724416986519712
+615,Sopho Samkharshvili,GE,Zugdidi,,B2,10,night_owl,no,0.396,0.743,0.084,bundesliga:0.067 la_liga:0.074 legends:0.137 world_cup:0.067 serie_a:-0.12 transfers:-0.128 national_teams:-0.106 premier_league:-0.189,yes,1046130472311563
+616,Levan6,GE,Ozurgeti,,B2,2,evening,no,0.307,0.812,0.14,premier_league:0.112 transfers:0.054 bundesliga:0.184 champions_league:-0.169 world_cup:-0.128 la_liga:-0.145,no,468419012411526
+617,LASHA KUBLASHELI,GE,Kutaisi,,B3,10,daytime,no,0.471,0.518,-0.181,la_liga:0.161 legends:0.081 transfers:0.131 premier_league:-0.058 georgian_football:-0.089 champions_league:-0.12 bundesliga:-0.131,no,1274422238711798
+618,Shalva,GE,Tbilisi,,B4,2,morning,no,0.745,0.754,0.296,legends:0.177 la_liga:0.191 transfers:-0.14 serie_a:-0.194 champions_league:-0.183,no,494042338886922
+619,Badri Ekhvaishvili,GE,Kutaisi,,B4,2,evening,no,0.653,0.659,-0.003,georgian_football:0.069 national_teams:0.079 legends:-0.1 champions_league:-0.069,no,1251782972482572
+620,MarjanaS,GE,Batumi,,B3,3,evening,no,0.476,0.384,0.288,premier_league:0.182 serie_a:0.148 bundesliga:0.177 national_teams:-0.107 champions_league:-0.135 transfers:-0.162 legends:-0.16,no,1194214033774915
+621,Data Gagosheli,GE,Ozurgeti,,B2,15,evening,no,0.297,0.746,0.297,world_cup:0.141 national_teams:0.081 legends:-0.093 georgian_football:-0.061 bundesliga:-0.101,no,482111106789513
+622,nikolozka,GE,Ozurgeti,,B4,2,evening,no,0.704,0.466,0.032,transfers:0.182 legends:0.178 national_teams:0.199 serie_a:-0.142 la_liga:-0.169 georgian_football:-0.148,no,2492248010959181
+623,zazaika,GE,Akhaltsikhe,,B3,2,evening,no,0.585,0.407,-0.197,world_cup:0.151 bundesliga:0.068 national_teams:0.181 legends:0.088 champions_league:-0.13 serie_a:-0.125 georgian_football:-0.188,no,385161491571569
+624,Ushangi23,GE,Batumi,,B5 (top),3,daytime,no,0.778,0.611,-0.118,bundesliga:0.06 serie_a:0.155 la_liga:-0.055 transfers:-0.164 premier_league:-0.06 legends:-0.078,no,2045028108192700
+625,Grisha Lezhaveli,GE,Telavi,,B3,2,daytime,no,0.558,0.609,0.259,bundesliga:0.146 premier_league:0.124 legends:0.187 champions_league:0.179 la_liga:-0.198 world_cup:-0.15 serie_a:-0.062,no,3322832401890147
+626,Tasouna,GE,Kutaisi,,B4,2,daytime,no,0.735,0.712,-0.126,world_cup:0.096 serie_a:0.134 legends:0.146 champions_league:0.059 transfers:-0.132 national_teams:-0.134,no,2700657788698874
+627,peikrishvili,GE,Telavi,,B1 (bottom),2,night_owl,no,0.122,0.372,-0.04,georgian_football:0.074 la_liga:0.125 premier_league:0.108 world_cup:0.183 legends:-0.119 national_teams:-0.198,no,2118337497353320
+628,Mikheil Kalatozadze,GE,Kutaisi,,B2,10,evening,no,0.321,0.561,-0.029,world_cup:0.063 la_liga:0.089 transfers:0.14 serie_a:0.079 champions_league:-0.155 national_teams:-0.061 legends:-0.173 bundesliga:-0.172,no,2857880410582773
+629,Grigoliko,GE,Telavi,,B1 (bottom),3,evening,no,0.06,0.817,0.262,legends:0.141 national_teams:0.182 la_liga:0.185 premier_league:0.191 bundesliga:-0.063 world_cup:-0.115,no,3065158402741153
+630,nugzarg,GE,Tbilisi,,B3,2,morning,yes,0.516,0.377,0.047,champions_league:0.188 legends:0.116 world_cup:0.056 bundesliga:-0.127 la_liga:-0.096 national_teams:-0.197,no,4134587995775733
+631,Oto Khubuleli,GE,Tbilisi,,B2,2,evening,no,0.417,0.523,0.242,transfers:0.089 champions_league:0.13 serie_a:0.174 legends:-0.099 world_cup:-0.132 national_teams:-0.171 georgian_football:-0.054,no,2631507948337880
+632,Keti Papavshvili,GE,Tbilisi,,B3,2,evening,no,0.506,0.571,0.1,legends:0.157 world_cup:0.111 serie_a:0.113 premier_league:-0.132 la_liga:-0.161 transfers:-0.104,no,4202018008976690
+633,Kaki Turashvili,GE,Tbilisi,,B2,15,daytime,yes,0.295,0.833,0.271,transfers:0.118 georgian_football:0.141 champions_league:0.092 serie_a:0.137 national_teams:-0.085 world_cup:-0.099 premier_league:-0.178,no,4488165744703122
+634,Ioseb Vashalshvili,GE,Zugdidi,,B2,3,morning,yes,0.355,0.421,0.119,la_liga:0.102 premier_league:0.198 world_cup:0.059 georgian_football:0.184 national_teams:-0.198 champions_league:-0.184 serie_a:-0.186,no,3162897092482942
+635,Irakayiko,GE,Batumi,,B4,3,daytime,no,0.747,0.549,0.025,national_teams:0.141 la_liga:0.118 serie_a:0.178 premier_league:0.196 world_cup:-0.078 transfers:-0.065,no,36872188481197
+636,KakiG,US,Los Angeles,,B3,3,daytime,no,0.543,0.828,0.002,premier_league:0.074 national_teams:0.108 champions_league:-0.104 serie_a:-0.13,no,648295767612555
+637,VASO TOMADIDZE,GE,Batumi,,B1 (bottom),3,daytime,no,0.084,0.782,-0.272,bundesliga:0.155 champions_league:0.166 la_liga:-0.161 world_cup:-0.056 georgian_football:-0.073,no,3597652734075725
+638,Tornik Zarkshvili,GE,Telavi,,B1 (bottom),2,evening,no,0.174,0.553,-0.162,georgian_football:0.067 la_liga:0.176 champions_league:0.125 legends:-0.058 bundesliga:-0.082 world_cup:-0.116 national_teams:-0.089,no,452766133903439
+639,Kakhika,GE,Gori,,B2,3,morning,no,0.255,0.671,0.163,transfers:0.153 bundesliga:0.189 world_cup:0.128 legends:-0.141 premier_league:-0.064,no,2961832676474002
+640,mario,GE,Poti,,B2,10,daytime,no,0.355,0.749,-0.064,serie_a:0.19 premier_league:0.159 champions_league:-0.08 world_cup:-0.077 georgian_football:-0.068,no,2628939043914050
+641,Grisha Elizbariani,GE,Kutaisi,,B4,3,morning,yes,0.704,0.725,-0.206,serie_a:0.149 georgian_football:0.098 champions_league:0.071 la_liga:0.172 transfers:-0.12 bundesliga:-0.059 national_teams:-0.118 premier_league:-0.144,no,1013664181777478
+642,GrishaN45,GE,Poti,,B4,3,evening,no,0.635,0.662,0.026,la_liga:0.134 premier_league:0.07 bundesliga:0.19 transfers:-0.054 serie_a:-0.101,no,2305777690837512
+643,Imnadzshvili,GE,Rustavi,,B3,2,daytime,no,0.572,0.369,-0.011,legends:0.093 premier_league:0.19 champions_league:-0.11 serie_a:-0.116,no,604451234503148
+644,Mgelidze,ES,Barcelona,,B1 (bottom),10,evening,no,0.242,0.832,0.257,transfers:0.117 bundesliga:0.13 champions_league:0.121 world_cup:-0.188 la_liga:-0.145,no,371426009635403
+645,ratiika,GE,Telavi,,B4,2,daytime,no,0.617,0.64,-0.231,champions_league:0.185 serie_a:0.161 legends:0.122 transfers:0.182 georgian_football:-0.065 premier_league:-0.158,no,3000732664903150
+646,Zezva Natenadshvili,GE,Poti,,B3,15,night_owl,no,0.544,0.695,-0.029,bundesliga:0.129 transfers:0.087 georgian_football:-0.054 world_cup:-0.068 legends:-0.094,no,3635836262387379
+647,Gio15,GE,Poti,,B3,21,evening,no,0.502,0.542,-0.139,legends:0.09 national_teams:0.105 la_liga:-0.071 georgian_football:-0.148 serie_a:-0.154,no,4327047759140306
+648,data sakvareladze,GE,Batumi,,B1 (bottom),15,evening,no,0.15,0.352,0.008,serie_a:0.073 legends:0.114 national_teams:0.062 world_cup:-0.189 georgian_football:-0.123 champions_league:-0.18 la_liga:-0.192,no,3420691153848927
+649,ZAZA TSAGURISHVILI,GE,Akhaltsikhe,,B1 (bottom),2,evening,no,0.1,0.727,0.018,serie_a:0.087 national_teams:0.119 champions_league:-0.088 world_cup:-0.075 bundesliga:-0.094 georgian_football:-0.143,no,4199735663089600
+650,Kakhiika,GE,Tbilisi,,B4,2,night_owl,no,0.73,0.573,-0.032,world_cup:0.098 serie_a:0.171 national_teams:0.149 la_liga:-0.193 champions_league:-0.11 georgian_football:-0.182,no,2505509155680415
+651,LukasT1,GE,Gori,,B3,2,daytime,no,0.566,0.732,0.146,champions_league:0.191 premier_league:0.068 georgian_football:0.056 serie_a:0.102 la_liga:-0.09 legends:-0.161 world_cup:-0.198,no,3406252346422276
+652,Tato Arakiashvili,GE,Akhaltsikhe,,B2,3,morning,no,0.284,0.472,0.109,world_cup:0.081 la_liga:0.11 national_teams:0.066 champions_league:0.145 transfers:-0.19 premier_league:-0.184 serie_a:-0.107,no,874466944624142
+653,GigaN,GE,Telavi,,B4,2,evening,no,0.62,0.614,0.235,la_liga:0.125 national_teams:0.074 world_cup:0.137 bundesliga:-0.104 legends:-0.099 serie_a:-0.088,no,1747269394923570
+654,valeri kldiashidze,GE,Akhaltsikhe,,B2,2,daytime,yes,0.447,0.397,0.07,premier_league:0.087 transfers:0.138 legends:0.183 serie_a:0.147 georgian_football:-0.095 national_teams:-0.178 world_cup:-0.104,no,363002710009484
+655,mbappe22,GE,Poti,,B1 (bottom),2,evening,yes,0.203,0.66,-0.137,world_cup:0.16 bundesliga:0.17 national_teams:0.156 legends:-0.107 champions_league:-0.154,no,2333495083657581
+656,givi kldiashvili,GE,Tbilisi,,B1 (bottom),10,daytime,no,0.164,0.379,-0.069,bundesliga:0.072 la_liga:0.145 georgian_football:0.2 premier_league:0.121 world_cup:-0.153 transfers:-0.051,no,381050183103235
+657,Sopho Zumbulashvili,GE,Gori,,B1 (bottom),3,evening,no,0.119,0.716,-0.055,premier_league:0.143 national_teams:0.175 world_cup:0.099 la_liga:-0.187 georgian_football:-0.101 champions_league:-0.119,no,1493091082983173
+658,Vaska Bochorua,GE,Rustavi,,B2,2,daytime,no,0.374,0.475,0.012,world_cup:0.193 georgian_football:0.071 serie_a:-0.175 bundesliga:-0.191,no,4217903832257182
+659,sergouna,GE,Telavi,,B1 (bottom),21,daytime,yes,0.171,0.736,0.261,champions_league:0.196 world_cup:0.104 national_teams:0.094 serie_a:-0.2 georgian_football:-0.192 transfers:-0.17,no,3184522019998242
+660,lukaska,GE,Akhaltsikhe,,B4,3,daytime,no,0.682,0.572,0.131,champions_league:0.084 legends:0.2 world_cup:-0.134 serie_a:-0.076 georgian_football:-0.059 premier_league:-0.139,no,3548231826265375
+661,Davitika,GE,Gori,,B3,3,daytime,no,0.468,0.78,0.085,georgian_football:0.153 premier_league:0.167 world_cup:0.129 bundesliga:-0.059 champions_league:-0.117 national_teams:-0.093 serie_a:-0.122,no,2580959384788615
+662,bachoushka.baller,GE,Rustavi,,B2,10,evening,yes,0.424,0.711,-0.176,georgian_football:0.052 legends:0.052 transfers:0.158 la_liga:-0.198 serie_a:-0.167,no,1006765150544419
+663,VaskaM,GR,Thessaloniki,,B2,10,morning,no,0.438,0.404,0.171,serie_a:0.107 legends:0.125 georgian_football:-0.14 transfers:-0.186 la_liga:-0.081 champions_league:-0.061,no,3719516455257961
+664,NATIA MAMULSHVILI,US,Chicago,,B1 (bottom),2,morning,no,0.097,0.545,0.198,premier_league:0.149 bundesliga:0.137 georgian_football:-0.136 transfers:-0.068 champions_league:-0.192,no,4485132083131030
+665,Otariuna,GE,Telavi,,B2,3,evening,no,0.411,0.361,-0.116,transfers:0.189 legends:0.176 world_cup:-0.172 premier_league:-0.057 bundesliga:-0.168 national_teams:-0.137,no,4016822878503286
+666,gogi ekhvaishvili,GE,Rustavi,,B5 (top),2,daytime,no,0.845,0.824,0.078,legends:0.119 champions_league:0.164 national_teams:0.156 world_cup:0.108 serie_a:-0.142 la_liga:-0.087 georgian_football:-0.122 premier_league:-0.174,no,1451751107945422
+667,Nikolozushka,GE,Rustavi,,B4,3,night_owl,no,0.645,0.462,0.283,premier_league:0.182 la_liga:0.081 bundesliga:0.072 legends:0.077 champions_league:-0.054 national_teams:-0.051,no,3718152847691888
+668,Shalva Arakiua,GE,Tbilisi,,B3,2,evening,no,0.544,0.706,0.285,premier_league:0.133 serie_a:0.16 la_liga:-0.151 bundesliga:-0.175,no,4493409132615556
+669,miqa mamulshvili,GE,Telavi,,B2,2,evening,no,0.395,0.492,-0.247,premier_league:0.07 georgian_football:0.074 serie_a:-0.136 national_teams:-0.105,no,1323705549072833
+670,konstantine zarkava,GE,Batumi,,B4,21,daytime,no,0.6,0.674,-0.256,premier_league:0.101 world_cup:0.171 national_teams:0.152 bundesliga:0.171 serie_a:-0.175 legends:-0.13 la_liga:-0.176 georgian_football:-0.14,no,4173875737407739
+671,sophog,GE,Rustavi,,B5 (top),3,evening,no,0.827,0.495,0.108,la_liga:0.128 champions_league:0.066 georgian_football:-0.082 transfers:-0.066,no,1867535291168086
+672,Sopo Nadiridze,GE,Batumi,,B2,10,evening,yes,0.28,0.488,0.155,champions_league:0.163 transfers:0.06 georgian_football:0.109 world_cup:-0.152 serie_a:-0.145 legends:-0.075 bundesliga:-0.17,no,134994086589265
+673,gega ugulshvili,GE,Poti,,B5 (top),2,evening,no,0.763,0.409,0.2,transfers:0.178 national_teams:0.065 bundesliga:-0.138 legends:-0.161,no,4121852112804822
+674,roin arseneli,GE,Batumi,,B4,10,evening,yes,0.614,0.756,-0.176,bundesliga:0.156 champions_league:0.068 world_cup:0.066 la_liga:-0.101 transfers:-0.057,no,4442421539961070
+675,Zaza Kldiashvili,GR,Athens,,B2,10,night_owl,no,0.449,0.696,0.291,la_liga:0.139 legends:0.186 georgian_football:0.055 champions_league:0.075 world_cup:-0.176 premier_league:-0.131 serie_a:-0.153,no,3474312464860409
+676,Zaal,GE,Telavi,,B3,2,evening,no,0.479,0.494,0.259,georgian_football:0.192 champions_league:0.051 world_cup:0.121 serie_a:-0.109 transfers:-0.135 national_teams:-0.071 la_liga:-0.151,no,4239750139688117
+677,ketevan nozadidze,GE,Gori,,B3,2,daytime,no,0.591,0.421,0.156,legends:0.137 la_liga:0.14 national_teams:-0.135 premier_league:-0.171,no,34448805436089
+678,nikusha maisureli,GE,Rustavi,,B4,3,night_owl,no,0.734,0.451,0.276,la_liga:0.092 serie_a:0.197 premier_league:0.185 national_teams:0.183 bundesliga:-0.104 legends:-0.098 world_cup:-0.067 transfers:-0.156,no,27498593193331
+679,zuka bakurshvili,GE,Tbilisi,,B1 (bottom),15,evening,no,0.23,0.644,-0.215,transfers:0.172 legends:0.061 premier_league:-0.074 champions_league:-0.141,no,323680410385698
+680,Guga Eliashava,GE,Ozurgeti,,B1 (bottom),2,evening,no,0.074,0.621,-0.139,transfers:0.084 world_cup:0.156 champions_league:0.193 bundesliga:0.055 legends:-0.133 national_teams:-0.081,no,3495443175317112
+681,Giorgiiko,GE,Telavi,,B3,3,morning,no,0.593,0.619,-0.278,champions_league:0.119 legends:0.1 national_teams:0.178 la_liga:-0.124 serie_a:-0.195 transfers:-0.174,no,2560517893323991
+682,buba chkhartshvili,GE,Batumi,,B5 (top),2,morning,no,0.795,0.808,-0.188,national_teams:0.116 georgian_football:0.124 world_cup:-0.109 transfers:-0.158,no,836244834808325
+683,gocha purtselshvili,GB,Birmingham,,B2,2,daytime,no,0.351,0.608,-0.271,legends:0.135 national_teams:0.129 la_liga:-0.089 premier_league:-0.196,no,987108643317330
+684,zezva iashvilava,GE,Batumi,Brentford FC,B4,3,evening,no,0.663,0.379,-0.23,serie_a:0.088 champions_league:0.176 world_cup:0.115 bundesliga:-0.15 premier_league:-0.073,no,188588155940038
+685,Merab Qoridshvili,GE,Zugdidi,,B2,3,evening,no,0.319,0.844,-0.22,legends:0.153 world_cup:0.057 transfers:-0.103 la_liga:-0.122,no,4308435203297661
+686,rati beberua,GE,Telavi,,B5 (top),10,evening,no,0.758,0.692,-0.162,serie_a:0.087 national_teams:0.094 la_liga:0.061 world_cup:-0.159 transfers:-0.085 premier_league:-0.067 bundesliga:-0.062,no,364525611184735
+687,nikoloz meladzava,US,New York,,B2,2,daytime,no,0.434,0.356,-0.281,legends:0.104 transfers:0.191 georgian_football:0.132 world_cup:0.158 premier_league:-0.059 bundesliga:-0.09,no,191706119307992
+688,sulkhanushka,DE,Berlin,,B1 (bottom),10,morning,no,0.221,0.617,-0.296,champions_league:0.14 la_liga:0.078 premier_league:0.186 transfers:-0.056 georgian_football:-0.06 legends:-0.073 serie_a:-0.064,no,4091740188228479
+689,lekso samkhariani,GE,Telavi,,B3,2,evening,no,0.462,0.593,-0.087,legends:0.084 serie_a:0.069 champions_league:0.116 georgian_football:0.083 national_teams:-0.105 transfers:-0.076 premier_league:-0.07,yes,3555483547890799
+690,Teimurazushka,GE,Tbilisi,,B2,2,daytime,no,0.289,0.829,0.261,premier_league:0.082 georgian_football:0.123 serie_a:0.119 legends:-0.107 champions_league:-0.159 transfers:-0.089 world_cup:-0.073,no,1827540213756995
+691,kukuri shengeliani,GE,Tbilisi,,B1 (bottom),2,morning,no,0.235,0.571,0.156,champions_league:0.188 serie_a:0.187 world_cup:0.185 georgian_football:0.175 premier_league:-0.096 la_liga:-0.169 legends:-0.065 bundesliga:-0.173,no,1256664481148931
+692,bidzina tomadiani,GE,Zugdidi,,B3,2,evening,no,0.545,0.53,-0.07,serie_a:0.149 champions_league:0.067 georgian_football:-0.092 world_cup:-0.095 national_teams:-0.064 legends:-0.17,no,75181542071982
+693,davitd,GE,Kutaisi,,B1 (bottom),3,evening,no,0.223,0.55,-0.205,champions_league:0.165 serie_a:0.123 georgian_football:-0.07 legends:-0.11 premier_league:-0.081,no,950036510546564
+694,Mari Skangshvili,TR,Istanbul,,B2,2,morning,no,0.304,0.699,-0.028,georgian_football:0.098 champions_league:0.193 world_cup:-0.137 premier_league:-0.176 serie_a:-0.111 national_teams:-0.091,no,2948925318056659
+695,Maka1,GE,Akhaltsikhe,,B3,10,evening,no,0.482,0.74,0.177,la_liga:0.11 national_teams:0.081 serie_a:0.192 premier_league:-0.141 transfers:-0.111,no,1492762122662078
+696,goat14,GE,Zugdidi,,B2,3,evening,no,0.274,0.691,0.227,serie_a:0.142 georgian_football:0.13 national_teams:0.132 premier_league:-0.087 la_liga:-0.099 world_cup:-0.188,no,925965722164460
+697,giga,US,New York,,B5 (top),2,morning,yes,0.874,0.396,-0.172,national_teams:0.184 champions_league:0.185 legends:0.073 world_cup:-0.096 transfers:-0.168 la_liga:-0.123 bundesliga:-0.087,no,2735850146873608
+698,vephkhvshvili,GE,Rustavi,,B3,10,evening,no,0.529,0.493,-0.164,legends:0.059 champions_league:0.073 national_teams:-0.072 serie_a:-0.194 bundesliga:-0.073,no,3608518835388246
+699,Zezvaushka,GE,Batumi,,B3,2,daytime,no,0.529,0.434,-0.219,la_liga:0.13 world_cup:0.174 serie_a:-0.128 transfers:-0.138 champions_league:-0.15 georgian_football:-0.198,yes,4158287646592113
+700,Tamar Ugulidze,GE,Tbilisi,,B4,3,morning,no,0.702,0.719,0.259,bundesliga:0.115 georgian_football:0.068 premier_league:-0.085 transfers:-0.123 champions_league:-0.1 world_cup:-0.19,no,668602046535387
+701,SandroL,GE,Kutaisi,,B3,2,evening,no,0.488,0.587,0.151,legends:0.064 premier_league:0.053 champions_league:0.082 transfers:-0.161 la_liga:-0.136,no,896733127675885
+702,Giga Beridzava,GE,Poti,,B2,2,evening,no,0.443,0.506,0.042,world_cup:0.103 serie_a:0.116 legends:0.074 national_teams:-0.148 georgian_football:-0.076 bundesliga:-0.084,no,3757137223988634
+703,guga23,GE,Kutaisi,,B3,3,daytime,no,0.588,0.38,-0.154,georgian_football:0.155 national_teams:0.104 premier_league:-0.16 transfers:-0.064 world_cup:-0.165,no,3263119548276929
+704,Sergoka,GE,Zugdidi,,B2,3,daytime,no,0.33,0.622,-0.241,transfers:0.081 la_liga:0.165 premier_league:-0.08 champions_league:-0.159,no,2952637866575874
+705,costa22,DE,Munich,,B4,15,daytime,yes,0.638,0.774,0.197,serie_a:0.071 legends:0.093 bundesliga:0.084 national_teams:-0.094 world_cup:-0.194 la_liga:-0.192,no,2601212209961594
+706,Nugzar Janjgavshvili,TR,Izmir,,B3,2,evening,no,0.558,0.565,0.278,premier_league:0.198 transfers:0.135 world_cup:-0.149 georgian_football:-0.109 champions_league:-0.13,no,4359607832134738
+707,sergo mgelidze,GE,Tbilisi,,B4,2,evening,no,0.634,0.847,-0.093,serie_a:0.174 national_teams:0.073 world_cup:0.196 champions_league:0.081 georgian_football:-0.097 la_liga:-0.09,no,3042815688662117
+708,talakhiani,GE,Poti,,B2,10,evening,no,0.38,0.373,-0.113,la_liga:0.175 georgian_football:0.088 national_teams:0.129 champions_league:-0.159 transfers:-0.059 legends:-0.143,no,4277613203113259
+709,Levan Inasarava,DE,Berlin,,B4,2,evening,no,0.746,0.494,-0.297,transfers:0.127 legends:0.057 serie_a:0.19 premier_league:0.07 la_liga:-0.053 bundesliga:-0.18 champions_league:-0.14,yes,1243623106432521
+710,Vakho Iremashiani,US,Chicago,,B2,2,daytime,no,0.298,0.413,0.084,georgian_football:0.172 legends:0.121 bundesliga:0.088 national_teams:0.147 premier_league:-0.061 champions_league:-0.055,no,4309500280119446
+711,GIORGIA.kaka,GE,Rustavi,,B3,10,daytime,no,0.459,0.563,0.299,bundesliga:0.093 la_liga:0.144 premier_league:-0.105 legends:-0.157,no,2606056211613583
+712,UCHA RURADELI,US,New York,,B1 (bottom),2,evening,no,0.249,0.517,-0.164,serie_a:0.122 georgian_football:0.085 transfers:0.062 bundesliga:0.104 la_liga:-0.194 legends:-0.198 world_cup:-0.09,no,67609538714273
+713,tengizuna,GE,Gori,,B3,2,evening,no,0.509,0.426,-0.205,serie_a:0.149 la_liga:0.116 world_cup:0.178 champions_league:0.179 georgian_football:-0.107 transfers:-0.132 national_teams:-0.162,no,1910544590257708
+714,Nikauna,GE,Tbilisi,,B3,3,evening,no,0.539,0.585,-0.182,georgian_football:0.161 world_cup:0.055 premier_league:-0.178 serie_a:-0.175 champions_league:-0.141,no,3079974005770336
+715,Sophouna2,GE,Ozurgeti,,B2,3,evening,no,0.279,0.642,-0.153,georgian_football:0.168 serie_a:0.114 champions_league:-0.136 transfers:-0.116 world_cup:-0.162 premier_league:-0.102,no,2158742968324306
+716,nika,GE,Zugdidi,,B1 (bottom),15,evening,no,0.15,0.527,-0.207,georgian_football:0.062 premier_league:0.13 la_liga:0.178 transfers:-0.179 champions_league:-0.169 legends:-0.075,no,1928204061816046
+717,MamukaL,GE,Kutaisi,,B4,2,daytime,no,0.681,0.655,0.175,bundesliga:0.061 transfers:0.068 legends:0.155 national_teams:0.059 la_liga:-0.087 georgian_football:-0.198 champions_league:-0.17,no,3491063430217332
+718,tornik purtseladze,GE,Poti,,B3,15,daytime,no,0.513,0.75,-0.206,georgian_football:0.061 national_teams:0.183 champions_league:-0.172 legends:-0.123 la_liga:-0.109,no,243698958591802
+719,ZurabB,GE,Akhaltsikhe,,B4,10,evening,no,0.603,0.512,0.083,serie_a:0.066 transfers:0.084 georgian_football:0.103 bundesliga:-0.146 premier_league:-0.065,no,1525660720765329
+720,Ushangi,GR,Athens,,B2,2,daytime,no,0.403,0.362,-0.096,georgian_football:0.133 la_liga:0.189 bundesliga:-0.129 legends:-0.144 serie_a:-0.189,no,509616987997709
+721,cf734,GE,Kutaisi,,B4,2,evening,no,0.704,0.363,-0.156,national_teams:0.11 bundesliga:0.195 premier_league:0.103 serie_a:-0.134 la_liga:-0.122 legends:-0.12 transfers:-0.093,no,1914012793548488
+722,Ika Onianiidze,GE,Zugdidi,,B3,10,evening,no,0.582,0.489,-0.173,transfers:0.137 world_cup:0.133 legends:0.116 la_liga:-0.173 georgian_football:-0.104 champions_league:-0.152,no,623210100100354
+723,Tea,GE,Telavi,,B1 (bottom),2,evening,no,0.221,0.746,-0.249,world_cup:0.18 national_teams:0.178 bundesliga:0.135 transfers:-0.063 legends:-0.1 serie_a:-0.185 premier_league:-0.126,no,4410715667669548
+724,roino,GE,Akhaltsikhe,,B3,2,morning,yes,0.509,0.483,-0.015,legends:0.121 world_cup:0.117 national_teams:-0.183 georgian_football:-0.07,no,1707387497540184
+725,Gagoshvili,GE,Ozurgeti,,B4,10,evening,no,0.66,0.402,-0.139,legends:0.184 serie_a:0.077 transfers:-0.129 georgian_football:-0.154 bundesliga:-0.076 world_cup:-0.181,no,3136144295977123
+726,lika dgebshvili,GE,Ozurgeti,,B2,15,evening,no,0.3,0.546,-0.045,national_teams:0.179 champions_league:0.146 transfers:-0.132 serie_a:-0.182 georgian_football:-0.107,no,4291444949543489
+727,GenadiT,GB,London,,B3,2,daytime,no,0.521,0.402,-0.28,la_liga:0.147 premier_league:0.052 national_teams:-0.145 world_cup:-0.154 georgian_football:-0.071 legends:-0.078,no,2232476856848500
+728,gigi vephkhvava,GE,Poti,,B1 (bottom),3,evening,no,0.124,0.512,0.283,georgian_football:0.072 serie_a:0.197 la_liga:0.121 transfers:-0.07 national_teams:-0.069,no,3092335850473008
+729,mikheil khubulava,TR,Istanbul,,B1 (bottom),2,evening,no,0.058,0.392,-0.092,world_cup:0.103 champions_league:0.06 bundesliga:0.156 transfers:-0.188 la_liga:-0.065 serie_a:-0.095 premier_league:-0.162,no,2036122124811677
+730,maradona69,GE,Rustavi,,B1 (bottom),10,evening,no,0.181,0.653,0.202,premier_league:0.196 world_cup:0.128 georgian_football:-0.187 legends:-0.143 la_liga:-0.188 bundesliga:-0.192,no,2509557852596203
+731,Sergoushka,GE,Rustavi,,B3,10,morning,no,0.57,0.581,-0.28,world_cup:0.143 bundesliga:0.133 la_liga:0.197 serie_a:-0.062 legends:-0.095 transfers:-0.133,no,521944229825439
+732,nodars80,GE,Ozurgeti,,B3,3,night_owl,no,0.506,0.354,0.106,champions_league:0.115 serie_a:0.174 legends:-0.131 georgian_football:-0.146 transfers:-0.069,no,3426125896306695
+733,VasoK,GE,Kutaisi,,B2,2,daytime,no,0.336,0.404,0.098,georgian_football:0.121 national_teams:0.095 la_liga:0.107 world_cup:0.114 bundesliga:-0.077 legends:-0.149 serie_a:-0.082,no,1737742435852260
+734,Jugelidze,GE,Telavi,,B2,3,evening,no,0.446,0.529,-0.002,world_cup:0.18 legends:0.069 serie_a:-0.057 bundesliga:-0.158,no,1733688897278383
+735,GochaL,GE,Batumi,,B4,15,evening,no,0.642,0.7,0.052,world_cup:0.151 premier_league:0.176 serie_a:0.064 national_teams:-0.054 transfers:-0.165,yes,2148195421659186
+736,kaisa703,GE,Telavi,,B4,2,evening,no,0.636,0.568,0.105,serie_a:0.2 georgian_football:0.182 legends:0.132 la_liga:-0.119 bundesliga:-0.119,no,2350447724643874
+737,Bekaushka,GE,Zugdidi,,B1 (bottom),2,evening,no,0.122,0.807,0.069,bundesliga:0.113 national_teams:0.082 champions_league:0.193 serie_a:-0.129 transfers:-0.105 premier_league:-0.079,no,3679357463780721
+738,zazaushka,GE,Telavi,,B1 (bottom),2,evening,yes,0.218,0.839,-0.201,national_teams:0.17 georgian_football:0.19 la_liga:0.159 world_cup:0.16 transfers:-0.127 premier_league:-0.182,no,2521818716290478
+739,ZUKA TALAKHSHVILI,GE,Kutaisi,,B1 (bottom),2,daytime,no,0.187,0.495,-0.15,national_teams:0.154 la_liga:0.123 transfers:0.16 georgian_football:0.145 serie_a:-0.192 champions_league:-0.1 bundesliga:-0.126 world_cup:-0.102,no,3548633143565571
+740,Eliso Dolidzshvili,GE,Kutaisi,,B4,2,evening,no,0.662,0.408,-0.218,national_teams:0.069 serie_a:0.102 georgian_football:-0.068 transfers:-0.086 premier_league:-0.075 world_cup:-0.097,no,2738689129909269
+741,guga natenadadze,GE,Zugdidi,,B2,2,evening,no,0.433,0.832,-0.068,national_teams:0.146 serie_a:0.119 transfers:0.126 la_liga:-0.108 premier_league:-0.188,no,2004434906243282
+742,temoluna,ES,Madrid,,B3,10,evening,no,0.572,0.478,-0.072,world_cup:0.096 national_teams:0.158 georgian_football:0.058 bundesliga:-0.062 premier_league:-0.116,no,1714816555155857
+743,TemolG22,GE,Poti,,B1 (bottom),2,daytime,no,0.084,0.498,0.267,national_teams:0.156 world_cup:0.084 champions_league:0.054 bundesliga:-0.133 georgian_football:-0.128 transfers:-0.116,no,2608879158045538
+744,KoteL,GE,Tbilisi,,B2,2,daytime,no,0.301,0.65,0.179,world_cup:0.134 serie_a:0.192 national_teams:0.08 champions_league:0.094 la_liga:-0.064 premier_league:-0.105,no,2729143744505036
+745,Ratiiko866,GE,Rustavi,,B2,2,evening,no,0.257,0.757,-0.202,georgian_football:0.096 national_teams:0.18 world_cup:0.135 champions_league:-0.067 serie_a:-0.084 transfers:-0.157,no,1756152389861414
+746,Zviad69,GE,Poti,,B3,15,evening,no,0.476,0.733,-0.08,legends:0.054 champions_league:0.139 world_cup:-0.1 georgian_football:-0.148 national_teams:-0.11 la_liga:-0.066,no,913103071106031
+747,miqa,GE,Telavi,,B2,2,daytime,no,0.277,0.635,0.15,georgian_football:0.088 serie_a:0.173 bundesliga:0.189 legends:-0.062 la_liga:-0.065 national_teams:-0.061 premier_league:-0.168,no,2149449570150050
+748,grishar14,GE,Gori,,B5 (top),15,daytime,no,0.801,0.846,0.176,transfers:0.137 la_liga:0.104 serie_a:0.075 georgian_football:0.179 legends:-0.105 national_teams:-0.134 world_cup:-0.187 bundesliga:-0.176,no,768879610069205
+749,Ugulshvili,GE,Zugdidi,,B2,3,daytime,no,0.255,0.677,-0.092,champions_league:0.146 national_teams:0.198 transfers:-0.068 serie_a:-0.151,no,4372015653954519
+750,Zurabiko,GE,Rustavi,,B4,3,evening,no,0.644,0.8,0.272,national_teams:0.117 la_liga:0.058 georgian_football:-0.169 premier_league:-0.084,no,887843066595828
+751,mgelshvili,GE,Akhaltsikhe,,B1 (bottom),2,night_owl,no,0.077,0.42,-0.07,champions_league:0.072 world_cup:0.055 national_teams:0.06 georgian_football:-0.063 la_liga:-0.176,no,4359861214921892
+752,SANDRO NACHKEBELI,US,New York,,B1 (bottom),3,daytime,no,0.1,0.613,0.075,georgian_football:0.159 national_teams:0.163 la_liga:-0.061 legends:-0.172 world_cup:-0.15 champions_league:-0.155,no,2484791311904124
+753,Gugaika,GE,Rustavi,,B2,2,evening,no,0.384,0.523,-0.26,serie_a:0.154 la_liga:0.079 world_cup:-0.114 transfers:-0.163 premier_league:-0.112 legends:-0.071,no,3118781424559735
+754,Zaaluna,GE,Gori,,B4,2,evening,yes,0.648,0.666,-0.008,national_teams:0.071 world_cup:0.098 legends:0.128 premier_league:0.102 transfers:-0.186 georgian_football:-0.128,no,2682681825796868
+755,vato khubulidze,GE,Tbilisi,,B2,3,evening,no,0.424,0.692,0.047,national_teams:0.182 transfers:0.057 world_cup:0.167 premier_league:0.188 la_liga:-0.07 serie_a:-0.082 champions_league:-0.105 legends:-0.166,no,60170406540095
+756,Nugoushka,GE,Rustavi,,B5 (top),10,evening,no,0.814,0.58,-0.245,serie_a:0.142 legends:0.063 georgian_football:0.063 champions_league:-0.063 world_cup:-0.156 premier_league:-0.119 bundesliga:-0.062,no,215853951245145
+757,Nikoloz Dvalishvili,GE,Telavi,,B5 (top),2,evening,no,0.875,0.748,0.016,serie_a:0.053 champions_league:0.195 georgian_football:0.184 transfers:0.104 national_teams:-0.185 bundesliga:-0.191 premier_league:-0.066 la_liga:-0.184,no,4381508154513270
+758,Luka Zhvanadze,GE,Telavi,,B3,2,daytime,no,0.572,0.426,0.035,bundesliga:0.155 serie_a:0.157 georgian_football:0.13 la_liga:-0.195 legends:-0.179 champions_league:-0.063 transfers:-0.17,no,992892604574227
+759,Mamuka Ratianashvili,GE,Akhaltsikhe,,B2,3,evening,no,0.263,0.4,-0.026,national_teams:0.089 champions_league:0.119 transfers:-0.054 georgian_football:-0.082 bundesliga:-0.194 legends:-0.156,no,2291156091316259
+760,guram bochorshvili,GE,Batumi,,B2,2,evening,no,0.399,0.423,-0.081,national_teams:0.113 la_liga:0.121 bundesliga:-0.157 world_cup:-0.107 georgian_football:-0.152 serie_a:-0.174,no,3173704623088615
+761,grishauna,GE,Telavi,,B3,2,daytime,no,0.594,0.677,0.054,serie_a:0.111 la_liga:0.053 transfers:0.155 bundesliga:-0.081 national_teams:-0.131 georgian_football:-0.15 champions_league:-0.061,no,713333443734808
+762,GOGID,GE,Telavi,,B4,3,evening,no,0.678,0.514,0.101,national_teams:0.144 georgian_football:0.186 world_cup:0.197 la_liga:0.183 champions_league:-0.183 premier_league:-0.097 legends:-0.148 transfers:-0.127,no,1052630076436254
+763,TamarB,GE,Gori,,B4,15,evening,no,0.643,0.769,-0.136,transfers:0.075 national_teams:0.115 la_liga:0.15 bundesliga:0.104 legends:-0.141 champions_league:-0.171,no,4316058266685256
+764,GiorgiB,GE,Kutaisi,,B4,2,evening,no,0.682,0.766,0.071,national_teams:0.142 legends:0.185 bundesliga:0.096 georgian_football:0.17 transfers:-0.069 premier_league:-0.188 world_cup:-0.189,no,2736959191514498
+765,datauna09,GE,Ozurgeti,,B2,15,daytime,no,0.428,0.768,-0.291,la_liga:0.154 national_teams:0.088 bundesliga:0.137 world_cup:0.063 legends:-0.082 serie_a:-0.14 champions_league:-0.115,no,4470907309447862
+766,Mariam Nadiriani,GE,Akhaltsikhe,,B2,2,daytime,no,0.435,0.766,0.095,serie_a:0.094 georgian_football:0.144 world_cup:-0.083 national_teams:-0.134 bundesliga:-0.057 la_liga:-0.151,no,2845220632057497
+767,jemal janjgavadze,GE,Rustavi,,B1 (bottom),2,evening,yes,0.095,0.845,0.297,georgian_football:0.195 world_cup:0.102 bundesliga:0.138 transfers:0.099 champions_league:-0.194 serie_a:-0.129 legends:-0.182 national_teams:-0.072,yes,3464442129714688
+768,Vovaka,GE,Tbilisi,,B5 (top),2,morning,no,0.894,0.527,0.088,legends:0.154 premier_league:0.174 national_teams:-0.188 transfers:-0.06 serie_a:-0.064 champions_league:-0.062,no,4291969141807580
+769,Tsalugelava22,GE,Rustavi,,B2,2,daytime,no,0.437,0.837,0.049,legends:0.149 world_cup:0.112 premier_league:-0.091 champions_league:-0.086 georgian_football:-0.115,no,754059348923451
+770,Lika Iremashidze,GE,Kutaisi,,B3,2,daytime,yes,0.504,0.545,0.118,transfers:0.191 world_cup:0.064 champions_league:-0.147 georgian_football:-0.078,no,3812919558079087
+771,Vaso Chanturiidze,US,New York,,B2,2,daytime,no,0.409,0.624,-0.097,world_cup:0.061 premier_league:0.127 serie_a:0.058 georgian_football:-0.072 la_liga:-0.181 bundesliga:-0.055,no,1457588982066221
+772,SulkhanA,GE,Tbilisi,,B2,2,daytime,yes,0.347,0.432,-0.244,champions_league:0.065 la_liga:0.196 transfers:0.111 national_teams:0.094 serie_a:-0.167 legends:-0.163 world_cup:-0.181 georgian_football:-0.139,no,644893306507262
+773,Arsenshvili,GE,Rustavi,,B3,2,evening,no,0.502,0.546,0,premier_league:0.112 serie_a:0.103 bundesliga:0.063 legends:-0.053 georgian_football:-0.091 transfers:-0.148,no,3682669472453480
+774,Ioseb Vephkhvidze,GB,Birmingham,,B3,2,evening,no,0.459,0.721,0.092,serie_a:0.113 la_liga:0.192 premier_league:0.145 world_cup:0.165 bundesliga:-0.14 legends:-0.055 transfers:-0.116,no,3177074268299380
+775,Shota,GE,Telavi,,B3,2,evening,no,0.469,0.492,-0.236,la_liga:0.165 serie_a:0.119 georgian_football:0.181 legends:-0.183 bundesliga:-0.103 premier_league:-0.18,no,433640614684151
+776,Irakay Papaveli,GE,Kutaisi,,B2,2,evening,no,0.431,0.691,0.025,world_cup:0.109 legends:0.198 national_teams:0.134 bundesliga:0.197 serie_a:-0.185 la_liga:-0.117 premier_league:-0.124,no,1926734712798066
+777,Irakay,GE,Kutaisi,,B3,15,morning,no,0.469,0.735,-0.217,serie_a:0.073 premier_league:0.077 champions_league:0.107 national_teams:-0.057 bundesliga:-0.185 legends:-0.164,no,2908737222904522
+778,Bidzina Arakiiani,GE,Gori,,B2,10,daytime,no,0.271,0.467,0.117,la_liga:0.085 serie_a:0.127 national_teams:0.079 champions_league:-0.068 bundesliga:-0.102,no,2183662627573823
+779,pavleo,GE,Batumi,,B2,2,daytime,no,0.292,0.643,0.3,la_liga:0.187 georgian_football:0.157 transfers:-0.117 bundesliga:-0.059 serie_a:-0.187 world_cup:-0.09,no,1865891867682261
+780,Maisuradze,GE,Akhaltsikhe,,B4,2,evening,no,0.734,0.722,-0.05,premier_league:0.162 national_teams:0.052 world_cup:0.09 transfers:-0.153 serie_a:-0.125 champions_league:-0.098 la_liga:-0.144,no,908224238094752
+781,otari skangshvili09,US,Chicago,,B3,2,evening,no,0.504,0.454,-0.199,premier_league:0.063 bundesliga:0.145 transfers:0.153 champions_league:0.088 georgian_football:-0.099 serie_a:-0.19,no,2972322182981665
+782,Lordkipashvili,GE,Akhaltsikhe,,B4,3,evening,no,0.675,0.745,0.284,georgian_football:0.103 world_cup:0.163 premier_league:0.118 serie_a:-0.151 national_teams:-0.139 bundesliga:-0.198 transfers:-0.116,no,1342700781359503
+783,Taso,DE,Munich,,B2,2,daytime,no,0.258,0.652,0.02,champions_league:0.19 legends:0.148 serie_a:-0.057 transfers:-0.148 la_liga:-0.094,no,2318598702638479
+784,cf15,GE,Telavi,,B3,3,morning,no,0.513,0.424,0.259,world_cup:0.112 national_teams:0.064 bundesliga:0.18 legends:0.128 premier_league:-0.131 georgian_football:-0.089 transfers:-0.096,no,379525255207163
+785,Jano,GE,Tbilisi,,B5 (top),2,daytime,yes,0.781,0.536,-0.116,la_liga:0.195 premier_league:0.146 serie_a:-0.072 champions_league:-0.109,no,3485756490617705
+786,nana chanturiua,GB,Birmingham,,B2,3,evening,no,0.387,0.395,0.039,world_cup:0.128 bundesliga:0.169 legends:0.092 national_teams:-0.074 la_liga:-0.153,no,4239957606965946
+787,Zviad,ES,Madrid,,B2,2,evening,no,0.309,0.526,0.152,serie_a:0.104 world_cup:0.144 legends:-0.177 champions_league:-0.197,no,1334161384282312
+788,GuguA,GE,Batumi,,B3,10,daytime,no,0.551,0.589,0.153,georgian_football:0.099 la_liga:0.114 bundesliga:0.139 transfers:0.087 world_cup:-0.115 legends:-0.114 champions_league:-0.191 serie_a:-0.18,no,34019169083453
+789,pavlea2,GE,Batumi,,B1 (bottom),2,daytime,no,0.053,0.744,-0.101,champions_league:0.116 bundesliga:0.083 premier_league:-0.052 la_liga:-0.166 georgian_football:-0.089,no,1350612977597965
+790,Uchauna,GE,Telavi,,B2,10,daytime,no,0.368,0.819,0.122,serie_a:0.08 transfers:0.192 national_teams:0.054 la_liga:0.118 premier_league:-0.068 world_cup:-0.056 legends:-0.091,no,2860639110240454
+791,IosebD,GE,Telavi,,B3,2,daytime,no,0.472,0.472,0.2,bundesliga:0.113 premier_league:0.08 transfers:0.09 national_teams:-0.173 world_cup:-0.199 georgian_football:-0.122 legends:-0.133,no,1137510950141833
+792,hamsik971,GE,Poti,,B3,3,evening,yes,0.453,0.667,-0.018,premier_league:0.166 bundesliga:0.073 serie_a:0.164 transfers:-0.102 la_liga:-0.096,no,4052782714545812
+793,Beberidze,GE,Batumi,,B4,2,evening,no,0.704,0.827,-0.198,serie_a:0.102 georgian_football:0.174 legends:0.137 champions_league:0.148 transfers:-0.18 world_cup:-0.089 national_teams:-0.071 bundesliga:-0.109,no,3732436845874535
+794,Kakha1,GE,Akhaltsikhe,,B4,2,evening,yes,0.628,0.806,0.124,georgian_football:0.059 national_teams:0.113 legends:-0.156 bundesliga:-0.128 world_cup:-0.177,no,95063215051374
+795,Niko Vashalshvili,GE,Telavi,,B3,3,daytime,no,0.524,0.798,0.258,transfers:0.108 georgian_football:0.142 serie_a:0.083 legends:0.096 national_teams:-0.155 world_cup:-0.115 la_liga:-0.174 champions_league:-0.097,no,3650297654262494
+796,GIGI TURASHIDZE,GE,Poti,,B2,2,evening,no,0.298,0.469,-0.01,world_cup:0.183 la_liga:0.117 georgian_football:0.116 transfers:-0.076 premier_league:-0.092 national_teams:-0.193,no,804725360148407
+797,Tornike Kldiashvili,GE,Telavi,,B3,21,evening,no,0.547,0.659,0.003,bundesliga:0.169 national_teams:0.088 premier_league:-0.076 la_liga:-0.196 champions_league:-0.152,no,1590542909865918
+798,Gega Lezhavshvili,GE,Akhaltsikhe,,B1 (bottom),2,daytime,yes,0.088,0.714,0.008,legends:0.112 georgian_football:0.165 national_teams:0.149 la_liga:0.106 bundesliga:-0.075 serie_a:-0.135,no,2282956384832728
+799,gegaa,GE,Zugdidi,,B2,2,evening,no,0.381,0.792,0.224,la_liga:0.087 serie_a:0.098 national_teams:0.152 world_cup:-0.171 champions_league:-0.184 premier_league:-0.177,no,218771151780472
+800,ShalvaS69,GE,Batumi,,B1 (bottom),3,evening,no,0.116,0.375,0.273,bundesliga:0.126 world_cup:0.065 champions_league:-0.171 legends:-0.081,no,433314345395577
+801,RevazD,TR,Ankara,,B4,3,evening,no,0.622,0.556,0.168,premier_league:0.171 georgian_football:0.157 national_teams:0.085 transfers:0.195 serie_a:-0.117 la_liga:-0.178 world_cup:-0.117,no,1934883870806748
+802,Medea14,GE,Ozurgeti,,B4,15,evening,no,0.708,0.461,-0.199,serie_a:0.118 la_liga:0.061 champions_league:-0.114 georgian_football:-0.162,no,2990027345219142
+803,Tamar Gogichidze,GE,Ozurgeti,,B3,15,daytime,no,0.464,0.847,-0.041,premier_league:0.115 transfers:0.057 la_liga:0.094 serie_a:-0.132 bundesliga:-0.087 champions_league:-0.11,no,4026618610314507
+804,salomem,GE,Batumi,,B2,10,evening,no,0.338,0.828,-0.126,legends:0.155 georgian_football:0.126 transfers:-0.16 la_liga:-0.123 premier_league:-0.098,no,2436026598194654
+805,UshangiT69,GB,Birmingham,,B3,15,daytime,no,0.502,0.6,0.274,legends:0.149 georgian_football:0.054 national_teams:0.17 champions_league:-0.179 la_liga:-0.194 bundesliga:-0.19,no,580009832490790
+806,misha samkharshvili,GE,Ozurgeti,,B2,10,daytime,no,0.363,0.487,-0.157,transfers:0.061 georgian_football:0.197 serie_a:-0.158 legends:-0.081 premier_league:-0.087,no,3333941969118846
+807,MikheilN1,GE,Kutaisi,,B1 (bottom),2,morning,no,0.062,0.449,-0.284,transfers:0.056 world_cup:0.074 premier_league:0.107 la_liga:0.137 bundesliga:-0.165 champions_league:-0.137,no,960094616441822
+808,ZviadK09,GE,Rustavi,,B4,2,daytime,no,0.67,0.352,-0.27,world_cup:0.199 premier_league:0.142 transfers:-0.098 legends:-0.198,no,733262756641862
+809,PridonB738,GE,Zugdidi,,B1 (bottom),3,morning,no,0.069,0.645,0.127,serie_a:0.117 legends:0.176 national_teams:0.103 transfers:0.179 georgian_football:-0.124 premier_league:-0.176,no,3035167785661850
+810,Rezi Ugrelishvili,GE,Akhaltsikhe,,B3,2,evening,no,0.524,0.759,-0.163,serie_a:0.068 georgian_football:0.073 champions_league:0.169 legends:0.196 bundesliga:-0.056 world_cup:-0.114,no,4274091461948407
+811,GEGA ARAKIASHVILI,GB,Birmingham,,B4,3,evening,no,0.695,0.721,-0.013,bundesliga:0.16 premier_league:0.134 legends:0.149 georgian_football:-0.197 transfers:-0.093 world_cup:-0.169 la_liga:-0.185,no,2305886836239939
+812,Tornike Nadirshvili,TR,Istanbul,,B2,2,evening,no,0.291,0.588,0.122,transfers:0.136 georgian_football:0.186 serie_a:-0.052 bundesliga:-0.073 champions_league:-0.057 national_teams:-0.054,no,3994544768768509
+813,VATOUSHKA,GE,Kutaisi,,B2,3,daytime,no,0.43,0.401,-0.079,bundesliga:0.149 georgian_football:0.09 world_cup:-0.156 legends:-0.088 premier_league:-0.159,no,504279977667583
+814,Guram Tsereteliiani,GE,Gori,,B1 (bottom),10,evening,no,0.051,0.661,-0.202,georgian_football:0.097 transfers:0.103 premier_league:-0.182 legends:-0.129,no,2795207756437576
+815,emzarn,GE,Zugdidi,,B2,3,daytime,yes,0.273,0.656,-0.268,champions_league:0.169 bundesliga:0.197 national_teams:-0.167 world_cup:-0.068,no,2045354532024720
+816,Dato Vashalidze,ES,Madrid,,B3,2,morning,no,0.474,0.552,0.1,premier_league:0.127 champions_league:0.095 bundesliga:-0.083 national_teams:-0.07 world_cup:-0.154,no,3516047246435003
+817,EmzarT,GE,Telavi,,B1 (bottom),2,daytime,no,0.172,0.525,-0.187,national_teams:0.051 premier_league:0.15 georgian_football:0.123 legends:0.152 transfers:-0.172 bundesliga:-0.186,no,514508993121853
+818,sopho skangiani,GE,Gori,,B3,10,evening,no,0.525,0.397,-0.074,georgian_football:0.057 national_teams:0.081 transfers:-0.188 la_liga:-0.182,no,4416880690910367
+819,Temo Lomidshvili,GE,Akhaltsikhe,,B2,10,daytime,no,0.325,0.83,0.097,georgian_football:0.181 serie_a:0.078 premier_league:0.16 legends:-0.185 transfers:-0.08 bundesliga:-0.195,no,2925678124194156
+820,Mamuka Beridzadze,GE,Poti,,B4,10,daytime,no,0.601,0.364,-0.299,champions_league:0.171 bundesliga:0.055 legends:-0.155 transfers:-0.161 la_liga:-0.159 georgian_football:-0.171,no,813150420209369
+821,Pridon55,GE,Rustavi,,B2,2,morning,no,0.382,0.809,-0.108,legends:0.123 world_cup:0.094 champions_league:0.146 premier_league:0.192 national_teams:-0.156 transfers:-0.199 la_liga:-0.104,no,3389052121118319
+822,Emzar,GE,Gori,,B1 (bottom),2,daytime,no,0.197,0.615,0.285,georgian_football:0.161 bundesliga:0.177 world_cup:0.166 champions_league:-0.127 national_teams:-0.143,no,497675149465372
+823,Ramazka,GE,Poti,,B3,2,evening,no,0.511,0.648,-0.073,legends:0.053 la_liga:0.056 bundesliga:0.065 premier_league:-0.171 georgian_football:-0.169 champions_league:-0.151,no,3434370698977243
+824,gio kalatozshvili,GE,Telavi,,B4,3,daytime,yes,0.649,0.399,0.109,champions_league:0.154 legends:0.103 la_liga:-0.143 bundesliga:-0.172 serie_a:-0.148,no,817858957935611
+825,dataa,GB,Birmingham,,B3,10,evening,no,0.544,0.51,-0.271,georgian_football:0.132 premier_league:0.111 legends:0.081 bundesliga:0.063 champions_league:-0.152 world_cup:-0.199 la_liga:-0.161 national_teams:-0.064,yes,3471612801964642
+826,Medeaa69,US,Chicago,,B1 (bottom),3,evening,no,0.159,0.557,0.138,georgian_football:0.182 la_liga:0.066 bundesliga:-0.118 world_cup:-0.158,no,4422710130928366
+827,Tornike Ruradava,GE,Rustavi,,B3,2,daytime,yes,0.596,0.419,-0.064,world_cup:0.13 national_teams:0.154 bundesliga:-0.194 legends:-0.118 transfers:-0.06 champions_league:-0.181,no,3432308544786258
+828,KakhiL,GE,Gori,,B3,2,morning,no,0.539,0.527,-0.174,world_cup:0.085 serie_a:0.07 national_teams:0.14 legends:-0.183 bundesliga:-0.108 premier_league:-0.101,no,1802591939580456
+829,Kakhi Phkhovelava,GE,Tbilisi,,B2,2,evening,no,0.449,0.402,0.288,national_teams:0.065 legends:0.15 la_liga:0.127 premier_league:-0.055 bundesliga:-0.14,no,1653179081164281
+830,Tokoushka,GE,Poti,,B1 (bottom),2,evening,no,0.061,0.597,0.162,champions_league:0.063 legends:0.172 premier_league:0.054 georgian_football:-0.064 bundesliga:-0.072 transfers:-0.074 national_teams:-0.078,yes,2008270313374532
+831,teimuraz japariani,GB,London,,B1 (bottom),15,evening,yes,0.219,0.403,0.277,premier_league:0.052 georgian_football:0.096 champions_league:0.196 legends:-0.181 serie_a:-0.188,no,1701303923553186
+832,Ramaz Natenadadze,GE,Rustavi,,B3,3,morning,no,0.473,0.768,-0.087,la_liga:0.124 champions_league:0.059 georgian_football:0.079 world_cup:0.129 national_teams:-0.13 serie_a:-0.16 bundesliga:-0.141,no,2873765054742628
+833,Mikheil Peikrishiani,GE,Batumi,,B2,3,daytime,no,0.253,0.516,-0.171,bundesliga:0.05 la_liga:0.051 premier_league:0.136 national_teams:-0.078 champions_league:-0.167 transfers:-0.054,no,1438887411983584
+834,Guramiko,GE,Tbilisi,,B4,2,daytime,no,0.613,0.473,-0.217,national_teams:0.164 champions_league:0.176 legends:0.193 premier_league:-0.139 georgian_football:-0.15 la_liga:-0.065 world_cup:-0.091,no,520894012442395
+835,Ramazika,GE,Telavi,,B4,15,evening,no,0.744,0.474,-0.211,georgian_football:0.185 national_teams:0.13 la_liga:0.196 transfers:-0.169 premier_league:-0.099 serie_a:-0.083 champions_league:-0.191,no,4116080756123783
+836,Temo Turashadze,GE,Rustavi,,B4,2,evening,no,0.746,0.352,0.05,national_teams:0.075 legends:0.2 transfers:0.165 world_cup:0.079 premier_league:-0.178 georgian_football:-0.08 serie_a:-0.154 bundesliga:-0.102,no,399809608125399
+837,zurab gelashiani,US,New York,,B2,10,night_owl,no,0.439,0.681,0.044,champions_league:0.073 serie_a:0.193 legends:0.065 transfers:-0.118 georgian_football:-0.074 national_teams:-0.195 world_cup:-0.183,no,230814492721474
+838,genadiz,GE,Tbilisi,,B1 (bottom),3,daytime,no,0.135,0.647,-0.071,serie_a:0.094 world_cup:0.159 national_teams:0.182 champions_league:-0.126 legends:-0.181 premier_league:-0.116 la_liga:-0.194,no,127993764573559
+839,Miriano61,GE,Rustavi,,B4,3,evening,no,0.722,0.662,0.295,georgian_football:0.135 national_teams:0.152 legends:0.069 la_liga:-0.194 bundesliga:-0.142 world_cup:-0.145 premier_league:-0.187,no,2408865652219490
+840,Iosebiko,GE,Ozurgeti,,B1 (bottom),2,daytime,yes,0.055,0.415,0.22,champions_league:0.087 bundesliga:0.142 serie_a:0.062 world_cup:-0.123 georgian_football:-0.137,no,3449988543400841
+841,goat111,GE,Tbilisi,,B2,2,daytime,no,0.346,0.69,-0.087,serie_a:0.146 legends:0.164 la_liga:0.128 georgian_football:0.157 transfers:-0.179 champions_league:-0.129 premier_league:-0.088,no,2212280825297225
+842,Jaba,GE,Gori,,B3,2,evening,no,0.574,0.731,-0.24,world_cup:0.071 la_liga:0.061 bundesliga:0.197 national_teams:0.16 transfers:-0.061 serie_a:-0.078 premier_league:-0.078,yes,1782265181302064
+843,Tea Arsenidze,GE,Poti,,B5 (top),2,evening,no,0.83,0.81,-0.254,champions_league:0.071 national_teams:0.131 georgian_football:-0.179 transfers:-0.14 bundesliga:-0.172 la_liga:-0.157,no,3533330143646441
+844,vaso zhvanshvili,GB,Birmingham,,B4,3,evening,no,0.703,0.807,0.288,transfers:0.054 serie_a:0.191 world_cup:-0.145 georgian_football:-0.128,no,3925641420304833
+845,Tengiz,GE,Gori,,B5 (top),15,daytime,no,0.793,0.388,0.167,premier_league:0.093 bundesliga:0.133 georgian_football:0.088 la_liga:0.057 serie_a:-0.176 national_teams:-0.199,no,3382573200647048
+846,Data Japarashvili,ES,Barcelona,,B3,15,daytime,no,0.478,0.768,-0.226,world_cup:0.127 national_teams:0.191 serie_a:0.179 legends:0.101 premier_league:-0.11 bundesliga:-0.185 champions_league:-0.12,no,230054174915260
+847,Buba Zarkshvili,GE,Zugdidi,,B1 (bottom),3,morning,no,0.166,0.588,0.022,la_liga:0.11 champions_league:0.178 serie_a:-0.063 georgian_football:-0.159 national_teams:-0.089 bundesliga:-0.069,no,811947712742408
+848,Levan Ubilua,GE,Kutaisi,,B1 (bottom),2,evening,no,0.084,0.653,0.066,premier_league:0.086 la_liga:0.139 legends:0.156 national_teams:-0.083 bundesliga:-0.076,no,1767101099650304
+849,sopho12,GE,Batumi,,B2,3,evening,no,0.281,0.375,0.261,champions_league:0.097 transfers:0.111 serie_a:0.144 georgian_football:0.198 premier_league:-0.162 national_teams:-0.092 la_liga:-0.184 bundesliga:-0.145,no,3055968729245754
+850,Japarshvili1,DE,Munich,,B2,3,evening,no,0.336,0.689,-0.131,serie_a:0.144 world_cup:0.15 transfers:-0.094 georgian_football:-0.169 champions_league:-0.094,no,1914675168135438
+851,bubak,GE,Zugdidi,,B2,10,daytime,no,0.292,0.385,-0.149,bundesliga:0.181 national_teams:0.112 legends:0.116 la_liga:0.136 transfers:-0.074 serie_a:-0.198,no,1899774904317850
+852,Niko Shengelshvili,GE,Gori,,B3,2,evening,no,0.582,0.369,-0.019,premier_league:0.178 legends:0.192 transfers:0.187 georgian_football:0.073 national_teams:-0.115 bundesliga:-0.188,no,600328773415619
+853,Irakli Gogitchava,GE,Gori,,B4,15,daytime,no,0.736,0.695,0.173,transfers:0.134 champions_league:0.123 georgian_football:0.166 serie_a:-0.115 legends:-0.112,no,1691078599037188
+854,Kakhaa,GE,Kutaisi,,B3,3,morning,no,0.549,0.509,0.019,bundesliga:0.102 world_cup:0.176 legends:0.055 premier_league:-0.115 champions_league:-0.146 serie_a:-0.148 transfers:-0.181,no,951994907525229
+855,Vaskao,US,New York,,B3,3,daytime,no,0.482,0.386,0.067,la_liga:0.07 world_cup:0.184 premier_league:0.118 legends:0.132 serie_a:-0.164 georgian_football:-0.117 bundesliga:-0.084 champions_league:-0.053,no,1647559841514976
+856,NugoM,GE,Zugdidi,,B3,2,daytime,no,0.536,0.735,-0.064,legends:0.133 world_cup:0.123 premier_league:-0.115 national_teams:-0.134,no,1853412954585876
+857,Keti Chanturishvili,GE,Kutaisi,,B3,2,evening,no,0.558,0.76,0.23,national_teams:0.199 transfers:0.188 legends:0.099 world_cup:-0.072 la_liga:-0.115 georgian_football:-0.197 bundesliga:-0.169,no,3931797152338215
+858,Shalva Chanturishvili,GE,Rustavi,Real Madrid,B3,2,evening,yes,0.481,0.784,0.099,premier_league:0.173 transfers:0.067 national_teams:0.055 la_liga:0.188 serie_a:-0.079 legends:-0.154 world_cup:-0.072,no,4493324536705743
+859,zaalk111,GE,Ozurgeti,,B1 (bottom),3,daytime,no,0.113,0.772,-0.282,champions_league:0.132 georgian_football:0.064 transfers:0.07 serie_a:-0.065 world_cup:-0.068 legends:-0.156,no,2676706121031503
+860,Anano14,GE,Akhaltsikhe,,B3,3,daytime,no,0.567,0.715,0.159,bundesliga:0.063 legends:0.089 champions_league:-0.116 la_liga:-0.105 world_cup:-0.116 georgian_football:-0.089,no,502026888626138
+861,Ushangiuna,GE,Zugdidi,,B3,10,evening,no,0.533,0.371,-0.264,champions_league:0.149 premier_league:0.147 georgian_football:0.132 serie_a:0.157 national_teams:-0.11 la_liga:-0.136 transfers:-0.175,no,891969219032627
+862,Nana Papavadze,GE,Akhaltsikhe,,B4,3,daytime,no,0.617,0.551,0.114,legends:0.121 national_teams:0.099 serie_a:-0.081 premier_league:-0.124 georgian_football:-0.124,no,1870537377599217
+863,rezo natenadshvili,GE,Zugdidi,,B2,15,daytime,no,0.326,0.636,-0.109,la_liga:0.174 bundesliga:0.117 champions_league:0.174 world_cup:-0.12 legends:-0.194,no,3649092263046615
+864,Grisha Shengelshvili,GE,Zugdidi,,B3,2,evening,no,0.536,0.55,0.123,la_liga:0.075 georgian_football:0.118 national_teams:0.115 serie_a:-0.13 premier_league:-0.157 champions_league:-0.134,no,3756476911146684
+865,elizbaradze23,GE,Batumi,,B3,2,morning,no,0.571,0.714,0.284,transfers:0.093 legends:0.069 champions_league:-0.103 bundesliga:-0.057,no,2239982201461707
+866,Sabauna,GE,Kutaisi,,B2,15,evening,no,0.317,0.769,0.033,bundesliga:0.125 legends:0.199 world_cup:0.078 georgian_football:0.118 premier_league:-0.188 national_teams:-0.172 transfers:-0.181,no,132859802187644
+867,Sopoa,GE,Rustavi,,B5 (top),2,daytime,no,0.816,0.845,-0.087,world_cup:0.184 champions_league:0.122 national_teams:0.187 transfers:-0.058 la_liga:-0.114 georgian_football:-0.112 bundesliga:-0.132,no,1480703490658562
+868,sophok,GE,Poti,,B3,2,evening,no,0.54,0.525,0.175,legends:0.106 bundesliga:0.179 premier_league:-0.082 world_cup:-0.069,no,3367397566889856
+869,vovaika,TR,Izmir,,B3,2,morning,no,0.481,0.599,-0.218,legends:0.182 premier_league:0.084 serie_a:0.191 national_teams:-0.177 champions_league:-0.135 world_cup:-0.133 transfers:-0.12,yes,1879289776207634
+870,pridon kldiashvili,TR,Istanbul,,B1 (bottom),2,evening,no,0.213,0.824,0.289,georgian_football:0.11 la_liga:0.177 transfers:0.111 bundesliga:-0.103 world_cup:-0.107 serie_a:-0.079,no,2379286696738036
+871,ubilshvili,GR,Thessaloniki,,B2,3,night_owl,no,0.303,0.352,0.289,transfers:0.099 world_cup:0.065 bundesliga:0.118 georgian_football:-0.115 la_liga:-0.108 champions_league:-0.12 legends:-0.063,no,590753768736403
+872,Lekso Bebershvili,GE,Kutaisi,,B2,15,evening,yes,0.264,0.7,0.153,world_cup:0.105 national_teams:0.183 premier_league:0.065 transfers:-0.193 la_liga:-0.123 legends:-0.16 georgian_football:-0.091,no,675350969755501
+873,temur mikaidze,GE,Akhaltsikhe,,B5 (top),2,evening,no,0.787,0.556,-0.179,legends:0.087 champions_league:0.101 bundesliga:0.115 national_teams:0.125 la_liga:-0.061 serie_a:-0.058 georgian_football:-0.173 world_cup:-0.071,no,596322915056521
+874,Rezo Vephkhvshvili,GE,Gori,,B4,3,morning,no,0.619,0.702,-0.237,champions_league:0.137 world_cup:0.111 la_liga:0.106 transfers:-0.14 georgian_football:-0.102 legends:-0.072 premier_league:-0.094,no,4125101434801593
+875,Maka Nozadshvili,GE,Gori,,B1 (bottom),2,daytime,yes,0.179,0.397,-0.1,champions_league:0.11 la_liga:0.062 serie_a:-0.188 bundesliga:-0.12 national_teams:-0.117,no,207350768189873
+876,KakhiB,GE,Akhaltsikhe,,B3,15,morning,no,0.484,0.728,0.19,premier_league:0.098 bundesliga:0.135 national_teams:0.063 champions_league:0.051 la_liga:-0.14 legends:-0.07 world_cup:-0.104 georgian_football:-0.053,no,896201704410702
+877,kakhaushka,GE,Batumi,,B4,10,daytime,no,0.723,0.374,-0.072,la_liga:0.166 georgian_football:0.155 champions_league:0.131 world_cup:-0.161 national_teams:-0.179 premier_league:-0.111,no,1422652410038736
+878,GubazB,GR,Thessaloniki,,B3,3,daytime,no,0.484,0.719,-0.034,bundesliga:0.12 georgian_football:0.175 national_teams:-0.182 serie_a:-0.192 transfers:-0.2 la_liga:-0.144,no,3689653611257156
+879,marjanad,GE,Kutaisi,,B1 (bottom),15,evening,no,0.128,0.741,0.058,champions_league:0.084 premier_league:0.077 bundesliga:0.171 transfers:0.072 world_cup:-0.118 georgian_football:-0.085 national_teams:-0.151,no,1981198212574682
+880,Vakhtang Kraveishua,GE,Rustavi,,B1 (bottom),3,daytime,no,0.207,0.514,-0.06,serie_a:0.051 legends:0.076 transfers:0.119 premier_league:-0.161 bundesliga:-0.105,no,1388678980016813
+881,Marjana Avalshvili,GE,Ozurgeti,,B4,10,evening,no,0.653,0.64,-0.208,champions_league:0.097 premier_league:0.108 national_teams:-0.065 transfers:-0.065 world_cup:-0.105,no,2685676907342654
+882,gioika565,GE,Gori,,B4,2,daytime,no,0.732,0.37,-0.115,world_cup:0.148 premier_league:0.168 legends:0.197 la_liga:-0.118 champions_league:-0.108,no,1841368672839776
+883,zviad chiradshvili,GE,Zugdidi,,B3,3,daytime,no,0.595,0.67,-0.249,legends:0.065 premier_league:0.136 world_cup:-0.198 bundesliga:-0.118 national_teams:-0.063 transfers:-0.085,no,3213893731149231
+884,TokoA84,GE,Poti,,B2,15,morning,no,0.285,0.393,0.193,premier_league:0.192 national_teams:0.08 bundesliga:0.1 serie_a:0.148 transfers:-0.14 legends:-0.148 georgian_football:-0.107 la_liga:-0.142,no,4246488066109233
+885,RamazS,GE,Ozurgeti,,B3,2,morning,no,0.551,0.605,-0.258,world_cup:0.189 national_teams:0.136 serie_a:0.055 bundesliga:-0.12 la_liga:-0.156 transfers:-0.133 georgian_football:-0.119,no,2151626134948694
+886,eka kemokladze,GE,Zugdidi,,B4,2,evening,no,0.725,0.632,0.086,bundesliga:0.134 la_liga:0.12 world_cup:0.091 transfers:-0.195 champions_league:-0.076 premier_league:-0.151,no,3200449326713018
+887,Gega213,GE,Ozurgeti,,B2,3,evening,no,0.327,0.745,-0.196,world_cup:0.071 transfers:0.07 la_liga:-0.135 premier_league:-0.175 georgian_football:-0.12,no,3234006991049243
+888,Tengiz Zumbulua,GE,Telavi,,B2,2,evening,no,0.379,0.824,-0.253,champions_league:0.163 georgian_football:0.114 serie_a:0.183 legends:-0.188 premier_league:-0.095,no,4346331378217487
+889,nugo phkhovelshvili,GE,Ozurgeti,,B1 (bottom),3,evening,yes,0.092,0.599,-0.285,transfers:0.175 premier_league:0.118 serie_a:0.074 la_liga:-0.162 national_teams:-0.107 world_cup:-0.059,no,4091453372801455
+890,niko tsereteliidze,GE,Telavi,,B4,3,evening,no,0.715,0.544,-0.227,world_cup:0.133 georgian_football:0.055 serie_a:-0.199 champions_league:-0.137 premier_league:-0.055,no,859383860373484
+891,luka ubilidze,GE,Batumi,,B4,2,evening,no,0.735,0.72,-0.113,world_cup:0.135 champions_league:0.16 la_liga:0.069 premier_league:-0.081 national_teams:-0.161 serie_a:-0.073,no,1972396374476542
+892,grigol dvaliava,GE,Telavi,,B3,2,evening,yes,0.453,0.79,0.195,premier_league:0.089 legends:0.086 national_teams:0.183 bundesliga:-0.091 la_liga:-0.061,no,2781642710256595
+893,tato14,GE,Batumi,,B3,2,daytime,yes,0.549,0.846,-0.017,serie_a:0.15 la_liga:0.093 premier_league:0.124 legends:0.056 georgian_football:-0.078 national_teams:-0.124 world_cup:-0.071 transfers:-0.127,yes,2163508730617630
+894,Ekhvaishvili,GE,Akhaltsikhe,,B3,3,evening,no,0.554,0.523,0.176,champions_league:0.159 bundesliga:0.102 georgian_football:0.199 serie_a:-0.122 world_cup:-0.088 national_teams:-0.096,no,2331076762261056
+895,koka janjgavadze,GE,Ozurgeti,,B2,2,night_owl,no,0.362,0.477,-0.031,champions_league:0.129 legends:0.054 georgian_football:0.07 serie_a:-0.117 la_liga:-0.078 national_teams:-0.132 bundesliga:-0.138,no,2101025832266125
+896,Datunao,GE,Poti,,B5 (top),2,evening,yes,0.845,0.776,0.052,champions_league:0.065 bundesliga:0.086 legends:-0.111 world_cup:-0.197,no,1138466313470254
+897,vaso,GE,Rustavi,,B2,2,daytime,no,0.438,0.798,-0.116,bundesliga:0.095 legends:0.081 premier_league:0.086 world_cup:0.193 champions_league:-0.148 national_teams:-0.171,no,165128871185783
+898,Kalatozidze46,GE,Zugdidi,,B2,3,morning,no,0.346,0.748,-0.133,national_teams:0.094 premier_league:0.077 serie_a:-0.166 georgian_football:-0.053 legends:-0.084 champions_league:-0.172,no,3778575545007453
+899,mari rustavshvili,GE,Poti,,B3,2,daytime,no,0.596,0.508,0.215,serie_a:0.196 georgian_football:0.155 la_liga:-0.113 legends:-0.068 bundesliga:-0.065,no,379889445040709
+900,mamuka abashvili,ES,Madrid,,B4,2,evening,no,0.741,0.383,0.191,transfers:0.095 world_cup:0.163 legends:0.179 national_teams:-0.112 georgian_football:-0.164 bundesliga:-0.148 premier_league:-0.114,no,932602825718029
+901,NikolozM,GE,Zugdidi,,B3,10,night_owl,no,0.506,0.462,-0.038,national_teams:0.15 georgian_football:0.18 bundesliga:-0.105 world_cup:-0.173 champions_league:-0.186 legends:-0.155,no,4052805647929854
+902,Otari Tsalugeliani,GE,Rustavi,,B1 (bottom),10,evening,no,0.163,0.687,0.1,georgian_football:0.051 world_cup:0.195 national_teams:-0.127 legends:-0.152 bundesliga:-0.121,no,363994835554953
+903,miqa japarua,GE,Tbilisi,,B2,3,evening,no,0.401,0.64,0.29,national_teams:0.076 transfers:0.181 georgian_football:0.124 serie_a:-0.101 la_liga:-0.185,no,1699567397733475
+904,Zezva920,GE,Zugdidi,,B3,2,evening,no,0.561,0.656,-0.155,legends:0.105 georgian_football:0.14 la_liga:0.131 transfers:0.171 bundesliga:-0.051 premier_league:-0.107 serie_a:-0.191,no,1150725705241267
+905,buba,GE,Poti,,B1 (bottom),2,daytime,yes,0.241,0.575,-0.126,premier_league:0.128 la_liga:0.147 champions_league:0.128 transfers:-0.118 georgian_football:-0.063,no,1944693654069112
+906,tornik973,GE,Gori,,B2,10,evening,no,0.314,0.632,0.005,bundesliga:0.051 la_liga:0.137 transfers:-0.136 national_teams:-0.131,no,4013493364101375
+907,Tokoa111,GE,Batumi,,B4,15,evening,no,0.642,0.524,0.194,transfers:0.1 national_teams:0.199 premier_league:0.162 serie_a:0.141 la_liga:-0.154 bundesliga:-0.087 champions_league:-0.087,no,1126610419693122
+908,Ananoka,GE,Zugdidi,,B3,2,daytime,no,0.488,0.76,-0.281,la_liga:0.057 world_cup:0.136 national_teams:0.162 champions_league:0.126 serie_a:-0.126 transfers:-0.138,no,3237146377293238
+909,NIKUSHAKA,GE,Batumi,,B5 (top),2,morning,yes,0.798,0.357,-0.207,bundesliga:0.118 national_teams:0.062 world_cup:0.075 premier_league:-0.104 la_liga:-0.113 transfers:-0.102 champions_league:-0.125,no,674238219277055
+910,KokaL,GE,Telavi,,B3,2,daytime,no,0.451,0.717,0.253,world_cup:0.075 la_liga:0.158 serie_a:0.159 bundesliga:-0.07 premier_league:-0.12 national_teams:-0.189 georgian_football:-0.184,no,3704890604270651
+911,ikal,GE,Ozurgeti,,B1 (bottom),15,daytime,no,0.092,0.359,0.239,transfers:0.172 legends:0.145 national_teams:-0.104 champions_league:-0.18 bundesliga:-0.142 serie_a:-0.097,no,926150513418312
+912,Tabagshvili,GE,Poti,,B1 (bottom),2,evening,no,0.201,0.73,-0.087,transfers:0.064 legends:0.112 champions_league:-0.133 premier_league:-0.198,no,2110218415006422
+913,zuraushka,GE,Ozurgeti,,B1 (bottom),21,daytime,no,0.134,0.526,0.175,champions_league:0.095 bundesliga:0.122 premier_league:0.13 world_cup:-0.164 transfers:-0.162 la_liga:-0.097,no,802808426315522
+914,Kakha Khubulshvili,GE,Poti,,B2,10,evening,no,0.439,0.561,0.259,bundesliga:0.162 legends:0.073 premier_league:-0.08 georgian_football:-0.106 national_teams:-0.143,no,1442920780723532
+915,Valeri Dolidzua,GE,Gori,,B2,15,morning,no,0.402,0.673,-0.05,serie_a:0.188 la_liga:0.095 premier_league:0.073 world_cup:-0.086 bundesliga:-0.137 transfers:-0.146 georgian_football:-0.159,no,543148826820531
+916,kapanshvili,GE,Akhaltsikhe,,B1 (bottom),2,daytime,no,0.196,0.672,-0.184,georgian_football:0.157 serie_a:0.074 transfers:0.099 legends:0.143 champions_league:-0.1 la_liga:-0.059 bundesliga:-0.092,no,480440850788466
+917,Ika1,GE,Batumi,,B2,15,daytime,no,0.301,0.645,0.068,bundesliga:0.191 world_cup:0.172 serie_a:0.174 national_teams:-0.133 la_liga:-0.069,no,1399245605302012
+918,koten,GE,Ozurgeti,,B3,2,evening,no,0.468,0.477,-0.062,bundesliga:0.133 legends:0.165 champions_league:0.069 serie_a:-0.142 premier_league:-0.181,no,671362783278484
+919,messi3,TR,Izmir,,B2,10,evening,no,0.384,0.533,0.214,la_liga:0.09 national_teams:0.157 serie_a:0.117 legends:-0.081 transfers:-0.171 world_cup:-0.052,no,3192593480740035
+920,NikoM,GE,Telavi,,B3,3,daytime,yes,0.522,0.497,-0.142,serie_a:0.063 national_teams:0.122 legends:-0.088 la_liga:-0.098 transfers:-0.078,no,479926238288861
+921,TEIMURAZA82,GE,Tbilisi,,B4,2,daytime,no,0.749,0.628,0.098,la_liga:0.075 bundesliga:0.193 champions_league:-0.135 world_cup:-0.056 national_teams:-0.157,no,3605855208119919
+922,emzarm,GE,Poti,,B2,3,evening,no,0.362,0.626,0.198,transfers:0.097 legends:0.109 serie_a:0.182 premier_league:-0.078 champions_league:-0.142 la_liga:-0.096 georgian_football:-0.173,no,3809404385617209
+923,Genadi,GE,Rustavi,,B5 (top),2,evening,yes,0.858,0.543,-0.049,national_teams:0.199 la_liga:0.112 transfers:0.099 serie_a:0.199 premier_league:-0.164 champions_league:-0.151,no,3895891979218112
+924,elgujao,GE,Tbilisi,,B3,2,evening,no,0.557,0.634,0.082,world_cup:0.08 bundesliga:0.078 premier_league:-0.051 national_teams:-0.147 georgian_football:-0.165 legends:-0.167,no,321692534579850
+925,VatoA69,GE,Rustavi,,B2,2,daytime,no,0.295,0.353,0.084,georgian_football:0.192 la_liga:0.141 world_cup:0.194 champions_league:0.071 legends:-0.075 national_teams:-0.061 bundesliga:-0.053 premier_league:-0.128,no,2472714336094724
+926,Kapanidze,GE,Telavi,,B1 (bottom),10,evening,yes,0.105,0.655,0.198,champions_league:0.076 transfers:0.052 serie_a:-0.052 bundesliga:-0.094,no,836226568616327
+927,Oto Papavshvili,GE,Gori,,B4,2,daytime,yes,0.662,0.717,0.006,legends:0.112 champions_league:0.197 la_liga:-0.146 premier_league:-0.101 georgian_football:-0.144 world_cup:-0.085,no,245787975047653
+928,Medeaiko,GE,Kutaisi,,B1 (bottom),2,morning,no,0.105,0.415,0.135,serie_a:0.15 bundesliga:0.09 la_liga:0.18 world_cup:0.055 premier_league:-0.14 georgian_football:-0.102 champions_league:-0.076 legends:-0.076,no,3980594558395386
+929,Mgelshvili09,GE,Zugdidi,,B2,3,morning,no,0.404,0.804,0.153,serie_a:0.078 transfers:0.159 bundesliga:0.193 legends:-0.17 premier_league:-0.127 champions_league:-0.062 la_liga:-0.058,no,1199556248563886
+930,ladoushka,GE,Akhaltsikhe,,B2,2,daytime,no,0.366,0.782,-0.073,champions_league:0.085 national_teams:0.076 legends:0.186 bundesliga:-0.074 transfers:-0.119 premier_league:-0.152,no,91515585638812
+931,vasor,GE,Telavi,,B2,2,morning,no,0.279,0.447,0.252,la_liga:0.054 georgian_football:0.167 national_teams:-0.082 champions_league:-0.092 premier_league:-0.052 serie_a:-0.119,no,2175900356775750
+932,bidzina ruradidze,GR,Thessaloniki,,B4,2,daytime,no,0.648,0.453,-0.11,la_liga:0.06 transfers:0.195 premier_league:0.097 national_teams:-0.064 georgian_football:-0.142 bundesliga:-0.185,no,2757347915395593
+933,givi papavshvili,GE,Telavi,,B3,10,morning,yes,0.503,0.414,0.224,world_cup:0.053 premier_league:0.116 legends:0.051 serie_a:0.151 transfers:-0.052 georgian_football:-0.134,no,2413227808166678
+934,OtoT95,GE,Tbilisi,,B4,10,daytime,no,0.677,0.825,0.043,georgian_football:0.115 world_cup:0.171 la_liga:0.058 premier_league:-0.074 legends:-0.082 serie_a:-0.129 national_teams:-0.108,no,1082336737123504
+935,Sopho Dolidzshvili,GE,Zugdidi,,B1 (bottom),2,evening,yes,0.208,0.523,-0.246,national_teams:0.154 legends:0.136 world_cup:-0.145 serie_a:-0.185 georgian_football:-0.145,no,2834252701709705
+936,irakli purtselua,GE,Akhaltsikhe,,B3,3,daytime,no,0.516,0.81,0.238,world_cup:0.181 georgian_football:0.072 premier_league:-0.143 transfers:-0.055,no,1967493871413643
+937,NUGO BEBERSHVILI,GE,Telavi,,B1 (bottom),2,daytime,no,0.168,0.831,0.252,bundesliga:0.173 georgian_football:0.106 la_liga:0.188 world_cup:-0.185 legends:-0.159,no,2352349316480868
+938,TengoM,GE,Akhaltsikhe,,B1 (bottom),15,evening,yes,0.112,0.414,0.069,premier_league:0.085 national_teams:0.19 transfers:-0.199 champions_league:-0.071 la_liga:-0.117 serie_a:-0.16,no,2072353055783084
+939,giorgi gvaramidze,GE,Kutaisi,,B3,2,daytime,no,0.461,0.352,-0.198,georgian_football:0.15 la_liga:0.155 world_cup:-0.193 legends:-0.112,no,1133775133395845
+940,Tako Ratianshvili,GE,Telavi,,B3,10,daytime,no,0.542,0.569,-0.033,la_liga:0.142 bundesliga:0.181 serie_a:0.077 national_teams:-0.115 georgian_football:-0.071 premier_league:-0.079 legends:-0.156,no,313779982466201
+941,nodar odishidze,GE,Poti,,B4,2,night_owl,no,0.747,0.786,0.049,la_liga:0.05 bundesliga:0.199 champions_league:-0.153 world_cup:-0.123,no,1331242706150671
+942,Jemal,GE,Kutaisi,,B3,2,daytime,no,0.517,0.822,-0.024,serie_a:0.123 world_cup:0.127 champions_league:0.169 georgian_football:-0.176 la_liga:-0.129 premier_league:-0.134 bundesliga:-0.09,no,2141776719330745
+943,guram bochoridze,GE,Ozurgeti,,B2,2,morning,no,0.382,0.569,-0.121,premier_league:0.163 la_liga:0.078 serie_a:0.098 world_cup:-0.053 champions_league:-0.167,no,4463292128897736
+944,Tako Kemoklashvili,GE,Gori,,B1 (bottom),2,daytime,no,0.248,0.505,0.239,georgian_football:0.18 legends:0.161 champions_league:0.131 bundesliga:0.088 world_cup:-0.051 premier_league:-0.175 la_liga:-0.166,no,1141017447821879
+945,Aniaka,DE,Munich,,B2,2,evening,no,0.316,0.669,-0.181,world_cup:0.192 bundesliga:0.072 national_teams:-0.172 serie_a:-0.133 la_liga:-0.16,no,2145535407385300
+946,malkhazd,GE,Ozurgeti,,B2,10,daytime,no,0.283,0.817,0.2,la_liga:0.059 legends:0.174 national_teams:0.102 champions_league:-0.111 world_cup:-0.058 transfers:-0.07,no,3692718234360161
+947,Nikoa275,GE,Ozurgeti,,B2,10,evening,no,0.303,0.646,0.152,la_liga:0.091 national_teams:0.131 premier_league:0.054 bundesliga:0.113 serie_a:-0.149 legends:-0.071 world_cup:-0.182 georgian_football:-0.126,yes,662474595441705
+948,TengizD,GE,Telavi,,B4,10,night_owl,yes,0.729,0.512,0.076,transfers:0.175 legends:0.064 national_teams:0.083 world_cup:0.185 premier_league:-0.081 georgian_football:-0.123 la_liga:-0.149 champions_league:-0.192,no,3407244716842107
+949,SopoB,GE,Zugdidi,,B4,2,evening,no,0.696,0.623,-0.29,champions_league:0.103 legends:0.108 la_liga:0.184 serie_a:-0.062 bundesliga:-0.134 georgian_football:-0.073,no,3375403672949127
+950,GubazK1,GE,Batumi,,B1 (bottom),10,daytime,yes,0.059,0.798,-0.16,legends:0.14 serie_a:0.088 transfers:0.1 premier_league:0.112 la_liga:-0.051 world_cup:-0.1 bundesliga:-0.086 champions_league:-0.154,no,1560590046129387
+951,natia natenadidze,GE,Telavi,,B5 (top),15,evening,no,0.863,0.742,0.211,georgian_football:0.16 la_liga:0.082 premier_league:0.105 world_cup:0.061 transfers:-0.084 serie_a:-0.078 bundesliga:-0.147,no,3989743257009599
+952,Sopo Janjgavidze,GE,Tbilisi,,B3,2,evening,no,0.481,0.68,-0.265,national_teams:0.176 transfers:0.142 la_liga:0.072 bundesliga:-0.191 georgian_football:-0.124 serie_a:-0.14 legends:-0.104,no,2204908478094199
+953,GuguL,GR,Thessaloniki,,B3,3,morning,yes,0.594,0.754,0.259,georgian_football:0.068 premier_league:0.065 legends:0.117 champions_league:-0.188 bundesliga:-0.161 world_cup:-0.167,no,974901979321550
+954,GigaZ,GE,Gori,,B5 (top),2,evening,no,0.899,0.836,-0.19,world_cup:0.149 la_liga:0.065 legends:0.11 champions_league:0.157 bundesliga:-0.096 transfers:-0.101,no,2015544472171426
+955,iurim111,GE,Batumi,,B4,10,daytime,no,0.688,0.66,-0.235,national_teams:0.133 legends:0.058 premier_league:0.097 la_liga:-0.17 world_cup:-0.163 georgian_football:-0.064,no,301904987070638
+956,Guga Maisureli,GE,Tbilisi,,B3,3,evening,no,0.481,0.554,0.116,legends:0.174 transfers:0.176 bundesliga:-0.071 world_cup:-0.191 la_liga:-0.104 serie_a:-0.07,no,2405853418599731
+957,Nugzar Zumbulidze,GR,Thessaloniki,,B3,10,evening,no,0.525,0.671,-0.06,serie_a:0.083 georgian_football:0.126 legends:-0.054 national_teams:-0.191 world_cup:-0.14 transfers:-0.189,no,3089067620056256
+958,Teimuraz,GE,Zugdidi,,B3,3,evening,no,0.574,0.667,-0.087,georgian_football:0.069 bundesliga:0.199 la_liga:0.087 premier_league:-0.096 serie_a:-0.096 champions_league:-0.164,no,3545529626367371
+959,daviti1,US,Los Angeles,,B2,15,evening,no,0.334,0.827,0.238,premier_league:0.19 world_cup:0.143 transfers:-0.092 legends:-0.054 bundesliga:-0.094 national_teams:-0.127,no,3742339186322824
+960,badrid,GE,Kutaisi,,B3,15,daytime,no,0.463,0.474,0.084,legends:0.086 transfers:0.12 bundesliga:0.19 serie_a:-0.132 world_cup:-0.111 national_teams:-0.136,no,2157406997532941
+961,ANANO DOLIDZIANI,GE,Zugdidi,,B3,3,evening,yes,0.484,0.478,-0.172,georgian_football:0.169 legends:0.179 national_teams:-0.107 champions_league:-0.1,no,352471285761048
+962,Vaska Gogichidze,GE,Ozurgeti,,B2,3,daytime,no,0.364,0.678,-0.138,serie_a:0.129 bundesliga:0.072 national_teams:-0.096 georgian_football:-0.058,no,134058054869532
+963,kako dgebadze,GE,Batumi,,B1 (bottom),2,evening,yes,0.087,0.759,0.274,bundesliga:0.156 champions_league:0.136 premier_league:0.079 georgian_football:-0.137 transfers:-0.185 world_cup:-0.186,no,2734756267748295
+964,Beso Zarkava,DE,Berlin,,B2,3,evening,no,0.275,0.491,0.093,premier_league:0.082 legends:0.149 transfers:0.177 la_liga:-0.167 national_teams:-0.083 bundesliga:-0.084,no,1480540377185187
+965,Ucha Abashadze,US,Chicago,,B3,3,evening,no,0.472,0.611,0.169,serie_a:0.104 la_liga:0.052 legends:0.053 national_teams:-0.075 transfers:-0.167 georgian_football:-0.117 premier_league:-0.063,no,959244226127008
+966,irakliuna,GE,Rustavi,,B3,10,daytime,no,0.484,0.754,0.27,legends:0.061 champions_league:0.107 transfers:0.072 serie_a:-0.056 world_cup:-0.057 national_teams:-0.074 georgian_football:-0.052,no,1903392714600307
+967,bachanaika,GE,Rustavi,,B2,2,daytime,no,0.348,0.635,0.148,world_cup:0.138 la_liga:0.189 national_teams:0.064 champions_league:0.084 georgian_football:-0.132 transfers:-0.079,no,2975467664652205
+968,Temo Matchavarshvili,GE,Ozurgeti,,B1 (bottom),2,morning,no,0.079,0.624,-0.143,national_teams:0.116 world_cup:0.071 transfers:0.154 georgian_football:0.116 serie_a:-0.118 premier_league:-0.103,no,3963345991569896
+969,qoridadze,GE,Zugdidi,,B2,2,daytime,no,0.427,0.45,-0.176,la_liga:0.097 bundesliga:0.188 serie_a:-0.16 premier_league:-0.135 legends:-0.149,no,4038818612609402
+970,bachanan,GE,Telavi,,B4,10,evening,no,0.704,0.708,-0.254,world_cup:0.175 la_liga:0.193 serie_a:0.118 national_teams:0.058 premier_league:-0.2 georgian_football:-0.061 champions_league:-0.069,no,2836764924657183
+971,tengouna,GE,Tbilisi,,B2,2,evening,no,0.321,0.821,-0.086,georgian_football:0.103 world_cup:0.05 bundesliga:-0.097 legends:-0.117,no,3138765417531598
+972,Otari Tsalugelidze,GE,Rustavi,,B3,15,evening,no,0.503,0.529,-0.109,bundesliga:0.167 national_teams:0.162 world_cup:0.198 legends:-0.056 georgian_football:-0.117,no,1439445389460417
+973,SalomeB,GE,Zugdidi,,B3,3,daytime,yes,0.597,0.717,-0.035,world_cup:0.067 serie_a:0.164 bundesliga:0.071 georgian_football:-0.184 legends:-0.178,yes,1639823542306475
+974,Tornikea,GE,Akhaltsikhe,,B3,2,daytime,yes,0.455,0.499,0.097,georgian_football:0.13 premier_league:0.138 national_teams:-0.074 world_cup:-0.061 bundesliga:-0.183 legends:-0.18,no,1861929111064930
+975,gelao,GE,Poti,,B2,2,daytime,no,0.328,0.602,-0.21,serie_a:0.088 national_teams:0.188 georgian_football:0.052 transfers:0.171 champions_league:-0.168 world_cup:-0.153 premier_league:-0.197 bundesliga:-0.069,no,3083642778138822
+976,Gioka,GE,Batumi,,B2,2,evening,no,0.332,0.624,0.254,la_liga:0.105 transfers:0.058 legends:-0.157 serie_a:-0.085 national_teams:-0.089 premier_league:-0.092,no,1107426979163765
+977,Datunaka,GB,London,,B2,2,daytime,no,0.418,0.777,0.174,champions_league:0.132 georgian_football:0.066 legends:-0.052 world_cup:-0.063 premier_league:-0.051,yes,1469842080718686
+978,Tazoka625,GE,Gori,,B1 (bottom),2,evening,no,0.072,0.571,0.218,world_cup:0.084 premier_league:0.089 serie_a:-0.198 champions_league:-0.075,no,1403377744440830
+979,PRIDON KRAVEISHVILI,GE,Telavi,,B2,2,evening,no,0.399,0.613,0.019,champions_league:0.178 premier_league:0.058 national_teams:-0.093 serie_a:-0.113,no,3230071394774563
+980,Soso Tomadshvili,GE,Tbilisi,,B2,2,daytime,no,0.442,0.389,-0.266,bundesliga:0.145 premier_league:0.057 serie_a:-0.178 georgian_football:-0.157,no,1681815372661995
+981,eka turashvili,DE,Munich,,B3,15,evening,yes,0.556,0.576,0.056,la_liga:0.05 georgian_football:0.068 champions_league:0.104 bundesliga:0.122 serie_a:-0.085 premier_league:-0.085 world_cup:-0.055 legends:-0.184,no,4465061757262724
+982,Manana Inasaradze,GE,Zugdidi,,B1 (bottom),15,evening,no,0.051,0.575,0.125,legends:0.065 transfers:0.169 la_liga:-0.152 national_teams:-0.08 bundesliga:-0.157,no,64416207105663
+983,elene inasaridze,GE,Gori,,B2,10,evening,no,0.345,0.494,0.256,world_cup:0.131 transfers:0.096 champions_league:0.167 serie_a:-0.113 national_teams:-0.056,no,2969025281913848
+984,Tokoa,GE,Ozurgeti,,B4,2,evening,no,0.644,0.78,0.229,national_teams:0.117 world_cup:0.183 legends:0.086 serie_a:0.083 champions_league:-0.193 la_liga:-0.139 georgian_football:-0.107 transfers:-0.133,no,4474369347433481
+985,Mamukaka,GE,Ozurgeti,,B3,2,daytime,no,0.455,0.403,0.133,premier_league:0.142 la_liga:0.107 world_cup:0.195 georgian_football:0.193 champions_league:-0.123 serie_a:-0.054 bundesliga:-0.191,yes,3805185461562321
+986,Tazo89,GR,Athens,,B1 (bottom),2,evening,no,0.119,0.505,0.054,georgian_football:0.054 national_teams:0.123 serie_a:0.119 la_liga:0.104 premier_league:-0.098 bundesliga:-0.063 legends:-0.155,no,116419122140764
+987,Nikoloz Ubilshvili,GB,Birmingham,,B2,3,daytime,no,0.371,0.447,-0.166,la_liga:0.059 premier_league:0.081 national_teams:0.103 serie_a:-0.125 georgian_football:-0.149,no,1650806223225992
+988,Lela Peikrishvili,US,Chicago,,B1 (bottom),2,night_owl,no,0.128,0.44,-0.087,champions_league:0.145 premier_league:0.065 legends:0.151 la_liga:0.087 world_cup:-0.122 bundesliga:-0.163,no,2818219697066800
+989,vaso lezhavshvili,GE,Akhaltsikhe,,B2,15,morning,no,0.253,0.633,0.146,serie_a:0.17 champions_league:0.085 legends:0.126 premier_league:-0.137 bundesliga:-0.196 la_liga:-0.051 transfers:-0.098,no,1172252472923065
+990,Iuri Kapanadze,GE,Ozurgeti,,B1 (bottom),10,evening,no,0.109,0.382,0.094,serie_a:0.121 bundesliga:0.15 georgian_football:0.139 transfers:0.097 champions_league:-0.133 la_liga:-0.156 premier_league:-0.06 national_teams:-0.194,no,1247832848736683
+991,MARJANAT1,GE,Kutaisi,,B2,15,daytime,no,0.394,0.849,-0.068,la_liga:0.162 premier_league:0.069 legends:0.121 serie_a:-0.099 world_cup:-0.158 champions_league:-0.081,no,972840459007074
+992,Otariko,GE,Poti,,B3,2,evening,no,0.526,0.554,-0.099,world_cup:0.175 bundesliga:0.073 champions_league:-0.11 premier_league:-0.132 national_teams:-0.181,no,3615916018980290
+993,Otarka,GE,Kutaisi,,B3,3,evening,no,0.451,0.566,0.091,transfers:0.061 premier_league:0.117 georgian_football:0.107 bundesliga:0.061 national_teams:-0.089 legends:-0.2 champions_league:-0.177,no,3487797616788524
+994,Giouna233,US,Chicago,,B2,10,morning,no,0.256,0.606,-0.242,champions_league:0.186 premier_league:0.085 la_liga:0.158 world_cup:-0.138 georgian_football:-0.091 national_teams:-0.177 legends:-0.121,no,4442007365869766
+995,zurab samkharua,GE,Akhaltsikhe,,B3,3,evening,no,0.575,0.687,0.198,legends:0.066 premier_league:0.176 la_liga:0.146 georgian_football:-0.119 serie_a:-0.157 champions_league:-0.093,no,367404919106426
+996,Tazo Tomadshvili,GE,Zugdidi,,B2,2,evening,no,0.273,0.544,-0.285,bundesliga:0.082 transfers:0.185 legends:-0.15 serie_a:-0.143 national_teams:-0.192 la_liga:-0.134,no,2628904786215430
+997,KetiN5,GE,Akhaltsikhe,,B3,15,evening,no,0.52,0.68,-0.213,transfers:0.114 legends:0.163 premier_league:-0.141 world_cup:-0.072 national_teams:-0.138 champions_league:-0.189,no,387067440616048
+998,Sandro Skangiani,GE,Batumi,,B3,10,evening,no,0.587,0.585,-0.196,serie_a:0.054 premier_league:0.16 georgian_football:0.185 world_cup:0.178 national_teams:-0.101 la_liga:-0.167 transfers:-0.111 bundesliga:-0.053,no,2061099204290475
+999,BekaK,GE,Kutaisi,,B2,3,daytime,yes,0.261,0.569,0.157,champions_league:0.134 world_cup:0.102 serie_a:-0.12 premier_league:-0.177 georgian_football:-0.085 legends:-0.145,no,3163838470642761

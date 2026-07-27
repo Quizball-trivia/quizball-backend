@@ -89,6 +89,19 @@ export async function challengeFriend(
     return;
   }
 
+  // Bots (any kind) are never challengeable, even a befriended persistent bot.
+  // The delayed friendly-challenge worker (PR12) has no bot support yet, and the
+  // friendly engine can never accept on a bot's behalf (§1.12), so reject with
+  // the same generic "unavailable" the FE already renders. Prevents a challenge
+  // from hanging until its 5-minute TTL expires.
+  if (targetUser.is_ai) {
+    socket.emit('error', {
+      code: 'LOBBY_CHALLENGE_INVALID',
+      message: 'This player is unavailable',
+    });
+    return;
+  }
+
   const areFriends = await friendsRepo.friendshipExists(userId, toUserId);
   if (!areFriends) {
     socket.emit('error', {

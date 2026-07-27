@@ -62,6 +62,7 @@ export interface LobbyMemberWithUser {
   avatar_customization: Json | null;
   favorite_club: string | null;
   is_ai: boolean;
+  ai_kind: string | null;
 }
 
 export interface LobbyCategoryWithDetails {

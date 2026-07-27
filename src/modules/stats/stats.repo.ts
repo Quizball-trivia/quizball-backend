@@ -142,7 +142,10 @@ export const statsRepo = {
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp.avatar_customization
         END AS opponent_avatar_customization,
-        COALESCE(opp.is_ai, false) AS opponent_is_ai,
+        -- Public mask (§1.2): persistent roster bots present as human (isAi
+        -- false, tier shown); only ephemeral/auction bots read as AI. Internal
+        -- users.is_ai is untouched.
+        COALESCE(opp.is_ai AND opp.ai_kind <> 'persistent', false) AS opponent_is_ai,
         CASE
           WHEN opp.is_deleted = true OR opp.deleted_at IS NOT NULL OR opp.pending_deletion_at IS NOT NULL THEN NULL
           ELSE opp_ranked.rp
@@ -182,7 +185,7 @@ export const statsRepo = {
             'username', ou.nickname,
             'avatarUrl', ou.avatar_url,
             'avatarCustomization', ou.avatar_customization,
-            'isAi', COALESCE(ou.is_ai, false),
+            'isAi', COALESCE(ou.is_ai AND ou.ai_kind <> 'persistent', false),
             'placement', mpo.placement,
             'totalPoints', mpo.total_points
           ) ORDER BY mpo.placement NULLS LAST, mpo.seat

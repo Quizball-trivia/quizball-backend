@@ -279,8 +279,9 @@ export const rankedRepo = {
   /**
    * Admin: reset the leaderboard for an event. Archives every existing ranked
    * profile and RP-change row into the archive tables under a single reset
-   * batch, then zeroes out the live ranked_profiles for real users only
-   * (excludes AI/seed/deleted). Tier becomes 'Academy' (the rp=0 tier) and all
+   * batch, then zeroes out the live ranked_profiles for settle-eligible users —
+   * real humans plus persistent roster bots (excludes ephemeral/auction AI, seed,
+   * deleted). Tier becomes 'Academy' (the rp=0 tier) and all
    * placement progress is cleared so players start fresh. Runs in one
    * transaction so the archive and reset are atomic.
    */
@@ -301,6 +302,10 @@ export const rankedRepo = {
       );
       const batchId = batchRows[0].id;
 
+      // The archive snapshots only the profiles the reset will actually zero —
+      // settle-eligible users (humans + persistent bots), excluding seed/deleted/
+      // pending-deletion — so it matches the live-reset predicate below and never
+      // retains rows that were never reset.
       const archivedProfiles = await tx.unsafe(
         `INSERT INTO ranked_profiles_archive (
           reset_batch_id, user_id, rp, tier, placement_status,
@@ -309,11 +314,20 @@ export const rankedRepo = {
           current_win_streak, last_ranked_match_at
         )
         SELECT
-          $1, user_id, rp, tier, placement_status,
-          placement_required, placement_played, placement_wins, placement_seed_rp,
-          placement_perf_sum, placement_points_for_sum, placement_points_against_sum,
-          current_win_streak, last_ranked_match_at
-        FROM ranked_profiles`,
+          $1, rp.user_id, rp.rp, rp.tier, rp.placement_status,
+          rp.placement_required, rp.placement_played, rp.placement_wins, rp.placement_seed_rp,
+          rp.placement_perf_sum, rp.placement_points_for_sum, rp.placement_points_against_sum,
+          rp.current_win_streak, rp.last_ranked_match_at
+        FROM ranked_profiles rp
+        WHERE EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = rp.user_id
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND u.is_seed = false
+            AND u.is_deleted = false
+            AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL
+        )`,
         [batchId]
       );
 
@@ -324,10 +338,19 @@ export const rankedRepo = {
           placement_anchor_rp, placement_perf_score, calculation_method, source_created_at
         )
         SELECT
-          $1, match_id, user_id, opponent_user_id, opponent_is_ai,
-          old_rp, delta_rp, new_rp, result, is_placement, placement_game_no,
-          placement_anchor_rp, placement_perf_score, calculation_method, created_at
-        FROM ranked_rp_changes`,
+          $1, rc.match_id, rc.user_id, rc.opponent_user_id, rc.opponent_is_ai,
+          rc.old_rp, rc.delta_rp, rc.new_rp, rc.result, rc.is_placement, rc.placement_game_no,
+          rc.placement_anchor_rp, rc.placement_perf_score, rc.calculation_method, rc.created_at
+        FROM ranked_rp_changes rc
+        WHERE EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = rc.user_id
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
+            AND u.is_seed = false
+            AND u.is_deleted = false
+            AND u.deleted_at IS NULL
+            AND u.pending_deletion_at IS NULL
+        )`,
         [batchId]
       );
 
@@ -348,7 +371,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rp.user_id
-            AND u.is_ai = false
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL

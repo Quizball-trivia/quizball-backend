@@ -1,6 +1,7 @@
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
+import { isRankedSettleEligible } from '../users/ai-classification.js';
 import { trackLevelUp } from '../../core/analytics/game-events.js';
 import { getProgressionFromTotalXp, getMatchXpReward } from './progression.logic.js';
 import { progressionRepo } from './progression.repo.js';
@@ -42,20 +43,22 @@ export const progressionService = {
     }
 
     const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
-    const humanPlayers = players.filter((player) => {
+    // XP/progression is in scope for persistent bots (they level like humans);
+    // ephemeral/auction AI stay excluded. Single source of truth for eligibility.
+    const xpEligiblePlayers = players.filter((player) => {
       const user = usersById.get(player.user_id);
-      return user && !user.is_ai;
+      return user != null && isRankedSettleEligible(user);
     });
-    if (humanPlayers.length === 0) {
+    if (xpEligiblePlayers.length === 0) {
       return;
     }
 
     const winnerDecisionMethod = getWinnerDecisionMethod(match.state_payload);
     const isForfeitDecision = winnerDecisionMethod === 'forfeit';
-    const isHeadToHead = humanPlayers.length === 2;
+    const isHeadToHead = xpEligiblePlayers.length === 2;
 
     await progressionRepo.runInTransaction(async (tx) => {
-      for (const player of humanPlayers) {
+      for (const player of xpEligiblePlayers) {
         const isDraw = match.winner_user_id === null;
         const isWinner = match.winner_user_id === player.user_id;
         const result: 'win' | 'loss' | 'draw' = isDraw ? 'draw' : isWinner ? 'win' : 'loss';
@@ -81,7 +84,10 @@ export const progressionService = {
         if (grantResult.awarded) {
           const oldLevel = getProgressionFromTotalXp(grantResult.totalXp - xpDelta).level;
           const newLevel = getProgressionFromTotalXp(grantResult.totalXp).level;
-          if (newLevel > oldLevel) {
+          // Level-up analytics stay human-only (capability matrix); bots grant XP
+          // silently.
+          const isBot = usersById.get(player.user_id)?.is_ai === true;
+          if (newLevel > oldLevel && !isBot) {
             trackLevelUp(player.user_id, newLevel);
           }
         }

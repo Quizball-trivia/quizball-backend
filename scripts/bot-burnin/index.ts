@@ -20,7 +20,6 @@
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
-loadEnv();
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -39,6 +38,7 @@ import { buildReport, formatReport } from './report.js';
 import { snapshotProfiles } from './snapshot.js';
 import { writeFixture } from './writer.js';
 import { ReceiptWriter, parseReceipt } from './receipt.js';
+import { assertDbTarget } from './target-guard.js';
 import type { BurnInSnapshot } from './types.js';
 
 const SEASON_START = new Date('2026-07-21T00:00:00Z');
@@ -93,7 +93,10 @@ function persistentBotsFlagOn(): boolean {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  assertDbTarget(process.env.DATABASE_URL ?? '', { allowRemote: argv.includes('--allow-remote') });
+
+  const args = parseArgs(argv);
 
   if (args.execute && !args.snapshotOut) {
     throw new Error('--execute requires --snapshot-out <file> (write-once pre-run snapshot for rollback).');

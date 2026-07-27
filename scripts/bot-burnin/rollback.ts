@@ -11,13 +11,13 @@
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
-loadEnv();
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
 import { rollback, RollbackRefusedError } from './snapshot.js';
 import { parseReceipt, receiptFixtures } from './receipt.js';
+import { assertDbTarget } from './target-guard.js';
 import type { BurnInSnapshot } from './types.js';
 
 function get(argv: string[], flag: string): string | undefined {
@@ -27,6 +27,8 @@ function get(argv: string[], flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  assertDbTarget(process.env.DATABASE_URL ?? '', { allowRemote: argv.includes('--allow-remote') });
+
   const receiptPath = get(argv, '--receipt');
   const snapshotPath = get(argv, '--snapshot');
   if (!receiptPath || !snapshotPath) {

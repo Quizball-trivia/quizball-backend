@@ -2,12 +2,12 @@
 /**
  * Roll back a persistent-bot burn-in run.
  *
- * Consumes the creation receipt (written match ids) + the pre-run snapshot.
- * Deletes ONLY burn-in matches whose participants are all roster bots, then
- * restores every bot's ranked_profiles + total_xp from the snapshot and clears
- * the one-time marker.
+ * Consumes the append-only JSONL receipt + the pre-run snapshot. Verifies
+ * receipt/snapshot/manifest mutual consistency and per-match identity, refuses
+ * atomically (deleting nothing) on ANY inconsistency or post-snapshot live
+ * activity, then deletes the burn-in matches and restores every captured field.
  *
- *   npm run bot:burnin:rollback -- --receipt receipt.json --snapshot snap.json
+ *   npm run bot:burnin:rollback -- --receipt run.jsonl --snapshot snap.json
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
@@ -16,8 +16,9 @@ loadEnv();
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
-import { rollback } from './snapshot.js';
-import type { BurnInReceipt, BurnInSnapshot } from './types.js';
+import { rollback, RollbackRefusedError } from './snapshot.js';
+import { parseReceipt, receiptFixtures } from './receipt.js';
+import type { BurnInSnapshot } from './types.js';
 
 function get(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
@@ -32,20 +33,25 @@ async function main(): Promise<void> {
     throw new Error('Both --receipt <file> and --snapshot <file> are required.');
   }
 
-  const receipt = JSON.parse(readFileSync(resolve(receiptPath), 'utf8')) as BurnInReceipt;
+  const parsed = parseReceipt(resolve(receiptPath));
   const snapshot = JSON.parse(readFileSync(resolve(snapshotPath), 'utf8')) as BurnInSnapshot;
+  const fixtures = receiptFixtures(parsed);
 
-  const result = await rollback(receipt, snapshot);
-
-  process.stdout.write(
-    `Rollback complete:\n` +
-      `  matches verified (roster-only): ${result.matchesVerified}\n` +
-      `  matches deleted:                ${result.matchesDeleted}\n` +
-      `  matches REFUSED (non-roster):   ${result.matchesRefused.length}\n` +
-      `  profiles restored:              ${result.profilesRestored}\n`,
-  );
-  if (result.matchesRefused.length > 0) {
-    process.stdout.write(`  refused ids: ${result.matchesRefused.join(', ')}\n`);
+  try {
+    const result = await rollback(parsed.header, fixtures, snapshot);
+    process.stdout.write(
+      `Rollback complete:\n` +
+        `  matches deleted:     ${result.matchesDeleted}\n` +
+        `  profiles restored:   ${result.profilesRestored}\n`,
+    );
+  } catch (err) {
+    if (err instanceof RollbackRefusedError) {
+      process.stderr.write(`\nRollback REFUSED (nothing deleted, marker kept): ${err.message}\n`);
+      process.exitCode = 2;
+      await sql.end();
+      return;
+    }
+    throw err;
   }
   await sql.end();
 }

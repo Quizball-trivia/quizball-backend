@@ -6,19 +6,23 @@
  * backdated ranked bot-vs-bot fixtures) using the REAL Season-2026 RP formula,
  * capped below the live human top-10.
  *
- * DRY-RUN IS THE DEFAULT — it simulates the full plan and prints the
- * distribution report with ZERO writes. --execute performs the backdated writes
- * and REQUIRES --snapshot-out <file> (pre-run state for rollback). A creation
- * receipt of written match ids is emitted for schema-free rollback.
+ * DRY-RUN IS THE DEFAULT — simulates the full plan, prints the distribution
+ * report, ZERO writes. --execute performs the backdated writes and REQUIRES
+ * --snapshot-out <file> (write-once pre-run snapshot for rollback) + an
+ * append-only JSONL receipt.
  *
- *   npm run bot:burnin -- --params ../calibration-s1final/params.json --limit 20
- *   npm run bot:burnin -- --params <p> --execute --snapshot-out snap.json --receipt-out receipt.json
+ * Burn-in is a PRISTINE-STATE operation: it runs ONCE, immediately after roster
+ * creation, BEFORE selection ever activates. --execute refuses unless every
+ * roster bot is exactly pristine and the PERSISTENT_BOTS flag is OFF.
+ *
+ *   npm run bot:burnin -- --params /abs/params.json --limit 20
+ *   npm run bot:burnin -- --params <p> --execute --snapshot-out snap.json --receipt-out run.jsonl
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 loadEnv();
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
 import { parseBotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
@@ -26,14 +30,16 @@ import {
   loadRoster,
   loadHumanTop10Rp,
   loadActiveCategoryIds,
-  burnInAlreadyRan,
-  markBurnInComplete,
+  claimBurnInMarker,
+  findNonPristineBots,
 } from './data.js';
+import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
 import { snapshotProfiles } from './snapshot.js';
 import { writeFixture } from './writer.js';
-import type { BurnInReceipt } from './types.js';
+import { ReceiptWriter, parseReceipt } from './receipt.js';
+import type { BurnInSnapshot } from './types.js';
 
 const SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
@@ -80,11 +86,17 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
+/** PERSISTENT_BOTS flag must be OFF for a pristine-state burn-in. */
+function persistentBotsFlagOn(): boolean {
+  const raw = (process.env.PERSISTENT_BOTS ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.execute && !args.snapshotOut) {
-    throw new Error('--execute requires --snapshot-out <file> (pre-run snapshot for rollback).');
+    throw new Error('--execute requires --snapshot-out <file> (write-once pre-run snapshot for rollback).');
   }
 
   const params = parseBotModelParams(JSON.parse(readFileSync(resolve(args.paramsPath), 'utf8')));
@@ -100,12 +112,26 @@ async function main(): Promise<void> {
 
   // Ceiling: human #10 − margin. If fewer than 10 placed humans, fall back to a
   // conservative absolute cap so bots never dominate an empty ladder.
-  const ceilingRp =
-    humanTop10Rp != null
-      ? Math.max(0, humanTop10Rp - args.marginRp)
-      : 1500 - args.marginRp;
-
+  const ceilingRp = humanTop10Rp != null ? Math.max(0, humanTop10Rp - args.marginRp) : 1500 - args.marginRp;
+  const env = (process.env.NODE_ENV ?? 'unknown').toString();
   const runDate = args.runDate;
+
+  const manifest = buildManifest({
+    seed: args.seed,
+    env,
+    seasonStart: SEASON_START,
+    runDate,
+    targetMatches: args.target,
+    ceilingMarginRp: args.marginRp,
+    ceilingRp,
+    humanTop10Rp,
+    paramsGeneratedAt: params.generatedAt,
+    paramsBatchId: params.source.batchId,
+    bots: roster,
+    categoryIds,
+  });
+  const manifestHash = computeManifestHash(manifest);
+
   const schedule = buildSchedule({
     bots: roster,
     params,
@@ -115,6 +141,7 @@ async function main(): Promise<void> {
     targetMatches: args.target,
     ceilingRp,
     categoryIds,
+    manifestHash,
   });
 
   const report = buildReport({
@@ -123,8 +150,8 @@ async function main(): Promise<void> {
     ceilingRp,
     humanTop10Rp,
   });
-
   process.stdout.write(formatReport(report));
+  process.stdout.write(`\nRun manifest hash: ${manifestHash}\n`);
 
   if (!args.execute) {
     process.stdout.write('\nDRY-RUN — no writes performed. Re-run with --execute --snapshot-out <file>.\n');
@@ -132,54 +159,104 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── Execute preconditions ──────────────────────────────────────────────────
   if (!report.ceilingRespected) {
     throw new Error('ABORT: simulated distribution violates the hard ceiling. No writes performed.');
   }
-  if (await burnInAlreadyRan()) {
-    throw new Error('ABORT: burn-in marker present — this env has already been burned in.');
+  if (persistentBotsFlagOn()) {
+    throw new Error('ABORT: PERSISTENT_BOTS flag is ON — burn-in must run before selection activates.');
+  }
+  const violations = await findNonPristineBots(roster.map((b) => b.userId));
+  if (violations.length > 0) {
+    const detail = violations.slice(0, 10).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
+    throw new Error(
+      `ABORT: ${violations.length} roster bot(s) are not pristine — burn-in refuses to touch dirty state:\n${detail}`,
+    );
   }
 
-  const env = (process.env.NODE_ENV ?? 'unknown').toString();
+  const snapshotPath = resolve(args.snapshotOut!);
+  const receiptPath = resolve(args.receiptOut ?? args.snapshotOut!.replace(/\.json$/, '') + '.receipt.jsonl');
 
-  // Snapshot BEFORE any write.
-  const snapshot = await snapshotProfiles(roster, {
-    seed: args.seed,
-    env,
-    ceilingRp,
-    humanTop10Rp,
-    marginRp: args.marginRp,
-  });
-  writeFileSync(resolve(args.snapshotOut!), JSON.stringify(snapshot, null, 2));
-  process.stdout.write(`\nSnapshot written: ${args.snapshotOut}\n`);
+  // ── Write-once snapshot + resume detection ─────────────────────────────────
+  const isResume = existsSync(snapshotPath);
+  let snapshot: BurnInSnapshot;
+  if (isResume) {
+    snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8')) as BurnInSnapshot;
+    if (snapshot.manifestHash !== manifestHash) {
+      throw new Error(
+        `ABORT: existing snapshot is for a DIFFERENT run (manifest ${snapshot.manifestHash} != ${manifestHash}). ` +
+          'Refusing to overwrite. Roll back the prior run or point --snapshot-out at a fresh file.',
+      );
+    }
+    if (!existsSync(receiptPath)) {
+      throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing — cannot reconcile.`);
+    }
+    const parsed = parseReceipt(receiptPath);
+    if (parsed.header.manifestHash !== manifestHash) {
+      throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
+    }
+    process.stdout.write(`\nRESUME: reusing snapshot + receipt for manifest ${manifestHash}.\n`);
+  } else {
+    if (existsSync(receiptPath)) {
+      throw new Error(`ABORT: receipt ${receiptPath} exists but snapshot does not — inconsistent state, refusing.`);
+    }
+    snapshot = await snapshotProfiles(roster, {
+      manifestHash,
+      seed: args.seed,
+      env,
+      ceilingRp,
+      humanTop10Rp,
+      marginRp: args.marginRp,
+    });
+    writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+    process.stdout.write(`\nSnapshot written (write-once): ${snapshotPath}\n`);
+  }
 
-  // Write fixtures with per-fixture receipt flushing so a crash is resumable.
-  const receipt: BurnInReceipt = {
-    createdAt: new Date().toISOString(),
-    seed: args.seed,
-    env,
-    rosterUserIds: roster.map((b) => b.userId),
-    matchIds: [],
-    fixtureKeys: [],
-  };
-  const receiptPath = args.receiptOut ?? args.snapshotOut!.replace(/\.json$/, '') + '.receipt.json';
+  // ── Append-only JSONL receipt ──────────────────────────────────────────────
+  const receipt = new ReceiptWriter(receiptPath, isResume);
+  if (!isResume) {
+    receipt.writeHeader({
+      kind: 'header',
+      createdAt: new Date().toISOString(),
+      manifestHash,
+      seed: args.seed,
+      env,
+      rosterUserIds: roster.map((b) => b.userId),
+    });
+  }
 
   let written = 0;
-  for (const fixture of schedule.fixtures) {
-    const res = await writeFixture(fixture);
-    receipt.matchIds.push(res.matchId);
-    receipt.fixtureKeys.push(fixture.key);
-    written++;
-    if (written % 50 === 0) {
-      writeFileSync(resolve(receiptPath), JSON.stringify(receipt, null, 2));
-      process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
+  try {
+    for (const fixture of schedule.fixtures) {
+      // Durably record the PLANNED line BEFORE any DB write for this fixture, so
+      // a crash mid-fixture still enumerates it on resume (finding 3).
+      const line = {
+        ordinal: fixture.ordinal,
+        key: fixture.key,
+        matchId: fixture.matchId,
+        botAUserId: fixture.botAUserId,
+        botBUserId: fixture.botBUserId,
+        winnerUserId: fixture.winnerUserId,
+        startedAt: fixture.startedAt.toISOString(),
+        endedAt: fixture.endedAt.toISOString(),
+      };
+      receipt.writePlanned(line);
+      await writeFixture(fixture, ceilingRp);
+      receipt.writeWritten(line);
+      written++;
+      if (written % 100 === 0) {
+        process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
+      }
     }
+  } finally {
+    receipt.close();
   }
-  writeFileSync(resolve(receiptPath), JSON.stringify(receipt, null, 2));
-  await markBurnInComplete(args.seed, schedule.fixtures.length);
+
+  // Atomic one-time marker keyed by the run manifest (finding 9).
+  await claimBurnInMarker(manifestHash, args.seed, schedule.fixtures.length);
 
   process.stdout.write(
-    `\nEXECUTE complete: ${written} fixtures written.\n` +
-      `Receipt: ${receiptPath}\nSnapshot: ${args.snapshotOut}\n`,
+    `\nEXECUTE complete: ${written} fixtures written.\nReceipt: ${receiptPath}\nSnapshot: ${snapshotPath}\n`,
   );
   await sql.end();
 }

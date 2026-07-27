@@ -18,16 +18,19 @@
  */
 import {
   computeSeasonRpDelta,
-  SEASON_INITIAL_RP,
 } from '../../src/modules/ranked/season-rp-formula.js';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, PlannedFixture } from './types.js';
 import { makeRng, deriveSeed, type Rng } from './rng.js';
 import { simulateFixture, winProbability } from './simulator.js';
+import { fixtureContentDigest, fixtureMatchIdFromDigest } from './manifest.js';
 
 const PLACEMENT_MATCHES = 3;
 const WINDOW_START_HOUR = 7; // 07:00 Tbilisi
-const WINDOW_END_HOUR = 25; // 01:23 next day ≈ hour 25 in a 07:00-anchored day
+// Activity window closes at 01:23 Tbilisi (the plan's boundary). Expressed as
+// minutes-since-midnight; a bot may START a fixture only inside the window and
+// the fixture must also END by this boundary — no 01:2x-01:5x spillover.
+const WINDOW_END_MIN_OF_DAY = 1 * 60 + 23; // 01:23
 const RECENT_OPPONENT_MEMORY = 5;
 const NEIGHBOR_BAND_START = 150;
 const NEIGHBOR_BAND_STEP = 150;
@@ -36,6 +39,9 @@ const TBILISI_OFFSET_MS = 4 * 60 * 60 * 1000; // UTC+4, no DST in Georgia
 // margin, +10 for beating a stronger opponent. The ceiling guard reserves this
 // much headroom so a win can never cross the ceiling.
 const MAX_WIN_DELTA = 100;
+// Longest a burn-in fixture can occupy (matches planFixture's max duration) —
+// used to guarantee the fixture ENDS by the 01:23 boundary.
+const MAX_FIXTURE_DURATION_MS = 7 * 60 * 1000;
 
 interface MutableBot extends BurnInBot {
   fixturesPlayed: number;
@@ -45,6 +51,10 @@ interface MutableBot extends BurnInBot {
   rngStream: Rng;
   /** Wall-clock cursor (UTC ms) the bot is next free after. */
   nextFreeAtMs: number;
+  /** Fixtures played in the CURRENT session burst (reset by a rest gap/day). */
+  sessionCount: number;
+  /** End of the current session's last fixture (UTC ms), for burst detection. */
+  sessionLastEndMs: number;
 }
 
 function tbilisiDayKey(utcMs: number): string {
@@ -55,12 +65,49 @@ function tbilisiHour(utcMs: number): number {
   return new Date(utcMs + TBILISI_OFFSET_MS).getUTCHours();
 }
 
-/** Is `hour` inside the bot's active archetype (or the default full window)? */
-function hourActive(bot: MutableBot, hour: number): boolean {
-  const normalized = hour < WINDOW_START_HOUR ? hour + 24 : hour; // 0-1am → 24-25
-  if (normalized < WINDOW_START_HOUR || normalized > WINDOW_END_HOUR) return false;
+/** Minutes-since-midnight (Tbilisi) for a UTC ms instant. */
+function tbilisiMinOfDay(utcMs: number): number {
+  const d = new Date(utcMs + TBILISI_OFFSET_MS);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+/**
+ * Is `utcMs` inside the activity window? The window runs 07:00 → 01:23 (next
+ * day). Any time at/after 07:00 OR at/before 01:23 is in-window.
+ */
+function inWindowMinute(utcMs: number): boolean {
+  const m = tbilisiMinOfDay(utcMs);
+  return m >= WINDOW_START_HOUR * 60 || m <= WINDOW_END_MIN_OF_DAY;
+}
+
+/**
+ * A fixture STARTING at `atMs` is admissible only if both the start and the
+ * latest-possible end stay within the window (no spillover past 01:23) and the
+ * bot's archetype hour matches.
+ */
+function fixtureFitsWindow(bot: MutableBot, atMs: number): boolean {
+  if (!inWindowMinute(atMs)) return false;
+  if (!inWindowMinute(atMs + MAX_FIXTURE_DURATION_MS)) return false;
   if (bot.schedule.activeHours.length === 0) return true;
-  return bot.schedule.activeHours.includes(hour);
+  return bot.schedule.activeHours.includes(tbilisiHour(atMs));
+}
+
+// A session burst ends when more than SESSION_REST_GAP_MS elapses with no
+// fixture; within a burst a bot plays at most schedule.sessionMax fixtures.
+const SESSION_REST_GAP_MS = 90 * 60 * 1000; // 90 min idle → new session
+
+/** True if the bot is mid-burst at `atMs` and has already hit its sessionMax. */
+function sessionExhausted(bot: MutableBot, atMs: number): boolean {
+  const continuingSession = atMs - bot.sessionLastEndMs <= SESSION_REST_GAP_MS;
+  if (!continuingSession) return false; // a new session is starting → allowed
+  return bot.sessionCount >= Math.max(1, bot.schedule.sessionMax);
+}
+
+/** Record a played fixture into the bot's session-burst counters. */
+function noteSessionPlay(bot: MutableBot, atMs: number, endMs: number): void {
+  const continuingSession = atMs - bot.sessionLastEndMs <= SESSION_REST_GAP_MS;
+  bot.sessionCount = continuingSession ? bot.sessionCount + 1 : 1;
+  bot.sessionLastEndMs = endMs;
 }
 
 /**
@@ -115,8 +162,9 @@ function pickOpponent(
     if ((remainingByBot.get(other.userId) ?? 0) <= 0) return false;
     if (other.status === 'retired') return false;
     if (other.nextFreeAtMs > atMs) return false; // busy (one match per timestamp)
-    if (!hourActive(other, tbilisiHour(atMs))) return false;
+    if (!fixtureFitsWindow(other, atMs)) return false; // in-window + ends by 01:23
     if ((other.perDayCount.get(dayKey) ?? 0) >= other.dailyCap) return false;
+    if (sessionExhausted(other, atMs)) return false; // sessionMax burst honored
     if (bot.recentOpponents.includes(other.userId)) return false;
     // Never pair two bots that are BOTH within a max-win of the ceiling —
     // otherwise no ceiling-respecting winner exists.
@@ -152,26 +200,28 @@ export function buildSchedule(opts: {
   targetMatches: number;
   ceilingRp: number;
   categoryIds: string[];
+  /** Run manifest hash — folded into every fixture's canonical content key. */
+  manifestHash: string;
 }): ScheduleResult {
-  const { params, seed, seasonStart, runDate, targetMatches, ceilingRp, categoryIds } = opts;
+  const { params, seed, seasonStart, runDate, targetMatches, ceilingRp, categoryIds, manifestHash } = opts;
   const rng = makeRng(seed);
   const daysSinceReset = Math.max(
     1,
     (runDate.getTime() - seasonStart.getTime()) / (24 * 60 * 60 * 1000),
   );
 
+  // Finding 5: simulate from the ACTUAL loaded profile state (no 450-overwrite).
+  // The pristine-state execute gate guarantees these are unplaced/450/0 at run
+  // time; the report and the writer therefore agree, and the code stops lying.
   const bots: MutableBot[] = opts.bots.map((b) => ({
     ...b,
-    rp: SEASON_INITIAL_RP,
-    placementPlayed: 0,
-    placementWins: 0,
-    placementStatus: 'unplaced',
-    currentWinStreak: 0,
     fixturesPlayed: 0,
     recentOpponents: [],
     perDayCount: new Map(),
     rngStream: makeRng(deriveSeed(seed, b.userId)),
     nextFreeAtMs: seasonStart.getTime(),
+    sessionCount: 0,
+    sessionLastEndMs: Number.NEGATIVE_INFINITY,
   }));
   const byId = new Map(bots.map((b) => [b.userId, b]));
 
@@ -182,7 +232,6 @@ export function buildSchedule(opts: {
   // consumes two bots). Iterate in RP order so placement/low bots get matched
   // early and the ladder spreads before neighbors climb away.
   const fixtures: PlannedFixture[] = [];
-  const windowMs = runDate.getTime() - seasonStart.getTime();
   let ordinal = 0;
 
   // Round-robin over "hungry" bots (still owed fixtures), each round advancing
@@ -223,18 +272,18 @@ export function buildSchedule(opts: {
       ceilingRp,
       categoryIds,
       ordinal: ordinal++,
-      seed,
-      windowMs,
-      seasonStartMs: seasonStart.getTime(),
+      manifestHash,
     });
     fixtures.push(fixture);
 
     // Commit in-memory state for both sides.
     commitFixture(fixture, byId);
+    const endMs = fixture.endedAt.getTime();
     for (const b of [bot, opp]) {
       b.fixturesPlayed++;
       const dayKey = tbilisiDayKey(atMs);
       b.perDayCount.set(dayKey, (b.perDayCount.get(dayKey) ?? 0) + 1);
+      noteSessionPlay(b, atMs, endMs);
       b.recentOpponents = [b === bot ? opp.userId : bot.userId, ...b.recentOpponents].slice(
         0,
         RECENT_OPPONENT_MEMORY,
@@ -243,8 +292,8 @@ export function buildSchedule(opts: {
     }
     // Both bots are busy until a short intra-session gap elapses.
     const gapMs = Math.max(8, bot.schedule.intraSessionGapMin) * 60 * 1000;
-    bot.nextFreeAtMs = atMs + gapMs;
-    opp.nextFreeAtMs = atMs + gapMs;
+    bot.nextFreeAtMs = endMs + gapMs;
+    opp.nextFreeAtMs = endMs + gapMs;
   }
 
   fixtures.sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
@@ -268,30 +317,37 @@ export function buildSchedule(opts: {
 }
 
 /**
- * Move the bot's clock to its next schedule-active, in-window slot that also has
- * daily-cap headroom. Returns the UTC ms, or null if no slot exists before the
- * run date. Session bursts are honored implicitly by nextFreeAtMs (set to a
- * short gap after each fixture) plus the daily cap.
+ * Move the bot's clock to its next schedule-active, in-window slot (start AND
+ * projected end inside 07:00-01:23) that also has daily-cap and session-burst
+ * headroom. Returns the UTC ms, or null if no slot exists before the run date.
  */
 function advanceToActiveSlot(bot: MutableBot, runEndMs: number): number | null {
   let cursor = bot.nextFreeAtMs;
-  let guard = 24 * 400; // up to ~400 days of hourly probes
+  let guard = 24 * 4 * 400; // 15-min probes over ~400 days
+  const jumpToNextDayStart = () => {
+    const next = new Date(cursor + TBILISI_OFFSET_MS);
+    next.setUTCDate(next.getUTCDate() + 1);
+    next.setUTCHours(WINDOW_START_HOUR, 0, 0, 0);
+    cursor = next.getTime() - TBILISI_OFFSET_MS;
+  };
   while (cursor < runEndMs && guard-- > 0) {
-    const hour = tbilisiHour(cursor);
     const dayKey = tbilisiDayKey(cursor);
     const capReached = (bot.perDayCount.get(dayKey) ?? 0) >= bot.dailyCap;
-    if (!capReached && hourActive(bot, hour)) {
+    if (capReached) {
+      jumpToNextDayStart();
+      continue;
+    }
+    if (fixtureFitsWindow(bot, cursor) && !sessionExhausted(bot, cursor)) {
       return cursor;
     }
-    // Jump forward: to next hour if just inactive, to next day 07:00 if cap-spent.
-    if (capReached) {
-      const next = new Date(cursor + TBILISI_OFFSET_MS);
-      next.setUTCDate(next.getUTCDate() + 1);
-      next.setUTCHours(WINDOW_START_HOUR, 0, 0, 0);
-      cursor = next.getTime() - TBILISI_OFFSET_MS;
-    } else {
-      cursor += 60 * 60 * 1000;
+    // Session spent mid-burst: jump past the rest gap to start a fresh session.
+    if (fixtureFitsWindow(bot, cursor) && sessionExhausted(bot, cursor)) {
+      cursor = bot.sessionLastEndMs + SESSION_REST_GAP_MS + 60 * 1000;
+      continue;
     }
+    // Out of window: probe forward 15 min; if past 01:23, jump to next 07:00.
+    if (!inWindowMinute(cursor)) jumpToNextDayStart();
+    else cursor += 15 * 60 * 1000;
   }
   return null;
 }
@@ -305,11 +361,9 @@ function planFixture(opts: {
   ceilingRp: number;
   categoryIds: string[];
   ordinal: number;
-  seed: number;
-  windowMs: number;
-  seasonStartMs: number;
+  manifestHash: string;
 }): PlannedFixture {
-  const { a, b, atMs, params, rng, ceilingRp, categoryIds, ordinal, seed } = opts;
+  const { a, b, atMs, params, rng, ceilingRp, categoryIds, ordinal, manifestHash } = opts;
 
   // HARD CEILING (win assignment only — never RP fudging): a side may win only
   // if its projected post-win RP stays at/under the ceiling. MAX_WIN_DELTA is
@@ -332,14 +386,33 @@ function planFixture(opts: {
 
   const sim = simulateFixture(a.baseSkill, b.baseSkill, params, rng, forceWinnerIsA);
 
-  const durationMs = rng.int(3, 7) * 60 * 1000;
+  const durationMs = rng.int(3, 7) * 60 * 1000; // ≤ MAX_FIXTURE_DURATION_MS
   const startedAt = new Date(atMs);
   const endedAt = new Date(atMs + durationMs);
   const winnerUserId = sim.winnerIsA ? a.userId : b.userId;
   const isPlacementContext = a.placementStatus !== 'placed' || b.placementStatus !== 'placed';
+  const categoryAId = rng.pick(categoryIds);
+  const categoryBId = rng.pick(categoryIds);
+
+  // Canonical fixture key = hash(manifest + participants + timestamps + winner
+  // + decision + scores). The deterministic matchId derives from it. A changed
+  // roster/config/runDate yields a different manifest hash → different key, so
+  // a UUID can never silently represent a different fixture (finding 4).
+  const key = fixtureContentDigest(manifestHash, {
+    botAUserId: a.userId,
+    botBUserId: b.userId,
+    startedAt,
+    endedAt,
+    winnerUserId,
+    decision: sim.decision,
+    scoreA: sim.scoreA,
+    scoreB: sim.scoreB,
+  });
 
   return {
-    key: `burnin:${seed}:${ordinal}`,
+    key,
+    matchId: fixtureMatchIdFromDigest(key),
+    ordinal,
     botAUserId: a.userId,
     botBUserId: b.userId,
     startedAt,
@@ -349,8 +422,8 @@ function planFixture(opts: {
     isPlacementContext,
     scoreA: sim.scoreA,
     scoreB: sim.scoreB,
-    categoryAId: rng.pick(categoryIds),
-    categoryBId: rng.pick(categoryIds),
+    categoryAId,
+    categoryBId,
   };
 }
 

@@ -32,12 +32,20 @@ export const achievementsRepo = {
     `;
   },
 
+  /**
+   * @param params.occurredAt  Optional backdated timestamp for the created_at
+   *   of a newly inserted progress row. Defaults to the column default (NOW())
+   *   so the LIVE path is unchanged; ONLY the one-time persistent-bot burn-in
+   *   writer passes an explicit historical value. `unlockedAt` already carries
+   *   the (possibly backdated) unlock timestamp the service computed.
+   */
   async upsertProgress(params: {
     userId: string;
     achievementId: string;
     progress: number;
     unlockedAt: string | null;
     sourceMatchId: string | null;
+    occurredAt?: Date;
   }): Promise<UserAchievementRow> {
     const [row] = await sql<UserAchievementRow[]>`
       INSERT INTO user_achievements (
@@ -45,21 +53,25 @@ export const achievementsRepo = {
         achievement_id,
         progress,
         unlocked_at,
-        source_match_id
+        source_match_id,
+        created_at,
+        updated_at
       )
       VALUES (
         ${params.userId},
         ${params.achievementId},
         ${params.progress},
         ${params.unlockedAt},
-        ${params.sourceMatchId}
+        ${params.sourceMatchId},
+        COALESCE(${params.occurredAt ?? null}::timestamptz, NOW()),
+        COALESCE(${params.occurredAt ?? null}::timestamptz, NOW())
       )
       ON CONFLICT (user_id, achievement_id)
       DO UPDATE SET
         progress = EXCLUDED.progress,
         unlocked_at = COALESCE(user_achievements.unlocked_at, EXCLUDED.unlocked_at),
         source_match_id = COALESCE(user_achievements.source_match_id, EXCLUDED.source_match_id),
-        updated_at = NOW()
+        updated_at = COALESCE(${params.occurredAt ?? null}::timestamptz, NOW())
       RETURNING *
     `;
 

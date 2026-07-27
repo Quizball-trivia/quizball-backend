@@ -72,11 +72,20 @@ export const achievementsService = {
     });
   },
 
+  /**
+   * @param options.occurredAt        Optional backdated unlock/insert timestamp.
+   *   Defaults to now(); ONLY the one-time persistent-bot burn-in writer passes
+   *   an explicit historical value so a bot's unlocks are dated in the past.
+   * @param options.suppressAnalytics When true, no achievement-unlocked
+   *   analytics fire (capability matrix: persistent bots stay out of analytics).
+   */
   async evaluateForMatch(
     matchId: string,
     userIds: string[],
-    matchVariant: AchievementMatchVariant
+    matchVariant: AchievementMatchVariant,
+    options?: { occurredAt?: Date; suppressAnalytics?: boolean }
   ): Promise<Record<string, AchievementUnlockPayload[]>> {
+    const occurredAtIso = options?.occurredAt?.toISOString();
     const uniqueUserIds = [...new Set(userIds)];
     const result: Record<string, AchievementUnlockPayload[]> = {};
 
@@ -115,7 +124,7 @@ export const achievementsService = {
         const unlockedAt = alreadyUnlocked
           ? existing?.unlocked_at ?? null
           : unlockedNow
-            ? new Date().toISOString()
+            ? occurredAtIso ?? new Date().toISOString()
             : null;
 
         upsertBatch.push({
@@ -124,6 +133,7 @@ export const achievementsService = {
           progress,
           unlockedAt,
           sourceMatchId: !alreadyUnlocked && unlockedNow ? matchId : null,
+          ...(options?.occurredAt ? { occurredAt: options.occurredAt } : {}),
         });
 
         if (!alreadyUnlocked && unlockedNow && unlockedAt) {
@@ -138,7 +148,11 @@ export const achievementsService = {
             unlockedAt,
           };
           unlockedForUser.push(payload);
-          trackAchievementUnlocked(userId, definition.id, definition.title.en ?? definition.id);
+          // Analytics stay human-only (capability matrix). Persistent bots
+          // unlock silently.
+          if (!options?.suppressAnalytics) {
+            trackAchievementUnlocked(userId, definition.id, definition.title.en ?? definition.id);
+          }
         }
       }
 

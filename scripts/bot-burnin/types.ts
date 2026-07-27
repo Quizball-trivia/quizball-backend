@@ -43,8 +43,16 @@ export interface BotSchedule {
 
 /** One scheduled, not-yet-written fixture. */
 export interface PlannedFixture {
-  /** Stable per-run idempotency key (seed + ordinal); also the receipt key. */
+  /**
+   * Canonical content digest (hex) = hash(manifestHash + participants +
+   * timestamps + winner + decision + scores). Populated by the scheduler after
+   * the manifest hash is known. Uniquely identifies the fixture within a run.
+   */
   key: string;
+  /** Deterministic match UUID derived from `key`. */
+  matchId: string;
+  /** Monotonic plan position (for the JSONL receipt / diagnostics only). */
+  ordinal: number;
   botAUserId: string;
   botBUserId: string;
   /** Backdated match start (UTC Date). */
@@ -85,14 +93,36 @@ export interface ProfileSnapshotRow {
   placementPointsAgainstSum: number;
   currentWinStreak: number;
   lastRankedMatchAt: string | null;
+  /** ranked_profiles.updated_at pre-run — used to detect post-snapshot writes. */
+  profileUpdatedAt: string | null;
   /** users.total_xp before the run (XP is additive; rollback restores it). */
   totalXp: number;
   /** Present only if a ranked_profiles row already existed pre-run. */
   profileExisted: boolean;
+  /** user_mode_match_stats(mode='ranked') pre-run — captured for full restore. */
+  rankedStats: {
+    existed: boolean;
+    gamesPlayed: number;
+    wins: number;
+    losses: number;
+    draws: number;
+    lastMatchAt: string | null;
+  };
+  /** user_achievements pre-run — captured for full restore (finding 10). */
+  achievements: Array<{
+    achievementId: string;
+    progress: number;
+    unlockedAt: string | null;
+    sourceMatchId: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 }
 
 export interface BurnInSnapshot {
   createdAt: string;
+  /** The run this snapshot belongs to — mutual-consistency check on rollback. */
+  manifestHash: string;
   seed: number;
   env: string;
   ceilingRp: number;
@@ -101,15 +131,35 @@ export interface BurnInSnapshot {
   profiles: ProfileSnapshotRow[];
 }
 
-/** Creation receipt: the match ids written, for a schema-free rollback. */
-export interface BurnInReceipt {
+/**
+ * The receipt is now an append-only JSONL file: a single HEADER line followed
+ * by one PLANNED line per fixture written durably BEFORE its DB writes, then a
+ * matching WRITTEN line after. On resume the header identifies the run and the
+ * PLANNED lines enumerate every fixture that may have touched the DB (zero
+ * unrecorded fixtures possible).
+ */
+export type ReceiptLine = ReceiptHeaderLine | ReceiptFixtureLine;
+
+export interface ReceiptHeaderLine {
+  kind: 'header';
   createdAt: string;
+  manifestHash: string;
   seed: number;
   env: string;
   /** All roster bot user ids — rollback verifies matches touch ONLY these. */
   rosterUserIds: string[];
-  matchIds: string[];
-  fixtureKeys: string[];
+}
+
+export interface ReceiptFixtureLine {
+  kind: 'planned' | 'written';
+  ordinal: number;
+  key: string;
+  matchId: string;
+  botAUserId: string;
+  botBUserId: string;
+  winnerUserId: string;
+  startedAt: string;
+  endedAt: string;
 }
 
 export interface BurnInConfig {

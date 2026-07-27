@@ -112,22 +112,114 @@ export async function loadActiveCategoryIds(): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-/** Has the one-time burn-in already run on this env? */
-export async function burnInAlreadyRan(): Promise<boolean> {
-  const rows = await sql<{ version: number }[]>`
-    SELECT version FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
+// Constant advisory-lock key for the one-time burn-in guard. Any process taking
+// pg_advisory_xact_lock(this) around the marker check+insert serializes with
+// every other execute attempt, so two concurrent runs can never both pass.
+const BURN_IN_ADVISORY_LOCK_KEY = 728_150_100; // mirrors the migration date
+
+/** Has the one-time burn-in already run on this env (any generation)? */
+export async function burnInAlreadyRan(): Promise<{ ran: boolean; manifestHash: string | null }> {
+  const rows = await sql<{ params: { manifestHash?: string } }[]>`
+    SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
   `;
-  return rows.length > 0;
+  return { ran: rows.length > 0, manifestHash: rows[0]?.params?.manifestHash ?? null };
 }
 
-/** Record the one-time marker so a second --execute run refuses. */
-export async function markBurnInComplete(seed: number, fixtureCount: number): Promise<void> {
-  await sql`
-    INSERT INTO bot_model_params (params, active, note)
-    VALUES (
-      ${sql.json({ kind: 'burnin-marker', seed, fixtureCount, completedAt: new Date().toISOString() })},
-      false,
-      ${BURN_IN_MARKER_NOTE}
-    )
+/**
+ * Atomically claim the one-time burn-in marker for THIS run manifest. Takes the
+ * xact advisory lock, then refuses if any marker already exists. Returns true
+ * on success; throws if another run already burned this env in. Finding 9.
+ */
+export async function claimBurnInMarker(manifestHash: string, seed: number, fixtureCount: number): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
+    const existing = await tx<{ params: { manifestHash?: string } }[]>`
+      SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
+    `;
+    if (existing.length > 0) {
+      const prior = existing[0].params?.manifestHash ?? '(unknown)';
+      throw new Error(`burn-in marker already present (manifest ${prior}) — env already burned in`);
+    }
+    await tx`
+      INSERT INTO bot_model_params (params, active, note)
+      VALUES (
+        ${sql.json({ kind: 'burnin-marker', manifestHash, seed, fixtureCount, completedAt: new Date().toISOString() })},
+        false,
+        ${BURN_IN_MARKER_NOTE}
+      )
+    `;
+  });
+}
+
+export interface PristineViolation {
+  userId: string;
+  nickname: string;
+  reasons: string[];
+}
+
+/**
+ * Pristine-state execute gate (findings 5/6/1). Burn-in is a pristine-state
+ * operation: it runs ONCE, immediately after roster creation, BEFORE selection
+ * ever activates. Every roster bot must be exactly: unplaced, RP 450, zero
+ * ranked games / XP, no live reservation, no live lobby+match. Returns the list
+ * of bots that violate any of these (empty = all pristine).
+ *
+ * generationCreatedAtFloor gates XP to the roster generation: any user_xp_events
+ * row is a violation (a freshly created bot has none).
+ */
+export async function findNonPristineBots(userIds: string[]): Promise<PristineViolation[]> {
+  if (userIds.length === 0) return [];
+  const rows = await sql<
+    Array<{
+      user_id: string;
+      nickname: string;
+      total_xp: number;
+      rp: number | null;
+      placement_status: string | null;
+      placement_played: number | null;
+      games_played: number | null;
+      xp_events: number;
+      reservations: number;
+      live_lobbies: number;
+      live_matches: number;
+      ranked_ledger: number;
+    }>
+  >`
+    SELECT
+      u.id AS user_id,
+      u.nickname,
+      u.total_xp,
+      rp.rp,
+      rp.placement_status,
+      rp.placement_played,
+      COALESCE(ums.games_played, 0) AS games_played,
+      (SELECT COUNT(*)::int FROM user_xp_events x WHERE x.user_id = u.id) AS xp_events,
+      (SELECT COUNT(*)::int FROM synthetic_bot_reservations r WHERE r.bot_user_id = u.id) AS reservations,
+      (SELECT COUNT(*)::int FROM lobby_members lm JOIN lobbies l ON l.id = lm.lobby_id
+        WHERE lm.user_id = u.id AND l.status IN ('waiting', 'active')) AS live_lobbies,
+      (SELECT COUNT(*)::int FROM match_players mp JOIN matches m ON m.id = mp.match_id
+        WHERE mp.user_id = u.id AND m.status = 'active') AS live_matches,
+      (SELECT COUNT(*)::int FROM ranked_rp_changes c WHERE c.user_id = u.id) AS ranked_ledger
+    FROM users u
+    LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
+    LEFT JOIN user_mode_match_stats ums ON ums.user_id = u.id AND ums.mode = 'ranked'
+    WHERE u.id = ANY(${userIds}::uuid[])
   `;
+
+  const violations: PristineViolation[] = [];
+  for (const r of rows) {
+    const reasons: string[] = [];
+    if (r.placement_status != null && r.placement_status !== 'unplaced') reasons.push(`placement_status=${r.placement_status}`);
+    if ((r.placement_played ?? 0) !== 0) reasons.push(`placement_played=${r.placement_played}`);
+    if (r.rp != null && r.rp !== 450) reasons.push(`rp=${r.rp}`);
+    if ((r.games_played ?? 0) !== 0) reasons.push(`ranked_games=${r.games_played}`);
+    if (Number(r.total_xp) !== 0) reasons.push(`total_xp=${r.total_xp}`);
+    if (r.xp_events !== 0) reasons.push(`xp_events=${r.xp_events}`);
+    if (r.reservations !== 0) reasons.push(`reservations=${r.reservations}`);
+    if (r.live_lobbies !== 0) reasons.push(`live_lobbies=${r.live_lobbies}`);
+    if (r.live_matches !== 0) reasons.push(`live_matches=${r.live_matches}`);
+    if (r.ranked_ledger !== 0) reasons.push(`ranked_ledger=${r.ranked_ledger}`);
+    if (reasons.length > 0) violations.push({ userId: r.user_id, nickname: r.nickname, reasons });
+  }
+  return violations;
 }

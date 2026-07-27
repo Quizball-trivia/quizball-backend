@@ -396,24 +396,22 @@ describe('match completion recovery on replay', () => {
   });
 
   describe('ranked settlement recovery', () => {
-    it('retries ranked settlement when getMatchOutcome returns null on replay', async () => {
+    it('retries ranked settlement on replay (settle is per-participant idempotent)', async () => {
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const socket = createSocketMock('u1');
 
       // Simulate: match completed but settlement never ran (disconnect scenario).
-      // First getMatchOutcome call (recovery check) returns null; after settlement
-      // the second call (inside buildFinalResultsPayload) returns the outcome.
+      // settleCompletedRankedMatch is now called UNCONDITIONALLY on replay — it
+      // self-guards (no-op when complete, fills gaps when partial), so the replay
+      // no longer gates on a pre-read outcome.
       getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
-      getMatchOutcomeMock
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(RANKED_OUTCOME);
+      getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME); // read inside buildFinalResultsPayload
       settleCompletedRankedMatchMock.mockResolvedValue(RANKED_OUTCOME);
       seedLastMatch('u1', 'm1');
       seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
-      expect(getMatchOutcomeMock).toHaveBeenCalledTimes(2);
       expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(socket.emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
         matchId: 'm1',
@@ -421,19 +419,23 @@ describe('match completion recovery on replay', () => {
       }));
     });
 
-    it('does not retry settlement when getMatchOutcome already has data', async () => {
+    it('always calls settlement on replay even when a (possibly partial) outcome exists', async () => {
+      // Previously the replay skipped settlement whenever getMatchOutcome was
+      // non-null — which silently starved the persistent-bot side when the
+      // ledger held only the human row. Settlement must now run regardless; its
+      // own per-participant idempotency prevents any double-settle.
       const { matchRealtimeService } = await import('../../src/realtime/services/match-realtime.service.js');
       const socket = createSocketMock('u1');
 
       getMatchMock.mockResolvedValue(COMPLETED_RANKED_MATCH);
       getMatchOutcomeMock.mockResolvedValue(RANKED_OUTCOME);
+      settleCompletedRankedMatchMock.mockResolvedValue(RANKED_OUTCOME);
       seedLastMatch('u1', 'm1');
       seedEnteredMarker('m1', 'u1');
 
       await matchRealtimeService.emitLastMatchResultIfAny({} as QuizballServer, socket);
 
-      expect(getMatchOutcomeMock).toHaveBeenCalledWith('m1');
-      expect(settleCompletedRankedMatchMock).not.toHaveBeenCalled();
+      expect(settleCompletedRankedMatchMock).toHaveBeenCalledWith('m1');
       expect(socket.emit).toHaveBeenCalledWith('match:final_results', expect.objectContaining({
         rankedOutcome: RANKED_OUTCOME,
       }));

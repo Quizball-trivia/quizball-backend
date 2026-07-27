@@ -74,6 +74,7 @@ import { isRankedSettleEligible } from '../../src/modules/users/ai-classificatio
 import {
   hasNoHumanInteraction,
   isGenuineAnswerSubmission,
+  isNoContestHuman,
 } from '../../src/realtime/services/match-interaction.service.js';
 import type { MatchAnswerRow } from '../../src/modules/matches/matches.types.js';
 import type { MatchPlayerRow, MatchRow } from '../../src/modules/matches/matches.types.js';
@@ -291,9 +292,13 @@ describe('settleCompletedRankedMatch — persistent bot participation', () => {
 describe('settleCompletedRankedMatch — ephemeral AI regression (unchanged)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('settles the human only, uses the aiAnchorRp fallback, marks opponent_is_ai', async () => {
+  it('settles the human only during placement and pins the aiAnchorRp fallback as placement anchor', async () => {
+    // Placement game vs an ephemeral AI anchored ABOVE the human's RP. The
+    // opponent has no real profile, so the recorded placement_anchor_rp comes
+    // straight from the aiAnchorRp fallback — deleting that fallback would break
+    // this assertion (it would fall back to the DEFAULT anchor 1900 instead).
     (matchesRepo.getMatch as Mock).mockResolvedValue(
-      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: false, aiAnchorRp: 1500 }, 'goals')
+      createCompletedRankedMatch('m-1', 'human-1', { isPlacement: true, aiAnchorRp: 2400 }, 'goals')
     );
     (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
       createPlayer('human-1', 1, 900, 1),
@@ -305,7 +310,10 @@ describe('settleCompletedRankedMatch — ephemeral AI regression (unchanged)', (
     ]);
     (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([]);
     (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
-      createProfile({ user_id: userId, rp: 1000, tier: 'Bench', placement_status: 'placed', placement_played: 3 })
+      createProfile({
+        user_id: userId, rp: 450, tier: 'Youth Prospect',
+        placement_status: 'unplaced', placement_played: 0, placement_wins: 0,
+      })
     );
     (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
 
@@ -316,30 +324,142 @@ describe('settleCompletedRankedMatch — ephemeral AI regression (unchanged)', (
     expect(outcome?.byUserId['ai-1']).toBeUndefined();
 
     const entries = (rankedRepo.applySettlement as Mock).mock.calls[0][0] as Array<{
-      change: { userId: string; opponentUserId: string | null; opponent_is_ai?: boolean; opponentIsAi?: boolean };
+      change: {
+        userId: string;
+        opponentIsAi: boolean;
+        placementAnchorRp: number | null;
+        isPlacement: boolean;
+      };
     }>;
     expect(entries).toHaveLength(1);
     // ensureProfile is called only for the human (opponent AI never ensured).
     expect(rankedRepo.ensureProfile).toHaveBeenCalledTimes(1);
     expect(rankedRepo.ensureProfile).toHaveBeenCalledWith('human-1');
 
-    // Against ephemeral AI there is no real opponentProfile, so the beat-stronger
-    // bonus never applies even though aiAnchorRp feeds the opponent RP. Flat +50
-    // win by 1 goal — unchanged from before this PR.
-    expect(outcome?.byUserId['human-1']?.deltaRp).toBe(50);
-
+    const change = entries[0].change;
+    // The aiAnchorRp fallback (2400) is the recorded placement anchor — NOT the
+    // opponent's (non-existent) profile RP, and NOT the default 1900.
+    expect(change.isPlacement).toBe(true);
+    expect(change.placementAnchorRp).toBe(2400);
     // ledger records opponent as AI.
-    const change = (rankedRepo.applySettlement as Mock).mock.calls[0][0][0].change;
     expect(change.opponentIsAi).toBe(true);
+
+    // Beat-stronger bonus still requires a REAL opponent profile, so a placement
+    // win by 1 goal against ephemeral AI is a flat +50 (anchor doesn't inflate it).
+    expect(outcome?.byUserId['human-1']?.deltaRp).toBe(50);
+  });
+});
+
+describe('settleCompletedRankedMatch — partial-ledger recovery', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('settles ONLY the missing bot side, leaves the human row + analytics untouched', async () => {
+    // A prior run wrote the human ledger row (or a pre-deploy human-only row is
+    // replayed) but not the newly settle-eligible persistent bot. Recovery must
+    // insert ONE new bot row, recompute NOTHING for the human, and emit exactly
+    // one analytics event total (zero for the already-settled human).
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'bot-1', undefined, 'goals')
+    );
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('human-1', 1, 400, 0),
+      createPlayer('bot-1', 2, 900, 2), // bot won 2-0
+    ]);
+    wireUsers([
+      { id: 'human-1', is_ai: false, ai_kind: null },
+      { id: 'bot-1', is_ai: true, ai_kind: 'persistent' },
+    ]);
+
+    // Existing ledger: human ONLY (already settled to a loss last run).
+    const humanRow = {
+      id: 'c-human',
+      match_id: 'm-1',
+      user_id: 'human-1',
+      opponent_user_id: 'bot-1',
+      opponent_is_ai: true,
+      old_rp: 1200,
+      delta_rp: -25,
+      new_rp: 1175,
+      result: 'loss' as const,
+      is_placement: false,
+      placement_game_no: null,
+      placement_anchor_rp: null,
+      placement_perf_score: null,
+      calculation_method: 'ranked_formula' as const,
+      coins_awarded: 100,
+      created_at: NOW_ISO,
+    };
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue([humanRow]);
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([
+      createProfile({ user_id: 'human-1', rp: 1175, tier: rankedService.tierFromRp(1175), placement_status: 'placed', placement_played: 3 }),
+    ]);
+    (rankedRepo.ensureProfile as Mock).mockImplementation(async (userId: string) =>
+      userId === 'human-1'
+        ? createProfile({ user_id: 'human-1', rp: 1175, tier: rankedService.tierFromRp(1175), placement_status: 'placed', placement_played: 3 })
+        : createProfile({ user_id: 'bot-1', rp: 1200, tier: rankedService.tierFromRp(1200), placement_status: 'placed', placement_played: 3, current_win_streak: 0 })
+    );
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    // Exactly one NEW row persisted — the bot's.
+    const entries = (rankedRepo.applySettlement as Mock).mock.calls[0][0] as Array<{
+      change: { userId: string; result: string };
+    }>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].change.userId).toBe('bot-1');
+    expect(entries[0].change.result).toBe('win');
+
+    // Merged outcome carries BOTH sides; the human side is the reused row values.
+    expect(outcome?.byUserId['human-1']?.deltaRp).toBe(-25);
+    expect(outcome?.byUserId['human-1']?.newRp).toBe(1175);
+    expect(outcome?.byUserId['bot-1']?.deltaRp).toBe(65); // +50 base +15 win-by-2
+
+    // Analytics: exactly ONE event total, and it is NOT for the already-settled
+    // human (bot is AI → no event; human already emitted its event last run).
+    expect(trackRankPointsChangedMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('re-reads a fully settled match without recompute, writes, or analytics', async () => {
+    (matchesRepo.getMatch as Mock).mockResolvedValue(
+      createCompletedRankedMatch('m-1', 'bot-1', undefined, 'goals')
+    );
+    (matchPlayersRepo.listMatchPlayers as Mock).mockResolvedValue([
+      createPlayer('human-1', 1, 400, 0),
+      createPlayer('bot-1', 2, 900, 2),
+    ]);
+    wireUsers([
+      { id: 'human-1', is_ai: false, ai_kind: null },
+      { id: 'bot-1', is_ai: true, ai_kind: 'persistent' },
+    ]);
+
+    const rows = [
+      { id: 'c-h', match_id: 'm-1', user_id: 'human-1', opponent_user_id: 'bot-1', opponent_is_ai: true, old_rp: 1200, delta_rp: -25, new_rp: 1175, result: 'loss' as const, is_placement: false, placement_game_no: null, placement_anchor_rp: null, placement_perf_score: null, calculation_method: 'ranked_formula' as const, coins_awarded: 100, created_at: NOW_ISO },
+      { id: 'c-b', match_id: 'm-1', user_id: 'bot-1', opponent_user_id: 'human-1', opponent_is_ai: false, old_rp: 1200, delta_rp: 65, new_rp: 1265, result: 'win' as const, is_placement: false, placement_game_no: null, placement_anchor_rp: null, placement_perf_score: null, calculation_method: 'ranked_formula' as const, coins_awarded: 0, created_at: NOW_ISO },
+    ];
+    (rankedRepo.getRpChangesForMatch as Mock).mockResolvedValue(rows);
+    (rankedRepo.getProfilesByUserIds as Mock).mockResolvedValue([
+      createProfile({ user_id: 'human-1', rp: 1175, tier: rankedService.tierFromRp(1175), placement_status: 'placed', placement_played: 3 }),
+      createProfile({ user_id: 'bot-1', rp: 1265, tier: rankedService.tierFromRp(1265), placement_status: 'placed', placement_played: 3 }),
+    ]);
+    (rankedRepo.applySettlement as Mock).mockResolvedValue(undefined);
+
+    const outcome = await rankedService.settleCompletedRankedMatch('m-1');
+
+    expect(rankedRepo.applySettlement).not.toHaveBeenCalled();
+    expect(rankedRepo.ensureProfile).not.toHaveBeenCalled();
+    expect(trackRankPointsChangedMock).not.toHaveBeenCalled();
+    expect(outcome?.byUserId['human-1']?.deltaRp).toBe(-25);
+    expect(outcome?.byUserId['bot-1']?.deltaRp).toBe(65);
   });
 });
 
 describe('no-contest zero-interaction guard treats persistent bots as AI', () => {
-  // The completion path (possession-completion.ts) builds the human set with
-  // `is_ai === false`, so a persistent bot is never counted as a human. A bot's
-  // genuine answer must therefore NOT clear the no-contest guard.
+  // Exercise the REAL production classifier (isNoContestHuman), the same helper
+  // the completion path uses to build its human set — so a regression that lets
+  // a persistent bot count as human would fail here.
   function buildHumanSet(roster: TestUser[]): Set<string> {
-    return new Set(roster.filter((u) => u.is_ai === false).map((u) => u.id));
+    return new Set(roster.filter((u) => isNoContestHuman(u)).map((u) => u.id));
   }
 
   const genuineAnswer = (userId: string): MatchAnswerRow => ({

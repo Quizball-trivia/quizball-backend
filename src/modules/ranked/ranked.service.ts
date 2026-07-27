@@ -15,6 +15,7 @@ import type {
   RankedMatchOutcome,
   RankedPlacementAiContext,
   RankedProfileRow,
+  RankedRpChangeRow,
   RankedTier,
   RankedUserOutcome,
 } from './ranked.types.js';
@@ -209,6 +210,25 @@ function computeRankedAiAnchor(profile: RankedProfileRow): number {
   return clamp(roundToNearest25(profile.rp), MIN_PLACEMENT_ANCHOR_RP, MAX_PLACEMENT_ANCHOR_RP);
 }
 
+// Reconstruct a settled participant's outcome from its persisted ledger row +
+// current profile, WITHOUT recomputing. Used by both the idempotent re-read and
+// the partial-recovery merge so an already-settled side is never re-derived.
+function outcomeFromLedgerRow(row: RankedRpChangeRow, profile: RankedProfileRow): RankedUserOutcome {
+  return {
+    userId: row.user_id,
+    oldRp: row.old_rp,
+    newRp: row.new_rp,
+    deltaRp: row.delta_rp,
+    coinsAwarded: row.coins_awarded,
+    oldTier: tierFromRp(row.old_rp),
+    newTier: tierFromRp(row.new_rp),
+    placementStatus: profile.placement_status,
+    placementPlayed: profile.placement_played,
+    placementRequired: profile.placement_required,
+    isPlacement: row.is_placement,
+  };
+}
+
 export const rankedService = {
   /**
    * Admin: reset the leaderboard for an event. Archives current standings, then
@@ -369,8 +389,17 @@ export const rankedService = {
       return null;
     }
 
+    // Per-participant idempotency. A match may carry a PARTIAL ledger (a crash
+    // between the two per-row writes, or a pre-deploy human-only row now being
+    // replayed alongside a newly settle-eligible persistent bot). Reuse the row
+    // for every already-settled participant untouched (no recompute, no
+    // analytics re-emit) and compute ONLY the players still missing a row.
     const existing = await rankedRepo.getRpChangesForMatch(matchId);
-    if (existing.length >= settleEligiblePlayers.length) {
+    const existingByUser = new Map(existing.map((row) => [row.user_id, row]));
+    const missingPlayers = settleEligiblePlayers.filter((p) => !existingByUser.has(p.user_id));
+
+    if (missingPlayers.length === 0) {
+      // Fully settled already — pure idempotent re-read, no writes, no analytics.
       const profiles = await rankedRepo.getProfilesByUserIds(settleEligiblePlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
       await invalidateUserRankCaches(profiles.map((profile) => ({
@@ -379,21 +408,9 @@ export const rankedService = {
       })));
       const outcomeByUser: Record<string, RankedUserOutcome> = {};
       for (const row of existing) {
-        if (!profileByUser.has(row.user_id)) continue;
-        const profile = profileByUser.get(row.user_id)!;
-        outcomeByUser[row.user_id] = {
-          userId: row.user_id,
-          oldRp: row.old_rp,
-          newRp: row.new_rp,
-          deltaRp: row.delta_rp,
-          coinsAwarded: row.coins_awarded,
-          oldTier: tierFromRp(row.old_rp),
-          newTier: tierFromRp(row.new_rp),
-          placementStatus: profile.placement_status,
-          placementPlayed: profile.placement_played,
-          placementRequired: profile.placement_required,
-          isPlacement: row.is_placement,
-        };
+        const profile = profileByUser.get(row.user_id);
+        if (!profile) continue;
+        outcomeByUser[row.user_id] = outcomeFromLedgerRow(row, profile);
       }
       return {
         isPlacement: Object.values(outcomeByUser).some((entry) => entry.isPlacement),
@@ -415,9 +432,13 @@ export const rankedService = {
       winnerDecisionMethod,
       bothForfeit,
       settleEligiblePlayerIds: settleEligiblePlayers.map((player) => player.user_id),
-      reusedExistingOutcome: existing.length >= settleEligiblePlayers.length,
+      missingPlayerIds: missingPlayers.map((player) => player.user_id),
+      reusedExistingRowCount: existing.length,
       rankedContext,
     }, 'Ranked settlement started');
+    // Ensure profiles for ALL eligible players (a missing side reads the
+    // already-settled side's profile as its opponent RP), but only the missing
+    // players are recomputed below.
     const profiles = await Promise.all(settleEligiblePlayers.map((player) => rankedRepo.ensureProfile(player.user_id)));
     const profileByUser = new Map(profiles.map((profile) => [profile.user_id, profile]));
 
@@ -455,7 +476,7 @@ export const rankedService = {
       outcome: RankedUserOutcome;
     }> = [];
 
-    for (const player of settleEligiblePlayers) {
+    for (const player of missingPlayers) {
       const profile = profileByUser.get(player.user_id);
       if (!profile) continue;
 
@@ -634,12 +655,21 @@ export const rankedService = {
       userIds: settlementEntries.map((entry) => entry.outcome.userId),
     }, 'Ranked settlement persistence applied');
 
+    const byUserIdOutcome: Record<string, RankedUserOutcome> = {};
+    // Reuse the untouched outcome for any participant already settled in a prior
+    // (partial) run — no recompute.
+    for (const row of existing) {
+      const profile = profileByUser.get(row.user_id);
+      if (!profile) continue;
+      byUserIdOutcome[row.user_id] = outcomeFromLedgerRow(row, profile);
+    }
+    // Overlay the freshly settled participants.
+    for (const entry of settlementEntries) {
+      byUserIdOutcome[entry.outcome.userId] = entry.outcome;
+    }
     const outcome = {
-      isPlacement: settlementEntries.some((entry) => entry.outcome.isPlacement),
-      byUserId: settlementEntries.reduce<Record<string, RankedUserOutcome>>((acc, entry) => {
-        acc[entry.outcome.userId] = entry.outcome;
-        return acc;
-      }, {}),
+      isPlacement: Object.values(byUserIdOutcome).some((o) => o.isPlacement),
+      byUserId: byUserIdOutcome,
     };
 
     logger.info(
@@ -647,12 +677,13 @@ export const rankedService = {
       'Ranked settlement completed'
     );
 
-    // Analytics: emit once per human player when RP is FRESHLY settled (not on the
-    // idempotent re-read path above), so ranked progression is visible in PostHog.
-    // Persistent bots settle RP but stay out of analytics (capability matrix).
-    for (const o of Object.values(outcome.byUserId)) {
-      const settledUser = byUserId.get(o.userId);
+    // Analytics: emit once per human player ONLY for FRESHLY settled rows (never
+    // the reused/idempotent ones), so ranked progression is visible in PostHog
+    // without double-counting a replay. Persistent bots stay out of analytics.
+    for (const entry of settlementEntries) {
+      const settledUser = byUserId.get(entry.outcome.userId);
       if (settledUser && settledUser.is_ai) continue;
+      const o = entry.outcome;
       trackRankPointsChanged(o.userId, o.oldRp, o.newRp, o.isPlacement ? 'placement' : 'ranked_match');
     }
 
@@ -669,19 +700,7 @@ export const rankedService = {
     for (const change of changes) {
       const profile = profileByUser.get(change.user_id);
       if (!profile) continue;
-      byUserId[change.user_id] = {
-        userId: change.user_id,
-        oldRp: change.old_rp,
-        newRp: change.new_rp,
-        deltaRp: change.delta_rp,
-        coinsAwarded: change.coins_awarded,
-        oldTier: tierFromRp(change.old_rp),
-        newTier: tierFromRp(change.new_rp),
-        placementStatus: profile.placement_status,
-        placementPlayed: profile.placement_played,
-        placementRequired: profile.placement_required,
-        isPlacement: change.is_placement,
-      };
+      byUserId[change.user_id] = outcomeFromLedgerRow(change, profile);
     }
 
     return {

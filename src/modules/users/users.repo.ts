@@ -23,6 +23,8 @@ export interface NicknameQuota {
   nextChangeAt: string | null;
 }
 
+export type AiKind = 'ephemeral' | 'persistent' | 'auction';
+
 export interface CreateUserData {
   email?: string | null;
   phoneNumber?: string | null;
@@ -32,6 +34,7 @@ export interface CreateUserData {
   avatarUrl?: string | null;
   avatarCustomization?: AvatarCustomization | null;
   isAi?: boolean;
+  aiKind?: AiKind;
 }
 
 export interface CreateIdentityData {
@@ -87,9 +90,10 @@ export const usersRepo = {
   },
 
   /**
-   * Case-insensitive nickname existence check among active real users.
-   * Backed by the partial unique index `uq_users_lower_nickname_real`
-   * (lower(nickname) WHERE is_ai = false AND not deleted), so this is an
+   * Case-insensitive nickname existence check among name-holding users: active
+   * real users plus persistent roster bots (whose names must block signups —
+   * a human registering a roster bot's exact name would out the bot). Backed by
+   * the partial unique index `uq_users_lower_nickname_claimable`, so this is an
    * O(log n) index lookup even at high user counts.
    */
   async isNicknameTaken(nickname: string, excludeUserId?: string): Promise<boolean> {
@@ -99,7 +103,7 @@ export const usersRepo = {
       SELECT EXISTS (
         SELECT 1 FROM users
         WHERE lower(nickname) = lower(${trimmed})
-          AND is_ai = false
+          AND (is_ai = false OR ai_kind = 'persistent')
           AND is_deleted = false
           AND deleted_at IS NULL
           AND pending_deletion_at IS NULL
@@ -146,9 +150,11 @@ export const usersRepo = {
 
   /**
    * Batch lookup: returns the subset of input nicknames already taken by
-   * active real (non-AI, non-seed) users, lowercased. Seed leaderboard users
-   * must not block ranked AI nickname selection. Uses the partial index on
-   * lower(nickname) — single query, O((k + matches) log n).
+   * active name-holding users — real users (non-seed) plus persistent roster
+   * bots, lowercased. Seed leaderboard users must not block ranked AI nickname
+   * selection, but roster bots must: an ephemeral opponent spawning with a
+   * roster bot's exact name would show two identical players. Uses the partial
+   * index on lower(nickname) — single query, O((k + matches) log n).
    */
   async findTakenLowerNicknames(nicknames: string[]): Promise<Set<string>> {
     if (nicknames.length === 0) return new Set();
@@ -156,7 +162,7 @@ export const usersRepo = {
     const rows = await sql<{ lower_nickname: string }[]>`
       SELECT lower(nickname) AS lower_nickname FROM users
       WHERE lower(nickname) = ANY(${lowered}::text[])
-        AND is_ai = false
+        AND (is_ai = false OR ai_kind = 'persistent')
         AND is_seed = false
         AND is_deleted = false
         AND deleted_at IS NULL
@@ -167,9 +173,11 @@ export const usersRepo = {
 
   async create(data: CreateUserData): Promise<User> {
     const phoneNumber = normalizeOptionalText(data.phoneNumber);
+    const isAi = data.isAi ?? false;
+    const aiKind = isAi ? data.aiKind ?? 'ephemeral' : null;
     const [user] = await sql<User[]>`
-      INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai)
-      VALUES (gen_random_uuid(), ${data.email ?? null}, ${phoneNumber}, ${phoneNumber ? data.phoneVerifiedAt ?? null : null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${data.isAi ?? false})
+      INSERT INTO users (id, email, phone_number, phone_verified_at, nickname, country, avatar_url, avatar_customization, onboarding_complete, is_ai, ai_kind)
+      VALUES (gen_random_uuid(), ${data.email ?? null}, ${phoneNumber}, ${phoneNumber ? data.phoneVerifiedAt ?? null : null}, ${data.nickname ?? null}, ${data.country ?? null}, ${data.avatarUrl ?? null}, ${sql.json((data.avatarCustomization ?? null) as Json)}, false, ${isAi}, ${aiKind})
       RETURNING *
     `;
     return user;
@@ -556,7 +564,10 @@ export const usersRepo = {
    */
   async deleteAiUser(id: string): Promise<boolean> {
     const result = await sql`
-      DELETE FROM users WHERE id = ${id} AND is_ai = true
+      DELETE FROM users
+      WHERE id = ${id}
+        AND is_ai = true
+        AND ai_kind IN ('ephemeral', 'auction')
     `;
     return result.count > 0;
   },
@@ -596,6 +607,8 @@ export const usersRepo = {
     // Idempotent: re-calling on a user already pending deletion returns the existing
     // timestamps unchanged. updated_at only bumps on the first scheduling so we don't
     // create spurious audit entries or invalidate caches on no-op repeats.
+    // AI users are excluded: account deletion is a human-account flow, and letting it
+    // schedule a synthetic user would give deletion automation a path to roster bots.
     const [user] = await sql<User[]>`
       UPDATE users
       SET
@@ -603,6 +616,7 @@ export const usersRepo = {
         pending_deletion_at = COALESCE(pending_deletion_at, NOW() + INTERVAL '30 days'),
         updated_at = CASE WHEN pending_deletion_at IS NULL THEN NOW() ELSE updated_at END
       WHERE id = ${id}
+        AND is_ai = false
         AND is_deleted = false
         AND deleted_at IS NULL
       RETURNING *

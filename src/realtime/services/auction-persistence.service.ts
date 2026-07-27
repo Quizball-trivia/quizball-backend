@@ -55,6 +55,7 @@ export async function persistFinishedAuctionMatch(
             nickname: ranking.displayName || `AI ${index + 1}`,
             avatarUrl: ranking.player?.avatarUrl ?? null,
             isAi: true,
+            aiKind: 'auction',
           });
           userId = aiUser.id;
         }

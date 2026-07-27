@@ -37,10 +37,14 @@ let testCategoryId: string;
 const testUserIds: string[] = [];
 const testMatchIds: string[] = [];
 
-async function seedUser(opts: { nickname: string; isAi?: boolean }): Promise<string> {
+async function seedUser(opts: {
+  nickname: string;
+  isAi?: boolean;
+  aiKind?: 'ephemeral' | 'persistent' | 'auction';
+}): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
-    INSERT INTO users (nickname, is_ai, onboarding_complete)
-    VALUES (${opts.nickname}, ${opts.isAi ?? false}, true)
+    INSERT INTO users (nickname, is_ai, ai_kind, onboarding_complete)
+    VALUES (${opts.nickname}, ${opts.isAi ?? false}, ${opts.isAi ? opts.aiKind ?? 'ephemeral' : null}, true)
     RETURNING id
   `;
   testUserIds.push(row.id);
@@ -93,8 +97,8 @@ beforeAll(async () => {
 
     // Create a shared test category for all seeded matches.
     const [cat] = await sql<{ id: string }[]>`
-      INSERT INTO categories (name, is_active)
-      VALUES (${{ en: 'IntegrationTest_Matches' }}::jsonb, true)
+      INSERT INTO categories (name, slug, is_active)
+      VALUES (${{ en: 'IntegrationTest_Matches' }}::jsonb, 'integration-test-matches', true)
       RETURNING id
     `;
     testCategoryId = cat.id;
@@ -270,6 +274,49 @@ describe('matchesService.incrementGoalsAndInsertEventIfMissing — integration',
 });
 
 describe('matchesService.cleanupOldDevMatches — integration', () => {
+  it('deletes the dev matches of an orphaned persistent bot but never the bot itself', async () => {
+    if (!dbAvailable) return;
+
+    const human = await seedUser({ nickname: 'cleanup_human_vs_roster' });
+    const rosterBot = await seedUser({
+      nickname: 'cleanup_roster_bot',
+      isAi: true,
+      aiKind: 'persistent',
+    });
+
+    // Old dev match where the roster bot appears ONLY here — the orphan
+    // condition that deletes an ephemeral bot must still spare a persistent one.
+    const oldDev = await seedMatch({
+      hostUserId: human,
+      opponentUserId: rosterBot,
+      isDev: true,
+      status: 'completed',
+      startedAt: new Date(Date.now() - 30 * 86_400_000),
+    });
+    // A newer dev match fills the keep=1 slot so oldDev is actually eligible
+    // even when this is the only suite that has seeded dev matches. Kept 3 days
+    // old so it can never outrank the sibling test's "recent" fixture.
+    await seedMatch({
+      hostUserId: human,
+      opponentUserId: rosterBot,
+      isDev: true,
+      status: 'completed',
+      startedAt: new Date(Date.now() - 3 * 86_400_000),
+    });
+
+    await matchesService.cleanupOldDevMatches(1);
+
+    const matches = await sql<{ id: string }[]>`
+      SELECT id FROM matches WHERE id = ${oldDev}
+    `;
+    expect(matches).toEqual([]);
+
+    const bots = await sql<{ id: string }[]>`
+      SELECT id FROM users WHERE id = ${rosterBot}
+    `;
+    expect(bots.map((r) => r.id)).toEqual([rosterBot]);
+  });
+
   it('removes old dev matches (and their child rows) but spares non-dev and recent dev', async () => {
     if (!dbAvailable) return;
 

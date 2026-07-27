@@ -415,8 +415,8 @@ describe('settleCompletedRankedMatch — partial-ledger recovery', () => {
     expect(outcome?.byUserId['human-1']?.newRp).toBe(1175);
     expect(outcome?.byUserId['bot-1']?.deltaRp).toBe(65); // +50 base +15 win-by-2
 
-    // Analytics: exactly ONE event total, and it is NOT for the already-settled
-    // human (bot is AI → no event; human already emitted its event last run).
+    // Analytics: ZERO events — the only freshly settled side is the bot (AI →
+    // never emits), and the human already emitted its event on the prior run.
     expect(trackRankPointsChangedMock).toHaveBeenCalledTimes(0);
   });
 

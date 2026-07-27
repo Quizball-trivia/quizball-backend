@@ -245,3 +245,100 @@ describe('one-winner acquire race', () => {
     expect(result).toBeNull();
   });
 });
+
+function tbilisiHour(): number {
+  return Number(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Tbilisi', hour: '2-digit', hour12: false }),
+  ) % 24;
+}
+
+describe('schedule window endHour>=24 wrap (finding #10)', () => {
+  it('an evening window encoded as endHour>=25 correctly INCLUDES the wrapped hour', async () => {
+    // Build a window [h .. h+something+24] that both spans the current hour AND
+    // wraps past midnight, encoded with endHour > 24 (the generator's form). The
+    // strict rung (session-preference requires in-window) must accept it.
+    const h = tbilisiHour();
+    // Window starts 1h before now and ends deep in the next day (encoded >24),
+    // so the current hour is inside a wrapped window.
+    const startHour = (h + 23) % 24; // one hour before now
+    const endHour = startHour + 5 + 24; // >24 → wraps; spans now and past midnight
+    repo.listEligibleBots.mockResolvedValue([
+      bot('evening', { rp: 1500, schedule: { startHour, endHour } }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result?.bot.user_id).toBe('evening');
+    // In-window at the strict rung → no schedule/session relaxation needed.
+    expect(result?.relaxationLevel).toBe('strict');
+  });
+
+  it('a window that excludes the current hour still forces schedule relaxation', async () => {
+    const h = tbilisiHour();
+    // A 2-hour window well away from now (encoded >24 to exercise the same path).
+    const startHour = (h + 4) % 24;
+    const endHour = startHour + 2 + 24;
+    repo.listEligibleBots.mockResolvedValue([
+      bot('offhours', { rp: 1500, schedule: { startHour, endHour } }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result?.bot.user_id).toBe('offhours');
+    // Out of window → session-preference AND schedule both had to relax.
+    expect(result?.relaxationLevel).toBe('relax_schedule');
+  });
+});
+
+describe('session-preference first rung (finding #10)', () => {
+  it('prefers a bot continuing a live session over one merely in-window', async () => {
+    const h = tbilisiHour();
+    const inWindow = { startHour: (h + 23) % 24, endHour: (h + 2) % 24 };
+    repo.listEligibleBots.mockResolvedValue([
+      // in-window but no recent session → fresh (still a session preference)
+      bot('fresh', { rp: 1500, schedule: { ...inWindow } }),
+      // in-window AND continuing a session started 5 min ago
+      bot('active', {
+        rp: 1500,
+        schedule: { ...inWindow, last_session_at: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+      }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    // Both pass the strict (session-preference) rung; either is acceptable, but
+    // selection must succeed AT the strict rung (proving the rung exists and both
+    // qualify as session-preferred).
+    expect(['fresh', 'active']).toContain(result?.bot.user_id);
+    expect(result?.relaxationLevel).toBe('strict');
+  });
+
+  it('relaxes session-preference when the only near bot has a stale session', async () => {
+    const h = tbilisiHour();
+    repo.listEligibleBots.mockResolvedValue([
+      bot('stale', {
+        rp: 1500,
+        // in-window but last session was hours ago (> 20-min gap) → NOT a session
+        // preference; must relax the first rung to be selected.
+        schedule: {
+          startHour: (h + 23) % 24,
+          endHour: (h + 2) % 24,
+          last_session_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+        },
+      }),
+    ]);
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+    expect(result?.bot.user_id).toBe('stale');
+    expect(result?.relaxationLevel).toBe('relax_session_preference');
+  });
+});

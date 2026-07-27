@@ -39,6 +39,12 @@ export interface FriendRequestListRow extends SocialPlayerRow {
   created_at: string;
 }
 
+export interface PendingAiFriendRequestRow {
+  id: string;
+  receiver_user_id: string;
+  created_at: string;
+}
+
 function normalizePair(userAId: string, userBId: string) {
   return userAId < userBId
     ? { userLowId: userAId, userHighId: userBId }
@@ -255,6 +261,30 @@ export const friendsRepo = {
         AND status = 'pending'
     `;
     return row ?? null;
+  },
+
+  async listPendingAiFriendRequests(): Promise<PendingAiFriendRequestRow[]> {
+    return sql<PendingAiFriendRequestRow[]>`
+      SELECT
+        fr.id,
+        fr.receiver_user_id,
+        fr.created_at
+      FROM friend_requests fr
+      JOIN users receiver ON receiver.id = fr.receiver_user_id
+      WHERE fr.status = 'pending'
+        -- Bound the scan: ignored requests stay pending forever, and anything
+        -- older than the 6h max accept delay can only be an ignore or a
+        -- persistently failing accept.
+        AND fr.created_at > NOW() - INTERVAL '3 days'
+        AND receiver.is_ai = true
+        AND receiver.is_deleted = false
+        AND receiver.deleted_at IS NULL
+        AND receiver.pending_deletion_at IS NULL
+      -- Random order: with an oldest-first slice, a backlog of ignored-but-
+      -- still-pending rows larger than the limit would starve newer requests.
+      ORDER BY random()
+      LIMIT 500
+    `;
   },
 
   async acceptRequest(

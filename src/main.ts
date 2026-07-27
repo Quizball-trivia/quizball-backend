@@ -13,6 +13,7 @@ import { DbWatchdog } from './db/watchdog.js';
 import { initSocketServer } from './realtime/socket-server.js';
 import { closeRedisClients } from './realtime/redis.js';
 import { shutdownPostHog } from './core/analytics.js';
+import { startAiFriendResponder, stopAiFriendResponder } from './modules/friends/ai-friend-responder.service.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -27,6 +28,7 @@ const server = httpServer.listen(config.PORT, () => {
     `Server started on port ${config.PORT} with Socket.IO`
   );
 });
+startAiFriendResponder();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -61,8 +63,15 @@ if (config.NODE_ENV !== 'local' && config.DB_WATCHDOG_ENABLED) {
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
+  // Stop responder ticks immediately (server.close waits for open connections,
+  // during which the interval could still fire) and drain the in-flight tick
+  // before the DB pool closes so a mid-tick accept never hits a closing pool.
+  const responderStopped = stopAiFriendResponder().catch((error) => {
+    logger.error({ error }, 'Shutdown cleanup step failed');
+  });
   io.close();
   server.close(async () => {
+    await responderStopped;
     const results = await Promise.allSettled([
       closeRedisClients(),
       shutdownPostHog(),

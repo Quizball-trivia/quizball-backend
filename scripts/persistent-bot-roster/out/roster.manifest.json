@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "seed": 20260729,
+  "count": 1000,
+  "reportSha256": "5c5587bba39836055803fb634212930001dd93f4a79a0be3db881bdd8fb2414c",
+  "patternsSha256": "63754b321e7876373371e9aa164a17370eb614d55eaa975b6600247485425755",
+  "exclusionSha256": "a290d5ec550b889a8bcd8fe6bab3e76993be9f97d3a3a6e10345170a252062b1",
+  "rosterSha256": "2d7adfc1fc28ddbe93ef297406a1ed3bcbc33b1a8252ff8b61c859042b13e849",
+  "generatedAt": "2026-07-27T21:53:18.712Z",
+  "maxNameAttempts": 4
+}

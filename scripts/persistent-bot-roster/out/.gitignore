@@ -1,0 +1,7 @@
+# Deliverables (report + CSV + manifest) ARE committed for review.
+# Nothing else in this dir is.
+*
+!.gitignore
+!REPORT.md
+!roster.csv
+!roster.manifest.json

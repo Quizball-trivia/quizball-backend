@@ -36,20 +36,24 @@ beforeEach(() => {
   repo.transferReservationToMatch.mockResolvedValue({ bot_user_id: 'bot' });
 });
 
-describe('flag-off inertness', () => {
+describe('flag-off: only ACQUISITION is gated; cleanup still runs (kill-switch safety)', () => {
   beforeEach(() => {
     configObj.PERSISTENT_BOTS_ENABLED = false;
   });
-  it('acquire/transfer/release are all no-ops with no repo calls', async () => {
+  it('acquire is a no-op with the flag off', async () => {
     expect(await reservationService.acquire({ botUserId: 'bot', lobbyId: 'l', ttlSec: 60 })).toBeNull();
     expect(await reservationService.isEnabled()).toBe(false);
+    expect(repo.acquireReservation).not.toHaveBeenCalled();
+  });
+  it('releases STILL run with the flag off so leases created while on are cleaned up', async () => {
     await reservationService.releaseByLobby('l', 'auto_leave_lobby');
     await reservationService.releaseByMatch('m', 'completion');
     await reservationService.releaseOwned({ botUserId: 'bot', fence: 1 }, 'match_found_cancel');
-    expect(repo.acquireReservation).not.toHaveBeenCalled();
-    expect(repo.releaseReservationByLobby).not.toHaveBeenCalled();
-    expect(repo.releaseReservationByMatch).not.toHaveBeenCalled();
-    expect(repo.releaseReservationOwned).not.toHaveBeenCalled();
+    expect(repo.releaseReservationByLobby).toHaveBeenCalledWith('l');
+    expect(repo.releaseReservationByMatch).toHaveBeenCalledWith('m');
+    expect(repo.releaseReservationOwned).toHaveBeenCalledWith(
+      expect.objectContaining({ botUserId: 'bot', fence: 1 }),
+    );
   });
 });
 

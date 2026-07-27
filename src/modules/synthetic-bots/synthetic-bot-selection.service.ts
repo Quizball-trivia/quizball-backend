@@ -85,38 +85,59 @@ function effectiveMatchesToday(bot: EligibleBotRow, rosterDay: string): number {
 function isWithinScheduleWindow(bot: EligibleBotRow, now = new Date()): boolean {
   const schedule = bot.schedule as { startHour?: unknown; endHour?: unknown } | null;
   const start = typeof schedule?.startHour === 'number' ? schedule.startHour : null;
-  const end = typeof schedule?.endHour === 'number' ? schedule.endHour : null;
+  const endRaw = typeof schedule?.endHour === 'number' ? schedule.endHour : null;
   // Missing/malformed schedule → treat as always in-window (schedule is the LAST
   // soft constraint relaxed anyway; a bad schedule must never hard-exclude).
-  if (start === null || end === null) return true;
+  if (start === null || endRaw === null) return true;
   const hourStr = now.toLocaleString('en-US', {
     timeZone: 'Asia/Tbilisi',
     hour: '2-digit',
     hour12: false,
   });
   const hour = Number.parseInt(hourStr, 10) % 24;
-  if (start === end) return true;
-  // Window may wrap past midnight (e.g. 22 → 2).
-  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+  // Generated evening schedules encode past-midnight windows as endHour > 24
+  // (e.g. 17→25 means 17:00–00:59). Treat any endHour ≥ 24 as wrapping, and
+  // normalize to [0,24) for the comparison so 00:00–00:59 is correctly INCLUDED.
+  const end = ((endRaw % 24) + 24) % 24;
+  const startNorm = ((start % 24) + 24) % 24;
+  if (startNorm === end) return true;
+  // Window wraps past midnight when the normalized end is at/behind the start
+  // (covers both an explicit 22→2 and an encoded 17→25).
+  return startNorm < end ? hour >= startNorm && hour < end : hour >= startNorm || hour < end;
+}
+
+// A bot "prefers" to be playing right now: it is within its active schedule
+// window AND either continuing a live session (last_session_at within the
+// session-gap window) or has no recent session (fresh start in-window). This is
+// the STRICTEST eligibility rung — dropped first when the pool is empty.
+const SESSION_GAP_MS = 20 * 60 * 1000; // matches the 20-min session segmentation used to learn archetypes.
+function prefersSessionNow(bot: EligibleBotRow, now: Date): boolean {
+  if (!isWithinScheduleWindow(bot, now)) return false;
+  const schedule = bot.schedule as { last_session_at?: unknown } | null;
+  const lastRaw = schedule?.last_session_at;
+  const lastMs = typeof lastRaw === 'string' ? Date.parse(lastRaw) : NaN;
+  if (Number.isNaN(lastMs)) return true; // in-window, no recent session → fresh start is a preference
+  return now.getTime() - lastMs <= SESSION_GAP_MS; // continuing an active session
 }
 
 interface EligibilityLevel {
   /** Soft constraints STILL enforced at this level (dropped as we relax). */
+  respectSessionPreference: boolean;
   respectRecentlyFaced: boolean;
   respectDailyCap: boolean;
   respectSchedule: boolean;
   relaxationLabel: string;
 }
 
-// Relaxation ladder: session preference → recently-faced → daily cap → schedule.
-// PR7 has no persisted session-preference signal yet (lands with the scheduler
-// in a later PR); level 0 is the strictest currently expressible tier. Each step
-// drops exactly one soft constraint, in the plan's fixed order.
+// Relaxation ladder in the plan's fixed order (§1.3):
+//   session preference → recently-faced → daily cap → schedule window.
+// Each step drops exactly one soft constraint (strictest first).
 const ELIGIBILITY_LADDER: EligibilityLevel[] = [
-  { respectRecentlyFaced: true, respectDailyCap: true, respectSchedule: true, relaxationLabel: 'strict' },
-  { respectRecentlyFaced: false, respectDailyCap: true, respectSchedule: true, relaxationLabel: 'relax_recently_faced' },
-  { respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: true, relaxationLabel: 'relax_daily_cap' },
-  { respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: false, relaxationLabel: 'relax_schedule' },
+  { respectSessionPreference: true, respectRecentlyFaced: true, respectDailyCap: true, respectSchedule: true, relaxationLabel: 'strict' },
+  { respectSessionPreference: false, respectRecentlyFaced: true, respectDailyCap: true, respectSchedule: true, relaxationLabel: 'relax_session_preference' },
+  { respectSessionPreference: false, respectRecentlyFaced: false, respectDailyCap: true, respectSchedule: true, relaxationLabel: 'relax_recently_faced' },
+  { respectSessionPreference: false, respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: true, relaxationLabel: 'relax_daily_cap' },
+  { respectSessionPreference: false, respectRecentlyFaced: false, respectDailyCap: false, respectSchedule: false, relaxationLabel: 'relax_schedule' },
 ];
 
 function passesLevel(
@@ -124,6 +145,7 @@ function passesLevel(
   level: EligibilityLevel,
   ctx: { recentlyFaced: Set<string>; rosterDay: string; now: Date },
 ): boolean {
+  if (level.respectSessionPreference && !prefersSessionNow(bot, ctx.now)) return false;
   if (level.respectRecentlyFaced && ctx.recentlyFaced.has(bot.user_id)) return false;
   if (level.respectDailyCap && effectiveMatchesToday(bot, ctx.rosterDay) >= bot.daily_cap) return false;
   if (level.respectSchedule && !isWithinScheduleWindow(bot, ctx.now)) return false;

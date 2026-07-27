@@ -164,21 +164,75 @@ export const syntheticBotsRepo = {
    * Re-key a stranded lobby-keyed reservation onto its live match (sweeper
    * recovery for a crash between match creation and transfer). Never touches a
    * reservation that already carries a match_id.
+   *
+   * Bot-qualified: only re-keys when the reserved bot is actually a match_player
+   * of the target match (no one-match-per-lobby constraint exists, so a
+   * duplicate-creation state could otherwise re-key onto the wrong match). The
+   * fence guard (`fence = expectedFence`) ensures a stale sweep snapshot cannot
+   * mutate a newer, re-acquired reservation. Returns whether a row was re-keyed.
    */
   async rekeyReservationToMatch(params: {
     botUserId: string;
     lobbyId: string;
     matchId: string;
+    expectedFence: number;
   }): Promise<boolean> {
     const rows = await sql<{ bot_user_id: string }[]>`
       UPDATE synthetic_bot_reservations
-        SET match_id = ${params.matchId}, heartbeat_at = now()
+        SET match_id = ${params.matchId},
+            heartbeat_at = now(),
+            expires_at = now() + interval '180 seconds'
       WHERE bot_user_id = ${params.botUserId}
         AND lobby_id = ${params.lobbyId}
+        AND fence = ${params.expectedFence}
         AND match_id IS NULL
+        AND EXISTS (
+          SELECT 1 FROM match_players mp
+          WHERE mp.match_id = ${params.matchId} AND mp.user_id = ${params.botUserId}
+        )
       RETURNING bot_user_id
     `;
     return rows.length > 0;
+  },
+
+  /**
+   * Fence-qualified heartbeat/expiry extension. Only extends the reservation the
+   * sweep observed (fence match), so a stale snapshot cannot extend a newer
+   * re-acquired reservation. Returns whether a row was extended.
+   */
+  async heartbeatReservationFenced(params: {
+    botUserId: string;
+    expectedFence: number;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    const rows = await sql<{ bot_user_id: string }[]>`
+      UPDATE synthetic_bot_reservations
+        SET heartbeat_at = now(), expires_at = ${params.expiresAt}
+      WHERE bot_user_id = ${params.botUserId} AND fence = ${params.expectedFence}
+      RETURNING bot_user_id
+    `;
+    return rows.length > 0;
+  },
+
+  /**
+   * Owner-agnostic release keyed by (lobby, fence) — the sweeper's genuinely
+   * stranded case. Fenced so a stale snapshot cannot delete a newer reservation.
+   */
+  async releaseReservationByLobbyFenced(lobbyId: string, expectedFence: number): Promise<string | null> {
+    const rows = await sql<{ bot_user_id: string }[]>`
+      DELETE FROM synthetic_bot_reservations
+      WHERE lobby_id = ${lobbyId} AND fence = ${expectedFence}
+      RETURNING bot_user_id
+    `;
+    return rows[0]?.bot_user_id ?? null;
+  },
+
+  /** Whether a lobby is still live enough to keep a pre-match reservation alive. */
+  async lobbyHasMembers(lobbyId: string): Promise<boolean> {
+    const [row] = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM lobby_members WHERE lobby_id = ${lobbyId}
+    `;
+    return (row?.n ?? 0) > 0;
   },
 
   /** Reservations past their expiry, oldest first — the sweeper's work list. */
@@ -272,5 +326,36 @@ export const syntheticBotsRepo = {
       RETURNING matches_day
     `;
     return rows[0]?.matches_day ?? null;
+  },
+
+  /**
+   * Tx-aware variant of the daily bump — runs INSIDE the match-creation
+   * transaction so the counter cannot drift from the reservation transfer (a
+   * crash after commit no longer loses the count). Also stamps the last session
+   * window timestamp into schedule.last_session_at (session tracking, §1.3) so
+   * the session-preference eligibility rung has a signal to read. Idempotent per
+   * match: the caller only invokes it when the transfer INSERT of match_id
+   * actually happened in this same tx.
+   */
+  async bumpMatchesTodayAndSelectedAtTx(tx: TransactionSql, botUserId: string): Promise<void> {
+    await tx.unsafe(
+      `UPDATE synthetic_player_profiles
+         SET
+           matches_today = CASE
+             WHEN matches_day IS DISTINCT FROM
+               ((now() AT TIME ZONE 'Asia/Tbilisi' - interval '7 hours')::date)
+             THEN 1 ELSE matches_today + 1 END,
+           matches_day = (now() AT TIME ZONE 'Asia/Tbilisi' - interval '7 hours')::date,
+           last_selected_at = now(),
+           schedule = jsonb_set(
+             COALESCE(schedule, '{}'::jsonb),
+             '{last_session_at}',
+             to_jsonb(now()),
+             true
+           ),
+           updated_at = now()
+       WHERE user_id = $1`,
+      [botUserId],
+    );
   },
 };

@@ -699,11 +699,18 @@ export const matchesService = {
             playerIds.map((userId, index) => ({ userId, seat: index + 1 })),
             tx,
           );
-          await reservationService.transferInTx(tx, {
+          const transferred = await reservationService.transferInTx(tx, {
             botUserId: persistentBotUserId!,
             lobbyId: params.lobbyId,
             matchId: created.id,
           });
+          // Bump the bot's Georgia-day counter + session timestamp INSIDE the
+          // same tx, gated on the transfer having actually happened — exactly-
+          // once per match, never lost to a post-commit crash and never bumped
+          // for a transfer that didn't occur (Sol finding #9).
+          if (transferred) {
+            await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, persistentBotUserId!);
+          }
           return created;
         })
       : await matchesRepo.createMatch({
@@ -725,19 +732,13 @@ export const matchesService = {
           seat: index + 1,
         }))
       );
-    } else {
-      // Successful transfer: bump the bot's Georgia-day match counter +
-      // last_selected_at, and record it as the human's recent opponent (LRU,
-      // last 5). Best-effort — the match is already durably created.
-      const bumpBotId = persistentBotUserId;
-      void syntheticBotsRepo.bumpMatchesTodayAndSelectedAt(bumpBotId).catch((err) => {
-        logger.warn({ err, botUserId: bumpBotId }, 'persistent-bot matches_today bump failed');
-      });
-      if (persistentMatchHumanId) {
-        void syntheticBotSelectionService
-          .recordRecentlyFaced(persistentMatchHumanId, bumpBotId)
-          .catch(() => undefined);
-      }
+    } else if (persistentMatchHumanId) {
+      // The Georgia-day counter + session timestamp were bumped inside the
+      // creation tx above. Recording the human's recent opponent is a Redis-only
+      // LRU (not a durable counter), so it stays best-effort after commit.
+      void syntheticBotSelectionService
+        .recordRecentlyFaced(persistentMatchHumanId, persistentBotUserId)
+        .catch(() => undefined);
     }
 
     if (params.variant === 'friendly_party_quiz') {

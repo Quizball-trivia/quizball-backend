@@ -19,6 +19,7 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import {
   FRIENDLY_LOBBY_MAX_MEMBERS,
   attachUserSocketsToLobby,
@@ -862,6 +863,7 @@ export async function leaveLobby(
           if (aiUserId) {
             await lobbiesRepo.removeMember(lobbyId, aiUserId);
           }
+          await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
           const redis = getRedisClient();
           if (redis) {
             await redis.del(rankedAiLobbyKey(lobbyId));

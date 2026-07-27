@@ -85,25 +85,31 @@ export const reservationService = {
   /**
    * Transfer a lobby-keyed reservation onto its match, INSIDE the caller's match
    * -creation transaction so the match row and the reservation's match_id commit
-   * atomically. Best-effort by design: returns whether a row was transferred so
-   * the caller can bump the bot's daily counters exactly once. Guarded on the
-   * flag AND on the lobby actually having a reservation (ephemeral lobbies skip).
+   * atomically. Returns whether a row was transferred so the caller can bump the
+   * bot's daily counters exactly once.
+   *
+   * NOT flag-gated (kill-switch safety): a reservation row only exists if the
+   * flag was on at acquire time; if the flag flips off mid-match the transfer of
+   * the ALREADY-ACQUIRED reservation must still complete, else the row is
+   * orphaned. No-op when the lobby has no reservation (ephemeral lobbies).
    */
   async transferInTx(
     tx: TransactionSql,
     params: { botUserId: string; lobbyId: string; matchId: string },
   ): Promise<boolean> {
-    if (!persistentBotsEnabled()) return false;
     const row = await syntheticBotsRepo.transferReservationToMatch(tx, params);
     return row != null;
   },
+
+  // Releases are NEVER flag-gated (kill-switch safety): they operate on existing
+  // reservation rows unconditionally and no-op when none exists, so reservations
+  // created while the flag was on are still cleaned up after it is turned off.
 
   /** Owner-qualified release (holder + fence) — the pre-match-lobby teardown sites. */
   async releaseOwned(
     params: { botUserId: string; fence: number },
     path: ReservationReleasePath,
   ): Promise<void> {
-    if (!persistentBotsEnabled()) return;
     try {
       const released = await syntheticBotsRepo.releaseReservationOwned({
         botUserId: params.botUserId,
@@ -124,7 +130,6 @@ export const reservationService = {
    * a match ever existed. No-op if the lobby has no reservation (ephemeral).
    */
   async releaseByLobby(lobbyId: string, path: ReservationReleasePath): Promise<void> {
-    if (!persistentBotsEnabled()) return;
     try {
       const botUserId = await syntheticBotsRepo.releaseReservationByLobby(lobbyId);
       if (botUserId) {
@@ -141,7 +146,6 @@ export const reservationService = {
    * state. No-op if the match has no reservation (ephemeral / human-vs-human).
    */
   async releaseByMatch(matchId: string, path: ReservationReleasePath): Promise<void> {
-    if (!persistentBotsEnabled()) return;
     try {
       const botUserId = await syntheticBotsRepo.releaseReservationByMatch(matchId);
       if (botUserId) {

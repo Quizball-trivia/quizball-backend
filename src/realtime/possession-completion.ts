@@ -425,6 +425,12 @@ export async function completePossessionMatch(
       } catch (err) {
         logger.warn({ err, matchId }, 'Ranked settlement failed — emitting results without rankedOutcome');
       }
+      // Release any persistent-bot reservation AFTER settlement finished (:406) —
+      // never at the status write (:330). Runs unconditionally here (own DB call,
+      // outside the Redis block below) so a missing/failing Redis client can never
+      // skip it. Releasing before RP settles would let a second match acquire the
+      // bot and read its profile mid-settlement.
+      await reservationService.releaseByMatch(matchId, 'completion');
     }
 
     const completionSideEffectsStartedAt = Date.now();
@@ -483,10 +489,6 @@ export async function completePossessionMatch(
       try {
         aiOpponentUserId = await redis.get(rankedAiMatchKey(matchId));
         await redis.del(rankedAiMatchKey(matchId));
-        // Release any persistent-bot reservation AFTER settlement (:406) — never
-        // at the status write (:330). Releasing before RP settles would let a
-        // second match acquire the bot and read its profile mid-settlement.
-        await reservationService.releaseByMatch(matchId, 'completion');
         await Promise.all(
           finalPlayers.map((player) =>
             redis.set(

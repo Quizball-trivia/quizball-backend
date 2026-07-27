@@ -26,14 +26,14 @@
  *  9. Emit schema-validated params.json (refuse if the refit did not converge).
  */
 
-import { withBatchRetry, config as loadEnv } from 'dotenv';
+import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 loadEnv();
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { openReadOnlyDb } from './readonly-db.js';
-import { withBatchRetry, resolveBatch, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, fetchAccuracyByDifficulty } from './queries.js';
+import { fetchAccuracyByDifficulty, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, resolveBatch, withBatchRetry } from './queries.js';
 import { fitLatentSkill, predictProb, type LatentAnswer, type LatentFitResult } from '../../src/modules/bots/calibration/latent-skill.js';
 import { buildFCurve, percentile, rocAuc, calibrationCurve, logNormalTimeStats, linearFit, logit } from '../../src/modules/bots/calibration/math.js';
 import { aggregateQuestionStats } from '../../src/modules/bots/calibration/aggregate.js';
@@ -100,21 +100,21 @@ async function main(): Promise<void> {
   const fitOpts = { maxIters: envInt('CALIBRATION_MAX_ITERS', 5000) };
   const db = openReadOnlyDb({ statementTimeoutMs });
   try {
-    const batch = await resolveBatch(db.query, { batchId: args.batchId, season: args.season });
+    const batch = await withBatchRetry(() => resolveBatch(db.query, { batchId: args.batchId, season: args.season }));
     if (!batch) throw new Error('No matching ranked_reset_batches row (check --season / --batch-id)');
     const s1Boundary = batch.completed_at;
     if (!s1Boundary) throw new Error('Resolved S1 batch has no completed_at; cannot scope Season-1 matches');
 
-    const profiles = await fetchPlacedProfiles(db.query, batch.id);
+    const profiles = await withBatchRetry(() => fetchPlacedProfiles(db.query, batch.id));
     const placedIds = profiles.map((p) => p.user_id);
     if (placedIds.length === 0) throw new Error('No placed S1 profiles for this batch');
 
     // S1 Bernoulli answers, already scoped to placed players + pre-boundary.
-    const rawAnswers = await fetchS1BernoulliAnswers(db.query, {
+    const rawAnswers = await withBatchRetry(() => fetchS1BernoulliAnswers(db.query, {
       s1Boundary,
       placedPlayerIds: placedIds,
       limit: args.limit,
-    });
+    }));
     if (rawAnswers.length === 0) throw new Error('No Season-1 Bernoulli answers for placed players');
 
     // Eligibility on the SCOPED set.
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
     writeFileSync(join(outDir, 'bot_model_params.insert.sql'), insertSql);
 
     // Accuracy-by-difficulty from the DB (real questions.difficulty buckets).
-    const diffRows = await fetchAccuracyByDifficulty(db.query);
+    const diffRows = await withBatchRetry(() => fetchAccuracyByDifficulty(db.query));
     const diffBuckets = diffRows.map((d) => ({
       difficulty: d.difficulty ?? 'unknown',
       questions: d.answers_count,

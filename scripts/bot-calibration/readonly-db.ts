@@ -60,6 +60,7 @@ export interface ReadOnlyDb {
    */
   sql: import('postgres').Sql;
   end: () => Promise<void>;
+  beginReadOnly: <T>(fn: (tx: ReturnType<typeof postgres>) => Promise<T>) => Promise<T>;
 }
 
 /**

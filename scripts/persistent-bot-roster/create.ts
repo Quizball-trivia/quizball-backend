@@ -28,6 +28,7 @@
  * Connection: prepare:false + the app's pooler-safe settings (finding #10).
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -38,6 +39,27 @@ import type { SqlLike, Tx } from './db-types.js';
 import { rosterDigest, sha256, type RosterManifest } from './manifest.js';
 import { generateRoster, normalizeForExclusion, type GeneratedBot } from './roster.js';
 import { isNicknameAllowed } from '../../src/modules/moderation/text-moderation.js';
+
+/**
+ * Build a Postgres array literal (e.g. `{"...","..."}`) for a jsonb[] bind
+ * parameter, passed as a single scalar text parameter rather than a JS array.
+ * postgres.js's own array-of-array-parameter path double-JSON-encodes when a
+ * query binds MORE THAN ONE unknown-typed jsonb[] parameter (empirically
+ * verified: a single jsonb[] array param round-trips fine, but a second one in
+ * the same unnest() call comes back as a jsonb STRING scalar, not an object —
+ * likely a param-type-inference quirk once Postgres sees two `::jsonb[]`
+ * casts). Building the literal ourselves and casting a scalar text parameter
+ * (`${literal}::jsonb[]`) sidesteps that path entirely.
+ */
+function jsonbArrayLiteral(values: readonly (string | null)[]): string {
+  return (
+    '{' +
+    values
+      .map((v) => (v === null ? 'NULL' : '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'))
+      .join(',') +
+    '}'
+  );
+}
 
 function argVal(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -145,6 +167,9 @@ export function verifyAndRegenerate(cfg: {
 
   return { manifest, bots, manifestDigest: sha256(manifestRaw) };
 }
+
+/** Bulk-insert batch size (findings #2/#3 keep the whole roster in ONE transaction). */
+const CHUNK_SIZE = 250;
 
 export class RosterCollisionError extends Error {
   constructor(public readonly collisions: string[]) {
@@ -258,42 +283,75 @@ export async function createRoster(sql: SqlLike, plan: VerifiedPlan, batch: stri
       throw new RosterCollisionError(collisions);
     }
 
-    // Clean state → insert every row inside this one transaction.
+    // Clean state → insert every row inside this one transaction, in chunks of
+    // CHUNK_SIZE bulk INSERT ... SELECT ... FROM unnest(...) statements (one per
+    // table) instead of per-bot round trips, so the whole roster survives the
+    // WAN pooler's transaction window. IDs are generated up front so the same
+    // id threads across all three tables within a chunk.
     const createdIds: string[] = [];
-    for (const b of bots) {
-      const [user] = await tx<{ id: string }[]>`
+    for (let start = 0; start < bots.length; start += CHUNK_SIZE) {
+      const chunk = bots.slice(start, start + CHUNK_SIZE);
+      const ids = chunk.map(() => randomUUID());
+
+      await tx`
         INSERT INTO users (
           id, email, nickname, country, avatar_url, avatar_customization,
           onboarding_complete, is_ai, ai_kind, coins, tickets, tickets_refill_started_at, favorite_club
-        ) VALUES (
-          gen_random_uuid(), NULL, ${b.nickname}, ${b.country}, NULL,
-          ${b.avatarCustomization ? tx.json(b.avatarCustomization as unknown as postgres.JSONValue) : null},
-          true, true, 'persistent', 0, 0, NULL, ${b.favoriteClub}
         )
-        RETURNING id
+        SELECT
+          id, NULL, nickname, country, NULL, avatar_customization,
+          true, true, 'persistent', 0, 0, NULL, favorite_club
+        FROM unnest(
+          ${ids}::uuid[],
+          ${chunk.map((b) => b.nickname)}::text[],
+          ${chunk.map((b) => b.country)}::text[],
+          ${jsonbArrayLiteral(chunk.map((b) => (b.avatarCustomization == null ? null : JSON.stringify(b.avatarCustomization))))}::jsonb[],
+          ${chunk.map((b) => b.favoriteClub)}::text[]
+        ) AS t(id, nickname, country, avatar_customization, favorite_club)
       `;
-      const userId = user!.id;
+
       await tx`
         INSERT INTO ranked_profiles (
           user_id, rp, tier, placement_status, placement_required, placement_played,
           placement_wins, placement_seed_rp, placement_perf_sum, placement_points_for_sum,
           placement_points_against_sum, current_win_streak, last_ranked_match_at
-        ) VALUES (${userId}, 450, 'Youth Prospect', 'unplaced', 3, 0, 0, NULL, 0, 0, 0, 0, NULL)
+        )
+        SELECT user_id, 450, 'Youth Prospect', 'unplaced', 3, 0, 0, NULL, 0, 0, 0, 0, NULL
+        FROM unnest(${ids}::uuid[]) AS t(user_id)
       `;
+
       await tx`
         INSERT INTO synthetic_player_profiles (
           user_id, status, base_skill, consistency, speed_offset, category_affinities,
           schedule, daily_cap, home_city, home_lat, home_lng, favorite_club,
           rename_propensity, personality_seed
-        ) VALUES (
-          ${userId}, 'active', ${b.baseSkill}, ${b.consistency}, ${b.speedOffset},
-          ${tx.json(b.categoryAffinities as unknown as postgres.JSONValue)},
-          ${tx.json({ ...b.schedule, batch, manifestDigest, band: b.skillBand, willRename: b.willRename } as unknown as postgres.JSONValue)},
-          ${b.dailyCap}, ${b.homeCity}, ${b.homeLat}, ${b.homeLng}, ${b.favoriteClub},
-          ${b.renamePropensity}, ${b.personalitySeed}
+        )
+        SELECT
+          user_id, 'active', base_skill, consistency, speed_offset, category_affinities,
+          schedule, daily_cap, home_city, home_lat, home_lng, favorite_club,
+          rename_propensity, personality_seed
+        FROM unnest(
+          ${ids}::uuid[],
+          ${chunk.map((b) => String(b.baseSkill))}::text[]::real[],
+          ${chunk.map((b) => String(b.consistency))}::text[]::real[],
+          ${chunk.map((b) => String(b.speedOffset))}::text[]::real[],
+          ${jsonbArrayLiteral(chunk.map((b) => JSON.stringify(b.categoryAffinities)))}::jsonb[],
+          ${jsonbArrayLiteral(chunk.map((b) => JSON.stringify({ ...b.schedule, batch, manifestDigest, band: b.skillBand, willRename: b.willRename })))}::jsonb[],
+          ${chunk.map((b) => String(b.dailyCap))}::text[]::smallint[],
+          ${chunk.map((b) => b.homeCity)}::text[],
+          ${chunk.map((b) => (b.homeLat == null ? null : String(b.homeLat)))}::text[]::float8[],
+          ${chunk.map((b) => (b.homeLng == null ? null : String(b.homeLng)))}::text[]::float8[],
+          ${chunk.map((b) => b.favoriteClub)}::text[],
+          ${chunk.map((b) => String(b.renamePropensity))}::text[]::real[],
+          ${chunk.map((b) => String(b.personalitySeed))}::text[]::bigint[]
+        ) AS t(
+          user_id, base_skill, consistency, speed_offset, category_affinities,
+          schedule, daily_cap, home_city, home_lat, home_lng, favorite_club,
+          rename_propensity, personality_seed
         )
       `;
-      createdIds.push(userId);
+
+      createdIds.push(...ids);
     }
     return { status: 'created' as const, createdIds, manifestDigest };
   })) as CreateOutcome;

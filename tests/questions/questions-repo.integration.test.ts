@@ -469,6 +469,28 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(result).toBeNull();
     });
 
+    it('should update payload without categoryId (normal CMS payload edit)', async () => {
+      if (!dbAvailable) return;
+
+      const question = await createTestQuestion(
+        { en: 'Keep my category' },
+        null,
+        { type: 'mcq_single', options: [] }
+      );
+      const newPayload = { type: 'mcq_single', options: [{ id: 'a', text: { en: 'A' } }] };
+
+      const updated = await questionsRepo.updateWithPayload(
+        question.id,
+        { status: 'published' },
+        newPayload
+      );
+
+      expect(updated).not.toBeNull();
+      expect(updated!.category_id).toBe(testCategoryId);
+      expect(updated!.status).toBe('published');
+      expect(await readPayloadFromDb(question.id)).toEqual(newPayload);
+    });
+
     it('should handle complex nested JSON in payload', async () => {
       if (!dbAvailable) return;
 

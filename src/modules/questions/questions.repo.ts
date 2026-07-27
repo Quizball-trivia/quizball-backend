@@ -321,7 +321,7 @@ export const questionsRepo = {
           type = CASE WHEN ${data.type !== undefined} THEN ${data.type ?? ''} ELSE type END,
           difficulty = CASE WHEN ${data.difficulty !== undefined} THEN ${data.difficulty ?? ''} ELSE difficulty END,
           status = CASE WHEN ${data.status !== undefined} THEN ${data.status ?? ''} ELSE status END,
-          prompt = CASE WHEN ${data.prompt !== undefined} THEN ${data.prompt !== undefined ? sql.json(data.prompt as unknown as Json) : null}::jsonb ELSE prompt END,
+          prompt = CASE WHEN ${data.prompt !== undefined} THEN ${data.prompt ? sql.json(data.prompt as unknown as Json) : null}::jsonb ELSE prompt END,
           explanation = CASE WHEN ${data.explanation !== undefined} THEN ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}::jsonb ELSE explanation END,
           updated_at = NOW()
         WHERE id = ${id}

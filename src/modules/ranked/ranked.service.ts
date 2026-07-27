@@ -5,6 +5,7 @@ import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
+import { isRankedSettleEligible } from '../users/ai-classification.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
@@ -357,15 +358,20 @@ export const rankedService = {
 
     const usersById = await usersRepo.getByIds(players.map((player) => player.user_id));
     const byUserId = new Map(players.map((player) => [player.user_id, usersById.get(player.user_id) ?? null]));
-    const humanPlayers = players.filter((player) => !byUserId.get(player.user_id)?.is_ai);
-    if (humanPlayers.length === 0) {
-      logger.debug({ matchId }, 'Ranked settlement skipped: no human players');
+    // Settle-eligible = real humans PLUS persistent roster bots (both accrue RP,
+    // W/L/D, streak, placement). Ephemeral/auction AI never settle a profile.
+    const settleEligiblePlayers = players.filter((player) => {
+      const user = byUserId.get(player.user_id);
+      return user != null && isRankedSettleEligible(user);
+    });
+    if (settleEligiblePlayers.length === 0) {
+      logger.debug({ matchId }, 'Ranked settlement skipped: no settle-eligible players');
       return null;
     }
 
     const existing = await rankedRepo.getRpChangesForMatch(matchId);
-    if (existing.length >= humanPlayers.length) {
-      const profiles = await rankedRepo.getProfilesByUserIds(humanPlayers.map((p) => p.user_id));
+    if (existing.length >= settleEligiblePlayers.length) {
+      const profiles = await rankedRepo.getProfilesByUserIds(settleEligiblePlayers.map((p) => p.user_id));
       const profileByUser = new Map(profiles.map((p) => [p.user_id, p]));
       await invalidateUserRankCaches(profiles.map((profile) => ({
         userId: profile.user_id,
@@ -408,11 +414,11 @@ export const rankedService = {
       winnerUserId: match.winner_user_id,
       winnerDecisionMethod,
       bothForfeit,
-      humanPlayerIds: humanPlayers.map((player) => player.user_id),
-      reusedExistingOutcome: existing.length >= humanPlayers.length,
+      settleEligiblePlayerIds: settleEligiblePlayers.map((player) => player.user_id),
+      reusedExistingOutcome: existing.length >= settleEligiblePlayers.length,
       rankedContext,
     }, 'Ranked settlement started');
-    const profiles = await Promise.all(humanPlayers.map((player) => rankedRepo.ensureProfile(player.user_id)));
+    const profiles = await Promise.all(settleEligiblePlayers.map((player) => rankedRepo.ensureProfile(player.user_id)));
     const profileByUser = new Map(profiles.map((profile) => [profile.user_id, profile]));
 
     const settlementEntries: Array<{
@@ -449,13 +455,20 @@ export const rankedService = {
       outcome: RankedUserOutcome;
     }> = [];
 
-    for (const player of humanPlayers) {
+    for (const player of settleEligiblePlayers) {
       const profile = profileByUser.get(player.user_id);
       if (!profile) continue;
 
+      const playerUser = byUserId.get(player.user_id);
+      // Coins are a human-only participation reward. Persistent bots settle RP
+      // but must never earn coins (capability matrix: economy stays AI).
+      const playerIsHuman = playerUser != null && !playerUser.is_ai;
+
       const opponent = players.find((candidate) => candidate.user_id !== player.user_id) ?? null;
       const opponentUser = opponent ? byUserId.get(opponent.user_id) ?? null : null;
-      const opponentProfile = opponent && opponentUser && !opponentUser.is_ai
+      // Opponent RP comes from a real profile for humans AND persistent bots;
+      // ephemeral/auction opponents fall back to the pinned aiAnchorRp below.
+      const opponentProfile = opponent && opponentUser && isRankedSettleEligible(opponentUser)
         ? (profileByUser.get(opponent.user_id) ?? await rankedRepo.ensureProfile(opponent.user_id))
         : null;
 
@@ -463,7 +476,12 @@ export const rankedService = {
       const result: 'win' | 'loss' = isWin ? 'win' : 'loss';
       const oldRp = profile.rp;
       const oldTier = tierFromRp(oldRp);
-      const isPlacement = rankedContext.isPlacement || needsPlacement(profile);
+      // Per-participant placement: each side's treatment derives ONLY from its
+      // own profile. The match-wide rankedContext.isPlacement flag (set from the
+      // human at match creation) must not force placement math onto an already-
+      // placed participant — a placed bot vs an unplaced human settle
+      // independently in the same match.
+      const isPlacement = needsPlacement(profile);
 
       let newRp = oldRp;
       let deltaRp = 0;
@@ -547,6 +565,8 @@ export const rankedService = {
         placementRequired: profile.placement_required,
       }, 'Ranked settlement computed player outcome');
 
+      const coinsAwarded = playerIsHuman ? coinsForRankedResult(result) : 0;
+
       settlementEntries.push({
         profile: {
           userId: player.user_id,
@@ -577,13 +597,13 @@ export const rankedService = {
           placementPerfScore,
           calculationMethod,
         },
-        coinsAwarded: coinsForRankedResult(result),
+        coinsAwarded,
         outcome: {
           userId: player.user_id,
           oldRp,
           newRp,
           deltaRp,
-          coinsAwarded: coinsForRankedResult(result),
+          coinsAwarded,
           oldTier,
           newTier,
           placementStatus,
@@ -629,7 +649,10 @@ export const rankedService = {
 
     // Analytics: emit once per human player when RP is FRESHLY settled (not on the
     // idempotent re-read path above), so ranked progression is visible in PostHog.
+    // Persistent bots settle RP but stay out of analytics (capability matrix).
     for (const o of Object.values(outcome.byUserId)) {
+      const settledUser = byUserId.get(o.userId);
+      if (settledUser && settledUser.is_ai) continue;
       trackRankPointsChanged(o.userId, o.oldRp, o.newRp, o.isPlacement ? 'placement' : 'ranked_match');
     }
 

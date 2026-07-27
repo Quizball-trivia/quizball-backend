@@ -281,8 +281,9 @@ export const rankedRepo = {
   /**
    * Admin: reset the leaderboard for an event. Archives every existing ranked
    * profile and RP-change row into the archive tables under a single reset
-   * batch, then zeroes out the live ranked_profiles for real users only
-   * (excludes AI/seed/deleted). Tier becomes 'Academy' (the rp=0 tier) and all
+   * batch, then zeroes out the live ranked_profiles for settle-eligible users —
+   * real humans plus persistent roster bots (excludes ephemeral/auction AI, seed,
+   * deleted). Tier becomes 'Academy' (the rp=0 tier) and all
    * placement progress is cleared so players start fresh. Runs in one
    * transaction so the archive and reset are atomic.
    */
@@ -350,7 +351,7 @@ export const rankedRepo = {
         WHERE EXISTS (
           SELECT 1 FROM users u
           WHERE u.id = rp.user_id
-            AND u.is_ai = false
+            AND (u.is_ai = false OR u.ai_kind = 'persistent')
             AND u.is_seed = false
             AND u.is_deleted = false
             AND u.deleted_at IS NULL

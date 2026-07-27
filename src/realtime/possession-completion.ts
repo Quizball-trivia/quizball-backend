@@ -35,7 +35,7 @@ import {
   emitFinalResultsToMatchParticipants,
 } from './services/match-final-results.service.js';
 import { finalizeRankedNoContest } from './services/ranked-no-contest.service.js';
-import { hasNoHumanInteraction } from './services/match-interaction.service.js';
+import { hasNoHumanInteraction, isNoContestHuman } from './services/match-interaction.service.js';
 import type { QuizballServer } from './socket-server.js';
 import type { MatchFinalResultsPayload } from './socket.types.js';
 
@@ -279,7 +279,7 @@ export async function completePossessionMatch(
       const humanUserIds = new Set(
         decisionInput
           .map((player) => rosterUsers.get(player.user_id))
-          .filter((user): user is NonNullable<typeof user> => user != null && user.is_ai === false)
+          .filter((user): user is NonNullable<typeof user> => user != null && isNoContestHuman(user))
           .map((user) => user.id)
       );
       if (humanUserIds.size > 0) {

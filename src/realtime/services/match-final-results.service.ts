@@ -303,12 +303,13 @@ export async function emitLastMatchResultIfAny(
 
   // Retry idempotent post-completion writes that may have been missed
   // (e.g. player disconnected before they fired after match completion).
+  // settleCompletedRankedMatch is per-participant idempotent: it no-ops when the
+  // ledger is complete and fills only the missing rows when it is partial (a
+  // human-only row awaiting its persistent-bot counterpart), so we call it
+  // unconditionally rather than gating on a non-null (possibly partial) outcome.
   try {
     if (lastMatch.mode === 'ranked' && !cancelledNoContest) {
-      const existing = await rankedService.getMatchOutcome(replay.matchId);
-      if (!existing) {
-        await rankedService.settleCompletedRankedMatch(replay.matchId);
-      }
+      await rankedService.settleCompletedRankedMatch(replay.matchId);
     }
   } catch (err) { logger.warn({ err, matchId: replay.matchId }, 'Failed to settle ranked outcome during replay'); }
 

@@ -149,13 +149,24 @@ export interface RosterPatterns {
    * become taken by a live signup before creation, which would silently diverge
    * the reproducible sequence. Creation additionally does a live final-collision
    * check as a separate post-pass.
+   *
+   * PRIVACY: the set holds ~23.5k real user nicknames (often full personal
+   * names). We only need MEMBERSHIP testing, so the committed artifact stores
+   * salted HASHES, never plaintext. Each entry is
+   * sha256(salt + nfcNormalizedLower(name)); the random salt is committed
+   * alongside (it only prevents casual bulk reading — targeted membership
+   * testing IS the intended feature). Plaintext is never written to any file.
    */
   exclusion: {
     count: number;
-    /** sha256 of the sorted, lowercased exclusion list. */
+    /** Hash algorithm + construction, for forward-compat. */
+    algorithm: 'sha256(salt+nfcLower)';
+    /** Random hex salt generated at measure time and committed. */
+    salt: string;
+    /** sha256 digest of the sorted hash list (stable content id). */
     sha256: string;
-    /** The lowercased names themselves (sorted). */
-    names: string[];
+    /** The salted hashes themselves (sorted hex). Membership-test only. */
+    hashes: string[];
   };
   /**
    * FROZEN list of real, active category slugs measured from the DB (hyphenated,

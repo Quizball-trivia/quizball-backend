@@ -17,6 +17,7 @@
 import type { RosterPatterns, ScheduleArchetype } from './patterns.js';
 import { COUNTRY_CITIES } from './pools.js';
 import { buildCandidate } from './name-generator.js';
+import { exclusionMembership, nfcLower } from './exclusion.js';
 import {
   chance,
   fieldRng,
@@ -75,26 +76,26 @@ const MAX_NAME_ATTEMPTS = 40;
 /** Minimum category count needed to sample 2-4 strengths + 2-4 weaknesses. */
 const MIN_CATEGORIES = 8;
 
+/** Canonical case-insensitive key (shared with the exclusion hashing). */
 function normalizeForExclusion(name: string): string {
-  // Locale-independent casefold; NFC to keep Georgian composed. Never use
-  // toLocaleLowerCase (Turkish-i / Mtavruli hazards).
-  return name.normalize('NFC').toLowerCase();
+  return nfcLower(name);
 }
 
 function generateName(
   masterSeed: number,
   index: number,
   patterns: RosterPatterns,
-  taken: Set<string>,
+  isExcluded: (name: string) => boolean,
+  emitted: Set<string>,
 ): { nickname: string; attempts: number } {
   const rng = fieldRng(masterSeed, index, 'name');
   for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt++) {
     const candidate = buildCandidate({ rng, patterns: patterns.name, attempt });
     const key = normalizeForExclusion(candidate);
-    // `taken` is pre-seeded with the frozen exclusion set (lowercased) plus every
-    // name emitted so far, so one membership check covers both.
-    if (!key || taken.has(key)) continue;
-    taken.add(key);
+    // Reject if empty, already emitted (mutual uniqueness), or in the frozen
+    // exclusion set (tested against the salted-hash membership set — no plaintext).
+    if (!key || emitted.has(key) || isExcluded(candidate)) continue;
+    emitted.add(key);
     return { nickname: candidate, attempts: attempt + 1 };
   }
   throw new Error(
@@ -180,12 +181,14 @@ export function generateRoster(options: GenerateOptions): GeneratedBot[] {
     );
   }
 
-  // Frozen exclusion set (already lowercased + sorted in patterns.json).
-  const taken = new Set<string>(patterns.exclusion.names);
+  // Frozen exclusion set: membership-tested against the committed SALTED HASHES
+  // (no plaintext). `emitted` tracks names produced so far for mutual uniqueness.
+  const { has: isExcluded } = exclusionMembership(patterns.exclusion);
+  const emitted = new Set<string>();
   const bots: GeneratedBot[] = [];
 
   for (let i = 0; i < count; i++) {
-    const { nickname, attempts } = generateName(seed, i, patterns, taken);
+    const { nickname, attempts } = generateName(seed, i, patterns, isExcluded, emitted);
 
     // Finding #7: EVERY attribute draws from its OWN sub-seeded stream, so
     // adding a draw to one attribute can never shift another (of this bot or any

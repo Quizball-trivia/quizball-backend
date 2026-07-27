@@ -1,4 +1,10 @@
 import type { RosterPatterns } from '../../scripts/persistent-bot-roster/patterns.js';
+import { buildExclusion } from '../../scripts/persistent-bot-roster/exclusion.js';
+
+/** Build a hashed exclusion block (fixed salt for hermetic tests). */
+export function makeExclusion(names: string[] = []): RosterPatterns['exclusion'] {
+  return buildExclusion(names, 'testsalt00000000');
+}
 
 /**
  * A synthetic patterns.json fixture for unit tests — independent of live data so
@@ -11,7 +17,7 @@ export function makePatterns(overrides: Partial<RosterPatterns> = {}): RosterPat
     generatedAt: '2026-07-27T00:00:00.000Z',
     measuredAgainst: 'test',
     cohort: { realWithIdentity: 11245, namedUsers: 152, namedAndPlayed: 122, everPlayed: 6190 },
-    exclusion: { count: 0, sha256: 'test', names: [] },
+    exclusion: makeExclusion([]),
     name: {
       cohortSize: 122,
       namedCohortSize: 152,

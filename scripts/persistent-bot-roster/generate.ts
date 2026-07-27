@@ -21,6 +21,7 @@ import { buildCandidate } from './name-generator.js';
 import { fieldRng } from './prng.js';
 import { renderCsv, renderReport } from './report.js';
 import { rosterDigest, sha256, type RosterManifest } from './manifest.js';
+import { exclusionMembership, nfcLower } from './exclusion.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,13 +68,14 @@ function main() {
 
   const bots = generateRoster({ seed, count, patterns });
 
-  // Sanity: all mutually unique (case-insensitive) and none in the exclusion set.
+  // Sanity: all mutually unique (case-insensitive) and none in the exclusion set
+  // (membership-tested against the committed salted hashes — no plaintext).
   const keys = new Set<string>();
-  const exclusion = new Set(patterns.exclusion.names);
+  const { has: isExcluded } = exclusionMembership(patterns.exclusion);
   for (const b of bots) {
-    const k = b.nickname.normalize('NFC').toLowerCase();
+    const k = nfcLower(b.nickname);
     if (keys.has(k)) throw new Error(`Duplicate generated nickname: ${b.nickname}`);
-    if (exclusion.has(k)) throw new Error(`Generated nickname collides with exclusion set: ${b.nickname}`);
+    if (isExcluded(b.nickname)) throw new Error(`Generated nickname collides with exclusion set: ${b.nickname}`);
     keys.add(k);
   }
 

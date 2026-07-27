@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 
 import { generateRoster, normalizeForExclusion } from '../../scripts/persistent-bot-roster/roster.js';
 import { fieldRng, mulberry32, personalitySeed, quantileSample, weightedPick } from '../../scripts/persistent-bot-roster/prng.js';
-import { makePatterns } from './fixtures.js';
+import { makePatterns, makeExclusion } from './fixtures.js';
 
 describe('roster generator — determinism', () => {
   it('same seed produces the identical roster', () => {
@@ -40,26 +40,25 @@ describe('roster generator — uniqueness & exclusion', () => {
   });
 
   it('never emits a name in the frozen exclusion set (case-insensitive)', () => {
-    // Seed the exclusion set with names the generator would otherwise produce.
+    // Seed the exclusion set (hashed) with names the generator would produce.
     const sample = generateRoster({ seed: 9, count: 300, patterns: makePatterns() });
-    const excluded = sample.slice(0, 150).map((b) => normalizeForExclusion(b.nickname));
-    const patterns = makePatterns({
-      exclusion: { count: excluded.length, sha256: 'x', names: [...excluded].sort() },
-    });
+    const excluded = sample.slice(0, 150).map((b) => b.nickname);
+    const excludedKeys = new Set(excluded.map((n) => normalizeForExclusion(n)));
+    const patterns = makePatterns({ exclusion: makeExclusion(excluded) });
     const bots = generateRoster({ seed: 9, count: 300, patterns });
     for (const b of bots) {
-      expect(excluded).not.toContain(normalizeForExclusion(b.nickname));
+      expect(excludedKeys.has(normalizeForExclusion(b.nickname))).toBe(false);
     }
   });
 
   it('still produces the full count under a large exclusion set', () => {
     // Exclude 5,000 plausible names; generator must still fill 1,000 uniquely.
     const filler = generateRoster({ seed: 555, count: 5000, patterns: makePatterns() });
-    const names = filler.map((b) => normalizeForExclusion(b.nickname)).sort();
-    const patterns = makePatterns({ exclusion: { count: names.length, sha256: 'x', names } });
+    const names = filler.map((b) => b.nickname);
+    const patterns = makePatterns({ exclusion: makeExclusion(names) });
     const bots = generateRoster({ seed: 111, count: 1000, patterns });
     expect(bots.length).toBe(1000);
-    const excl = new Set(names);
+    const excl = new Set(names.map((n) => normalizeForExclusion(n)));
     for (const b of bots) expect(excl.has(normalizeForExclusion(b.nickname))).toBe(false);
   });
 });

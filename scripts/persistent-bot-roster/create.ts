@@ -342,14 +342,9 @@ async function main() {
       process.stdout.write(`Created ${outcome.createdIds.length} bots in batch "${cfg.batch}".\n`);
     }
 
-    const inv = await checkInvariants(sql, cfg.batch, plan.manifest.count);
-    process.stdout.write(`Invariant check: ${JSON.stringify(inv.counts)}\n`);
-    if (!inv.ok) {
-      process.stderr.write(`INVARIANT FAILURES:\n - ${inv.problems.join('\n - ')}\n`);
-      process.exit(2);
-    }
-
-    // Receipt (finding #4): per-environment provenance for rollback.
+    // Write the RECEIPT FIRST — immediately after the transaction commits — so a
+    // subsequent invariant failure can never strand committed rows without
+    // rollback provenance (CodeRabbit #1). Only then run the invariant check.
     const receipt = {
       schemaVersion: 1,
       batch: cfg.batch,
@@ -360,8 +355,17 @@ async function main() {
       userIds: outcome.createdIds.slice().sort(),
     };
     writeFileSync(cfg.receiptPath, JSON.stringify(receipt, null, 2) + '\n');
-    process.stdout.write(`All invariants passed. Receipt written: ${cfg.receiptPath}\n`);
+    process.stdout.write(`Receipt written (before invariants): ${cfg.receiptPath}\n`);
     process.stdout.write('NOTE: the receipt is a PER-ENVIRONMENT artifact — keep staging and prod receipts separate.\n');
+
+    const inv = await checkInvariants(sql, cfg.batch, plan.manifest.count);
+    process.stdout.write(`Invariant check: ${JSON.stringify(inv.counts)}\n`);
+    if (!inv.ok) {
+      process.stderr.write(`INVARIANT FAILURES:\n - ${inv.problems.join('\n - ')}\n`);
+      process.stderr.write(`Rows ARE committed; roll back with the receipt just written: ${cfg.receiptPath}\n`);
+      process.exit(2);
+    }
+    process.stdout.write('All invariants passed.\n');
   } finally {
     await sql.end({ timeout: 5 });
   }

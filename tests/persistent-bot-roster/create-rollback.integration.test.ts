@@ -221,7 +221,9 @@ describe('roster create + rollback (test DB)', { timeout: 30_000 }, () => {
     };
     const expected = new Set(bots.map((b) => normalizeForExclusion(b.nickname)));
 
-    const result = await rollbackReceipt(sql, { receipt, expectedNickByAny: expected, force: false, dry: false });
+    const result = await rollbackReceipt(sql, {
+      receipt, manifest, manifestDigest: plan.manifestDigest, expectedNickByAny: expected, force: false, dry: false,
+    });
     expect(result.refusedReason).toBeUndefined();
     expect(result.deleted).toBe(COUNT);
 
@@ -251,16 +253,36 @@ describe('roster create + rollback (test DB)', { timeout: 30_000 }, () => {
       VALUES (${rogue!.id}, 0.5, 12345, ${sql.json({ batch: BATCH } as never)})
     `;
     try {
+      const plan = verifyAndRegenerate(verifyCfg);
       const receipt: RosterReceipt = {
-        schemaVersion: 1, batch: BATCH, manifestDigest: 'x', rosterSha256: manifest.rosterSha256,
+        schemaVersion: 1, batch: BATCH, manifestDigest: plan.manifestDigest, rosterSha256: manifest.rosterSha256,
         count: 1, createdAt: new Date().toISOString(), userIds: [rogue!.id],
       };
       const expected = new Set(bots.map((b) => normalizeForExclusion(b.nickname)));
-      const result = await rollbackReceipt(sql, { receipt, expectedNickByAny: expected, force: false, dry: false });
+      const result = await rollbackReceipt(sql, {
+        receipt, manifest, manifestDigest: plan.manifestDigest, expectedNickByAny: expected, force: false, dry: false,
+      });
       expect(result.refusedReason).toMatch(/nickname matches the manifest/);
       expect(result.deleted).toBe(0);
     } finally {
       await sql`DELETE FROM users WHERE id = ${rogue!.id}`;
     }
+  });
+
+  it('rollback refuses inside the function when receipt.manifestDigest is wrong (CodeRabbit #4)', async ({ skip }) => {
+    if (!dbAvailable) return skip();
+    const plan = verifyAndRegenerate(verifyCfg);
+    // A receipt with a MISMATCHED manifestDigest must be refused by rollbackReceipt
+    // itself (not just the CLI wrapper), before any lock/delete.
+    const receipt: RosterReceipt = {
+      schemaVersion: 1, batch: BATCH, manifestDigest: 'deadbeef', rosterSha256: manifest.rosterSha256,
+      count: 1, createdAt: new Date().toISOString(), userIds: ['00000000-0000-0000-0000-000000000000'],
+    };
+    const expected = new Set(bots.map((b) => normalizeForExclusion(b.nickname)));
+    const result = await rollbackReceipt(sql, {
+      receipt, manifest, manifestDigest: plan.manifestDigest, expectedNickByAny: expected, force: false, dry: false,
+    });
+    expect(result.refusedReason).toMatch(/manifestDigest does not match/);
+    expect(result.deleted).toBe(0);
   });
 });

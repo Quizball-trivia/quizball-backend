@@ -57,23 +57,38 @@ export interface RollbackResult {
 
 export interface RollbackInputs {
   receipt: RosterReceipt;
-  /** Expected lowercased nicknames by user id (from regenerating the manifest). */
+  /** Regenerated manifest (from the supplied manifest.json + patterns.json). */
+  manifest: RosterManifest;
+  /** sha256 of the manifest.json bytes — receipt.manifestDigest must equal this. */
+  manifestDigest: string;
+  /** Expected lowercased nicknames (from regenerating the manifest). */
   expectedNickByAny: Set<string>;
   force: boolean;
   dry: boolean;
 }
 
 /**
- * Roll back exactly the receipt's ids in one locking transaction. Exported for
+ * Roll back exactly the receipt's ids in one locking transaction. The receipt↔
+ * manifest binding is verified INSIDE the transaction (CodeRabbit #4), so a
+ * mismatched receipt/manifest pairing refuses before any lock or delete — even
+ * for programmatic callers that don't go through the CLI wrapper. Exported for
  * the integration test.
  */
 export async function rollbackReceipt(sql: SqlLike, inputs: RollbackInputs): Promise<RollbackResult> {
-  const { receipt, expectedNickByAny, force, dry } = inputs;
+  const { receipt, manifest, manifestDigest, expectedNickByAny, force, dry } = inputs;
   const ids = receipt.userIds;
   if (ids.length === 0) return { candidates: 0, deleted: 0 };
 
   return (await sql.begin(async (rawTx) => {
     const tx = rawTx as unknown as Tx;
+
+    // Receipt↔manifest binding (fail closed, before any DB mutation).
+    if (receipt.manifestDigest !== manifestDigest) {
+      return { candidates: 0, deleted: 0, refusedReason: 'receipt.manifestDigest does not match the supplied manifest; wrong pairing' };
+    }
+    if (receipt.rosterSha256 !== manifest.rosterSha256) {
+      return { candidates: 0, deleted: 0, refusedReason: 'receipt.rosterSha256 does not match manifest.rosterSha256' };
+    }
 
     // Lock the exact rows and gather everything needed to validate them.
     const rows = await tx<{
@@ -212,16 +227,12 @@ async function main() {
 
   const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as RosterReceipt;
   const { manifest, nicks } = expectedNicknames(manifestPath, patternsPath);
-  if (receipt.manifestDigest !== sha256(readFileSync(manifestPath, 'utf8'))) {
-    throw new Error('receipt.manifestDigest does not match the supplied manifest; wrong pairing. Refusing.');
-  }
-  if (receipt.rosterSha256 !== manifest.rosterSha256) {
-    throw new Error('receipt.rosterSha256 does not match manifest.rosterSha256; refusing.');
-  }
+  const manifestDigest = sha256(readFileSync(manifestPath, 'utf8'));
 
   const sql = openWriteDb();
   try {
-    const r = await rollbackReceipt(sql, { receipt, expectedNickByAny: nicks, force, dry });
+    // The receipt↔manifest binding is enforced inside rollbackReceipt.
+    const r = await rollbackReceipt(sql, { receipt, manifest, manifestDigest, expectedNickByAny: nicks, force, dry });
     if (r.refusedReason) {
       process.stderr.write(`REFUSED: ${r.refusedReason}\n`);
       if (r.gameplayReferenced?.length) {

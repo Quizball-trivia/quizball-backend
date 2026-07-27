@@ -14,12 +14,13 @@
  * injection surface; plain strings also sidestep postgres.js fragment machinery.
  */
 
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { openReadOnlyDb } from './readonly-db.js';
+import { buildExclusion } from './exclusion.js';
 import type {
   ActivityPatterns,
   AvatarPatterns,
@@ -248,28 +249,33 @@ async function measure(): Promise<RosterPatterns> {
     `);
     const categorySlugs = catRows.map((r) => r.slug);
 
-    // Frozen exclusion set --------------------------------------------
+    // Frozen exclusion set (salted-hash, privacy-preserving) ----------
+    // Fetch RAW names (no SQL lower/DISTINCT): NFC-normalization must happen
+    // BEFORE dedup so canonically-equal but byte-different names collapse to one
+    // entry. Then salt + hash + dedup + sort. Plaintext never leaves this scope.
     const exclusionRows = await q<{ x: string }[]>(`
-      SELECT DISTINCT lower(x) x FROM (
+      SELECT x FROM (
         SELECT nickname x FROM users WHERE nickname IS NOT NULL
-        UNION SELECT old_nickname FROM nickname_history WHERE old_nickname IS NOT NULL
-        UNION SELECT new_nickname FROM nickname_history WHERE new_nickname IS NOT NULL
+        UNION ALL SELECT old_nickname FROM nickname_history WHERE old_nickname IS NOT NULL
+        UNION ALL SELECT new_nickname FROM nickname_history WHERE new_nickname IS NOT NULL
       ) s WHERE x IS NOT NULL
     `);
-    const names = exclusionRows.map((r) => r.x.normalize('NFC')).sort();
-    const exclusionSha = createHash('sha256').update(names.join('\n')).digest('hex');
+    const rawNames = exclusionRows.map((r) => r.x);
+    const salt = randomBytes(16).toString('hex');
+    const exclusion = buildExclusion(rawNames, salt);
 
     return {
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
-      measuredAgainst: maskDsn(process.env.ROSTER_MEASURE_DATABASE_URL!),
+      // Non-identifying label only (no project ref / role / pooler host).
+      measuredAgainst: `${envTag()} @ ${new Date().toISOString()}`,
       cohort: {
         realWithIdentity: cohort!.real_identity,
         namedUsers: cohort!.named,
         namedAndPlayed: cohort!.named_played,
         everPlayed: cohort!.ever_played,
       },
-      exclusion: { count: names.length, sha256: exclusionSha, names },
+      exclusion,
       categorySlugs,
       name,
       avatar,
@@ -437,13 +443,19 @@ function quantileOf(sorted: number[], p: number): number {
   return sorted[idx]!;
 }
 
-function maskDsn(dsn: string): string {
-  try {
-    const u = new URL(dsn);
-    return `${u.protocol}//${u.username}:***@${u.host}${u.pathname}`;
-  } catch {
-    return '(unparseable dsn)';
-  }
+/**
+ * A NON-identifying environment label. Never emit the DSN's project ref, role,
+ * or pooler host — those leak into committed artifacts. Prefer an explicit
+ * ROSTER_ENV_TAG; otherwise coarse-classify by known Supabase project refs
+ * without echoing them.
+ */
+function envTag(): string {
+  const explicit = process.env.ROSTER_ENV_TAG;
+  if (explicit) return explicit;
+  const dsn = process.env.ROSTER_MEASURE_DATABASE_URL ?? '';
+  if (dsn.includes('nsdfiprfmhdqhbfxfwpv')) return 'staging';
+  if (dsn.includes('lfbwhxvwubzeqkztghok')) return 'prod';
+  return 'unknown-env';
 }
 
 async function main() {
@@ -453,7 +465,7 @@ async function main() {
   writeFileSync(outPath, JSON.stringify(patterns, null, 2) + '\n');
   process.stdout.write(`Wrote ${outPath}\n`);
   process.stdout.write(`Cohort: ${JSON.stringify(patterns.cohort)}\n`);
-  process.stdout.write(`Exclusion set: ${patterns.exclusion.count} names, sha256=${patterns.exclusion.sha256.slice(0, 16)}...\n`);
+  process.stdout.write(`Exclusion set: ${patterns.exclusion.count} salted hashes, digest=${patterns.exclusion.sha256.slice(0, 16)}...\n`);
 }
 
 main()

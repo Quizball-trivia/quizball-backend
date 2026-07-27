@@ -21,12 +21,12 @@
 > manifest seed/count reproduces `manifest.rosterSha256`. There are no independent
 > patterns/count inputs that could pair an approved report with a different roster.
 
-- **Roster digest (manifest.rosterSha256):** `b599d79af8ca1d1c83a8827677d833c5e2bcc7b3c2d91917ffef9f682ee54609`
-- **Seed:** `20260728`
+- **Roster digest (manifest.rosterSha256):** `2d7adfc1fc28ddbe93ef297406a1ed3bcbc33b1a8252ff8b61c859042b13e849`
+- **Seed:** `20260729`
 - **Roster size:** 1000
-- **patterns.json measured against:** postgresql://postgres.nsdfiprfmhdqhbfxfwpv:***@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
-- **patterns.json generated at:** 2026-07-27T20:44:46.908Z
-- **Frozen exclusion set:** 23489 names, sha256 `de7ea7c59a59b57fa7a62b754e0280edd79da96e65ebbcfcdf9b28b33f7f1dd9`
+- **patterns.json measured against:** staging @ 2026-07-27T21:52:59.098Z
+- **patterns.json generated at:** 2026-07-27T21:52:59.096Z
+- **Frozen exclusion set:** 23489 names, sha256 `a290d5ec550b889a8bcd8fe6bab3e76993be9f97d3a3a6e10345170a252062b1`
 
 ## Cohort & methodology
 
@@ -86,34 +86,34 @@ hours would be meaningless. Night-owl caps are additionally clamped below the pl
 
 | feature | measured | generated |
 |---|---|---|
-| single-word | 66.4% | 63.0% |
-| two-word (first+last) | 33.6% | 37.0% |
-| has digit | 11.5% | 18.4% |
-| has space | 33.6% | 37.0% |
-| all-lowercase | 34.4% | 39.1% |
+| single-word | 66.4% | 61.5% |
+| two-word (first+last) | 33.6% | 38.5% |
+| has digit | 11.5% | 17.8% |
+| has space | 33.6% | 38.5% |
+| all-lowercase | 34.4% | 35.0% |
 | Georgian-script | 1.6% | 1.0% |
 
 ### Country
 
 | value | measured share | generated share |
 |---|---|---|
-| GE | 85.0% | 84.2% |
-| US | 3.0% | 3.7% |
-| GB | 3.0% | 3.1% |
-| TR | 2.0% | 1.9% |
-| GR | 2.0% | 0.9% |
-| DE | 2.0% | 1.8% |
-| ES | 3.0% | 4.4% |
+| GE | 85.0% | 83.7% |
+| US | 3.0% | 2.7% |
+| GB | 3.0% | 2.8% |
+| TR | 2.0% | 2.6% |
+| GR | 2.0% | 2.4% |
+| DE | 2.0% | 2.2% |
+| ES | 3.0% | 3.6% |
 
 ### Skill bands
 
 | band | target | generated |
 |---|---|---|
-| B1 (bottom) | 20.0% | 20.4% |
-| B2 | 30.0% | 29.4% |
-| B3 | 30.0% | 29.9% |
-| B4 | 15.0% | 15.0% |
-| B5 (top) | 5.0% | 5.3% |
+| B1 (bottom) | 20.0% | 19.5% |
+| B2 | 30.0% | 29.2% |
+| B3 | 30.0% | 31.3% |
+| B4 | 15.0% | 15.8% |
+| B5 (top) | 5.0% | 4.2% |
 
 ### Schedule archetypes (per-user sessionization, §1.3)
 
@@ -125,60 +125,60 @@ can never receive a high day cap. The aggregate histogram (below) is disclosure 
 
 | archetype | window | target | generated | cap p50/p90 |
 |---|---|---|---|---|
-| evening | 17:00–01:23 | 55.0% | 54.0% | 2/10 |
-| daytime | 11:00–17:00 | 30.0% | 30.1% | 6/8 |
-| morning | 7:00–11:00 | 12.0% | 12.4% | 10/12 |
-| night_owl | 0:00–5:00 | 3.0% | 3.5% | 8/8 |
+| evening | 17:00–01:23 | 55.0% | 55.8% | 2/10 |
+| daytime | 11:00–17:00 | 30.0% | 30.4% | 6/8 |
+| morning | 7:00–11:00 | 12.0% | 11.7% | 10/12 |
+| night_owl | 0:00–5:00 | 3.0% | 2.1% | 8/8 |
 
 ### Daily match cap by archetype (joint sampling check)
 
 | archetype | max generated cap | mean cap |
 |---|---|---|
-| evening | 20 | 5.5 |
-| daytime | 21 | 7.7 |
-| morning | 13 | 10.9 |
+| evening | 20 | 5.6 |
+| daytime | 21 | 8.2 |
+| morning | 13 | 10.8 |
 | night_owl | 8 | 8.0 |
 
 ### Sparse fields (mimicking real coverage)
 
-- favorite_club non-null: measured 0.84%, generated 0.8%
-- avatarCustomization present: generated 4.4% (real coverage is sparse)
-- will rename over season: generated 11.0% (target 12%)
+- favorite_club non-null: measured 0.84%, generated 0.5%
+- avatarCustomization present: generated 4.5% (real coverage is sparse)
+- will rename over season: generated 11.4% (target 12%)
 
 ## Sample of 30 generated identities
 
 | # | nickname | country | city | club | band | cap | schedule | rename |
 |---|---|---|---|---|---|---|---|---|
-| 0 | TasoN | GE | Gori |  | B2 | 21 | daytime |  |
-| 33 | ElgujaD | GE | Zugdidi |  | B2 | 10 | evening |  |
-| 66 | Eka Chanturieli | GE | Poti |  | B2 | 2 | evening |  |
-| 99 | JabaR | US | New York |  | B2 | 8 | evening | yes |
-| 132 | hamsikika | GE | Ozurgeti |  | B2 | 6 | daytime |  |
-| 165 | Tazo | GE | Rustavi |  | B2 | 2 | evening |  |
-| 198 | Anaka | GE | Kutaisi |  | B4 | 10 | evening |  |
-| 231 | Gochaka111 | ES | Madrid |  | B3 | 10 | evening |  |
-| 264 | datunaika | GE | Rustavi |  | B1 (bottom) | 12 | morning |  |
-| 297 | nikoz | GE | Tbilisi |  | B1 (bottom) | 10 | evening |  |
-| 330 | Temuri Nachkebshvili | GE | Zugdidi |  | B2 | 10 | morning |  |
-| 363 | Zezva | GE | Poti |  | B4 | 10 | morning |  |
-| 396 | nikouna | GR | Thessaloniki |  | B2 | 10 | evening |  |
-| 429 | Sergo Mgelidze | GE | Akhaltsikhe |  | B5 (top) | 8 | evening |  |
-| 462 | kako | GE | Gori |  | B5 (top) | 8 | night_owl | yes |
-| 495 | zuriko lesgashvili | GE | Rustavi |  | B3 | 21 | daytime |  |
-| 528 | jabaka14 | GE | Zugdidi |  | B3 | 2 | evening |  |
-| 561 | Bachana Ugreliadze | GE | Poti |  | B1 (bottom) | 8 | evening |  |
-| 594 | Zviad Lobzhua | GE | Tbilisi |  | B2 | 6 | daytime |  |
-| 627 | Nika Lezhavshvili47 | TR | Izmir |  | B2 | 7 | daytime | yes |
-| 660 | Mamuka Ubilshvili | GR | Thessaloniki |  | B2 | 8 | daytime |  |
-| 693 | ZurikoZ | GE | Batumi |  | B3 | 2 | evening |  |
-| 726 | anaz | GE | Batumi |  | B1 (bottom) | 8 | night_owl | yes |
-| 759 | Zura Chkhikvshvili | DE | Berlin |  | B3 | 6 | daytime |  |
-| 792 | Lasha Ugulshvili | GE | Gori |  | B2 | 10 | evening |  |
-| 825 | sophoo23 | GE | Poti |  | B2 | 6 | daytime |  |
-| 858 | Sopho Ugreliidze | US | Los Angeles |  | B1 (bottom) | 8 | evening |  |
-| 891 | Tamta Nachkebidze164 | GE | Kutaisi | Real Madrid | B4 | 6 | daytime |  |
-| 924 | kaka111 | GE | Poti |  | B3 | 20 | evening |  |
-| 957 | Sopho Gogichshvili | GE | Kutaisi |  | B2 | 8 | evening | yes |
+| 0 | ushangi chadunshvili | GE | Zugdidi |  | B4 | 8 | evening | yes |
+| 33 | zurabushka09 | GE | Gori |  | B2 | 2 | evening |  |
+| 66 | eldara | GE | Tbilisi |  | B2 | 7 | daytime |  |
+| 99 | Iashvili | US | Chicago |  | B2 | 11 | morning |  |
+| 132 | ketevan lobzhidze | GE | Akhaltsikhe |  | B3 | 8 | evening |  |
+| 165 | Valeri Nachkebidze | DE | Berlin |  | B4 | 6 | daytime |  |
+| 198 | gio tabagshvili | GE | Tbilisi |  | B3 | 2 | evening |  |
+| 231 | artetaka | GE | Rustavi |  | B2 | 10 | evening |  |
+| 264 | tazon | GE | Batumi |  | B2 | 6 | daytime |  |
+| 297 | soso | GE | Kutaisi |  | B2 | 21 | daytime |  |
+| 330 | koka lordkipaadze | GE | Gori |  | B3 | 2 | evening |  |
+| 363 | Mirian Ekhvaiiani9 | GE | Gori |  | B2 | 12 | morning | yes |
+| 396 | ValeriB | GE | Rustavi |  | B2 | 8 | daytime |  |
+| 429 | Jemal Kalatozshvili | GE | Tbilisi |  | B3 | 2 | evening |  |
+| 462 | soso ugreliiani | TR | Ankara |  | B2 | 8 | daytime |  |
+| 495 | tengo | GE | Tbilisi |  | B4 | 12 | morning |  |
+| 528 | Pridon | GE | Ozurgeti |  | B3 | 6 | daytime |  |
+| 561 | MirianK | GE | Poti |  | B2 | 2 | evening |  |
+| 594 | Purtselshvili | GE | Rustavi |  | B4 | 8 | daytime |  |
+| 627 | Ilia | GE | Zugdidi |  | B3 | 10 | evening |  |
+| 660 | SandroN | GE | Batumi |  | B2 | 8 | daytime |  |
+| 693 | otoika | GE | Akhaltsikhe |  | B2 | 7 | daytime | yes |
+| 726 | კოკა14 | GE | Zugdidi |  | B4 | 10 | evening | yes |
+| 759 | Sopho Kiknshvili | GE | Akhaltsikhe |  | B4 | 7 | daytime |  |
+| 792 | Merab15 | GE | Zugdidi |  | B2 | 10 | morning |  |
+| 825 | Lesgadze | GE | Kutaisi |  | B4 | 6 | daytime |  |
+| 858 | Teimuraz Odishidze | GE | Batumi |  | B3 | 6 | daytime |  |
+| 891 | kaka15 | GE | Ozurgeti |  | B2 | 8 | daytime |  |
+| 924 | Temurushka | GE | Poti |  | B2 | 6 | daytime |  |
+| 957 | TemoA1 | GE | Tbilisi |  | B2 | 2 | evening | yes |
 
 ## Full roster
 

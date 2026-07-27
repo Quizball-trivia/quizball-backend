@@ -24,22 +24,6 @@ function getLocaleAccessor(locale: string): string {
   return LOCALE_PROMPT_ACCESSORS.en;
 }
 
-/**
- * Helper to safely stringify JSON values for ::jsonb casts.
- * If the value is already a string, parse it first to avoid double-encoding.
- * e.g. '{"en":"..."}' → parse → {"en":"..."} → stringify → '{"en":"..."}'
- */
-const toJsonString = (val: unknown): string => {
-  if (typeof val === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(val));
-    } catch {
-      return JSON.stringify(val);
-    }
-  }
-  return JSON.stringify(val);
-};
-
 export interface CreateQuestionData {
   categoryId: string;
   type: string;
@@ -244,32 +228,32 @@ export const questionsRepo = {
     data: CreateQuestionData,
     payload?: Json
   ): Promise<QuestionWithPayload> {
-    return sql.begin(async (tx) => {
-      const questionResult = await tx.unsafe<Question[]>(
-        `INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
-         RETURNING *`,
-        [
-          data.categoryId,
-          data.type,
-          data.difficulty,
-          data.status ?? 'draft',
-          toJsonString(data.prompt),
-          data.explanation ? toJsonString(data.explanation) : null,
-          data.createdBy ?? null,
-        ]
-      );
-      const question = questionResult[0];
+    return sql.begin(async (transaction) => {
+      // postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+      // tagged-template call signatures; the runtime object still supports them.
+      const tx = transaction as unknown as typeof sql;
+      const [question] = await tx<Question[]>`
+        INSERT INTO questions (category_id, type, difficulty, status, prompt, explanation, created_by)
+        VALUES (
+          ${data.categoryId},
+          ${data.type},
+          ${data.difficulty},
+          ${data.status ?? 'draft'},
+          ${sql.json(data.prompt as unknown as Json)},
+          ${data.explanation ? sql.json(data.explanation as unknown as Json) : null},
+          ${data.createdBy ?? null}
+        )
+        RETURNING *
+      `;
 
       let questionPayload: Json | null = null;
       if (payload) {
-        const payloadResult = await tx.unsafe<{ payload: Json }[]>(
-          `INSERT INTO question_payloads (question_id, payload)
-           VALUES ($1, $2::jsonb)
-           RETURNING payload`,
-          [question.id, toJsonString(payload)]
-        );
-        questionPayload = payloadResult[0].payload;
+        const [payloadRow] = await tx<{ payload: Json }[]>`
+          INSERT INTO question_payloads (question_id, payload)
+          VALUES (${question.id}, ${sql.json(payload)})
+          RETURNING payload
+        `;
+        questionPayload = payloadRow.payload;
       }
 
       return { ...question, payload: questionPayload };
@@ -320,36 +304,29 @@ export const questionsRepo = {
     data: UpdateQuestionData,
     payload: Json
   ): Promise<QuestionWithPayload | null> {
-    return sql.begin(async (tx) => {
-      // Update question
-      const questionResult = await tx.unsafe<Question[]>(
-        `UPDATE questions
-         SET
-           category_id = CASE WHEN $2 THEN $3 ELSE category_id END,
-           type = CASE WHEN $4 THEN $5 ELSE type END,
-           difficulty = CASE WHEN $6 THEN $7 ELSE difficulty END,
-           status = CASE WHEN $8 THEN $9 ELSE status END,
-           prompt = CASE WHEN $10 THEN $11::jsonb ELSE prompt END,
-           explanation = CASE WHEN $12 THEN $13::jsonb ELSE explanation END,
-           updated_at = NOW()
-         WHERE id = $1
-         RETURNING *`,
-        [
-          id,
-          data.categoryId !== undefined,
-          data.categoryId ?? '',
-          data.type !== undefined,
-          data.type ?? '',
-          data.difficulty !== undefined,
-          data.difficulty ?? '',
-          data.status !== undefined,
-          data.status ?? '',
-          data.prompt !== undefined,
-          data.prompt ? toJsonString(data.prompt) : null,
-          data.explanation !== undefined,
-          data.explanation ? toJsonString(data.explanation) : null,
-        ]
-      );
+    return sql.begin(async (transaction) => {
+      // postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+      // tagged-template call signatures; the runtime object still supports them.
+      const tx = transaction as unknown as typeof sql;
+      // Only bind category_id when provided so an empty-string uuid is never
+      // cast (which errors); other columns keep the preserve-when-undefined CASE.
+      const categoryIdSet = data.categoryId !== undefined
+        ? tx`category_id = ${data.categoryId},`
+        : tx``;
+
+      const questionResult = await tx<Question[]>`
+        UPDATE questions
+        SET
+          ${categoryIdSet}
+          type = CASE WHEN ${data.type !== undefined} THEN ${data.type ?? ''} ELSE type END,
+          difficulty = CASE WHEN ${data.difficulty !== undefined} THEN ${data.difficulty ?? ''} ELSE difficulty END,
+          status = CASE WHEN ${data.status !== undefined} THEN ${data.status ?? ''} ELSE status END,
+          prompt = CASE WHEN ${data.prompt !== undefined} THEN ${data.prompt !== undefined ? sql.json(data.prompt as unknown as Json) : null}::jsonb ELSE prompt END,
+          explanation = CASE WHEN ${data.explanation !== undefined} THEN ${data.explanation ? sql.json(data.explanation as unknown as Json) : null}::jsonb ELSE explanation END,
+          updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING *
+      `;
 
       if (questionResult.length === 0) {
         return null;
@@ -357,15 +334,13 @@ export const questionsRepo = {
 
       const question = questionResult[0];
 
-      // Upsert payload
-      const payloadResult = await tx.unsafe<{ payload: Json }[]>(
-        `INSERT INTO question_payloads (question_id, payload)
-         VALUES ($1, $2::jsonb)
-         ON CONFLICT (question_id)
-         DO UPDATE SET payload = $2::jsonb, updated_at = NOW()
-         RETURNING payload`,
-        [id, toJsonString(payload)]
-      );
+      const payloadResult = await tx<{ payload: Json }[]>`
+        INSERT INTO question_payloads (question_id, payload)
+        VALUES (${id}, ${sql.json(payload)})
+        ON CONFLICT (question_id)
+        DO UPDATE SET payload = ${sql.json(payload)}, updated_at = NOW()
+        RETURNING payload
+      `;
 
       return { ...question, payload: payloadResult[0].payload };
     });

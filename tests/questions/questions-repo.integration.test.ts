@@ -168,8 +168,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
   }
 
   describe('prompt field JSONB behavior', () => {
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should store empty object {} as valid JSONB when prompt is {}', async () => {
+    it('should store empty object {} as valid JSONB when prompt is {}', async () => {
       if (!dbAvailable) return;
 
       // Create question with initial prompt
@@ -190,8 +189,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(JSON.stringify(dbRow.prompt)).toBe('{}');
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should preserve existing prompt when prompt is undefined', async () => {
+    it('should preserve existing prompt when prompt is undefined', async () => {
       if (!dbAvailable) return;
 
       const originalPrompt = { en: 'Original prompt', es: 'Pregunta original' };
@@ -211,8 +209,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(dbRow.prompt).toEqual(originalPrompt);
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should update prompt with new value when provided', async () => {
+    it('should update prompt with new value when provided', async () => {
       if (!dbAvailable) return;
 
       const question = await createTestQuestion({ en: 'Initial' });
@@ -233,8 +230,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
   });
 
   describe('explanation field JSONB behavior', () => {
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should clear explanation when explicitly set to null', async () => {
+    it('should clear explanation when explicitly set to null', async () => {
       if (!dbAvailable) return;
 
       const question = await createTestQuestion(
@@ -260,8 +256,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(dbRow.explanation).toBeNull();
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should preserve existing explanation when undefined', async () => {
+    it('should preserve existing explanation when undefined', async () => {
       if (!dbAvailable) return;
 
       const originalExplanation = { en: 'Keep this explanation' };
@@ -284,8 +279,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(dbRow.explanation).toEqual(originalExplanation);
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should update explanation with new value when provided', async () => {
+    it('should update explanation with new value when provided', async () => {
       if (!dbAvailable) return;
 
       const question = await createTestQuestion(
@@ -309,8 +303,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
   });
 
   describe('payload upsert behavior', () => {
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should insert payload when none exists', async () => {
+    it('should insert payload when none exists', async () => {
       if (!dbAvailable) return;
 
       // Create question without payload
@@ -337,8 +330,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(payload).toEqual(newPayload);
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should update existing payload (upsert)', async () => {
+    it('should update existing payload (upsert)', async () => {
       if (!dbAvailable) return;
 
       const initialPayload = {
@@ -377,8 +369,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
   });
 
   describe('full roundtrip test', () => {
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should create, update, and read back question with all fields correctly', async () => {
+    it('should create, update, and read back question with all fields correctly', async () => {
       if (!dbAvailable) return;
 
       // Step 1: Create question with initial data
@@ -478,8 +469,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       expect(result).toBeNull();
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should handle complex nested JSON in payload', async () => {
+    it('should handle complex nested JSON in payload', async () => {
       if (!dbAvailable) return;
 
       const question = await createTestQuestion({ en: 'Complex question' });
@@ -527,8 +517,7 @@ describe('QuestionsRepo.updateWithPayload Integration Tests', () => {
       });
     });
 
-    // skipped: latent double-encoding in createWithPayload/updateWithPayload (tx.unsafe + stringified JSON instead of sql.json) — un-skip in the follow-up fix PR
-    it.skip('should handle empty payload object', async () => {
+    it('should handle empty payload object', async () => {
       if (!dbAvailable) return;
 
       const question = await createTestQuestion({ en: 'Question' });

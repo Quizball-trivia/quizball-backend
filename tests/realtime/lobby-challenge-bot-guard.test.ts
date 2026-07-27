@@ -2,8 +2,9 @@
  * PR3 guard: a bot target (any kind, incl. a befriended persistent bot) is never
  * challengeable. The friendly-challenge worker (PR12) has no bot support yet and
  * nothing may accept on a bot's behalf (§1.12), so challengeFriend rejects early
- * with the generic "unavailable" error the FE already renders — before the
- * friendship / busy / duplicate checks even run.
+ * with the generic "unavailable" error the FE already renders — after the
+ * friendship check (anti-oracle: strangers get NOT_FRIENDS for bots and humans
+ * alike), but before the busy / duplicate checks run.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

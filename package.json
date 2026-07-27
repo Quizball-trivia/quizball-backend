@@ -56,7 +56,9 @@
     "grant:dev-unlimited": "tsx scripts/grant-dev-unlimited.ts",
     "grant:dev-unlimited:apply": "tsx scripts/grant-dev-unlimited.ts --apply",
     "bot:refresh-question-stats": "tsx scripts/refresh-question-stats.ts",
-    "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts"
+    "bot:calibrate": "tsx scripts/bot-calibration/calibrate.ts",
+    "bot:burnin": "tsx scripts/bot-burnin/index.ts",
+    "bot:burnin:rollback": "tsx scripts/bot-burnin/rollback.ts"
   },
   "keywords": [],
   "author": "",

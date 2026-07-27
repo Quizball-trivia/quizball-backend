@@ -14,6 +14,7 @@ import { objectivesService } from '../modules/objectives/index.js';
 import { progressionService } from '../modules/progression/progression.service.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { rankedAiMatchKey } from './ai-ranked.constants.js';
+import { reservationService } from '../modules/synthetic-bots/reservation.service.js';
 import {
   deleteMatchCache,
   getMatchCacheOrRebuild,
@@ -482,6 +483,10 @@ export async function completePossessionMatch(
       try {
         aiOpponentUserId = await redis.get(rankedAiMatchKey(matchId));
         await redis.del(rankedAiMatchKey(matchId));
+        // Release any persistent-bot reservation AFTER settlement (:406) — never
+        // at the status write (:330). Releasing before RP settles would let a
+        // second match acquire the bot and read its profile mid-settlement.
+        await reservationService.releaseByMatch(matchId, 'completion');
         await Promise.all(
           finalPlayers.map((player) =>
             redis.set(

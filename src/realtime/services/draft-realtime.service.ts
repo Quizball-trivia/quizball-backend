@@ -5,6 +5,7 @@ import { AppError, ErrorCode } from '../../core/errors.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { storeService } from '../../modules/store/store.service.js';
 import {
   RANKED_RECENT_CATEGORY_MODE,
@@ -207,6 +208,7 @@ async function abortRankedDraftBeforeMatchCreation(
   } = {}
 ): Promise<void> {
   await lobbiesRepo.deleteLobby(lobby.id);
+  await reservationService.releaseByLobby(lobby.id, 'abort_before_match_creation');
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del([
@@ -529,6 +531,11 @@ async function startMatchFromDraft(
           reason: 'pre_match_ranked_abandon',
         });
       }
+      // The reservation was transferred onto the match at creation; the match is
+      // now abandoned. Release by match (and by lobby as a belt-and-braces guard
+      // for the crash-between-creation-and-transfer window).
+      await reservationService.releaseByMatch(matchId, 'pre_match_abandon');
+      await reservationService.releaseByLobby(lobbyId, 'pre_match_abandon');
       await redis.del([
         rankedAiMatchKey(matchId),
         rankedAiLobbyKey(lobbyId),

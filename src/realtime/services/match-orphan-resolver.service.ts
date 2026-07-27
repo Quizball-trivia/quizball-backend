@@ -5,6 +5,7 @@ import { resolveMatchVariant } from '../../modules/matches/matches.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { completePossessionMatchFromProgress } from '../possession-completion.js';
 import { getRedisClient } from '../redis.js';
 import {
@@ -49,6 +50,9 @@ export function orphanMatchCleanupKeys(matchId: string, userIds: string[]): stri
 }
 
 async function cleanupOrphanMatchRedisKeys(matchId: string, userIds: string[]): Promise<void> {
+  // Terminal release of any persistent-bot reservation (direct-abandon orphan
+  // path; the forfeit path releases at finalizeMatchAsForfeit's choke point).
+  await reservationService.releaseByMatch(matchId, 'orphan_resolver');
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
   await redis.del(orphanMatchCleanupKeys(matchId, userIds)).catch((error) => {

@@ -24,6 +24,7 @@ import {
   matchReconnectCountKey,
 } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { buildStandings } from '../match-utils.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import type { MatchForfeitPendingPayload } from '../socket.types.js';
@@ -417,6 +418,11 @@ export async function finalizeMatchAsForfeit(
         )
       )
     );
+
+    // Terminal release of any persistent-bot reservation for this match
+    // (regular forfeit choke point — self-forfeit, disconnect-terminal-forfeit,
+    // orphan-resolved forfeit all pass through finalizeMatchAsForfeit).
+    await reservationService.releaseByMatch(params.matchId, 'self_forfeit');
 
     const resultVersion = Date.now();
     const redis = getRedisClient();

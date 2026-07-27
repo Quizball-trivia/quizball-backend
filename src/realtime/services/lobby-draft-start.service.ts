@@ -5,6 +5,7 @@ import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -52,6 +53,7 @@ export async function abortRankedDraftStartForTickets(
 ): Promise<void> {
   await lobbiesRepo.deleteLobby(lobby.id);
   await warmupRealtimeService.cleanupLobby(lobby.id);
+  await reservationService.releaseByLobby(lobby.id, 'abort_start_for_tickets');
   const redis = getRedisClient();
   if (redis) {
     await redis.del(rankedAiLobbyKey(lobby.id));

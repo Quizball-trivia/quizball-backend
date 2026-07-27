@@ -5,6 +5,7 @@ import { getRedisClient } from '../redis.js';
 import { acquireLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import {
   emitLobbyState,
   syncFriendlyLobbyModeForMemberCount,
@@ -103,6 +104,7 @@ export async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId
     if (aiUserId) {
       await lobbiesRepo.removeMember(lobbyId, aiUserId);
     }
+    await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
     const redis = getRedisClient();
     if (redis) {
       await redis.del(rankedAiLobbyKey(lobbyId));

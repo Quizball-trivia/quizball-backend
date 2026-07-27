@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
@@ -64,6 +65,11 @@ export async function finalizeRankedNoContest(
       );
     }
   }
+
+  // Terminal release of any persistent-bot reservation for this match
+  // (no-contest / early-forfeit choke point — covers self-forfeit, disconnect
+  // and orphan paths that route their early-forfeit through here).
+  await reservationService.releaseByMatch(params.matchId, 'no_contest');
 
   const resultVersion = Date.now();
   const redis = getRedisClient();

@@ -9,6 +9,7 @@ import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { trackMatchAbandoned } from '../../core/analytics/game-events.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
@@ -419,6 +420,7 @@ async function removeUserFromLobby(
     if (aiUserId) {
       await lobbiesRepo.removeMember(lobby.id, aiUserId);
       await removeUserFromLobbySockets(io, lobby.id, aiUserId);
+      await reservationService.releaseByLobby(lobby.id, 'remove_user_from_lobby');
       if (redis) {
         await redis.del(rankedAiLobbyKey(lobby.id));
       }
@@ -449,6 +451,7 @@ async function closeRankedPreMatchLobby(
 ): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobby.id);
   await lobbiesRepo.deleteLobby(lobby.id);
+  await reservationService.releaseByLobby(lobby.id, 'close_pre_match_lobby');
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del(rankedAiLobbyKey(lobby.id));

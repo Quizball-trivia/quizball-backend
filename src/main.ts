@@ -60,13 +60,15 @@ if (config.NODE_ENV !== 'local' && config.DB_WATCHDOG_ENABLED) {
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal');
   dbWatchdog.stop();
+  // Stop responder ticks immediately (server.close waits for open connections,
+  // during which the interval could still fire) and drain the in-flight tick
+  // before the DB pool closes so a mid-tick accept never hits a closing pool.
+  const responderStopped = stopAiFriendResponder().catch((error) => {
+    logger.error({ error }, 'Shutdown cleanup step failed');
+  });
   io.close();
   server.close(async () => {
-    // Drain the responder before the DB pool closes — a mid-tick accept query
-    // against a disconnecting pool would fail and strand ready requests.
-    await stopAiFriendResponder().catch((error) => {
-      logger.error({ error }, 'Shutdown cleanup step failed');
-    });
+    await responderStopped;
     const results = await Promise.allSettled([
       closeRedisClients(),
       shutdownPostHog(),

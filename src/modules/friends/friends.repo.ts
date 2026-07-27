@@ -280,7 +280,9 @@ export const friendsRepo = {
         AND receiver.is_deleted = false
         AND receiver.deleted_at IS NULL
         AND receiver.pending_deletion_at IS NULL
-      ORDER BY fr.created_at ASC
+      -- Random order: with an oldest-first slice, a backlog of ignored-but-
+      -- still-pending rows larger than the limit would starve newer requests.
+      ORDER BY random()
       LIMIT 500
     `;
   },

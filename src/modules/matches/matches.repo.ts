@@ -30,7 +30,35 @@ export interface CreateMatchData {
  * transactions and drives the tx-aware primitives on each repo.
  */
 export const matchesRepo = {
-  async createMatch(data: CreateMatchData): Promise<MatchRow> {
+  async createMatch(data: CreateMatchData, tx?: TransactionSql): Promise<MatchRow> {
+    // Accepts an optional transaction handle so callers that must commit the
+    // match row atomically with a sibling write (e.g. the persistent-bot
+    // reservation transfer) can pass their tx. Uses tx.unsafe inside a
+    // transaction — postgres.js TransactionSql doesn't expose the tagged-template
+    // call signature cleanly to TS (codebase precedent, see match-players.repo).
+    if (tx) {
+      const rows = await tx.unsafe<MatchRow[]>(
+        `INSERT INTO matches (
+          id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at
+        )
+        VALUES (
+          gen_random_uuid(), $1, $2, 'active',
+          $3, $4, 0, $5, $6::jsonb, $7::jsonb, $8, NOW()
+        )
+        RETURNING *`,
+        [
+          data.lobbyId,
+          data.mode,
+          data.categoryAId,
+          data.categoryBId,
+          data.totalQuestions,
+          JSON.stringify(data.statePayload ?? null),
+          JSON.stringify(data.rankedContext ?? null),
+          data.isDev ?? false,
+        ],
+      );
+      return rows[0];
+    }
     const [row] = await sql<MatchRow[]>`
       INSERT INTO matches (
         id, lobby_id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at

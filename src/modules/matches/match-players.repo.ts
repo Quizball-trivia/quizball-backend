@@ -17,10 +17,28 @@ export const matchPlayersRepo = {
   async insertMatchPlayers(
     matchId: string,
     players: Array<{ userId: string; seat: number }>,
+    tx?: TransactionSql,
   ): Promise<MatchPlayerRow[]> {
     if (players.length === 0) return [];
-    const rows = players.map((p) => [matchId, p.userId, p.seat]);
 
+    if (tx) {
+      // Composes with a caller-owned transaction (e.g. the persistent-bot
+      // reservation transfer committing atomically with match creation).
+      const values: (string | number)[] = [];
+      const tuples = players.map((p, i) => {
+        values.push(matchId, p.userId, p.seat);
+        const base = i * 3;
+        return `($${base + 1}, $${base + 2}, $${base + 3})`;
+      });
+      return tx.unsafe<MatchPlayerRow[]>(
+        `INSERT INTO match_players (match_id, user_id, seat)
+         VALUES ${tuples.join(', ')}
+         RETURNING *`,
+        values,
+      );
+    }
+
+    const rows = players.map((p) => [matchId, p.userId, p.seat]);
     return sql<MatchPlayerRow[]>`
       INSERT INTO match_players (match_id, user_id, seat)
       VALUES ${sql(rows)}

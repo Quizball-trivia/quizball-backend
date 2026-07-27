@@ -50,8 +50,9 @@ describe('challengeFriend — bot target guard', () => {
     vi.clearAllMocks();
   });
 
-  it('rejects a persistent-bot target with a generic unavailable error, before the friendship check', async () => {
+  it('rejects a BEFRIENDED persistent-bot target with a generic unavailable error', async () => {
     getByIdMock.mockResolvedValue({ id: 'bot-1', is_ai: true, ai_kind: 'persistent' });
+    friendshipExistsMock.mockResolvedValue(true);
 
     const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
     const { socket, emit } = makeSocket('human-1');
@@ -62,20 +63,33 @@ describe('challengeFriend — bot target guard', () => {
       code: 'LOBBY_CHALLENGE_INVALID',
       message: 'This player is unavailable',
     }));
-    // The guard short-circuits ahead of the friendship lookup.
-    expect(friendshipExistsMock).not.toHaveBeenCalled();
   });
 
-  it('rejects an ephemeral-bot target the same way', async () => {
-    getByIdMock.mockResolvedValue({ id: 'bot-2', is_ai: true, ai_kind: 'ephemeral' });
+  it('answers NOT_FRIENDS for a non-friend bot target — no bot-classification oracle', async () => {
+    // Friendship is checked FIRST: a stranger probing an arbitrary UUID must get
+    // the exact same error for a roster bot as for a human stranger.
+    getByIdMock.mockResolvedValue({ id: 'bot-2', is_ai: true, ai_kind: 'persistent' });
+    friendshipExistsMock.mockResolvedValue(false);
 
     const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
     const { socket, emit } = makeSocket('human-1');
 
     await challengeFriend({} as never, socket, { toUserId: 'bot-2' });
 
+    expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_CHALLENGE_NOT_FRIENDS' }));
+    expect(emit).not.toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_CHALLENGE_INVALID' }));
+  });
+
+  it('rejects a befriended ephemeral-bot target the same way as persistent', async () => {
+    getByIdMock.mockResolvedValue({ id: 'bot-3', is_ai: true, ai_kind: 'ephemeral' });
+    friendshipExistsMock.mockResolvedValue(true);
+
+    const { challengeFriend } = await import('../../src/realtime/services/lobby-challenge.service.js');
+    const { socket, emit } = makeSocket('human-1');
+
+    await challengeFriend({} as never, socket, { toUserId: 'bot-3' });
+
     expect(emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_CHALLENGE_INVALID' }));
-    expect(friendshipExistsMock).not.toHaveBeenCalled();
   });
 
   it('lets a human target proceed past the bot guard to the friendship check', async () => {

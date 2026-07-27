@@ -89,24 +89,29 @@ export async function challengeFriend(
     return;
   }
 
-  // Bots (any kind) are never challengeable, even a befriended persistent bot.
-  // The delayed friendly-challenge worker (PR12) has no bot support yet, and the
-  // friendly engine can never accept on a bot's behalf (§1.12), so reject with
-  // the same generic "unavailable" the FE already renders. Prevents a challenge
-  // from hanging until its 5-minute TTL expires.
-  if (targetUser.is_ai) {
-    socket.emit('error', {
-      code: 'LOBBY_CHALLENGE_INVALID',
-      message: 'This player is unavailable',
-    });
-    return;
-  }
-
+  // Friendship is checked BEFORE bot classification: a different error code for
+  // bot targets would let anyone probe an arbitrary UUID and distinguish roster
+  // bots from human strangers (a public masking oracle). Non-friends always get
+  // NOT_FRIENDS regardless of what the target is.
   const areFriends = await friendsRepo.friendshipExists(userId, toUserId);
   if (!areFriends) {
     socket.emit('error', {
       code: 'LOBBY_CHALLENGE_NOT_FRIENDS',
       message: 'You can only challenge friends',
+    });
+    return;
+  }
+
+  // Bots (any kind) are never challengeable, even a befriended persistent bot.
+  // The delayed friendly-challenge worker (PR12) has no bot support yet, and the
+  // friendly engine can never accept on a bot's behalf (§1.12), so reject with
+  // the same generic "unavailable" the FE already renders. Prevents a challenge
+  // from hanging until its 5-minute TTL expires. Until PR12, a befriended bot
+  // remains distinguishable to its FRIENDS only — the documented interim gap.
+  if (targetUser.is_ai) {
+    socket.emit('error', {
+      code: 'LOBBY_CHALLENGE_INVALID',
+      message: 'This player is unavailable',
     });
     return;
   }

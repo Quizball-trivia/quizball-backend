@@ -236,8 +236,10 @@ describe('offline calibration script (read-only) against the test DB', () => {
     expect(mine.length).toBe(N_PLAYERS * N_QUESTIONS);
     expect(rows.some((r) => r.player_id === ids.aiId)).toBe(false);
     expect(rows.some((r) => r.player_id === ids.seedId)).toBe(false);
-    // The backfill row (null index) must be absent.
-    expect(mine.every((r) => r.question_id !== undefined)).toBe(true);
+    // The backfill row (null index, seeded on the eligible match for the last
+    // pushed question) must be absent specifically.
+    const backfillQuestionId = ids.questionIds[ids.questionIds.length - 1];
+    expect(rows.some((r) => r.question_id === backfillQuestionId)).toBe(false);
   });
 
   it('excludes S2 answers (matches ending after the S1 boundary)', async () => {

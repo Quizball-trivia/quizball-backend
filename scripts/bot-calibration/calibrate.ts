@@ -55,7 +55,12 @@ function parseArgs(argv: string[]): Args {
     const i = argv.indexOf(flag);
     return i === -1 ? undefined : argv[i + 1];
   };
-  const num = (v: string | undefined): number | undefined => (v != null ? Number(v) : undefined);
+  const num = (v: string | undefined): number | undefined => {
+    if (v == null) return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new Error(`Malformed numeric flag value: ${v}`);
+    return n;
+  };
   return {
     season: num(get('--season')),
     batchId: get('--batch-id'),
@@ -137,7 +142,13 @@ async function main(): Promise<void> {
     // In-sample number for reference.
     const topTrain = train.filter((a) => topSet.has(a.playerId));
     const topAggregateAccuracyInSample = topTrain.length > 0 ? topTrain.reduce((s, a) => s + a.correct, 0) / topTrain.length : null;
-    const ceilingBase = topAggregateAccuracyHoldout ?? topAggregateAccuracyInSample ?? 0;
+    const ceilingBase = topAggregateAccuracyHoldout ?? topAggregateAccuracyInSample;
+    if (ceilingBase == null) {
+      throw new Error('Ceiling underivable: top cohort has no holdout and no train answers - refusing to emit params');
+    }
+    if (topAggregateAccuracyHoldout == null) {
+      console.warn('WARNING: ceiling measured IN-SAMPLE (no holdout rows for the top cohort) - treat as optimistic');
+    }
     const ceilingAccuracy = Math.max(0, ceilingBase - args.marginPp / 100);
 
     // Speed floor from top-cohort clean-window times.
@@ -169,7 +180,12 @@ async function main(): Promise<void> {
     const fCurve = buildFCurve(rpsSorted, skillsSorted, FCURVE_PERCENTILES);
 
     // question_stats via the SHARED aggregation (single SQL source).
-    const agg = await aggregateQuestionStats(db.sql, { limit: args.limit });
+    // Explicit READ ONLY transaction: transaction poolers (Supabase 6543) ignore
+    // the default_transaction_read_only startup parameter, so the per-call BEGIN
+    // is the guarantee that holds everywhere.
+    const agg = await db.sql.begin('read only', async (tx) =>
+      aggregateQuestionStats(tx as unknown as typeof db.sql, { limit: args.limit })
+    );
 
     // difficultyLink: regress refit beta on logit(smoothed_accuracy), holdout-validated.
     const accByQuestion = new Map<string, number>();
@@ -185,15 +201,16 @@ async function main(): Promise<void> {
       const ltest: typeof linkPoints = [];
       for (const p of linkPoints) (lrng() < 0.2 ? ltest : ltrain).push(p);
       const trainPts = ltrain.length >= 2 ? ltrain : linkPoints;
-      const testPts = ltest.length >= 2 ? ltest : trainPts;
+      const holdoutUsable = ltest.length >= 2;
+      const testPts = holdoutUsable ? ltest : trainPts;
       const fit = linearFit(trainPts.map((p) => p.x), trainPts.map((p) => p.y));
       let se = 0;
       for (const p of testPts) { const pred = fit.intercept + fit.slope * p.x; se += (pred - p.y) ** 2; }
       difficultyLink = {
         intercept: fit.intercept,
         slope: fit.slope,
-        holdoutR2: fit.r2,
-        holdoutRmse: Math.sqrt(se / testPts.length),
+        holdoutR2: holdoutUsable ? fit.r2 : null,
+        holdoutRmse: holdoutUsable ? Math.sqrt(se / testPts.length) : null,
         nQuestions: linkPoints.length,
       };
     }

@@ -11,20 +11,24 @@ Into `--out` (default `scripts/bot-calibration/out/`):
 
 - **`params.json`** — matches `bot_model_params.params`: the f(RP) curve knots,
   the ceiling block (top-cohort accuracy, margin, ceiling accuracy, speed floor,
-  top-cohort timing), and the per-format easiness offsets.
+  top-cohort timing), the difficulty link, and the explicit clamps.
 - **`bot_model_params.insert.sql`** — an `INSERT … active=false` for review. It
   is **never applied automatically**; a human reviews and runs it deliberately.
-- **`REPORT.md`** — cohort sizes, exclusion counts, the timeout-backfill
-  signature, the f(RP) knot table, format offsets, holdout validation
-  (AUC + calibration curve), timing distributions, and the **frozen Layer-1
-  ceiling constants** printed as a copy-pasteable TS block for PR8.
+- **`REPORT.md`** — cohort sizes, measured exclusion counts, the f(RP) knot
+  table, the per-format answer-distribution tables, accuracy-by-difficulty,
+  holdout validation (AUC + calibration curve), timing distributions, and the
+  **frozen Layer-1 ceiling constants** printed as a copy-pasteable TS block
+  for PR8.
 
 ## Read-only by construction
 
 1. Connection string comes **only** from `CALIBRATION_DATABASE_URL` (never
    `DATABASE_URL`). Missing → the script refuses to run.
-2. The session sets `default_transaction_read_only=on` and every query runs
-   inside a `BEGIN TRANSACTION READ ONLY` block — Postgres rejects any write.
+2. Every query — including the shared aggregation — runs inside an explicit
+   `BEGIN TRANSACTION READ ONLY` block, which holds through transaction
+   poolers (Supabase 6543 ignores session-level startup parameters); the
+   `default_transaction_read_only=on` connection default is kept as an extra
+   belt on direct connections.
 3. Every statement is screened as SELECT/WITH-only before it is sent
    (`assertSelectOnly`), as a secondary guard.
 

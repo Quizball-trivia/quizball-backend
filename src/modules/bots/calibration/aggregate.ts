@@ -160,9 +160,10 @@ function accumulateFormatStats(agg: FormatAgg, type: string, payload: Record<str
     if (typeof fc === 'number') bump(agg.countdownFoundCounts, fc);
     else if (Array.isArray(payload.foundAnswerIds)) bump(agg.countdownFoundCounts, payload.foundAnswerIds.length);
   } else if (type === 'put_in_order') {
-    const arr = payload.submittedOrderIds;
-    if (Array.isArray(arr)) bump(agg.putInOrderCorrectCounts, arr.length);
-    else if (typeof payload.foundCount === 'number') bump(agg.putInOrderCorrectCounts, payload.foundCount);
+    // foundCount is the partial-credit count; submittedOrderIds.length is just
+    // how many items were submitted (usually all), kept only for older rows.
+    if (typeof payload.foundCount === 'number') bump(agg.putInOrderCorrectCounts, payload.foundCount);
+    else if (Array.isArray(payload.submittedOrderIds)) bump(agg.putInOrderCorrectCounts, payload.submittedOrderIds.length);
   } else if (type === 'clue_chain') {
     const ci = payload.clueIndex;
     if (typeof ci === 'number') bump(agg.cluesRevealIndex, ci);

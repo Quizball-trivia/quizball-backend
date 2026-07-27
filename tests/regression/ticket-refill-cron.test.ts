@@ -74,12 +74,13 @@ describeLocal('regression: refill_tickets_global() cron', () => {
       flags: { is_ai?: boolean; is_deleted?: boolean; deleted_at?: boolean; pending?: boolean } = {}
     ) => {
       const [row] = await sql<{ id: string }[]>`
-        INSERT INTO public.users (email, nickname, tickets, is_ai, is_deleted, deleted_at, pending_deletion_at)
+        INSERT INTO public.users (email, nickname, tickets, is_ai, ai_kind, is_deleted, deleted_at, pending_deletion_at)
         VALUES (
           ${`reg-refill-${key}@test.local`},
           ${`reg-refill-${key}`},
           ${tickets},
           ${flags.is_ai ?? false},
+          ${flags.is_ai ? 'ephemeral' : null},
           ${flags.is_deleted ?? false},
           ${flags.deleted_at ? sql`NOW()` : null},
           ${flags.pending ? sql`NOW()` : null}

@@ -1,0 +1,119 @@
+-- Persistent bot roster: supporting tables (inert until the roster ships).
+--
+--   synthetic_player_profiles  hidden ability + identity + activity schedule per roster bot
+--   synthetic_bot_reservations one-concurrent-match invariant (lobby-keyed, fenced)
+--   question_stats(+_backoff)  smoothed human difficulty/timing per question, with
+--                              hierarchical backoff scopes for sparse/new questions
+--   bot_model_params           versioned tuning read live by the gameplay model
+--
+-- No app code reads these yet; created ahead of the roster so later PRs are
+-- pure code. Idempotent: safe under manual apply + deploy runner re-run.
+
+CREATE TABLE IF NOT EXISTS public.synthetic_player_profiles (
+  user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'resting', 'retired')),
+  -- Hidden ability on the calibration scale; effective in-match skill is
+  -- derived from current RP + this offset, clamped by the model params.
+  base_skill real NOT NULL,
+  consistency real NOT NULL DEFAULT 0.5,
+  speed_offset real NOT NULL DEFAULT 0,
+  -- category slug -> bounded affinity offset (strengths positive, weaknesses negative)
+  category_affinities jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- activity archetype: preferred hours, session shape (all times Asia/Tbilisi)
+  schedule jsonb NOT NULL DEFAULT '{}'::jsonb,
+  daily_cap smallint NOT NULL DEFAULT 6,
+  matches_today smallint NOT NULL DEFAULT 0,
+  -- The Georgia-day matches_today counts for; a selection on a later day resets
+  -- the counter instead of trusting a cron to zero 1,000 rows at 07:00.
+  matches_day date,
+  home_city text,
+  home_lat double precision,
+  home_lng double precision,
+  favorite_club text,
+  rename_propensity real NOT NULL DEFAULT 0,
+  -- Generator MUST constrain seeds to the JS safe-integer range (< 2^53):
+  -- Supabase type generation maps bigint to `number`.
+  personality_seed bigint NOT NULL,
+  -- Rubber-band governor state (per-bot, survives restarts): the current
+  -- effective-skill adjustment, an EMA of human-match win rate with its sample
+  -- count, and the last adjustment time (cooldown/hysteresis anchor).
+  governor_adjustment real NOT NULL DEFAULT 0,
+  winrate_ema real,
+  winrate_samples integer NOT NULL DEFAULT 0,
+  governor_updated_at timestamptz,
+  last_selected_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_synthetic_profiles_status
+  ON public.synthetic_player_profiles (status);
+
+-- Fencing sequence: monotonically increasing token per reservation acquisition
+-- so a stale holder (crashed process, expired sweep) can never release or act
+-- on a reservation the bot has since re-acquired under a newer token.
+CREATE SEQUENCE IF NOT EXISTS public.synthetic_bot_reservation_fence_seq;
+
+CREATE TABLE IF NOT EXISTS public.synthetic_bot_reservations (
+  bot_user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+  -- Reservation is acquired at AI-fallback time, when only the lobby exists;
+  -- the match UUID is attached after the draft completes, atomically with
+  -- match creation.
+  lobby_id uuid NOT NULL UNIQUE,
+  match_id uuid UNIQUE,
+  holder text NOT NULL,
+  fence bigint NOT NULL DEFAULT nextval('public.synthetic_bot_reservation_fence_seq'),
+  acquired_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  heartbeat_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Deliberately UNVERSIONED (latest snapshot only): the mid-match immutability
+-- invariant is satisfied at match creation, which copies the model inputs for
+-- the match's drafted questions into matches.ranked_context (the same pattern
+-- that pins aiCorrectness today). A refresh or restart therefore cannot alter
+-- a live match, and no version history needs retention here.
+CREATE TABLE IF NOT EXISTS public.question_stats (
+  question_id uuid PRIMARY KEY REFERENCES public.questions(id) ON DELETE CASCADE,
+  answers_count integer NOT NULL DEFAULT 0,
+  correct_count integer NOT NULL DEFAULT 0,
+  smoothed_accuracy real,
+  median_time_ms integer,
+  log_time_sigma real,
+  -- Per-format extras that don't fit the Bernoulli columns (countdown
+  -- found-count distribution, put-in-order partial credit, clue reveal index).
+  format_stats jsonb NOT NULL DEFAULT '{}'::jsonb,
+  refreshed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.question_stats_backoff (
+  scope text NOT NULL CHECK (scope IN ('category_type', 'type', 'global')),
+  scope_key text NOT NULL,
+  answers_count integer NOT NULL DEFAULT 0,
+  correct_count integer NOT NULL DEFAULT 0,
+  smoothed_accuracy real,
+  median_time_ms integer,
+  log_time_sigma real,
+  refreshed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope, scope_key)
+);
+
+CREATE TABLE IF NOT EXISTS public.bot_model_params (
+  version integer PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY,
+  params jsonb NOT NULL,
+  active boolean NOT NULL DEFAULT false,
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- At most one active parameter version at any time.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bot_model_params_single_active
+  ON public.bot_model_params ((true))
+  WHERE active;
+
+ALTER TABLE public.synthetic_player_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.synthetic_bot_reservations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.question_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.question_stats_backoff ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bot_model_params ENABLE ROW LEVEL SECURITY;

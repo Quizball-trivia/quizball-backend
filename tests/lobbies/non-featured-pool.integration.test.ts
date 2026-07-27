@@ -27,8 +27,8 @@ const DIFFICULTIES = ['easy', 'medium', 'hard', 'easy', 'medium', 'hard'] as con
 
 async function seedCategoryWithQuestions(name: string): Promise<string> {
   const [category] = await sql<{ id: string }[]>`
-    INSERT INTO categories (name, is_active)
-    VALUES (${{ en: name }}::jsonb, true)
+    INSERT INTO categories (name, slug, is_active)
+    VALUES (${{ en: name }}::jsonb, ${`${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`}, true)
     RETURNING id
   `;
   const categoryId = category.id;

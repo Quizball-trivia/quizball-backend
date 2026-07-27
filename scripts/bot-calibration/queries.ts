@@ -85,6 +85,24 @@ const PLAYER_FETCH_BATCH = 50;
  * huge streamed result cannot be killed by the pooler. `limit` caps the total
  * rows (smoke runs) and short-circuits once reached.
  */
+/** Transient network faults (pooler resets) between batches are recoverable:
+ * each batch is an independent READ ONLY transaction, so a plain retry cannot
+ * duplicate or lose rows. */
+async function withBatchRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (err) {
+      lastErr = err;
+      const msg = String((err as Error)?.message ?? err);
+      if (!/ECONNRESET|CONNECTION_CLOSED|ETIMEDOUT|EPIPE/i.test(msg)) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function fetchS1BernoulliAnswers(
   query: ReadOnlyRunner,
   opts: { s1Boundary: string; placedPlayerIds: readonly string[]; limit?: number },
@@ -96,7 +114,8 @@ export async function fetchS1BernoulliAnswers(
   const out: BernoulliAnswerRow[] = [];
   for (let i = 0; i < opts.placedPlayerIds.length && out.length < cap; i += PLAYER_FETCH_BATCH) {
     const batch = opts.placedPlayerIds.slice(i, i + PLAYER_FETCH_BATCH) as string[];
-    const rows = await query<BernoulliAnswerRow[]>`
+    const batchCap = Number.isFinite(cap) ? cap - out.length : null;
+    const rows = await withBatchRetry(() => query<BernoulliAnswerRow[]>`
       SELECT ma.user_id AS player_id, mq.question_id, ma.is_correct AS correct
       FROM match_answers ma
       JOIN matches m          ON m.id = ma.match_id
@@ -108,7 +127,8 @@ export async function fetchS1BernoulliAnswers(
         AND ma.user_id = ANY(${batch})
         AND u.is_ai = false AND u.is_seed = false AND u.is_deleted = false AND u.deleted_at IS NULL
         AND q.type = ANY(${types})
-        AND ma.selected_index IS NOT NULL`;
+        AND ma.selected_index IS NOT NULL
+      LIMIT ${batchCap}::int`);
     out.push(...rows);
   }
   return Number.isFinite(cap) ? out.slice(0, cap) : out;

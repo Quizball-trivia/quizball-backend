@@ -89,8 +89,15 @@ async function main(): Promise<void> {
   // Ops overrides for long prod runs against the pooler:
   //  - CALIBRATION_STATEMENT_TIMEOUT_MS: per-statement server timeout.
   //  - CALIBRATION_MAX_ITERS: fit iteration cap (raise if a large fit needs it).
-  const statementTimeoutMs = Number(process.env.CALIBRATION_STATEMENT_TIMEOUT_MS ?? 120_000);
-  const fitOpts = { maxIters: Number(process.env.CALIBRATION_MAX_ITERS ?? 5000) };
+  const envInt = (name: string, fallback: number): number => {
+    const raw = process.env[name];
+    if (raw == null || raw === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`Malformed ${name}: ${raw}`);
+    return n;
+  };
+  const statementTimeoutMs = envInt('CALIBRATION_STATEMENT_TIMEOUT_MS', 120_000);
+  const fitOpts = { maxIters: envInt('CALIBRATION_MAX_ITERS', 5000) };
   const db = openReadOnlyDb({ statementTimeoutMs });
   try {
     const batch = await resolveBatch(db.query, { batchId: args.batchId, season: args.season });

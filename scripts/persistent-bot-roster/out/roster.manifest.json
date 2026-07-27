@@ -1,9 +1,11 @@
 {
-  "seed": 20260727,
+  "schemaVersion": 2,
+  "seed": 20260728,
   "count": 1000,
-  "reportSha256": "4dd16ad7701facedee856f41655b57d9a83f33f91f265676a1d819c64903fd1d",
-  "patternsSha256": "00855012a841d2a32581dc9d3a9439cb4a3d2d0810f304e165ebb4a797125ddf",
+  "reportSha256": "c3a257e789c63c61be0c98737053e606aad53e6a4f60b9563f884e7e47841609",
+  "patternsSha256": "bbbd8e0c01eb8ef9faad1977a372e0be2dfa8eda7aff95e171da9f82fa666a85",
   "exclusionSha256": "de7ea7c59a59b57fa7a62b754e0280edd79da96e65ebbcfcdf9b28b33f7f1dd9",
-  "generatedAt": "2026-07-27T19:11:53.646Z",
-  "maxNameAttempts": 4
+  "rosterSha256": "b599d79af8ca1d1c83a8827677d833c5e2bcc7b3c2d91917ffef9f682ee54609",
+  "generatedAt": "2026-07-27T20:45:21.763Z",
+  "maxNameAttempts": 5
 }

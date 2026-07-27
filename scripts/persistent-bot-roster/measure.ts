@@ -356,47 +356,56 @@ function buildActivityModel(starts: StartRow[], hist: number[]): ActivityPattern
     profiles.push({ peakHour, medianSessionLen, peakDayCap });
   }
 
-  // Archetype assignment by modal hour band.
+  // Archetype assignment by modal hour band. The 22:00–01:59 tail is folded into
+  // EVENING; true night_owl is only the 02:00–05:59 pre-dawn minority.
   const archetypeOf = (peakHour: number): 'evening' | 'daytime' | 'morning' | 'night_owl' => {
-    if (peakHour >= 17 && peakHour <= 23) return 'evening';
-    if (peakHour >= 11 && peakHour <= 16) return 'daytime';
+    if (peakHour >= 2 && peakHour <= 5) return 'night_owl';
     if (peakHour >= 6 && peakHour <= 10) return 'morning';
-    return 'night_owl'; // 00:00–05:59, the small pre-dawn/late minority
+    if (peakHour >= 11 && peakHour <= 16) return 'daytime';
+    return 'evening'; // 17:00–01:59 (incl. the late-night tail)
   };
 
   const buckets: Record<string, UserProfile[]> = { evening: [], daytime: [], morning: [], night_owl: [] };
   for (const p of profiles) buckets[archetypeOf(p.peakHour)]!.push(p);
 
-  const totalUsers = Math.max(profiles.length, 1);
   const windows: Record<string, { startHour: number; endHour: number }> = {
-    // Night window ends 01:23 per plan §1.3 (encoded as endHour 25.38 ≈ 01:23 next day).
-    evening: { startHour: 17, endHour: 25 },
+    // Night window ends 01:23 per plan §1.3 (endHour 25.38 ≈ 01:23 next day).
+    evening: { startHour: 17, endHour: 25.38 },
     daytime: { startHour: 11, endHour: 17 },
     morning: { startHour: 7, endHour: 11 },
-    night_owl: { startHour: 22, endHour: 25.38 },
+    night_owl: { startHour: 0, endHour: 5 },
   };
 
+  // OVERRIDE the archetype MIX to the plan's design (evening-dominant, night-owl
+  // a 2-3% minority). Reason: the per-user MODAL-HOUR signal is contaminated — a
+  // spurious spike puts ~46% of users at exactly 00:00 Tbilisi (a timestamp
+  // artifact, not real behaviour), so weighting the mix by measured modal hours
+  // is meaningless. The per-user SESSION-LENGTH and CAP distributions below ARE
+  // used (they are robust to the hour artifact); only the mix weight is imposed.
+  const OVERRIDE_WEIGHTS: Record<string, number> = { evening: 55, daytime: 30, morning: 12, night_owl: 3 };
+  // Night-owls get short windows, so cap them below the plan's 15 ceiling.
+  const NIGHT_OWL_CAP_CEILING = 8;
+
   const archetypes = (['evening', 'daytime', 'morning', 'night_owl'] as const).map((key) => {
-    const members = buckets[key]!;
-    const share = members.length / totalUsers;
+    // Session length + cap come from the per-user tuples of THIS cluster; if a
+    // cluster is thin (e.g. night_owl under the artifact), fall back to all users
+    // so we still have a robust cap/session distribution.
+    const members = buckets[key]!.length >= 30 ? buckets[key]! : profiles;
     const sessionLens = members.map((m) => m.medianSessionLen).sort((a, b) => a - b);
     const caps = members.map((m) => m.peakDayCap).sort((a, b) => a - b);
-    // Session length band = [p25, p90] of this cluster's median session lengths.
     const loLen = Math.max(1, Math.round(quantileOf(sessionLens, 0.25) || 1));
     const hiLen = Math.max(loLen, Math.round(quantileOf(sessionLens, 0.9) || 3));
-    // Joint cap quantiles from THIS cluster's peak-day counts (never the global).
+    const cap = (p: number) => {
+      let v = Math.max(1, quantileOf(caps, p));
+      if (key === 'night_owl') v = Math.min(v, NIGHT_OWL_CAP_CEILING);
+      return v;
+    };
     const capQ: [number, number][] = caps.length
-      ? [
-          [0.5, Math.max(1, quantileOf(caps, 0.5))],
-          [0.75, Math.max(1, quantileOf(caps, 0.75))],
-          [0.9, Math.max(1, quantileOf(caps, 0.9))],
-          [0.99, Math.max(1, quantileOf(caps, 0.99))],
-          [1.0, Math.max(1, caps[caps.length - 1]!)],
-        ]
-      : [[1.0, 3]];
+      ? [[0.5, cap(0.5)], [0.75, cap(0.75)], [0.9, cap(0.9)], [0.99, cap(0.99)], [1.0, cap(1.0)]]
+      : [[1.0, key === 'night_owl' ? 3 : 5]];
     return {
       key,
-      weight: Math.max(Math.round(share * 100), key === 'night_owl' ? 2 : 3),
+      weight: OVERRIDE_WEIGHTS[key]!,
       startHour: windows[key]!.startHour,
       endHour: windows[key]!.endHour,
       sessionLength: [loLen, hiLen] as [number, number],
@@ -405,7 +414,9 @@ function buildActivityModel(starts: StartRow[], hist: number[]): ActivityPattern
   });
 
   return {
-    source: 'measured',
+    // Per-user session/cap distributions are MEASURED; the archetype MIX weight
+    // is OVERRIDDEN (contaminated modal-hour signal) — hence 'overridden'.
+    source: 'overridden',
     hourlyHistogram: hist,
     scheduleArchetypes: archetypes,
     usersClustered: profiles.length,

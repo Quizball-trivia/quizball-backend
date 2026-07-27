@@ -168,6 +168,18 @@ export function renderReport(input: ReportInputs): string {
   out.push(`Staging under-samples renames (measured ${(patterns.rename.rawMeasuredRate * 100).toFixed(2)}% — very young data). The`);
   out.push(`generator uses the plan target lifetime rename rate of ${(patterns.rename.lifetimeRate * 100).toFixed(0)}%.`);
   out.push('');
+  if (patterns.activity.source === 'overridden') {
+    out.push('### Activity archetype MIX — OVERRIDDEN (session/cap distributions MEASURED)');
+    out.push('');
+    out.push(`Per-user sessionization runs over ${patterns.activity.usersClustered} players, and each archetype's`);
+    out.push('session-length and daily-cap distributions are MEASURED from its members. The archetype');
+    out.push('MIX WEIGHTS, however, are imposed to the plan design (evening-dominant, night-owl a');
+    out.push('~3% minority): the per-user modal-hour signal is contaminated — a timestamp artifact');
+    out.push('parks ~46% of users at exactly 00:00 Tbilisi — so weighting the mix by measured modal');
+    out.push('hours would be meaningless. Night-owl caps are additionally clamped below the plan\'s');
+    out.push('15-match ceiling.');
+    out.push('');
+  }
 
   // Distribution summaries side-by-side
   out.push('## Distribution summaries (generated vs measured)');

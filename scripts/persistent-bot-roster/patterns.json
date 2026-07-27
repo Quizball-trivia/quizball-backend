@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-27T19:11:47.376Z",
+  "generatedAt": "2026-07-27T20:44:46.908Z",
   "measuredAgainst": "postgresql://postgres.nsdfiprfmhdqhbfxfwpv:***@aws-1-eu-central-1.pooler.supabase.com:5432/postgres",
   "cohort": {
     "realWithIdentity": 11245,
@@ -23503,6 +23503,86 @@
       "კოკრო"
     ]
   },
+  "categorySlugs": [
+    "00s",
+    "10s",
+    "80s",
+    "90s",
+    "argentina",
+    "argentina-1978",
+    "argentina-world-cup",
+    "arsenal",
+    "badges-and-logos",
+    "ballon-dor",
+    "barcelona",
+    "bayern",
+    "brazil",
+    "brazil-world-cup",
+    "bundes-liga",
+    "career-path",
+    "champios-leage",
+    "chelsea",
+    "club-world-cup",
+    "dortmund",
+    "england",
+    "england-world-cup",
+    "football-logic",
+    "france",
+    "france-world-cup",
+    "germany",
+    "germany-world-cup",
+    "high-low",
+    "imposter",
+    "inter-milan",
+    "italia-italy",
+    "italy-world-cup",
+    "juventus",
+    "kvnb-netherlands",
+    "la-liga",
+    "league-1",
+    "liverpool",
+    "manchester-city",
+    "manchester-united",
+    "maradona-world-cup",
+    "messi-world-cup",
+    "mexico-1970",
+    "milan",
+    "netherlands-world-cup",
+    "pele-world-cup",
+    "portugal",
+    "premier-league",
+    "psg",
+    "real-madrid",
+    "ronaldo-world-cup",
+    "seria-a",
+    "soviet-union-world-cup",
+    "spain",
+    "spain-world-cup",
+    "transfers",
+    "uefa-euro",
+    "west-germany-1974",
+    "world-cup",
+    "world-cup-brazil-2014",
+    "world-cup-captains",
+    "world-cup-champions",
+    "world-cup-classics",
+    "world-cup-crests",
+    "world-cup-finals",
+    "world-cup-france-1998",
+    "world-cup-germany-2006",
+    "world-cup-goalkeepers",
+    "world-cup-italy-1990",
+    "world-cup-kits",
+    "world-cup-korea-japan-2002",
+    "world-cup-mexico-1986",
+    "world-cup-qatar-2022",
+    "world-cup-records",
+    "world-cup-russia-2018",
+    "world-cup-south-africa-2010",
+    "world-cup-spain-1982",
+    "world-cup-stadiums",
+    "world-cup-usa-1994"
+  ],
   "name": {
     "cohortSize": 122,
     "namedCohortSize": 152,
@@ -24027,97 +24107,164 @@
     ]
   },
   "activity": {
-    "source": "measured",
+    "source": "overridden",
     "hourlyHistogram": [
-      5872,
-      700,
-      4072,
-      1802,
-      989,
-      977,
-      2998,
-      1066,
-      0,
+      5909,
+      722,
+      4087,
+      1833,
+      1001,
+      1005,
+      3037,
+      1076,
+      2,
       101,
-      106,
-      112,
-      1692,
-      2018,
-      4819,
-      2192,
-      3007,
-      2350,
-      4394,
-      6017,
-      1007,
-      1660,
-      2254,
-      2892
-    ],
-    "dailyCapQuantiles": [
-      [
-        0.5,
-        2
-      ],
-      [
-        0.75,
-        3
-      ],
-      [
-        0.9,
-        10
-      ],
-      [
-        0.99,
-        15
-      ],
-      [
-        1,
-        21
-      ]
+      108,
+      117,
+      1721,
+      2031,
+      4835,
+      2228,
+      3031,
+      2378,
+      4423,
+      6046,
+      1020,
+      1663,
+      2271,
+      2927
     ],
     "scheduleArchetypes": [
       {
         "key": "evening",
-        "weight": 52,
+        "weight": 55,
         "startHour": 17,
-        "endHour": 25,
+        "endHour": 25.38,
         "sessionLength": [
-          2,
-          5
+          1,
+          1
+        ],
+        "dailyCapQuantiles": [
+          [
+            0.5,
+            2
+          ],
+          [
+            0.75,
+            8
+          ],
+          [
+            0.9,
+            10
+          ],
+          [
+            0.99,
+            10
+          ],
+          [
+            1,
+            20
+          ]
         ]
       },
       {
         "key": "daytime",
-        "weight": 35,
+        "weight": 30,
         "startHour": 11,
         "endHour": 17,
         "sessionLength": [
           1,
-          4
+          1
+        ],
+        "dailyCapQuantiles": [
+          [
+            0.5,
+            6
+          ],
+          [
+            0.75,
+            7
+          ],
+          [
+            0.9,
+            8
+          ],
+          [
+            0.99,
+            21
+          ],
+          [
+            1,
+            21
+          ]
         ]
       },
       {
         "key": "morning",
-        "weight": 11,
+        "weight": 12,
         "startHour": 7,
         "endHour": 11,
         "sessionLength": [
           1,
-          3
+          2
+        ],
+        "dailyCapQuantiles": [
+          [
+            0.5,
+            10
+          ],
+          [
+            0.75,
+            11
+          ],
+          [
+            0.9,
+            12
+          ],
+          [
+            0.99,
+            13
+          ],
+          [
+            1,
+            13
+          ]
         ]
       },
       {
         "key": "night_owl",
         "weight": 3,
         "startHour": 0,
-        "endHour": 2,
+        "endHour": 5,
         "sessionLength": [
           1,
-          4
+          1
+        ],
+        "dailyCapQuantiles": [
+          [
+            0.5,
+            8
+          ],
+          [
+            0.75,
+            8
+          ],
+          [
+            0.9,
+            8
+          ],
+          [
+            0.99,
+            8
+          ],
+          [
+            1,
+            8
+          ]
         ]
       }
-    ]
+    ],
+    "usersClustered": 6091
   },
   "rename": {
     "source": "overridden",

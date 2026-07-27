@@ -9,6 +9,18 @@ import { isRankedSettleEligible } from '../users/ai-classification.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
+import {
+  SEASON_INITIAL_RP,
+  SEASON_BEAT_STRONGER_BONUS_RP,
+  SEASON_FORFEIT_LOSS_RP,
+  SEASON_OPPONENT_FORFEIT_WIN_RP,
+  SEASON_PENALTY_LOSS_RP,
+  SEASON_PENALTY_WIN_RP,
+  SEASON_REGULAR_LOSS_RP,
+  SEASON_REGULAR_WIN_RP,
+  seasonMarginBonus,
+  computeSeasonRpDelta,
+} from './season-rp-formula.js';
 import type {
   RankedAiMatchContext,
   PlacementStatus,
@@ -59,29 +71,21 @@ const RANKED_LOSS_COINS = 100;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
 // ── Season 2026 RP formula ──────────────────────────────────────────────────
-// Transparent, margin-based scoring (replaces the old Elo-style delta). A win
-// is worth a flat base by how it was decided, plus a goal-margin bonus, plus a
-// small bonus for beating a higher-ranked opponent. Losses subtract.
-const SEASON_REGULAR_WIN_RP = 50;
-const SEASON_PENALTY_WIN_RP = 35;
-const SEASON_REGULAR_LOSS_RP = -25;
-const SEASON_PENALTY_LOSS_RP = -15;
-const SEASON_FORFEIT_LOSS_RP = -50; // you quit
-const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a regular win
-const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
-// Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
-// Signed margin: bonus only when the player was AHEAD (margin > 0). A winner who
-// took the result while behind on goals (e.g. an opponent-forfeit win at 0-2)
-// earns no margin bonus.
-function seasonMarginBonus(signedGoalMargin: number): number {
-  if (signedGoalMargin >= 4) return 40;
-  if (signedGoalMargin === 3) return 30;
-  if (signedGoalMargin === 2) return 15;
-  return 0;
-}
-// Hidden starting rank for a brand-new ranked profile (Youth Prospect band).
-// Mirrors the literal used in ranked.repo.ts ensureProfile().
-export const SEASON_INITIAL_RP = 450;
+// The delta math itself lives in ./season-rp-formula.js so the burn-in dry-run
+// can predict outcomes offline from the SAME source. Re-exported below so
+// existing importers of these symbols from ranked.service are unaffected.
+export {
+  SEASON_INITIAL_RP,
+  SEASON_REGULAR_WIN_RP,
+  SEASON_PENALTY_WIN_RP,
+  SEASON_REGULAR_LOSS_RP,
+  SEASON_PENALTY_LOSS_RP,
+  SEASON_FORFEIT_LOSS_RP,
+  SEASON_OPPONENT_FORFEIT_WIN_RP,
+  SEASON_BEAT_STRONGER_BONUS_RP,
+  seasonMarginBonus,
+  computeSeasonRpDelta,
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -150,37 +154,6 @@ function needsPlacement(profile: RankedProfileRow): boolean {
 
 function coinsForRankedResult(result: 'win' | 'loss'): number {
   return result === 'win' ? RANKED_WIN_COINS : RANKED_LOSS_COINS;
-}
-
-/**
- * Season 2026 RP delta for one player in a settled match.
- * @param isWin            did this player win
- * @param decision         how the winner was decided ('penalty_goals' = shootout,
- *                         'forfeit' = a player quit, else a regular goals result)
- * @param goalMargin       signed myGoals - oppGoals (bonuses a win only when ahead)
- * @param opponentIsStronger  opponent's current RP was strictly higher than mine
- */
-function computeSeasonRpDelta(
-  isWin: boolean,
-  decision: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null,
-  goalMargin: number,
-  opponentIsStronger: boolean,
-): number {
-  const isPenalty = decision === 'penalty_goals';
-  const isForfeit = decision === 'forfeit';
-
-  if (!isWin) {
-    if (isForfeit) return SEASON_FORFEIT_LOSS_RP; // -50: this player quit
-    return isPenalty ? SEASON_PENALTY_LOSS_RP : SEASON_REGULAR_LOSS_RP; // -15 / -25
-  }
-
-  const regularWinBaseRp = isForfeit ? SEASON_OPPONENT_FORFEIT_WIN_RP : SEASON_REGULAR_WIN_RP;
-  let delta = isPenalty ? SEASON_PENALTY_WIN_RP : regularWinBaseRp; // +35 / +50
-  // Margin bonus only applies to a decisive (goals) win — a shootout is by
-  // definition level on goals, so no margin bonus there.
-  if (!isPenalty) delta += seasonMarginBonus(goalMargin);
-  if (opponentIsStronger) delta += SEASON_BEAT_STRONGER_BONUS_RP; // +10
-  return delta;
 }
 
 function computeNextPlacementAnchor(profile: RankedProfileRow): number {

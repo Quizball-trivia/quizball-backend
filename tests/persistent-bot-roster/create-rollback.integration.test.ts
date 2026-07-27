@@ -114,7 +114,9 @@ describe('approval gate (verifyAndRegenerate)', () => {
   });
 });
 
-describe('roster create + rollback (test DB)', () => {
+// Generous timeout: creation runs ~60 sequential INSERTs in one transaction,
+// which can exceed the 5s default under shared-test-DB contention (full suite).
+describe('roster create + rollback (test DB)', { timeout: 30_000 }, () => {
   it('creates 20 bots atomically with correct rows and passing invariants', async ({ skip }) => {
     if (!dbAvailable) return skip();
     const plan = verifyAndRegenerate(verifyCfg);

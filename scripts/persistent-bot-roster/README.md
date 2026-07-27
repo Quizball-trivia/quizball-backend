@@ -40,27 +40,38 @@ taken and warning to re-measure.
 ## Commands
 
 ```bash
-# 1. Measure real patterns (READ-ONLY; never touches DATABASE_URL)
+# 1. Measure real patterns (READ-ONLY; never touches DATABASE_URL).
+#    Point at a read-only DB role; the wrapper runs BEGIN READ ONLY + verifies
+#    SHOW transaction_read_only='on'.
 ROSTER_MEASURE_DATABASE_URL='postgres://…pooler…' \
   npm run roster:measure -- --out scripts/persistent-bot-roster/patterns.json
 
-# 2. Generate the dry-run report + roster CSV (no DB writes)
-npm run roster:generate -- --seed 20260727 --count 1000 \
+# 2. Generate the dry-run report + CSV + manifest (no DB writes).
+npm run roster:generate -- --seed 20260728 --count 1000 \
   --patterns scripts/persistent-bot-roster/patterns.json \
   --out-dir scripts/persistent-bot-roster/out
 
 # 3. HUMAN REVIEW: read out/REPORT.md, note its sha256.
 
-# 4. Create on STAGING after approval (idempotent; skips existing nicknames)
+# 4. Create on STAGING after approval. The MANIFEST is the single source of truth
+#    (binds report/patterns/seed/count/exclusion + a digest of ALL rows). Creation
+#    regenerates and matches the digest, runs the app nickname moderator over every
+#    name, and inserts all 1,000 in ONE transaction (fail-closed on any collision).
+#    It writes a per-environment RECEIPT next to the manifest.
 DATABASE_URL='postgres://…staging…' \
-  npm run roster:create -- --approved-report <sha256> --seed 20260727 \
+  npm run roster:create -- \
+    --manifest scripts/persistent-bot-roster/out/roster.manifest.json \
+    --report   scripts/persistent-bot-roster/out/REPORT.md \
     --patterns scripts/persistent-bot-roster/patterns.json \
-    --report scripts/persistent-bot-roster/out/REPORT.md \
-    --batch roster-2026-07-27
+    --approved-report <sha256-of-REPORT.md> \
+    --batch roster-2026-07-28
 
-# 5. Roll back a batch if needed
+# 5. Roll back a batch (receipt-driven; deletes ONLY the receipt's ids).
 DATABASE_URL='postgres://…staging…' \
-  npm run roster:rollback -- --batch roster-2026-07-27
+  npm run roster:rollback -- \
+    --receipt  scripts/persistent-bot-roster/out/receipt-roster-2026-07-28.json \
+    --manifest scripts/persistent-bot-roster/out/roster.manifest.json \
+    --patterns scripts/persistent-bot-roster/patterns.json
 ```
 
 `--dry` on create/rollback verifies the gate and reports what WOULD happen
@@ -74,14 +85,21 @@ without writing. Typecheck the scripts with `npm run lint:roster`.
 - `ranked_profiles`: byte-for-byte the `ranked.repo.ensureProfile` unplaced
   defaults — `rp=450`, `tier='Youth Prospect'`, `placement_status='unplaced'`.
 - `synthetic_player_profiles`: hidden `base_skill`/band, `consistency`,
-  `speed_offset`, `category_affinities`, `schedule` (with the generation
-  `batch` tag), `daily_cap`, city/coords, `favorite_club`, `rename_propensity`,
+  `speed_offset`, `category_affinities` (keyed on real hyphenated slugs),
+  `schedule` (carries `{batch, manifestDigest}`), `daily_cap` (sampled jointly
+  with the schedule archetype), city/coords, `favorite_club`, `rename_propensity`,
   JS-safe `personality_seed`.
 
-The generation batch tag lives in `synthetic_player_profiles.schedule.batch`;
-`rollback.ts` deletes exactly that batch (users cascade-delete their profiles and
-ranked rows). Rollback refuses if any selected row is not an identity-free
-persistent bot.
+## Rollback provenance
+
+`create.ts` writes a **receipt** (`receipt-<batch>.json`) listing the created user
+ids + the manifest digest. `rollback.ts` deletes ONLY those ids, and inside one
+locking transaction verifies per id: `is_ai` + `ai_kind='persistent'`, no
+identity, `schedule.batch` matches, and the nickname matches the regenerated
+manifest row. It refuses any bot with an active reservation / hosted lobby / live
+match, and refuses bots carrying gameplay history (match_players / friendships /
+ranked_rp_changes) unless `--force`. **Receipts are per-environment** — a staging
+receipt lists staging ids; use the prod receipt to roll back prod.
 
 ## Measured vs OVERRIDDEN
 

@@ -3,6 +3,7 @@ import { countryPayload } from '../../core/country.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
 import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
+import { isRankedSettleEligible } from '../../modules/users/ai-classification.js';
 import { registerAiUserId, identifyUser } from '../../core/analytics.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../../modules/users/avatar-customization.js';
 import { rankedService } from '../../modules/ranked/ranked.service.js';
@@ -153,7 +154,10 @@ export async function getOpponentInfoFromParticipants(
   const currentCountry = await getCurrentCountryForUser(opponent.user_id);
   let rp: number | undefined;
   if (matchMode === 'ranked') {
-    if (opponentUser?.is_ai && typeof rankedContext?.aiAnchorRp === 'number') {
+    // Only ephemeral/auction AI substitute the pinned anchor RP. Persistent bots
+    // are settle-eligible and load their real ranked profile like a human (PR7
+    // feeds them through here).
+    if (opponentUser && !isRankedSettleEligible(opponentUser) && typeof rankedContext?.aiAnchorRp === 'number') {
       rp = rankedContext.aiAnchorRp;
     } else {
       const profile = await rankedService.ensureProfile(opponent.user_id);
@@ -208,9 +212,12 @@ export async function buildParticipantPayloads(
   let rpByUserId = new Map<string, number>();
 
   if (matchMode === 'ranked') {
+    // Persistent bots settle like humans, so they must get a real profile fetched
+    // here; only ephemeral/auction AI take the pinned anchor below. Must stay in
+    // lockstep with the rankPoints branch further down.
     const nonAiPlayers = players.filter((player) => {
       const user = usersById.get(player.user_id);
-      return !(user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number');
+      return !(user && !isRankedSettleEligible(user) && typeof rankedContext?.aiAnchorRp === 'number');
     });
     const profiles = await Promise.all(
       nonAiPlayers.map(async (player) => ({
@@ -223,7 +230,7 @@ export async function buildParticipantPayloads(
 
   return players.map((player) => {
     const user = usersById.get(player.user_id);
-    const rankPoints = matchMode === 'ranked' && user?.is_ai && typeof rankedContext?.aiAnchorRp === 'number'
+    const rankPoints = matchMode === 'ranked' && user && !isRankedSettleEligible(user) && typeof rankedContext?.aiAnchorRp === 'number'
       ? rankedContext.aiAnchorRp
       : rpByUserId.get(player.user_id);
 

@@ -18,7 +18,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const patternsPath = path.resolve(dir, '../../scripts/persistent-bot-roster/patterns.json');
 const patterns = JSON.parse(readFileSync(patternsPath, 'utf8')) as RosterPatterns;
 
-const SEED = 20260727;
+const SEED = 20260728;
 
 describe('reproducibility against committed patterns.json', () => {
   it('regenerating with the same seed yields the identical 1,000 nicknames', () => {

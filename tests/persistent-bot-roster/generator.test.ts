@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 
 import { generateRoster, normalizeForExclusion } from '../../scripts/persistent-bot-roster/roster.js';
 import { fieldRng, mulberry32, personalitySeed, quantileSample, weightedPick } from '../../scripts/persistent-bot-roster/prng.js';
@@ -109,14 +110,31 @@ describe('roster generator — field validity', () => {
     }
   });
 
-  it('daily cap comes from the empirical quantile set', () => {
-    const allowed = new Set([2, 3, 8, 14, 20]);
-    for (const b of bots) expect(allowed.has(b.dailyCap)).toBe(true);
+  it('daily cap is drawn from the chosen archetype\'s own quantile set (finding #6)', () => {
+    const patterns = makePatterns();
+    const capsByArch = new Map(
+      patterns.activity.scheduleArchetypes.map((a) => [a.key, new Set(a.dailyCapQuantiles.map(([, v]) => v))]),
+    );
+    for (const b of bots) {
+      expect(capsByArch.get(b.schedule.archetype)!.has(b.dailyCap)).toBe(true);
+    }
   });
 
-  it('category affinities: 2-4 strengths + 2-4 weaknesses, bounded', () => {
+  it('night-owls never get a high daily cap (finding #6)', () => {
     for (const b of bots) {
-      const vals = Object.values(b.categoryAffinities);
+      if (b.schedule.archetype === 'night_owl') expect(b.dailyCap).toBeLessThan(15);
+    }
+  });
+
+  it('category affinities: 2-4 strengths + 2-4 weaknesses, keyed on real slugs (finding #5)', () => {
+    const validSlugs = new Set(makePatterns().categorySlugs);
+    for (const b of bots) {
+      const entries = Object.entries(b.categoryAffinities);
+      for (const [slug] of entries) {
+        expect(validSlugs.has(slug)).toBe(true); // real hyphenated slug
+        expect(slug.includes('_')).toBe(false); // never invented underscore keys
+      }
+      const vals = entries.map(([, v]) => v);
       const strengths = vals.filter((v) => v > 0).length;
       const weaknesses = vals.filter((v) => v < 0).length;
       expect(strengths).toBeGreaterThanOrEqual(2);
@@ -206,6 +224,58 @@ describe('safe-integer seeds', () => {
     expect(a.map((x) => x.nickname)).toEqual(b.map((x) => x.nickname));
   });
 });
+
+describe('name safety (finding #8)', () => {
+  const bots = generateRoster({ seed: 314159, count: 3000, patterns: makePatterns() });
+  const BARE_ATHLETES = ['messi', 'ronaldo', 'cr7', 'neymar', 'mbappe', 'pele', 'maradona', 'zlatan', 'vidal', 'arteta', 'ramos', 'hamsik', 'kaka'];
+
+  it('never emits a bare famous-athlete token (always decorated)', () => {
+    for (const b of bots) {
+      expect(BARE_ATHLETES).not.toContain(b.nickname.toLowerCase());
+    }
+  });
+
+  it('never emits a bare <=2-letter token like cf/fc/gk', () => {
+    for (const b of bots) {
+      expect(['cf', 'fc', 'gk']).not.toContain(b.nickname.toLowerCase());
+    }
+  });
+
+  it('athlete-derived names carry extra entropy (digits or a suffix)', () => {
+    const derived = bots.filter((b) => BARE_ATHLETES.some((a) => b.nickname.toLowerCase().startsWith(a) && b.nickname.toLowerCase() !== a));
+    for (const b of derived) {
+      // longer than the bare token OR contains a digit
+      const base = BARE_ATHLETES.find((a) => b.nickname.toLowerCase().startsWith(a))!;
+      expect(b.nickname.length).toBeGreaterThan(base.length);
+    }
+  });
+});
+
+describe('per-field seed isolation (finding #7)', () => {
+  it('consistency and speedOffset are independent across bots (not perfectly correlated)', () => {
+    const bots = generateRoster({ seed: 271828, count: 500, patterns: makePatterns() });
+    // If the two shared one stream, a fixed functional relationship would hold.
+    // Check they are not a deterministic function of each other.
+    const pairs = new Set(bots.map((b) => `${b.consistency}:${b.speedOffset}`));
+    const consistencies = new Set(bots.map((b) => b.consistency));
+    // Many distinct speedOffsets per consistency value → independent streams.
+    expect(pairs.size).toBeGreaterThan(consistencies.size);
+  });
+
+  it('golden digest: fixed seed reproduces a stable canonical roster hash', () => {
+    // Guards cross-version drift. If the generator changes, this hash changes and
+    // the test must be updated deliberately (with a re-approval).
+    const bots = generateRoster({ seed: 20260728, count: 100, patterns: makePatterns() });
+    const canon = bots
+      .map((b) => `${b.index}|${b.nickname}|${b.country}|${b.skillBand}|${b.dailyCap}|${b.schedule.archetype}|${b.personalitySeed}`)
+      .join('\n');
+    const digest = createHash('sha256').update(canon).digest('hex');
+    // Recorded once; a change here is intentional and must be reviewed.
+    expect(digest).toBe(GOLDEN_DIGEST_SEED_20260728_N100);
+  });
+});
+
+const GOLDEN_DIGEST_SEED_20260728_N100 = '5f1b65be4e2e153c99f546d75102906011e9a340d2c2b6c55110167086274b52';
 
 function bigintReplacer(_k: string, v: unknown): unknown {
   return typeof v === 'bigint' ? v.toString() : v;

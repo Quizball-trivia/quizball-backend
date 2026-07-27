@@ -77,25 +77,24 @@ export function makePatterns(overrides: Partial<RosterPatterns> = {}): RosterPat
       ],
     },
     activity: {
-      source: 'measured',
+      source: 'overridden',
+      usersClustered: 6091,
       hourlyHistogram: [
         5872, 700, 4072, 1802, 989, 977, 2998, 1066, 0, 101, 106, 112,
         1692, 2018, 4819, 2192, 3007, 2350, 4394, 6017, 1007, 1660, 2254, 2892,
       ],
-      dailyCapQuantiles: [
-        [0.5, 2],
-        [0.75, 3],
-        [0.9, 8],
-        [0.99, 14],
-        [1.0, 20],
-      ],
       scheduleArchetypes: [
-        { key: 'evening', weight: 45, startHour: 17, endHour: 25, sessionLength: [2, 5] },
-        { key: 'daytime', weight: 25, startHour: 11, endHour: 17, sessionLength: [1, 4] },
-        { key: 'morning', weight: 8, startHour: 7, endHour: 11, sessionLength: [1, 3] },
-        { key: 'night_owl', weight: 3, startHour: 0, endHour: 2, sessionLength: [1, 4] },
+        { key: 'evening', weight: 55, startHour: 17, endHour: 25.38, sessionLength: [1, 3], dailyCapQuantiles: [[0.5, 2], [0.75, 4], [0.9, 8], [0.99, 12], [1.0, 20]] },
+        { key: 'daytime', weight: 30, startHour: 11, endHour: 17, sessionLength: [1, 4], dailyCapQuantiles: [[0.5, 2], [0.75, 3], [0.9, 6], [0.99, 12], [1.0, 21]] },
+        { key: 'morning', weight: 12, startHour: 7, endHour: 11, sessionLength: [1, 2], dailyCapQuantiles: [[0.5, 2], [0.75, 3], [0.9, 5], [0.99, 8], [1.0, 10]] },
+        { key: 'night_owl', weight: 3, startHour: 0, endHour: 5, sessionLength: [1, 2], dailyCapQuantiles: [[0.5, 2], [0.75, 3], [0.9, 5], [0.99, 8], [1.0, 8]] },
       ],
     },
+    categorySlugs: [
+      'world-cup', 'premier-league', 'la-liga', 'seria-a', 'bundes-liga', 'transfers',
+      'ballon-dor', 'champios-leage', 'arsenal', 'barcelona', 'real-madrid', 'juventus',
+      'argentina', 'brazil', 'england', 'france', 'germany', 'portugal',
+    ],
     rename: { source: 'overridden', lifetimeRate: 0.12, rawMeasuredRate: 0.0002 },
     skill: {
       bandWeights: [20, 30, 30, 15, 5],

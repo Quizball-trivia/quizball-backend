@@ -33,7 +33,7 @@ loadEnv();
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { openReadOnlyDb } from './readonly-db.js';
-import { resolveBatch, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, fetchAccuracyByDifficulty } from './queries.js';
+import { fetchAccuracyByDifficulty, fetchPlacedProfiles, fetchS1BernoulliAnswers, fetchS1CleanTimesForPlayers, resolveBatch, withBatchRetry } from './queries.js';
 import { fitLatentSkill, predictProb, type LatentAnswer, type LatentFitResult } from '../../src/modules/bots/calibration/latent-skill.js';
 import { buildFCurve, percentile, rocAuc, calibrationCurve, logNormalTimeStats, linearFit, logit } from '../../src/modules/bots/calibration/math.js';
 import { aggregateQuestionStats } from '../../src/modules/bots/calibration/aggregate.js';
@@ -100,21 +100,21 @@ async function main(): Promise<void> {
   const fitOpts = { maxIters: envInt('CALIBRATION_MAX_ITERS', 5000) };
   const db = openReadOnlyDb({ statementTimeoutMs });
   try {
-    const batch = await resolveBatch(db.query, { batchId: args.batchId, season: args.season });
+    const batch = await withBatchRetry(() => resolveBatch(db.query, { batchId: args.batchId, season: args.season }));
     if (!batch) throw new Error('No matching ranked_reset_batches row (check --season / --batch-id)');
     const s1Boundary = batch.completed_at;
     if (!s1Boundary) throw new Error('Resolved S1 batch has no completed_at; cannot scope Season-1 matches');
 
-    const profiles = await fetchPlacedProfiles(db.query, batch.id);
+    const profiles = await withBatchRetry(() => fetchPlacedProfiles(db.query, batch.id));
     const placedIds = profiles.map((p) => p.user_id);
     if (placedIds.length === 0) throw new Error('No placed S1 profiles for this batch');
 
     // S1 Bernoulli answers, already scoped to placed players + pre-boundary.
-    const rawAnswers = await fetchS1BernoulliAnswers(db.query, {
+    const rawAnswers = await withBatchRetry(() => fetchS1BernoulliAnswers(db.query, {
       s1Boundary,
       placedPlayerIds: placedIds,
       limit: args.limit,
-    });
+    }));
     if (rawAnswers.length === 0) throw new Error('No Season-1 Bernoulli answers for placed players');
 
     // Eligibility on the SCOPED set.
@@ -164,11 +164,11 @@ async function main(): Promise<void> {
     const ceilingAccuracy = Math.max(0, ceilingBase - args.marginPp / 100);
 
     // Speed floor from top-cohort clean-window times.
-    const topTimes = await fetchS1CleanTimesForPlayers(db.query, {
+    const topTimes = await withBatchRetry(() => fetchS1CleanTimesForPlayers(db.query, {
       s1Boundary,
       playerIds: topIds,
       cleanWindowStart: TIMING_CLEAN_WINDOW_START,
-    });
+    }));
     const topTimesSorted = [...topTimes].sort((a, b) => a - b);
     const speedFloor = topTimesSorted.length > 0
       ? SPEED_FLOOR_PERCENTILES.map((p) => ({ percentile: p, timeMs: Math.round(percentile(topTimesSorted, p)) }))
@@ -210,9 +210,9 @@ async function main(): Promise<void> {
     // Explicit READ ONLY transaction: transaction poolers (Supabase 6543) ignore
     // the default_transaction_read_only startup parameter, so the per-call BEGIN
     // is the guarantee that holds everywhere.
-    const agg = await db.sql.begin('read only', async (tx) =>
-      aggregateQuestionStats(tx as unknown as typeof db.sql, { limit: args.limit })
-    );
+    const agg = await withBatchRetry(() => db.beginReadOnly((tx) =>
+      aggregateQuestionStats(tx, { limit: args.limit })
+    ));
 
     // difficultyLink: regress refit beta on logit(smoothed_accuracy), holdout-validated.
     const accByQuestion = new Map<string, number>();
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       source: {
         batchId: batch.id,
         seasonNumber: batch.season_number,
-        batchCompletedAt: batch.completed_at,
+        batchCompletedAt: new Date(batch.completed_at as unknown as string | Date).toISOString(),
         isSmokeRun,
       },
       thetaAnchoring: { convention: 'mean-zero-over-fitted-s1-cohort', cohortSize: skillByPlayer.size },
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
     writeFileSync(join(outDir, 'bot_model_params.insert.sql'), insertSql);
 
     // Accuracy-by-difficulty from the DB (real questions.difficulty buckets).
-    const diffRows = await fetchAccuracyByDifficulty(db.query);
+    const diffRows = await withBatchRetry(() => fetchAccuracyByDifficulty(db.query));
     const diffBuckets = diffRows.map((d) => ({
       difficulty: d.difficulty ?? 'unknown',
       questions: d.answers_count,

@@ -209,13 +209,15 @@ export const statsRepo = {
   /**
    * Ranked W/D/L split around the latest completed season-reset boundary.
    * The pre-aggregated `user_mode_match_stats` table has no date dimension, so we
-   * count from `matches` directly. Previous matches ended before the boundary;
-   * current matches ended at or after it.
+   * count from `matches` directly. Current matches ended at or after the boundary;
+   * previous matches ended before it but not before the previous season's own
+   * start, so seasons older than the immediately previous one are excluded.
    * Only ranked, completed, non-dev matches are counted.
    */
   async getRankedStatsSplitAtBoundary(
     userId: string,
     boundaryIso: string,
+    previousStartIso: string,
   ): Promise<RankedSplitStatsRow> {
     // A no-winner match is only a real DRAW when both players were present and
     // the result was tied. Abandoned / opponent-never-joined matches also have a
@@ -224,9 +226,9 @@ export const statsRepo = {
     // draws, to keep the profile W/L/D consistent with RP.
     const [row] = await sql<RankedSplitStatsRow[]>`
       SELECT
-        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id = ${userId})::int AS previous_wins,
-        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS previous_losses,
-        COUNT(*) FILTER (WHERE m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS previous_draws,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${previousStartIso}::timestamptz AND m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id = ${userId})::int AS previous_wins,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${previousStartIso}::timestamptz AND m.ended_at < ${boundaryIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS previous_losses,
+        COUNT(*) FILTER (WHERE m.ended_at >= ${previousStartIso}::timestamptz AND m.ended_at < ${boundaryIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS previous_draws,
         COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND m.winner_user_id = ${userId})::int AS current_wins,
         COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND ((m.winner_user_id IS NOT NULL AND m.winner_user_id <> ${userId}) OR (m.winner_user_id IS NULL AND pc.player_count < 2)))::int AS current_losses,
         COUNT(*) FILTER (WHERE m.ended_at >= ${boundaryIso}::timestamptz AND m.winner_user_id IS NULL AND pc.player_count >= 2)::int AS current_draws

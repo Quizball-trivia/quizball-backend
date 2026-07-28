@@ -112,7 +112,6 @@ function knownFlagList(): string {
 function validateArgv(argv: string[]): void {
   const errors: string[] = [];
   const valueFlags = new Set<string>(VALUE_FLAGS);
-  const booleanFlags = new Set<string>(BOOLEAN_FLAGS);
   const seen = new Set<string>();
 
   for (let i = 0; i < argv.length; i++) {
@@ -140,9 +139,12 @@ function validateArgv(argv: string[]): void {
 
     if (valueFlags.has(token)) {
       const value = argv[i + 1];
-      // A missing value, or the next token being another flag, both mean the
-      // flag was passed without its value.
-      if (value == null || (value.startsWith('--') && (booleanFlags.has(value) || valueFlags.has(value)))) {
+      // A missing value, or ANY `--`-prefixed next token, means the flag was
+      // passed without its value. Checking only for KNOWN flags here would let
+      // `--params --snapshot-out` bind the unknown flag as the params path —
+      // the exact silent-acceptance failure this validation exists to stop.
+      // The unknown token is still reported on its own iteration.
+      if (value == null || value.startsWith('--')) {
         errors.push(`${token} requires a value.`);
       } else {
         i++; // consume the value so it is never mistaken for a flag

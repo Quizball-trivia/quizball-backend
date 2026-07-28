@@ -709,10 +709,6 @@ interface XpEventRow {
 }
 
 /**
- * Guard against a silently misaligned unnest: postgres pads shorter arrays with
- * NULL rather than erroring, which would quietly null out trailing rows.
- */
-/**
  * Bind a timestamp column as ISO-8601 text.
  *
  * postgres.js infers a parameter's type from the first array element, so a raw
@@ -725,6 +721,10 @@ function tsColumn(rows: readonly Date[]): string[] {
   return rows.map((d) => d.toISOString());
 }
 
+/**
+ * Guard against a silently misaligned unnest: postgres pads shorter arrays with
+ * NULL rather than erroring, which would quietly null out trailing rows.
+ */
 function assertAligned(columns: readonly unknown[][], expected: number, label: string): void {
   for (const column of columns) {
     if (column.length !== expected) {

@@ -401,7 +401,7 @@ describe('batched writer equivalence (#343 merge gate)', () => {
     const ledger = await sql<any[]>`
       SELECT c.old_rp, c.delta_rp, c.new_rp, c.result, m.ended_at
       FROM ranked_rp_changes c JOIN matches m ON m.id = c.match_id
-      WHERE c.user_id = ${best.userId} ORDER BY m.ended_at, c.new_rp`;
+      WHERE c.user_id = ${best.userId} ORDER BY m.ended_at, m.id`;
     expect(ledger.length).toBeGreaterThanOrEqual(4);
     for (let i = 1; i < ledger.length; i++) {
       // Each fixture starts from the previous fixture's result — the proof the

@@ -103,4 +103,14 @@ describe('CLI strict arg validation', () => {
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/--seed requires a value/i);
   });
+
+  it('does not swallow an UNKNOWN flag as the previous flag\'s value', () => {
+    // `--params --snapshot-out` must not bind '--snapshot-out' as the params
+    // path: that would silently accept the unknown flag, the exact failure this
+    // validation exists to prevent.
+    const { code, stderr } = runCli(['--params', '--snapshot-out', 'receipt.json']);
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/--params requires a value/i);
+    expect(stderr).toMatch(/unknown flag: --snapshot-out/i);
+  });
 }, 120_000);

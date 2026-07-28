@@ -280,9 +280,24 @@ export const auctionRepo = {
     // so the editor shows clue_en + clue_ka side by side. (clue_kind is a
     // constant and supported_fact_ids empty — no per-clue metadata in this schema.)
     const [card] = await sql<
-      { clue_1: string; clue_2: string; clue_3: string; locale: string; football_player_id: string }[]
+      {
+        clue_1: string;
+        clue_2: string;
+        clue_3: string;
+        locale: string;
+        football_player_id: string;
+        card_family_id: string | null;
+        variant_key: string | null;
+      }[]
     >`
-      SELECT clue_1, clue_2, clue_3, locale, football_player_id
+      SELECT
+        clue_1,
+        clue_2,
+        clue_3,
+        locale,
+        football_player_id,
+        card_family_id,
+        variant_key
       FROM player_clue_cards
       WHERE id = ${cardId}
     `;
@@ -293,7 +308,18 @@ export const auctionRepo = {
     const [sibling] = await sql<{ clue_1: string; clue_2: string; clue_3: string }[]>`
       SELECT clue_1, clue_2, clue_3
       FROM player_clue_cards
-      WHERE football_player_id = ${card.football_player_id} AND locale = ${siblingLocale}
+      WHERE locale = ${siblingLocale}
+        AND (
+          (
+            ${card.variant_key}::text IS NOT NULL
+            AND card_family_id = ${card.card_family_id}::uuid
+          )
+          OR (
+            ${card.variant_key}::text IS NULL
+            AND variant_key IS NULL
+            AND football_player_id = ${card.football_player_id}::uuid
+          )
+        )
       LIMIT 1
     `;
 
@@ -354,7 +380,13 @@ export const auctionRepo = {
     // still updates exactly one row (the sibling lookup keys off an `en` source).
     const rowId = await sql.begin(async (tx) => {
       const rows = await tx.unsafe<
-        { id: string; locale: string; football_player_id: string }[]
+        {
+          id: string;
+          locale: string;
+          football_player_id: string;
+          card_family_id: string | null;
+          variant_key: string | null;
+        }[]
       >(
         `UPDATE player_clue_cards
          SET
@@ -366,7 +398,7 @@ export const auctionRepo = {
            END,
            updated_at = NOW()
          WHERE id = $1
-         RETURNING id, locale, football_player_id`,
+         RETURNING id, locale, football_player_id, card_family_id, variant_key`,
         [id, status, forceNote]
       );
       const [row] = rows;
@@ -386,10 +418,20 @@ export const auctionRepo = {
                ELSE review_notes
              END,
              updated_at = NOW()
-           WHERE football_player_id = $1
-             AND locale = 'ka'
+           WHERE locale = 'ka'
+             AND (
+               (
+                 $3::text IS NOT NULL
+                 AND card_family_id = $1::uuid
+               )
+               OR (
+                 $3::text IS NULL
+                 AND variant_key IS NULL
+                 AND football_player_id = $4::uuid
+               )
+             )
              AND status <> 'published'`,
-          [row.football_player_id, forceNote]
+          [row.card_family_id, forceNote, row.variant_key, row.football_player_id]
         );
       }
 
@@ -463,8 +505,18 @@ async function updateCardFields(
          updated_at = NOW()
        FROM player_clue_cards en
        WHERE en.id = $1
-         AND ka.football_player_id = en.football_player_id
-         AND ka.locale = 'ka'`,
+         AND ka.locale = 'ka'
+         AND (
+           (
+             en.variant_key IS NOT NULL
+             AND ka.card_family_id = en.card_family_id
+           )
+           OR (
+             en.variant_key IS NULL
+             AND ka.variant_key IS NULL
+             AND ka.football_player_id = en.football_player_id
+           )
+         )`,
       [
         id,
         clueKa1 !== undefined,

@@ -1,3 +1,4 @@
+import { logger } from '../../core/logger.js';
 import {
   auctionContentRepo,
   type AuctionContentLocale,
@@ -119,9 +120,8 @@ export const auctionContentService = {
   async getRandomPublishedAuctionCard(
     options: RandomPublishedAuctionCardOptions
   ): Promise<PublishedAuctionCard> {
-    const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
-
-    if (!row) {
+    const card = await findRandomPublishedAuctionCard(options);
+    if (!card) {
       await assertPublishedAuctionContentAvailable(options.locale);
       throw new AuctionContentUnavailableError({
         code: 'auction_content_unavailable',
@@ -131,8 +131,50 @@ export const auctionContentService = {
       });
     }
 
-    return mapPublishedAuctionCard(row);
+    return card;
   },
+
+  /**
+   * Match-flow lookup where `null` has one precise meaning: the filtered pool
+   * (position + already-used exclusions) is exhausted. Repository/DB failures
+   * still reject, allowing the realtime layer to retry without mistaking an
+   * outage for a legitimate end-of-match condition.
+   */
+  findRandomPublishedAuctionCard,
+
+  /**
+   * Cross-match no-repeat pick. Applies the recently-seen footballer exclusion
+   * first. If that exhausts the pool, it retries with the same history ordered
+   * least-recently-seen first, rather than discarding the history signal.
+   */
+  async findRandomPublishedAuctionCardExcludingSeen(
+    options: RandomPublishedAuctionCardOptions
+  ): Promise<PublishedAuctionCard | null> {
+    const seenPlayerIds = options.excludeRecentlySeenFootballPlayerIds ?? [];
+    if (seenPlayerIds.length === 0) return findRandomPublishedAuctionCard(options);
+
+    const fresh = await findRandomPublishedAuctionCard(options);
+    if (fresh) return fresh;
+    logger.info(
+      {
+        locale: options.locale,
+        positionGroup: options.positionGroup ?? null,
+        excludedSeenPlayerCount: seenPlayerIds.length,
+        excludedUsedCount: options.excludeClueCardIds?.length ?? 0,
+      },
+      'Auction card pool empty with cross-match history excluded; choosing least-recently-seen player'
+    );
+
+    return findRandomPublishedAuctionCard({
+      ...options,
+      excludeRecentlySeenFootballPlayerIds: undefined,
+      preferLeastRecentlySeenFootballPlayerIds:
+        seenPlayerIds.length > 0 ? seenPlayerIds : undefined,
+    });
+  },
+
+  getRecentlySeenFootballPlayerIds: auctionContentRepo.getRecentlySeenFootballPlayerIds,
+  recordSeenClueCards: auctionContentRepo.recordSeenClueCards,
 
   async getPublishedAuctionCardById(clueCardId: string): Promise<PublishedAuctionCard> {
     const row = await auctionContentRepo.getPublishedAuctionCardById(clueCardId);
@@ -147,5 +189,12 @@ export const auctionContentService = {
 
   assertPublishedAuctionContentAvailable,
 };
+
+async function findRandomPublishedAuctionCard(
+  options: RandomPublishedAuctionCardOptions
+): Promise<PublishedAuctionCard | null> {
+  const row = await auctionContentRepo.getRandomPublishedAuctionCard(options);
+  return row ? mapPublishedAuctionCard(row) : null;
+}
 
 export type { AuctionContentLocale };

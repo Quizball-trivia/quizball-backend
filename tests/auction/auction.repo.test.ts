@@ -63,6 +63,7 @@ import { auctionRepo } from '../../src/modules/auction/auction.repo.js';
 
 const CARD_ID = '11111111-1111-1111-1111-111111111111';
 const PLAYER_ID = '22222222-2222-2222-2222-222222222222';
+const FAMILY_ID = '33333333-3333-3333-3333-333333333333';
 
 const viewRow = {
   id: CARD_ID,
@@ -122,19 +123,54 @@ describe('auctionRepo (player_clue_cards backend)', () => {
   it('shapes en clues + ka sibling clues into ordered clue rows', async () => {
     // First query returns the en card row; second returns the ka sibling clues.
     dbMocks.taggedResults.push([
-      { clue_1: 'First', clue_2: 'Second', clue_3: 'Third', locale: 'en', football_player_id: PLAYER_ID },
+      {
+        clue_1: 'First',
+        clue_2: 'Second',
+        clue_3: 'Third',
+        locale: 'en',
+        football_player_id: PLAYER_ID,
+        card_family_id: FAMILY_ID,
+        variant_key: 'medium',
+      },
     ]);
     dbMocks.taggedResults.push([{ clue_1: 'Pirveli', clue_2: 'Meore', clue_3: 'Mesame' }]);
 
     const clues = await auctionRepo.getClues(CARD_ID);
 
-    expect(dbMocks.taggedCalls[0].text).toContain('clue_1, clue_2, clue_3');
+    expect(dbMocks.taggedCalls[0].text).toMatch(/clue_1,\s+clue_2,\s+clue_3/);
     expect(dbMocks.taggedCalls[0].text).toContain('player_clue_cards');
     expect(clues).toHaveLength(3);
     expect(clues.map((c) => c.clue_order)).toEqual([1, 2, 3]);
     expect(clues.map((c) => c.clue_en)).toEqual(['First', 'Second', 'Third']);
     expect(clues.map((c) => c.clue_ka)).toEqual(['Pirveli', 'Meore', 'Mesame']);
     expect(clues.every((c) => c.clue_kind === 'fact')).toBe(true);
+    const siblingQuery = dbMocks.taggedCalls[1];
+    expect(siblingQuery.text).toContain('card_family_id = $param::uuid');
+    expect(siblingQuery.text).toContain('variant_key IS NULL');
+    expect(siblingQuery.values).toContain(FAMILY_ID);
+  });
+
+  it('keeps the football-player sibling fallback only for NULL-variant legacy cards', async () => {
+    dbMocks.taggedResults.push([
+      {
+        clue_1: 'First',
+        clue_2: 'Second',
+        clue_3: 'Third',
+        locale: 'en',
+        football_player_id: PLAYER_ID,
+        card_family_id: FAMILY_ID,
+        variant_key: null,
+      },
+    ]);
+    dbMocks.taggedResults.push([{ clue_1: 'Pirveli', clue_2: 'Meore', clue_3: 'Mesame' }]);
+
+    await auctionRepo.getClues(CARD_ID);
+
+    const siblingQuery = dbMocks.taggedCalls[1];
+    expect(siblingQuery.text).toContain('$param::text IS NULL');
+    expect(siblingQuery.text).toContain('variant_key IS NULL');
+    expect(siblingQuery.text).toContain('football_player_id = $param::uuid');
+    expect(siblingQuery.values).toContain(PLAYER_ID);
   });
 
   it('returns no clues when the card row is missing', async () => {
@@ -170,6 +206,9 @@ describe('auctionRepo (player_clue_cards backend)', () => {
     // The second call targets the ka sibling.
     const kaQuery = dbMocks.unsafe.mock.calls[1][0] as string;
     expect(kaQuery).toContain("locale = 'ka'");
+    expect(kaQuery).toContain('ka.card_family_id = en.card_family_id');
+    expect(kaQuery).toContain('en.variant_key IS NULL');
+    expect(kaQuery).toContain('ka.variant_key IS NULL');
     expect(updateQuery).toContain('difficulty');
     expect(updateQuery).not.toContain('auction_card_clues');
 
@@ -190,7 +229,13 @@ describe('auctionRepo (player_clue_cards backend)', () => {
   });
 
   it('updates status against player_clue_cards and reloads detail', async () => {
-    dbMocks.unsafeResults.push([{ id: CARD_ID, locale: 'en', football_player_id: PLAYER_ID }]); // en UPDATE ... RETURNING
+    dbMocks.unsafeResults.push([{
+      id: CARD_ID,
+      locale: 'en',
+      football_player_id: PLAYER_ID,
+      card_family_id: FAMILY_ID,
+      variant_key: 'medium',
+    }]); // en UPDATE ... RETURNING
     dbMocks.unsafeResults.push([]); // ka sibling auto-publish UPDATE
     dbMocks.taggedResults.push([viewRow]); // getCardDetail reload
 
@@ -205,7 +250,13 @@ describe('auctionRepo (player_clue_cards backend)', () => {
   });
 
   it('also publishes the ka sibling when an en card is published (same transaction)', async () => {
-    dbMocks.unsafeResults.push([{ id: CARD_ID, locale: 'en', football_player_id: PLAYER_ID }]); // en UPDATE
+    dbMocks.unsafeResults.push([{
+      id: CARD_ID,
+      locale: 'en',
+      football_player_id: PLAYER_ID,
+      card_family_id: FAMILY_ID,
+      variant_key: 'medium',
+    }]); // en UPDATE
     dbMocks.unsafeResults.push([]); // ka sibling UPDATE
     dbMocks.taggedResults.push([viewRow]); // getCardDetail reload
 
@@ -223,18 +274,44 @@ describe('auctionRepo (player_clue_cards backend)', () => {
     expect(enUpdate.params[0]).toBe(CARD_ID);
     expect(enUpdate.params[1]).toBe('published');
 
-    // Second unsafe call: the ka sibling UPDATE keyed by football_player_id + locale.
+    // Second unsafe call: the ka sibling UPDATE is keyed by V2 card family.
     const kaUpdate = dbMocks.unsafeCalls[1];
     expect(kaUpdate.query).toContain('UPDATE player_clue_cards');
     expect(kaUpdate.query).toContain("status = 'published'");
-    expect(kaUpdate.query).toContain('WHERE football_player_id = $1');
+    expect(kaUpdate.query).toContain('card_family_id = $1::uuid');
     expect(kaUpdate.query).toContain("locale = 'ka'");
     expect(kaUpdate.query).toContain("status <> 'published'"); // idempotent guard
-    expect(kaUpdate.params[0]).toBe(PLAYER_ID);
+    expect(kaUpdate.params).toEqual([FAMILY_ID, null, 'medium', PLAYER_ID]);
+  });
+
+  it('publishes by football player only for NULL-variant legacy cards', async () => {
+    dbMocks.unsafeResults.push([{
+      id: CARD_ID,
+      locale: 'en',
+      football_player_id: PLAYER_ID,
+      card_family_id: FAMILY_ID,
+      variant_key: null,
+    }]);
+    dbMocks.unsafeResults.push([]);
+    dbMocks.taggedResults.push([viewRow]);
+
+    await auctionRepo.updateStatus(CARD_ID, 'published');
+
+    const kaUpdate = dbMocks.unsafeCalls[1];
+    expect(kaUpdate.query).toContain('$3::text IS NULL');
+    expect(kaUpdate.query).toContain('variant_key IS NULL');
+    expect(kaUpdate.query).toContain('football_player_id = $4::uuid');
+    expect(kaUpdate.params).toEqual([FAMILY_ID, null, null, PLAYER_ID]);
   });
 
   it('does NOT touch a ka sibling for non-publish status changes on an en card', async () => {
-    dbMocks.unsafeResults.push([{ id: CARD_ID, locale: 'en', football_player_id: PLAYER_ID }]); // en UPDATE
+    dbMocks.unsafeResults.push([{
+      id: CARD_ID,
+      locale: 'en',
+      football_player_id: PLAYER_ID,
+      card_family_id: FAMILY_ID,
+      variant_key: 'medium',
+    }]); // en UPDATE
     dbMocks.taggedResults.push([viewRow]); // getCardDetail reload
 
     const result = await auctionRepo.updateStatus(CARD_ID, 'approved');
@@ -247,7 +324,13 @@ describe('auctionRepo (player_clue_cards backend)', () => {
   });
 
   it('does NOT propagate when a ka card is published directly (single-row update)', async () => {
-    dbMocks.unsafeResults.push([{ id: CARD_ID, locale: 'ka', football_player_id: PLAYER_ID }]); // ka UPDATE
+    dbMocks.unsafeResults.push([{
+      id: CARD_ID,
+      locale: 'ka',
+      football_player_id: PLAYER_ID,
+      card_family_id: FAMILY_ID,
+      variant_key: 'medium',
+    }]); // ka UPDATE
     dbMocks.taggedResults.push([viewRow]); // getCardDetail reload
 
     const result = await auctionRepo.updateStatus(CARD_ID, 'published');

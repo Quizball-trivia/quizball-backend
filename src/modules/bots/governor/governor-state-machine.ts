@@ -39,6 +39,24 @@
  * effectiveProbCap(). So a maximally positive governor offset still cannot raise
  * a bot above HARD_PROB_CAP / HARD_SKILL_CAP; the clamps run strictly after.
  * governor-clamp-order.test.ts asserts this ordering.
+ *
+ * KNOWN LIMITS OF THE CONTROL AUTHORITY (deliberate, documented for the soak)
+ *  - SPECIAL FORMATS. The offset moves theta, which drives the Bernoulli
+ *    (multiple-choice) path. Countdown / put-in-order / clue outcomes are
+ *    sampled from calibrated format_stats histograms and only consult skill in
+ *    their no-distribution FALLBACK (persistent-bot-gameplay.ts). So the
+ *    governor's authority over a match is partial, and a bot whose matches are
+ *    format-heavy responds more slowly. This is a PR8 modelling property, not
+ *    something PR9 changes; making the histograms skill-conditional is the
+ *    proper fix and belongs with the model, not the controller. The top-10
+ *    backstop does not depend on it (RP-proximity still nerfs the MCQ path).
+ *  - RANK LATENCY. Top-protection reacts at SETTLEMENT, so it changes the
+ *    NEXT match, never the one that crossed the line. Combined with the 60s
+ *    top-10 snapshot, a bot can briefly appear inside the human top 10 before
+ *    the ring bites. The margins (150 RP ring / 400 RP band) are sized to start
+ *    pushing back well before that; a hard "never rank a bot top-10" guarantee
+ *    would need a leaderboard-level exclusion or an RP cap, which is a product
+ *    decision outside this controller.
  */
 
 /** Bounded offset in theta (logit) units. Deliberately small: this trims, never re-skills. */
@@ -106,6 +124,27 @@ export const TOP_PROTECTION_MARGIN_RP = 150;
  * pins the offset to the floor immediately rather than stepping down.
  */
 export const TOP_PROTECTION_CRITICAL_RP = 50;
+
+/**
+ * The TOP BAND for win-rate purposes, deliberately WIDER than the protection
+ * ring (Sol finding #2 + #4).
+ *
+ * Two things depend on this being wider:
+ *
+ * (a) REACHABILITY. Inside the protection ring stepGovernor returns from the
+ *     top-protection branch before the win-rate arm ever runs, so if the
+ *     top-band target were keyed on the ring itself it would be unreachable
+ *     dead code and the documented 40-45% steering would not exist. Keying it
+ *     on this wider zone means bots APPROACHING the top — the ones the target
+ *     is actually about — steer to 42.5% under the ordinary win-rate arm.
+ *
+ * (b) NO RINGING AT THE BOUNDARY. A bot that just fell out of the ring sits in
+ *     the band between the two radii. There the win-rate arm targets 42.5%, so
+ *     its nerf-depressed EMA does not immediately read as "losing too much" and
+ *     buy back a boost that would push it straight back into the ring. The gap
+ *     between the ring and this zone IS the hysteresis on the rank axis.
+ */
+export const TOP_BAND_MARGIN_RP = 400;
 
 export type GovernorTrigger =
   | 'none'
@@ -182,14 +221,20 @@ export function updateWinrateEma(previous: number | null, won: boolean): number 
 }
 
 /**
- * The bot's target win rate. A bot inside the top-protection ring is by
- * definition top-band, so it gets the lower (40-45%) target; everyone else the
- * mid-ladder 45-55%. With an unknown top-10 RP we cannot tell, so we assume
- * mid-ladder (the top-protection arm is disabled in that case anyway).
+ * The bot's target win rate: the lower top-band figure once it is within
+ * TOP_BAND_MARGIN_RP of the #10 human, else mid-ladder.
+ *
+ * Keyed on TOP_BAND_MARGIN_RP (400) rather than the protection ring (150) so
+ * the target is actually REACHABLE — inside the ring the top-protection branch
+ * returns before the win-rate arm runs, so a ring-keyed target would be dead
+ * code. See TOP_BAND_MARGIN_RP.
+ *
+ * With an unknown top-10 RP we cannot place the bot on the ladder at all, so we
+ * assume mid-ladder (the protection arm is disabled in that case regardless).
  */
 export function targetWinrate(botRp: number, humanTop10Rp: number | null): number {
-  if (humanTop10Rp == null) return MID_LADDER_TARGET_WINRATE;
-  return botRp >= humanTop10Rp - TOP_PROTECTION_MARGIN_RP
+  if (humanTop10Rp == null || !Number.isFinite(humanTop10Rp)) return MID_LADDER_TARGET_WINRATE;
+  return botRp >= humanTop10Rp - TOP_BAND_MARGIN_RP
     ? TOP_BAND_TARGET_WINRATE
     : MID_LADDER_TARGET_WINRATE;
 }

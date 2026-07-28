@@ -73,11 +73,23 @@ export async function recordSettledMatch(
   input: GovernorSettlementInput,
 ): Promise<GovernorDecision | null> {
   try {
-    const state = await governorRepo.getState(input.botUserId);
-    if (!state) {
+    const stored = await governorRepo.getState(input.botUserId);
+    if (!stored) {
       // A persistent bot without a roster profile: nothing to govern. Expected
       // for a hand-made test bot; never for a generated roster bot.
       logger.debug({ botUserId: input.botUserId }, 'Governor: no synthetic profile; skipping');
+      return null;
+    }
+    const { state, lastMatchId } = stored;
+
+    // Replay short-circuit: this match is already folded into the EMA. The
+    // UPDATE guard would reject it anyway, but returning here keeps the
+    // "write lost a race" log honest and saves the top-10 lookup.
+    if (lastMatchId === input.matchId) {
+      logger.debug(
+        { botUserId: input.botUserId, matchId: input.matchId },
+        'Governor: match already folded into the EMA; skipping replay',
+      );
       return null;
     }
 
@@ -90,11 +102,16 @@ export async function recordSettledMatch(
       enabled: governorEnabled(),
     });
 
-    const saved = await governorRepo.saveState(input.botUserId, decision.next, state.winrateSamples);
+    const saved = await governorRepo.saveState(
+      input.botUserId,
+      decision.next,
+      state.winrateSamples,
+      input.matchId,
+    );
     if (!saved) {
       logger.info(
         { botUserId: input.botUserId, matchId: input.matchId },
-        'Governor: state write lost a concurrent race; sample dropped',
+        'Governor: state write lost a concurrent race or duplicate match; sample dropped',
       );
       return null;
     }

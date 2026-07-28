@@ -17,6 +17,7 @@ export interface GovernorStateRow {
   winrate_samples: number;
   governor_updated_at: string | null;
   governor_samples_at_adjustment: number;
+  governor_last_match_id: string | null;
 }
 
 /** Per-day bot-vs-human totals, straight off the persistent_bot_daily_winrate view. */
@@ -51,39 +52,58 @@ function toState(row: GovernorStateRow): GovernorState {
   };
 }
 
+/** State plus the last-folded match id (idempotency key, not part of the machine). */
+export interface GovernorStateWithMatch {
+  state: GovernorState;
+  lastMatchId: string | null;
+}
+
 export const governorRepo = {
   /** Current governor state for one bot, or null when it has no roster profile. */
-  async getState(botUserId: string): Promise<GovernorState | null> {
+  async getState(botUserId: string): Promise<GovernorStateWithMatch | null> {
     const [row] = await sql<GovernorStateRow[]>`
       SELECT
         governor_adjustment,
         winrate_ema,
         winrate_samples,
         governor_updated_at,
-        governor_samples_at_adjustment
+        governor_samples_at_adjustment,
+        governor_last_match_id
       FROM synthetic_player_profiles
       WHERE user_id = ${botUserId}
       LIMIT 1
     `;
-    return row ? toState(row) : null;
+    return row ? { state: toState(row), lastMatchId: row.governor_last_match_id } : null;
   },
 
   /**
-   * Persist the post-match governor state.
+   * Persist the post-match governor state, idempotently for `matchId`.
    *
-   * CONCURRENCY: guarded on `winrate_samples = expectedSamples` (the value the
-   * caller read). Two replicas settling two of a bot's matches at once would
-   * otherwise each write samples = read + 1 and silently lose one sample. The
-   * loser gets false back and simply skips — one dropped EMA sample out of a
-   * 20-match memory is immaterial, whereas a lost UPDATE that also reverted the
-   * offset would not be. (A bot plays one match at a time by the reservation
-   * invariant, so this is a belt-and-braces guard against the settle-replay and
-   * forfeit paths racing on the SAME match.)
+   * TWO guards, both evaluated INSIDE the UPDATE so they are race-free against a
+   * concurrent commit (Sol finding #1):
+   *
+   *   1. `governor_last_match_id IS DISTINCT FROM matchId` — match-level
+   *      idempotency. Settlement is replayed by several paths (final-results
+   *      replay, forfeit re-settle) and each replay re-enters the governor after
+   *      the ledger row already exists. Without this, one match could be folded
+   *      into the EMA repeatedly. This is the guard that actually matters,
+   *      because the match is what identifies the event.
+   *   2. `winrate_samples = expectedSamples` — optimistic concurrency, so two
+   *      in-flight settlements for DIFFERENT matches cannot lose an update by
+   *      both writing read+1. The loser returns false and skips; one dropped
+   *      sample out of a ~20-match memory is immaterial, a lost update that also
+   *      reverted the offset would not be.
+   *
+   * Note guard 1 is deliberately "not the same match as last time" rather than a
+   * full history: the reservation invariant means a bot plays one match at a
+   * time, so a replay of match A can only interleave with a genuinely newer
+   * match B after A has finished — and A→B→A is not reachable.
    */
   async saveState(
     botUserId: string,
     state: GovernorState,
     expectedSamples: number,
+    matchId: string,
   ): Promise<boolean> {
     const rows = await sql<{ user_id: string }[]>`
       UPDATE synthetic_player_profiles
@@ -93,9 +113,11 @@ export const governorRepo = {
           winrate_samples = ${state.winrateSamples},
           governor_updated_at = ${state.updatedAt},
           governor_samples_at_adjustment = ${state.samplesAtAdjustment},
+          governor_last_match_id = ${matchId},
           updated_at = now()
       WHERE user_id = ${botUserId}
         AND winrate_samples = ${expectedSamples}
+        AND governor_last_match_id IS DISTINCT FROM ${matchId}::uuid
       RETURNING user_id
     `;
     return rows.length > 0;
@@ -117,7 +139,14 @@ export const governorRepo = {
    */
   async getHumanTop10Rp(): Promise<number | null> {
     return withSpan('db.bots.human_top10_rp', { 'db.operation.name': 'select' }, async () => {
-      const [row] = await sql<{ rp: number }[]>`
+      // Take the top 10 in one pass so we can distinguish "no humans at all"
+      // from "fewer than 10 humans" and still return a usable threshold in the
+      // latter case (Sol finding #3): with <10 placed humans EVERY placed bot is
+      // in the public top 10, which is exactly when protection must NOT be off.
+      // The LAST human we can see is then the most conservative threshold
+      // available — it is at or below the true #10 slot, so the ring engages
+      // earlier, never later.
+      const rows = await sql<{ rp: number }[]>`
         SELECT rp.rp AS rp
         FROM ranked_profiles rp
         JOIN users u ON u.id = rp.user_id
@@ -128,10 +157,10 @@ export const governorRepo = {
           AND u.pending_deletion_at IS NULL
           AND rp.placement_status = 'placed'
         ORDER BY rp.rp DESC, rp.updated_at ASC
-        OFFSET 9
-        LIMIT 1
+        LIMIT 10
       `;
-      return row ? Number(row.rp) : null;
+      if (rows.length === 0) return null;
+      return Number(rows[rows.length - 1].rp);
     });
   },
 

@@ -15,6 +15,23 @@ ALTER TABLE public.synthetic_player_profiles
 COMMENT ON COLUMN public.synthetic_player_profiles.governor_samples_at_adjustment IS
   'winrate_samples value at the moment governor_adjustment last changed; the match-count half of the governor cooldown (PR9, plan 1.5).';
 
+-- MATCH-LEVEL IDEMPOTENCY for the EMA.
+--
+-- Settlement is per-participant idempotent via the ranked_rp_changes PK, but the
+-- governor is a SEPARATE write that happens after that ledger commits. Two
+-- hazards follow, and a sample-count guard alone closes neither:
+--   - a settlement REPLAY (final-results replay, forfeit path re-settling) can
+--     re-enter the governor for a match already folded into the EMA;
+--   - two concurrent settlement attempts can both read pre-update state, and the
+--     later one can pass a stale-count guard once the first has committed.
+-- Recording the last match folded in makes the update idempotent on the thing
+-- that actually identifies the event: the match.
+ALTER TABLE public.synthetic_player_profiles
+  ADD COLUMN IF NOT EXISTS governor_last_match_id uuid;
+
+COMMENT ON COLUMN public.synthetic_player_profiles.governor_last_match_id IS
+  'The match whose result was last folded into winrate_ema; makes the governor EMA update idempotent against settlement replays (PR9).';
+
 -- Daily bot-vs-human win/loss telemetry (plan 1.10). A VIEW, not a table: the
 -- ranked ledger already holds every settled result, so an aggregate cannot drift
 -- from the source of truth and there is nothing to backfill or reconcile.
@@ -23,7 +40,13 @@ COMMENT ON COLUMN public.synthetic_player_profiles.governor_samples_at_adjustmen
 -- persistent bots (PR2 settles them like humans); opponent_is_ai = false keeps
 -- this to matches actually played against HUMANS, which is the only win rate the
 -- governor and the 40-45% target are defined against.
-CREATE OR REPLACE VIEW public.persistent_bot_daily_winrate AS
+-- security_invoker: a Postgres view runs as its OWNER by default, which would
+-- make it a standing RLS bypass over users + ranked_rp_changes for anyone who
+-- can select it. With security_invoker the caller''s own RLS policies apply, so
+-- the view can never become a privilege-escalation path if a future grant is
+-- added. The ops endpoint reads it via the service role, which is unaffected.
+CREATE OR REPLACE VIEW public.persistent_bot_daily_winrate
+WITH (security_invoker = true) AS
 SELECT
   ((rc.created_at AT TIME ZONE 'Asia/Tbilisi'))::date AS georgia_day,
   COUNT(*) FILTER (WHERE rc.result = 'win')::int      AS bot_wins,

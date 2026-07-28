@@ -97,10 +97,20 @@ const configSchema = z.object({
   // (no persistent bot settles a match, so the governor is never invoked), so
   // defaulting ON adds no behavior until the roster actually ships.
   //
-  // Turning it OFF drives every bot's stored offset to 0 on its next settlement
-  // — bots fall back to their base calibrated skill (PR8), which is still bound
-  // by the Layer-1 hard clamps. The offsets are NOT wiped instantly; a bot that
-  // never plays again keeps its last stored offset, which the pin then applies.
+  // Turning it OFF zeroes the offset at PIN time (so every match created after
+  // the flip runs on base calibrated skill) and additionally drives the stored
+  // value to 0 at each bot's next settlement.
+  //
+  // Two residual windows it does NOT close, by construction:
+  //   - a match ALREADY IN FLIGHT keeps the adjustment pinned into its
+  //     ranked_context (that immutability is the §1.7 invariant — a live match
+  //     must not change under the players);
+  //   - during a ROLLING deploy, replicas still running the previous release
+  //     read the stored offset directly and cannot honour the new flag.
+  // Both drain within one match / one deploy. For an immediate, global stop,
+  // zero the column: UPDATE synthetic_player_profiles SET governor_adjustment=0.
+  // Base calibrated skill is still bound by the Layer-1 hard clamps either way,
+  // so neither window is a safety hole — only a delay in the trim.
   BOT_GOVERNOR_ENABLED: z
     .enum(["true", "false", "1", "0", ""])
     .default("true")

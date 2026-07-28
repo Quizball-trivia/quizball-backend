@@ -45,14 +45,17 @@ const repo = governorRepo as unknown as {
 
 const BOT = 'bot-uuid';
 
-function storedState(overrides = {}) {
+function storedState(overrides = {}, lastMatchId: string | null = null) {
   return {
-    adjustment: 0,
-    winrateEma: 0.5,
-    winrateSamples: 40,
-    updatedAt: null,
-    samplesAtAdjustment: 0,
-    ...overrides,
+    state: {
+      adjustment: 0,
+      winrateEma: 0.5,
+      winrateSamples: 40,
+      updatedAt: null,
+      samplesAtAdjustment: 0,
+      ...overrides,
+    },
+    lastMatchId,
   };
 }
 
@@ -65,14 +68,29 @@ beforeEach(() => {
 });
 
 describe('recordSettledMatch', () => {
-  it('persists with the READ sample count as the optimistic-concurrency guard', async () => {
+  it('persists with the READ sample count and the match id as guards', async () => {
     await recordSettledMatch({ botUserId: BOT, botRp: 1000, won: true, matchId: 'm1' });
     expect(repo.saveState).toHaveBeenCalledTimes(1);
-    const [userId, nextState, expectedSamples] = repo.saveState.mock.calls[0];
+    const [userId, nextState, expectedSamples, matchId] = repo.saveState.mock.calls[0];
     expect(userId).toBe(BOT);
     // Guard is the PRE-update value; the written state is the post-update one.
     expect(expectedSamples).toBe(40);
     expect(nextState.winrateSamples).toBe(41);
+    expect(matchId).toBe('m1');
+  });
+
+  it('skips a settlement REPLAY of a match already folded into the EMA', async () => {
+    repo.getState.mockResolvedValue(storedState({}, 'm1'));
+    const result = await recordSettledMatch({ botUserId: BOT, botRp: 1000, won: true, matchId: 'm1' });
+    expect(result).toBeNull();
+    expect(repo.saveState).not.toHaveBeenCalled();
+  });
+
+  it('still folds in a DIFFERENT match after a previous one', async () => {
+    repo.getState.mockResolvedValue(storedState({}, 'm0'));
+    const result = await recordSettledMatch({ botUserId: BOT, botRp: 1000, won: true, matchId: 'm1' });
+    expect(result).not.toBeNull();
+    expect(repo.saveState).toHaveBeenCalledTimes(1);
   });
 
   it('skips a persistent bot that has no synthetic profile', async () => {

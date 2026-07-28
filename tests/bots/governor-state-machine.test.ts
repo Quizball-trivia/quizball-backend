@@ -21,6 +21,7 @@ import {
   MAX_GOVERNOR_ADJUSTMENT,
   MID_LADDER_TARGET_WINRATE,
   MIN_SAMPLES_FOR_WINRATE,
+  TOP_BAND_MARGIN_RP,
   TOP_BAND_TARGET_WINRATE,
   TOP_PROTECTION_CRITICAL_RP,
   TOP_PROTECTION_MARGIN_RP,
@@ -93,16 +94,46 @@ describe('updateWinrateEma', () => {
 });
 
 describe('targetWinrate (per-band targets, §1.5)', () => {
-  it('uses the lower top-band target inside the protection ring', () => {
+  it('uses the lower top-band target inside the wider top band', () => {
+    expect(targetWinrate(4000 - TOP_BAND_MARGIN_RP, 4000)).toBe(TOP_BAND_TARGET_WINRATE);
     expect(targetWinrate(3900, 4000)).toBe(TOP_BAND_TARGET_WINRATE);
   });
 
-  it('uses the mid-ladder target well below the ring', () => {
+  it('uses the mid-ladder target well below the band', () => {
     expect(targetWinrate(1000, 4000)).toBe(MID_LADDER_TARGET_WINRATE);
+    expect(targetWinrate(4000 - TOP_BAND_MARGIN_RP - 1, 4000)).toBe(MID_LADDER_TARGET_WINRATE);
   });
 
   it('falls back to mid-ladder when the top-10 RP is unknown', () => {
     expect(targetWinrate(9999, null)).toBe(MID_LADDER_TARGET_WINRATE);
+    expect(targetWinrate(9999, Number.NaN)).toBe(MID_LADDER_TARGET_WINRATE);
+  });
+
+  it('the top-band target is REACHABLE by the win-rate arm (not dead code)', () => {
+    // The regression this guards: if the top-band target were keyed on the
+    // PROTECTION ring, stepGovernor would always return from the protection
+    // branch first and the 40-45% target could never be applied. The band must
+    // therefore be strictly wider than the ring, leaving a zone where the
+    // win-rate arm runs AND targets the top-band figure.
+    expect(TOP_BAND_MARGIN_RP).toBeGreaterThan(TOP_PROTECTION_MARGIN_RP);
+
+    // A bot in that zone: outside the ring, inside the band. After this win its
+    // EMA is 0.55 — only 0.05 above the MID-LADDER target (inside the dead band,
+    // so a mid-ladder judgement would do nothing) but 0.125 above the 0.425
+    // top-band target, which is outside the band. So a nerf here PROVES the arm
+    // is using the top-band target.
+    const botRp = 4000 - TOP_PROTECTION_MARGIN_RP - 50;
+    expect(topProtectionZone(botRp, 4000)).toBe('clear');
+    const decision = stepGovernor(
+      freshState({
+        winrateEma: 0.5,
+        winrateSamples: 100,
+        updatedAt: new Date(T0.getTime() - 10 * COOLDOWN_MS),
+      }),
+      { botRp, humanTop10Rp: 4000, won: true, now: T0, enabled: true },
+    );
+    expect(decision.next.winrateEma).toBeCloseTo(0.55, 10);
+    expect(decision.trigger).toBe('winrate_down');
   });
 });
 
@@ -368,6 +399,36 @@ describe('TOP PROTECTION DOMINATES (§1.5 precedence)', () => {
       }).next;
     }
     expect(state.adjustment).toBe(-MAX_GOVERNOR_ADJUSTMENT);
+  });
+
+  it('does not ring when a nerfed bot falls just outside the ring', () => {
+    // The regression: a bot pinned at the floor by top-protection drops just
+    // out of the ring with a nerf-depressed EMA. If the win-rate arm judged it
+    // against the MID-LADDER target it would read as "losing too much", buy
+    // back a boost, climb into the ring, get nerfed again — visible ringing.
+    // The wider top band means it is still judged against 0.425 out here.
+    const justOutside = 4000 - TOP_PROTECTION_MARGIN_RP - 1;
+    expect(topProtectionZone(justOutside, 4000)).toBe('clear');
+
+    // A depressed-but-plausible EMA for a top-band bot: at/just under target.
+    let state = freshState({
+      adjustment: -MAX_GOVERNOR_ADJUSTMENT,
+      winrateEma: 0.42,
+      winrateSamples: 200,
+      updatedAt: new Date(T0.getTime() - 100 * COOLDOWN_MS),
+      samplesAtAdjustment: 0,
+    });
+    // Alternate results just outside the ring; the offset must NOT climb back.
+    for (let i = 0; i < 40; i += 1) {
+      state = stepGovernor(state, {
+        botRp: justOutside,
+        humanTop10Rp: 4000,
+        won: i % 2 === 0,
+        now: new Date(T0.getTime() + i * (COOLDOWN_MS + 1000)),
+        enabled: true,
+      }).next;
+      expect(state.adjustment).toBeLessThanOrEqual(0);
+    }
   });
 
   it('protection never fires when the top-10 RP is unknown', () => {

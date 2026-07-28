@@ -25,23 +25,33 @@ function bot(i: number): BurnInBot {
 }
 
 const base = {
-  seed: 1, env: 'test',
+  seed: 1,
   seasonStart: new Date('2026-07-21T00:00:00Z'),
-  runDate: new Date('2026-07-28T00:00:00Z'),
-  targetMatches: 22, ceilingMarginRp: 200, ceilingRp: 1300, humanTop10Rp: 1500,
+  seasonEnd: new Date('2026-07-28T00:00:00Z'),
+  targetMatches: 22, ceilingMarginRp: 200,
   params, bots: [bot(0), bot(1)], categoryIds: ['c1', 'c2'],
 };
 
-describe('manifest hashes the full plan', () => {
+describe('manifest hashes the plan INTENT only (P1-1)', () => {
   it('is stable for identical inputs and order-independent for the roster', () => {
     const h1 = manifestHash(buildManifest(base));
     const h2 = manifestHash(buildManifest({ ...base, bots: [bot(1), bot(0)] }));
     expect(h1).toBe(h2);
   });
 
+  it('is INVARIANT to mutable ranked state (rp/placement/streak) — resume stability', () => {
+    const h1 = manifestHash(buildManifest(base));
+    // Simulate a partial run having moved the bots' ranked state. H must NOT change.
+    const moved = [
+      { ...bot(0), rp: 900, placementStatus: 'placed', placementPlayed: 3, placementWins: 2, currentWinStreak: 4 },
+      { ...bot(1), rp: 600, placementStatus: 'in_progress', placementPlayed: 1 },
+    ];
+    const h2 = manifestHash(buildManifest({ ...base, bots: moved }));
+    expect(h2).toBe(h1);
+  });
+
   it('changes when the calibration params CONTENTS change (not just metadata)', () => {
     const h1 = manifestHash(buildManifest(base));
-    // Same generatedAt/batchId, different curve value → H MUST change (finding 5).
     const mutated = { ...params, fCurve: params.fCurve.map((k, i) => (i === 0 ? { ...k, skill: k.skill + 0.01 } : k)) };
     const h2 = manifestHash(buildManifest({ ...base, params: mutated }));
     expect(h2).not.toBe(h1);
@@ -54,10 +64,10 @@ describe('manifest hashes the full plan', () => {
     expect(h2).not.toBe(h1);
   });
 
-  it('changes when seed / target / ceiling change', () => {
+  it('changes when seed / target / season window change', () => {
     const h1 = manifestHash(buildManifest(base));
     expect(manifestHash(buildManifest({ ...base, seed: 2 }))).not.toBe(h1);
     expect(manifestHash(buildManifest({ ...base, targetMatches: 30 }))).not.toBe(h1);
-    expect(manifestHash(buildManifest({ ...base, ceilingRp: 1200 }))).not.toBe(h1);
+    expect(manifestHash(buildManifest({ ...base, seasonEnd: new Date('2026-07-29T00:00:00Z') }))).not.toBe(h1);
   });
 });

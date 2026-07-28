@@ -26,13 +26,29 @@ import { fixtureContentDigest, fixtureMatchIdFromDigest } from '../../scripts/bo
 const MANIFEST = 'test-manifest-hash-writer';
 
 let sql: typeof import('../../src/db/index.js').sql;
-let writeFixture: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
+let writeFixtureRaw: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
 let CeilingExceededError: typeof import('../../scripts/bot-burnin/writer.js').CeilingExceededError;
 let FixtureVerificationError: typeof import('../../scripts/bot-burnin/writer.js').FixtureVerificationError;
 let snapshotProfiles: typeof import('../../scripts/bot-burnin/snapshot.js').snapshotProfiles;
 let rollback: typeof import('../../scripts/bot-burnin/snapshot.js').rollback;
 let RollbackRefusedError: typeof import('../../scripts/bot-burnin/snapshot.js').RollbackRefusedError;
+let owner: { manifestHash: string; ownerToken: string };
 let dbAvailable = false;
+
+// All fixture writes go through the owned run so the writer's fail-closed lock
+// check passes. Rollback tests delete the marker, so re-claim it if absent.
+async function ensureOwner(): Promise<void> {
+  const rows = await sql<{ note: string }[]>`SELECT note FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete' LIMIT 1`;
+  if (rows.length === 0) {
+    const { claimRun } = await import('../../scripts/bot-burnin/data.js');
+    const d = await claimRun(MANIFEST, 1);
+    owner = { manifestHash: MANIFEST, ownerToken: (d as { ownerToken: string }).ownerToken };
+  }
+}
+async function writeFixture(fixture: Parameters<typeof writeFixtureRaw>[0], ceiling?: number) {
+  await ensureOwner();
+  return writeFixtureRaw(fixture, owner, ceiling);
+}
 
 const testUserIds: string[] = [];
 const testMatchIds: string[] = [];
@@ -134,8 +150,14 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    ({ writeFixture, CeilingExceededError, FixtureVerificationError } = await import('../../scripts/bot-burnin/writer.js'));
+    ({ writeFixture: writeFixtureRaw, CeilingExceededError, FixtureVerificationError } = await import('../../scripts/bot-burnin/writer.js'));
     ({ snapshotProfiles, rollback, RollbackRefusedError } = await import('../../scripts/bot-burnin/snapshot.js'));
+    const { claimRun } = await import('../../scripts/bot-burnin/data.js');
+    // Claim a 'running' marker so the writer's fail-closed ownership check passes.
+    await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
+    const decision = await claimRun(MANIFEST, 1);
+    if (decision.kind === 'refuse') throw new Error(`test owner claim refused: ${decision.reason}`);
+    owner = { manifestHash: MANIFEST, ownerToken: (decision as { ownerToken: string }).ownerToken };
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
     categoryId = cat?.id
       ?? (await sql<{ id: string }[]>`
@@ -149,6 +171,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!dbAvailable) return;
+  await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
   if (testMatchIds.length > 0) {
     await sql`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${testMatchIds}::uuid[])`;
     await sql`DELETE FROM user_xp_events WHERE source_key = ANY(${testMatchIds})`;

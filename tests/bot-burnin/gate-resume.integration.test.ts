@@ -22,12 +22,31 @@ const MANIFEST = 'test-manifest-gate-resume';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let findNonPristineBots: typeof import('../../scripts/bot-burnin/data.js').findNonPristineBots;
-let acquireRunLock: typeof import('../../scripts/bot-burnin/data.js').acquireRunLock;
-let resolveRun: typeof import('../../scripts/bot-burnin/data.js').resolveRun;
-let insertRunningMarker: typeof import('../../scripts/bot-burnin/data.js').insertRunningMarker;
+let claimRun: typeof import('../../scripts/bot-burnin/data.js').claimRun;
 let markRunComplete: typeof import('../../scripts/bot-burnin/data.js').markRunComplete;
-let writeFixture: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
+let assertRunOwned: typeof import('../../scripts/bot-burnin/data.js').assertRunOwned;
+let writeFixtureRaw: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
+let owner: { manifestHash: string; ownerToken: string };
 let dbAvailable = false;
+
+async function ensureOwner(): Promise<void> {
+  // Re-claim a fresh MANIFEST-owned 'running' marker unless one already exists
+  // with OUR token (decision-table tests replace the marker with other Hs).
+  const rows = await sql<{ params: { manifestHash?: string; ownerToken?: string; status?: string } }[]>`
+    SELECT params FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete' LIMIT 1
+  `;
+  const m = rows[0]?.params;
+  const valid = m?.status === 'running' && m.manifestHash === MANIFEST && owner?.ownerToken === m.ownerToken;
+  if (!valid) {
+    await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
+    const d = await claimRun(MANIFEST, 1);
+    owner = { manifestHash: MANIFEST, ownerToken: (d as { ownerToken: string }).ownerToken };
+  }
+}
+async function writeFixture(fixture: Parameters<typeof writeFixtureRaw>[0], ceiling?: number) {
+  await ensureOwner();
+  return writeFixtureRaw(fixture, owner, ceiling);
+}
 
 const testUserIds: string[] = [];
 const testMatchIds: string[] = [];
@@ -66,8 +85,10 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    ({ findNonPristineBots, acquireRunLock, resolveRun, insertRunningMarker, markRunComplete } = await import('../../scripts/bot-burnin/data.js'));
-    ({ writeFixture } = await import('../../scripts/bot-burnin/writer.js'));
+    ({ findNonPristineBots, claimRun, markRunComplete, assertRunOwned } = await import('../../scripts/bot-burnin/data.js'));
+    ({ writeFixture: writeFixtureRaw } = await import('../../scripts/bot-burnin/writer.js'));
+    await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
+    await ensureOwner();
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
     categoryId = cat?.id ?? (await sql<{ id: string }[]>`INSERT INTO categories (slug, name, is_active) VALUES (${`gr_${Date.now()}`}, 'GR', true) RETURNING id`)[0].id;
   } catch {
@@ -196,49 +217,58 @@ describe('crash-boundary resume', () => {
 });
 
 describe('run-identity decision table (fresh / resume / refuse)', () => {
-  it('resolveRun: no marker -> fresh; running+sameH -> resume; complete -> refuse; differentH -> refuse', async ({ skip }) => {
+  it('claimRun: no marker -> fresh; live-running+sameH -> refuse; complete -> refuse; differentH -> refuse', async ({ skip }) => {
     if (!dbAvailable) skip();
-    // Clear any leftover marker so this test starts from a known state.
     await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
     const H = `gr-run-${Date.now()}`;
     markerHashes.push(H, `${H}-x`);
 
-    const lock = await acquireRunLock();
-    try {
-      // 1. No marker -> fresh.
-      expect((await resolveRun(lock, H)).kind).toBe('fresh');
+    // 1. No marker -> fresh (writes a 'running' marker with a fresh heartbeat).
+    const fresh = await claimRun(H, 1);
+    expect(fresh.kind).toBe('fresh');
+    const token = (fresh as { ownerToken: string }).ownerToken;
 
-      // Insert the 'running' marker for H.
-      await insertRunningMarker(lock, H, 1);
+    // 2. A LIVE run (fresh heartbeat) of the same H -> refuse (not a takeover).
+    const busy = await claimRun(H, 1);
+    expect(busy.kind).toBe('refuse');
+    if (busy.kind === 'refuse') expect(busy.reason).toMatch(/live process/i);
 
-      // 2. running + same H -> resume (this is what unblocks crash-resume).
-      const resume = await resolveRun(lock, H);
-      expect(resume.kind).toBe('resume');
+    // 3. A DIFFERENT H -> refuse.
+    expect((await claimRun(`${H}-x`, 1)).kind).toBe('refuse');
 
-      // 3. running + a DIFFERENT H -> refuse.
-      expect((await resolveRun(lock, `${H}-x`)).kind).toBe('refuse');
-
-      // 4. complete -> refuse.
-      await markRunComplete(lock, H, 5);
-      const done = await resolveRun(lock, H);
-      expect(done.kind).toBe('refuse');
-      if (done.kind === 'refuse') expect(done.reason).toMatch(/complete/i);
-    } finally {
-      await lock.release();
-    }
+    // 4. complete -> refuse.
+    await markRunComplete(H, token, 5);
+    const done = await claimRun(H, 1);
+    expect(done.kind).toBe('refuse');
+    if (done.kind === 'refuse') expect(done.reason).toMatch(/complete/i);
   });
 
-  it('the advisory lock serializes concurrent runs (second acquire blocks until release)', async ({ skip }) => {
+  it('P1-1: a stale-heartbeat run of the SAME H is taken over as a RESUME (crash-resume)', async ({ skip }) => {
     if (!dbAvailable) skip();
-    const first = await acquireRunLock();
-    let secondAcquired = false;
-    const secondPromise = acquireRunLock().then((l) => { secondAcquired = true; return l; });
-    // While first holds the lock, the second must NOT have acquired yet.
-    await new Promise((r) => setTimeout(r, 150));
-    expect(secondAcquired).toBe(false);
-    await first.release();
-    const second = await secondPromise;
-    expect(secondAcquired).toBe(true);
-    await second.release();
+    await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
+    const H = `gr-resume-${Date.now()}`;
+    markerHashes.push(H);
+
+    // Fresh run claims the marker, then "crashes" — simulate by backdating the
+    // heartbeat well past the stale threshold.
+    const fresh = await claimRun(H, 1);
+    expect(fresh.kind).toBe('fresh');
+    await sql`
+      UPDATE bot_model_params
+      SET params = params || ${sql.json({ heartbeatAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() })}
+      WHERE note = 'persistent-bot-burnin:complete' AND params->>'manifestHash' = ${H}
+    `;
+
+    // Re-invoking with the SAME H (same args → same H by construction) RESUMES,
+    // taking over the lock with a new owner token.
+    const resume = await claimRun(H, 1);
+    expect(resume.kind).toBe('resume');
+    const newToken = (resume as { ownerToken: string }).ownerToken;
+    expect(newToken).not.toBe((fresh as { ownerToken: string }).ownerToken);
+
+    // The OLD token is now fail-closed: a write under it must be rejected.
+    await expect(
+      sql.begin(async (tx) => assertRunOwned(tx, H, (fresh as { ownerToken: string }).ownerToken))
+    ).rejects.toThrow(/lock lost/i);
   });
 });

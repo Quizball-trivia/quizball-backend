@@ -18,10 +18,17 @@ describe('resolveTarget', () => {
     expect(t.isSupabase).toBe(true);
     expect(t.confirmToken).toBe('nsdfiprfmhdqhbfxfwpv');
   });
-  it('parses the project ref from a direct supabase.co subdomain', () => {
+  it('parses the project ref from a bare supabase.co subdomain', () => {
     const t = resolveTarget(DIRECT_SUPABASE);
     expect(t.isSupabase).toBe(true);
     expect(t.confirmToken).toBe('nsdfiprfmhdqhbfxfwpv');
+  });
+
+  it('parses the project ref from db.<ref>.supabase.co (label AFTER db., not "db") — P2-2', () => {
+    const t = resolveTarget('postgresql://postgres:pw@db.nsdfiprfmhdqhbfxfwpv.supabase.co:5432/postgres');
+    expect(t.isSupabase).toBe(true);
+    expect(t.confirmToken).toBe('nsdfiprfmhdqhbfxfwpv');
+    expect(t.confirmToken).not.toBe('db');
   });
   it('uses the hostname as the token for a non-Supabase remote', () => {
     const t = resolveTarget(OTHER_REMOTE);

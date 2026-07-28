@@ -1441,6 +1441,14 @@ export async function pauseMatchForDisconnectedPlayer(
     { NX: true, EX: DISCONNECT_TTL_SEC }
   );
   const alreadyDisconnected = claimedEpisode === null;
+  // Everything downstream must key off the EPISODE's marker, not this handler's
+  // local clock reading: when a duplicate handler loses the claim the stored
+  // marker still holds the winner's timestamp, and the grace-expiry handler
+  // refuses to forfeit unless the armed timestamp matches the stored marker
+  // exactly.
+  const episodeMarkerMs = alreadyDisconnected
+    ? Number(await redis.get(matchDisconnectKey(matchId, userId))) || disconnectedAtMs
+    : disconnectedAtMs;
   const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
   const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
@@ -1666,7 +1674,7 @@ export async function pauseMatchForDisconnectedPlayer(
     'match_disconnect_forfeit',
     matchId,
     new Date(Date.now() + harnessDelayMs(MATCH_DISCONNECT_GRACE_MS)),
-    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId, disconnectMarkerMs: disconnectedAtMs }
+    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId, disconnectMarkerMs: episodeMarkerMs }
   );
 
   return {

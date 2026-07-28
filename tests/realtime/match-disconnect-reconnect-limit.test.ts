@@ -567,6 +567,29 @@ describe('stale disconnect after a completed rejoin', () => {
     expect(result.finalized).toBe(false);
   });
 
+  it('arms the forfeit timer with the EPISODE marker, not the duplicate handler clock', async () => {
+    const { pauseMatchForDisconnectedPlayer } = await import(
+      '../../src/realtime/services/match-disconnect.service.js'
+    );
+    // The first handler of the episode already claimed the marker.
+    const originalMarkerMs = Date.now() - 5_000;
+    redisValues.set('match:disconnect:m1:u1', String(originalMarkerMs));
+    redisValues.set('match:reconnect_count:m1:u1', '1');
+
+    // A duplicate handler for the SAME episode (socket disconnect + match:leave)
+    // loses the SET NX claim. The grace-expiry handler refuses to forfeit unless
+    // the armed timestamp equals the STORED marker, so arming with this
+    // handler's own clock would silently drop the forfeit.
+    await pauseMatchForDisconnectedPlayer(createIo(), 'm1', 'u1', {
+      ignoreSocketId: 'second-socket',
+      disconnectedConnectedAt: Date.now() - 60_000,
+    });
+
+    expect(redisValues.get('match:disconnect:m1:u1')).toBe(String(originalMarkerMs));
+    const armed = scheduleRealtimeTimerMock.mock.calls.at(-1);
+    expect(armed?.[3]).toMatchObject({ disconnectMarkerMs: originalMarkerMs });
+  });
+
   it('counts the disconnect when the connection age is unknown (fail-safe)', async () => {
     const { pauseMatchForDisconnectedPlayer, fenceDisconnectCountOnResume } = await import(
       '../../src/realtime/services/match-disconnect.service.js'

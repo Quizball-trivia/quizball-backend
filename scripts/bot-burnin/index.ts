@@ -30,21 +30,20 @@ import {
   loadHumanTop10Rp,
   loadActiveCategoryIds,
   findNonPristineBots,
-  acquireRunLock,
-  resolveRun,
-  insertRunningMarker,
+  claimRun,
+  heartbeatRun,
   markRunComplete,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
 import { snapshotProfiles, writeSnapshotExclusive, readSnapshot } from './snapshot.js';
-import { writeFixture } from './writer.js';
+import { writeFixture, type RunOwner } from './writer.js';
 import { ReceiptWriter, parseReceipt } from './receipt.js';
 import { assertDbTarget } from './target-guard.js';
 import type { BurnInSnapshot } from './types.js';
 
-const SEASON_START = new Date('2026-07-21T00:00:00Z');
+const DEFAULT_SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
 const DEFAULT_TARGET = 22; // population median inside the 15-40 band
 const DEFAULT_MARGIN = 200;
@@ -58,7 +57,20 @@ interface Args {
   snapshotOut: string | null;
   receiptOut: string | null;
   limit: number | null;
-  runDate: Date;
+  seasonStart: Date;
+  /**
+   * The end of the backfill window — the scheduler's timeline horizon. For
+   * --execute it is a REQUIRED explicit arg (no wall-clock default) so the
+   * manifest hash H is stable across resume. Dry-run defaults to now().
+   */
+  seasonEnd: Date;
+}
+
+function parseDate(raw: string | undefined, flag: string): Date | undefined {
+  if (raw == null) return undefined;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) throw new Error(`Malformed date for ${flag}: ${raw}`);
+  return d;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -75,17 +87,23 @@ function parseArgs(argv: string[]): Args {
   };
   const paramsPath = get('--params');
   if (!paramsPath) throw new Error('--params <file> is required (zod-validated calibration params).');
-  const runDateRaw = get('--run-date');
+  const execute = has('--execute');
+  const seasonEndArg = parseDate(get('--season-end') ?? get('--run-date'), '--season-end');
+  // For --execute the window end MUST be explicit so H is resume-stable.
+  if (execute && seasonEndArg == null) {
+    throw new Error('--execute requires an explicit --season-end <ISO date> (no wall-clock default, so the run hash is stable across resume).');
+  }
   return {
     paramsPath,
     seed: num(get('--seed')) ?? DEFAULT_SEED,
     target: num(get('--target')) ?? DEFAULT_TARGET,
     marginRp: num(get('--margin-rp')) ?? DEFAULT_MARGIN,
-    execute: has('--execute'),
+    execute,
     snapshotOut: get('--snapshot-out') ?? null,
     receiptOut: get('--receipt-out') ?? null,
     limit: num(get('--limit')) ?? null,
-    runDate: runDateRaw ? new Date(runDateRaw) : new Date(),
+    seasonStart: parseDate(get('--season-start'), '--season-start') ?? DEFAULT_SEASON_START,
+    seasonEnd: seasonEndArg ?? new Date(),
   };
 }
 
@@ -122,20 +140,18 @@ async function main(): Promise<void> {
   if (categoryIds.length === 0) throw new Error('No active categories to draw from.');
 
   // Ceiling: human #10 − margin. If fewer than 10 placed humans, fall back to a
-  // conservative absolute cap so bots never dominate an empty ladder.
+  // conservative absolute cap so bots never dominate an empty ladder. The
+  // concrete ceilingRp is derived live and is NOT part of H (it drifts); it is
+  // enforced per-fixture pre-commit instead.
   const ceilingRp = humanTop10Rp != null ? Math.max(0, humanTop10Rp - args.marginRp) : 1500 - args.marginRp;
   const env = (process.env.NODE_ENV ?? 'unknown').toString();
-  const runDate = args.runDate;
 
   const manifest = buildManifest({
     seed: args.seed,
-    env,
-    seasonStart: SEASON_START,
-    runDate,
+    seasonStart: args.seasonStart,
+    seasonEnd: args.seasonEnd,
     targetMatches: args.target,
     ceilingMarginRp: args.marginRp,
-    ceilingRp,
-    humanTop10Rp,
     params,
     bots: roster,
     categoryIds,
@@ -146,8 +162,10 @@ async function main(): Promise<void> {
     bots: roster,
     params,
     seed: args.seed,
-    seasonStart: SEASON_START,
-    runDate,
+    seasonStart: args.seasonStart,
+    // The scheduler's timeline horizon is the season window END (explicit for
+    // --execute), so the plan — and thus every fixture key — is resume-stable.
+    runDate: args.seasonEnd,
     targetMatches: args.target,
     ceilingRp,
     categoryIds,
@@ -180,95 +198,77 @@ async function main(): Promise<void> {
   const snapshotPath = resolve(args.snapshotOut!);
   const receiptPath = resolve(args.receiptOut ?? args.snapshotOut!.replace(/\.json$/, '') + '.receipt.jsonl');
 
-  // ── Single run-identity model under a held session advisory lock ───────────
-  // The lock (dedicated connection) is held across the WHOLE run so two
-  // concurrent --execute can never both burn in — the loser blocks, then reads
-  // the marker and refuses/resumes. The marker is the durable one-time guard;
-  // the decision table lives in resolveRun().
-  const lock = await acquireRunLock();
+  // ── Single run-identity model, pooler-safe fail-closed lock (P1-3) ─────────
+  // claimRun atomically applies the decision table under an xact advisory lock
+  // and writes a durable LOCK-ROW (the marker, carrying our owner token +
+  // heartbeat). Every fixture write re-checks that token fail-closed, so a lost
+  // lock (takeover/rollback) stops further writes rather than racing on.
+  const decision = await claimRun(manifestHash, args.seed);
+  if (decision.kind === 'refuse') {
+    throw new Error(`ABORT: ${decision.reason}`);
+  }
+  const isResume = decision.kind === 'resume';
+  const owner: RunOwner = { manifestHash, ownerToken: decision.ownerToken };
+
+  let snapshot: BurnInSnapshot;
+  if (isResume) {
+    // RESUME: the receipt is the source of truth — the pristine gate is
+    // DELIBERATELY SKIPPED (a half-done run is not pristine). Same H proves the
+    // plan is identical (P1-1: H excludes mutable state + wall clock).
+    if (!existsSync(snapshotPath)) throw new Error(`ABORT: resume marker present but snapshot ${snapshotPath} is missing.`);
+    snapshot = readSnapshot(snapshotPath);
+    if (snapshot.manifestHash !== manifestHash) throw new Error(`ABORT: snapshot manifest ${snapshot.manifestHash} != ${manifestHash}.`);
+    if (!existsSync(receiptPath)) throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing.`);
+    const parsed = parseReceipt(receiptPath);
+    if (parsed.header.manifestHash !== manifestHash) throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
+    process.stdout.write(`\nRESUME (same H ${manifestHash}): pristine gate SKIPPED, reconciling from snapshot+receipt.\n`);
+  } else {
+    // FRESH: run the FULL pristine gate, then write-once snapshot.
+    const violations = await findNonPristineBots(roster.map((b) => b.userId));
+    if (violations.length > 0) {
+      const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
+      throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
+    }
+    if (existsSync(receiptPath)) throw new Error(`ABORT: fresh run but receipt ${receiptPath} exists — inconsistent, refusing.`);
+    snapshot = await snapshotProfiles(roster, { manifestHash, seed: args.seed, env, ceilingRp, humanTop10Rp, marginRp: args.marginRp });
+    writeSnapshotExclusive(snapshotPath, snapshot); // 'wx' — refuses if present
+    process.stdout.write(`\nFRESH run: pristine gate passed; snapshot written (write-once): ${snapshotPath}\n`);
+  }
+
+  const receipt = new ReceiptWriter(receiptPath, isResume);
+  if (!isResume) {
+    receipt.writeHeader({
+      kind: 'header', createdAt: new Date().toISOString(), manifestHash,
+      seed: args.seed, env, rosterUserIds: roster.map((b) => b.userId),
+    });
+  }
   let written = 0;
   try {
-    const decision = await resolveRun(lock, manifestHash);
-    if (decision.kind === 'refuse') {
-      throw new Error(`ABORT: ${decision.reason}`);
+    for (const fixture of schedule.fixtures) {
+      // Durably record the PLANNED line BEFORE any DB write (finding 3).
+      const line = {
+        ordinal: fixture.ordinal, key: fixture.key, matchId: fixture.matchId,
+        botAUserId: fixture.botAUserId, botBUserId: fixture.botBUserId,
+        winnerUserId: fixture.winnerUserId,
+        startedAt: fixture.startedAt.toISOString(), endedAt: fixture.endedAt.toISOString(),
+      };
+      receipt.writePlanned(line);
+      await writeFixture(fixture, owner, ceilingRp);
+      receipt.writeWritten(line);
+      written++;
+      if (written % 25 === 0) {
+        await heartbeatRun(manifestHash, owner.ownerToken); // keep the lock alive
+      }
+      if (written % 100 === 0) {
+        process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
+      }
     }
-    const isResume = decision.kind === 'resume';
-
-    let snapshot: BurnInSnapshot;
-    if (isResume) {
-      // RESUME: the receipt is the source of truth for what's done — the
-      // pristine gate is DELIBERATELY SKIPPED (a half-done run is not pristine).
-      if (!existsSync(snapshotPath)) {
-        throw new Error(`ABORT: resume marker present but snapshot ${snapshotPath} is missing — cannot reconcile.`);
-      }
-      snapshot = readSnapshot(snapshotPath);
-      if (snapshot.manifestHash !== manifestHash) {
-        throw new Error(`ABORT: snapshot manifest ${snapshot.manifestHash} != ${manifestHash}.`);
-      }
-      if (!existsSync(receiptPath)) {
-        throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing — cannot reconcile.`);
-      }
-      const parsed = parseReceipt(receiptPath);
-      if (parsed.header.manifestHash !== manifestHash) {
-        throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
-      }
-      process.stdout.write(`\nRESUME (marker 'running', manifest ${manifestHash}): pristine gate SKIPPED, reconciling from snapshot+receipt.\n`);
-    } else {
-      // FRESH: run the FULL pristine gate under the lock (serialized vs
-      // selection/reservations), then write-once snapshot + running marker.
-      const violations = await findNonPristineBots(roster.map((b) => b.userId));
-      if (violations.length > 0) {
-        const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
-        throw new Error(
-          `ABORT: ${violations.length} roster bot(s) are not pristine — burn-in refuses to touch dirty state:\n${detail}`,
-        );
-      }
-      if (existsSync(receiptPath)) {
-        throw new Error(`ABORT: no marker but receipt ${receiptPath} exists — inconsistent state, refusing.`);
-      }
-      snapshot = await snapshotProfiles(roster, {
-        manifestHash, seed: args.seed, env, ceilingRp, humanTop10Rp, marginRp: args.marginRp,
-      });
-      // Write-once via exclusive create ('wx'): a pre-existing file → abort.
-      writeSnapshotExclusive(snapshotPath, snapshot);
-      await insertRunningMarker(lock, manifestHash, args.seed);
-      process.stdout.write(`\nFRESH run: pristine gate passed; snapshot written (write-once): ${snapshotPath}\n`);
-    }
-
-    // ── Append-only JSONL receipt ─────────────────────────────────────────────
-    const receipt = new ReceiptWriter(receiptPath, isResume);
-    if (!isResume) {
-      receipt.writeHeader({
-        kind: 'header', createdAt: new Date().toISOString(), manifestHash,
-        seed: args.seed, env, rosterUserIds: roster.map((b) => b.userId),
-      });
-    }
-    try {
-      for (const fixture of schedule.fixtures) {
-        // Durably record the PLANNED line BEFORE any DB write (finding 3).
-        const line = {
-          ordinal: fixture.ordinal, key: fixture.key, matchId: fixture.matchId,
-          botAUserId: fixture.botAUserId, botBUserId: fixture.botBUserId,
-          winnerUserId: fixture.winnerUserId,
-          startedAt: fixture.startedAt.toISOString(), endedAt: fixture.endedAt.toISOString(),
-        };
-        receipt.writePlanned(line);
-        await writeFixture(fixture, ceilingRp);
-        receipt.writeWritten(line);
-        written++;
-        if (written % 100 === 0) {
-          process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
-        }
-      }
-    } finally {
-      receipt.close();
-    }
-
-    // Flip the marker to 'complete' (still under the lock).
-    await markRunComplete(lock, manifestHash, schedule.fixtures.length);
   } finally {
-    await lock.release();
+    receipt.close();
   }
+
+  // Flip the marker to 'complete' (verifies our ownership under the xact lock).
+  await markRunComplete(manifestHash, owner.ownerToken, schedule.fixtures.length);
 
   process.stdout.write(
     `\nEXECUTE complete: ${written} fixtures written.\nReceipt: ${receiptPath}\nSnapshot: ${snapshotPath}\n`,

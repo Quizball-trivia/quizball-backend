@@ -37,13 +37,19 @@ export function resolveTarget(dsn: string): TargetIdentity {
   const isLocal = LOCAL_HOSTS.has(host);
   const isSupabase = host.includes('supabase.co') || host.includes('pooler.supabase.com');
 
-  // Supabase project ref: the pooler user is 'postgres.<ref>'; the direct host
-  // is '<ref>.supabase.co'. Prefer the user-embedded ref, else the subdomain.
+  // Supabase project ref (P2-2):
+  //   - pooler:  user is 'postgres.<ref>'  (host = *.pooler.supabase.com)
+  //   - direct:  host is 'db.<ref>.supabase.co' → the ref is the label AFTER 'db.'
+  //     (host.split('.')[0] is 'db', NOT the ref).
   let confirmToken = host;
   if (isSupabase) {
     const user = decodeURIComponent(url.username);
     const userRef = user.startsWith('postgres.') ? user.slice('postgres.'.length) : '';
-    const sub = host.endsWith('.supabase.co') ? host.split('.')[0] : '';
+    let sub = '';
+    if (host.endsWith('.supabase.co')) {
+      const labels = host.split('.'); // e.g. ['db','<ref>','supabase','co'] or ['<ref>','supabase','co']
+      sub = labels[0] === 'db' && labels.length >= 4 ? labels[1] : labels[0];
+    }
     confirmToken = (userRef || sub || host).toLowerCase();
   }
   return { host, isLocal, isSupabase, confirmToken };

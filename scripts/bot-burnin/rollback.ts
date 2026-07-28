@@ -17,6 +17,7 @@ import { sql } from '../../src/db/index.js';
 import { rollback, RollbackRefusedError, readSnapshot } from './snapshot.js';
 import { parseReceipt, receiptFixtures } from './receipt.js';
 import { assertDbTarget } from './target-guard.js';
+import { withRollbackLock } from './data.js';
 
 function get(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
@@ -38,7 +39,9 @@ async function main(): Promise<void> {
   const fixtures = receiptFixtures(parsed);
 
   try {
-    const result = await rollback(parsed.header, fixtures, snapshot);
+    // Serialize rollback against any concurrent --execute via the same advisory
+    // lock the run claim uses (P1-3b).
+    const result = await withRollbackLock(() => rollback(parsed.header, fixtures, snapshot));
     process.stdout.write(
       `Rollback complete:\n` +
         `  matches deleted:     ${result.matchesDeleted}\n` +

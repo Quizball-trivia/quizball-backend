@@ -221,13 +221,16 @@ export async function rollback(
   let matchesDeleted = 0;
   try {
     await sql.begin(async (tx) => {
-      // Lock the roster bots' profiles for the duration of the tx.
+      // Lock EVERY mutated table's roster rows FOR UPDATE for the whole tx, so
+      // no XP / achievement / stats / profile write can race in between the
+      // validation and the restore (P1-2).
       await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
+      await tx`SELECT user_id FROM user_mode_match_stats WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
+      await tx`SELECT user_id FROM user_achievements WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
+      await tx`SELECT user_id FROM user_xp_events WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
+      await tx`SELECT id FROM users WHERE id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
 
-      // 1. No post-snapshot mutation on ANY tracked surface. A ledger row / XP
-      // event whose match is not in the receipt, OR a ranked_profiles updated_at
-      // that moved past the snapshot value, OR achievement/stats/xp drift beyond
-      // the snapshot => live activity after execute. Abort.
+      // 1. No post-snapshot mutation on ANY tracked surface.
       const strayLedger = await tx<{ user_id: string; match_id: string }[]>`
         SELECT user_id, match_id FROM ranked_rp_changes WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
       `;
@@ -235,28 +238,52 @@ export async function rollback(
         SELECT user_id, source_type, source_key FROM user_xp_events WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
       `;
       const offending = new Set<string>();
-      for (const r of strayLedger) if (!receiptMatchSet.has(r.match_id)) offending.add(r.user_id);
+      const reasons: string[] = [];
+      const flag = (userId: string, why: string) => { offending.add(userId); reasons.push(`${userId}: ${why}`); };
+      for (const r of strayLedger) if (!receiptMatchSet.has(r.match_id)) flag(r.user_id, `ledger for non-receipt match ${r.match_id}`);
       for (const r of strayXp) {
-        // match_result XP not in the receipt, OR any non-match XP at all, is live activity.
-        if (r.source_type === 'match_result') { if (!receiptMatchSet.has(r.source_key)) offending.add(r.user_id); }
-        else offending.add(r.user_id);
+        if (r.source_type === 'match_result') { if (!receiptMatchSet.has(r.source_key)) flag(r.user_id, `xp for non-receipt match ${r.source_key}`); }
+        else flag(r.user_id, `non-match xp (${r.source_type})`);
       }
-      // profile_updated_at drift (the captured-but-unused field, now checked).
+
+      // profile_updated_at drift: compare the LIVE updated_at against the value
+      // captured in the snapshot (P1-2 — the captured-but-unused field, now used).
       const nowProfiles = await tx<{ user_id: string; updated_at: string | null; exists: boolean }[]>`
         SELECT u.id AS user_id, rp.updated_at, (rp.user_id IS NOT NULL) AS exists
         FROM users u LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
         WHERE u.id = ANY(${header.rosterUserIds}::uuid[])
       `;
+      const verifiedMatchSet = receiptMatchSet; // updated_at moved by OUR fixtures is expected
       for (const r of nowProfiles) {
         const snap = snapshotByUser.get(r.user_id);
         if (!snap) continue;
-        // A live event that is NOT explained by the receipt would move updated_at
-        // beyond the snapshot AND leave a stray ledger/xp row (caught above). If
-        // the profile row vanished for a bot that had one, that is also drift.
-        if (snap.profileExisted && !r.exists) offending.add(r.user_id);
+        if (snap.profileExisted && !r.exists) { flag(r.user_id, 'profile row vanished'); continue; }
+        if (!snap.profileExisted && r.exists) continue; // burn-in-created; removed in restore
+        // If updated_at advanced past the snapshot AND the bot has NO burn-in
+        // ledger row (i.e. our own fixtures did not touch it), a live write moved
+        // it. A bot our fixtures settled legitimately has updated_at moved — but
+        // that is always accompanied by a receipt ledger row, checked above; a
+        // MOVE with no receipt ledger is live drift.
+        const movedPastSnapshot = snap.profileUpdatedAt != null && r.updated_at != null
+          && new Date(r.updated_at).getTime() > new Date(snap.profileUpdatedAt).getTime();
+        const hasReceiptLedger = strayLedger.some((l) => l.user_id === r.user_id && verifiedMatchSet.has(l.match_id));
+        if (movedPastSnapshot && !hasReceiptLedger) flag(r.user_id, `profile updated_at advanced with no burn-in ledger`);
       }
+
+      // Achievement drift: any achievement NOT in the snapshot set whose source
+      // is NOT a receipt burn-in match is a live unlock → abort.
+      const nowAch = await tx<{ user_id: string; achievement_id: string; source_match_id: string | null }[]>`
+        SELECT user_id, achievement_id, source_match_id FROM user_achievements WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
+      `;
+      for (const a of nowAch) {
+        const snap = snapshotByUser.get(a.user_id);
+        const inSnapshot = snap?.achievements.some((s) => s.achievementId === a.achievement_id) ?? false;
+        const burnInSourced = a.source_match_id != null && receiptMatchSet.has(a.source_match_id);
+        if (!inSnapshot && !burnInSourced) flag(a.user_id, `live achievement ${a.achievement_id}`);
+      }
+
       if (offending.size > 0) {
-        throw new RollbackRefusedError(`post-snapshot live activity on roster bots — refused: ${[...offending].join(', ')}`);
+        throw new RollbackRefusedError(`post-snapshot live activity on roster bots — refused:\n  ${reasons.slice(0, 12).join('\n  ')}`);
       }
 
       // 2. Per-match verification (exact pair + burnIn tag + fixture-key + roster).
@@ -336,11 +363,11 @@ export async function rollback(
           await tx`DELETE FROM user_mode_match_stats WHERE user_id = ${p.userId} AND mode = 'ranked'`;
         }
 
-        // user_achievements: delete ONLY burn-in-created rows (those whose
-        // source_match_id is a verified burn-in match, OR any achievement not in
-        // the snapshot set), then restore the snapshot set verbatim. This never
-        // touches a pre-existing achievement that the snapshot already carries.
-        const snapAchIds = new Set(p.achievements.map((a) => a.achievementId));
+        // user_achievements: delete ONLY the rows NOT in the snapshot set. After
+        // the drift validation above, every such row is burn-in-created (a live
+        // achievement would have aborted the rollback), so this deletes only
+        // burn-in-created achievements, never a pre-existing one. Then restore
+        // the snapshot set verbatim.
         await tx`
           DELETE FROM user_achievements
           WHERE user_id = ${p.userId}
@@ -355,7 +382,6 @@ export async function rollback(
               source_match_id = EXCLUDED.source_match_id, updated_at = EXCLUDED.updated_at
           `;
         }
-        void snapAchIds;
       }
 
       // Clear the one-time marker so the env can be re-run after a full rollback.

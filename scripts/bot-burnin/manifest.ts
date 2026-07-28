@@ -15,31 +15,36 @@ import { createHash } from 'node:crypto';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, BotSchedule, PlannedFixture } from './types.js';
 
+/**
+ * The manifest identifies the PLAN INTENT, never the mutable world state or the
+ * wall clock (P1-1). Two invocations of the SAME plan produce the same H whether
+ * or not fixtures have already run — which is what makes crash-resume work.
+ *
+ * IN H: seed, ceiling config, target, the EXPLICIT season window (start+end,
+ * both passed as args — no wall-clock default), roster MEMBERSHIP (bot ids), the
+ * per-bot HIDDEN ABILITY (base_skill/dailyCap/schedule/status — fixed roster
+ * properties that drive the plan), the category set, and the model params.
+ * OUT of H: per-bot current RP/placement/streak (mutable ranked state — a
+ * partial run moves it) and the wall-clock run date.
+ */
 export interface RunManifest {
-  version: 2;
+  version: 3;
   seed: number;
-  env: string;
   seasonStart: string;
-  runDate: string;
+  seasonEnd: string;
   targetMatches: number;
+  // Only the ceiling MARGIN config is in H (stable). The concrete ceilingRp is
+  // derived from live human RP at run time (which drifts) and is enforced
+  // per-fixture pre-commit — so it must NOT be part of the plan identity.
   ceilingMarginRp: number;
-  ceilingRp: number;
-  humanTop10Rp: number | null;
-  // Finding 4/5: hash the FULL calibration params CONTENTS, not just metadata —
-  // a re-fit that keeps generatedAt/batchId but changes the curve MUST change H.
+  // Finding 4/5: hash the FULL calibration params CONTENTS, not just metadata.
   params: BotModelParams;
-  /** The roster + its loaded starting state AND schedule, canonicalized + sorted. */
+  /** Roster membership + fixed hidden ability. NO mutable ranked state. */
   roster: Array<{
     userId: string;
     baseSkill: number;
     dailyCap: number;
     status: string;
-    rp: number;
-    placementPlayed: number;
-    placementWins: number;
-    placementStatus: string;
-    currentWinStreak: number;
-    // Finding 4: schedules drive the plan (which slots pair), so they belong in H.
     schedule: BotSchedule;
   }>;
   categoryIds: string[];
@@ -55,27 +60,21 @@ function stableStringify(value: unknown): string {
 
 export function buildManifest(opts: {
   seed: number;
-  env: string;
   seasonStart: Date;
-  runDate: Date;
+  seasonEnd: Date;
   targetMatches: number;
   ceilingMarginRp: number;
-  ceilingRp: number;
-  humanTop10Rp: number | null;
   params: BotModelParams;
   bots: BurnInBot[];
   categoryIds: string[];
 }): RunManifest {
   return {
-    version: 2,
+    version: 3,
     seed: opts.seed,
-    env: opts.env,
     seasonStart: opts.seasonStart.toISOString(),
-    runDate: opts.runDate.toISOString(),
+    seasonEnd: opts.seasonEnd.toISOString(),
     targetMatches: opts.targetMatches,
     ceilingMarginRp: opts.ceilingMarginRp,
-    ceilingRp: opts.ceilingRp,
-    humanTop10Rp: opts.humanTop10Rp,
     params: opts.params,
     roster: [...opts.bots]
       .map((b) => ({
@@ -83,11 +82,6 @@ export function buildManifest(opts: {
         baseSkill: b.baseSkill,
         dailyCap: b.dailyCap,
         status: b.status,
-        rp: b.rp,
-        placementPlayed: b.placementPlayed,
-        placementWins: b.placementWins,
-        placementStatus: b.placementStatus,
-        currentWinStreak: b.currentWinStreak,
         schedule: b.schedule,
       }))
       .sort((a, b) => (a.userId < b.userId ? -1 : 1)),

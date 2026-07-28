@@ -26,6 +26,7 @@ import { rankedService } from '../../src/modules/ranked/ranked.service.js';
 import { progressionService } from '../../src/modules/progression/progression.service.js';
 import { achievementsService } from '../../src/modules/achievements/index.js';
 import { computeSeasonRpDelta, SEASON_INITIAL_RP } from '../../src/modules/ranked/season-rp-formula.js';
+import { assertRunOwned } from './data.js';
 import type { PlannedFixture } from './types.js';
 
 export class FixtureVerificationError extends Error {}
@@ -98,8 +99,10 @@ async function verifyExistingMatch(fixture: PlannedFixture): Promise<void> {
 /**
  * Insert the completed-shaped match rows for one fixture (backdated), if absent.
  * Returns created=false when the match already exists AND verifies identical.
+ * The insert tx re-checks lock ownership FAIL-CLOSED so a fixture can never land
+ * after the run lost its lock (P1-3).
  */
-async function insertHistoricalMatch(fixture: PlannedFixture): Promise<WriteFixtureResult> {
+async function insertHistoricalMatch(fixture: PlannedFixture, owner: RunOwner): Promise<WriteFixtureResult> {
   const matchId = fixture.matchId;
 
   const existing = await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${matchId}`;
@@ -109,6 +112,9 @@ async function insertHistoricalMatch(fixture: PlannedFixture): Promise<WriteFixt
   }
 
   await sql.begin(async (tx) => {
+    // Fail-closed: only proceed if we STILL own the run lock (marker row shows
+    // 'running' + our token). A takeover/rollback aborts this insert.
+    await assertRunOwned(tx, owner.manifestHash, owner.ownerToken);
     // Re-check inside the tx (another resume worker may race us).
     const race = await tx<{ id: string }[]>`SELECT id FROM matches WHERE id = ${matchId}`;
     if (race.length > 0) return;
@@ -182,25 +188,33 @@ async function assertCeilingPreCommit(fixture: PlannedFixture, ceilingRp: number
   }
 }
 
+/** Identifies the current run for the fail-closed lock re-check (P1-3). */
+export interface RunOwner {
+  manifestHash: string;
+  ownerToken: string;
+}
+
 /**
  * Write + settle one fixture end-to-end with the fixture's backdated timestamp.
  * Safe to re-run: completion/settlement/XP/achievements are each idempotent on
  * the match id. When `ceilingRp` is provided the ceiling is asserted PRE-COMMIT,
- * so a violation is refused before any settlement write lands.
+ * so a violation is refused before any settlement write lands. `owner` gates
+ * every write on still holding the run lock (fail-closed).
  */
-export async function writeFixture(fixture: PlannedFixture, ceilingRp?: number): Promise<WriteFixtureResult> {
-  // Ceiling assertion FIRST (finding 6): compute the projected post-settlement
-  // RP from live DB profiles and refuse before writing anything if it exceeds
-  // the ceiling. On resume the fixture may already be settled; skip the assert
-  // in that case (the settled row is verified separately) to stay idempotent.
-  const alreadySettled = await sql<{ id: string }[]>`
-    SELECT id FROM matches WHERE id = ${fixture.matchId} AND status = 'completed'
+export async function writeFixture(fixture: PlannedFixture, owner: RunOwner, ceilingRp?: number): Promise<WriteFixtureResult> {
+  // Ceiling assertion FIRST (finding 6 + P2-1): compute the projected post-
+  // settlement RP from live DB profiles and refuse before writing anything if it
+  // exceeds the ceiling. This runs whenever the fixture is NOT yet settled — so
+  // a crash-written 'active' fixture is RE-ASSERTED on resume before it settles.
+  const settledAlready = await sql<{ status: string }[]>`
+    SELECT status FROM matches WHERE id = ${fixture.matchId}
   `;
-  if (ceilingRp != null && alreadySettled.length === 0) {
+  const isCompleted = settledAlready[0]?.status === 'completed';
+  if (ceilingRp != null && !isCompleted) {
     await assertCeilingPreCommit(fixture, ceilingRp);
   }
 
-  const result = await insertHistoricalMatch(fixture);
+  const result = await insertHistoricalMatch(fixture, owner);
 
   // Drive the REAL production functions with the injected historical timestamp.
   // completeMatch is a no-op if already completed; settlement + XP + achievement

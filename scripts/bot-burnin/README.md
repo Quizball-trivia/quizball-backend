@@ -20,7 +20,7 @@ final RP hard-capped below the live human top-10. Run staging first.
 - `PERSISTENT_BOTS` flag must be OFF — burn-in is a pristine-state operation
   that must run before selection ever activates.
 
-## Architecture: plan-all-then-execute-in-one-transaction
+## Architecture: plan-all-then-execute-in-chronological-chunks
 
 **PLAN** is a pure function of immutable inputs: seed, the explicit season
 window (start + end), roster membership + each bot's fixed hidden ability
@@ -30,15 +30,19 @@ simulated from the pristine baseline (450 RP, unplaced, 0 games) and the
 live-derived ceiling (human top-10 RP − margin) is enforced during pairing, so
 the plan can never produce a fixture that would push a bot over it.
 
-**EXECUTE** writes the ENTIRE plan in ONE database transaction: it takes the
-xact advisory lock, re-checks the one-time marker and the pristine gate
-*inside* the transaction, writes every fixture, then inserts the `'complete'`
-marker — all as one unit. If anything throws partway through, the whole
-transaction rolls back and the DB ends up exactly as it started.
+**EXECUTE** writes the plan in chronological CHUNKS (default 250 fixtures),
+each chunk in its own committed transaction, in the scheduler's chronological
+order. Each chunk-tx takes the xact advisory lock, re-checks the one-time
+marker inside the transaction, and writes its fixtures; the `'complete'`
+marker is inserted only in the FINAL chunk's transaction.
 
-Burn-in is **NOT resumable**. There is no snapshot, no receipt, no ownership
-token, no heartbeat. A crashed or interrupted run commits nothing; you simply
-re-run it from scratch with the same args.
+Burn-in **IS idempotently resumable.** A crash leaves a committed
+chronological PREFIX — every bot's history up to that point is
+self-consistent — and only the in-flight chunk rolls back. Re-running with
+the SAME inputs re-plans identically and SKIPS already-written fixtures (by
+deterministic match id), resuming from the first unwritten one, then writes
+the one-time `'complete'` marker in the final chunk's transaction. There is
+still no snapshot, no receipt, no ownership token.
 
 ## Commands
 
@@ -53,7 +57,7 @@ Simulates the full fixture plan in memory and prints the distribution report
 actual, sample bot timelines). Zero writes. `--season-end` defaults to now();
 `--limit` caps roster size loaded (highest base_skill first).
 
-### Execute (writes — one transaction)
+### Execute (writes — chronological chunk batches, resumable)
 
 ```bash
 npm run bot:burnin -- --params <path> --execute --season-end <ISO> [--season-start ISO] [--seed N] [--target N] [--margin-rp N]
@@ -89,7 +93,7 @@ burn-in's to touch.
 | `--season-start ISO` | `2026-07-21T00:00:00Z` | start of the backfill window |
 | `--season-end ISO` | now() (dry-run) / required (`--execute`) | end of the backfill window — the scheduler's timeline horizon |
 | `--limit N` | none (all) | cap on roster size loaded (highest base_skill first); dry-run only |
-| `--execute` | off (dry-run) | perform the real writes, in one transaction |
+| `--execute` | off (dry-run) | perform the real writes, in chronological chunk transactions (resumable) |
 | `--allow-remote` | off | required (with matching `BURNIN_CONFIRM_ENV`) to target a non-localhost DB |
 
 The ceiling itself: `humanTop10Rp - marginRp` when at least 10 placed human
@@ -112,7 +116,10 @@ enforced per-fixture during pairing instead.
   450 RP/unplaced/all-zero accumulators (or missing, treated as fresh), zero
   ranked ledger rows, zero ranked `user_mode_match_stats` games, zero
   finished/live matches, zero XP events, `users.total_xp = 0`, zero
-  achievements, no reservations or live lobby membership.
+  achievements, no reservations or live lobby membership. The gate runs under
+  a row lock (`FOR UPDATE` on `ranked_profiles`) inside the first chunk's
+  transaction, and only against bots not already touched by a prior partial
+  run.
 - **DB target guard.** Localhost is allowed by default; a remote target
   requires `--allow-remote` plus `BURNIN_CONFIRM_ENV` set to the matching
   Supabase project ref.

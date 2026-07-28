@@ -112,8 +112,9 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     await acquire(bot, lobby);
 
     // Production activation (its own committed tx, lock released after).
-    const activated = await repo.activateLobbyForDraftLocked(lobby);
-    expect(activated).toBe(true);
+    const activation = await repo.activateLobbyForDraftLocked(lobby);
+    expect(activation.activated).toBe(true);
+    expect(activation.committedReservation).toBe(true); // THIS call owns the commit
     // committed_at is now set; NO match created yet (the gap).
     const [afterActivate] = await sql<{ committed_at: string | null; match_id: string | null }[]>`
       SELECT committed_at, match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
@@ -214,5 +215,47 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     expect(abortResult.botReleased).toBeNull();
     const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
+  });
+
+  it('(D) DYNAMIC gate: a draft_start_error teardown (uncommitFirst) NO-OPS when a reconnect activated + created a match', async () => {
+    if (!dbAvailable) return;
+    // The exact P1 Sol flagged: a stale draft_start_error handler passes
+    // teardown-intent (uncommitFirst) but a reconnect activated + CREATED A MATCH
+    // first. The AUTHORITATIVE in-lock live-match check overrides the static
+    // intent → no-op → the fresh commit survives, the bot stays in the live draft.
+    const bot = await newBot(`race-d-${Date.now()}`);
+    const lobby = await newWaitingLobby(bot);
+    await acquire(bot, lobby);
+    // Reconnect activated (committed_at set) AND created its match.
+    await repo.activateLobbyForDraftLocked(lobby);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'active', ${categoryId}, 10, 0, NOW()) RETURNING id
+    `;
+    matchIds.push(match.id);
+    // Stale teardown handler fires with uncommitFirst — must NO-OP (live match).
+    const abortResult = await repo.abortRankedAiLobbyLocked(lobby, { uncommitFirst: true });
+    expect(abortResult.aborted).toBe(false);
+    expect(abortResult.botReleased).toBeNull();
+    // committed_at survives (NOT cleared), reservation kept for the live draft.
+    const [res] = await sql<{ committed_at: string | null }[]>`
+      SELECT committed_at FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(res.committed_at).not.toBeNull();
+  });
+
+  it('(E) ticket-failure teardown reclaims a genuinely-STUCK lobby (activated, committed, NO match)', async () => {
+    if (!dbAvailable) return;
+    // Ticket failure is post-activation (committed_at set) with NO match created —
+    // a genuinely stuck draft. teardown-intent + the in-lock check (no active
+    // match) → reclaim + teardown.
+    const bot = await newBot(`race-e-${Date.now()}`);
+    const lobby = await newWaitingLobby(bot);
+    await acquire(bot, lobby);
+    await repo.activateLobbyForDraftLocked(lobby); // committed_at set, no match
+    const abortResult = await repo.abortRankedAiLobbyLocked(lobby, { uncommitFirst: true });
+    expect(abortResult.aborted).toBe(true);
+    expect(abortResult.botReleased).toBe(bot);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
   });
 });

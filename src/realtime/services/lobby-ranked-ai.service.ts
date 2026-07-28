@@ -492,13 +492,16 @@ async function startRankedAiDraft(params: {
   // bot elsewhere. If a concurrent reconnect already advanced the draft, the
   // locked abort observes 'active' and no-ops. Ephemeral keeps its legacy
   // Redis-key-only cleanup (no reservation exists; other paths reap the lobby).
-  const releasePreMatch = async (path: 'draft_start_cancel' | 'draft_start_error'): Promise<void> => {
+  const releasePreMatch = async (
+    path: 'draft_start_cancel' | 'draft_start_error',
+  ): Promise<void> => {
     if (persistentBotReservation) {
-      // draft_start_error fires AFTER startDraft (which activated the lobby →
-      // committed_at set), so it's a genuine draft-teardown and must un-commit
-      // first. draft_start_cancel fires BEFORE startDraft (pre-activation,
-      // committed_at NULL) and must NOT un-commit — the lobby may have been
-      // concurrently activated by a reconnect whose commit we must not clear.
+      // draft_start_error may fire post-activation (committed_at set) → pass
+      // teardown-intent. The AUTHORITATIVE decision is the in-lock live-match
+      // check inside the locked abort: if a reconnect activated + created a match,
+      // it no-ops and the fresh commit survives; only a genuinely-stuck draft (no
+      // live match) is reclaimed. draft_start_cancel is pre-activation (no commit
+      // by us) so it does not pass teardown-intent.
       await compensateAbortLobby(io, lobbyId, path, { draftTeardown: path === 'draft_start_error' });
       return;
     }
@@ -510,14 +513,14 @@ async function startRankedAiDraft(params: {
 
   try {
     if (await hasRankedCancelRequest(userId)) {
-      // THIS flow's user cancelled — we own the abort.
+      // THIS flow's user cancelled BEFORE activation — pre-activation, no commit.
       logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped because user cancelled search');
       await releasePreMatch('draft_start_cancel');
       return;
     }
     const readyLobby = await lobbiesRepo.getById(lobbyId);
     if (!readyLobby || readyLobby.mode !== 'ranked') {
-      // Lobby gone → free the still-lobby-keyed reservation.
+      // Lobby gone → free the still-lobby-keyed reservation (pre-activation).
       await releasePreMatch('draft_start_cancel');
       return;
     }
@@ -535,7 +538,7 @@ async function startRankedAiDraft(params: {
         'Ranked AI draft start skipped because user session moved elsewhere'
       );
       if (persistentBotReservation) {
-        // Locked release + teardown (serialized with draft activation).
+        // Pre-activation superseded cleanup — we have not committed (no teardown).
         await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
       } else {
         await cleanupSupersededRankedAiLobby({
@@ -551,11 +554,10 @@ async function startRankedAiDraft(params: {
     await startDraft(io, lobbyId);
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
-    // startDraft sets the lobby ACTIVE (under the advisory lock) before it can
-    // throw. releasePreMatch's locked abort (abortLobby) re-reads status under the
-    // SAME lock: if the draft advanced to 'active' (a recoverable draft holds the
-    // bot — the draft-grace/abort path owns release), it no-ops and the bot is
-    // kept. Race-free with activation; no separate TOCTOU status check.
+    // startDraft may have ACTIVATED (committed_at set) before throwing. The locked
+    // abort's in-lock live-match check is the authoritative gate: if a reconnect
+    // created a match, it no-ops (the live draft keeps the bot); only a stuck
+    // no-match draft is reclaimed.
     await releasePreMatch('draft_start_error');
     io.to(`lobby:${lobbyId}`).emit('error', {
       code: 'MATCH_PREPARATION_FAILED',

@@ -209,7 +209,7 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     ]);
     insertLobbyCategoriesMock.mockResolvedValue(undefined);
     setLobbyStatusMock.mockResolvedValue(undefined);
-    activateLobbyForDraftLockedMock.mockResolvedValue(true);
+    activateLobbyForDraftLockedMock.mockResolvedValue({ activated: true, committedReservation: false });
     cleanupLobbyMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
     removeMemberMock.mockResolvedValue(undefined);

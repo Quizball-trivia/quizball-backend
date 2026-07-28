@@ -52,12 +52,12 @@ export async function abortRankedDraftStartForTickets(
   lobby: { id: string; mode: 'friendly' | 'ranked' },
   humanUserIds: string[]
 ): Promise<void> {
-  // End the lobby + free any persistent-bot reservation atomically under the
-  // shared per-lobby advisory lock (serialized with draft activation). The locked
-  // abort deletes the lobby + all members + reservation only while still
-  // 'waiting'/gone; if a reconnect concurrently advanced the draft, it no-ops
-  // (but the ticket abort only fires pre-activation, so it aborts here).
-  await reservationService.abortLobby(lobby.id, 'abort_start_for_tickets');
+  // Ticket failure fires POST-activation (committed_at is set), so it must be
+  // able to reclaim a genuinely-stuck draft → teardown-intent. The AUTHORITATIVE
+  // in-lock live-match check inside the locked abort decides: if a reconnect
+  // activated + created a match first, the abort no-ops (the live match keeps the
+  // bot); if the draft is truly stuck (no match), it reclaims + tears down.
+  await reservationService.abortLobby(lobby.id, 'abort_start_for_tickets', { draftTeardown: true });
   await warmupRealtimeService.cleanupLobby(lobby.id);
   const redis = getRedisClient();
   if (redis) {

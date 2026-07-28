@@ -133,9 +133,19 @@ export const syntheticBotsRepo = {
    * (the true root cause of the earlier race). A genuine draft-teardown clears it
    * again (abortRankedAiLobbyLocked with uncommitFirst) as part of its abort.
    *
-   * Returns whether the lobby row was flipped (false if the lobby was gone).
+   * Returns:
+   *   - activated: whether the lobby row was flipped to 'active' (false if gone).
+   *   - committedReservation: whether THIS CALL transitioned a reservation's
+   *     committed_at NULL→now() (i.e. THIS flow owns the commit). The
+   *     `WHERE committed_at IS NULL` guard means exactly one concurrent activator
+   *     sees the affected row — so a caller can pass draftTeardown/uncommitFirst
+   *     ONLY when committedReservation is true, never clearing a commit made by a
+   *     racing reconnect flow (the residual case-(a) race the live-match check
+   *     alone could not close).
    */
-  async activateLobbyForDraftLocked(lobbyId: string): Promise<boolean> {
+  async activateLobbyForDraftLocked(
+    lobbyId: string,
+  ): Promise<{ activated: boolean; committedReservation: boolean }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
       const rows = await tx.unsafe<{ id: string }[]>(
@@ -143,39 +153,47 @@ export const syntheticBotsRepo = {
         [lobbyId],
       );
       // Commit any lobby-keyed reservation to THIS draft. No-op if none (ephemeral
-      // opponent) or already transferred.
-      await tx.unsafe(
+      // opponent) or already transferred/committed by a racing flow. The RETURNING
+      // row count proves whether THIS call owns the commit.
+      const committed = await tx.unsafe<{ bot_user_id: string }[]>(
         `UPDATE synthetic_bot_reservations
             SET committed_at = now()
-          WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NULL`,
+          WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NULL
+          RETURNING bot_user_id`,
         [lobbyId],
       );
-      return rows.length > 0;
+      return { activated: rows.length > 0, committedReservation: committed.length > 0 };
     });
   },
 
   /**
    * ABORT half of the lock ordering, and the ONLY lobby-phase reservation-release
-   * path. Under the SAME per-lobby advisory lock as draft activation, decide via
-   * the reservation's COMMIT STATE (not lobby status / match existence — the true
-   * root-cause fix) whether the bot is committed to a live draft:
+   * path. Under the SAME per-lobby advisory lock as draft activation, the
+   * AUTHORITATIVE gate on whether the bot may be reclaimed is a DYNAMIC in-lock
+   * live-match check — NOT the caller's static teardown-intent flag. Whether an
+   * abort is safe depends on the race that actually happened (did a reconnect
+   * activate + create a match between this handler starting and its abort), which
+   * only an in-lock check can decide.
    *
-   *   - A persistent reservation exists for this lobby AND committed_at IS NOT
-   *     NULL → a draft has started for this bot (activation set it; it stays set
-   *     across the whole activate → draft → transfer window, even before the
-   *     match row exists). HANDS OFF: no release, no teardown. The genuine
-   *     draft-teardown paths clear committed_at first, so this only protects a
-   *     LIVE draft.
-   *   - Otherwise (no reservation, or committed_at IS NULL) → abort: free the
-   *     (still lobby-keyed) reservation AND end the lobby (remove all members +
-   *     delete it), all in this one locked tx.
+   * Inside the locked tx:
+   *   1. If an ACTIVE match exists for the lobby → the bot is committed to a LIVE
+   *      match → NO-OP entirely (never clear committed_at, never release, never
+   *      teardown). This overrides any teardown-intent: a stale draft_start_error
+   *      / ticket-failure / sweeper that lost the race cannot clobber the fresh
+   *      commit a reconnect just created.
+   *   2. Else (no active match): if the caller has teardown-intent (uncommitFirst)
+   *      clear committed_at — safe now, because there is no live match. Then free
+   *      the still-lobby-keyed reservation ONLY if committed_at IS NULL (a commit
+   *      left over from an in-flight activation with no match yet, and NO
+   *      teardown-intent, is still protected), and end the lobby.
    *
-   * A transferred reservation (match_id set) is never freed here (the match_id IS
-   * NULL guard); its terminal fate is the settlement-gated by-match path.
+   * A transferred reservation (match_id set) is never freed here (its terminal
+   * fate is the settlement-gated by-match path).
    *
-   * The abort ALWAYS ENDS the lobby when it proceeds — no "release the bot but
-   * keep the lobby" mode. Redis/socket cleanup is left to the caller (idempotent,
-   * outside the tx). Returns what happened, incl. the removed member ids.
+   * getActiveMatchForLobby's equivalent is a plain SELECT (acquires no locks), so
+   * evaluating it inside the advisory-locked tx introduces no lock-ordering risk.
+   *
+   * Redis/socket cleanup is left to the caller (idempotent, outside the tx).
    */
   async abortRankedAiLobbyLocked(
     lobbyId: string,
@@ -183,9 +201,24 @@ export const syntheticBotsRepo = {
   ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
-      // uncommitFirst: the caller owns the draft it is tearing down (or the
-      // sweeper proved the draft crashed) → clear committed_at IN THIS SAME tx,
-      // atomically, so the predicate below reclaims the bot without a two-tx gap.
+
+      // AUTHORITATIVE dynamic gate: an active match for the lobby means the bot is
+      // committed to a LIVE match (a reconnect may have activated + created it
+      // between this handler starting and now). Hands off entirely — overrides
+      // any static teardown-intent.
+      const [{ has_active_match }] = await tx.unsafe<{ has_active_match: boolean }[]>(
+        `SELECT EXISTS (
+           SELECT 1 FROM matches m WHERE m.lobby_id = $1 AND m.status = 'active'
+         ) AS has_active_match`,
+        [lobbyId],
+      );
+      if (has_active_match) {
+        return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
+      }
+
+      // No live match. A teardown-intent caller may now clear committed_at — safe,
+      // because nothing live owns the bot. (Without teardown-intent, a leftover
+      // commit stays and protects the still-in-flight activation below.)
       if (opts?.uncommitFirst) {
         await tx.unsafe(
           `UPDATE synthetic_bot_reservations SET committed_at = NULL
@@ -193,10 +226,10 @@ export const syntheticBotsRepo = {
           [lobbyId],
         );
       }
-      // A COMMITTED, still-lobby-keyed reservation means a draft is live for this
-      // bot → hands off entirely (no release, no teardown). committed_at is the
-      // durable signal that survives past activation's commit and covers the gap
-      // until match transfer, without any reliance on lobby status / match row.
+
+      // A still-COMMITTED, still-lobby-keyed reservation (a caller without
+      // teardown-intent, e.g. a plain cancel that lost to a fresh activation) →
+      // hands off (do not release, do not teardown).
       const committed = await tx.unsafe<{ bot_user_id: string }[]>(
         `SELECT bot_user_id FROM synthetic_bot_reservations
           WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NOT NULL`,

@@ -123,12 +123,14 @@ async function reconcileOne(reservation: {
     return;
   }
 
-  // Lobby gone / empty / wedged AND no active match — genuinely stranded. We
-  // have already ruled out a live match (returned above) and a live lobby
-  // (returned above), so if this reservation is COMMITTED it is a draft that
-  // CRASHED after activation (Sol point 4): uncommitFirst clears the commit flag
-  // in the SAME locked tx as the abort so the bot is reclaimed atomically. The
-  // advisory lock still serializes with any concurrent activation.
+  // Lobby gone / empty / wedged, and (via the checks above, OUTSIDE the lock) no
+  // active match at snapshot time — likely a draft that CRASHED after activation.
+  // We pass teardown-intent (uncommitFirst), but the AUTHORITATIVE decision is
+  // the DYNAMIC live-match check INSIDE abortRankedAiLobbyLocked's advisory-locked
+  // tx: if a reconnect activated + created a match between our snapshot and the
+  // lock acquisition, that in-lock check sees it and no-ops (never clears the
+  // fresh commit). Only a genuinely-stranded reservation (no match under the
+  // lock) is reclaimed.
   const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId, { uncommitFirst: true });
   appMetrics.persistentBotSweeperActions.add(1, { action: result.aborted ? 'release' : 'skipped_live' });
   logger.info(

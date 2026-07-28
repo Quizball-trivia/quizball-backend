@@ -1,15 +1,15 @@
 /**
  * Run manifest + canonical fixture identity.
  *
- * Finding 4: a fixture id must identify the FIXTURE, not `seed + ordinal`. The
- * run manifest hashes every input that could change the plan (seed, season,
- * run date, target, margin, ceiling, params version, env, and the exact roster
- * with its loaded starting state). Each fixture key then hashes the manifest
- * hash together with the canonical fixture CONTENT (both participants, planned
- * timestamps, winner, decision, scores). On resume, an existing DB row is
- * accepted only after a field-by-field match against this canonical content —
- * a changed roster/config/runDate yields different keys, so a UUID can never
- * silently represent a different fixture.
+ * A fixture id must identify the FIXTURE, not `seed + ordinal`. The manifest
+ * hashes the PLAN INTENT (see RunManifest — seed, explicit season window,
+ * target, ceiling margin, roster membership + fixed hidden ability, category
+ * set, full params contents; NOT mutable ranked state or the wall clock). Each
+ * fixture key then hashes the manifest hash together with the canonical fixture
+ * CONTENT (participants, planned timestamps, winner, decision, scores). On
+ * resume, an existing DB row is accepted only after a field-by-field match —
+ * and because H is invariant to mutable state, the SAME args after a crash yield
+ * the SAME H, so the resume reconciles rather than refusing (P1-1).
  */
 import { createHash } from 'node:crypto';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';

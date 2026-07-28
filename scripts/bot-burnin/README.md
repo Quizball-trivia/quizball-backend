@@ -1,7 +1,7 @@
 # Persistent-bot burn-in engine (PR6)
 
 One-time, per-environment engine that gives every persistent roster bot a
-plausible season-to-date: 3 placement matches + backdated ranked bot-vs-bot
+plausible season-to-date: placement matches + backdated ranked bot-vs-bot
 fixtures, settled through the REAL Season-2026 RP formula, with every bot's
 final RP hard-capped below the live human top-10. Run staging first.
 
@@ -17,39 +17,68 @@ final RP hard-capped below the live human top-10. Run staging first.
   `.env.local` taking precedence).
 - At least 2 roster bots and at least one active category
   (`categories.is_active = true`); the engine throws otherwise.
+- `PERSISTENT_BOTS` flag must be OFF — burn-in is a pristine-state operation
+  that must run before selection ever activates.
+
+## Architecture: plan-all-then-execute-in-one-transaction
+
+**PLAN** is a pure function of immutable inputs: seed, the explicit season
+window (start + end), roster membership + each bot's fixed hidden ability
+(base_skill/dailyCap/schedule/status), the target fixture count, the ceiling
+margin, the calibration params, and the active category set. Every bot is
+simulated from the pristine baseline (450 RP, unplaced, 0 games) and the
+live-derived ceiling (human top-10 RP − margin) is enforced during pairing, so
+the plan can never produce a fixture that would push a bot over it.
+
+**EXECUTE** writes the ENTIRE plan in ONE database transaction: it takes the
+xact advisory lock, re-checks the one-time marker and the pristine gate
+*inside* the transaction, writes every fixture, then inserts the `'complete'`
+marker — all as one unit. If anything throws partway through, the whole
+transaction rolls back and the DB ends up exactly as it started.
+
+Burn-in is **NOT resumable**. There is no snapshot, no receipt, no ownership
+token, no heartbeat. A crashed or interrupted run commits nothing; you simply
+re-run it from scratch with the same args.
 
 ## Commands
 
 ### Dry-run (default — no writes)
 
 ```bash
-npm run bot:burnin -- --params <path> [--limit N] [--seed N] [--target N] [--margin-rp N] [--run-date ISO]
+npm run bot:burnin -- --params <path> [--limit N] [--seed N] [--target N] [--margin-rp N] [--season-start ISO] [--season-end ISO]
 ```
 
 Simulates the full fixture plan in memory and prints the distribution report
 (bots, planned fixtures, matches/bot, hard-ceiling check, band targets vs.
-actual, sample bot timelines). Zero writes.
+actual, sample bot timelines). Zero writes. `--season-end` defaults to now();
+`--limit` caps roster size loaded (highest base_skill first).
 
-### Execute (writes — requires `--snapshot-out`)
+### Execute (writes — one transaction)
 
 ```bash
-npm run bot:burnin -- --params <path> --execute --snapshot-out snap.json [--receipt-out receipt.json]
+npm run bot:burnin -- --params <path> --execute --season-end <ISO> [--season-start ISO] [--seed N] [--target N] [--margin-rp N]
 ```
 
-Runs the same simulation, then (if the ceiling holds and the burn-in hasn't
-already run) snapshots pre-run state, writes the backdated fixtures, and marks
-the environment as burned in.
+`--execute` REQUIRES an explicit `--season-end` (no wall-clock default, so the
+plan is fully determined by its inputs). `--limit` is dry-run-only — passing
+it with `--execute` is refused, since a partial burn plus a global one-time
+marker would be incoherent. There is no `--snapshot-out` — nothing is
+snapshotted.
 
 ### Rollback
 
 ```bash
-npm run bot:burnin:rollback -- --receipt receipt.json --snapshot snap.json
+npm run bot:burnin:rollback -- --params <path> --season-end <ISO> [--season-start ISO] [--seed N] [--target N] [--margin-rp N]
 ```
 
-Reverts a burn-in run using its receipt (created match ids) and its pre-run
-snapshot.
+Recomputes the plan from the SAME inputs the run used, reads the ceiling from
+the stored marker (verifying the recomputed manifest hash matches), then in
+one transaction deletes exactly the plan's matches and resets every roster bot
+to the pristine baseline. REFUSES (deletes nothing) if any roster bot has a
+match not in the recomputed plan — that's real post-burn-in activity, not
+burn-in's to touch.
 
-### Flags (`index.ts`)
+### Flags and defaults
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -57,70 +86,57 @@ snapshot.
 | `--seed N` | `20260721` | RNG seed; also derives per-bot RNG streams and fixture keys |
 | `--target N` | `22` | per-bot fixture-count target (population median inside the 15-40 band) |
 | `--margin-rp N` | `200` | RP margin subtracted from human top-10 to get the hard ceiling |
-| `--limit N` | none (all) | cap on roster size loaded (highest base_skill first) |
-| `--run-date ISO` | `new Date()` (now) | simulated "as of" date the backfill runs up to |
-| `--execute` | off (dry-run) | perform real writes instead of simulating |
-| `--snapshot-out <file>` | none | required with `--execute`; pre-run state for rollback |
-| `--receipt-out <file>` | `<snapshot-out base>.receipt.json` | where the creation receipt is written |
+| `--season-start ISO` | `2026-07-21T00:00:00Z` | start of the backfill window |
+| `--season-end ISO` | now() (dry-run) / required (`--execute`) | end of the backfill window — the scheduler's timeline horizon |
+| `--limit N` | none (all) | cap on roster size loaded (highest base_skill first); dry-run only |
+| `--execute` | off (dry-run) | perform the real writes, in one transaction |
+| `--allow-remote` | off | required (with matching `BURNIN_CONFIRM_ENV`) to target a non-localhost DB |
 
-Season start is a fixed constant, `SEASON_START = 2026-07-21T00:00:00Z`, used
-to compute each bot's day budget (`daysSinceReset × dailyCap`).
-
-The ceiling itself: `humanTop10Rp - marginRp` when at least one placed human
-profile exists (falls back to the lowest available placed human RP if fewer
-than 10), else a conservative `1500 - marginRp`.
+The ceiling itself: `humanTop10Rp - marginRp` when at least 10 placed human
+profiles exist (falls back to the lowest available placed human RP if fewer
+than 10 exist, or a conservative `1500 - marginRp` if none exist). The
+concrete ceiling is derived live and is NOT part of the plan identity — it's
+enforced per-fixture during pairing instead.
 
 ## Safety model
 
 - **Dry-run is the default.** No DB writes happen unless `--execute` is
   passed.
-- **`--execute` requires `--snapshot-out`.** The script throws immediately
-  otherwise — there is no way to write without a way to revert.
-- **Hard-ceiling abort.** If the simulated distribution's max bot RP exceeds
-  the ceiling (`report.ceilingRespected === false`), `--execute` aborts before
-  any write.
 - **One-time marker.** `bot_model_params` gets a row with
-  `note = 'persistent-bot-burnin:complete'` after a successful execute. A
-  second `--execute` on the same environment checks for this marker first and
-  refuses to run. Rollback deletes this row so the environment can be
-  re-burned afterward.
-- **Per-fixture idempotency.** Each planned fixture's match id is a
-  deterministic UUID derived by hashing its fixture key
-  (`fixtureMatchId` in `writer.ts`). The match insert and the downstream
-  settlement/XP calls are each idempotent on that id, so a crashed or
-  interrupted run can simply be re-invoked and resumes without duplicating
-  fixtures. The receipt is flushed to disk every 50 fixtures during the run
-  for the same reason.
-- **Rollback verification.** For every match id in the receipt, rollback
-  reads its `match_players` rows and refuses to touch any match whose
-  participants aren't ALL in the receipt's roster set — it will never delete
-  a match that involves a human or non-roster bot. Verified matches have
-  their `ranked_rp_changes` and `user_xp_events` (source_type='match_result')
-  rows deleted, then the match rows themselves (cascades to
-  `match_players`/`match_answers`). Every roster bot's `ranked_profiles` +
-  `users.total_xp` are then restored from the snapshot; if a bot had no
-  profile before the run, rollback deletes the profile and its
-  `user_mode_match_stats` ranked row instead of restoring blank values. The
-  one-time marker is cleared in the same transaction.
+  `note = 'persistent-bot-burnin:complete'`, inserted inside the same
+  transaction as the writes. A second `--execute` on the same environment
+  refuses (checked both before and again inside the transaction, under the
+  lock).
+- **Pristine gate.** `--execute` refuses (inside the transaction, under the
+  lock) unless every roster bot is exactly pristine: `ranked_profiles` at
+  450 RP/unplaced/all-zero accumulators (or missing, treated as fresh), zero
+  ranked ledger rows, zero ranked `user_mode_match_stats` games, zero
+  finished/live matches, zero XP events, `users.total_xp = 0`, zero
+  achievements, no reservations or live lobby membership.
+- **DB target guard.** Localhost is allowed by default; a remote target
+  requires `--allow-remote` plus `BURNIN_CONFIRM_ENV` set to the matching
+  Supabase project ref.
+- **`PERSISTENT_BOTS` flag must be OFF.** `--execute` aborts otherwise — burn-in
+  must run before selection ever activates.
+- **Hard-ceiling abort.** If the simulated distribution's max bot RP would
+  exceed the ceiling, `--execute` aborts before any write (defensive only —
+  planning enforces the ceiling by construction).
 
 ## What it writes (execute mode)
 
-Per fixture, via the real production settlement path
-(`matchesService.completeMatch` → `rankedService.settleCompletedRankedMatch`
-→ `progressionService.awardCompletedMatchXp`, all called with the fixture's
-backdated timestamp):
+Per fixture, using the SAME production settlement math
+(`computeParticipantSettlement` from `season-rp-formula.ts`) and achievement
+evaluation, called directly inside the transaction with the fixture's
+backdated timestamp:
 
-- `matches` (one row, `mode='ranked'`, `is_dev=false`, backdated `started_at`)
+- `matches` (one row, `mode='ranked'`, `is_dev=false`, backdated `started_at`/`ended_at`)
 - `match_players` (both bot seats, with points/goals from the simulation)
-- `ranked_profiles` (RP, tier, placement, streak — via real settlement)
-- `ranked_rp_changes` (ledger rows)
-- `user_mode_match_stats` (ranked aggregation, since `is_dev=false`)
-- `users.total_xp` (via `awardCompletedMatchXp`)
+- `ranked_rp_changes` + `ranked_profiles` (RP, tier, placement, streak)
+- `user_mode_match_stats` (ranked aggregation)
+- `user_xp_events` + `users.total_xp`
+- `user_achievements`
 
-It does **not** write coins, tickets, notifications, or analytics events —
-persistent bots are treated as AI for economy/analytics purposes by the
-settlement and XP code paths themselves (not special-cased in this script),
-so those side effects never fire for burn-in matches.
+It does **not** write coins, tickets, notifications, or analytics events.
 
 ## Also produced
 
@@ -129,8 +145,3 @@ so those side effects never fire for burn-in matches.
   check (human #10 RP, ceiling RP, max bot RP, respected Y/N), ladder band
   target vs. actual counts, and sample timelines for the 3 strongest, 3
   weakest, and 2 median bots (nickname, skill, final RP, tier, W-L record).
-- **Snapshot file** (`--snapshot-out`): pre-run `ranked_profiles` + `total_xp`
-  for every roster bot, plus run metadata (seed, env, ceiling, margin).
-- **Receipt file** (`--receipt-out`): created match ids, fixture keys, roster
-  user ids, seed, and env — the only input rollback needs besides the
-  snapshot.

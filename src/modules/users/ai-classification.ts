@@ -6,6 +6,26 @@ export interface AiClassifiable {
   ai_kind: string | null;
 }
 
+/** Minimal shape needed to tell a finalized (deleted) account from a live one. */
+export interface AccountDeletionState {
+  is_deleted: boolean;
+  deleted_at: string | Date | null;
+}
+
+/**
+ * The account has been FINALIZED by finalize_pending_account_deletions(): it is
+ * anonymized and its ranked standing has already been zeroed, so writing to it
+ * would resurrect a deleted player as a ranked ghost.
+ *
+ * Deliberately NARROWER than isUserAccountInactive (users.repo), which also
+ * covers merely pending-deletion accounts: those can still cancel and must keep
+ * earning their standing until finalization actually runs.
+ * Mirrors the SQL predicate `is_deleted = true OR deleted_at IS NOT NULL`.
+ */
+export function isUserAccountFinalized(user: AccountDeletionState): boolean {
+  return Boolean(user.is_deleted || user.deleted_at);
+}
+
 /**
  * Positive allowlist for ranked settlement & progression: a real human OR a
  * persistent roster bot. Persistent bots settle like humans (RP, W/L/D, streak,

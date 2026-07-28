@@ -28,6 +28,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import {
@@ -202,6 +203,7 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
       matchExitPendingKey(matchId, player.user_id),
       matchPresenceKey(matchId, player.user_id),
       matchReconnectCountKey(matchId, player.user_id),
+      matchReconnectFenceKey(matchId, player.user_id),
     ]),
   ];
 }
@@ -455,11 +457,68 @@ export async function getDisconnectCount(matchId: string, userId: string): Promi
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/**
+ * Stamp the reconnect fence at a COMPLETED rejoin. Clearing the disconnect
+ * episode marker alone is not enough: the marker is the only thing that stops a
+ * duplicate handler double-counting, and once resume deletes it a still-in-flight
+ * disconnect for the OLD connection looks like a brand-new episode. That is how a
+ * reconnected player accrued extra disconnects and eventually tripped the
+ * reconnect-limit fast path, which forfeits with `definiteForfeiterUserId` and so
+ * bypasses every presence guard.
+ *
+ * Deliberately a fence, not a reset: the budget still shrinks across genuinely new
+ * disconnects, so a player cannot drop forever by rejoining in between.
+ *
+ * The fence stores the SOCKET ID that completed the rejoin, not a timestamp. A
+ * timestamp cannot discriminate: the rejoining socket is already open when it
+ * sends `match:rejoin`, so its connectedAt necessarily PRECEDES the resume, and
+ * a time-based fence would swallow that socket's own later genuine drop for the
+ * rest of the match. Only events from a DIFFERENT (superseded) socket are stale.
+ */
+export async function fenceDisconnectCountOnResume(
+  matchId: string,
+  userId: string,
+  resumedSocketId?: string
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  if (!resumedSocketId) {
+    // Nothing identifies the recovered connection, so there is no safe fence to
+    // stamp. Clear any previous one rather than leave a stale socket id behind.
+    await redis.del(matchReconnectFenceKey(matchId, userId));
+    return;
+  }
+  await redis.set(matchReconnectFenceKey(matchId, userId), resumedSocketId, { EX: FORFEIT_TTL_SEC });
+}
+
+/**
+ * True when this disconnect comes from a connection the player has already been
+ * SUPERSEDED past: the fence names the socket that completed the rejoin, and
+ * this event belongs to a different one.
+ *
+ * Fails SAFE: with no fence, or no identifiable source socket, or when the event
+ * IS the fenced socket, the disconnect counts as normal.
+ */
+async function isFencedStaleDisconnect(
+  matchId: string,
+  userId: string,
+  sourceSocketId: string | undefined
+): Promise<boolean> {
+  if (typeof sourceSocketId !== 'string' || sourceSocketId.length === 0) return false;
+  const redis = getRedisClient();
+  if (!redis) return false;
+  const fencedSocketId = await redis.get(matchReconnectFenceKey(matchId, userId));
+  if (!fencedSocketId) return false;
+  return fencedSocketId !== sourceSocketId;
+}
+
 async function incrementDisconnectCount(matchId: string, userId: string): Promise<number> {
   const redis = getRedisClient();
   if (!redis) return 0;
-  const nextCount = (await getDisconnectCount(matchId, userId)) + 1;
-  await redis.set(matchReconnectCountKey(matchId, userId), String(nextCount), { EX: FORFEIT_TTL_SEC });
+  // Atomic INCR: the previous read-modify-write let two concurrent pauses both
+  // read N and both write N+1, losing a count.
+  const nextCount = await redis.incr(matchReconnectCountKey(matchId, userId));
+  await redis.expire(matchReconnectCountKey(matchId, userId), FORFEIT_TTL_SEC);
   return nextCount;
 }
 
@@ -710,7 +769,7 @@ export async function handleMatchRejoin(
           );
           await emitPartyQuizStateToSocket(socket, match.id);
         }
-        await resumePausedMatch(io, match.id, userId);
+        await resumePausedMatch(io, match.id, userId, socket.id);
         return;
       }
 
@@ -905,7 +964,11 @@ export async function handleMatchDisconnect(io: QuizballServer, socket: Quizball
 export async function resumePausedMatch(
   io: QuizballServer,
   matchId: string,
-  userId: string
+  userId: string,
+  // The socket the player recovered ON. Recorded as the reconnect fence so a
+  // late event from a SUPERSEDED socket cannot re-open a disconnect episode,
+  // while this socket's own later genuine drop still counts.
+  resumedSocketId?: string
 ): Promise<void> {
   const match = await matchesRepo.getMatch(matchId);
   if (!match || match.status !== 'active') return;
@@ -928,6 +991,10 @@ export async function resumePausedMatch(
   const otherDisconnected = disconnectedBeforeResume.filter((disconnectedUserId) => disconnectedUserId !== userId);
   if (otherDisconnected.length > 0) {
     if (userWasDisconnected) {
+      // Fence BEFORE clearing the marker: between the two there is a window
+      // where a late disconnect for the just-cleared episode would see no fence
+      // and count as fresh — the very bug this fences against.
+      await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
       await redis.del(matchDisconnectKey(matchId, userId));
     }
     const disconnectedOpponentId = otherDisconnected[0];
@@ -974,6 +1041,10 @@ export async function resumePausedMatch(
     await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
     await redis.del(matchGraceKey(matchId));
     if (disconnectedBeforeResume.includes(userId)) {
+      // Fence BEFORE clearing the marker: between the two there is a window
+      // where a late disconnect for the just-cleared episode would see no fence
+      // and count as fresh — the very bug this fences against.
+      await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
       await redis.del(matchDisconnectKey(matchId, userId));
     }
     for (const exitPendingUserId of exitPendingUserIds) {
@@ -1046,6 +1117,7 @@ export async function resumePausedMatch(
         );
       if (blockingDisconnectedUserIds.length > 0) {
         for (const recoveredUserId of reconnectingDisconnectedUserIds) {
+          await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
           await redis.del(matchDisconnectKey(matchId, recoveredUserId));
         }
         const blockingDisconnectedUserId = blockingDisconnectedUserIds[0]!;
@@ -1075,6 +1147,7 @@ export async function resumePausedMatch(
       }
 
       for (const recoveredUserId of reconnectingDisconnectedUserIds) {
+        await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
         await redis.del(matchDisconnectKey(matchId, recoveredUserId));
       }
       await redis.del(matchGraceKey(matchId));
@@ -1358,8 +1431,51 @@ export async function pauseMatchForDisconnectedPlayer(
   //      that is not the user's only active match UI. A bare user/site socket is
   //      not enough: it can be on the menu while the player is absent from the
   //      actual match UI; or
+  //  (c) the disconnecting connection predates the last COMPLETED rejoin
+  //      (fencedStaleDisconnect). Resume deletes the marker, so without this a
+  //      late-landing disconnect for the pre-rejoin socket would look like a new
+  //      episode and eat another reconnect.
   // The marker is cleared on resume, so a genuinely new disconnect counts again.
-  const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
+  //
+  // The fence is checked BEFORE the marker is claimed: a disconnect for a
+  // connection the player already recovered from must not re-open a disconnect
+  // episode at all (it would re-pause a healthy match and re-arm the forfeit
+  // timer), not merely be excluded from the count.
+  const fencedStaleDisconnect = await isFencedStaleDisconnect(
+    matchId,
+    userId,
+    options.ignoreSocketId
+  );
+  if (fencedStaleDisconnect) {
+    logger.info(
+      { matchId, userId, variant, staleSocketId: options.ignoreSocketId },
+      'Match disconnect pause skipped: event is from a socket superseded by a completed rejoin'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
+      finalized: false,
+    };
+  }
+
+  // The marker is CLAIMED atomically (SET NX) rather than read here and written
+  // further down: two handlers for the same episode could both observe "no
+  // marker" in that gap and both charge a reconnect. The claim is the episode
+  // admission ticket — exactly one caller can win it.
+  const claimedEpisode = await redis.set(
+    matchDisconnectKey(matchId, userId),
+    String(disconnectedAtMs),
+    { NX: true, EX: DISCONNECT_TTL_SEC }
+  );
+  const alreadyDisconnected = claimedEpisode === null;
+  // Everything downstream must key off the EPISODE's marker, not this handler's
+  // local clock reading: when a duplicate handler loses the claim the stored
+  // marker still holds the winner's timestamp, and the grace-expiry handler
+  // refuses to forfeit unless the armed timestamp matches the stored marker
+  // exactly.
+  const episodeMarkerMs = alreadyDisconnected
+    ? Number(await redis.get(matchDisconnectKey(matchId, userId))) || disconnectedAtMs
+    : disconnectedAtMs;
   const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
   const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
@@ -1388,7 +1504,10 @@ export async function pauseMatchForDisconnectedPlayer(
     },
     'Match disconnect pause requested'
   );
-  await redis.set(matchDisconnectKey(matchId, userId), String(disconnectedAtMs), { EX: DISCONNECT_TTL_SEC });
+  // The marker was already claimed above (SET NX). Only refresh its TTL, so a
+  // duplicate handler for the same episode cannot slide the recorded
+  // disconnected-at forward and silently extend the grace window.
+  await redis.expire(matchDisconnectKey(matchId, userId), DISCONNECT_TTL_SEC);
   if (variant === 'friendly_party_quiz') {
     await redis.set(matchPauseKey(matchId), String(disconnectedAtMs), { NX: true, EX: PRESENCE_TTL_SEC });
   } else {
@@ -1564,7 +1683,7 @@ export async function pauseMatchForDisconnectedPlayer(
       { matchId, userId, socketCount: replacementSocketIds.length },
       'Auto-resuming match after fast socket replacement'
     );
-    await resumePausedMatch(io, matchId, userId);
+    await resumePausedMatch(io, matchId, userId, replacementSocketIds[0]);
   }
   if (acquired !== 'OK') {
     return {
@@ -1582,7 +1701,7 @@ export async function pauseMatchForDisconnectedPlayer(
     'match_disconnect_forfeit',
     matchId,
     new Date(Date.now() + harnessDelayMs(MATCH_DISCONNECT_GRACE_MS)),
-    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId, disconnectMarkerMs: disconnectedAtMs }
+    { kind: 'match_disconnect_forfeit', matchId, disconnectedUserId: userId, disconnectMarkerMs: episodeMarkerMs }
   );
 
   return {

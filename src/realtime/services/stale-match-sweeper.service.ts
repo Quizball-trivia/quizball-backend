@@ -15,6 +15,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import type { MatchRow } from '../../modules/matches/matches.types.js';
@@ -53,6 +54,7 @@ async function cleanupMatchRedisKeys(matchId: string, userIds: string[]): Promis
       matchExitPendingKey(matchId, userId),
       matchPresenceKey(matchId, userId),
       matchReconnectCountKey(matchId, userId),
+      matchReconnectFenceKey(matchId, userId),
     ]),
   ];
   await redis.del(keys).catch((error) => {

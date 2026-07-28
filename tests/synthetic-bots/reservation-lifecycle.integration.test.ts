@@ -300,6 +300,32 @@ describe('settlement-gated release (P1-1/P1-3): releaseReservationByMatchIfSettl
     const released = await repo.releaseReservationByMatchIfSettled(matchId);
     expect(released).toBe(bot);
   });
+
+  // Terminal teardown fans in from several sites (completion, forfeit, disconnect,
+  // orphan resolver, sweeper) and two replicas can reach them at once. The release
+  // must be a single atomic DELETE, so exactly ONE caller may observe the release
+  // and bump the metric — a second observer would double-count the bot as freed.
+  it('CONCURRENT terminal release: exactly one caller observes the release', async () => {
+    if (!dbAvailable) return;
+    const { bot, matchId } = await seedTransferredReservation('concurrent', 'completed');
+    const human = await newUser({ nickname: `concurrent-h-${Date.now()}` });
+    await sql`
+      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
+      VALUES (${matchId}, ${human}, ${bot}, true, 1500, -25, 1475, 'loss', false, 'ranked_formula', 100),
+             (${matchId}, ${bot}, ${human}, false, 1200, 50, 1250, 'win', false, 'ranked_formula', 0)
+    `;
+
+    const results = await Promise.all([
+      repo.releaseReservationByMatchIfSettled(matchId),
+      repo.releaseReservationByMatchIfSettled(matchId),
+      repo.releaseReservationByMatchIfSettled(matchId),
+    ]);
+
+    expect(results.filter((value) => value === bot)).toHaveLength(1);
+    expect(results.filter((value) => value === null)).toHaveLength(2);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
+  });
 });
 
 describe('listEligibleBots HARD filters', () => {

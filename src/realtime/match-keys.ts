@@ -38,6 +38,14 @@ export function matchReconnectCountKey(matchId: string, userId: string): string 
   return `match:reconnect_count:${matchId}:${userId}`;
 }
 
+// Wall-clock stamp of the player's last COMPLETED rejoin. A disconnect whose
+// socket connected before this instant belongs to an episode the player has
+// already recovered from, so it must not spend another reconnect. Shares the
+// counter's TTL so the two always expire together.
+export function matchReconnectFenceKey(matchId: string, userId: string): string {
+  return `match:reconnect_fence:${matchId}:${userId}`;
+}
+
 export function matchForfeitPendingUserKey(userId: string): string {
   return `user:match_forfeit_pending:${userId}`;
 }

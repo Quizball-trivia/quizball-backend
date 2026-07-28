@@ -127,7 +127,8 @@ export const reservationService = {
 
   /**
    * Terminal release keyed by lobby (any holder). The lobby is torn down before
-   * a match ever existed. No-op if the lobby has no reservation (ephemeral).
+   * a match ever existed. No-op if the lobby has no reservation (ephemeral) or if
+   * it has already been transferred onto a match (match_id IS NULL guard).
    */
   async releaseByLobby(lobbyId: string, path: ReservationReleasePath): Promise<void> {
     try {
@@ -142,8 +143,52 @@ export const reservationService = {
   },
 
   /**
-   * Terminal release keyed by match (any holder). The match reached a terminal
-   * state. No-op if the match has no reservation (ephemeral / human-vs-human).
+   * ABORT-path release keyed by lobby — closes the abort TOCTOU. Frees the
+   * reservation ONLY while its lobby is genuinely abortable (still 'waiting' or
+   * fully gone) AND still lobby-keyed. If a concurrent reconnect advanced the
+   * lobby waiting→active (startDraft) between the caller's status check and here,
+   * this is a race-free no-op — the live draft/match keeps the bot. Use this at
+   * every pre-match ABORT site instead of releaseByLobby.
+   */
+  async releaseIfLobbyAbortable(lobbyId: string, path: ReservationReleasePath): Promise<void> {
+    try {
+      const botUserId = await syntheticBotsRepo.releaseReservationByLobbyIfAbortable(lobbyId);
+      if (botUserId) {
+        appMetrics.persistentBotReservationReleases.add(1, { path });
+        logger.info({ botUserId, lobbyId, path, mode: 'if_abortable' }, 'persistent-bot reservation released (lobby abortable)');
+      }
+    } catch (err) {
+      logger.warn({ err, lobbyId, path }, 'persistent-bot reservation abortable-release failed');
+    }
+  },
+
+  /**
+   * SETTLEMENT-GATED terminal release keyed by match — the SINGLE choke point for
+   * every terminal teardown site (completion, forfeit, disconnect, orphan,
+   * sweeper). Frees the bot ONLY when its settlement is provably done (its own
+   * ranked_rp_changes row exists, OR the match is 'abandoned'/no-contest, OR the
+   * match row is gone). A caught-and-swallowed settlement failure therefore can
+   * NEVER release the bot early — the reservation stays and a later replay/sweep
+   * releases it once the ledger lands. Predicate is evaluated inside the DELETE,
+   * so it is race-free w.r.t. a concurrent settlement commit. No-op if the match
+   * has no reservation (ephemeral / human-vs-human).
+   */
+  async releaseIfSettled(matchId: string, path: ReservationReleasePath): Promise<void> {
+    try {
+      const botUserId = await syntheticBotsRepo.releaseReservationByMatchIfSettled(matchId);
+      if (botUserId) {
+        appMetrics.persistentBotReservationReleases.add(1, { path });
+        logger.info({ botUserId, matchId, path, mode: 'if_settled' }, 'persistent-bot reservation released (settlement confirmed)');
+      }
+    } catch (err) {
+      logger.warn({ err, matchId, path }, 'persistent-bot reservation settlement-gated release failed');
+    }
+  },
+
+  /**
+   * Terminal release keyed by match (any holder), UNCONDITIONAL. Only for
+   * NO-SETTLEMENT terminal paths (pre-match abandon before any RP could settle).
+   * For any path where a ranked settlement may run, use releaseIfSettled instead.
    */
   async releaseByMatch(matchId: string, path: ReservationReleasePath): Promise<void> {
     try {

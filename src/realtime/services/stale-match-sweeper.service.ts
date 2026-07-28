@@ -40,7 +40,7 @@ function staleSweepLockKey(matchId: string): string {
 async function cleanupMatchRedisKeys(matchId: string, userIds: string[]): Promise<void> {
   // Terminal release of any persistent-bot reservation (stale-sweep + boot-sweep
   // direct-abandon path; forfeit-resolved matches release at the finalizer).
-  await reservationService.releaseByMatch(matchId, 'stale_sweeper');
+  await reservationService.releaseIfSettled(matchId, 'stale_sweeper');
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
   const keys = [

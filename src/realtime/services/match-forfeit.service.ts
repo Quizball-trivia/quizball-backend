@@ -422,7 +422,7 @@ export async function finalizeMatchAsForfeit(
     // Terminal release of any persistent-bot reservation for this match
     // (regular forfeit choke point — self-forfeit, disconnect-terminal-forfeit,
     // orphan-resolved forfeit all pass through finalizeMatchAsForfeit).
-    await reservationService.releaseByMatch(params.matchId, 'self_forfeit');
+    await reservationService.releaseIfSettled(params.matchId, 'self_forfeit');
 
     const resultVersion = Date.now();
     const redis = getRedisClient();

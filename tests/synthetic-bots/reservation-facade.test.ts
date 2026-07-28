@@ -14,6 +14,8 @@ const repo = {
   releaseReservationOwned: vi.fn(),
   releaseReservationByLobby: vi.fn(),
   releaseReservationByMatch: vi.fn(),
+  releaseReservationByMatchIfSettled: vi.fn(),
+  releaseReservationByLobbyIfAbortable: vi.fn(),
 };
 
 vi.mock('../../src/modules/synthetic-bots/synthetic-bots.repo.js', () => ({
@@ -33,7 +35,27 @@ beforeEach(() => {
   repo.releaseReservationOwned.mockResolvedValue(true);
   repo.releaseReservationByLobby.mockResolvedValue('bot');
   repo.releaseReservationByMatch.mockResolvedValue('bot');
+  repo.releaseReservationByMatchIfSettled.mockResolvedValue('bot');
+  repo.releaseReservationByLobbyIfAbortable.mockResolvedValue('bot');
   repo.transferReservationToMatch.mockResolvedValue({ bot_user_id: 'bot' });
+});
+
+describe('settlement-gated release (P1-1): releaseIfSettled', () => {
+  it('does NOT free the bot when settlement is not committed (repo returns null)', async () => {
+    // Simulates a forfeit/completion whose settlement failed → bot ledger absent
+    // → the atomic gated DELETE deletes nothing → facade reports no release.
+    repo.releaseReservationByMatchIfSettled.mockResolvedValueOnce(null);
+    await reservationService.releaseIfSettled('m', 'self_forfeit');
+    expect(repo.releaseReservationByMatchIfSettled).toHaveBeenCalledWith('m');
+    // No unconditional by-match delete is ever used by this path.
+    expect(repo.releaseReservationByMatch).not.toHaveBeenCalled();
+  });
+
+  it('frees the bot once settlement is committed (repo returns the bot id)', async () => {
+    repo.releaseReservationByMatchIfSettled.mockResolvedValueOnce('bot');
+    await reservationService.releaseIfSettled('m', 'completion');
+    expect(repo.releaseReservationByMatchIfSettled).toHaveBeenCalledWith('m');
+  });
 });
 
 describe('flag-off: only ACQUISITION is gated; cleanup still runs (kill-switch safety)', () => {

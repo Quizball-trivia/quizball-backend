@@ -11,8 +11,9 @@ import '../setup.js';
 const lobbiesRepo = {
   listMembersWithUser: vi.fn(),
   removeMember: vi.fn().mockResolvedValue(undefined),
+  getById: vi.fn(),
 };
-const reservationService = { releaseByLobby: vi.fn().mockResolvedValue(undefined) };
+const reservationService = { releaseIfLobbyAbortable: vi.fn().mockResolvedValue(undefined) };
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({ lobbiesRepo }));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({ reservationService }));
@@ -28,6 +29,8 @@ const BOT = { user_id: 'persistent-bot', is_ai: true };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Lobby is still 'waiting' (abortable) unless a test overrides it.
+  lobbiesRepo.getById.mockResolvedValue({ id: 'lobby-1', status: 'waiting', mode: 'ranked' });
 });
 
 describe('releaseRankedAiLobbyMemberSafely (Redis down)', () => {
@@ -38,10 +41,10 @@ describe('releaseRankedAiLobbyMemberSafely (Redis down)', () => {
       .mockResolvedValueOnce([]); // confirm: bot gone
     await releaseRankedAiLobbyMemberSafely('lobby-1');
     expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('lobby-1', 'persistent-bot');
-    expect(reservationService.releaseByLobby).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
+    expect(reservationService.releaseIfLobbyAbortable).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
     // removeMember happened before release.
     const removeOrder = lobbiesRepo.removeMember.mock.invocationCallOrder[0];
-    const releaseOrder = reservationService.releaseByLobby.mock.invocationCallOrder[0];
+    const releaseOrder = reservationService.releaseIfLobbyAbortable.mock.invocationCallOrder[0];
     expect(removeOrder).toBeLessThan(releaseOrder);
   });
 
@@ -52,20 +55,28 @@ describe('releaseRankedAiLobbyMemberSafely (Redis down)', () => {
       .mockResolvedValueOnce([BOT]); // confirm: bot STILL present
     await releaseRankedAiLobbyMemberSafely('lobby-1');
     expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('lobby-1', 'persistent-bot');
-    expect(reservationService.releaseByLobby).not.toHaveBeenCalled();
+    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
   });
 
   it('does NOT release when removeMember throws (leaves it for the sweeper)', async () => {
     lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN, BOT]);
     lobbiesRepo.removeMember.mockRejectedValueOnce(new Error('db down'));
     await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(reservationService.releaseByLobby).not.toHaveBeenCalled();
+    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
   });
 
   it('releases directly when there is no bot member (human-only leftover)', async () => {
     lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN]);
     await releaseRankedAiLobbyMemberSafely('lobby-1');
     expect(lobbiesRepo.removeMember).not.toHaveBeenCalled();
-    expect(reservationService.releaseByLobby).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
+    expect(reservationService.releaseIfLobbyAbortable).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
+  });
+
+  it('does NOT remove the bot or release when the lobby advanced to active (P1-2 TOCTOU)', async () => {
+    // A concurrent reconnect advanced the draft → status active → leave it live.
+    lobbiesRepo.getById.mockResolvedValueOnce({ id: 'lobby-1', status: 'active', mode: 'ranked' });
+    await releaseRankedAiLobbyMemberSafely('lobby-1');
+    expect(lobbiesRepo.removeMember).not.toHaveBeenCalled();
+    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
   });
 });

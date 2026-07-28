@@ -212,7 +212,7 @@ async function cleanupPossessionTerminalRedisKeys(matchId: string, roster: Posse
   // no-contest) that does not route through finalizeMatchAsForfeit. The
   // finalizer paths (single-forfeiter) release at their own choke points; a
   // second release here is a harmless no-op (row already gone).
-  await reservationService.releaseByMatch(matchId, 'disconnect_terminal');
+  await reservationService.releaseIfSettled(matchId, 'disconnect_terminal');
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
   await redis.del(possessionTerminalCleanupKeys(matchId, roster));

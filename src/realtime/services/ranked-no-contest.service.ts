@@ -69,7 +69,7 @@ export async function finalizeRankedNoContest(
   // Terminal release of any persistent-bot reservation for this match
   // (no-contest / early-forfeit choke point — covers self-forfeit, disconnect
   // and orphan paths that route their early-forfeit through here).
-  await reservationService.releaseByMatch(params.matchId, 'no_contest');
+  await reservationService.releaseIfSettled(params.matchId, 'no_contest');
 
   const resultVersion = Date.now();
   const redis = getRedisClient();

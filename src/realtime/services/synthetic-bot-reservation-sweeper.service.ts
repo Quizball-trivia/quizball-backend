@@ -63,19 +63,20 @@ async function reconcileOne(reservation: {
       return;
     }
     // Terminal-looking match. Release ONLY when settlement is provably done —
-    // checked by DIRECT FACTS (match gone / ranked ledger row committed /
-    // no-contest abandon), never by age. A 'completed' match whose settlement
-    // ledger hasn't landed yet is still in flight; leave it for a later sweep
-    // (the completion choke point normally releases it first anyway).
-    const safe = await syntheticBotsRepo.isMatchReservationSafeToRelease(matchId);
-    if (!safe) {
+    // checked by DIRECT FACTS, never by age, and gated on THIS BOT's own ledger
+    // row (settlement supports partial ledgers). Uses the same atomic,
+    // settlement-gated DELETE as every terminal release site — race-free w.r.t. a
+    // concurrent settlement commit, and a no-op while the bot is unsettled (left
+    // for a later sweep). Only 'active' matches were handled above; a completed
+    // match whose bot ledger hasn't landed simply isn't freed here.
+    const released = await syntheticBotsRepo.releaseReservationByMatchIfSettled(matchId);
+    if (released) {
+      appMetrics.persistentBotSweeperActions.add(1, { action: 'release' });
+      logger.info({ botUserId, matchId }, 'reservation sweeper released terminal-match reservation (settlement confirmed)');
+    } else {
       appMetrics.persistentBotSweeperActions.add(1, { action: 'settlement_pending' });
-      logger.info({ botUserId, matchId }, 'reservation sweeper deferring release: settlement not yet committed');
-      return;
+      logger.info({ botUserId, matchId }, 'reservation sweeper deferring release: settlement not yet committed for this bot');
     }
-    const released = await syntheticBotsRepo.releaseReservationByMatch(matchId);
-    appMetrics.persistentBotSweeperActions.add(1, { action: 'release' });
-    logger.info({ botUserId, matchId, released: released != null }, 'reservation sweeper released terminal-match reservation');
     return;
   }
 

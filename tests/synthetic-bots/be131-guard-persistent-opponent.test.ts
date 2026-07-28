@@ -72,11 +72,13 @@ vi.mock('../../src/modules/users/users.repo.js', () => ({
     ])),
   },
 }));
-// Spy the reservation release so we can assert the terminal path frees the bot.
+// Spy the settlement-gated release so we can assert the terminal path frees the bot.
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
   reservationService: {
-    releaseByMatch: (...a: unknown[]) => releaseByMatchMock(...a),
+    releaseIfSettled: (...a: unknown[]) => releaseByMatchMock(...a),
+    releaseByMatch: vi.fn().mockResolvedValue(undefined),
     releaseByLobby: vi.fn().mockResolvedValue(undefined),
+    releaseIfLobbyAbortable: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

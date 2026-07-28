@@ -534,7 +534,7 @@ async function startMatchFromDraft(
       // The reservation was transferred onto the match at creation; the match is
       // now abandoned. Release by match (and by lobby as a belt-and-braces guard
       // for the crash-between-creation-and-transfer window).
-      await reservationService.releaseByMatch(matchId, 'pre_match_abandon');
+      await reservationService.releaseIfSettled(matchId, 'pre_match_abandon');
       await reservationService.releaseByLobby(lobbyId, 'pre_match_abandon');
       await redis.del([
         rankedAiMatchKey(matchId),

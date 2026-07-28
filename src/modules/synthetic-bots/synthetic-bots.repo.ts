@@ -157,6 +157,32 @@ export const syntheticBotsRepo = {
   },
 
   /**
+   * ABORT-path release: free the reservation ONLY while its lobby is genuinely
+   * still in a pre-draft state — one atomic guarded DELETE that closes the abort
+   * TOCTOU. `startDraft` advances waiting→active (then transfers match_id) under a
+   * lobby lock; by requiring BOTH the reservation is still lobby-keyed
+   * (match_id IS NULL) AND the lobby is still 'waiting', a concurrent reconnect
+   * that advanced the lobby makes this release a no-op — the live draft/match
+   * keeps the bot. If the reservation already transferred OR the lobby advanced,
+   * nothing is deleted. Returns the freed bot id (if any).
+   */
+  async releaseReservationByLobbyIfAbortable(lobbyId: string): Promise<string | null> {
+    const rows = await sql<{ bot_user_id: string }[]>`
+      DELETE FROM synthetic_bot_reservations r
+      WHERE r.lobby_id = ${lobbyId}
+        AND r.match_id IS NULL
+        AND (
+          -- lobby still pre-draft (mine to abort) ...
+          EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id AND l.status = 'waiting')
+          -- ... or already fully torn down (no lobby → no draft can be running).
+          OR NOT EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id)
+        )
+      RETURNING r.bot_user_id
+    `;
+    return rows[0]?.bot_user_id ?? null;
+  },
+
+  /**
    * Terminal release keyed by match (any holder). The match reached a terminal
    * state (completion after settlement, forfeit, disconnect, orphan, sweep).
    */
@@ -247,32 +273,62 @@ export const syntheticBotsRepo = {
   },
 
   /**
-   * Whether a match-keyed reservation is SAFE for the sweeper to release —
-   * proven by direct facts, never by age. Safe iff the match is terminal AND
-   * settlement is provably done for it:
-   *   - the match no longer exists (row gone → nothing left to settle), OR
-   *   - a ranked_rp_changes ledger row exists for the match (RP committed), OR
-   *   - the match is 'abandoned' as a no-contest (state_payload.cancelledNoContest
-   *     — no RP settles for a no-contest, so nothing to race), OR
-   *   - the match is 'abandoned' generally (terminal, no settlement will run).
-   * An 'active' match, or a 'completed' match whose settlement ledger row hasn't
-   * landed yet, is NOT safe (settlement may still be in flight).
+   * Whether a match-keyed reservation is SAFE to release for a SPECIFIC bot —
+   * proven by direct facts, never by age. Settlement supports PARTIAL ledgers
+   * (PR2 recovery: a human's ranked_rp_changes row can land before the bot's),
+   * so a match-wide "any ledger row exists" check is a false positive. We check
+   * the BOT'S OWN row. Safe iff:
+   *   - the match row is gone (nothing left to settle), OR
+   *   - a ranked_rp_changes row exists FOR THIS BOT (its RP committed), OR
+   *   - the match is 'abandoned' (no-contest / terminal abandon — no RP settles).
+   * An 'active' match, or a 'completed' match whose bot ledger row hasn't landed
+   * yet, is NOT safe (the bot's settlement may still be in flight).
    */
-  async isMatchReservationSafeToRelease(matchId: string): Promise<boolean> {
-    const [row] = await sql<{ status: string | null; settled: boolean; no_contest: boolean }[]>`
+  async isMatchReservationSafeToRelease(matchId: string, botUserId: string): Promise<boolean> {
+    const [row] = await sql<{ status: string | null; bot_settled: boolean }[]>`
       SELECT
         m.status AS status,
-        EXISTS (SELECT 1 FROM ranked_rp_changes rc WHERE rc.match_id = m.id) AS settled,
-        COALESCE((m.state_payload ->> 'cancelledNoContest')::boolean, false) AS no_contest
+        EXISTS (
+          SELECT 1 FROM ranked_rp_changes rc
+          WHERE rc.match_id = m.id AND rc.user_id = ${botUserId}
+        ) AS bot_settled
       FROM matches m
       WHERE m.id = ${matchId}
     `;
     if (!row) return true; // match row gone → nothing to settle, safe to free.
-    if (row.status === 'active') return false; // still playing.
-    if (row.settled) return true; // ranked ledger committed.
-    if (row.status === 'abandoned') return true; // no-contest / terminal abandon: no RP settles.
-    // status='completed' but no ledger row yet → settlement still in flight.
-    return false;
+    if (row.bot_settled) return true; // this bot's ledger row committed.
+    if (row.status === 'abandoned') return true; // no-contest / terminal abandon.
+    return false; // active, or completed-but-bot-unsettled → still in flight.
+  },
+
+  /**
+   * Atomic, settlement-gated release keyed by match. Deletes the reservation for
+   * `matchId` ONLY when that bot's settlement is provably done — the bot's own
+   * ranked_rp_changes row exists, OR the match is 'abandoned' (no-contest), OR
+   * the match row is gone. This is the SINGLE choke point every terminal release
+   * site (completion, forfeit, disconnect, orphan, sweeper) routes through, so a
+   * caught-and-swallowed settlement failure can never free the bot early. Uses
+   * the reservation's own bot_user_id (no caller need know it). The predicate is
+   * evaluated inside the DELETE, so it is race-free w.r.t. a concurrent
+   * settlement commit. Returns the freed bot id (if released) else null.
+   */
+  async releaseReservationByMatchIfSettled(matchId: string): Promise<string | null> {
+    const rows = await sql<{ bot_user_id: string }[]>`
+      DELETE FROM synthetic_bot_reservations r
+      WHERE r.match_id = ${matchId}
+        AND (
+          NOT EXISTS (SELECT 1 FROM matches m WHERE m.id = r.match_id)
+          OR EXISTS (
+            SELECT 1 FROM ranked_rp_changes rc
+            WHERE rc.match_id = r.match_id AND rc.user_id = r.bot_user_id
+          )
+          OR EXISTS (
+            SELECT 1 FROM matches m WHERE m.id = r.match_id AND m.status = 'abandoned'
+          )
+        )
+      RETURNING r.bot_user_id
+    `;
+    return rows[0]?.bot_user_id ?? null;
   },
 
   /** Reservations past their expiry, oldest first — the sweeper's work list. */

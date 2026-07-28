@@ -119,6 +119,12 @@ type RankedAiOpponentGeo = {
  * Tear down a lobby we created but failed to fully wire (compensation). Removes
  * both members, deletes the lobby, and clears the legacy Redis key — leaving no
  * orphan lobby behind. Best-effort; every step is guarded.
+ *
+ * ONLY tears down a lobby that is still 'waiting' (or already gone): a concurrent
+ * reconnect could have advanced this lobby's draft to 'active' between our abort
+ * decision and here, in which case the draft is LIVE and NOT ours to delete —
+ * we leave it untouched. This mirrors the abort-release SQL guard, so the whole
+ * abort path (release + teardown) no-ops atomically once the draft advanced.
  */
 async function compensateAbortLobby(
   io: QuizballServer,
@@ -127,6 +133,12 @@ async function compensateAbortLobby(
   aiUserId: string | null,
 ): Promise<void> {
   try {
+    const latest = await lobbiesRepo.getById(lobbyId).catch(() => null);
+    if (latest && latest.status !== 'waiting') {
+      // A reconnect advanced this lobby — leave the live draft/match alone.
+      logger.info({ lobbyId, status: latest.status }, 'compensateAbortLobby: lobby advanced elsewhere — not tearing down');
+      return;
+    }
     await lobbiesRepo.removeMember(lobbyId, userId).catch(() => undefined);
     if (aiUserId) await lobbiesRepo.removeMember(lobbyId, aiUserId).catch(() => undefined);
     await lobbiesRepo.deleteLobby(lobbyId).catch(() => undefined);
@@ -351,14 +363,16 @@ async function handleRankedAiMatchFound(params: {
   const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, opponentRp, favoriteClub, persistentBotReservation, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
-  // Abort owned by THIS flow → release the (still lobby-keyed) reservation AND
-  // tear the lobby down. releaseOwned is match_id-qualified, so if the draft was
-  // concurrently activated and transferred the reservation onto a match, this is
-  // a no-op on the reservation; compensateAbortLobby only removes members /
-  // deletes the lobby if it is still ours to remove.
-  const releasePreMatch = async (path: 'match_found_cancel'): Promise<void> => {
+  // Abort owned by THIS flow → release the reservation ONLY if the lobby is still
+  // abortable (waiting/gone), then tear the lobby down. releaseIfLobbyAbortable is
+  // an atomic SQL guard (match_id IS NULL AND lobby waiting-or-gone): if a
+  // concurrent reconnect advanced this lobby's draft, both the release AND the
+  // teardown (compensateAbortLobby's own status guard) no-op — the live draft
+  // keeps the bot. Release BEFORE teardown so the guard sees the still-waiting
+  // lobby.
+  const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
     if (persistentBotReservation) {
-      await reservationService.releaseOwned(persistentBotReservation, path);
+      await reservationService.releaseIfLobbyAbortable(lobbyId, 'match_found_cancel');
     }
     await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
   };
@@ -476,7 +490,7 @@ async function handleRankedAiMatchFound(params: {
       return;
     }
     if (persistentBotReservation) {
-      await reservationService.releaseOwned(persistentBotReservation, 'match_found_cancel');
+      await reservationService.releaseIfLobbyAbortable(lobbyId, 'match_found_cancel');
     }
     await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
   }
@@ -496,9 +510,11 @@ async function startRankedAiDraft(params: {
 
   // NEW hooks (Appendix A leak paths): the plain-cancel return and the catch
   // below previously wedged the lobby / left the reservation to TTL-expire.
+  // releaseIfLobbyAbortable atomically no-ops if a concurrent reconnect advanced
+  // this lobby's draft (closes the abort TOCTOU).
   const releasePreMatch = async (path: 'draft_start_cancel' | 'draft_start_error'): Promise<void> => {
     if (persistentBotReservation) {
-      await reservationService.releaseOwned(persistentBotReservation, path);
+      await reservationService.releaseIfLobbyAbortable(lobbyId, path);
     }
     const redis = getRedisClient();
     if (redis?.isOpen) {
@@ -547,24 +563,13 @@ async function startRankedAiDraft(params: {
     await startDraft(io, lobbyId);
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
-    // Finding #3: startDraft sets the lobby ACTIVE before it can throw. If the
-    // lobby is now active, a recoverable draft still holds the bot — the
-    // draft-grace / draft-abort path owns release; releasing here would free a
-    // bot that a retry can still legitimately create a match for. Only release
-    // when the lobby is NOT in a recoverable active-draft state (still waiting /
-    // gone = we are effectively aborting this lobby).
-    let lobbyRecoverable = false;
-    try {
-      const latest = await lobbiesRepo.getById(lobbyId);
-      lobbyRecoverable = latest?.status === 'active' && latest.mode === 'ranked';
-    } catch {
-      lobbyRecoverable = false;
-    }
-    if (!lobbyRecoverable) {
-      await releasePreMatch('draft_start_error');
-    } else {
-      logger.info({ lobbyId }, 'Ranked AI draft start failed but lobby is active/recoverable — keeping reservation for the draft-abort path');
-    }
+    // startDraft sets the lobby ACTIVE before it can throw. releaseIfLobbyAbortable
+    // is a single atomic SQL guard (match_id IS NULL AND lobby waiting-or-gone):
+    // if the draft advanced the lobby to 'active' (a recoverable draft still
+    // holds the bot — the draft-grace/abort path owns release), this no-ops and
+    // the bot is kept. No separate status check needed (which would itself be a
+    // TOCTOU); the guard is race-free.
+    await releasePreMatch('draft_start_error');
     io.to(`lobby:${lobbyId}`).emit('error', {
       code: 'MATCH_PREPARATION_FAILED',
       message: 'Match preparation got stuck. Please restart ranked matchmaking.',

@@ -431,7 +431,7 @@ export async function completePossessionMatch(
         // settlement would free the bot for a second match while its RP is still
         // unsettled. Runs here (own DB call, outside the Redis block) so a
         // missing/failing Redis client can never skip it.
-        await reservationService.releaseByMatch(matchId, 'completion');
+        await reservationService.releaseIfSettled(matchId, 'completion');
       } catch (err) {
         logger.warn({ err, matchId }, 'Ranked settlement failed — NOT releasing reservation (replay will re-settle then release)');
       }

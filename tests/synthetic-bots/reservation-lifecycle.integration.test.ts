@@ -223,65 +223,75 @@ describe('match_id-qualified releases (P1-B): a transferred reservation survives
   });
 });
 
-describe('sweeper settlement-safety (P1-A): release only when settlement is provably committed', () => {
-  async function safeToRelease(matchId: string): Promise<boolean> {
-    const [row] = await sql<{ status: string | null; settled: boolean; no_contest: boolean }[]>`
-      SELECT m.status AS status,
-             EXISTS (SELECT 1 FROM ranked_rp_changes rc WHERE rc.match_id = m.id) AS settled,
-             COALESCE((m.state_payload ->> 'cancelledNoContest')::boolean, false) AS no_contest
-      FROM matches m WHERE m.id = ${matchId}
-    `;
-    if (!row) return true;
-    if (row.status === 'active') return false;
-    if (row.settled) return true;
-    if (row.status === 'abandoned') return true;
-    return false; // completed but no ledger row yet
-  }
+describe('settlement-gated release (P1-1/P1-3): releaseReservationByMatchIfSettled', () => {
+  // Drives the REAL repo method: an atomic DELETE that frees the reservation only
+  // when THIS BOT's settlement is provably done. Uses the app repo's own SQL.
+  let repo: typeof import('../../src/modules/synthetic-bots/synthetic-bots.repo.js').syntheticBotsRepo;
 
-  it('a completed match with NO ranked ledger row is NOT safe to release (settlement in flight)', async () => {
+  beforeAll(async () => {
     if (!dbAvailable) return;
-    const bot = await newUser({ persistent: true, nickname: `settle-${Date.now()}` });
-    const lobby = await newLobby(bot);
-    const [match] = await sql<{ id: string }[]>`
-      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
-      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'completed', ${categoryId}, 10, 0, NOW())
-      RETURNING id
-    `;
-    createdMatchIds.push(match.id);
-    expect(await safeToRelease(match.id)).toBe(false);
+    repo = (await import('../../src/modules/synthetic-bots/synthetic-bots.repo.js')).syntheticBotsRepo;
   });
 
-  it('becomes safe once a ranked_rp_changes ledger row exists (settlement committed)', async () => {
-    if (!dbAvailable) return;
-    const bot = await newUser({ persistent: true, nickname: `settle2-${Date.now()}` });
-    const human = await newUser({ nickname: `settle2-h-${Date.now()}` });
+  async function seedTransferredReservation(nick: string, matchStatus: 'completed' | 'abandoned', noContest = false) {
+    const bot = await newUser({ persistent: true, nickname: `${nick}-bot-${Date.now()}` });
     await newProfile(bot, 1200);
     const lobby = await newLobby(bot);
     const [match] = await sql<{ id: string }[]>`
-      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
-      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'completed', ${categoryId}, 10, 0, NOW())
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at, state_payload)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', ${matchStatus}, ${categoryId}, 10, 0, NOW(), ${sql.json(noContest ? { cancelledNoContest: true } : {})})
       RETURNING id
     `;
     createdMatchIds.push(match.id);
-    expect(await safeToRelease(match.id)).toBe(false);
-    await sql`
-      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
-      VALUES (${match.id}, ${bot}, ${human}, false, 1200, 50, 1250, 'win', false, 'ranked_formula', 0)
-    `;
-    expect(await safeToRelease(match.id)).toBe(true);
+    await sql`INSERT INTO synthetic_bot_reservations (bot_user_id, lobby_id, match_id, holder, expires_at) VALUES (${bot}, ${lobby}, ${match.id}, 'holderA', now() + interval '180 seconds')`;
+    return { bot, lobby, matchId: match.id };
+  }
+
+  it('does NOT release a completed match with NO ranked ledger row (settlement in flight)', async () => {
+    if (!dbAvailable) return;
+    const { bot, matchId } = await seedTransferredReservation('inflight', 'completed');
+    const released = await repo.releaseReservationByMatchIfSettled(matchId);
+    expect(released).toBeNull();
+    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
   });
 
-  it('a no-contest abandon is safe (no RP settles)', async () => {
+  it('PARTIAL LEDGER: a human row exists but the BOT row does NOT → still NOT safe to release', async () => {
     if (!dbAvailable) return;
-    const bot = await newUser({ persistent: true, nickname: `nc-${Date.now()}` });
-    const lobby = await newLobby(bot);
-    const [match] = await sql<{ id: string }[]>`
-      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at, state_payload)
-      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'abandoned', ${categoryId}, 10, 0, NOW(), ${sql.json({ cancelledNoContest: true })})
-      RETURNING id
+    const { bot, matchId } = await seedTransferredReservation('partial', 'completed');
+    const human = await newUser({ nickname: `partial-h-${Date.now()}` });
+    // Only the HUMAN's ledger row lands first (PR2 partial-ledger recovery).
+    await sql`
+      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
+      VALUES (${matchId}, ${human}, ${bot}, true, 1500, -25, 1475, 'loss', false, 'ranked_formula', 100)
     `;
-    createdMatchIds.push(match.id);
-    expect(await safeToRelease(match.id)).toBe(true);
+    // A match-wide EXISTS would false-positive here; the bot-specific check must not.
+    const released = await repo.releaseReservationByMatchIfSettled(matchId);
+    expect(released).toBeNull();
+    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
+  });
+
+  it('releases once the BOT’s own ledger row lands', async () => {
+    if (!dbAvailable) return;
+    const { bot, matchId } = await seedTransferredReservation('committed', 'completed');
+    const human = await newUser({ nickname: `committed-h-${Date.now()}` });
+    await sql`
+      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
+      VALUES (${matchId}, ${human}, ${bot}, true, 1500, -25, 1475, 'loss', false, 'ranked_formula', 100),
+             (${matchId}, ${bot}, ${human}, false, 1200, 50, 1250, 'win', false, 'ranked_formula', 0)
+    `;
+    const released = await repo.releaseReservationByMatchIfSettled(matchId);
+    expect(released).toBe(bot);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
+  });
+
+  it('releases a no-contest abandon (no RP settles)', async () => {
+    if (!dbAvailable) return;
+    const { bot, matchId } = await seedTransferredReservation('nc', 'abandoned', true);
+    const released = await repo.releaseReservationByMatchIfSettled(matchId);
+    expect(released).toBe(bot);
   });
 });
 
@@ -307,6 +317,55 @@ describe('listEligibleBots HARD filters', () => {
     expect(ids).toContain(active);
     expect(ids).not.toContain(retired);
     expect(ids).not.toContain(reserved);
+  });
+});
+
+describe('abort-path release (P1-2 TOCTOU): releaseReservationByLobbyIfAbortable', () => {
+  let repo: typeof import('../../src/modules/synthetic-bots/synthetic-bots.repo.js').syntheticBotsRepo;
+  beforeAll(async () => {
+    if (!dbAvailable) return;
+    repo = (await import('../../src/modules/synthetic-bots/synthetic-bots.repo.js')).syntheticBotsRepo;
+  });
+
+  it('frees the bot while the lobby is still waiting', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `abort-wait-${Date.now()}` });
+    const lobby = await newLobby(bot); // status defaults to 'waiting'
+    await acquire(bot, lobby, 'holderA', 180);
+    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby);
+    expect(freed).toBe(bot);
+  });
+
+  it('NO-OPS when a concurrent reconnect advanced the lobby waiting→active (bot kept for the live draft)', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `abort-active-${Date.now()}` });
+    const [lobby] = await sql<{ id: string }[]>`
+      INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${bot}, 'active') RETURNING id
+    `;
+    createdLobbyIds.push(lobby.id);
+    await acquire(bot, lobby.id, 'holderA', 180);
+    // Lobby is 'active' (draft advanced) → abort release must no-op.
+    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby.id);
+    expect(freed).toBeNull();
+    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
+  });
+
+  it('NO-OPS once the reservation has been transferred onto a match (match_id set)', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `abort-xfer-${Date.now()}` });
+    const lobby = await newLobby(bot);
+    await acquire(bot, lobby, 'holderA', 180);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'active', ${categoryId}, 10, 0, NOW()) RETURNING id
+    `;
+    createdMatchIds.push(match.id);
+    await sql`UPDATE synthetic_bot_reservations SET match_id = ${match.id} WHERE bot_user_id = ${bot}`;
+    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby);
+    expect(freed).toBeNull();
+    const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
   });
 });
 

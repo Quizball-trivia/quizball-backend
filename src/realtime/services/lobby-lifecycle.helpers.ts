@@ -56,6 +56,24 @@ export async function resolveLobbyAiMemberFromDb(lobbyId: string): Promise<strin
  */
 export async function releaseRankedAiLobbyMemberSafely(lobbyId: string): Promise<void> {
   const redis = getRedisClient();
+
+  // Never touch a lobby whose draft advanced (a concurrent reconnect started it):
+  // removing the bot member from a LIVE draft would corrupt it. If the lobby is
+  // not 'waiting' (advanced) it is not ours to abort — leave the bot for the
+  // draft/match lifecycle. A missing lobby is fine (fully torn down); proceed to
+  // the abortable release, which no-ops if the reservation already transferred.
+  try {
+    const latest = await lobbiesRepo.getById(lobbyId);
+    if (latest && latest.status !== 'waiting') {
+      logger.info({ lobbyId, status: latest.status }, 'releaseRankedAiLobbyMemberSafely: lobby advanced elsewhere — leaving it live');
+      if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
+      return;
+    }
+  } catch (err) {
+    logger.warn({ err, lobbyId }, 'Failed to read lobby status; leaving reservation for the sweeper');
+    return;
+  }
+
   // Prefer the DB (source of truth); fall back to the Redis cache only as a
   // secondary hint (it may still hold the id when the member row already went).
   let aiUserId: string | null = null;
@@ -93,8 +111,10 @@ export async function releaseRankedAiLobbyMemberSafely(lobbyId: string): Promise
     }
   }
 
-  // Bot confirmed removed (or none present) → free the reservation.
-  await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
+  // Bot confirmed removed (or none present) → free the reservation, but only via
+  // the abortable guard (match_id IS NULL AND lobby waiting-or-gone) so a draft
+  // that advanced between our status read and here still no-ops the release.
+  await reservationService.releaseIfLobbyAbortable(lobbyId, 'auto_leave_lobby');
   if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
 }
 
@@ -164,15 +184,10 @@ export async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId
   await lobbiesRepo.removeMember(lobbyId, userId);
 
   if (lobby && isRankedAiLobby(lobby)) {
-    const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-    if (aiUserId) {
-      await lobbiesRepo.removeMember(lobbyId, aiUserId);
-    }
-    await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
-    const redis = getRedisClient();
-    if (redis) {
-      await redis.del(rankedAiLobbyKey(lobbyId));
-    }
+    // DB-resolve the bot, remove it, confirm removal, THEN abortably release —
+    // never touches a lobby whose draft advanced, and no-op if Redis is down or
+    // the reservation already transferred (fixes P1-C Redis + P1-2 TOCTOU).
+    await releaseRankedAiLobbyMemberSafely(lobbyId);
   }
   await removeUserFromLobbySockets(io, lobbyId, userId);
   logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');

@@ -52,7 +52,7 @@ export function orphanMatchCleanupKeys(matchId: string, userIds: string[]): stri
 async function cleanupOrphanMatchRedisKeys(matchId: string, userIds: string[]): Promise<void> {
   // Terminal release of any persistent-bot reservation (direct-abandon orphan
   // path; the forfeit path releases at finalizeMatchAsForfeit's choke point).
-  await reservationService.releaseByMatch(matchId, 'orphan_resolver');
+  await reservationService.releaseIfSettled(matchId, 'orphan_resolver');
   const redis = getRedisClient();
   if (!redis || !redis.isOpen) return;
   await redis.del(orphanMatchCleanupKeys(matchId, userIds)).catch((error) => {

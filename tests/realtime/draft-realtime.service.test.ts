@@ -436,7 +436,7 @@ describe('draftRealtimeService', () => {
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
     expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
-    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation');
+    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 
@@ -698,7 +698,7 @@ describe('draftRealtimeService', () => {
       expect(insertLobbyCategoryBanMock).not.toHaveBeenCalled();
       expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
       expect(beginMatchForLobbyMock).not.toHaveBeenCalled();
-      expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation');
+      expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
       expect(redisDelMock).toHaveBeenCalledWith([
         'ranked:ai:lobby:l1',
         'draft:absent_after_grace:l1:u1',
@@ -1222,7 +1222,7 @@ describe('draftRealtimeService', () => {
     expect(emit).not.toHaveBeenCalledWith('draft:complete', expect.anything());
     expect(consumeRankedTicketsMock).not.toHaveBeenCalled();
     expect(createMatchFromLobbyMock).not.toHaveBeenCalled();
-    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation');
+    expect(abortLobbyMock).toHaveBeenCalledWith('l1', 'abort_before_match_creation', { draftTeardown: true });
     expect(emit).toHaveBeenCalledWith('ranked:queue_left');
   });
 

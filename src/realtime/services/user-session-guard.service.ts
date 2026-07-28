@@ -464,10 +464,11 @@ async function closeRankedPreMatchLobby(
   reason: string
 ): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobby.id);
-  // End the lobby + free any persistent-bot reservation atomically under the
-  // shared per-lobby advisory lock (serialized with draft activation). Deletes
-  // the lobby + all members + reservation only while still 'waiting'/gone.
-  await reservationService.abortLobby(lobby.id, 'close_pre_match_lobby');
+  // Force-close of a STUCK active pre-match lobby (activated but no entered match
+  // — the caller already confirmed no live match and abandoned any match row).
+  // This is a genuine draft-teardown, so draftTeardown clears the reservation's
+  // commit flag under the lock and reclaims the bot.
+  await reservationService.abortLobby(lobby.id, 'close_pre_match_lobby', { draftTeardown: true });
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del(rankedAiLobbyKey(lobby.id));

@@ -514,7 +514,7 @@ describe('user-session-guard.service', () => {
 
     // The lobby teardown + reservation release now goes through the locked abort
     // primitive (which deletes the lobby inside its transaction).
-    expect(abortLobbyMock).toHaveBeenCalledWith('draft-lobby', 'close_pre_match_lobby');
+    expect(abortLobbyMock).toHaveBeenCalledWith('draft-lobby', 'close_pre_match_lobby', { draftTeardown: true });
     expect(lobbySocket.leave).toHaveBeenCalledWith('lobby:draft-lobby');
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
     expect(snapshot.state).toBe('IDLE');

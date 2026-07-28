@@ -55,7 +55,32 @@ describe('botModelParams schema', () => {
 
   it('allows null holdout stats (sparse difficulty link)', () => {
     const p = validParams();
-    p.difficultyLink = { intercept: 0, slope: 0, holdoutR2: null, holdoutRmse: null, nQuestions: 0 };
+    // Slope must stay strictly negative (difficulty invariant); null holdout is fine.
+    p.difficultyLink = { intercept: 0, slope: -0.5, holdoutR2: null, holdoutRmse: null, nQuestions: 0 };
     expect(() => parseBotModelParams(p)).not.toThrow();
+  });
+
+  it('rejects a non-negative difficulty-link slope (would invert difficulty)', () => {
+    const zero = validParams();
+    zero.difficultyLink = { ...zero.difficultyLink, slope: 0 };
+    expect(() => parseBotModelParams(zero)).toThrow();
+    const positive = validParams();
+    positive.difficultyLink = { ...positive.difficultyLink, slope: 0.5 };
+    expect(() => parseBotModelParams(positive)).toThrow();
+  });
+
+  it('rejects clamps that try to LOOSEN the immutable code backstops', () => {
+    const probe = validParams();
+    probe.clamps.finalProbCap = 0.95; // > HARD 0.93
+    expect(() => parseBotModelParams(probe)).toThrow();
+    const skill = validParams();
+    skill.clamps.skillCap = 5; // > HARD 4
+    expect(() => parseBotModelParams(skill)).toThrow();
+    const time = validParams();
+    time.clamps.minAnswerTimeMs = 100; // < HARD 600
+    expect(() => parseBotModelParams(time)).toThrow();
+    const ceil = validParams();
+    ceil.ceiling.ceilingAccuracy = 0.95; // > HARD 0.8631
+    expect(() => parseBotModelParams(ceil)).toThrow();
   });
 });

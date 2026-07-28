@@ -13,6 +13,7 @@ const inputs: PersistentBotSkillInputs = {
   governorAdjustment: 0,
   categoryAffinities: { football: 0.3 },
   dailyFormSeed: '2026-07-28',
+  thetaCeilingBound: 2.5,
 };
 const stats: ResolvedQuestionStats = { smoothedAccuracy: 0.55, medianTimeMs: 2500, logTimeSigma: 0.7 };
 const keys = { botId: 'bot-9', matchId: 'match-9', questionId: 'q-9' };

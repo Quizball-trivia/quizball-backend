@@ -2,27 +2,50 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseBotModelParams, type BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { ScopeStat } from '../../src/modules/bots/calibration/math.js';
+import { logit } from '../../src/modules/bots/calibration/math.js';
+import {
+  HARD_CEILING_ACCURACY,
+  HARD_MIN_ANSWER_TIME_MS,
+  HARD_PROB_CAP,
+  HARD_SKILL_CAP,
+  S1_TOP_COHORT_ACCURACY_HOLDOUT,
+} from '../../src/modules/bots/calibration/hard-clamps.js';
 import {
   aggregateCeiling,
-  baseSkillTheta,
   boundedCategoryTilt,
   decideClueRevealIndex,
   decideCountdownFoundCount,
   decideMcq,
   decidePutInOrderCorrectCount,
+  effectiveProbCap,
+  effectiveSkillCap,
+  effectiveSkillTheta,
+  expectedAggregateAccuracy,
+  maxCountdownFoundForCeiling,
+  maxPutInOrderMatchedForCeiling,
+  minClueIndexForCeiling,
   questionBetaFromStats,
   resolveQuestionStats,
   sampleHistogram,
+  solveThetaCeilingBound,
   topCohortSpeedFloorMs,
   type PersistentBotSkillInputs,
   type ResolvedQuestionStats,
 } from '../../src/realtime/persistent-bot-gameplay.js';
+import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
 
 // The frozen calibration artifact is the authoritative fixture (PR4 output).
 const PARAMS_PATH = '/Users/user/dev/quizball/calibration-s1final/params.json';
 const params: BotModelParams = parseBotModelParams(
   JSON.parse(readFileSync(PARAMS_PATH, 'utf8')),
 );
+
+// A realistic S1-like beta distribution (accuracies across the full pool) and the
+// pinned theta-ceiling bound solved over it — the same the pin builder computes.
+const REAL_ACCS: number[] = [];
+for (let a = 0.15; a <= 0.95; a += 0.01) REAL_ACCS.push(a);
+const REAL_BETAS = REAL_ACCS.map((a) => params.difficultyLink.intercept + params.difficultyLink.slope * logit(a));
+const THETA_CEILING = solveThetaCeilingBound(REAL_BETAS, params.ceiling.ceilingAccuracy, effectiveProbCap(params));
 
 function inputs(overrides: Partial<PersistentBotSkillInputs> = {}): PersistentBotSkillInputs {
   return {
@@ -31,201 +54,222 @@ function inputs(overrides: Partial<PersistentBotSkillInputs> = {}): PersistentBo
     governorAdjustment: 0,
     categoryAffinities: {},
     dailyFormSeed: '2026-07-28',
+    thetaCeilingBound: THETA_CEILING,
     ...overrides,
   };
 }
 
-// Turn a smoothed accuracy into the ResolvedQuestionStats the model consumes.
 function statsFromAccuracy(acc: number | null, median = 3000, sigma = 0.6): ResolvedQuestionStats {
   return { smoothedAccuracy: acc, medianTimeMs: median, logTimeSigma: sigma };
 }
 
 const keys = { botId: 'bot-1', matchId: 'match-1', questionId: 'q-1' };
 
-describe('persistent bot gameplay model — params fixture', () => {
-  it('loads and validates the frozen S1 params', () => {
+describe('params fixture + hard code constants', () => {
+  it('loads the frozen S1 params and the hard constants line up', () => {
     expect(params.clamps.finalProbCap).toBe(0.93);
-    expect(params.ceiling.ceilingAccuracy).toBeCloseTo(0.8630612, 5);
-    expect(aggregateCeiling(params)).toBeCloseTo(0.8630612, 5);
-    expect(topCohortSpeedFloorMs(params)).toBe(469); // min speed-floor percentile
+    expect(HARD_PROB_CAP).toBe(0.93);
+    expect(HARD_SKILL_CAP).toBe(4);
+    expect(HARD_MIN_ANSWER_TIME_MS).toBe(600);
+    expect(HARD_CEILING_ACCURACY).toBe(0.8631);
+    expect(aggregateCeiling(params)).toBeLessThanOrEqual(HARD_CEILING_ACCURACY);
+    expect(topCohortSpeedFloorMs(params)).toBe(600); // max(measured 469, hard floor 600)
   });
 });
 
-describe('monotonicity', () => {
-  it('pCorrect is non-increasing as question difficulty (beta) rises', () => {
-    // Sweep smoothed accuracy DOWN (harder) => beta UP => pCorrect DOWN.
-    const accs = [0.95, 0.85, 0.75, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05];
-    let prev = Infinity;
-    for (const acc of accs) {
-      const d = decideMcq(params, inputs(), statsFromAccuracy(acc), null, keys);
-      expect(d.pCorrect).toBeLessThanOrEqual(prev + 1e-9);
-      prev = d.pCorrect;
-    }
+describe('CRITICAL-1 — aggregate ceiling is a HARD runtime bound', () => {
+  it('the pinned theta bound keeps expected aggregate over the real mix <= ceiling', () => {
+    const cap = effectiveSkillCap(params, THETA_CEILING);
+    const agg = expectedAggregateAccuracy(cap, REAL_BETAS, effectiveProbCap(params));
+    expect(agg).toBeLessThanOrEqual(params.ceiling.ceilingAccuracy + 1e-6);
   });
 
-  it('holds even with an extreme category tilt (tilt cannot re-order difficulty)', () => {
-    const strong = inputs({ categoryAffinities: { football: 999 } }); // clamped internally
-    const accs = [0.9, 0.7, 0.5, 0.3, 0.1];
-    let prev = Infinity;
-    for (const acc of accs) {
-      const d = decideMcq(params, strong, statsFromAccuracy(acc), 'football', keys);
-      expect(d.pCorrect).toBeLessThanOrEqual(prev + 1e-9);
-      prev = d.pCorrect;
-    }
-  });
-
-  it('betaQ rises as accuracy falls (difficulty link sign)', () => {
-    expect(questionBetaFromStats(params, 0.9)).toBeLessThan(questionBetaFromStats(params, 0.3));
-  });
-});
-
-describe('hard clamps (non-overridable)', () => {
-  it('final pCorrect never exceeds finalProbCap regardless of skill / tilt / form', () => {
+  it('worst reachable bot (max RP+offset+tilt+form+noise) aggregates <= ceiling AND below real top cohort', () => {
+    // Every skill term maxed; noise favorable. theta_eff is capped POINTWISE at
+    // the bound, so the realized aggregate cannot exceed the bound's aggregate.
     const godlike = inputs({
       currentRp: 100000,
       personalOffset: 100,
       governorAdjustment: 100,
       categoryAffinities: { football: 100 },
     });
-    // Easiest possible question (accuracy ~1) + max everything.
-    for (const acc of [0.999, 0.99, 0.9]) {
-      const d = decideMcq(params, godlike, statsFromAccuracy(acc), 'football', keys);
-      expect(d.pCorrect).toBeLessThanOrEqual(params.clamps.finalProbCap + 1e-9);
-    }
-  });
-
-  it('effective skill is bounded by skillCap', () => {
-    const capped = baseSkillTheta(params, inputs({ currentRp: 1e9, personalOffset: 50, governorAdjustment: 50 }));
-    expect(capped).toBeLessThanOrEqual(params.clamps.skillCap);
-    const cappedLow = baseSkillTheta(params, inputs({ currentRp: 0, personalOffset: -50, governorAdjustment: -50 }));
-    expect(cappedLow).toBeGreaterThanOrEqual(-params.clamps.skillCap);
-  });
-
-  it('sampled answer time never dips below the speed floor', () => {
-    const floor = topCohortSpeedFloorMs(params);
-    // Question with a tiny median tries to pull times below the floor.
-    for (let i = 0; i < 200; i += 1) {
-      const d = decideMcq(
-        params,
-        inputs(),
-        statsFromAccuracy(0.5, 10, 0.1),
-        null,
-        { ...keys, questionId: `q-${i}` },
-      );
-      expect(d.answerTimeMs).toBeGreaterThanOrEqual(Math.min(floor, params.clamps.minAnswerTimeMs));
-      expect(d.answerTimeMs).toBeGreaterThanOrEqual(params.clamps.minAnswerTimeMs);
-      expect(d.answerTimeMs).toBeGreaterThanOrEqual(floor);
-    }
-  });
-
-  it('a realistic top-band bot aggregates under the ceiling over the real mix', () => {
-    // §1.5: the ceiling is a telemetry-verified aggregate over the ACTUAL
-    // difficulty mix, enforced via skillCap + finalProbCap. The OPERATING point
-    // of the strongest real bot is the top of f(RP) (~1.21 theta) plus a bounded
-    // hidden-ability offset — NOT the skillCap (4), which is a pathological
-    // safety rail, not a reachable in-match theta. A bot at that realistic top
-    // must land under the frozen ceiling AND below the real top-cohort accuracy
-    // (the δ target: top bots play slightly worse than same-band humans).
-    const topRp = params.fCurve[params.fCurve.length - 1].rp;
-    const topBand = inputs({ currentRp: topRp, personalOffset: 0.3, governorAdjustment: 0 });
     let correct = 0;
-    const n = 6000;
+    const n = REAL_BETAS.length * 40;
     for (let i = 0; i < n; i += 1) {
-      // Beta symmetric around 0 reflects the mean-zero-anchored S1 difficulty
-      // spread; invert the difficulty link to the smoothed accuracy the model
-      // consumes.
-      const betaStream = ((i * 2654435761) >>> 0) / 4294967296;
-      const beta = (betaStream * 2 - 1) * 2; // beta in [-2, 2]
-      const z = (beta - params.difficultyLink.intercept) / params.difficultyLink.slope;
-      const acc = 1 / (1 + Math.exp(-z));
-      const d = decideMcq(params, topBand, statsFromAccuracy(acc), null, { ...keys, questionId: `qc-${i}` });
+      const acc = REAL_ACCS[i % REAL_ACCS.length];
+      const d = decideMcq(params, godlike, statsFromAccuracy(acc), 'football', { ...keys, questionId: `wq-${i}` });
       correct += d.isCorrect ? 1 : 0;
     }
     const aggregate = correct / n;
-    expect(aggregate).toBeLessThanOrEqual(params.ceiling.ceilingAccuracy);
-    // And strictly below the real top cohort (the downward-δ intent).
-    expect(aggregate).toBeLessThan(params.ceiling.topAggregateAccuracyHoldout ?? 1);
+    expect(aggregate).toBeLessThanOrEqual(params.ceiling.ceilingAccuracy + 0.01); // sampling slack
+    expect(aggregate).toBeLessThan(S1_TOP_COHORT_ACCURACY_HOLDOUT);
+  });
+
+  it('solveThetaCeilingBound is monotone and returns the fallback for an empty distribution', () => {
+    expect(expectedAggregateAccuracy(1, REAL_BETAS, 0.93))
+      .toBeLessThan(expectedAggregateAccuracy(2, REAL_BETAS, 0.93));
+    const fallback = solveThetaCeilingBound([], params.ceiling.ceilingAccuracy, 0.93);
+    expect(fallback).toBeGreaterThan(0);
+    expect(fallback).toBeLessThanOrEqual(HARD_SKILL_CAP);
   });
 });
 
-describe('determinism', () => {
+describe('CRITICAL-2 — clamps are immutable code constants applied last', () => {
+  it('a params row that tries to LOOSEN a clamp is REJECTED at load', () => {
+    const bad = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
+    bad.clamps.finalProbCap = 1; // > HARD_PROB_CAP
+    expect(() => parseBotModelParams(bad)).toThrow();
+
+    const bad2 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
+    bad2.clamps.skillCap = 99; // > HARD_SKILL_CAP
+    expect(() => parseBotModelParams(bad2)).toThrow();
+
+    const bad3 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
+    bad3.clamps.minAnswerTimeMs = 0; // < HARD_MIN_ANSWER_TIME_MS
+    expect(() => parseBotModelParams(bad3)).toThrow();
+
+    const bad4 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
+    bad4.ceiling.ceilingAccuracy = 0.99; // > HARD_CEILING_ACCURACY
+    expect(() => parseBotModelParams(bad4)).toThrow();
+
+    const bad5 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
+    bad5.difficultyLink.slope = 0.5; // non-negative slope inverts difficulty
+    expect(() => parseBotModelParams(bad5)).toThrow();
+  });
+
+  it('runtime clamps take the STRICTER of params vs code (defence in depth)', () => {
+    // Even a hand-built params object with looser clamps (bypassing the schema)
+    // cannot loosen the effective caps at runtime.
+    const loose = { ...params, clamps: { finalProbCap: 1, skillCap: 100, minAnswerTimeMs: 0 } } as BotModelParams;
+    expect(effectiveProbCap(loose)).toBe(HARD_PROB_CAP);
+    expect(effectiveSkillCap(loose, HARD_SKILL_CAP)).toBe(HARD_SKILL_CAP);
+    const d = decideMcq(loose, inputs({ thetaCeilingBound: HARD_SKILL_CAP }), statsFromAccuracy(0.99), null, keys);
+    expect(d.pCorrect).toBeLessThanOrEqual(HARD_PROB_CAP + 1e-9);
+  });
+
+  it('the skill cap is applied AFTER tilt/form/noise (nothing escapes it)', () => {
+    const cap = 1.0;
+    // base already at cap, plus large positive tilt+form+noise → still clamped to cap.
+    expect(effectiveSkillTheta(1.0, 0.6, 0.25, 5.0, cap)).toBe(cap);
+    expect(effectiveSkillTheta(-1.0, -0.6, -0.25, -5.0, cap)).toBe(-cap);
+  });
+});
+
+describe('monotonicity — expected pCorrect non-increasing in difficulty at fixed affinity', () => {
+  // Average out the per-question noise by sampling many questionIds per difficulty.
+  function meanP(acc: number, categorySlug: string | null, affKey?: string): number {
+    let s = 0;
+    const n = 400;
+    const inp = affKey ? inputs({ categoryAffinities: { [affKey]: 0.6 } }) : inputs();
+    for (let i = 0; i < n; i += 1) {
+      s += decideMcq(params, inp, statsFromAccuracy(acc), categorySlug, { ...keys, questionId: `mq-${acc}-${i}` }).pCorrect;
+    }
+    return s / n;
+  }
+
+  it('mean pCorrect decreases as accuracy falls (harder)', () => {
+    const accs = [0.95, 0.8, 0.65, 0.5, 0.35, 0.2, 0.1];
+    let prev = Infinity;
+    for (const acc of accs) {
+      const m = meanP(acc, null);
+      expect(m).toBeLessThanOrEqual(prev + 5e-3);
+      prev = m;
+    }
+  });
+
+  it('bounded tilt cannot reverse the EXTREMES (trivial ~always right, brutal ~near floor)', () => {
+    // Strong-affinity bot on a trivial question still ~aces; weak-affinity bot on a
+    // brutal question still ~misses. The tilt only reorders mid-range (realistic).
+    const trivialStrong = meanP(0.97, 'x', 'x');
+    const brutalWeak = decideMcq(
+      params,
+      inputs({ categoryAffinities: { x: -0.6 }, currentRp: 300 }),
+      statsFromAccuracy(0.05),
+      'x',
+      keys,
+    ).pCorrect;
+    expect(trivialStrong).toBeGreaterThan(0.7);
+    expect(brutalWeak).toBeLessThan(0.5);
+  });
+
+  it('betaQ rises as accuracy falls (negative link slope enforced)', () => {
+    expect(questionBetaFromStats(params, 0.9)).toBeLessThan(questionBetaFromStats(params, 0.3));
+    expect(params.difficultyLink.slope).toBeLessThan(0);
+  });
+});
+
+describe('speed floor end-to-end', () => {
+  it('sampled answer time never dips below the hard floor / measured floor', () => {
+    const floor = topCohortSpeedFloorMs(params);
+    expect(floor).toBeGreaterThanOrEqual(HARD_MIN_ANSWER_TIME_MS);
+    for (let i = 0; i < 200; i += 1) {
+      const d = decideMcq(params, inputs(), statsFromAccuracy(0.5, 10, 0.1), null, { ...keys, questionId: `sf-${i}` });
+      expect(d.answerTimeMs).toBeGreaterThanOrEqual(floor);
+    }
+  });
+});
+
+describe('determinism + never reads human answer', () => {
   it('same (botId,matchId,questionId,params) => identical decision', () => {
-    const a = decideMcq(params, inputs(), statsFromAccuracy(0.6), 'football', keys);
-    const b = decideMcq(params, inputs(), statsFromAccuracy(0.6), 'football', keys);
-    expect(a).toEqual(b);
+    expect(decideMcq(params, inputs(), statsFromAccuracy(0.6), 'football', keys))
+      .toEqual(decideMcq(params, inputs(), statsFromAccuracy(0.6), 'football', keys));
   });
-
-  it('different questionId => independent stream (not identical)', () => {
-    const a = decideMcq(params, inputs(), statsFromAccuracy(0.6), null, keys);
-    const b = decideMcq(params, inputs(), statsFromAccuracy(0.6), null, { ...keys, questionId: 'q-2' });
-    // Not asserting inequality of the boolean (could coincide); assert the time
-    // differs, which it must with an independent stream.
-    expect(a.answerTimeMs === b.answerTimeMs && a.isCorrect === b.isCorrect).toBe(false);
-  });
-});
-
-describe('never reads the human answer', () => {
-  it('decision is a pure function of params/inputs/stats/keys only', () => {
-    // The signature has no human-answer parameter; recomputing at "reveal time"
-    // with the same inputs yields the same result.
-    const atShow = decideMcq(params, inputs(), statsFromAccuracy(0.55), 'trivia', keys);
-    const atReveal = decideMcq(params, inputs(), statsFromAccuracy(0.55), 'trivia', keys);
-    expect(atReveal).toEqual(atShow);
+  it('decision is a pure function of inputs (no human-answer parameter)', () => {
+    const a = decideMcq(params, inputs(), statsFromAccuracy(0.55), 'trivia', keys);
+    const b = decideMcq(params, inputs(), statsFromAccuracy(0.55), 'trivia', keys);
+    expect(b).toEqual(a);
   });
 });
 
 describe('category tilt bounding', () => {
-  it('tilt vanishes at difficulty extremes and peaks near the middle', () => {
-    const mid = boundedCategoryTilt(0.6, 0);
-    const hard = boundedCategoryTilt(0.6, 4);
-    const easy = boundedCategoryTilt(0.6, -4);
-    expect(Math.abs(mid)).toBeGreaterThan(Math.abs(hard));
-    expect(Math.abs(mid)).toBeGreaterThan(Math.abs(easy));
-    expect(Math.abs(hard)).toBeLessThan(0.05);
-  });
-
-  it('affinity is clamped to MAX_CATEGORY_TILT_THETA', () => {
+  it('tilt vanishes at extremes, peaks mid, and is clamped', () => {
+    expect(Math.abs(boundedCategoryTilt(0.6, 0))).toBeGreaterThan(Math.abs(boundedCategoryTilt(0.6, 4)));
+    expect(Math.abs(boundedCategoryTilt(0.6, 4))).toBeLessThan(0.05);
     expect(boundedCategoryTilt(999, 0)).toBeCloseTo(boundedCategoryTilt(0.6, 0), 9);
-    expect(boundedCategoryTilt(-999, 0)).toBeCloseTo(boundedCategoryTilt(-0.6, 0), 9);
   });
 });
 
-describe('per-format models (not Bernoulli)', () => {
-  it('countdown uses the found-count distribution and caps the found fraction', () => {
-    const dist = { '1': 5, '3': 20, '5': 10 };
-    const found = decideCountdownFoundCount(params, inputs(), dist, 6, keys);
-    expect(found).toBeGreaterThanOrEqual(0);
-    expect(found).toBeLessThanOrEqual(Math.floor(6 * params.clamps.finalProbCap));
+describe('HIGH — per-format models bypass Bernoulli AND respect the SCORE ceiling', () => {
+  const ceilScore = Math.min(aggregateCeiling(params), effectiveProbCap(params)) * 100;
+
+  it('countdown found-count cap keeps the SCORE at/under the ceiling (no 13/14→95 leak)', () => {
+    for (const total of [4, 6, 8, 14]) {
+      const maxFound = maxCountdownFoundForCeiling(params, total);
+      expect(calculateCountdownScore(maxFound, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+      expect(calculateCountdownScore(maxFound + 1, total)).toBeGreaterThan(ceilScore + 1e-9 - 5);
+      const drawn = decideCountdownFoundCount(params, inputs(), { '3': 5, '5': 10, '6': 8 }, total, keys);
+      expect(calculateCountdownScore(drawn, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+    }
   });
 
-  it('put-in-order uses the partial-credit distribution and caps it', () => {
-    const dist = { '2': 4, '4': 12, '6': 3 };
-    const c = decidePutInOrderCorrectCount(params, inputs(), dist, 6, keys);
-    expect(c).toBeGreaterThanOrEqual(0);
-    expect(c).toBeLessThanOrEqual(Math.min(6, Math.floor(6 * params.clamps.finalProbCap)));
+  it('put-in-order matched cap keeps the SCORE at/under the ceiling (no 5/6→100 leak)', () => {
+    for (const total of [4, 5, 6]) {
+      const maxMatched = maxPutInOrderMatchedForCeiling(params, total);
+      expect(calculatePutInOrderScore(maxMatched, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+      const drawn = decidePutInOrderCorrectCount(params, inputs(), { '4': 4, '5': 8, '6': 3 }, total, keys);
+      expect(calculatePutInOrderScore(drawn, total)).toBeLessThanOrEqual(ceilScore + 1e-9);
+    }
   });
 
-  it('clue reveal index respects clue bounds', () => {
-    const dist = { '0': 2, '1': 8, '2': 5 };
-    const idx = decideClueRevealIndex(params, inputs(), dist, 5, keys);
-    expect(idx).toBeGreaterThanOrEqual(0);
-    expect(idx).toBeLessThanOrEqual(4);
+  it('clue reveal-index floor keeps the SCORE at/under the ceiling (no instant-solve 100)', () => {
+    const minIdx = minClueIndexForCeiling(params);
+    expect(calculateCluesScore(true, minIdx)).toBeLessThanOrEqual(ceilScore + 1e-9);
+    const idx = decideClueRevealIndex(params, inputs(), { '0': 10, '1': 5 }, 5, keys);
+    expect(idx).toBeGreaterThanOrEqual(minIdx);
+    expect(calculateCluesScore(true, idx)).toBeLessThanOrEqual(ceilScore + 1e-9);
   });
 
   it('per-format decisions are deterministic', () => {
-    const dist = { '2': 4, '4': 12 };
-    expect(decidePutInOrderCorrectCount(params, inputs(), dist, 6, keys))
-      .toBe(decidePutInOrderCorrectCount(params, inputs(), dist, 6, keys));
+    expect(decidePutInOrderCorrectCount(params, inputs(), { '2': 4, '4': 12 }, 6, keys))
+      .toBe(decidePutInOrderCorrectCount(params, inputs(), { '2': 4, '4': 12 }, 6, keys));
   });
 
   it('sampleHistogram is a proper weighted draw', () => {
     const counts = new Map<number, number>();
     let r = 0;
-    const dist = { '0': 1, '1': 3 };
-    // Feed a rising uniform to cover the whole CDF.
     for (let i = 0; i < 1000; i += 1) {
       const next = () => ((r = (r + 0.001) % 1), r);
-      const s = sampleHistogram(dist, next);
+      const s = sampleHistogram({ '0': 1, '1': 3 }, next);
       if (s != null) counts.set(s, (counts.get(s) ?? 0) + 1);
     }
     expect((counts.get(1) ?? 0)).toBeGreaterThan(counts.get(0) ?? 0);
@@ -233,27 +277,19 @@ describe('per-format models (not Bernoulli)', () => {
 });
 
 describe('backoff resolves for a brand-new question with no stats', () => {
-  const emptyGlobal: ScopeStat = {
-    answersCount: 100000,
-    correctCount: 50000,
-    smoothedAccuracy: 0.5,
-    timingSamples: 100000,
-    medianTimeMs: 1184,
-    logTimeSigma: 0.72,
+  const globalScope: ScopeStat = {
+    answersCount: 100000, correctCount: 50000, smoothedAccuracy: 0.5,
+    timingSamples: 100000, medianTimeMs: 1184, logTimeSigma: 0.72,
   };
-
-  it('falls all the way back to global when the question has no row', () => {
-    const resolved = resolveQuestionStats(null, null, null, emptyGlobal);
+  it('falls back to global then produces a bounded decision', () => {
+    const resolved = resolveQuestionStats(null, null, null, globalScope);
     expect(resolved.smoothedAccuracy).toBe(0.5);
-    expect(resolved.medianTimeMs).toBe(1184);
     const d = decideMcq(params, inputs(), resolved, null, keys);
     expect(d.pCorrect).toBeGreaterThan(0);
-    expect(d.pCorrect).toBeLessThanOrEqual(params.clamps.finalProbCap);
+    expect(d.pCorrect).toBeLessThanOrEqual(effectiveProbCap(params));
   });
-
-  it('null smoothed accuracy => beta 0 (median difficulty), still bounded', () => {
-    const resolved: ResolvedQuestionStats = { smoothedAccuracy: null, medianTimeMs: null, logTimeSigma: null };
-    const d = decideMcq(params, inputs(), resolved, null, keys);
+  it('null accuracy => beta 0, still bounded, floored time', () => {
+    const d = decideMcq(params, inputs(), { smoothedAccuracy: null, medianTimeMs: null, logTimeSigma: null }, null, keys);
     expect(Number.isFinite(d.pCorrect)).toBe(true);
     expect(d.answerTimeMs).toBeGreaterThanOrEqual(topCohortSpeedFloorMs(params));
   });

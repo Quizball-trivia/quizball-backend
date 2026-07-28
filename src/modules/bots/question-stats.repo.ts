@@ -105,4 +105,19 @@ export const questionStatsRepo = {
       formatStats: formatRows[0]?.format_stats ?? null,
     };
   },
+
+  /**
+   * All per-question smoothed accuracies (Bernoulli questions with a computed
+   * accuracy), for solving the ceiling-derived theta bound at match creation.
+   * Returns an empty array when the table is empty (fresh DB) → the caller uses
+   * the conservative frozen fallback bound. Read-only, single round-trip.
+   */
+  async getAllSmoothedAccuracies(): Promise<number[]> {
+    const rows = await sql<Array<{ smoothed_accuracy: number }>>`
+      SELECT smoothed_accuracy
+      FROM question_stats
+      WHERE smoothed_accuracy IS NOT NULL
+    `;
+    return rows.map((r) => r.smoothed_accuracy);
+  },
 };

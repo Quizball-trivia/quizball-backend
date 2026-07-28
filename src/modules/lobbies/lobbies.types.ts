@@ -42,6 +42,12 @@ export interface PersistentBotModelPin {
   categoryAffinities: Record<string, number>;
   /** Georgia-day string used to seed the bounded daily-form swing. */
   dailyFormSeed: string;
+  /**
+   * Ceiling-derived theta bound, solved at creation over the frozen difficulty
+   * distribution so a bot's expected aggregate accuracy cannot exceed the frozen
+   * ceiling. Effective theta is capped pointwise at this. Frozen per match.
+   */
+  thetaCeilingBound: number;
 }
 
 export interface LobbyRow {

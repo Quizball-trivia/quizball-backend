@@ -13,6 +13,10 @@ import { logger } from '../../core/logger.js';
 import type { PersistentBotModelPin } from '../lobbies/lobbies.types.js';
 import { botModelParamsRepo } from './bot-model-params.repo.js';
 import { syntheticProfileRepo } from './synthetic-profile.repo.js';
+import { questionStatsRepo } from './question-stats.repo.js';
+import { logit } from './calibration/math.js';
+import { effectiveProbCap, solveThetaCeilingBound } from '../../realtime/persistent-bot-gameplay.js';
+import type { BotModelParams } from './calibration/params-schema.js';
 
 // Asia/Tbilisi is a fixed UTC+4 (no DST) — mirrors store.service's convention.
 const GEORGIA_UTC_OFFSET_MS = 4 * 60 * 60 * 1000;
@@ -32,9 +36,10 @@ export async function buildPersistentBotModelPin(
   currentRp: number,
   now: Date = new Date(),
 ): Promise<PersistentBotModelPin | null> {
-  const [active, skill] = await Promise.all([
+  const [active, skill, accuracies] = await Promise.all([
     botModelParamsRepo.getActive(),
     syntheticProfileRepo.getSkillInputs(botUserId),
+    questionStatsRepo.getAllSmoothedAccuracies().catch(() => [] as number[]),
   ]);
   if (!active || !skill) {
     logger.info(
@@ -43,6 +48,9 @@ export async function buildPersistentBotModelPin(
     );
     return null;
   }
+
+  const thetaCeilingBound = solveCeilingBound(active.params, accuracies);
+
   return {
     paramsVersion: active.version,
     params: active.params,
@@ -52,5 +60,20 @@ export async function buildPersistentBotModelPin(
     governorAdjustment: skill.governorAdjustment,
     categoryAffinities: skill.categoryAffinities,
     dailyFormSeed: georgiaDaySeed(now),
+    thetaCeilingBound,
   };
+}
+
+/**
+ * Solve the ceiling-derived theta bound over the frozen difficulty distribution:
+ * map each question's human smoothed_accuracy to beta via the link, then find the
+ * max theta whose expected aggregate stays at/under the ceiling. Pinned so the
+ * whole match uses ONE bound (immune to a mid-match stats refresh). An empty
+ * accuracy list (fresh DB) yields the conservative frozen fallback inside
+ * solveThetaCeilingBound.
+ */
+export function solveCeilingBound(params: BotModelParams, accuracies: readonly number[]): number {
+  const { intercept, slope } = params.difficultyLink;
+  const betas = accuracies.map((acc) => intercept + slope * logit(acc));
+  return solveThetaCeilingBound(betas, params.ceiling.ceilingAccuracy, effectiveProbCap(params));
 }

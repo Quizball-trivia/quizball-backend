@@ -24,6 +24,12 @@
 
 import type { BotModelParams } from '../modules/bots/calibration/params-schema.js';
 import { evalFCurve, logit, resolveBackoff, sigmoid, type ScopeStat } from '../modules/bots/calibration/math.js';
+import {
+  HARD_MIN_ANSWER_TIME_MS,
+  HARD_PROB_CAP,
+  HARD_SKILL_CAP,
+  HARD_THETA_CEILING_FALLBACK,
+} from '../modules/bots/calibration/hard-clamps.js';
 import { clamp } from './scoring.js';
 
 /**
@@ -57,6 +63,13 @@ export interface PersistentBotSkillInputs {
   categoryAffinities: Record<string, number>;
   /** Deterministic daily-form seed component (a Georgia-day string is fine). */
   dailyFormSeed: string;
+  /**
+   * Ceiling-derived theta bound, solved at match creation over the real
+   * difficulty distribution (or the frozen fallback when the stats table was
+   * empty). Effective theta is capped at min(HARD_SKILL_CAP, paramsSkillCap,
+   * this) so the aggregate cannot exceed the frozen ceiling. Pinned per match.
+   */
+  thetaCeilingBound: number;
 }
 
 /**
@@ -122,16 +135,58 @@ export function boundedCategoryTilt(affinity: number, betaQ: number): number {
 }
 
 /**
- * Effective skill (theta) for a bot: f(currentRp) + personalOffset + governor,
- * bounded by the params skill cap. Category tilt / daily form / match noise are
- * added per-question (they depend on the question), so they are NOT included
- * here — this is the question-independent base.
+ * The question-independent base skill BEFORE the effective-theta cap:
+ * f(currentRp) + personalOffset + governor. This is intentionally NOT capped
+ * here — category tilt, daily form and per-question noise are added on top and
+ * the cap is applied ONCE to the final effective theta (effectiveSkillTheta).
+ * Capping here would let the later terms escape the cap (the be#175 bug).
  */
 export function baseSkillTheta(params: BotModelParams, inputs: PersistentBotSkillInputs): number {
   const fromRp = evalFCurve(params.fCurve, inputs.currentRp);
-  const theta = fromRp + inputs.personalOffset + inputs.governorAdjustment;
-  const cap = params.clamps.skillCap;
+  return fromRp + inputs.personalOffset + inputs.governorAdjustment;
+}
+
+/**
+ * The immutable upper bound on effective theta. It is the MOST RESTRICTIVE of:
+ *   - HARD_SKILL_CAP (code constant, be#175 insurance),
+ *   - params.clamps.skillCap (can only be stricter — schema-bounded ≤ HARD),
+ *   - the ceiling-derived theta bound pinned at match creation (thetaCeilingBound):
+ *     the max theta whose EXPECTED aggregate over the real difficulty mix stays
+ *     at/under the ceiling. Pinned per match; falls back to the frozen constant
+ *     when the stats table was empty at creation.
+ * A CMS/DB row can never loosen any of these.
+ */
+export function effectiveSkillCap(params: BotModelParams, thetaCeilingBound: number): number {
+  return Math.min(HARD_SKILL_CAP, params.clamps.skillCap, thetaCeilingBound);
+}
+
+/**
+ * Final effective theta for ONE decision: base + bounded category tilt + daily
+ * form + per-question noise, then clamped ONCE to +/- effectiveSkillCap. Because
+ * the realized theta is capped at thetaCeilingBound POINTWISE (every decision),
+ * the aggregate over any question mix is <= E_beta[cappedSigmoid(bound - beta)]
+ * <= the ceiling — a distribution-independent hard guarantee (noise can only
+ * pull an individual theta below the bound, never above).
+ */
+export function effectiveSkillTheta(
+  base: number,
+  tilt: number,
+  dailyForm: number,
+  matchNoise: number,
+  cap: number,
+): number {
+  const theta = base + tilt + dailyForm + matchNoise;
   return clamp(theta, -cap, cap);
+}
+
+/** The effective per-question probability cap: params can only make it stricter. */
+export function effectiveProbCap(params: BotModelParams): number {
+  return Math.min(HARD_PROB_CAP, params.clamps.finalProbCap);
+}
+
+/** The effective minimum answer time: params can only make it stricter (larger). */
+export function effectiveMinAnswerTimeMs(params: BotModelParams): number {
+  return Math.max(HARD_MIN_ANSWER_TIME_MS, params.clamps.minAnswerTimeMs);
 }
 
 /**
@@ -147,17 +202,69 @@ export function questionBetaFromStats(params: BotModelParams, smoothedAccuracy: 
 }
 
 /**
- * Decide a Bernoulli (multiple-choice) question outcome for a persistent bot.
- * P(correct) = sigmoid(theta_effective - beta_q), then hard-clamped by
- * finalProbCap. Bounded category tilt, daily form and per-match noise adjust
- * theta_effective but can never push the FINAL probability past the cap.
- * Monotonic in beta_q by construction: none of the theta terms depend on beta
- * except the tilt, which only shrinks toward the middle (never re-orders a
- * trivial vs a hard question). `categorySlug` null skips the tilt entirely.
+ * Expected aggregate accuracy of a bot with a FIXED effective theta over a set
+ * of question difficulties (betas), with the per-question probability cap
+ * applied. Monotonically non-decreasing in theta (used to solve the ceiling
+ * bound). betas may be empty → falls back to a single beta=0.
+ */
+export function expectedAggregateAccuracy(theta: number, betas: readonly number[], probCap: number): number {
+  const bs = betas.length > 0 ? betas : [0];
+  let s = 0;
+  for (const b of bs) s += Math.min(sigmoid(theta - b), probCap);
+  return s / bs.length;
+}
+
+/**
+ * Solve the ceiling-derived theta bound: the LARGEST theta whose expected
+ * aggregate accuracy over `betas` stays at/under `ceiling`. Bisection is valid
+ * because expectedAggregateAccuracy is monotonic in theta. When `betas` is empty
+ * (fresh DB, no question_stats), returns the conservative frozen fallback so the
+ * bound is never accidentally loose. The result is additionally never allowed
+ * above HARD_SKILL_CAP (it is only ever a tightening).
  *
- * NEVER reads the human's answer — the decision is a function only of the
- * params, the bot's inputs, the question stats, and the (bot,match,question)
- * seed, so it is identical whether computed at question-show or replayed later.
+ * This is computed ONCE at match creation and pinned; the noise/tilt/form terms
+ * are then bounded POINTWISE at this value per decision, so the realized
+ * aggregate is guaranteed ≤ ceiling regardless of the noise distribution.
+ */
+export function solveThetaCeilingBound(
+  betas: readonly number[],
+  ceiling: number,
+  probCap: number,
+): number {
+  if (betas.length === 0) return Math.min(HARD_THETA_CEILING_FALLBACK, HARD_SKILL_CAP);
+  // The capped sigmoid tops out at probCap; if even a very high theta cannot
+  // reach the ceiling (ceiling >= probCap over an all-easy mix), the bound is
+  // the hard skill cap (no ceiling pressure). Otherwise bisect.
+  let lo = -HARD_SKILL_CAP;
+  let hi = HARD_SKILL_CAP;
+  if (expectedAggregateAccuracy(hi, betas, probCap) <= ceiling) return hi;
+  if (expectedAggregateAccuracy(lo, betas, probCap) > ceiling) return lo;
+  for (let i = 0; i < 60; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (expectedAggregateAccuracy(mid, betas, probCap) <= ceiling) lo = mid;
+    else hi = mid;
+  }
+  return lo; // largest theta known to satisfy the constraint
+}
+
+/**
+ * Decide a Bernoulli (multiple-choice) question outcome for a persistent bot.
+ * P(correct) = min(sigmoid(theta_eff - beta_q), effectiveProbCap). theta_eff =
+ * base + boundedCategoryTilt + dailyForm + matchNoise, then clamped ONCE to
+ * +/- effectiveSkillCap (= min(HARD_SKILL_CAP, paramsSkillCap, thetaCeilingBound))
+ * — the cap is applied AFTER every term so nothing escapes it. Because theta_eff
+ * is bounded pointwise at thetaCeilingBound, the aggregate accuracy over any
+ * question mix is provably ≤ the frozen ceiling.
+ *
+ * Monotonicity: the EXPECTED (over noise) pCorrect is non-increasing in beta_q
+ * for fixed affinity — the direct −beta_q term dominates the tilt's bounded,
+ * middle-weighted beta dependence. Individual noisy draws are independent (a bot
+ * can miss an easy question / land a hard one, like a real player); the tilt is
+ * bounded so it can only reorder MID-range difficulties, never the extremes
+ * (a trivial question stays ~always right, a brutal one ~always wrong).
+ *
+ * NEVER reads the human's answer — a pure function of params, inputs, stats, and
+ * the (bot,match,question) seed.
  */
 export function decideMcq(
   params: BotModelParams,
@@ -181,9 +288,10 @@ export function decideMcq(
   // not identically shifted, but reproducible for this (bot,match,question).
   const matchNoise = standardNormal(next) * MATCH_NOISE_SIGMA_THETA;
 
-  const thetaEffective = base + tilt + dailyForm + matchNoise;
+  const cap = effectiveSkillCap(params, inputs.thetaCeilingBound);
+  const thetaEffective = effectiveSkillTheta(base, tilt, dailyForm, matchNoise, cap);
   const rawP = sigmoid(thetaEffective - betaQ);
-  const pCorrect = clamp(rawP, 0, params.clamps.finalProbCap);
+  const pCorrect = clamp(rawP, 0, effectiveProbCap(params));
 
   const isCorrect = next() < pCorrect;
   const answerTimeMs = sampleAnswerTimeMs(params, stats, isCorrect, next);
@@ -210,8 +318,9 @@ export function sampleAnswerTimeMs(
   const dwell = isCorrect ? 0 : 0.15;
   const sampled = Math.exp(mu + dwell + standardNormal(next) * sigma);
 
+  // Floor by the hard code minimum AND the measured top-cohort speed floor.
   const speedFloorMs = topCohortSpeedFloorMs(params);
-  return Math.round(Math.max(sampled, params.clamps.minAnswerTimeMs, speedFloorMs));
+  return Math.round(Math.max(sampled, effectiveMinAnswerTimeMs(params), speedFloorMs));
 }
 
 /**
@@ -221,8 +330,11 @@ export function sampleAnswerTimeMs(
  */
 export function topCohortSpeedFloorMs(params: BotModelParams): number {
   const floors = params.ceiling.speedFloor;
-  if (floors.length === 0) return params.clamps.minAnswerTimeMs;
-  return floors.reduce((min, f) => Math.min(min, f.timeMs), Infinity);
+  const measured = floors.length === 0
+    ? effectiveMinAnswerTimeMs(params)
+    : floors.reduce((min, f) => Math.min(min, f.timeMs), Infinity);
+  // Never below the hard code floor, even if the measured floor is somehow lower.
+  return Math.max(measured, HARD_MIN_ANSWER_TIME_MS);
 }
 
 /** The frozen aggregate accuracy ceiling (86.3% for S1) as a code constant. */
@@ -237,9 +349,28 @@ export function aggregateCeiling(params: BotModelParams): number {
 // capped so it cannot exceed the top-cohort normalized-score equivalents.
 // ---------------------------------------------------------------------------
 
-/** Cap on the normalized special-format score, mirroring finalProbCap. */
-function specialScoreCap(params: BotModelParams): number {
-  return params.clamps.finalProbCap;
+/**
+ * The maximum normalized SCORE (0..1) a special-format answer may earn — the
+ * frozen aggregate ceiling. The per-format caps below translate this into a
+ * count/index cap that respects how scoring.ts converts counts → points (e.g.
+ * put-in-order 20 pts/position capped at 100, countdown 5-pt buckets), so a bot
+ * can't defeat the ceiling via rounding (13/14 → 95) or a low denominator
+ * (5/6 → 100).
+ */
+function ceilingScoreFraction(params: BotModelParams): number {
+  return Math.min(aggregateCeiling(params), effectiveProbCap(params));
+}
+
+/**
+ * Skill-scaled fraction in [0,1] for the no-distribution fallback, using the
+ * CAPPED effective skill (thetaCeilingBound applies to formats too) so the
+ * fallback can't exceed the ceiling either. Deterministic (no noise term — a
+ * distribution-free fallback keeps the mean).
+ */
+function cappedSkillFraction(params: BotModelParams, inputs: PersistentBotSkillInputs): number {
+  const cap = effectiveSkillCap(params, inputs.thetaCeilingBound);
+  const skill = clamp(baseSkillTheta(params, inputs), -cap, cap);
+  return clamp(sigmoid(skill), 0, 1);
 }
 
 /**
@@ -279,13 +410,28 @@ export function decideCountdownFoundCount(
   if (foundCountDistribution && Object.keys(foundCountDistribution).length > 0) {
     found = sampleHistogram(foundCountDistribution, next) ?? 0;
   } else {
-    // No distribution: fall back to a skill-scaled fraction.
-    const skill = baseSkillTheta(params, inputs);
-    const frac = clamp(sigmoid(skill) * 0.9, 0, 1);
-    found = Math.round(capped * frac);
+    found = Math.round(capped * cappedSkillFraction(params, inputs));
   }
-  const cap = Math.floor(capped * specialScoreCap(params));
-  return clamp(found, 0, cap);
+  return clamp(found, 0, maxCountdownFoundForCeiling(params, totalGroups));
+}
+
+/**
+ * The largest countdown found-count whose resulting SCORE (5-pt buckets via
+ * calculateCountdownScore) stays at/under the ceiling. Searched, not derived by
+ * a raw fraction, so the 5-pt rounding (13/14 → 95) can't defeat the cap.
+ */
+export function maxCountdownFoundForCeiling(params: BotModelParams, totalGroups: number): number {
+  const maxScore = ceilingScoreFraction(params) * 100;
+  const total = Math.max(1, totalGroups);
+  let best = 0;
+  for (let f = 0; f <= total; f += 1) {
+    // Mirror calculateCountdownScore's bucketing without importing it here.
+    const raw = (f / total) * 100;
+    const score = Math.min(Math.round(raw / 5) * 5, 100);
+    if (score <= maxScore + 1e-9) best = f;
+    else break;
+  }
+  return best;
 }
 
 /**
@@ -304,12 +450,26 @@ export function decidePutInOrderCorrectCount(
   if (correctCountDistribution && Object.keys(correctCountDistribution).length > 0) {
     count = sampleHistogram(correctCountDistribution, next) ?? 0;
   } else {
-    const skill = baseSkillTheta(params, inputs);
-    const frac = clamp(sigmoid(skill), 0, 1);
-    count = Math.round(totalItems * frac);
+    count = Math.round(totalItems * cappedSkillFraction(params, inputs));
   }
-  const cap = Math.floor(totalItems * specialScoreCap(params));
-  return clamp(count, 0, Math.max(0, Math.min(totalItems, cap)));
+  return clamp(count, 0, maxPutInOrderMatchedForCeiling(params, totalItems));
+}
+
+/**
+ * The largest put-in-order matched-position count whose SCORE (20 pts/position,
+ * capped 100, via calculatePutInOrderScore) stays at/under the ceiling. This is
+ * what stops 5/6 → 100 pts from defeating a raw-fraction cap.
+ */
+export function maxPutInOrderMatchedForCeiling(params: BotModelParams, totalItems: number): number {
+  const maxScore = ceilingScoreFraction(params) * 100;
+  const total = Math.max(0, totalItems);
+  let best = 0;
+  for (let m = 0; m <= total; m += 1) {
+    const score = Math.min(m * 20, 100);
+    if (score <= maxScore + 1e-9) best = m;
+    else break;
+  }
+  return best;
 }
 
 /**
@@ -331,11 +491,28 @@ export function decideClueRevealIndex(
   if (clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0) {
     index = sampleHistogram(clueRevealIndexDistribution, next) ?? maxIndex;
   } else {
-    const skill = baseSkillTheta(params, inputs);
-    const frac = clamp(1 - sigmoid(skill), 0, 1);
+    const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
   }
-  return clamp(index, 0, maxIndex);
+  // Floor the reveal index so the resulting SCORE (100 − index*20, floor 20)
+  // stays at/under the ceiling: index 0 → 100 pts would defeat the cap, so a bot
+  // must reveal at least enough clues that its best score respects the ceiling.
+  const minIndex = minClueIndexForCeiling(params);
+  return clamp(index, Math.min(minIndex, maxIndex), maxIndex);
+}
+
+/**
+ * The smallest clue reveal index whose SCORE (calculateCluesScore = max(20,
+ * 100 − index*20)) stays at/under the ceiling. Solving-instantly (index 0 →
+ * 100) is disallowed when 100 exceeds the ceiling-equivalent score.
+ */
+export function minClueIndexForCeiling(params: BotModelParams): number {
+  const maxScore = ceilingScoreFraction(params) * 100;
+  for (let idx = 0; idx <= 4; idx += 1) {
+    const score = Math.max(20, 100 - idx * 20);
+    if (score <= maxScore + 1e-9) return idx;
+  }
+  return 4;
 }
 
 /**

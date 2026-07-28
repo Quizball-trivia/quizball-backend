@@ -3,6 +3,12 @@ import { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { errorResponseSchema } from '../../http/openapi/common-schemas.js';
 import { registerEndpoint } from '../../http/openapi/register-endpoint.js';
 import {
+  auctionLeaderboardQuerySchema,
+  auctionLeaderboardResponseSchema,
+  auctionUserRankQuerySchema,
+  auctionUserRankResponseSchema,
+} from './auction-leaderboard.schemas.js';
+import {
   auctionCardDetailSchema,
   auctionCardIdParamSchema,
   auctionCardSummarySchema,
@@ -82,6 +88,34 @@ export function registerAuctionOpenApi(registry: OpenAPIRegistry): void {
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Not an admin', schema: errorResponseSchema },
       404: { description: 'Auction card not found', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/auction/leaderboard',
+    summary: 'List the Auction leaderboard',
+    tags: ['Auction'],
+    security: [{ bearerAuth: [] }],
+    query: auctionLeaderboardQuerySchema,
+    responses: {
+      200: { description: 'Auction leaderboard', schema: auctionLeaderboardResponseSchema },
+      400: { description: 'Invalid query parameters', schema: errorResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/auction/leaderboard/me',
+    summary: "Get the authenticated user's Auction rank",
+    tags: ['Auction'],
+    security: [{ bearerAuth: [] }],
+    query: auctionUserRankQuerySchema,
+    responses: {
+      200: { description: 'Rank information, or null when unranked', schema: auctionUserRankResponseSchema },
+      400: { description: 'Invalid query parameters', schema: errorResponseSchema },
+      401: { description: 'Authentication required', schema: errorResponseSchema },
     },
   });
 }

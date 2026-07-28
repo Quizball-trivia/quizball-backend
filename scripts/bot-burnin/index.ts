@@ -37,7 +37,7 @@ import {
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
-import { writeFixtureInTx, writeSeededProfilesInTx } from './writer.js';
+import { writeFixtureChunkInTx, writeSeededProfilesInTx } from './writer.js';
 import { assertDbTarget } from './target-guard.js';
 import { solveSeeds } from './seed-solver.js';
 
@@ -77,16 +77,100 @@ function parseDate(raw: string | undefined, flag: string): Date | undefined {
   return d;
 }
 
+/** Switches that take NO value. */
+const BOOLEAN_FLAGS = ['--execute', '--allow-remote'] as const;
+/** Flags that REQUIRE a following value. */
+const VALUE_FLAGS = [
+  '--params',
+  '--seed',
+  '--recent-matches',
+  '--margin-rp',
+  '--human-top10-rp',
+  '--limit',
+  '--season-start',
+  '--season-end',
+  '--run-date',
+] as const;
+const KNOWN_FLAGS: readonly string[] = [...BOOLEAN_FLAGS, ...VALUE_FLAGS];
+
+function knownFlagList(): string {
+  return `Valid flags:\n  ${[...KNOWN_FLAGS].sort().join('\n  ')}`;
+}
+
+/**
+ * Reject anything argv-shaped we do not recognise, BEFORE any planning or DB
+ * work (#343).
+ *
+ * WHY: burn-in is a one-time, marker-guarded operation — on prod there is no
+ * second attempt without a rollback. The parser used to look up only the flags
+ * it knew and silently ignore everything else, so a typo'd flag
+ * (`--margin` for `--margin-rp`) silently reverted to a DEFAULT while the
+ * operator believed they had overridden the ladder. The staging run was in fact
+ * launched with a `--snapshot-out` that does not exist and was accepted without
+ * a word.
+ */
+function validateArgv(argv: string[]): void {
+  const errors: string[] = [];
+  const valueFlags = new Set<string>(VALUE_FLAGS);
+  const booleanFlags = new Set<string>(BOOLEAN_FLAGS);
+  const seen = new Set<string>();
+
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (!token.startsWith('--')) continue; // a value consumed by its flag
+
+    // `--flag=value` is not supported by the `--flag value` parser; naming it
+    // explicitly beats "unknown flag --seed=7".
+    if (token.includes('=')) {
+      const [name] = token.split('=', 1);
+      errors.push(
+        KNOWN_FLAGS.includes(name)
+          ? `${name} must be passed as '${name} <value>', not '${token}'.`
+          : `Unknown flag: ${token}`,
+      );
+      continue;
+    }
+
+    if (!KNOWN_FLAGS.includes(token)) {
+      errors.push(`Unknown flag: ${token}`);
+      continue;
+    }
+    if (seen.has(token)) errors.push(`Flag passed more than once: ${token}`);
+    seen.add(token);
+
+    if (valueFlags.has(token)) {
+      const value = argv[i + 1];
+      // A missing value, or the next token being another flag, both mean the
+      // flag was passed without its value.
+      if (value == null || (value.startsWith('--') && (booleanFlags.has(value) || valueFlags.has(value)))) {
+        errors.push(`${token} requires a value.`);
+      } else {
+        i++; // consume the value so it is never mistaken for a flag
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid arguments:\n  ${errors.join('\n  ')}\n\n${knownFlagList()}`);
+  }
+}
+
 function parseArgs(argv: string[]): Args {
+  validateArgv(argv);
   const get = (flag: string): string | undefined => {
     const i = argv.indexOf(flag);
     return i === -1 ? undefined : argv[i + 1];
   };
   const has = (flag: string) => argv.includes(flag);
-  const num = (v: string | undefined): number | undefined => {
+  const num = (v: string | undefined, flag: string): number | undefined => {
     if (v == null) return undefined;
     const n = Number(v);
-    if (!Number.isFinite(n)) throw new Error(`Malformed numeric flag value: ${v}`);
+    // Must ERROR, never fall through to the default: a typo'd numeric value
+    // silently reverting to DEFAULT_MARGIN / DEFAULT_HUMAN_TOP10 changes the
+    // planned ladder while the operator believes they overrode it.
+    if (v.trim() === '' || !Number.isFinite(n)) {
+      throw new Error(`Malformed numeric value for ${flag}: '${v}' — expected a finite number.`);
+    }
     return n;
   };
   const paramsPath = get('--params');
@@ -102,14 +186,20 @@ function parseArgs(argv: string[]): Args {
   if (execute && seasonEndArg == null) {
     throw new Error('--execute requires an explicit --season-end <ISO date> (no wall-clock default, so the run hash is stable across resume).');
   }
+  const limit = num(get('--limit'), '--limit') ?? null;
+  // --limit is DRY-RUN ONLY: a partial burn plus a global one-time marker is
+  // incoherent (the marker would claim a full burn while only a subset ran).
+  if (execute && limit != null) {
+    throw new Error('--limit is dry-run-only; refusing --execute --limit (a partial burn + global marker is incoherent).');
+  }
   return {
     paramsPath,
-    seed: num(get('--seed')) ?? DEFAULT_SEED,
-    recentMatches: num(get('--recent-matches')) ?? RECENT_MATCHES,
-    marginRp: num(get('--margin-rp')) ?? DEFAULT_MARGIN,
-    humanTop10RpOverride: num(get('--human-top10-rp')) ?? DEFAULT_HUMAN_TOP10,
+    seed: num(get('--seed'), '--seed') ?? DEFAULT_SEED,
+    recentMatches: num(get('--recent-matches'), '--recent-matches') ?? RECENT_MATCHES,
+    marginRp: num(get('--margin-rp'), '--margin-rp') ?? DEFAULT_MARGIN,
+    humanTop10RpOverride: num(get('--human-top10-rp'), '--human-top10-rp') ?? DEFAULT_HUMAN_TOP10,
     execute,
-    limit: num(get('--limit')) ?? null,
+    limit,
     seasonStart: parseDate(get('--season-start'), '--season-start') ?? DEFAULT_SEASON_START,
     seasonEnd: seasonEndArg ?? new Date(),
   };
@@ -123,15 +213,11 @@ function persistentBotsFlagOn(): boolean {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  assertDbTarget(process.env.DATABASE_URL ?? '', { allowRemote: argv.includes('--allow-remote') });
-
+  // Arg validation FIRST: every argv error (unknown flag, missing value,
+  // malformed number/date, --execute --limit) surfaces before the tool looks at
+  // a database at all.
   const args = parseArgs(argv);
-
-  // --limit is DRY-RUN ONLY: a partial burn plus a global one-time marker is
-  // incoherent (the marker would claim a full burn while only a subset ran).
-  if (args.execute && args.limit != null) {
-    throw new Error('--limit is dry-run-only; refusing --execute --limit (a partial burn + global marker is incoherent).');
-  }
+  assertDbTarget(process.env.DATABASE_URL ?? '', { allowRemote: argv.includes('--allow-remote') });
 
   const params = parseBotModelParams(JSON.parse(readFileSync(resolve(args.paramsPath), 'utf8')));
 
@@ -286,9 +372,11 @@ async function main(): Promise<void> {
         await assertRunClaim(tx, manifestHash, runId!);
       }
 
-      for (const fixture of chunk) {
-        await writeFixtureInTx(tx, fixture);
-      }
+      // Batched: the whole chunk in a handful of statements instead of ~7 per
+      // fixture (#343). Identical final state — the per-fixture writer never
+      // reads its own writes through SQL, so the row states it would re-SELECT
+      // are folded in memory instead.
+      await writeFixtureChunkInTx(tx, chunk);
 
       // 'complete' lands in the SAME tx as the last chunk, so a crash before the
       // final chunk never leaves a 'complete' marker (only 'running').

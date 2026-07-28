@@ -73,3 +73,71 @@ export const auctionPipelineStatsResponseSchema = z.object({
 });
 
 export type AuctionPipelineStatsResponse = z.infer<typeof auctionPipelineStatsResponseSchema>;
+
+export const auctionPipelinePromptKeyEnum = z.enum([
+  'generator_rules',
+  'verifier_rules',
+  'judge_rules',
+  'variant_medium',
+  'variant_hard',
+]);
+
+export const auctionPipelineWorkerSchema = z.object({
+  worker_id: z.string(),
+  hostname: z.string(),
+  task_id: z.string().uuid().nullable(),
+  player_name: z.string().nullable(),
+  variant_key: z.string().nullable(),
+  stage: z.string().nullable(),
+  started_at: z.string(),
+  updated_at: z.string(),
+  seconds_since_heartbeat: z.number().int(),
+  is_stale: z.boolean(),
+});
+
+export const auctionPipelineWorkersResponseSchema = z.object({
+  workers: z.array(auctionPipelineWorkerSchema),
+  live: z.number().int(),
+  stale: z.number().int(),
+});
+
+export const auctionPipelinePromptSchema = z.object({
+  key: z.string(),
+  text: z.string(),
+  updated_at: z.string(),
+  updated_by: z.string().nullable(),
+});
+
+export const auctionPipelinePromptsResponseSchema = z.object({
+  items: z.array(auctionPipelinePromptSchema),
+});
+
+export const auctionPipelinePromptKeyParamSchema = z.object({
+  key: auctionPipelinePromptKeyEnum,
+});
+
+export const auctionPipelinePromptUpdateSchema = z.object({
+  text: z.string().trim().min(1).max(8000),
+});
+
+/**
+ * Either an explicit set of task ids or a whole-class filter, never both and
+ * never neither — an unqualified requeue would reset every terminal task.
+ */
+export const auctionPipelineRequeueSchema = z
+  .object({
+    taskIds: z.array(z.string().uuid()).min(1).max(500).optional(),
+    filter: z.enum(['failed', 'rejected']).optional(),
+  })
+  .refine(
+    (value) => (value.taskIds === undefined) !== (value.filter === undefined),
+    { message: 'Provide exactly one of taskIds or filter' }
+  );
+
+export const auctionPipelineRequeueResponseSchema = z.object({
+  requeued: z.number().int(),
+});
+
+export type AuctionPipelinePromptUpdate = z.infer<typeof auctionPipelinePromptUpdateSchema>;
+export type AuctionPipelineRequeueRequest = z.infer<typeof auctionPipelineRequeueSchema>;
+export type AuctionPipelinePromptKeyParam = z.infer<typeof auctionPipelinePromptKeyParamSchema>;

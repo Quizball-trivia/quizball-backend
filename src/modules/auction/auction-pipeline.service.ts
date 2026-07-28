@@ -1,5 +1,12 @@
 import { auctionPipelineRepo } from './auction-pipeline.repo.js';
-import type { AuctionPipelineStageCount, AuctionPipelineStats } from './auction-pipeline.types.js';
+import { logAudit } from '../activity/audit.js';
+import type {
+  AuctionPipelinePrompt,
+  AuctionPipelinePromptKey,
+  AuctionPipelineStageCount,
+  AuctionPipelineStats,
+  AuctionPipelineWorker,
+} from './auction-pipeline.types.js';
 
 const TERMINAL_STAGES = ['published', 'rejected', 'failed'] as const;
 
@@ -73,5 +80,53 @@ export const auctionPipelineService = {
       recent_failures: recentFailures,
       latest_snapshot: latestSnapshot,
     };
+  },
+
+  async listWorkers(): Promise<{ workers: AuctionPipelineWorker[]; live: number; stale: number }> {
+    const workers = await auctionPipelineRepo.listWorkers();
+    const stale = workers.filter((worker) => worker.is_stale).length;
+
+    return { workers, live: workers.length - stale, stale };
+  },
+
+  async listPrompts(): Promise<AuctionPipelinePrompt[]> {
+    return auctionPipelineRepo.listPrompts();
+  },
+
+  async savePrompt(
+    key: AuctionPipelinePromptKey,
+    text: string,
+    userId: string
+  ): Promise<AuctionPipelinePrompt> {
+    const prompt = await auctionPipelineRepo.upsertPrompt(key, text, userId);
+
+    logAudit({
+      userId,
+      action: 'update',
+      entityType: 'auction_pipeline_prompt',
+      entityId: key,
+      metadata: { chars: text.length },
+    });
+
+    return prompt;
+  },
+
+  async requeueTasks(
+    params: { taskIds?: string[]; filter?: 'failed' | 'rejected' },
+    userId: string
+  ): Promise<{ requeued: number }> {
+    const requeued = await auctionPipelineRepo.requeueTasks(params);
+
+    logAudit({
+      userId,
+      action: 'requeue',
+      entityType: 'auction_pipeline_task',
+      metadata: {
+        requeued,
+        ...(params.taskIds ? { task_ids: params.taskIds.length } : { filter: params.filter }),
+      },
+    });
+
+    return { requeued };
   },
 };

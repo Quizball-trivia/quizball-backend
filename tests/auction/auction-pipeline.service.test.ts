@@ -11,11 +11,22 @@ vi.mock('../../src/modules/auction/auction-pipeline.repo.js', () => ({
     getRecentFailures: vi.fn(),
     getLatestSnapshot: vi.fn(),
     getPoolCounts: vi.fn(),
+    listWorkers: vi.fn(),
+    listPrompts: vi.fn(),
+    upsertPrompt: vi.fn(),
+    requeueTasks: vi.fn(),
   },
+}));
+
+vi.mock('../../src/modules/activity/audit.js', () => ({
+  logAudit: vi.fn(),
 }));
 
 import { auctionPipelineService } from '../../src/modules/auction/auction-pipeline.service.js';
 import { auctionPipelineRepo } from '../../src/modules/auction/auction-pipeline.repo.js';
+import { logAudit } from '../../src/modules/activity/audit.js';
+
+const ADMIN_USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 function mockRepo(overrides: {
   stages?: { stage: string; count: number }[];
@@ -95,5 +106,97 @@ describe('auctionPipelineService.getStats', () => {
     const stats = await auctionPipelineService.getStats();
 
     expect(stats.totals.players_remaining).toBe(0);
+  });
+});
+
+describe('auctionPipelineService.listWorkers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('splits live and stale worker counts', async () => {
+    (auctionPipelineRepo.listWorkers as Mock).mockResolvedValue([
+      { worker_id: 'a', is_stale: false },
+      { worker_id: 'b', is_stale: true },
+      { worker_id: 'c', is_stale: false },
+    ]);
+
+    const result = await auctionPipelineService.listWorkers();
+
+    expect(result.live).toBe(2);
+    expect(result.stale).toBe(1);
+    expect(result.workers).toHaveLength(3);
+  });
+
+  it('handles an empty roster', async () => {
+    (auctionPipelineRepo.listWorkers as Mock).mockResolvedValue([]);
+
+    const result = await auctionPipelineService.listWorkers();
+
+    expect(result).toEqual({ workers: [], live: 0, stale: 0 });
+  });
+});
+
+describe('auctionPipelineService.savePrompt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('persists the override and writes an audit entry', async () => {
+    (auctionPipelineRepo.upsertPrompt as Mock).mockResolvedValue({
+      key: 'judge_rules',
+      text: 'Be strict.',
+      updated_at: '2026-07-28T00:00:00.000Z',
+      updated_by: ADMIN_USER_ID,
+    });
+
+    await auctionPipelineService.savePrompt('judge_rules', 'Be strict.', ADMIN_USER_ID);
+
+    expect(auctionPipelineRepo.upsertPrompt).toHaveBeenCalledWith(
+      'judge_rules',
+      'Be strict.',
+      ADMIN_USER_ID
+    );
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: ADMIN_USER_ID,
+        action: 'update',
+        entityType: 'auction_pipeline_prompt',
+        entityId: 'judge_rules',
+      })
+    );
+  });
+});
+
+describe('auctionPipelineService.requeueTasks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the requeued count and audits the filter used', async () => {
+    (auctionPipelineRepo.requeueTasks as Mock).mockResolvedValue(7);
+
+    const result = await auctionPipelineService.requeueTasks({ filter: 'failed' }, ADMIN_USER_ID);
+
+    expect(result).toEqual({ requeued: 7 });
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'requeue',
+        entityType: 'auction_pipeline_task',
+        metadata: expect.objectContaining({ requeued: 7, filter: 'failed' }),
+      })
+    );
+  });
+
+  it('audits the task-id count rather than the ids themselves', async () => {
+    (auctionPipelineRepo.requeueTasks as Mock).mockResolvedValue(2);
+
+    await auctionPipelineService.requeueTasks({ taskIds: ['a', 'b'] }, ADMIN_USER_ID);
+
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ requeued: 2, task_ids: 2 }),
+      })
+    );
   });
 });

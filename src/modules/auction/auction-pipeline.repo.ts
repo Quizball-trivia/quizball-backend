@@ -4,13 +4,19 @@ import type {
   AuctionPipelineCardStatusCounts,
   AuctionPipelineFailureSample,
   AuctionPipelinePoolCounts,
+  AuctionPipelinePrompt,
+  AuctionPipelinePromptKey,
   AuctionPipelineSnapshot,
   AuctionPipelineStageCount,
   AuctionPipelineVariantCount,
+  AuctionPipelineWorker,
 } from './auction-pipeline.types.js';
 
 const FAILURE_SAMPLE_LIMIT = 20;
 const ERROR_MESSAGE_MAX_LENGTH = 300;
+
+/** A worker that has not checked in for this long is reported as stale. */
+const WORKER_STALE_SECONDS = 120;
 
 /**
  * Mirrors the auction eligibility rules used by the content pipeline: a player
@@ -234,5 +240,131 @@ export const auctionPipelineRepo = {
       eligible_players: parseCount(row?.eligible_players),
       players_with_published_card: parseCount(row?.players_with_published_card),
     };
+  },
+
+  /**
+   * Live runner heartbeats. Staleness is derived in SQL against now() so it
+   * reflects the database clock rather than the API server's.
+   */
+  async listWorkers(): Promise<AuctionPipelineWorker[]> {
+    const rows = await sql<{
+      worker_id: string;
+      hostname: string;
+      task_id: string | null;
+      player_name: string | null;
+      variant_key: string | null;
+      stage: string | null;
+      started_at: Date;
+      updated_at: Date;
+      seconds_since_heartbeat: number;
+      is_stale: boolean;
+    }[]>`
+      SELECT
+        worker_id,
+        hostname,
+        task_id,
+        player_name,
+        variant_key,
+        stage,
+        started_at,
+        updated_at,
+        EXTRACT(EPOCH FROM (now() - updated_at))::int AS seconds_since_heartbeat,
+        EXTRACT(EPOCH FROM (now() - updated_at)) > ${WORKER_STALE_SECONDS} AS is_stale
+      FROM pipeline_workers
+      ORDER BY updated_at DESC
+    `;
+
+    return rows.map((row) => ({
+      worker_id: row.worker_id,
+      hostname: row.hostname,
+      task_id: row.task_id,
+      player_name: row.player_name,
+      variant_key: row.variant_key,
+      stage: row.stage,
+      started_at: row.started_at.toISOString(),
+      updated_at: row.updated_at.toISOString(),
+      seconds_since_heartbeat: row.seconds_since_heartbeat,
+      is_stale: row.is_stale,
+    }));
+  },
+
+  async listPrompts(): Promise<AuctionPipelinePrompt[]> {
+    const rows = await sql<{
+      key: string;
+      text: string;
+      updated_at: Date;
+      updated_by: string | null;
+    }[]>`
+      SELECT key, text, updated_at, updated_by
+      FROM pipeline_prompts
+      ORDER BY key
+    `;
+
+    return rows.map((row) => ({
+      key: row.key,
+      text: row.text,
+      updated_at: row.updated_at.toISOString(),
+      updated_by: row.updated_by,
+    }));
+  },
+
+  async upsertPrompt(
+    key: AuctionPipelinePromptKey,
+    text: string,
+    updatedBy: string
+  ): Promise<AuctionPipelinePrompt> {
+    const [row] = await sql<{
+      key: string;
+      text: string;
+      updated_at: Date;
+      updated_by: string | null;
+    }[]>`
+      INSERT INTO pipeline_prompts (key, text, updated_by, updated_at)
+      VALUES (${key}, ${text}, ${updatedBy}, now())
+      ON CONFLICT (key) DO UPDATE SET
+        text = EXCLUDED.text,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      RETURNING key, text, updated_at, updated_by
+    `;
+
+    return {
+      key: row.key,
+      text: row.text,
+      updated_at: row.updated_at.toISOString(),
+      updated_by: row.updated_by,
+    };
+  },
+
+  /**
+   * Reset terminal tasks back to 'queued' so the runner picks them up again.
+   * Only rejected/failed tasks are eligible — published families are never
+   * touched, so a requeue can't destroy shipped content. Leases are cleared so
+   * a task is not stuck waiting for a lease that no live worker owns.
+   */
+  async requeueTasks(params: {
+    taskIds?: string[];
+    filter?: 'failed' | 'rejected';
+  }): Promise<number> {
+    const selector =
+      params.taskIds && params.taskIds.length > 0
+        ? sql`id = ANY(${params.taskIds}::uuid[])`
+        : sql`stage = ${params.filter as string}`;
+
+    const rows = await sql<{ id: string }[]>`
+      UPDATE card_generation_tasks
+      SET stage = 'queued',
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          failure_class = NULL,
+          failure_message = NULL,
+          rejection_reason = NULL,
+          completed_at = NULL
+      WHERE ${selector}
+        AND stage IN ('rejected', 'failed')
+      RETURNING id
+    `;
+
+    return rows.length;
   },
 };

@@ -7790,6 +7790,147 @@
           "recent_failures",
           "latest_snapshot"
         ]
+      },
+      "AuctionPipelineWorkersResponse": {
+        "type": "object",
+        "properties": {
+          "workers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "worker_id": {
+                  "type": "string"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "player_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "variant_key": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "stage": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "started_at": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "seconds_since_heartbeat": {
+                  "type": "integer"
+                },
+                "is_stale": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "worker_id",
+                "hostname",
+                "task_id",
+                "player_name",
+                "variant_key",
+                "stage",
+                "started_at",
+                "updated_at",
+                "seconds_since_heartbeat",
+                "is_stale"
+              ]
+            }
+          },
+          "live": {
+            "type": "integer"
+          },
+          "stale": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workers",
+          "live",
+          "stale"
+        ]
+      },
+      "AuctionPipelinePromptsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "updated_by": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "key",
+                "text",
+                "updated_at",
+                "updated_by"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AuctionPipelinePrompt": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "text",
+          "updated_at",
+          "updated_by"
+        ]
+      },
+      "AuctionPipelineRequeueResponse": {
+        "type": "object",
+        "properties": {
+          "requeued": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requeued"
+        ]
       }
     },
     "parameters": {}
@@ -19771,6 +19912,271 @@
           },
           "403": {
             "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/workers": {
+      "get": {
+        "summary": "Live card generation worker heartbeats",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workers with stale flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelineWorkersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/prompts": {
+      "get": {
+        "summary": "Operator prompt overrides for the card pipeline",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored prompt overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePromptsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/prompts/{key}": {
+      "put": {
+        "summary": "Create or replace a card pipeline prompt override",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "generator_rules",
+                "verifier_rules",
+                "judge_rules",
+                "variant_medium",
+                "variant_hard"
+              ]
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored prompt override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePrompt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid prompt key or text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/requeue": {
+      "post": {
+        "summary": "Reset rejected or failed generation tasks back to queued",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "taskIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "minItems": 1,
+                    "maxItems": 500
+                  },
+                  "filter": {
+                    "type": "string",
+                    "enum": [
+                      "failed",
+                      "rejected"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of tasks requeued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelineRequeueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid requeue selector",
             "content": {
               "application/json": {
                 "schema": {

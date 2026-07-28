@@ -77,9 +77,9 @@ export async function refreshQuestionStats(
         await tx`
           INSERT INTO question_stats
             (question_id, answers_count, correct_count, smoothed_accuracy,
-             median_time_ms, log_time_sigma, format_stats, refreshed_at)
+             median_time_ms, log_time_sigma, timing_samples, format_stats, refreshed_at)
           SELECT ${r.questionId}, ${r.answersCount}, ${r.correctCount}, ${r.smoothedAccuracy},
-                 ${r.medianTimeMs}, ${r.logTimeSigma}, ${tx.json(r.formatStats as Json)}, ${now}
+                 ${r.medianTimeMs}, ${r.logTimeSigma}, ${r.timingSamples}, ${tx.json(r.formatStats as Json)}, ${now}
           WHERE EXISTS (SELECT 1 FROM questions q WHERE q.id = ${r.questionId})
           ON CONFLICT (question_id) DO UPDATE SET
             answers_count     = EXCLUDED.answers_count,
@@ -87,6 +87,7 @@ export async function refreshQuestionStats(
             smoothed_accuracy = EXCLUDED.smoothed_accuracy,
             median_time_ms    = EXCLUDED.median_time_ms,
             log_time_sigma    = EXCLUDED.log_time_sigma,
+            timing_samples    = EXCLUDED.timing_samples,
             format_stats      = EXCLUDED.format_stats,
             refreshed_at      = EXCLUDED.refreshed_at
         `;
@@ -101,10 +102,10 @@ export async function refreshQuestionStats(
         await tx`
           INSERT INTO question_stats_backoff
             (scope, scope_key, answers_count, correct_count, smoothed_accuracy,
-             median_time_ms, log_time_sigma, refreshed_at)
+             median_time_ms, log_time_sigma, timing_samples, refreshed_at)
           VALUES (
             ${r.scope}, ${r.scopeKey}, ${r.answersCount}, ${r.correctCount}, ${r.smoothedAccuracy},
-            ${r.medianTimeMs}, ${r.logTimeSigma}, ${now}
+            ${r.medianTimeMs}, ${r.logTimeSigma}, ${r.timingSamples}, ${now}
           )
           ON CONFLICT (scope, scope_key) DO UPDATE SET
             answers_count     = EXCLUDED.answers_count,
@@ -112,6 +113,7 @@ export async function refreshQuestionStats(
             smoothed_accuracy = EXCLUDED.smoothed_accuracy,
             median_time_ms    = EXCLUDED.median_time_ms,
             log_time_sigma    = EXCLUDED.log_time_sigma,
+            timing_samples    = EXCLUDED.timing_samples,
             refreshed_at      = EXCLUDED.refreshed_at
         `;
       }

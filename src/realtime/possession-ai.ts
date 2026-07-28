@@ -79,16 +79,69 @@ type PersistentModelContext = {
   botUserId: string;
 };
 
-function parsePersistentBotModelPin(ctx: unknown): PersistentBotModelPin | null {
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** A category-affinity map is valid iff every value is a finite number. */
+function parseCategoryAffinities(value: unknown): Record<string, number> | null {
+  if (value == null) return {};
+  const record = asRecord(value);
+  if (!record) return null;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (!isFiniteNumber(v)) return null;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Validate EVERY field the gameplay model reads before trusting a pin. A
+ * partial or older-written pin (missing/non-finite personalOffset,
+ * governorAdjustment, dailyFormSeed, thetaCeilingBound, currentRp, or a
+ * non-object params) must be treated as ABSENT — return null so the caller
+ * falls back to the RP bridge — rather than letting an undefined leak into theta
+ * and NaN-poison every decision. thetaCeilingBound is the only field allowed to
+ * be missing (older pins pre-date it); it then defaults to the conservative
+ * frozen fallback so the ceiling is still enforced.
+ */
+export function parsePersistentBotModelPin(ctx: unknown): PersistentBotModelPin | null {
   const record = asRecord(ctx);
   const pin = record ? asRecord(record.persistentBotModel) : null;
   if (!pin) return null;
-  if (typeof pin.botUserId !== 'string' || typeof pin.currentRp !== 'number') return null;
-  return pin as unknown as PersistentBotModelPin;
+
+  if (typeof pin.botUserId !== 'string' || pin.botUserId.length === 0) return null;
+  if (!isFiniteNumber(pin.currentRp)) return null;
+  if (!isFiniteNumber(pin.personalOffset)) return null;
+  if (!isFiniteNumber(pin.governorAdjustment)) return null;
+  if (typeof pin.dailyFormSeed !== 'string' || pin.dailyFormSeed.length === 0) return null;
+  // thetaCeilingBound: required to be finite IF present; a missing one is allowed
+  // (older pin) and defaults later. A present-but-non-finite value is invalid.
+  if (pin.thetaCeilingBound !== undefined && !isFiniteNumber(pin.thetaCeilingBound)) return null;
+  const affinities = parseCategoryAffinities(pin.categoryAffinities);
+  if (affinities === null) return null;
+  if (pin.params == null || typeof pin.params !== 'object') return null;
+
+  return {
+    paramsVersion: isFiniteNumber(pin.paramsVersion) ? pin.paramsVersion : null,
+    params: pin.params,
+    botUserId: pin.botUserId,
+    currentRp: pin.currentRp,
+    personalOffset: pin.personalOffset,
+    governorAdjustment: pin.governorAdjustment,
+    categoryAffinities: affinities,
+    dailyFormSeed: pin.dailyFormSeed,
+    thetaCeilingBound: isFiniteNumber(pin.thetaCeilingBound)
+      ? pin.thetaCeilingBound
+      : HARD_THETA_CEILING_FALLBACK,
+  };
 }
 
 function persistentModelFromPin(pin: PersistentBotModelPin): PersistentModelContext | null {
   try {
+    // parsePersistentBotModelPin has already validated every scalar field is
+    // finite; params still needs the full zod validation (and can throw).
     const params = parseBotModelParams(pin.params);
     const inputs: PersistentBotSkillInputs = {
       currentRp: pin.currentRp,
@@ -96,12 +149,7 @@ function persistentModelFromPin(pin: PersistentBotModelPin): PersistentModelCont
       governorAdjustment: pin.governorAdjustment,
       categoryAffinities: pin.categoryAffinities ?? {},
       dailyFormSeed: pin.dailyFormSeed,
-      // The ceiling-derived theta bound, solved + pinned at match creation. If an
-      // older pin lacks it, fall back to the conservative frozen constant so the
-      // aggregate ceiling is still enforced (never left unbounded).
-      thetaCeilingBound: typeof pin.thetaCeilingBound === 'number'
-        ? pin.thetaCeilingBound
-        : HARD_THETA_CEILING_FALLBACK,
+      thetaCeilingBound: pin.thetaCeilingBound,
     };
     return { params, inputs, botUserId: pin.botUserId };
   } catch (error) {
@@ -346,8 +394,6 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
   ): Promise<{
     isCorrect: boolean;
     clueIndex: number | null;
-    countdownFoundCount: number | null;
-    putInOrderCorrectCount: number | null;
     /** Calibrated think-time (ms), already floored by the top-cohort speed floor. */
     answerTimeMs: number;
   }> {
@@ -370,21 +416,21 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     // their think-time (the timing model is shared).
     const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys);
 
+    // Schedule time only needs correctness (for the delay hesitation), the clue
+    // reveal index (drives the clue answer time), and the think-time. The
+    // countdown / put-in-order COUNTS are NOT needed here — they are re-derived
+    // deterministically at commit with the REAL group/item count, so nothing is
+    // computed against an unknown total here.
     if (questionKind === 'countdown') {
-      const dist = readHist(formatStats, 'countdownFoundCountDistribution');
-      // totalGroups unknown at schedule time; commit re-derives with the real
-      // count. Countdown isCorrect is always false (opponent-relative), matching
-      // the ephemeral path.
-      const count = decideCountdownFoundCount(model.params, model.inputs, dist, Number.MAX_SAFE_INTEGER, keys);
-      return { isCorrect: false, clueIndex: null, countdownFoundCount: count, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+      // Countdown isCorrect is always false (opponent-relative), matching the
+      // ephemeral path; the found-count is decided at commit.
+      return { isCorrect: false, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
     }
     if (questionKind === 'putInOrder') {
       // Correctness comes from the calibrated partial-credit count (all-placed =
-      // correct), NOT the Bernoulli draw — resolved at commit with the real item
-      // count. Schedule-time isCorrect stays false (only affects hesitation).
-      const dist = readHist(formatStats, 'putInOrderCorrectCountDistribution');
-      const count = decidePutInOrderCorrectCount(model.params, model.inputs, dist, Number.MAX_SAFE_INTEGER, keys);
-      return { isCorrect: false, clueIndex: null, countdownFoundCount: null, putInOrderCorrectCount: count, answerTimeMs: mcq.answerTimeMs };
+      // correct) at commit, NOT the Bernoulli draw. Schedule-time isCorrect stays
+      // false (only affects the hesitation multiplier).
+      return { isCorrect: false, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
     }
     if (questionKind === 'clues') {
       // The reveal-index distribution IS the performance metric (NOT a Bernoulli
@@ -392,9 +438,9 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       // commit (always solved, score steps down with the index).
       const dist = readHist(formatStats, 'clueRevealIndexDistribution');
       const idx = decideClueRevealIndex(model.params, model.inputs, dist, clueCount ?? 1, keys);
-      return { isCorrect: true, clueIndex: idx, countdownFoundCount: null, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+      return { isCorrect: true, clueIndex: idx, answerTimeMs: mcq.answerTimeMs };
     }
-    return { isCorrect: mcq.isCorrect, clueIndex: null, countdownFoundCount: null, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+    return { isCorrect: mcq.isCorrect, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
   }
 
   /** Commit-time countdown found-count via the calibrated distribution + real total. */

@@ -431,6 +431,15 @@ export function maxCountdownFoundForCeiling(params: BotModelParams, totalGroups:
     if (score <= maxScore + 1e-9) best = f;
     else break;
   }
+  // Coarse-granularity guard: when even ONE found group already scores above the
+  // ceiling (small totals, e.g. 1 group → 100 pts), the question is effectively
+  // all-or-nothing — there is no intermediate value to cap to. Forcing 0 would
+  // make the bot deterministically miss it (worse-than-human + detectable). Treat
+  // it like a Bernoulli: allow the full total (the aggregate ceiling is enforced
+  // for such all-or-nothing outcomes by the theta bound governing how OFTEN the
+  // distribution/skill lands the group). The cap only bites when a genuine
+  // intermediate found-count exists below the ceiling.
+  if (best === 0 && total >= 1) return total;
   return best;
 }
 
@@ -469,6 +478,13 @@ export function maxPutInOrderMatchedForCeiling(params: BotModelParams, totalItem
     if (score <= maxScore + 1e-9) best = m;
     else break;
   }
+  // Coarse-granularity guard (see maxCountdownFoundForCeiling): if even one
+  // matched position already exceeds the ceiling score, allow the full total
+  // rather than deterministically zeroing an all-or-nothing question. With the
+  // 20-pt/position step and an 86.3% ceiling this never fires for totalItems ≥ 1
+  // (m=1 → 20 pts), but the guard keeps the two formats consistent and safe if
+  // the scoring granularity ever changes.
+  if (best === 0 && total >= 1) return total;
   return best;
 }
 

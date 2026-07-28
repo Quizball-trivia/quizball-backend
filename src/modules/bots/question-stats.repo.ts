@@ -33,6 +33,7 @@ interface StatRow {
   smoothed_accuracy: number | null;
   median_time_ms: number | null;
   log_time_sigma: number | null;
+  timing_samples: number | null;
 }
 
 function toScope(row: StatRow | undefined | null): ScopeStat | null {
@@ -41,7 +42,11 @@ function toScope(row: StatRow | undefined | null): ScopeStat | null {
     answersCount: row.answers_count,
     correctCount: row.correct_count,
     smoothedAccuracy: row.smoothed_accuracy,
-    timingSamples: row.answers_count, // repo stores no separate timing count; treat answers_count as the timing sample proxy for backoff gating
+    // Clean-window timing sample count, resolved INDEPENDENTLY of accuracy in the
+    // backoff. NULL only for rows written before the timing_samples column
+    // existed (migration 20260728120000); those fall back to answers_count until
+    // the next refresh repopulates the real count.
+    timingSamples: row.timing_samples ?? row.answers_count,
     medianTimeMs: row.median_time_ms,
     logTimeSigma: row.log_time_sigma,
   };
@@ -77,11 +82,11 @@ export const questionStatsRepo = {
 
     const [perQuestionRows, backoffRows, formatRows] = await Promise.all([
       sql<StatRow[]>`
-        SELECT answers_count, correct_count, smoothed_accuracy, median_time_ms, log_time_sigma
+        SELECT answers_count, correct_count, smoothed_accuracy, median_time_ms, log_time_sigma, timing_samples
         FROM question_stats WHERE question_id = ${questionId} LIMIT 1
       `,
       sql<Array<StatRow & { scope: string; scope_key: string }>>`
-        SELECT scope, scope_key, answers_count, correct_count, smoothed_accuracy, median_time_ms, log_time_sigma
+        SELECT scope, scope_key, answers_count, correct_count, smoothed_accuracy, median_time_ms, log_time_sigma, timing_samples
         FROM question_stats_backoff
         WHERE (scope = 'category_type' AND scope_key = ${categoryTypeKey})
            OR (scope = 'type' AND scope_key = ${meta.type})

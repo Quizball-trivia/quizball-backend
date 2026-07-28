@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseBotModelParams, type BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { ScopeStat } from '../../src/modules/bots/calibration/math.js';
@@ -34,8 +35,9 @@ import {
 } from '../../src/realtime/persistent-bot-gameplay.js';
 import { calculateCountdownScore, calculatePutInOrderScore, calculateCluesScore } from '../../src/realtime/scoring.js';
 
-// The frozen calibration artifact is the authoritative fixture (PR4 output).
-const PARAMS_PATH = '/Users/user/dev/quizball/calibration-s1final/params.json';
+// The frozen calibration artifact (PR4 output), vendored into the repo so tests
+// run on CI / any checkout without a home-dir absolute path.
+const PARAMS_PATH = resolve(__dirname, 'fixtures/params.json');
 const params: BotModelParams = parseBotModelParams(
   JSON.parse(readFileSync(PARAMS_PATH, 'utf8')),
 );

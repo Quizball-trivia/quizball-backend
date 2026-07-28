@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseBotModelParams, type BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import { solveCeilingBound } from '../../src/modules/bots/persistent-bot-context.service.js';
@@ -10,7 +11,7 @@ import { logit } from '../../src/modules/bots/calibration/math.js';
 import { HARD_SKILL_CAP, HARD_THETA_CEILING_FALLBACK } from '../../src/modules/bots/calibration/hard-clamps.js';
 
 const params: BotModelParams = parseBotModelParams(
-  JSON.parse(readFileSync('/Users/user/dev/quizball/calibration-s1final/params.json', 'utf8')),
+  JSON.parse(readFileSync(resolve(__dirname, '../realtime/fixtures/params.json'), 'utf8')),
 );
 
 describe('pin-time ceiling bound (solveCeilingBound)', () => {

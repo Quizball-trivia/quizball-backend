@@ -74,7 +74,7 @@ async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: num
   const { manifestHash, schedule } = plan(bots, ceilingRp);
   const rosterIds = bots.map((b) => b.userId);
   const fixtures = schedule.fixtures;
-  const alreadyWritten = await data.existingMatchIds(fixtures.map((f) => f.matchId));
+  const alreadyWritten = await data.validatedExistingMatchIds(fixtures);
   const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
   const writtenBots = new Set<string>();
   for (const f of fixtures) if (alreadyWritten.has(f.matchId)) { writtenBots.add(f.botAUserId); writtenBots.add(f.botBUserId); }
@@ -168,14 +168,14 @@ describe('execute (chunked)', () => {
     await expect(execute(bots, 100_000, { chunk: 2, crashAfterChunk: 1 })).rejects.toThrow(/simulated crash/);
 
     // A committed PREFIX exists (some matches), the run is NOT marked complete.
-    const written1 = await data.existingMatchIds(matchIds);
+    const written1 = new Set((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])`).map((r) => r.id));
     expect(written1.size).toBeGreaterThan(0);
     expect(written1.size).toBeLessThan(matchIds.length);
     expect(await data.readBurnInMarker()).toBeNull();
 
     // RERUN: same plan, skips the written prefix, finishes the rest, marks complete.
     await execute(bots, 100_000, { chunk: 2 });
-    const written2 = await data.existingMatchIds(matchIds);
+    const written2 = new Set((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])`).map((r) => r.id));
     expect(written2.size).toBe(matchIds.length);
     expect(await data.readBurnInMarker()).not.toBeNull();
     // No duplicate ledger rows (idempotent) — exactly one ledger row per (match,user).
@@ -189,6 +189,31 @@ describe('execute (chunked)', () => {
 
     // Teardown.
     await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
+  });
+
+  it('resume ABORTS on a colliding non-burn-in match at a planned fixture slot (P2 validation depth)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    await clearMarker();
+    const bots = await Promise.all([seedBot(71, -0.3), seedBot(72, 0.2), seedBot(73, 0.0), seedBot(74, 0.1)]);
+    const p = plan(bots, 100_000);
+    const first = p.schedule.fixtures[0];
+
+    // A colliding match: same id as a planned fixture, but NOT a burn-in match
+    // (no ranked_context.burnIn/fixtureKey). It must NEVER be accepted as done.
+    await sql`
+      INSERT INTO matches (id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, is_dev, started_at, ended_at)
+      VALUES (${first.matchId}, 'ranked', 'completed', ${categoryIds[0]}, ${categoryIds[0]}, 12, 12, false, ${first.startedAt}, ${first.endedAt})
+    `;
+    await sql`INSERT INTO match_players (match_id, user_id, seat) VALUES (${first.matchId}, ${first.botAUserId}, 1), (${first.matchId}, ${first.botBUserId}, 2)`;
+
+    // Resume validation must throw (colliding non-burn-in match), NOT skip it.
+    await expect(execute(bots, 100_000)).rejects.toThrow(/resume abort|not a burn-in match/i);
+    // No completion marker was written.
+    expect(await data.readBurnInMarker()).toBeNull();
+
+    // Teardown: remove the colliding match.
+    await sql`DELETE FROM match_players WHERE match_id = ${first.matchId}`;
+    await sql`DELETE FROM matches WHERE id = ${first.matchId}`;
   });
 
   it('writes all fixtures + the complete marker atomically; a second run refuses', async ({ skip }) => {

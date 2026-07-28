@@ -169,13 +169,71 @@ export async function readBurnInMarker(): Promise<RunMarker | null> {
   return rows[0]?.params ?? null;
 }
 
-/** Which of the given plan match-ids are already written (idempotent resume). */
-export async function existingMatchIds(matchIds: string[]): Promise<Set<string>> {
-  if (matchIds.length === 0) return new Set();
-  const rows = await sql<{ id: string }[]>`
-    SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])
+/** Minimal fixture shape the resume validator checks against the DB. */
+export interface ResumeFixture {
+  matchId: string;
+  key: string;
+  botAUserId: string;
+  botBUserId: string;
+  decision: string;
+  endedAt: Date;
+}
+
+/**
+ * Resume validation (P2): for each planned fixture whose match row already
+ * exists, VERIFY it is genuinely OURS before treating it as done — the row must
+ * be a completed burn-in match (ranked_context.burnIn === true + our fixtureKey),
+ * with the exact planned participant pair, decision, and ended_at. Any mismatch
+ * (a colliding non-burn-in match at this id, or a partially-written/foreign row)
+ * throws — it must NEVER be silently accepted as complete. Returns the set of
+ * VALIDATED already-done match ids.
+ */
+export async function validatedExistingMatchIds(fixtures: ResumeFixture[]): Promise<Set<string>> {
+  const done = new Set<string>();
+  const matchIds = fixtures.map((f) => f.matchId);
+  if (matchIds.length === 0) return done;
+
+  const rows = await sql<
+    { id: string; status: string; winner_user_id: string | null; ended_at: string | null; decision: string | null; burn_in: boolean | null; fixture_key: string | null }[]
+  >`
+    SELECT
+      m.id, m.status, m.winner_user_id, m.ended_at,
+      m.state_payload->>'winnerDecisionMethod' AS decision,
+      (m.ranked_context->>'burnIn')::boolean AS burn_in,
+      m.ranked_context->>'fixtureKey' AS fixture_key
+    FROM matches m WHERE m.id = ANY(${matchIds}::uuid[])
   `;
-  return new Set(rows.map((r) => r.id));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  const players = await sql<{ match_id: string; user_id: string; seat: number }[]>`
+    SELECT match_id, user_id, seat FROM match_players WHERE match_id = ANY(${matchIds}::uuid[])
+  `;
+  const playersByMatch = new Map<string, { user_id: string; seat: number }[]>();
+  for (const p of players) {
+    const list = playersByMatch.get(p.match_id) ?? [];
+    list.push(p);
+    playersByMatch.set(p.match_id, list);
+  }
+
+  for (const f of fixtures) {
+    const m = byId.get(f.matchId);
+    if (!m) continue; // not written yet — will be created this run
+    const fail = (why: string): never => {
+      throw new Error(`resume abort: match ${f.matchId} ${why} — a colliding/foreign or partially-written match must not be accepted as complete.`);
+    };
+    if (m.burn_in !== true) fail('is not a burn-in match (ranked_context.burnIn !== true)');
+    if (m.fixture_key !== f.key) fail(`fixtureKey mismatch (db=${m.fixture_key})`);
+    if (m.status !== 'completed') fail(`status is '${m.status}', not 'completed' (partial write)`);
+    if (m.winner_user_id === null) fail('winner_user_id is null');
+    if (m.decision !== f.decision) fail(`decision mismatch (db=${m.decision})`);
+    if (m.ended_at == null || new Date(m.ended_at).toISOString() !== f.endedAt.toISOString()) fail('ended_at mismatch');
+    const pl = (playersByMatch.get(f.matchId) ?? []).sort((a, b) => a.seat - b.seat);
+    const seatA = pl.find((p) => p.seat === 1);
+    const seatB = pl.find((p) => p.seat === 2);
+    if (seatA?.user_id !== f.botAUserId || seatB?.user_id !== f.botBUserId) fail('participant pair mismatch');
+    done.add(f.matchId);
+  }
+  return done;
 }
 
 export interface PristineViolation {

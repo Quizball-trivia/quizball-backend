@@ -33,7 +33,7 @@ import {
   lockBurnIn,
   assertNotBurnedIn,
   insertBurnInMarker,
-  existingMatchIds,
+  validatedExistingMatchIds,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
   const fixtures = schedule.fixtures;
 
   // Idempotent resume: skip fixtures already written by a prior (crashed) run.
-  const alreadyWritten = await existingMatchIds(fixtures.map((f) => f.matchId));
+  const alreadyWritten = await validatedExistingMatchIds(fixtures);
   const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
 
   // Pristine gate applies ONLY to bots not yet touched by a prior partial run

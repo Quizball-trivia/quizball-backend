@@ -20,6 +20,9 @@ const schedulerMock = vi.hoisted(() => ({
   scheduleRealtimeTimer: vi.fn(),
   cancelRealtimeTimer: vi.fn(),
 }));
+const persistenceMock = vi.hoisted(() => ({
+  persistFinishedAuctionMatch: vi.fn(async () => ({})),
+}));
 
 const redisMock = vi.hoisted(() => {
   const store = new Map<string, string>();
@@ -31,6 +34,12 @@ const redisMock = vi.hoisted(() => {
         store.set(key, value);
         return 'OK';
       }),
+      incr: vi.fn(async (key: string) => {
+        const next = Number(store.get(key) ?? '0') + 1;
+        store.set(key, String(next));
+        return next;
+      }),
+      expire: vi.fn(async () => true),
       del: vi.fn(async (key: string | string[]) => {
         const keys = Array.isArray(key) ? key : [key];
         keys.forEach((entry) => store.delete(entry));
@@ -66,6 +75,10 @@ vi.mock('../../src/realtime/redis.js', async (importOriginal) => {
     getRedisClient: () => redisMock.client,
   };
 });
+
+vi.mock('../../src/realtime/services/auction-persistence.service.js', () => ({
+  persistFinishedAuctionMatch: persistenceMock.persistFinishedAuctionMatch,
+}));
 
 const footballer = {
   id: 'footballer-1',
@@ -151,17 +164,23 @@ function createIo(fetchSockets: Array<{ id: string; rooms: Set<string> }> = []) 
 }
 
 function createSocket(userId = 'user-1') {
+  const rooms = new Set<string>();
   return {
     id: 'socket-1',
+    rooms,
     data: {
       user: { id: userId },
       matchId: 'match-1',
     },
     emit: vi.fn(),
+    join: vi.fn((room: string) => rooms.add(room)),
+    leave: vi.fn((room: string) => rooms.delete(room)),
   } as unknown as QuizballSocket & {
     id: string;
+    rooms: Set<string>;
     emit: Mock;
-    data: { user?: { id: string }; matchId?: string };
+    join: Mock;
+    data: { user?: { id: string }; lobbyId?: string; matchId?: string };
   };
 }
 
@@ -181,10 +200,14 @@ describe('auction disconnect service', () => {
   });
 
   it('pauses and extends the current human turn when their last auction socket disconnects', async () => {
-    const { handleAuctionSocketDisconnect } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const { handleAuctionSocketDisconnect, runAuctionDisconnectDebounceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
     const { io, roomEmit } = createIo();
 
     await handleAuctionSocketDisconnect(io, createSocket(), { context });
+    await runAuctionDisconnectDebounceTimer(io, {
+      kind: 'auction_disconnect_debounce', matchId: 'match-1', userId: 'user-1',
+      seatId: 'seat-human', disconnectedAt: '2026-06-20T10:00:00.000Z',
+    }, { context });
 
     const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
     expect(saved.version).toBe(4);
@@ -234,6 +257,18 @@ describe('auction disconnect service', () => {
     );
   });
 
+  it('atomically counts parallel auction disconnects', async () => {
+    const { incrementAuctionDisconnectCount } = await import('../../src/realtime/services/auction-disconnect-state.service.js');
+
+    const counts = await Promise.all(Array.from({ length: 20 }, () => (
+      incrementAuctionDisconnectCount('match-1', 'user-1')
+    )));
+
+    expect(new Set(counts).size).toBe(20);
+    expect(redisMock.store.get('auction:reconnect_count:match-1:user-1')).toBe('20');
+    expect(redisMock.client.expire).toHaveBeenCalledTimes(20);
+  });
+
   it('does not pause if another socket for the same user is still in the match room', async () => {
     const { handleAuctionSocketDisconnect } = await import('../../src/realtime/services/auction-disconnect.service.js');
     const { io, roomEmit } = createIo([{ id: 'socket-2', rooms: new Set(['match:match-1']) }]);
@@ -243,6 +278,53 @@ describe('auction disconnect service', () => {
     expect(stateStoreMock.save).not.toHaveBeenCalled();
     expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalled();
     expect(roomEmit).not.toHaveBeenCalled();
+  });
+
+  it('arms durable grace when a matched human has no socket at match start', async () => {
+    const { armAuctionDisconnectGrace } = await import(
+      '../../src/realtime/services/auction-disconnect.service.js'
+    );
+    const { io } = createIo();
+
+    expect(await armAuctionDisconnectGrace(io, biddingState(), 'user-1')).toBe(true);
+    expect(JSON.parse(redisMock.store.get('auction:disconnect:match-1:user-1')!)).toEqual(
+      expect.objectContaining({
+        matchId: 'match-1',
+        userId: 'user-1',
+        seatId: 'seat-human',
+        disconnectCount: 0,
+      })
+    );
+    expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
+      'auction_disconnect_grace',
+      'match-1:user-1',
+      expect.any(Date),
+      expect.objectContaining({
+        matchId: 'match-1',
+        userId: 'user-1',
+      })
+    );
+  });
+
+  it('keeps a replacement socket inside the debounce completely invisible', async () => {
+    const { handleAuctionSocketDisconnect, resumeAuctionUserIfDisconnected } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const liveSockets: Array<{ id: string; rooms: Set<string> }> = [];
+    const { io, roomEmit } = createIo(liveSockets);
+    await handleAuctionSocketDisconnect(io, createSocket(), { context });
+
+    const replacement = createSocket();
+    replacement.id = 'socket-2';
+    replacement.rooms.add('match:match-1');
+    liveSockets.push(replacement);
+    await resumeAuctionUserIfDisconnected(io, replacement, biddingState());
+
+    expect(redisMock.store.has('auction:reconnect_count:match-1:user-1')).toBe(false);
+    expect(redisMock.store.has('auction:disconnect:match-1:user-1')).toBe(false);
+    expect(roomEmit).not.toHaveBeenCalled();
+    expect(schedulerMock.cancelRealtimeTimer).toHaveBeenCalledWith('auction_disconnect_grace', 'match-1:user-1');
+    expect(schedulerMock.scheduleRealtimeTimer).not.toHaveBeenCalledWith(
+      'auction_resume_countdown', expect.anything(), expect.anything(), expect.anything(),
+    );
   });
 
   it('on reconnect: clears the disconnect marker, cancels grace, and starts a resume countdown', async () => {
@@ -284,6 +366,157 @@ describe('auction disconnect service', () => {
     expect(redisMock.store.has('auction:pause:match-1')).toBe(true);
   });
 
+  it('rejoining with a replacement socket clears grace and prevents a stale timer from forfeiting the seat', async () => {
+    const { rejoinAuctionMatch } = await import('../../src/realtime/services/auction-realtime.service.js');
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    redisMock.store.set('auction:disconnect:match-1:user-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    const socket = createSocket();
+    socket.data.matchId = undefined;
+    const { io } = createIo([socket]);
+
+    expect(await rejoinAuctionMatch(io, socket, 'match-1')).toBe(true);
+    const outcome = await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace',
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      disconnectCount: 1,
+    }, { context });
+
+    expect(outcome).toEqual({ kind: 'noop', reason: 'already_reconnected' });
+    expect(redisMock.store.has('auction:disconnect:match-1:user-1')).toBe(false);
+    expect(stateStoreMock.save).not.toHaveBeenCalled();
+  });
+
+  it('does not forfeit a live match-bound socket when a stale disconnect marker reaches expiry', async () => {
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    redisMock.store.set('auction:disconnect:match-1:user-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    const socket = createSocket();
+    socket.rooms.add('match:match-1');
+    const { io } = createIo([socket]);
+
+    const outcome = await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace',
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      disconnectCount: 1,
+    }, { context }, 'reconnect_limit');
+
+    expect(outcome).toEqual({ kind: 'noop', reason: 'replacement_socket_present' });
+    expect(redisMock.store.has('auction:disconnect:match-1:user-1')).toBe(false);
+    expect(stateStoreMock.save).not.toHaveBeenCalled();
+  });
+
+  it('still forfeits from the provisional durable marker after a restart loses the debounce process', async () => {
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      seats: [seat('seat-human', 'user-1'), seat('bot-a', null, true), seat('bot-b', null, true)],
+    }));
+    redisMock.store.set('auction:disconnect:match-1:user-1', JSON.stringify({
+      matchId: 'match-1', userId: 'user-1', seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z', disconnectCount: 0,
+    }));
+    const { io } = createIo();
+
+    const outcome = await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace', matchId: 'match-1', userId: 'user-1',
+      seatId: 'seat-human', disconnectCount: 0,
+    }, { context });
+
+    expect(outcome.kind).toBe('forfeited');
+    expect(persistenceMock.persistFinishedAuctionMatch).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'finished' })
+    );
+  });
+
+  it('finishes and persists immediately when a voluntary forfeit removes the last live human', async () => {
+    const { handleAuctionForfeit } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const onlyHuman = biddingState({
+      seats: [seat('seat-human', 'user-1'), seat('bot-a', null, true), seat('bot-b', null, true)],
+    });
+    stateStoreMock.load.mockResolvedValue(onlyHuman);
+    const { io, roomEmit } = createIo();
+
+    await handleAuctionForfeit(io, createSocket(), { context });
+
+    expect(persistenceMock.persistFinishedAuctionMatch).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'finished' })
+    );
+    expect(roomEmit).toHaveBeenCalledWith(
+      'auction:match_finished', expect.objectContaining({ matchId: 'match-1' })
+    );
+  });
+
+  it('finishes a 3-human match with last_player_standing when the second opponent forfeits', async () => {
+    const { logger } = await import('../../src/core/logger.js');
+    const info = vi.spyOn(logger, 'info');
+    const { runAuctionDisconnectGraceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const first = {
+      ...seat('seat-human', 'user-1'),
+      isEliminated: true,
+      forfeited: true,
+    };
+    stateStoreMock.load.mockResolvedValue(biddingState({
+      seats: [
+        first,
+        seat('seat-human-2', 'user-2'),
+        seat('seat-human-3', 'user-3'),
+      ],
+      currentRound: {
+        ...biddingState().currentRound!,
+        turnOrder: ['seat-human-2', 'seat-human-3'],
+        currentTurnSeatId: 'seat-human-2',
+      },
+    }));
+    redisMock.store.set('auction:disconnect:match-1:user-2', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-2',
+      seatId: 'seat-human-2',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    const { io } = createIo();
+
+    const outcome = await runAuctionDisconnectGraceTimer(io, {
+      kind: 'auction_disconnect_grace',
+      matchId: 'match-1',
+      userId: 'user-2',
+      seatId: 'seat-human-2',
+      disconnectCount: 1,
+    }, { context });
+
+    expect(outcome).toEqual(expect.objectContaining({
+      kind: 'forfeited',
+      finishReason: 'last_player_standing',
+      state: expect.objectContaining({
+        phase: 'finished',
+        rankings: expect.arrayContaining([
+          expect.objectContaining({ userId: 'user-3', rank: 1 }),
+        ]),
+      }),
+    }));
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: 'match-1',
+        finishReason: 'last_player_standing',
+      }),
+      'Auction match finished'
+    );
+  });
+
   it('resume countdown elapses: clears the pause and broadcasts auction:resume', async () => {
     const { runAuctionResumeCountdownTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
     redisMock.store.set('auction:pause:match-1', JSON.stringify({
@@ -310,12 +543,49 @@ describe('auction disconnect service', () => {
     );
   });
 
+  it('resume countdown re-points the shared pause to another disconnected human', async () => {
+    const { runAuctionResumeCountdownTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    redisMock.store.set('auction:pause:match-1', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-1',
+      seatId: 'seat-human',
+      pauseUntil: '2026-06-20T10:00:30.000Z',
+      disconnectCount: 1,
+    }));
+    redisMock.store.set('auction:disconnect:match-1:user-2', JSON.stringify({
+      matchId: 'match-1',
+      userId: 'user-2',
+      seatId: 'seat-human-2',
+      pauseUntil: '2026-06-20T10:00:31.000Z',
+      disconnectCount: 1,
+    }));
+    stateStoreMock.load.mockResolvedValue(biddingState());
+    const { io } = createIo();
+
+    await runAuctionResumeCountdownTimer(io, {
+      kind: 'auction_resume_countdown',
+      matchId: 'match-1',
+      userId: 'user-1',
+    });
+
+    expect(JSON.parse(redisMock.store.get('auction:pause:match-1')!)).toEqual(
+      expect.objectContaining({
+        userId: 'user-2',
+        seatId: 'seat-human-2',
+      })
+    );
+  });
+
   it('pauses the match when a player disconnects during clue_reveal (phase-agnostic pause)', async () => {
-    const { handleAuctionSocketDisconnect } = await import('../../src/realtime/services/auction-disconnect.service.js');
+    const { handleAuctionSocketDisconnect, runAuctionDisconnectDebounceTimer } = await import('../../src/realtime/services/auction-disconnect.service.js');
     stateStoreMock.load.mockResolvedValue(biddingState({ phase: 'clue_reveal' }));
     const { io, roomEmit } = createIo();
 
     await handleAuctionSocketDisconnect(io, createSocket(), { context });
+    await runAuctionDisconnectDebounceTimer(io, {
+      kind: 'auction_disconnect_debounce', matchId: 'match-1', userId: 'user-1',
+      seatId: 'seat-human', disconnectedAt: '2026-06-20T10:00:00.000Z',
+    }, { context });
 
     // Pause row written (clue/solo timers defer against it) + paused broadcast,
     // without mutating the match state.

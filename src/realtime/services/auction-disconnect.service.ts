@@ -1,6 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs } from '../../core/harness-timing.js';
-import { resolveAuctionContext, type AuctionEngineContext } from '../../modules/auction/auction-context.js';
+import { type AuctionEngineContext } from '../../modules/auction/auction-context.js';
 import { advanceTurnOrResolveRound, finishMatch, getTurnMs, stripSeatBidLeadership } from '../../modules/auction/auction-engine.js';
 import {
   findAuctionSeatByUserId,
@@ -12,7 +12,10 @@ import {
   saveAuctionMatchMutation,
   skipAuctionMatchMutation,
 } from '../../modules/auction/auction-state.store.js';
-import { canPlayerContinue } from '../../modules/auction/auction-rules.js';
+import {
+  canPlayerContinue,
+  hasLastPlayerStanding,
+} from '../../modules/auction/auction-rules.js';
 import {
   scheduleRealtimeTimer,
   cancelRealtimeTimer,
@@ -29,6 +32,7 @@ import type {
 import {
   advanceAuctionMatchFlowAfterMutation,
   scheduleAuctionSoloPickTimeoutTimer,
+  type AuctionMatchFinishReason,
 } from './auction-match-flow.service.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
 import { buildAuctionPausedStatePayload } from './auction-disconnect-state.service.js';
@@ -36,6 +40,7 @@ import {
   clearAuctionPause,
   clearAuctionUserDisconnected,
   findAnyDisconnectedHuman,
+  getAuctionDisconnectDebounceMs,
   getAuctionDisconnectGraceMs,
   getAuctionDisconnectedUser,
   getAuctionPause,
@@ -48,8 +53,10 @@ import {
   toRemainingAuctionReconnects,
 } from './auction-disconnect-state.service.js';
 import { emitAndScheduleAuctionTurnStarted, scheduleAuctionTurnTimeoutTimer } from './auction-turn.service.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 export type AuctionDisconnectGraceTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_disconnect_grace' }>;
+export type AuctionDisconnectDebounceTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_disconnect_debounce' }>;
 export type AuctionResumeCountdownTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_resume_countdown' }>;
 
 // "Get ready" countdown after a player opts to rejoin, before the match
@@ -63,20 +70,32 @@ export function auctionResumeCountdownTimerKey(matchId: string, userId: string):
 export interface AuctionDisconnectOptions {
   now?: Date;
   context?: AuctionEngineContext;
+  bypassPresenceGuard?: boolean;
 }
 
 type AuctionDisconnectExpiryOutcome =
   | { kind: 'noop'; reason: string }
-  | { kind: 'forfeited'; state: AuctionMatchState; userId: string; seatId: string; reason: 'disconnect_timeout' | 'reconnect_limit' };
+  | {
+    kind: 'forfeited';
+    state: AuctionMatchState;
+    userId: string;
+    seatId: string;
+    reason: 'disconnect_timeout' | 'reconnect_limit';
+    finishReason?: AuctionMatchFinishReason;
+  };
 
 export function auctionDisconnectGraceTimerKey(matchId: string, userId: string): string {
+  return `${matchId}:${userId}`;
+}
+
+export function auctionDisconnectDebounceTimerKey(matchId: string, userId: string): string {
   return `${matchId}:${userId}`;
 }
 
 export async function handleAuctionSocketDisconnect(
   io: QuizballServer,
   socket: QuizballSocket,
-  options: AuctionDisconnectOptions = {}
+  _options: AuctionDisconnectOptions = {}
 ): Promise<void> {
   const userId = socket.data.user?.id;
   if (!userId) return;
@@ -91,54 +110,112 @@ export async function handleAuctionSocketDisconnect(
   const seat = findAuctionSeatByUserId(state, userId);
   if (!seat || seat.isBot) return;
 
+  await armAuctionDisconnectGrace(io, state, userId, socket.id);
+}
+
+export async function armAuctionDisconnectGrace(
+  io: QuizballServer,
+  state: AuctionMatchState,
+  userId: string,
+  ignoreSocketId?: string
+): Promise<boolean> {
+  const seat = findAuctionSeatByUserId(state, userId);
+  if (!seat || seat.isBot || seat.forfeited || state.phase === 'finished') return false;
+
   const hasReplacement = await hasReplacementAuctionMatchSocket({
     io,
-    matchId,
+    matchId: state.matchId,
     userId,
-    ignoreSocketId: socket.id,
+    ignoreSocketId,
   });
-  if (hasReplacement) return;
+  if (hasReplacement) return false;
 
-  const disconnectCount = await incrementAuctionDisconnectCount(matchId, userId);
   const graceMs = getAuctionDisconnectGraceMs();
   const pauseUntil = new Date(Date.now() + graceMs).toISOString();
+  const disconnectedAt = new Date(Date.now()).toISOString();
+  // Persist the absence and terminal grace timer immediately. Visible effects
+  // are delayed until the durable debounce fires, so a process restart cannot
+  // lose either the debounce decision or the eventual grace-forfeit.
   await markAuctionUserDisconnected({
-    matchId,
+    matchId: state.matchId,
     userId,
     seatId: seat.seatId,
     pauseUntil,
-    disconnectCount,
+    disconnectCount: 0,
   });
+  await scheduleAuctionDisconnectGraceTimer(state.matchId, userId, seat.seatId, 0, pauseUntil);
+  await scheduleRealtimeTimer(
+    'auction_disconnect_debounce',
+    auctionDisconnectDebounceTimerKey(state.matchId, userId),
+    new Date(Date.now() + getAuctionDisconnectDebounceMs()),
+    {
+      kind: 'auction_disconnect_debounce',
+      matchId: state.matchId,
+      userId,
+      seatId: seat.seatId,
+      disconnectedAt,
+    },
+  );
+  return true;
+}
+
+export async function runAuctionDisconnectDebounceTimer(
+  io: QuizballServer,
+  payload: AuctionDisconnectDebounceTimerPayload,
+  options: AuctionDisconnectOptions = {}
+): Promise<void> {
+  const disconnected = await getAuctionDisconnectedUser(payload.matchId, payload.userId);
+  if (!disconnected || disconnected.seatId !== payload.seatId || disconnected.disconnectCount !== 0) return;
+
+  const hasReplacement = await hasReplacementAuctionMatchSocket({
+    io, matchId: payload.matchId, userId: payload.userId,
+  });
+  if (hasReplacement) {
+    await clearAuctionUserDisconnected(payload.matchId, payload.userId);
+    await cancelRealtimeTimer('auction_disconnect_grace', auctionDisconnectGraceTimerKey(payload.matchId, payload.userId));
+    return;
+  }
+
+  const state = await auctionStateStore.load(payload.matchId).catch(() => null);
+  if (!state || state.phase === 'finished') return;
+  const seat = findAuctionSeatByUserId(state, payload.userId);
+  if (!seat || seat.isBot || seat.forfeited) return;
+
+  const disconnectCount = await incrementAuctionDisconnectCount(payload.matchId, payload.userId);
+  const pauseUntil = disconnected.pauseUntil;
+  const graceMs = getAuctionDisconnectGraceMs();
+  await markAuctionUserDisconnected({ ...disconnected, disconnectCount });
+  // Replace the provisional payload with the counted disconnect. The deadline
+  // remains anchored to the original socket loss, not the end of debounce.
+  await scheduleAuctionDisconnectGraceTimer(payload.matchId, payload.userId, payload.seatId, disconnectCount, pauseUntil);
 
   const reason = disconnectCount > MAX_AUCTION_DISCONNECTS ? 'reconnect_limit' : 'disconnect';
   const remainingReconnects = toRemainingAuctionReconnects(disconnectCount);
   const opponentPayload = buildOpponentDisconnectedPayload({
-    matchId,
-    userId,
+    matchId: payload.matchId,
+    userId: payload.userId,
     seatId: seat.seatId,
     pauseUntil,
     graceMs,
     remainingReconnects,
     reason,
   });
-  io.to(`match:${matchId}`).emit('auction:opponent_disconnected', opponentPayload);
+  io.to(`match:${payload.matchId}`).emit('auction:opponent_disconnected', opponentPayload);
 
   if (disconnectCount > MAX_AUCTION_DISCONNECTS) {
     await runAuctionDisconnectGraceTimer(io, {
       kind: 'auction_disconnect_grace',
-      matchId,
-      userId,
+      matchId: payload.matchId,
+      userId: payload.userId,
       seatId: seat.seatId,
       disconnectCount,
     }, options, 'reconnect_limit');
     return;
   }
 
-  await scheduleAuctionDisconnectGraceTimer(matchId, userId, seat.seatId, disconnectCount, pauseUntil);
-
   const pauseRow = {
-    matchId,
-    userId,
+    matchId: payload.matchId,
+    userId: payload.userId,
     seatId: seat.seatId,
     pauseUntil,
     disconnectCount,
@@ -146,14 +223,14 @@ export async function handleAuctionSocketDisconnect(
   const paused = await pauseAuctionCurrentTurnForDisconnectedSeat(state, pauseRow);
   if (paused) {
     emitAuctionPaused(io, paused.state, {
-      userId,
+      userId: payload.userId,
       seatId: seat.seatId,
       pauseUntil: paused.pauseUntil,
       graceMs: paused.graceMs,
       remainingReconnects: paused.remainingReconnects,
       reason,
     });
-    io.to(`match:${matchId}`).emit('auction:state', buildAuctionPausedStatePayload(paused));
+    io.to(`match:${payload.matchId}`).emit('auction:state', buildAuctionPausedStatePayload(paused));
     await scheduleAuctionTurnTimeoutTimer(paused.state, options);
   } else if (shouldPauseAuctionPhaseForSeat(state, seat.seatId)) {
     // Phase-agnostic pause (ISSUE 1): clue_reveal / reveal / this player's own
@@ -163,15 +240,15 @@ export async function handleAuctionSocketDisconnect(
     // reaches the disconnected seat (pauseAuctionCurrentTurnIfDisconnected).
     // Do NOT overwrite a pause row that still belongs to a DIFFERENT
     // still-disconnected player — the row re-points when its owner resolves.
-    const existingPause = await getAuctionPause(matchId);
-    const existingOwnerStillGone = existingPause && existingPause.userId !== userId
-      ? await getAuctionDisconnectedUser(matchId, existingPause.userId)
+    const existingPause = await getAuctionPause(payload.matchId);
+    const existingOwnerStillGone = existingPause && existingPause.userId !== payload.userId
+      ? await getAuctionDisconnectedUser(payload.matchId, existingPause.userId)
       : null;
     if (!existingOwnerStillGone) {
       await setAuctionPause(pauseRow);
     }
     emitAuctionPaused(io, state, {
-      userId,
+      userId: payload.userId,
       seatId: seat.seatId,
       pauseUntil,
       graceMs,
@@ -181,7 +258,7 @@ export async function handleAuctionSocketDisconnect(
   }
 
   logger.info(
-    { matchId, userId, seatId: seat.seatId, disconnectCount, remainingReconnects },
+    { matchId: payload.matchId, userId: payload.userId, seatId: seat.seatId, disconnectCount, remainingReconnects },
     'Auction human disconnected; grace armed'
   );
 }
@@ -201,11 +278,30 @@ export async function resumeAuctionUserIfDisconnected(
   const userId = socket.data.user?.id;
   if (!userId) return false;
 
+  return resumeAuctionUserByIdIfDisconnected(io, userId, state);
+}
+
+async function resumeAuctionUserByIdIfDisconnected(
+  io: QuizballServer,
+  userId: string,
+  state: AuctionMatchState
+): Promise<boolean> {
   const seat = findAuctionSeatByUserId(state, userId);
   if (!seat || seat.isBot) return false;
 
   const disconnected = await getAuctionDisconnectedUser(state.matchId, userId);
   if (!disconnected) return false;
+
+  if (disconnected.disconnectCount === 0) {
+    // Socket replacement landed inside the invisible debounce. No match state
+    // was paused and this does not consume a reconnect allowance.
+    await clearAuctionUserDisconnected(state.matchId, userId);
+    await Promise.all([
+      cancelRealtimeTimer('auction_disconnect_debounce', auctionDisconnectDebounceTimerKey(state.matchId, userId)),
+      cancelRealtimeTimer('auction_disconnect_grace', auctionDisconnectGraceTimerKey(state.matchId, userId)),
+    ]);
+    return true;
+  }
 
   // Arm the resume countdown FIRST, then clear the disconnect marker + grace
   // timer. Ordered this way, a crash mid-sequence leaves either the grace
@@ -268,7 +364,7 @@ export async function runAuctionResumeCountdownTimer(
   // If the resumed player's turn was parked at the pause backstop, give them a
   // fresh turn window from NOW (the backstop deadline is far in the future and
   // the original one is long gone).
-  const rebased = await rebaseAuctionTurnDeadlineAfterResume(matchId, seat.seatId);
+  const rebased = await rebaseAuctionTurnDeadlineAfterResume(matchId, seat.seatId, options);
   const freshState = rebased ?? (await auctionStateStore.load(matchId) ?? state);
   const payloadOut: AuctionResumePayload = {
     matchId: freshState.matchId,
@@ -311,8 +407,10 @@ export async function runAuctionResumeCountdownTimer(
  */
 async function rebaseAuctionTurnDeadlineAfterResume(
   matchId: string,
-  seatId: string
+  seatId: string,
+  options: AuctionDisconnectOptions
 ): Promise<AuctionMatchState | null> {
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(matchId, (current) => {
     const round = current.currentRound;
     if (current.phase !== 'bidding' || round?.currentTurnSeatId !== seatId || !round) {
@@ -322,11 +420,12 @@ async function rebaseAuctionTurnDeadlineAfterResume(
       ...current,
       currentRound: {
         ...round,
-        turnEndsAt: new Date(Date.now() + getTurnMs(round)).toISOString(),
-        updatedAt: new Date().toISOString(),
+        turnEndsAt: new Date(context.now().getTime() + getTurnMs(round, context)).toISOString(),
+        updatedAt: context.nowIso(),
       },
     }, (next) => next);
   }, {
+    now: context.now,
     onMissingState: () => null,
   });
 }
@@ -445,6 +544,21 @@ export async function runAuctionDisconnectGraceTimer(
     return noop('disconnect_count_mismatch');
   }
 
+  if (!options.bypassPresenceGuard) {
+    const hasReplacement = await hasReplacementAuctionMatchSocket({
+      io,
+      matchId: payload.matchId,
+      userId: payload.userId,
+    });
+    if (hasReplacement) {
+      const state = await auctionStateStore.load(payload.matchId).catch(() => null);
+      if (state && state.phase !== 'finished') {
+        await resumeAuctionUserByIdIfDisconnected(io, payload.userId, state);
+      }
+      return noop('replacement_socket_present');
+    }
+  }
+
   const outcome = await forfeitAuctionSeatForDisconnect(payload.matchId, payload.userId, payload.seatId, reason, options);
   if (outcome.kind === 'noop') return outcome;
 
@@ -473,7 +587,11 @@ export async function runAuctionDisconnectGraceTimer(
   if (outcome.state.phase === 'bidding' && outcome.state.currentRound?.currentTurnSeatId) {
     await emitAndScheduleAuctionTurnStarted(io, outcome.state, options);
   } else {
-    await advanceAuctionMatchFlowAfterMutation(io, outcome.state, options);
+    await advanceAuctionMatchFlowAfterMutation(io, outcome.state, {
+      ...options,
+      finishReason: outcome.finishReason
+        ?? (outcome.state.phase === 'finished' ? 'forfeit' : undefined),
+    });
   }
 
   logger.info(
@@ -525,7 +643,7 @@ export async function handleAuctionForfeit(
   await runAuctionDisconnectGraceTimer(
     io,
     { kind: 'auction_disconnect_grace', matchId, userId, seatId: seat.seatId, disconnectCount: 0 },
-    options,
+    { ...options, bypassPresenceGuard: true },
     'reconnect_limit'
   );
 
@@ -571,7 +689,7 @@ async function forfeitAuctionSeatForDisconnect(
   reason: 'disconnect_timeout' | 'reconnect_limit',
   options: AuctionDisconnectOptions
 ): Promise<AuctionDisconnectExpiryOutcome> {
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(matchId, (current) => {
     const seat = findAuctionSeatByUserId(current, userId);
     if (!seat || seat.seatId !== seatId || seat.isBot) return skipAuctionMatchMutation(noop('seat_missing'));
@@ -587,16 +705,18 @@ async function forfeitAuctionSeatForDisconnect(
     };
 
     if (next.phase === 'bidding' && next.currentRound) {
-      // Fold the forfeiter out AND strip their bid leadership — otherwise
-      // resolveRoundWin would still hand the footballer to the quit seat.
-      next = advanceTurnOrResolveRound(stripSeatBidLeadership({
+      const forfeitedCurrentTurn = next.currentRound.currentTurnSeatId === seatId;
+      next = stripSeatBidLeadership({
         ...next,
         currentRound: {
           ...next.currentRound,
           foldedSeatIds: [...new Set([...next.currentRound.foldedSeatIds, seatId])],
           updatedAt: context.nowIso(),
         },
-      }, seatId), context);
+      }, seatId);
+      if (forfeitedCurrentTurn) {
+        next = advanceTurnOrResolveRound(next, context);
+      }
     } else if (next.phase === 'solo_pick' && next.soloPick?.playerSeatId === seatId) {
       next = {
         ...next,
@@ -607,7 +727,11 @@ async function forfeitAuctionSeatForDisconnect(
       };
     }
 
-    if (!next.seats.some(canPlayerContinue)) {
+    const lastPlayerStanding = hasLastPlayerStanding(next.seats);
+    const hasLiveHuman = next.seats.some((entry) => (
+      !entry.isBot && Boolean(entry.userId) && !entry.forfeited && !entry.isEliminated
+    ));
+    if (lastPlayerStanding || !hasLiveHuman || !next.seats.some(canPlayerContinue)) {
       next = finishMatch(next, context);
     }
 
@@ -617,6 +741,7 @@ async function forfeitAuctionSeatForDisconnect(
       userId,
       seatId,
       reason,
+      finishReason: lastPlayerStanding ? 'last_player_standing' : undefined,
     }));
   }, {
     now: context.now,

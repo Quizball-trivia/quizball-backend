@@ -14,6 +14,7 @@ import { getRedisClient } from '../redis.js';
 import type { QuizballServer } from '../socket-server.js';
 
 export const AUCTION_DISCONNECT_GRACE_MS = 30_000;
+export const AUCTION_DISCONNECT_DEBOUNCE_MS = 2_000;
 export const MAX_AUCTION_DISCONNECTS = 3;
 // While a turn is paused for a disconnect, its deadline is pushed THIS far past
 // the grace instant (ranked's PAUSE_QUESTION_BACKSTOP_MS pattern). The grace
@@ -68,6 +69,10 @@ export function getAuctionDisconnectGraceMs(): number {
   return harnessDelayMs(AUCTION_DISCONNECT_GRACE_MS, 150);
 }
 
+export function getAuctionDisconnectDebounceMs(): number {
+  return harnessDelayMs(AUCTION_DISCONNECT_DEBOUNCE_MS, 50);
+}
+
 export async function getAuctionDisconnectCount(matchId: string, userId: string): Promise<number> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return 0;
@@ -79,10 +84,9 @@ export async function getAuctionDisconnectCount(matchId: string, userId: string)
 export async function incrementAuctionDisconnectCount(matchId: string, userId: string): Promise<number> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return 0;
-  const nextCount = (await getAuctionDisconnectCount(matchId, userId)) + 1;
-  await redis.set(auctionReconnectCountKey(matchId, userId), String(nextCount), {
-    EX: AUCTION_RECONNECT_COUNT_TTL_SEC,
-  });
+  const key = auctionReconnectCountKey(matchId, userId);
+  const nextCount = await redis.incr(key);
+  await redis.expire(key, AUCTION_RECONNECT_COUNT_TTL_SEC);
   return nextCount;
 }
 

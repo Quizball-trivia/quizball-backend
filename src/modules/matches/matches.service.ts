@@ -645,8 +645,9 @@ export const matchesService = {
         );
       } else if (persistentOpponent && aiSeatId) {
         // Persistent bot: NO aiAnchorRp (settlement + payloads read the bot's
-        // real profile, PR3). Difficulty is the temporary bridge from the bot's
-        // own RP (§1.7) until PR8. Placement is derived per-side at settlement,
+        // real profile, PR3). Difficulty comes from the calibrated model pinned
+        // below (PR8); the RP-derived bridge remains the fallback when no
+        // calibration is active. Placement is derived per-side at settlement,
         // never pinned here.
         //
         // ANY failure here ABORTS creation (rethrow) — we must NOT silently drop
@@ -658,8 +659,17 @@ export const matchesService = {
           rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
           persistentBotUserId = aiSeatId;
           persistentMatchHumanId = humanUserId;
+          // PR8: pin the active calibrated model params + the bot's frozen skill
+          // inputs into ranked_context so a mid-match params refresh can't alter
+          // the live bot (§1.7). Reuses the botProfile already loaded here. A
+          // missing calibration returns null → possession-ai falls back to the
+          // RP-derived bridge; never fatal.
+          const pin = await buildPersistentBotModelPin(aiSeatId, botProfile.rp);
+          if (pin) {
+            rankedContext = { ...rankedContext, persistentBotModel: pin };
+          }
           logger.info(
-            { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, rankedContext },
+            { lobbyId: params.lobbyId, humanUserId, persistentBotUserId, paramsVersion: pin?.paramsVersion ?? null, rankedContext },
             'Built persistent-bot ranked context for match'
           );
         } catch (err) {
@@ -686,37 +696,6 @@ export const matchesService = {
         }
       }
 
-      // PERSISTENT-BOT gameplay pin (PR8). If the AI opponent is a persistent
-      // roster bot, snapshot the active calibrated model params + the bot's
-      // frozen skill inputs into ranked_context so a mid-match params refresh
-      // cannot alter the live bot (§1.7). Additive to whatever ranked_context
-      // the branch above built; inert for ephemeral / human matches. A missing
-      // calibration falls back to the bridge (returns null) — never fatal.
-      //
-      // PR7 reconciliation: PR7 owns the persistent branch here (no aiAnchorRp +
-      // reservation transfer). At merge, attach this pin inside PR7's
-      // `persistentOpponent` branch using the bot profile it already loads,
-      // instead of re-detecting here.
-      const aiUser = user1?.is_ai ? user1 : user2?.is_ai ? user2 : null;
-      const aiSeatId = user1?.is_ai ? seat1 : user2?.is_ai ? seat2 : null;
-      if (aiUser && aiSeatId && isPersistentBot(aiUser)) {
-        try {
-          const botProfile = await rankedService.ensureProfile(aiSeatId);
-          const pin = await buildPersistentBotModelPin(aiSeatId, botProfile.rp);
-          if (pin) {
-            rankedContext = { ...(rankedContext ?? {}), persistentBotModel: pin };
-            logger.info(
-              { lobbyId: params.lobbyId, botUserId: aiSeatId, paramsVersion: pin.paramsVersion },
-              'Pinned persistent-bot calibrated model into ranked context'
-            );
-          }
-        } catch (err) {
-          logger.error(
-            { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
-            'Failed to build persistent-bot model pin; falling back to bridge difficulty'
-          );
-        }
-      }
     }
 
     const totalQuestions = params.totalQuestions

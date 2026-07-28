@@ -7529,6 +7529,499 @@
           "playerNationality",
           "playerCurrentClub"
         ]
+      },
+      "AuctionPipelineStatsResponse": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": "string"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "total_tasks": {
+                "type": "integer"
+              },
+              "terminal_families": {
+                "type": "integer"
+              },
+              "published_families": {
+                "type": "integer"
+              },
+              "rejected_families": {
+                "type": "integer"
+              },
+              "failed_families": {
+                "type": "integer"
+              },
+              "pass_rate": {
+                "type": "number",
+                "nullable": true
+              },
+              "recent_pass_rates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "hours": {
+                      "type": "integer"
+                    },
+                    "published": {
+                      "type": "integer"
+                    },
+                    "terminal": {
+                      "type": "integer"
+                    },
+                    "pass_rate": {
+                      "type": "number",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "hours",
+                    "published",
+                    "terminal",
+                    "pass_rate"
+                  ]
+                }
+              },
+              "eligible_players": {
+                "type": "integer"
+              },
+              "players_done": {
+                "type": "integer"
+              },
+              "players_remaining": {
+                "type": "integer"
+              },
+              "completion_rate": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "total_tasks",
+              "terminal_families",
+              "published_families",
+              "rejected_families",
+              "failed_families",
+              "pass_rate",
+              "recent_pass_rates",
+              "eligible_players",
+              "players_done",
+              "players_remaining",
+              "completion_rate"
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "stage": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "stage",
+                "count"
+              ]
+            }
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "variant_key": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "published": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "variant_key",
+                "count",
+                "published"
+              ]
+            }
+          },
+          "cards": {
+            "type": "object",
+            "properties": {
+              "published": {
+                "type": "integer"
+              },
+              "needs_review": {
+                "type": "integer"
+              },
+              "superseded": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              },
+              "published_families": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "published",
+              "needs_review",
+              "superseded",
+              "rejected",
+              "published_families"
+            ]
+          },
+          "attempts_24h": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "success": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "by_error_class": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "error_class": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "error_class",
+                    "count"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "total",
+              "success",
+              "rejected",
+              "failed",
+              "by_error_class"
+            ]
+          },
+          "recent_failures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "task_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "task_stage": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "error_class": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "error_message": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "external_call": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "task_id",
+                "task_stage",
+                "status",
+                "error_class",
+                "error_message",
+                "external_call",
+                "created_at"
+              ]
+            }
+          },
+          "latest_snapshot": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "source": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "player_row_count": {
+                "type": "integer"
+              },
+              "valuation_row_count": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "promoted_at": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "source",
+              "status",
+              "player_row_count",
+              "valuation_row_count",
+              "created_at",
+              "promoted_at"
+            ]
+          }
+        },
+        "required": [
+          "generated_at",
+          "totals",
+          "stages",
+          "variants",
+          "cards",
+          "attempts_24h",
+          "recent_failures",
+          "latest_snapshot"
+        ]
+      },
+      "AuctionPipelineWorkersResponse": {
+        "type": "object",
+        "properties": {
+          "workers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "worker_id": {
+                  "type": "string"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "player_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "variant_key": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "stage": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "started_at": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "seconds_since_heartbeat": {
+                  "type": "integer"
+                },
+                "is_stale": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "worker_id",
+                "hostname",
+                "task_id",
+                "player_name",
+                "variant_key",
+                "stage",
+                "started_at",
+                "updated_at",
+                "seconds_since_heartbeat",
+                "is_stale"
+              ]
+            }
+          },
+          "live": {
+            "type": "integer"
+          },
+          "stale": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workers",
+          "live",
+          "stale"
+        ]
+      },
+      "AuctionPipelinePromptsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "append",
+                    "replace"
+                  ]
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "updated_by": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "key",
+                "text",
+                "mode",
+                "updated_at",
+                "updated_by"
+              ]
+            }
+          },
+          "effective": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "append",
+                    "replace"
+                  ]
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "updated_by": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "key",
+                "text",
+                "mode",
+                "updated_at",
+                "updated_by"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items",
+          "effective"
+        ]
+      },
+      "AuctionPipelinePrompt": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "append",
+              "replace"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "text",
+          "mode",
+          "updated_at",
+          "updated_by"
+        ]
+      },
+      "AuctionPipelineRequeueResponse": {
+        "type": "object",
+        "properties": {
+          "requeued": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requeued"
+        ]
+      },
+      "AuctionPipelinePromptResetResponse": {
+        "type": "object",
+        "properties": {
+          "reset": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reset"
+        ]
       }
     },
     "parameters": {}
@@ -19465,6 +19958,394 @@
           },
           "403": {
             "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/stats": {
+      "get": {
+        "summary": "Auction card generation pipeline status counters",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline stage, attempt and coverage counters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelineStatsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/workers": {
+      "get": {
+        "summary": "Live card generation worker heartbeats",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workers with stale flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelineWorkersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/prompts": {
+      "get": {
+        "summary": "Operator prompt overrides for the card pipeline",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored prompt overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePromptsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/prompts/{key}": {
+      "put": {
+        "summary": "Create or replace a card pipeline prompt override",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "generator_rules",
+                "verifier_rules",
+                "judge_rules",
+                "variant_medium",
+                "variant_hard"
+              ]
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "replace"
+                    ],
+                    "default": "append"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored prompt override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePrompt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid prompt key or text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Reset a prompt override so the built-in rules apply again",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "generator_rules",
+                "verifier_rules",
+                "judge_rules",
+                "variant_medium",
+                "variant_hard"
+              ]
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether an override was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePromptResetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid prompt key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/auction-pipeline/requeue": {
+      "post": {
+        "summary": "Reset rejected or failed generation tasks back to queued",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "taskIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "minItems": 1,
+                    "maxItems": 500
+                  },
+                  "filter": {
+                    "type": "string",
+                    "enum": [
+                      "failed",
+                      "rejected"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of tasks requeued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelineRequeueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid requeue selector",
             "content": {
               "application/json": {
                 "schema": {

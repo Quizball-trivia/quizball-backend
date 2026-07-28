@@ -56,6 +56,24 @@ export {
 } from './auction.schemas.js';
 export { registerAuctionOpenApi } from './auction.openapi.js';
 
+// Card generation pipeline status (CMS admin).
+export { auctionPipelineController } from './auction-pipeline.controller.js';
+export { auctionPipelineService } from './auction-pipeline.service.js';
+export { auctionPipelineRepo } from './auction-pipeline.repo.js';
+export { registerAuctionPipelineOpenApi } from './auction-pipeline.openapi.js';
+export {
+  auctionPipelineStatsResponseSchema,
+  auctionPipelineWorkersResponseSchema,
+  auctionPipelinePromptsResponseSchema,
+  auctionPipelinePromptSchema,
+  auctionPipelinePromptKeyParamSchema,
+  auctionPipelinePromptUpdateSchema,
+  auctionPipelineRequeueSchema,
+  auctionPipelineRequeueResponseSchema,
+  auctionPipelinePromptResetResponseSchema,
+} from './auction-pipeline.schemas.js';
+export type * from './auction-pipeline.types.js';
+
 // Player clue card import/review (CMS admin) — consolidated from feat/player-clue-import.
 export { registerPlayerClueCardsOpenApi } from './player-clue-cards.openapi.js';
 export { playerClueCardsController } from './player-clue-cards.controller.js';

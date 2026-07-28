@@ -21,6 +21,13 @@ export default defineConfig({
       'tests/regression/friendly-possession-lobby.test.ts',
       'tests/regression/friendly-party-quiz-lobby.test.ts',
       'tests/regression/auction-full-flow.test.ts',
+      // Persistent-bot burn-in integration tests mutate the SINGLETON one-time
+      // run marker, so they must run serially (vitest.burnin.config.ts,
+      // `npm run test:burnin`). Excluded here so the parallel suite never races
+      // on the marker. The pure-unit burn-in tests stay in below.
+      'tests/bot-burnin/writer.integration.test.ts',
+      'tests/bot-burnin/gate-resume.integration.test.ts',
+      'tests/bot-burnin/cli-args.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     coverage: {

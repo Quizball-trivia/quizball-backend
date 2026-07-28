@@ -33,13 +33,7 @@ let snapshotProfiles: typeof import('../../scripts/bot-burnin/snapshot.js').snap
 let rollback: typeof import('../../scripts/bot-burnin/snapshot.js').rollback;
 let RollbackRefusedError: typeof import('../../scripts/bot-burnin/snapshot.js').RollbackRefusedError;
 let owner: { manifestHash: string; ownerToken: string };
-let fileLock: Awaited<ReturnType<typeof import('../../src/db/index.js').sql.reserve>> | null = null;
 let dbAvailable = false;
-
-// The run marker is a singleton row; the marker-mutating burn-in integration
-// files must serialize against each other. A session advisory lock on a shared
-// TEST key (held for the whole file) provides that without --no-file-parallelism.
-const TEST_MARKER_LOCK_KEY = 728_150_777;
 
 // All fixture writes go through the owned run so the writer's fail-closed lock
 // check passes. Rollback tests delete the marker, so re-claim it if absent.
@@ -156,8 +150,6 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    fileLock = await sql.reserve();
-    await fileLock`SELECT pg_advisory_lock(${TEST_MARKER_LOCK_KEY})`;
     ({ writeFixture: writeFixtureRaw, CeilingExceededError, FixtureVerificationError } = await import('../../scripts/bot-burnin/writer.js'));
     ({ snapshotProfiles, rollback, RollbackRefusedError } = await import('../../scripts/bot-burnin/snapshot.js'));
     const { claimRun } = await import('../../scripts/bot-burnin/data.js');
@@ -180,9 +172,6 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!dbAvailable) return;
   await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
-  if (fileLock) {
-    try { await fileLock`SELECT pg_advisory_unlock(${TEST_MARKER_LOCK_KEY})`; } finally { fileLock.release(); }
-  }
   if (testMatchIds.length > 0) {
     await sql`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${testMatchIds}::uuid[])`;
     await sql`DELETE FROM user_xp_events WHERE source_key = ANY(${testMatchIds})`;

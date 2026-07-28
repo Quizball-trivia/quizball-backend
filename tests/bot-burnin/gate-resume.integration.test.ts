@@ -27,12 +27,7 @@ let markRunComplete: typeof import('../../scripts/bot-burnin/data.js').markRunCo
 let assertRunOwned: typeof import('../../scripts/bot-burnin/data.js').assertRunOwned;
 let writeFixtureRaw: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
 let owner: { manifestHash: string; ownerToken: string };
-let fileLock: Awaited<ReturnType<typeof import('../../src/db/index.js').sql.reserve>> | null = null;
 let dbAvailable = false;
-
-// The run marker is a singleton row; marker-mutating burn-in integration files
-// serialize against each other via a session advisory lock on a shared TEST key.
-const TEST_MARKER_LOCK_KEY = 728_150_777;
 
 async function ensureOwner(): Promise<void> {
   // Re-claim a fresh MANIFEST-owned 'running' marker unless one already exists
@@ -90,8 +85,6 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    fileLock = await sql.reserve();
-    await fileLock`SELECT pg_advisory_lock(${TEST_MARKER_LOCK_KEY})`;
     ({ findNonPristineBots, claimRun, markRunComplete, assertRunOwned } = await import('../../scripts/bot-burnin/data.js'));
     ({ writeFixture: writeFixtureRaw } = await import('../../scripts/bot-burnin/writer.js'));
     await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
@@ -106,9 +99,6 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!dbAvailable) return;
   await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
-  if (fileLock) {
-    try { await fileLock`SELECT pg_advisory_unlock(${TEST_MARKER_LOCK_KEY})`; } finally { fileLock.release(); }
-  }
   if (markerHashes.length > 0) {
     await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete' AND params->>'manifestHash' = ANY(${markerHashes})`;
   }

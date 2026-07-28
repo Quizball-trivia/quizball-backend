@@ -459,6 +459,24 @@ export const rankedRepo = {
     `;
   },
 
+  /** Newest-first. Two rows bound both the current season (start) and the
+   *  previous season (start + end); older seasons never affect the split. */
+  async listRecentCompletedSeasonResets(): Promise<Array<{
+    seasonNumber: number;
+    completedAt: string;
+  }>> {
+    return sql<Array<{ seasonNumber: number; completedAt: string }>>`
+      SELECT
+        season_number AS "seasonNumber",
+        completed_at AS "completedAt"
+      FROM ranked_reset_batches
+      WHERE completed_at IS NOT NULL
+        AND season_number IS NOT NULL
+      ORDER BY season_number DESC
+      LIMIT 2
+    `;
+  },
+
   async listArchivedLeaderboard(
     batchId: string,
     limit: number,

@@ -3,6 +3,7 @@ import { BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { parseStoredAvatarCustomization, type AvatarCustomization } from '../users/avatar-customization.js';
 import { tierFromRp } from '../ranked/ranked.service.js';
+import { rankedRepo } from '../ranked/ranked.repo.js';
 import type { RankedTier } from '../ranked/ranked.types.js';
 
 export interface HeadToHeadSummary {
@@ -70,25 +71,76 @@ export interface ModeStatsSummary {
   winRate: number;
 }
 
-/** Ranked W/D/L split at the World Cup event START.
- *  `regular` = ranked games before the event began (the normal ranked record);
- *  `event`   = ranked games played during the event. */
 export interface RankedSeasonSplit {
-  regular: ModeStatsSummary;
-  event: ModeStatsSummary;
+  current: ModeStatsSummary;
+  previous: ModeStatsSummary;
+  currentSeasonNumber: number;
+  previousSeasonNumber: number | null;
 }
 
 export interface UserStatsSummary {
   overall: ModeStatsSummary;
   ranked: ModeStatsSummary;
   friendly: ModeStatsSummary;
-  /** Ranked W/D/L partitioned at the event start (regular vs during-event). */
   rankedSeasons: RankedSeasonSplit;
 }
 
-// World Cup event START. Ranked games before this are the regular record; games
-// on/after it count toward the World Cup event.
-const EVENT_START_ISO = '2026-06-11T00:00:00Z';
+interface SeasonBoundary {
+  boundaryIso: string;
+  /** Start of the previous season — the penultimate reset's completion, or the
+   *  epoch when only one season has completed. Bounds the previous bucket from
+   *  below so it never absorbs seasons older than the immediately previous one. */
+  previousStartIso: string;
+  currentSeasonNumber: number;
+  previousSeasonNumber: number | null;
+}
+
+const EPOCH_ISO = '1970-01-01T00:00:00Z';
+const SEASON_BOUNDARY_CACHE_TTL_MS = 5 * 60 * 1000;
+const FRESH_SEASON_BOUNDARY: SeasonBoundary = {
+  boundaryIso: EPOCH_ISO,
+  previousStartIso: EPOCH_ISO,
+  currentSeasonNumber: 1,
+  previousSeasonNumber: null,
+};
+
+let seasonBoundaryCache: { value: SeasonBoundary; expiresAt: number } | null = null;
+let seasonBoundaryLoad: Promise<SeasonBoundary> | null = null;
+
+async function getSeasonBoundary(): Promise<SeasonBoundary> {
+  const now = Date.now();
+  if (seasonBoundaryCache && seasonBoundaryCache.expiresAt > now) {
+    return seasonBoundaryCache.value;
+  }
+
+  seasonBoundaryLoad ??= rankedRepo.listRecentCompletedSeasonResets().then((resets) => {
+    const [latest, penultimate] = resets;
+    const value = latest
+      ? {
+          boundaryIso: latest.completedAt,
+          previousStartIso: penultimate?.completedAt ?? EPOCH_ISO,
+          currentSeasonNumber: latest.seasonNumber + 1,
+          previousSeasonNumber: latest.seasonNumber,
+        }
+      : FRESH_SEASON_BOUNDARY;
+    seasonBoundaryCache = {
+      value,
+      expiresAt: Date.now() + SEASON_BOUNDARY_CACHE_TTL_MS,
+    };
+    return value;
+  });
+
+  try {
+    return await seasonBoundaryLoad;
+  } finally {
+    seasonBoundaryLoad = null;
+  }
+}
+
+export function _resetSeasonBoundaryCacheForTests(): void {
+  seasonBoundaryCache = null;
+  seasonBoundaryLoad = null;
+}
 
 function toWinRate(wins: number, gamesPlayed: number): number {
   if (gamesPlayed <= 0) return 0;
@@ -203,9 +255,14 @@ export const statsService = {
   },
 
   async getUserStatsSummary(userId: string): Promise<UserStatsSummary> {
+    const seasonBoundary = await getSeasonBoundary();
     const [rows, split] = await Promise.all([
       statsRepo.getUserModeStats(userId),
-      statsRepo.getRankedStatsByEventWindow(userId, EVENT_START_ISO),
+      statsRepo.getRankedStatsSplitAtBoundary(
+        userId,
+        seasonBoundary.boundaryIso,
+        seasonBoundary.previousStartIso,
+      ),
     ]);
 
     const ranked = emptyModeStats();
@@ -225,8 +282,8 @@ export const statsService = {
     const overallLosses = ranked.losses + friendly.losses;
     const overallDraws = ranked.draws + friendly.draws;
 
-    const regularGames = split.regular_wins + split.regular_losses + split.regular_draws;
-    const eventGames = split.event_wins + split.event_losses + split.event_draws;
+    const currentGames = split.current_wins + split.current_losses + split.current_draws;
+    const previousGames = split.previous_wins + split.previous_losses + split.previous_draws;
 
     return {
       overall: {
@@ -239,20 +296,22 @@ export const statsService = {
       ranked,
       friendly,
       rankedSeasons: {
-        regular: {
-          gamesPlayed: regularGames,
-          wins: split.regular_wins,
-          losses: split.regular_losses,
-          draws: split.regular_draws,
-          winRate: toWinRate(split.regular_wins, regularGames),
+        current: {
+          gamesPlayed: currentGames,
+          wins: split.current_wins,
+          losses: split.current_losses,
+          draws: split.current_draws,
+          winRate: toWinRate(split.current_wins, currentGames),
         },
-        event: {
-          gamesPlayed: eventGames,
-          wins: split.event_wins,
-          losses: split.event_losses,
-          draws: split.event_draws,
-          winRate: toWinRate(split.event_wins, eventGames),
+        previous: {
+          gamesPlayed: previousGames,
+          wins: split.previous_wins,
+          losses: split.previous_losses,
+          draws: split.previous_draws,
+          winRate: toWinRate(split.previous_wins, previousGames),
         },
+        currentSeasonNumber: seasonBoundary.currentSeasonNumber,
+        previousSeasonNumber: seasonBoundary.previousSeasonNumber,
       },
     };
   },

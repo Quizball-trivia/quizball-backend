@@ -248,26 +248,35 @@ export function buildSchedule(opts: {
   const fixtures: PlannedFixture[] = [];
   let ordinal = 0;
 
-  // Round-robin over "hungry" bots (still owed fixtures), each round advancing
-  // the initiator's clock into a plausible active slot and pairing it.
+  // CHRONOLOGICAL GREEDY: each round, the initiator is the hungry bot with the
+  // globally-EARLIEST admissible slot (tie-break by userId — a stable, seeded-
+  // independent total order). This emits fixtures in non-decreasing startedAt
+  // order BY CONSTRUCTION, so pairing + ceiling enforcement + the projected RP
+  // trajectory happen in exactly the order the writer applies them. That makes
+  // the ceiling guarantee airtight at write time and lets the writer assert the
+  // settled RP equals the projected RP (no post-hoc sort, no divergence).
+  const runEndMs = runDate.getTime();
   let safety = bots.length * targetMatches * 8;
   while (safety-- > 0) {
     const hungry = bots.filter((b) => (remainingByBot.get(b.userId) ?? 0) > 0 && b.status !== 'retired');
     if (hungry.length < 2) break;
-    // Initiator = the hungriest, RP-ascending tiebreak (spreads the low end).
-    hungry.sort((a, b) => {
-      const rem = (remainingByBot.get(b.userId) ?? 0) - (remainingByBot.get(a.userId) ?? 0);
-      return rem !== 0 ? rem : a.rp - b.rp;
-    });
-    const bot = hungry[0];
 
-    // Advance the initiator's clock to its next active, in-window, in-window-cap
-    // slot (session-aware: jump to the next day if the session/cap is spent).
-    const atMs = advanceToActiveSlot(bot, runDate.getTime());
-    if (atMs === null) {
-      remainingByBot.set(bot.userId, 0); // no feasible slot left → stop owing it
-      continue;
+    // Each bot's next admissible slot (pure read of its clock/caps/sessions).
+    let bot: MutableBot | null = null;
+    let atMs = Number.POSITIVE_INFINITY;
+    for (const cand of hungry) {
+      const slot = advanceToActiveSlot(cand, runEndMs);
+      if (slot === null) {
+        remainingByBot.set(cand.userId, 0); // no feasible slot left → stop owing it
+        continue;
+      }
+      // Global-min slot; tie-break on userId for a stable, deterministic order.
+      if (slot < atMs || (slot === atMs && (bot === null || cand.userId < bot.userId))) {
+        bot = cand;
+        atMs = slot;
+      }
     }
+    if (bot === null) continue; // every hungry bot exhausted its window this round
 
     const opp = pickOpponent(bot, bots, atMs, remainingByBot, ceilingRp);
     if (!opp) {
@@ -310,7 +319,14 @@ export function buildSchedule(opts: {
     opp.nextFreeAtMs = endMs + gapMs;
   }
 
-  fixtures.sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+  // Chronological greedy emits fixtures in non-decreasing startedAt order by
+  // construction. Assert the invariant rather than re-sort — a violation would
+  // mean pairing/ceiling/projection order diverged from write order (a bug).
+  for (let i = 1; i < fixtures.length; i++) {
+    if (fixtures[i].startedAt.getTime() < fixtures[i - 1].startedAt.getTime()) {
+      throw new Error(`scheduler invariant violated: fixture ${i} startedAt < previous (not chronological)`);
+    }
+  }
 
   return {
     fixtures,

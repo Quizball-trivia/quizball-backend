@@ -115,6 +115,24 @@ describe('hard ceiling', () => {
   });
 });
 
+describe('chronological ordering (order-consistency fix)', () => {
+  it('emits fixtures in non-decreasing startedAt order (matches write order)', () => {
+    const { fixtures } = buildSchedule({ ...baseOpts, bots: makeBots(24) });
+    for (let i = 1; i < fixtures.length; i++) {
+      expect(fixtures[i].startedAt.getTime()).toBeGreaterThanOrEqual(fixtures[i - 1].startedAt.getTime());
+    }
+  });
+
+  it('every fixture carries a positive projected RP for BOTH seats (the write-time equality belt is armed)', () => {
+    const { fixtures } = buildSchedule({ ...baseOpts, bots: makeBots(24) });
+    expect(fixtures.length).toBeGreaterThan(0);
+    for (const f of fixtures) {
+      expect(f.projectedRpA).toBeGreaterThan(0);
+      expect(f.projectedRpB).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('per-bot feasibility', () => {
   it('a retired bot plays no fixtures; a low-cap bot plays fewer', () => {
     const bots = makeBots(12);

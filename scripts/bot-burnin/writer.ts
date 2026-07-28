@@ -166,6 +166,28 @@ export async function writeFixtureInTx(
     }),
   }));
 
+  // Belt: the settled RP computed from the LIVE row must exactly equal the plan's
+  // PROJECTED RP for this seat. Equality holds iff fixtures are applied in the
+  // same order the plan projected them (chronological). This fails loud inside
+  // the tx — rolling everything back — on any plan/write divergence (ordering,
+  // a pristine-gate hole, or formula drift), and is strictly stronger than a
+  // <= ceiling check (the plan already guarantees projectedRp <= ceiling).
+  // projectedRp <= 0 means "not projected" (a hand-built fixture in a unit test);
+  // the real scheduler always sets a positive projected RP. Skip the check then.
+  const expectedA = fixture.projectedRpA;
+  const expectedB = fixture.projectedRpB;
+  if (expectedA > 0 && expectedB > 0) {
+    for (const participant of participants) {
+      const expected = participant.userId === fixture.botAUserId ? expectedA : expectedB;
+      if (participant.settlement.newRp !== expected) {
+        throw new Error(
+          `burn-in plan/write divergence on match ${fixture.matchId} bot ${participant.userId}: ` +
+            `settled RP ${participant.settlement.newRp} != projected ${expected} — aborting (rolls back)`,
+        );
+      }
+    }
+  }
+
   for (const participant of participants) {
     const settlement = participant.settlement;
     await tx.unsafe(

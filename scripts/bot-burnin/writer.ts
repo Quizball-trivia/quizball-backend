@@ -1,14 +1,15 @@
 /**
  * Direct transactional writer for one historical persistent-bot fixture.
  *
- * The caller owns the transaction. Every match, settlement, stats, and XP row
- * is written through that injected transaction, with no live multi-transaction
- * service calls.
+ * The caller owns the transaction. Every match, settlement, stats, and XP row is
+ * written through that injected transaction as plain SQL, with no side-effect
+ * service calls: these fixtures are backdated synthetic history, not gameplay,
+ * so nothing here should fire achievements, notifications, quests or analytics
+ * (see the note at the end of writeFixtureInTx).
  */
 import type { TransactionSql } from '../../src/db/index.js';
 import { getMatchXpReward } from '../../src/modules/progression/progression.logic.js';
 import { computeParticipantSettlement, tierFromRp } from '../../src/modules/ranked/season-rp-formula.js';
-import { achievementsService } from '../../src/modules/achievements/index.js';
 import type { PlacementStatus } from '../../src/modules/ranked/ranked.types.js';
 import type { PlannedFixture } from './types.js';
 import { placementWinsForBand, type SeededBot } from './s2-distribution.js';
@@ -369,14 +370,24 @@ export async function writeFixtureInTx(
     );
   }
 
-  // Achievements: same pipeline as live completion, but driven INSIDE this
-  // transaction (tx-aware), backdated, and with analytics suppressed (capability
-  // matrix — persistent bots stay out of analytics). The just-written match +
-  // stats rows are visible to the evaluation because it uses the same tx.
-  await achievementsService.evaluateForMatch(
-    fixture.matchId,
-    [fixture.botAUserId, fixture.botBUserId],
-    'ranked_sim',
-    { occurredAt: matchAt, suppressAnalytics: true, tx },
-  );
+  // Burn-in deliberately invokes NO side-effect services — not achievements, and
+  // not notifications/quests/streak-rewards/analytics either.
+  //
+  // WHY (semantics, not performance): these fixtures are backdated synthetic
+  // history fabricated to give a fresh bot roster a plausible ladder position.
+  // They are not gameplay that happened. Live services interpret a completed
+  // match as a real-time event a player just earned, so running them here would
+  // manufacture unlocks and notifications for matches nobody played. Burn-in
+  // therefore writes ONLY the ledger of record it is meant to seed: matches,
+  // match_players, ranked_profiles, ranked_rp_changes, user_mode_match_stats and
+  // the match XP events — all as plain SQL on the caller's transaction, so a
+  // chunk is exactly reproducible and rolls back atomically.
+  //
+  // Keeping the write path service-free also keeps it deterministic: the planner
+  // solves seeds against a model of these rows alone, so any extra service
+  // mutating them would put the executed ladder out of step with the plan.
+  //
+  // Secondary (measured, loopback, 5,999 fixtures): evaluating achievements costs
+  // 20.5s vs 8.7s, ~2.4x. Real but not itself prohibitive — it is not the reason
+  // for this change, and it is NOT what stalled the first staging execute.
 }

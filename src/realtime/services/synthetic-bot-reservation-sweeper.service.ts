@@ -39,10 +39,6 @@ let sweepTimer: NodeJS.Timeout | null = null;
 // produced no match is treated as wedged and released — an unbounded "lobby row
 // exists → extend forever" would strand a bot permanently.
 const MAX_LOBBY_KEYED_AGE_MS = 15 * 60 * 1000;
-// A terminal (completed/abandoned) match's reservation is not released by the
-// sweeper until its terminal transition is at least this old, so a release never
-// races an in-flight RP settlement (status flips to completed before RP settles).
-const SETTLEMENT_GRACE_MS = 2 * 60 * 1000;
 
 async function reconcileOne(reservation: {
   bot_user_id: string;
@@ -66,16 +62,15 @@ async function reconcileOne(reservation: {
       appMetrics.persistentBotSweeperActions.add(1, { action: extended ? 'skipped_live' : 'stale_snapshot' });
       return;
     }
-    // Match terminal/gone — a completion/forfeit/sweep hook was missed. Respect
-    // a settlement grace: a match flips to 'completed' BEFORE RP settles, so
-    // releasing immediately could free the bot while its profile is mid-write and
-    // let a second match read a stale RP. Only release once the terminal
-    // transition is safely older than settlement can take; otherwise wait for the
-    // next sweep (the completion choke point normally releases it first anyway).
-    const endedAtMs = match?.ended_at ? new Date(match.ended_at).getTime() : null;
-    if (match && endedAtMs != null && Date.now() - endedAtMs < SETTLEMENT_GRACE_MS) {
-      appMetrics.persistentBotSweeperActions.add(1, { action: 'settlement_grace' });
-      logger.info({ botUserId, matchId }, 'reservation sweeper deferring release: settlement grace');
+    // Terminal-looking match. Release ONLY when settlement is provably done —
+    // checked by DIRECT FACTS (match gone / ranked ledger row committed /
+    // no-contest abandon), never by age. A 'completed' match whose settlement
+    // ledger hasn't landed yet is still in flight; leave it for a later sweep
+    // (the completion choke point normally releases it first anyway).
+    const safe = await syntheticBotsRepo.isMatchReservationSafeToRelease(matchId);
+    if (!safe) {
+      appMetrics.persistentBotSweeperActions.add(1, { action: 'settlement_pending' });
+      logger.info({ botUserId, matchId }, 'reservation sweeper deferring release: settlement not yet committed');
       return;
     }
     const released = await syntheticBotsRepo.releaseReservationByMatch(matchId);

@@ -635,6 +635,11 @@ export const matchesService = {
         // real profile, PR3). Difficulty is the temporary bridge from the bot's
         // own RP (§1.7) until PR8. Placement is derived per-side at settlement,
         // never pinned here.
+        //
+        // ANY failure here ABORTS creation (rethrow) — we must NOT silently drop
+        // the persistent branch and create a match whose reservation is never
+        // transferred (Sol P1-D). The lobby retains the bot and the caller's
+        // retry re-enters this path.
         try {
           const botProfile = await rankedService.ensureProfile(aiSeatId);
           rankedContext = rankedService.buildPersistentBotMatchContext(botProfile.rp);
@@ -645,11 +650,11 @@ export const matchesService = {
             'Built persistent-bot ranked context for match'
           );
         } catch (err) {
-          if (err instanceof AppError) throw err;
           logger.error(
             { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
-            'Failed to load persistent-bot ranked profile; proceeding without ranked context'
+            'Failed to load persistent-bot ranked profile; aborting match creation (will retry with the same bot)'
           );
+          throw err;
         }
       } else if (humanUserId) {
         try {
@@ -704,13 +709,22 @@ export const matchesService = {
             lobbyId: params.lobbyId,
             matchId: created.id,
           });
-          // Bump the bot's Georgia-day counter + session timestamp INSIDE the
-          // same tx, gated on the transfer having actually happened — exactly-
-          // once per match, never lost to a post-commit crash and never bumped
-          // for a transfer that didn't occur (Sol finding #9).
-          if (transferred) {
-            await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, persistentBotUserId!);
+          if (!transferred) {
+            // The reservation could not be handed off (it was released/re-keyed
+            // out from under us, or the lobby no longer owns it). We must NOT
+            // commit a persistent-bot match without its reservation — throw to
+            // ROLL BACK the whole tx (match + players). The lobby retains the bot
+            // and the caller's retry re-enters selection/creation (Sol P1-D).
+            throw new AppError(
+              'Persistent-bot reservation transfer failed; aborting match creation',
+              409,
+              ErrorCode.CONFLICT,
+            );
           }
+          // Bump the bot's Georgia-day counter + session timestamp INSIDE the
+          // same tx — exactly-once per match by construction (the transfer above
+          // is proven to have happened), never lost to a post-commit crash.
+          await syntheticBotsRepo.bumpMatchesTodayAndSelectedAtTx(tx, persistentBotUserId!);
           return created;
         })
       : await matchesRepo.createMatch({

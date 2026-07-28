@@ -278,43 +278,57 @@ export async function startRankedAiForUser(
       await userSessionGuardService.emitState(io, userId);
     }
 
-    span.setAttribute('quizball.lobby_id', lobby.id);
-    span.setAttribute('quizball.ai_user_id', aiUser!.id);
-    span.setAttribute('quizball.persistent_bot', persistent);
+    // Compensation extends through the timer calc + search-started emit +
+    // scheduling: a throw ANYWHERE here (before the search-timer is installed)
+    // must also release the reservation and tear down the lobby, else the bot is
+    // stranded with no live flow to free it (Sol P2).
+    try {
+      span.setAttribute('quizball.lobby_id', lobby.id);
+      span.setAttribute('quizball.ai_user_id', aiUser!.id);
+      span.setAttribute('quizball.persistent_bot', persistent);
 
-    const searchDurationMs =
-      options?.searchDurationMs ??
-      harnessDelayMs(randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS));
-    span.setAttribute('quizball.search_duration_ms', searchDurationMs);
-    if (!options?.skipSearchEmit) {
-      io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+      const searchDurationMs =
+        options?.searchDurationMs ??
+        harnessDelayMs(randomIntBetween(RANKED_SIM_SEARCH_MIN_MS, RANKED_SIM_SEARCH_MAX_MS));
+      span.setAttribute('quizball.search_duration_ms', searchDurationMs);
+      if (!options?.skipSearchEmit) {
+        io.to(`user:${userId}`).emit('ranked:search_started', { durationMs: searchDurationMs });
+      }
+      logger.info(
+        { lobbyId: lobby.id, userId, searchDurationMs, persistent, skipSearchEmit: options?.skipSearchEmit ?? false },
+        'Ranked AI search started'
+      );
+
+      const startedLobbyId = lobby.id;
+      setTimeout(
+        () =>
+          void handleRankedAiMatchFound({
+            io,
+            lobbyId: startedLobbyId,
+            userId,
+            aiUser: aiUser!,
+            aiProfile: resolvedProfile!,
+            aiGeo: resolvedGeo!,
+            rankedContext: rankedContext!,
+            opponentRp: opponentRp!,
+            favoriteClub: favoriteClub!,
+            persistentBotReservation,
+            lobbiesRepo,
+            logger,
+            foundModalMs: harnessDelayMs(RANKED_SIM_FOUND_MODAL_MS),
+            startDraft,
+          }),
+        searchDurationMs
+      );
+    } catch (err) {
+      if (persistentBotReservation) {
+        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: aiUser!.id }, 'persistent-bot search scheduling failed; compensating (release + teardown)');
+        await reservationService.releaseOwned(persistentBotReservation, 'match_found_cancel');
+        await compensateAbortLobby(io, lobby.id, userId, aiUser!.id);
+        return;
+      }
+      throw err;
     }
-    logger.info(
-      { lobbyId: lobby.id, userId, searchDurationMs, persistent, skipSearchEmit: options?.skipSearchEmit ?? false },
-      'Ranked AI search started'
-    );
-
-    const startedLobbyId = lobby.id;
-    setTimeout(
-      () =>
-        void handleRankedAiMatchFound({
-          io,
-          lobbyId: startedLobbyId,
-          userId,
-          aiUser: aiUser!,
-          aiProfile: resolvedProfile!,
-          aiGeo: resolvedGeo!,
-          rankedContext: rankedContext!,
-          opponentRp: opponentRp!,
-          favoriteClub: favoriteClub!,
-          persistentBotReservation,
-          lobbiesRepo,
-          logger,
-          foundModalMs: harnessDelayMs(RANKED_SIM_FOUND_MODAL_MS),
-          startDraft,
-        }),
-      searchDurationMs
-    );
   });
 }
 
@@ -337,10 +351,11 @@ async function handleRankedAiMatchFound(params: {
   const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, opponentRp, favoriteClub, persistentBotReservation, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
-  // NEW hook (Appendix A leak path): the plain-cancel returns below left the
-  // lobby-keyed reservation to expire on TTL and the lobby orphaned. Release the
-  // reservation AND tear the lobby down (release + lobby cleanup — Sol finding
-  // #3/#5) when we bail before the draft starts.
+  // Abort owned by THIS flow → release the (still lobby-keyed) reservation AND
+  // tear the lobby down. releaseOwned is match_id-qualified, so if the draft was
+  // concurrently activated and transferred the reservation onto a match, this is
+  // a no-op on the reservation; compensateAbortLobby only removes members /
+  // deletes the lobby if it is still ours to remove.
   const releasePreMatch = async (path: 'match_found_cancel'): Promise<void> => {
     if (persistentBotReservation) {
       await reservationService.releaseOwned(persistentBotReservation, path);
@@ -350,14 +365,24 @@ async function handleRankedAiMatchFound(params: {
 
   try {
     if (await hasRankedCancelRequest(userId)) {
+      // THIS flow's user cancelled — we own the abort.
       logger.info({ lobbyId, userId, aiUserId: aiUser.id }, 'Ranked AI match_found skipped because user cancelled search');
       await releasePreMatch('match_found_cancel');
       return;
     }
 
     const latestLobby = await lobbiesRepo.getById(lobbyId);
-    if (!latestLobby || latestLobby.status !== 'waiting' || latestLobby.mode !== 'ranked') {
+    if (!latestLobby || latestLobby.mode !== 'ranked') {
+      // Lobby genuinely gone → free the (lobby-keyed) reservation. Nothing to tear
+      // down; compensate is a no-op on a missing lobby.
       await releasePreMatch('match_found_cancel');
+      return;
+    }
+    if (latestLobby.status !== 'waiting') {
+      // Someone ELSE advanced this lobby (e.g. a reconnect started the draft) —
+      // it is LIVE and NOT ours to cancel. Do NOT release or tear down; the
+      // draft/match lifecycle now owns the reservation's fate.
+      logger.info({ lobbyId, userId, status: latestLobby.status }, 'Ranked AI match_found: lobby advanced elsewhere — leaving it live');
       return;
     }
 
@@ -365,6 +390,8 @@ async function handleRankedAiMatchFound(params: {
     const hasHost = members.some((member) => member.user_id === userId);
     const hasAi = members.some((member) => member.user_id === aiUser.id);
     if (!hasHost || !hasAi) {
+      // Membership was torn down out from under us → the lobby is being abandoned;
+      // free the reservation (still lobby-keyed) and clean up.
       await releasePreMatch('match_found_cancel');
       return;
     }
@@ -431,9 +458,23 @@ async function handleRankedAiMatchFound(params: {
       foundModalMs
     );
   } catch (error) {
-    // A throw here left the lobby wired but no draft scheduled. Release the
-    // reservation and tear the lobby down — don't just log (Sol finding #4).
-    logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion — releasing + tearing down');
+    // A throw here left the lobby wired but no draft scheduled by THIS flow.
+    // Only release + tear down if the lobby is NOT live/recoverable — a reconnect
+    // could have independently activated the draft, in which case it is LIVE and
+    // owns the reservation now. releaseOwned is also match_id-qualified, so a
+    // transferred reservation is never freed here regardless.
+    logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
+    let lobbyLive = false;
+    try {
+      const latest = await lobbiesRepo.getById(lobbyId);
+      lobbyLive = latest != null && latest.status !== 'waiting' && latest.mode === 'ranked';
+    } catch {
+      lobbyLive = false;
+    }
+    if (lobbyLive) {
+      logger.info({ lobbyId }, 'Ranked AI match_found catch: lobby advanced elsewhere — leaving it live');
+      return;
+    }
     if (persistentBotReservation) {
       await reservationService.releaseOwned(persistentBotReservation, 'match_found_cancel');
     }
@@ -467,13 +508,22 @@ async function startRankedAiDraft(params: {
 
   try {
     if (await hasRankedCancelRequest(userId)) {
+      // THIS flow's user cancelled — we own the abort.
       logger.info({ lobbyId, userId }, 'Ranked AI draft start skipped because user cancelled search');
       await releasePreMatch('draft_start_cancel');
       return;
     }
     const readyLobby = await lobbiesRepo.getById(lobbyId);
-    if (!readyLobby || readyLobby.status !== 'waiting' || readyLobby.mode !== 'ranked') {
+    if (!readyLobby || readyLobby.mode !== 'ranked') {
+      // Lobby gone → free the still-lobby-keyed reservation.
       await releasePreMatch('draft_start_cancel');
+      return;
+    }
+    if (readyLobby.status !== 'waiting') {
+      // A reconnect (or another actor) already advanced this lobby's draft — it
+      // is LIVE and NOT ours to cancel. The draft/match lifecycle owns the
+      // reservation now; do not release or tear down.
+      logger.info({ lobbyId, userId, status: readyLobby.status }, 'Ranked AI draft start: lobby advanced elsewhere — leaving it live');
       return;
     }
     const supersedingSession = await getSupersedingSessionState(lobbiesRepo, userId, lobbyId);

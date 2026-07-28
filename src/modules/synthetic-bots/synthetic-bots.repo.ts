@@ -123,25 +123,34 @@ export const syntheticBotsRepo = {
     holder: string;
     fence: number;
   }): Promise<boolean> {
+    // `AND match_id IS NULL`: an owner (lobby-phase) release must NEVER delete a
+    // reservation that has already been transferred onto a match — a concurrently
+    // activated draft may have created the match under the same holder+fence, and
+    // its bot is now LIVE. Once match_id is set, only a terminal by-match release
+    // (after settlement) may free it.
     const rows = await sql<{ bot_user_id: string }[]>`
       DELETE FROM synthetic_bot_reservations
       WHERE bot_user_id = ${params.botUserId}
         AND holder = ${params.holder}
         AND fence = ${params.fence}
+        AND match_id IS NULL
       RETURNING bot_user_id
     `;
     return rows.length > 0;
   },
 
   /**
-   * Terminal release keyed by lobby (any holder). The lobby is being torn down
-   * before a match ever existed; whoever holds the reservation, it must go.
+   * Terminal release keyed by lobby, ONLY while the reservation is still lobby-
+   * keyed (match_id IS NULL). The lobby is being torn down before a match ever
+   * existed; whoever holds it, it must go — UNLESS it has already been
+   * transferred onto a live match (then it is not this lobby's to free).
    * Returns the released bot id (if any) for telemetry.
    */
   async releaseReservationByLobby(lobbyId: string): Promise<string | null> {
     const rows = await sql<{ bot_user_id: string }[]>`
       DELETE FROM synthetic_bot_reservations
       WHERE lobby_id = ${lobbyId}
+        AND match_id IS NULL
       RETURNING bot_user_id
     `;
     return rows[0]?.bot_user_id ?? null;
@@ -219,9 +228,11 @@ export const syntheticBotsRepo = {
    * stranded case. Fenced so a stale snapshot cannot delete a newer reservation.
    */
   async releaseReservationByLobbyFenced(lobbyId: string, expectedFence: number): Promise<string | null> {
+    // match_id IS NULL: never delete a reservation that has since been
+    // transferred onto a match (the by-match terminal path owns those).
     const rows = await sql<{ bot_user_id: string }[]>`
       DELETE FROM synthetic_bot_reservations
-      WHERE lobby_id = ${lobbyId} AND fence = ${expectedFence}
+      WHERE lobby_id = ${lobbyId} AND fence = ${expectedFence} AND match_id IS NULL
       RETURNING bot_user_id
     `;
     return rows[0]?.bot_user_id ?? null;
@@ -233,6 +244,35 @@ export const syntheticBotsRepo = {
       SELECT COUNT(*)::int AS n FROM lobby_members WHERE lobby_id = ${lobbyId}
     `;
     return (row?.n ?? 0) > 0;
+  },
+
+  /**
+   * Whether a match-keyed reservation is SAFE for the sweeper to release —
+   * proven by direct facts, never by age. Safe iff the match is terminal AND
+   * settlement is provably done for it:
+   *   - the match no longer exists (row gone → nothing left to settle), OR
+   *   - a ranked_rp_changes ledger row exists for the match (RP committed), OR
+   *   - the match is 'abandoned' as a no-contest (state_payload.cancelledNoContest
+   *     — no RP settles for a no-contest, so nothing to race), OR
+   *   - the match is 'abandoned' generally (terminal, no settlement will run).
+   * An 'active' match, or a 'completed' match whose settlement ledger row hasn't
+   * landed yet, is NOT safe (settlement may still be in flight).
+   */
+  async isMatchReservationSafeToRelease(matchId: string): Promise<boolean> {
+    const [row] = await sql<{ status: string | null; settled: boolean; no_contest: boolean }[]>`
+      SELECT
+        m.status AS status,
+        EXISTS (SELECT 1 FROM ranked_rp_changes rc WHERE rc.match_id = m.id) AS settled,
+        COALESCE((m.state_payload ->> 'cancelledNoContest')::boolean, false) AS no_contest
+      FROM matches m
+      WHERE m.id = ${matchId}
+    `;
+    if (!row) return true; // match row gone → nothing to settle, safe to free.
+    if (row.status === 'active') return false; // still playing.
+    if (row.settled) return true; // ranked ledger committed.
+    if (row.status === 'abandoned') return true; // no-contest / terminal abandon: no RP settles.
+    // status='completed' but no ledger row yet → settlement still in flight.
+    return false;
   },
 
   /** Reservations past their expiry, oldest first — the sweeper's work list. */

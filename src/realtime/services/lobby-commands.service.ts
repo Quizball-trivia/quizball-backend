@@ -14,12 +14,9 @@ import {
   matchesService,
   PARTY_QUIZ_TOTAL_QUESTIONS,
 } from '../../modules/matches/matches.service.js';
-import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
-import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
-import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import {
   FRIENDLY_LOBBY_MAX_MEMBERS,
   attachUserSocketsToLobby,
@@ -40,8 +37,8 @@ import { startRankedAiForUser } from './lobby-ranked-ai.service.js';
 import {
   acquireLobbyLockWithRetry,
   closeLobbyIfEmpty,
-  getRankedAiUserIdForLobby,
   isRankedAiLobby,
+  releaseRankedAiLobbyMemberSafely,
   removeUserFromLobbySockets,
   resolveLobbyId,
   transferHostIfNeeded,
@@ -859,15 +856,9 @@ export async function leaveLobby(
 
         await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-          if (aiUserId) {
-            await lobbiesRepo.removeMember(lobbyId, aiUserId);
-          }
-          await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
-          const redis = getRedisClient();
-          if (redis) {
-            await redis.del(rankedAiLobbyKey(lobbyId));
-          }
+          // Resolve the bot from the DB (not Redis), remove it, confirm removal,
+          // THEN release — never orphan the bot in the lobby if Redis is down.
+          await releaseRankedAiLobbyMemberSafely(lobbyId);
         }
 
         await removeUserFromLobbySockets(io, lobbyId, userId);

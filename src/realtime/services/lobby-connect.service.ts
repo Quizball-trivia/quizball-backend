@@ -1,10 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
-import { getRedisClient } from '../redis.js';
 import { logger } from '../../core/logger.js';
-import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
-import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import {
   attachUserSocketsToLobby,
   emitLobbyState,
@@ -16,8 +13,8 @@ import {
   closeLobbyIfEmpty,
   getFirstDraftActorId,
   getNextDraftActorId,
-  getRankedAiUserIdForLobby,
   isRankedAiLobby,
+  releaseRankedAiLobbyMemberSafely,
   resolveRankedAiUserIdForDraft,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
@@ -194,15 +191,9 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
 
         await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-          if (aiUserId) {
-            await lobbiesRepo.removeMember(lobbyId, aiUserId);
-          }
-          await reservationService.releaseByLobby(lobbyId, 'auto_leave_lobby');
-          const redis = getRedisClient();
-          if (redis) {
-            await redis.del(rankedAiLobbyKey(lobbyId));
-          }
+          // Resolve the bot from the DB (not Redis), remove it, confirm removal,
+          // THEN release — never orphan the bot in the lobby if Redis is down.
+          await releaseRankedAiLobbyMemberSafely(lobbyId);
         }
         logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
 

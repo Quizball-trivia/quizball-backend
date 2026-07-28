@@ -111,8 +111,10 @@ export function simulateFixture(
     }
   }
 
-  const totalA = correctA * 100 + goalsA * 20;
-  const totalB = correctB * 100 + goalsB * 20;
+  // totalPoints must reflect the FINAL scoreline (a forced-winner swap may have
+  // changed the goals above), not the pre-swap goals.
+  const totalA = correctA * 100 + finalGoalsA * 20;
+  const totalB = correctB * 100 + finalGoalsB * 20;
 
   return {
     winnerIsA,

@@ -81,36 +81,35 @@ async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: num
   const untouchedBotIds = rosterIds.filter((id) => !writtenBots.has(id));
 
   const CHUNK = opts.chunk ?? 250;
-  let gateChecked = false;
+  const chunkArr: (typeof remaining)[] = [];
+  for (let i = 0; i < remaining.length; i += CHUNK) chunkArr.push(remaining.slice(i, i + CHUNK));
+  const passes = chunkArr.length > 0 ? chunkArr : [[] as typeof remaining];
+
+  let runId: string | null = null;
   let committedChunks = 0;
-  for (let i = 0; i < remaining.length; i += CHUNK) {
-    const chunk = remaining.slice(i, i + CHUNK);
-    const isLast = i + CHUNK >= remaining.length;
+  for (let ci = 0; ci < passes.length; ci++) {
+    const chunk = passes[ci];
+    const isFirst = ci === 0;
+    const isLast = ci === passes.length - 1;
     await sql.begin(async (tx) => {
       await data.lockBurnIn(tx);
-      await data.assertNotBurnedIn(tx);
-      if (!gateChecked) {
+      if (isFirst) {
+        runId = await data.claimRunning(tx, manifestHash, 42, ceilingRp);
         if (untouchedBotIds.length > 0) {
           await data.lockRosterGateRows(tx, untouchedBotIds);
           const violations = await data.findNonPristineBots(tx, untouchedBotIds);
           if (violations.length > 0) throw new Error(`not pristine: ${violations.map((v) => v.nickname).join(',')}`);
         }
-        gateChecked = true;
+      } else {
+        await data.assertRunClaim(tx, manifestHash, runId!);
       }
       for (const f of chunk) await writeFixtureInTx(tx, f);
-      if (isLast) await data.insertBurnInMarker(tx, manifestHash, 42, fixtures.length, ceilingRp);
+      if (isLast) await data.completeRun(tx, manifestHash, runId!, fixtures.length);
     });
     committedChunks++;
     if (opts.crashAfterChunk != null && committedChunks >= opts.crashAfterChunk && !isLast) {
       throw new Error('simulated crash between chunks');
     }
-  }
-  if (remaining.length === 0) {
-    await sql.begin(async (tx) => {
-      await data.lockBurnIn(tx);
-      await data.assertNotBurnedIn(tx);
-      await data.insertBurnInMarker(tx, manifestHash, 42, fixtures.length, ceilingRp);
-    });
   }
   return { manifestHash, matchIds: fixtures.map((f) => f.matchId), fixtures };
 }
@@ -167,13 +166,24 @@ describe('execute (chunked)', () => {
     // Crash after the first small chunk commits.
     await expect(execute(bots, 100_000, { chunk: 2, crashAfterChunk: 1 })).rejects.toThrow(/simulated crash/);
 
-    // A committed PREFIX exists (some matches), the run is NOT marked complete.
+    // A committed PREFIX exists (some matches); the run holds a 'running' claim
+    // (NOT 'complete') — the crash left it in progress.
     const written1 = new Set((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])`).map((r) => r.id));
     expect(written1.size).toBeGreaterThan(0);
     expect(written1.size).toBeLessThan(matchIds.length);
-    expect(await data.readBurnInMarker()).toBeNull();
+    const midMarker = await data.readBurnInMarker();
+    expect(midMarker?.status).toBe('running');
 
-    // RERUN: same plan, skips the written prefix, finishes the rest, marks complete.
+    // Simulate the crashed process no longer heartbeating: backdate the claim so
+    // the resume can take it over (a live process would keep it fresh → refuse).
+    await sql`
+      UPDATE bot_model_params
+      SET params = params || ${sql.json({ heartbeatAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() })}
+      WHERE note = 'persistent-bot-burnin:complete'
+    `;
+
+    // RERUN: same plan, takes over the stale claim, skips the written prefix,
+    // finishes the rest, marks complete.
     await execute(bots, 100_000, { chunk: 2 });
     const written2 = new Set((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])`).map((r) => r.id));
     expect(written2.size).toBe(matchIds.length);
@@ -266,6 +276,30 @@ describe('execute (chunked)', () => {
 
     // A second run (same plan) refuses via the one-time marker.
     await expect(execute(bots, 100_000)).rejects.toThrow(/already burned in/i);
+  });
+
+  it('a concurrent execute REFUSES while a live (running) claim is held (MAJOR: no interleave)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    await clearMarker();
+    const bots = await Promise.all([seedBot(91, -0.3), seedBot(92, 0.2), seedBot(93, 0.0), seedBot(94, 0.1)]);
+    const { manifestHash } = plan(bots, 100_000);
+
+    // Simulate run A having claimed 'running' with a FRESH heartbeat (a live run
+    // mid-way between chunks — the exact concurrency window CodeRabbit flagged).
+    await sql.begin(async (tx) => {
+      await data.lockBurnIn(tx);
+      await data.claimRunning(tx, manifestHash, 42, 100_000);
+    });
+    const held = await data.readBurnInMarker();
+    expect(held?.status).toBe('running');
+
+    // Run B (concurrent) must REFUSE — not interleave and write.
+    await expect(execute(bots, 100_000)).rejects.toThrow(/concurrent live run|in progress/i);
+    // No fixtures were written by run B.
+    const [{ c }] = await sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM match_players WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[])`;
+    expect(c).toBe(0);
+
+    await clearMarker();
   });
 
   it('the pristine gate refuses a dirty bot INSIDE the tx — nothing committed', async ({ skip }) => {

@@ -84,8 +84,10 @@ export async function loadRoster(limit: number | null): Promise<BurnInBot[]> {
 
 /**
  * Live human top-10 RP for the hard ceiling. HUMANS ONLY (is_ai=false) — the
- * ceiling exists so bots never rank above real players. Returns null if fewer
- * than 10 placed humans exist yet (caller falls back to a conservative cap).
+ * ceiling exists so bots never rank above real players. If 10+ placed humans
+ * exist, returns the 10th-highest RP. If 1–9 exist, returns the LOWEST of them
+ * (a conservative ceiling below the smallest real human). Returns null ONLY when
+ * NO placed human exists (caller then falls back to a conservative absolute cap).
  */
 export async function loadHumanTop10Rp(): Promise<number | null> {
   const rows = await sql<{ rp: number }[]>`
@@ -121,16 +123,29 @@ export async function loadActiveCategoryIds(): Promise<string[]> {
 // across a restart.
 const BURN_IN_ADVISORY_LOCK_KEY = 728_150_100; // mirrors the migration date
 
+// A 'running' marker whose heartbeat/start is older than this is considered a
+// dead run and may be taken over by a resume of the SAME manifest.
+const RUN_STALE_MS = 60_000;
+
 /** One-time marker row stored in bot_model_params.params. */
 export interface RunMarker {
   kind: 'burnin-marker';
   manifestHash: string;
-  status: 'complete';
+  status: 'running' | 'complete';
+  /** Random per-process id; every subsequent chunk re-checks it (fail-closed). */
+  runId: string;
   seed: number;
   fixtureCount: number;
   /** The live-derived ceiling the run used — so rollback recomputes the SAME plan. */
   ceilingRp: number;
-  completedAt: string;
+  startedAt: string;
+  /** Bumped each chunk so a live run isn't mistaken for stale (resume takeover). */
+  heartbeatAt: string;
+  completedAt?: string;
+}
+
+function newRunId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 /** Take the xact advisory lock for the current transaction (pooler-safe). */
@@ -154,26 +169,86 @@ export async function lockRosterGateRows(tx: TransactionSql, userIds: string[]):
   await tx`SELECT user_id FROM user_xp_events WHERE user_id = ANY(${userIds}::uuid[]) FOR UPDATE`;
 }
 
-/** Refuse (throw) if a burn-in marker already exists. Call under the lock. */
-export async function assertNotBurnedIn(tx: TransactionSql): Promise<void> {
+export class RunClaimError extends Error {}
+
+/**
+ * Claim the run in the FIRST chunk's tx (under the advisory lock). Inserts a
+ * durable 'running' marker with OUR runId, so concurrent --execute runs that
+ * interleave between chunks are blocked even though the advisory lock is
+ * released on each chunk commit. Decision (all under the lock):
+ *   - no marker                        → claim (insert 'running' + our runId)
+ *   - 'complete'                       → refuse (already burned in)
+ *   - 'running' + different manifest   → refuse (a different run holds it)
+ *   - 'running' + same manifest, fresh → refuse (a concurrent live run of this
+ *                                        plan is in progress)
+ *   - 'running' + same manifest, STALE → take over (crashed run; this is a
+ *                                        resume — idempotent skip handles dupes)
+ * Returns our runId (passed to every later chunk's re-check).
+ */
+export async function claimRunning(tx: TransactionSql, manifestHash: string, seed: number, ceilingRp: number): Promise<string> {
   const rows = await tx<{ params: RunMarker }[]>`
     SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
   `;
-  if (rows.length > 0) {
-    const m = rows[0].params;
-    throw new Error(`ABORT: this environment is already burned in (manifest ${m.manifestHash}, ${m.completedAt}) — refusing.`);
+  const now = new Date().toISOString();
+  if (rows.length === 0) {
+    const runId = newRunId();
+    const marker: RunMarker = {
+      kind: 'burnin-marker', manifestHash, status: 'running', runId, seed, fixtureCount: 0, ceilingRp,
+      startedAt: now, heartbeatAt: now,
+    };
+    await tx`
+      INSERT INTO bot_model_params (params, active, note)
+      VALUES (${sql.json(marker as unknown as Record<string, unknown>)}, false, ${BURN_IN_MARKER_NOTE})
+    `;
+    return runId;
   }
+  const m = rows[0].params;
+  if (m.status === 'complete') {
+    throw new RunClaimError(`ABORT: this environment is already burned in (manifest ${m.manifestHash}, ${m.completedAt ?? '?'}) — refusing.`);
+  }
+  if (m.manifestHash !== manifestHash) {
+    throw new RunClaimError(`ABORT: a DIFFERENT burn-in run is in progress (manifest ${m.manifestHash}, runId ${m.runId}) — refusing.`);
+  }
+  const ageMs = Date.now() - new Date(m.heartbeatAt ?? m.startedAt).getTime();
+  if (ageMs < RUN_STALE_MS) {
+    throw new RunClaimError(`ABORT: a concurrent live run of this plan is in progress (heartbeat ${Math.round(ageMs / 1000)}s ago) — refusing.`);
+  }
+  // Stale same-manifest run → take it over (resume). New runId invalidates the old.
+  const runId = newRunId();
+  await tx`
+    UPDATE bot_model_params
+    SET params = params || ${sql.json({ runId, heartbeatAt: now, ceilingRp })}
+    WHERE note = ${BURN_IN_MARKER_NOTE}
+  `;
+  return runId;
 }
 
-/** Insert the one-time 'complete' marker (same tx as the writes). */
-export async function insertBurnInMarker(tx: TransactionSql, manifestHash: string, seed: number, fixtureCount: number, ceilingRp: number): Promise<void> {
-  const marker: RunMarker = {
-    kind: 'burnin-marker', manifestHash, status: 'complete', seed, fixtureCount, ceilingRp,
-    completedAt: new Date().toISOString(),
-  };
+/**
+ * Re-assert our claim in a later chunk's tx (under the lock). Fail-closed: if the
+ * marker is gone, no longer 'running', or held by a DIFFERENT runId (a takeover),
+ * abort — this chunk's writes must not land. Bumps the heartbeat.
+ */
+export async function assertRunClaim(tx: TransactionSql, manifestHash: string, runId: string): Promise<void> {
+  const rows = await tx<{ params: RunMarker }[]>`
+    SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
+  `;
+  const m = rows[0]?.params;
+  if (!m || m.status !== 'running' || m.manifestHash !== manifestHash || m.runId !== runId) {
+    throw new RunClaimError(`ABORT: burn-in run claim lost (marker runId ${m?.runId ?? 'none'}/${m?.status ?? 'gone'} != ${runId}) — aborting fail-closed.`);
+  }
   await tx`
-    INSERT INTO bot_model_params (params, active, note)
-    VALUES (${sql.json(marker as unknown as Record<string, unknown>)}, false, ${BURN_IN_MARKER_NOTE})
+    UPDATE bot_model_params SET params = params || ${sql.json({ heartbeatAt: new Date().toISOString() })}
+    WHERE note = ${BURN_IN_MARKER_NOTE}
+  `;
+}
+
+/** Flip the marker 'running' → 'complete' in the FINAL chunk's tx (verifies our claim). */
+export async function completeRun(tx: TransactionSql, manifestHash: string, runId: string, fixtureCount: number): Promise<void> {
+  await assertRunClaim(tx, manifestHash, runId);
+  await tx`
+    UPDATE bot_model_params
+    SET params = params || ${sql.json({ status: 'complete', fixtureCount, completedAt: new Date().toISOString() })}
+    WHERE note = ${BURN_IN_MARKER_NOTE}
   `;
 }
 

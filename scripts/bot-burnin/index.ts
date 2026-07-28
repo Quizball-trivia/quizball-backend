@@ -31,8 +31,9 @@ import {
   loadActiveCategoryIds,
   findNonPristineBots,
   lockBurnIn,
-  assertNotBurnedIn,
-  insertBurnInMarker,
+  claimRunning,
+  assertRunClaim,
+  completeRun,
   validatedExistingMatchIds,
   lockRosterGateRows,
 } from './data.js';
@@ -65,8 +66,14 @@ interface Args {
 
 function parseDate(raw: string | undefined, flag: string): Date | undefined {
   if (raw == null) return undefined;
+  // Require an explicit ISO-8601 date/datetime (e.g. 2026-07-28 or
+  // 2026-07-28T00:00:00Z) — reject loose strings like "2026" or "next week"
+  // that Date() would silently accept, so the season window is unambiguous.
+  if (!/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(raw)) {
+    throw new Error(`Malformed date for ${flag}: '${raw}' — expected ISO-8601 (e.g. 2026-07-28 or 2026-07-28T00:00:00Z).`);
+  }
   const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) throw new Error(`Malformed date for ${flag}: ${raw}`);
+  if (Number.isNaN(d.getTime())) throw new Error(`Malformed date for ${flag}: '${raw}'.`);
   return d;
 }
 
@@ -85,7 +92,12 @@ function parseArgs(argv: string[]): Args {
   const paramsPath = get('--params');
   if (!paramsPath) throw new Error('--params <file> is required (zod-validated calibration params).');
   const execute = has('--execute');
-  const seasonEndArg = parseDate(get('--season-end') ?? get('--run-date'), '--season-end');
+  // --run-date is a legacy alias for --season-end; validate under whichever flag
+  // the user actually passed so the error names the right flag.
+  const seasonEndRaw = get('--season-end');
+  const seasonEndArg = seasonEndRaw != null
+    ? parseDate(seasonEndRaw, '--season-end')
+    : parseDate(get('--run-date'), '--run-date');
   // For --execute the window end MUST be explicit so H is resume-stable.
   if (execute && seasonEndArg == null) {
     throw new Error('--execute requires an explicit --season-end <ISO date> (no wall-clock default, so the run hash is stable across resume).');
@@ -217,17 +229,31 @@ async function main(): Promise<void> {
 
   const CHUNK = 250;
   let written = 0;
-  let gateChecked = false;
-  for (let i = 0; i < remaining.length; i += CHUNK) {
-    const chunk = remaining.slice(i, i + CHUNK);
-    const isLastChunk = i + CHUNK >= remaining.length;
-    await sql.begin(async (tx) => {
-      await lockBurnIn(tx); // serialize vs concurrent runs (released on commit)
-      await assertNotBurnedIn(tx); // one-time guard (marker inserted only at the end)
+  // Our durable run claim — set in the first tx, re-checked in every later tx,
+  // flipped to 'complete' in the last. This blocks concurrent --execute runs
+  // that interleave between chunks (the per-chunk advisory lock alone does not,
+  // since it releases on each commit).
+  let runId: string | null = null;
 
-      // Pristine gate under FOR UPDATE row locks across EVERY table the gate
-      // reads (P2/P3-pristine-race), once, in the first chunk — UNTOUCHED bots.
-      if (!gateChecked) {
+  const chunks: (typeof remaining)[] = [];
+  for (let i = 0; i < remaining.length; i += CHUNK) chunks.push(remaining.slice(i, i + CHUNK));
+  // A fully-resumed run (nothing remaining) still needs a finalize tx to claim
+  // (take over the stale prior claim) + complete. Represent it as one empty tx.
+  const passes = chunks.length > 0 ? chunks : [[]];
+
+  for (let ci = 0; ci < passes.length; ci++) {
+    const chunk = passes[ci];
+    const isFirst = ci === 0;
+    const isLast = ci === passes.length - 1;
+    await sql.begin(async (tx) => {
+      await lockBurnIn(tx); // serialize this tx vs concurrent runs
+
+      if (isFirst) {
+        // Claim the run (insert/takeover 'running') — refuses on a concurrent
+        // live run or a completed run.
+        runId = await claimRunning(tx, manifestHash, args.seed, ceilingRp);
+        // Pristine gate under FOR UPDATE row locks across EVERY table the gate
+        // reads (P2/P3), for the UNTOUCHED bots only.
         if (untouchedBotIds.length > 0) {
           await lockRosterGateRows(tx, untouchedBotIds);
           const violations = await findNonPristineBots(tx, untouchedBotIds);
@@ -236,30 +262,23 @@ async function main(): Promise<void> {
             throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
           }
         }
-        gateChecked = true;
+      } else {
+        // Every later chunk re-asserts our claim fail-closed (a takeover aborts).
+        await assertRunClaim(tx, manifestHash, runId!);
       }
 
       for (const fixture of chunk) {
         await writeFixtureInTx(tx, fixture);
       }
 
-      // The completion marker lands in the SAME tx as the last chunk, so a crash
-      // before the final chunk never leaves a 'complete' marker.
-      if (isLastChunk) {
-        await insertBurnInMarker(tx, manifestHash, args.seed, fixtures.length, ceilingRp);
+      // 'complete' lands in the SAME tx as the last chunk, so a crash before the
+      // final chunk never leaves a 'complete' marker (only 'running').
+      if (isLast) {
+        await completeRun(tx, manifestHash, runId!, fixtures.length);
       }
     });
     written += chunk.length;
-    process.stdout.write(`  … ${written}/${remaining.length} fixtures written (chunk committed)\n`);
-  }
-
-  // No remaining fixtures (a fully-resumed run) but no marker yet → finalize.
-  if (remaining.length === 0) {
-    await sql.begin(async (tx) => {
-      await lockBurnIn(tx);
-      await assertNotBurnedIn(tx);
-      await insertBurnInMarker(tx, manifestHash, args.seed, fixtures.length, ceilingRp);
-    });
+    if (chunk.length > 0) process.stdout.write(`  … ${written}/${remaining.length} fixtures written (chunk committed)\n`);
   }
 
   process.stdout.write(

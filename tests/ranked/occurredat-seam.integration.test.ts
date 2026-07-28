@@ -50,10 +50,10 @@ beforeAll(async () => {
     const dbModule = await import('../../src/db/index.js');
     sql = dbModule.sql;
     await sql`SELECT 1`;
-    dbAvailable = true;
     matchesService = (await import('../../src/modules/matches/matches.service.js')).matchesService;
     rankedService = (await import('../../src/modules/ranked/ranked.service.js')).rankedService;
     progressionService = (await import('../../src/modules/progression/progression.service.js')).progressionService;
+    dbAvailable = true; // only after ALL imports succeed
   } catch {
     console.warn('\n⚠️  Skipping occurredAt-seam integration tests: DB unavailable.\n');
   }

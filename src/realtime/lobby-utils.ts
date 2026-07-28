@@ -1,12 +1,15 @@
 import crypto from 'crypto';
 
 import type { QuizballServer } from './socket-server.js';
+import type { LobbyGameMode } from './socket.types.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { logger } from '../core/logger.js';
 import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 
 export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
+/** Auction seats exactly 3 players (humans + bot backfill). */
+export const FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS = 3;
 const LOBBY_LOCK_TTL_MS = 3000;
 
 const LOBBY_NAME_ADJECTIVES = [
@@ -52,11 +55,39 @@ export function generateLobbyName(): string {
 
 export function normalizeFriendlyGameMode(
   gameMode: string | null | undefined
-): 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim' {
-  if (gameMode === 'friendly_party_quiz' || gameMode === 'ranked_sim') {
+): LobbyGameMode {
+  if (
+    gameMode === 'friendly_party_quiz'
+    || gameMode === 'auction'
+    || gameMode === 'ranked_sim'
+  ) {
     return gameMode;
   }
   return 'friendly_possession';
+}
+
+/**
+ * How many members a friendly lobby may HOLD in a given game mode.
+ *
+ * Possession shares the party ceiling because a possession lobby is allowed to
+ * grow past 2 — it just auto-promotes to party quiz when it does. Auction is
+ * hard-capped at its 3 seats.
+ */
+export function maxMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
+  return gameMode === 'auction'
+    ? FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS
+    : FRIENDLY_LOBBY_MAX_MEMBERS;
+}
+
+/**
+ * How many members can actually PLAY the given mode — the limit a host must
+ * satisfy to switch into it. Possession is strictly a 2-player duel, so unlike
+ * `maxMembersForFriendlyGameMode` it does not inherit the party ceiling.
+ */
+export function playableMembersForFriendlyGameMode(gameMode: LobbyGameMode): number {
+  if (gameMode === 'auction') return FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS;
+  if (gameMode === 'friendly_possession' || gameMode === 'ranked_sim') return 2;
+  return FRIENDLY_LOBBY_MAX_MEMBERS;
 }
 
 async function syncFriendlyLobbyModeForMemberCountInternal(
@@ -70,11 +101,17 @@ async function syncFriendlyLobbyModeForMemberCountInternal(
 
   const memberCount = await lobbiesRepo.countMembers(lobbyId);
   const currentMode = normalizeFriendlyGameMode(lobby.game_mode);
-  const nextMode = memberCount > 2 ? 'friendly_party_quiz' : currentMode;
+  // Auction is an explicitly chosen 3-seat mode — a third member is expected
+  // there and must NOT auto-promote the lobby to party quiz.
+  const nextMode = memberCount > 2 && currentMode !== 'auction'
+    ? 'friendly_party_quiz'
+    : currentMode;
 
+  // Only the actual promotion into party quiz invalidates ready states. An
+  // auction lobby taking its expected third member changes nothing.
   const shouldClearReady =
     options?.clearReadyOnPartyTransition === true &&
-    memberCount > 2 &&
+    nextMode === 'friendly_party_quiz' &&
     currentMode !== 'friendly_party_quiz';
 
   if (nextMode !== currentMode) {

@@ -1,40 +1,73 @@
 /**
- * Guards burn-in/rollback scripts against silently targeting a remote DB.
+ * Guards burn-in/rollback scripts against silently targeting the wrong DB.
  *
  * An incident occurred where cleanup DELETEs hit staging because a bare
- * `loadEnv()` call (loading `.env`) overrode `.env.local`'s localhost DSN
- * with the staging pooler DSN. This guard makes the resolved DB host an
- * explicit, checked precondition instead of an implicit side effect of
- * dotenv load order.
+ * `loadEnv()` call (loading `.env`) overrode `.env.local`'s localhost DSN with
+ * the staging pooler DSN. This guard makes the resolved DB target an explicit,
+ * checked precondition instead of an implicit side effect of dotenv load order.
+ *
+ * Rules:
+ *   - localhost / 127.0.0.1 → allowed without confirmation.
+ *   - any non-local host → requires --allow-remote AND a BURNIN_CONFIRM_ENV that
+ *     MATCHES the target's identity (not merely nonempty):
+ *       * Supabase (host contains 'supabase.co'/'pooler.supabase.com', case-
+ *         insensitive) → identity = the project ref (e.g. the user
+ *         'postgres.<ref>' or the '<ref>.supabase.co' subdomain).
+ *       * any other remote → identity = the hostname.
+ *     Confirmation is compared case-insensitively.
  */
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
-const MANAGED_POOLER_SUBSTRINGS = ['pooler.supabase.com', '.supabase.co'];
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
-function parseHost(dsn: string): string {
+interface TargetIdentity {
+  host: string;
+  isLocal: boolean;
+  isSupabase: boolean;
+  /** The value BURNIN_CONFIRM_ENV must match (project ref, or hostname). */
+  confirmToken: string;
+}
+
+export function resolveTarget(dsn: string): TargetIdentity {
+  let url: URL;
   try {
-    return new URL(dsn).hostname;
+    url = new URL(dsn);
   } catch {
-    throw new Error(`Refusing to run burn-in: could not parse DB host from DSN '${dsn}'.`);
+    throw new Error(`Refusing to run burn-in: could not parse DB DSN.`);
   }
+  const host = url.hostname.toLowerCase();
+  const isLocal = LOCAL_HOSTS.has(host);
+  const isSupabase = host.includes('supabase.co') || host.includes('pooler.supabase.com');
+
+  // Supabase project ref: the pooler user is 'postgres.<ref>'; the direct host
+  // is '<ref>.supabase.co'. Prefer the user-embedded ref, else the subdomain.
+  let confirmToken = host;
+  if (isSupabase) {
+    const user = decodeURIComponent(url.username);
+    const userRef = user.startsWith('postgres.') ? user.slice('postgres.'.length) : '';
+    const sub = host.endsWith('.supabase.co') ? host.split('.')[0] : '';
+    confirmToken = (userRef || sub || host).toLowerCase();
+  }
+  return { host, isLocal, isSupabase, confirmToken };
 }
 
 export function assertDbTarget(dsn: string, opts: { allowRemote: boolean }): void {
-  const host = parseHost(dsn);
-  const isLocal = LOCAL_HOSTS.has(host);
-  const isManagedPooler = MANAGED_POOLER_SUBSTRINGS.some((substr) => dsn.includes(substr));
+  const t = resolveTarget(dsn);
+  if (t.isLocal) return;
 
-  if (!isLocal && !opts.allowRemote) {
+  if (!opts.allowRemote) {
     throw new Error(
-      `Refusing to run burn-in against non-local DB host '${host}'. Pass --allow-remote to target a deliberate remote environment.`,
+      `Refusing to run burn-in against non-local DB host '${t.host}'. Pass --allow-remote to target a deliberate remote environment.`,
     );
   }
 
-  if (isManagedPooler) {
-    const confirmEnv = process.env.BURNIN_CONFIRM_ENV ?? '';
-    if (confirmEnv.trim() === '') {
-      throw new Error(
-        `Refusing to run burn-in against managed-pooler DB host '${host}'. Set BURNIN_CONFIRM_ENV=<environment name> to explicitly acknowledge the target environment.`,
-      );
-    }
+  const confirm = (process.env.BURNIN_CONFIRM_ENV ?? '').trim().toLowerCase();
+  if (confirm === '') {
+    throw new Error(
+      `Refusing to run burn-in against remote host '${t.host}'. Set BURNIN_CONFIRM_ENV to the target identity ('${t.confirmToken}') to explicitly acknowledge it.`,
+    );
+  }
+  if (confirm !== t.confirmToken) {
+    throw new Error(
+      `BURNIN_CONFIRM_ENV='${confirm}' does not match the target identity '${t.confirmToken}' (host '${t.host}'). Refusing — this prevents pointing a confirmation for one environment at another.`,
+    );
   }
 }

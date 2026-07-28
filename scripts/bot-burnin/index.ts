@@ -21,7 +21,7 @@
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
 import { parseBotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
@@ -29,13 +29,16 @@ import {
   loadRoster,
   loadHumanTop10Rp,
   loadActiveCategoryIds,
-  claimBurnInMarker,
   findNonPristineBots,
+  acquireRunLock,
+  resolveRun,
+  insertRunningMarker,
+  markRunComplete,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
-import { snapshotProfiles } from './snapshot.js';
+import { snapshotProfiles, writeSnapshotExclusive, readSnapshot } from './snapshot.js';
 import { writeFixture } from './writer.js';
 import { ReceiptWriter, parseReceipt } from './receipt.js';
 import { assertDbTarget } from './target-guard.js';
@@ -101,6 +104,11 @@ async function main(): Promise<void> {
   if (args.execute && !args.snapshotOut) {
     throw new Error('--execute requires --snapshot-out <file> (write-once pre-run snapshot for rollback).');
   }
+  // --limit is DRY-RUN ONLY: a partial burn plus a global one-time marker is
+  // incoherent (the marker would claim a full burn while only a subset ran).
+  if (args.execute && args.limit != null) {
+    throw new Error('--limit is dry-run-only; refusing --execute --limit (a partial burn + global marker is incoherent).');
+  }
 
   const params = parseBotModelParams(JSON.parse(readFileSync(resolve(args.paramsPath), 'utf8')));
 
@@ -128,8 +136,7 @@ async function main(): Promise<void> {
     ceilingMarginRp: args.marginRp,
     ceilingRp,
     humanTop10Rp,
-    paramsGeneratedAt: params.generatedAt,
-    paramsBatchId: params.source.batchId,
+    params,
     bots: roster,
     categoryIds,
   });
@@ -162,101 +169,106 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ── Execute preconditions ──────────────────────────────────────────────────
+  // ── Execute preconditions (config-only, pre-lock) ──────────────────────────
   if (!report.ceilingRespected) {
     throw new Error('ABORT: simulated distribution violates the hard ceiling. No writes performed.');
   }
   if (persistentBotsFlagOn()) {
     throw new Error('ABORT: PERSISTENT_BOTS flag is ON — burn-in must run before selection activates.');
   }
-  const violations = await findNonPristineBots(roster.map((b) => b.userId));
-  if (violations.length > 0) {
-    const detail = violations.slice(0, 10).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
-    throw new Error(
-      `ABORT: ${violations.length} roster bot(s) are not pristine — burn-in refuses to touch dirty state:\n${detail}`,
-    );
-  }
 
   const snapshotPath = resolve(args.snapshotOut!);
   const receiptPath = resolve(args.receiptOut ?? args.snapshotOut!.replace(/\.json$/, '') + '.receipt.jsonl');
 
-  // ── Write-once snapshot + resume detection ─────────────────────────────────
-  const isResume = existsSync(snapshotPath);
-  let snapshot: BurnInSnapshot;
-  if (isResume) {
-    snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8')) as BurnInSnapshot;
-    if (snapshot.manifestHash !== manifestHash) {
-      throw new Error(
-        `ABORT: existing snapshot is for a DIFFERENT run (manifest ${snapshot.manifestHash} != ${manifestHash}). ` +
-          'Refusing to overwrite. Roll back the prior run or point --snapshot-out at a fresh file.',
-      );
-    }
-    if (!existsSync(receiptPath)) {
-      throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing — cannot reconcile.`);
-    }
-    const parsed = parseReceipt(receiptPath);
-    if (parsed.header.manifestHash !== manifestHash) {
-      throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
-    }
-    process.stdout.write(`\nRESUME: reusing snapshot + receipt for manifest ${manifestHash}.\n`);
-  } else {
-    if (existsSync(receiptPath)) {
-      throw new Error(`ABORT: receipt ${receiptPath} exists but snapshot does not — inconsistent state, refusing.`);
-    }
-    snapshot = await snapshotProfiles(roster, {
-      manifestHash,
-      seed: args.seed,
-      env,
-      ceilingRp,
-      humanTop10Rp,
-      marginRp: args.marginRp,
-    });
-    writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
-    process.stdout.write(`\nSnapshot written (write-once): ${snapshotPath}\n`);
-  }
-
-  // ── Append-only JSONL receipt ──────────────────────────────────────────────
-  const receipt = new ReceiptWriter(receiptPath, isResume);
-  if (!isResume) {
-    receipt.writeHeader({
-      kind: 'header',
-      createdAt: new Date().toISOString(),
-      manifestHash,
-      seed: args.seed,
-      env,
-      rosterUserIds: roster.map((b) => b.userId),
-    });
-  }
-
+  // ── Single run-identity model under a held session advisory lock ───────────
+  // The lock (dedicated connection) is held across the WHOLE run so two
+  // concurrent --execute can never both burn in — the loser blocks, then reads
+  // the marker and refuses/resumes. The marker is the durable one-time guard;
+  // the decision table lives in resolveRun().
+  const lock = await acquireRunLock();
   let written = 0;
   try {
-    for (const fixture of schedule.fixtures) {
-      // Durably record the PLANNED line BEFORE any DB write for this fixture, so
-      // a crash mid-fixture still enumerates it on resume (finding 3).
-      const line = {
-        ordinal: fixture.ordinal,
-        key: fixture.key,
-        matchId: fixture.matchId,
-        botAUserId: fixture.botAUserId,
-        botBUserId: fixture.botBUserId,
-        winnerUserId: fixture.winnerUserId,
-        startedAt: fixture.startedAt.toISOString(),
-        endedAt: fixture.endedAt.toISOString(),
-      };
-      receipt.writePlanned(line);
-      await writeFixture(fixture, ceilingRp);
-      receipt.writeWritten(line);
-      written++;
-      if (written % 100 === 0) {
-        process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
-      }
+    const decision = await resolveRun(lock, manifestHash);
+    if (decision.kind === 'refuse') {
+      throw new Error(`ABORT: ${decision.reason}`);
     }
-  } finally {
-    receipt.close();
-  }
+    const isResume = decision.kind === 'resume';
 
-  // Atomic one-time marker keyed by the run manifest (finding 9).
-  await claimBurnInMarker(manifestHash, args.seed, schedule.fixtures.length);
+    let snapshot: BurnInSnapshot;
+    if (isResume) {
+      // RESUME: the receipt is the source of truth for what's done — the
+      // pristine gate is DELIBERATELY SKIPPED (a half-done run is not pristine).
+      if (!existsSync(snapshotPath)) {
+        throw new Error(`ABORT: resume marker present but snapshot ${snapshotPath} is missing — cannot reconcile.`);
+      }
+      snapshot = readSnapshot(snapshotPath);
+      if (snapshot.manifestHash !== manifestHash) {
+        throw new Error(`ABORT: snapshot manifest ${snapshot.manifestHash} != ${manifestHash}.`);
+      }
+      if (!existsSync(receiptPath)) {
+        throw new Error(`ABORT: resume snapshot present but receipt ${receiptPath} is missing — cannot reconcile.`);
+      }
+      const parsed = parseReceipt(receiptPath);
+      if (parsed.header.manifestHash !== manifestHash) {
+        throw new Error(`ABORT: receipt header manifest ${parsed.header.manifestHash} != ${manifestHash}.`);
+      }
+      process.stdout.write(`\nRESUME (marker 'running', manifest ${manifestHash}): pristine gate SKIPPED, reconciling from snapshot+receipt.\n`);
+    } else {
+      // FRESH: run the FULL pristine gate under the lock (serialized vs
+      // selection/reservations), then write-once snapshot + running marker.
+      const violations = await findNonPristineBots(roster.map((b) => b.userId));
+      if (violations.length > 0) {
+        const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
+        throw new Error(
+          `ABORT: ${violations.length} roster bot(s) are not pristine — burn-in refuses to touch dirty state:\n${detail}`,
+        );
+      }
+      if (existsSync(receiptPath)) {
+        throw new Error(`ABORT: no marker but receipt ${receiptPath} exists — inconsistent state, refusing.`);
+      }
+      snapshot = await snapshotProfiles(roster, {
+        manifestHash, seed: args.seed, env, ceilingRp, humanTop10Rp, marginRp: args.marginRp,
+      });
+      // Write-once via exclusive create ('wx'): a pre-existing file → abort.
+      writeSnapshotExclusive(snapshotPath, snapshot);
+      await insertRunningMarker(lock, manifestHash, args.seed);
+      process.stdout.write(`\nFRESH run: pristine gate passed; snapshot written (write-once): ${snapshotPath}\n`);
+    }
+
+    // ── Append-only JSONL receipt ─────────────────────────────────────────────
+    const receipt = new ReceiptWriter(receiptPath, isResume);
+    if (!isResume) {
+      receipt.writeHeader({
+        kind: 'header', createdAt: new Date().toISOString(), manifestHash,
+        seed: args.seed, env, rosterUserIds: roster.map((b) => b.userId),
+      });
+    }
+    try {
+      for (const fixture of schedule.fixtures) {
+        // Durably record the PLANNED line BEFORE any DB write (finding 3).
+        const line = {
+          ordinal: fixture.ordinal, key: fixture.key, matchId: fixture.matchId,
+          botAUserId: fixture.botAUserId, botBUserId: fixture.botBUserId,
+          winnerUserId: fixture.winnerUserId,
+          startedAt: fixture.startedAt.toISOString(), endedAt: fixture.endedAt.toISOString(),
+        };
+        receipt.writePlanned(line);
+        await writeFixture(fixture, ceilingRp);
+        receipt.writeWritten(line);
+        written++;
+        if (written % 100 === 0) {
+          process.stdout.write(`  … ${written}/${schedule.fixtures.length} fixtures written\n`);
+        }
+      }
+    } finally {
+      receipt.close();
+    }
+
+    // Flip the marker to 'complete' (still under the lock).
+    await markRunComplete(lock, manifestHash, schedule.fixtures.length);
+  } finally {
+    await lock.release();
+  }
 
   process.stdout.write(
     `\nEXECUTE complete: ${written} fixtures written.\nReceipt: ${receiptPath}\nSnapshot: ${snapshotPath}\n`,

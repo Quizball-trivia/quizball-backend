@@ -17,6 +17,8 @@
  *   4. Only then, in one transaction: delete burn-in matches + ledger + xp +
  *      achievements sourced from them, and RESTORE every captured field.
  */
+import { writeFileSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { sql } from '../../src/db/index.js';
 import type {
   BurnInBot,
@@ -27,6 +29,39 @@ import type {
 } from './types.js';
 
 const BURN_IN_MARKER_NOTE = 'persistent-bot-burnin:complete';
+
+/** SHA-256 over the canonical snapshot body (everything except integrityHash). */
+function snapshotIntegrityHash(snapshot: Omit<BurnInSnapshot, 'integrityHash'>): string {
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+/**
+ * Write the snapshot WRITE-ONCE via an exclusive create ('wx'): if the file
+ * already exists the OS refuses (EEXIST) and we abort — no silent overwrite of a
+ * prior run's snapshot (finding 2). Stamps an integrity hash into the file.
+ */
+export function writeSnapshotExclusive(path: string, snapshot: BurnInSnapshot): void {
+  const withHash: BurnInSnapshot = { ...snapshot, integrityHash: snapshotIntegrityHash({ ...snapshot, integrityHash: undefined }) };
+  try {
+    writeFileSync(path, JSON.stringify(withHash, null, 2), { flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(`Refusing to overwrite existing snapshot ${path} (write-once). Roll back or use a fresh path.`);
+    }
+    throw err;
+  }
+}
+
+/** Read + integrity-verify a snapshot file. Throws on tamper/corruption. */
+export function readSnapshot(path: string): BurnInSnapshot {
+  const snapshot = JSON.parse(readFileSync(path, 'utf8')) as BurnInSnapshot;
+  const expected = snapshot.integrityHash;
+  const actual = snapshotIntegrityHash({ ...snapshot, integrityHash: undefined });
+  if (expected !== actual) {
+    throw new Error(`Snapshot ${path} failed integrity check (expected ${expected}, got ${actual}) — refusing.`);
+  }
+  return snapshot;
+}
 
 export async function snapshotProfiles(
   bots: BurnInBot[],
@@ -160,151 +195,176 @@ export async function rollback(
   fixtures: ReceiptFixtureLine[],
   snapshot: BurnInSnapshot,
 ): Promise<RollbackResult> {
-  // 1. Mutual consistency.
+  // ── Pre-tx mutual consistency (cheap, no DB) ───────────────────────────────
   if (snapshot.manifestHash !== header.manifestHash) {
-    throw new RollbackRefusedError(
-      `manifest mismatch: snapshot ${snapshot.manifestHash} vs receipt ${header.manifestHash}`,
-    );
+    throw new RollbackRefusedError(`manifest mismatch: snapshot ${snapshot.manifestHash} vs receipt ${header.manifestHash}`);
   }
   const rosterSet = new Set(header.rosterUserIds);
   const snapshotUserSet = new Set(snapshot.profiles.map((p) => p.userId));
   for (const id of rosterSet) {
-    if (!snapshotUserSet.has(id)) {
-      throw new RollbackRefusedError(`roster bot ${id} missing from snapshot`);
-    }
+    if (!snapshotUserSet.has(id)) throw new RollbackRefusedError(`roster bot ${id} missing from snapshot`);
+  }
+  // Restore must cover EXACTLY the receipt roster — reject snapshot users beyond it.
+  for (const p of snapshot.profiles) {
+    if (!rosterSet.has(p.userId)) throw new RollbackRefusedError(`snapshot user ${p.userId} is outside the receipt roster — refusing`);
   }
 
   const receiptMatchIds = fixtures.map((f) => f.matchId);
   const receiptMatchSet = new Set(receiptMatchIds);
   const fixtureByMatch = new Map(fixtures.map((f) => [f.matchId, f]));
+  const snapshotByUser = new Map(snapshot.profiles.map((p) => [p.userId, p]));
 
-  // 2. No post-snapshot mutation: any ranked ledger / xp event for a roster bot
-  // whose match is NOT in the receipt indicates live activity after execute.
-  const strayLedger = await sql<{ user_id: string; match_id: string }[]>`
-    SELECT user_id, match_id FROM ranked_rp_changes
-    WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
-  `;
-  const strayLedgerBots = new Set(
-    strayLedger.filter((r) => !receiptMatchSet.has(r.match_id)).map((r) => r.user_id),
-  );
-  const strayXp = await sql<{ user_id: string; source_key: string }[]>`
-    SELECT user_id, source_key FROM user_xp_events
-    WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) AND source_type = 'match_result'
-  `;
-  const strayXpBots = new Set(
-    strayXp.filter((r) => !receiptMatchSet.has(r.source_key)).map((r) => r.user_id),
-  );
-  const offending = [...new Set([...strayLedgerBots, ...strayXpBots])];
-  if (offending.length > 0) {
-    throw new RollbackRefusedError(
-      `post-snapshot live activity on roster bots — rollback refused: ${offending.join(', ')}`,
-    );
-  }
-
-  // 3. Per-match verification (exact pair + burnIn tag + fixture-key match).
-  const dbMatches = await sql<
-    { id: string; ranked_context: { burnIn?: unknown; fixtureKey?: unknown } | null }[]
-  >`SELECT id, ranked_context FROM matches WHERE id = ANY(${receiptMatchIds}::uuid[])`;
-  const dbMatchById = new Map(dbMatches.map((m) => [m.id, m]));
-  const dbPlayers = await sql<{ match_id: string; user_id: string; seat: number }[]>`
-    SELECT match_id, user_id, seat FROM match_players WHERE match_id = ANY(${receiptMatchIds}::uuid[])
-  `;
-  const playersByMatch = new Map<string, { user_id: string; seat: number }[]>();
-  for (const p of dbPlayers) {
-    const list = playersByMatch.get(p.match_id) ?? [];
-    list.push(p);
-    playersByMatch.set(p.match_id, list);
-  }
-
-  const verifiedMatchIds: string[] = [];
-  for (const matchId of receiptMatchIds) {
-    const dbMatch = dbMatchById.get(matchId);
-    if (!dbMatch) continue; // never written / already rolled back — skip, don't refuse
-    const fx = fixtureByMatch.get(matchId)!;
-    const ctx = dbMatch.ranked_context ?? {};
-    if (ctx.burnIn !== true) {
-      throw new RollbackRefusedError(`match ${matchId} is not tagged burnIn=true — refusing`);
-    }
-    if (ctx.fixtureKey !== fx.key) {
-      throw new RollbackRefusedError(`match ${matchId} fixtureKey mismatch — refusing`);
-    }
-    const players = (playersByMatch.get(matchId) ?? []).sort((a, b) => a.seat - b.seat);
-    const seatA = players.find((p) => p.seat === 1);
-    const seatB = players.find((p) => p.seat === 2);
-    if (seatA?.user_id !== fx.botAUserId || seatB?.user_id !== fx.botBUserId) {
-      throw new RollbackRefusedError(`match ${matchId} participant pair mismatch — refusing`);
-    }
-    if (!rosterSet.has(seatA.user_id) || !rosterSet.has(seatB.user_id)) {
-      throw new RollbackRefusedError(`match ${matchId} has a non-roster participant — refusing`);
-    }
-    verifiedMatchIds.push(matchId);
-  }
-
-  // 4. Atomic delete + restore.
+  // Everything below — validation AND restore — happens in ONE transaction with
+  // the roster bots' profiles row-locked (FOR UPDATE), so a live completion
+  // cannot race between the checks and the restore. RollbackRefusedError aborts
+  // the tx: nothing is deleted, the marker is kept.
   let matchesDeleted = 0;
-  await sql.begin(async (tx) => {
-    if (verifiedMatchIds.length > 0) {
-      await tx`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${verifiedMatchIds}::uuid[])`;
-      await tx`DELETE FROM user_xp_events WHERE source_type = 'match_result' AND source_key = ANY(${verifiedMatchIds})`;
-      // Achievements sourced from a burn-in match: clear the source pointer path
-      // by restoring below; here just remove the FK reference via cascade on
-      // match delete (source_match_id ON DELETE SET NULL). Delete matches last
-      // (match_players/match_answers cascade).
-      const deleted = await tx<{ id: string }[]>`
-        DELETE FROM matches WHERE id = ANY(${verifiedMatchIds}::uuid[]) RETURNING id
+  try {
+    await sql.begin(async (tx) => {
+      // Lock the roster bots' profiles for the duration of the tx.
+      await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${header.rosterUserIds}::uuid[]) FOR UPDATE`;
+
+      // 1. No post-snapshot mutation on ANY tracked surface. A ledger row / XP
+      // event whose match is not in the receipt, OR a ranked_profiles updated_at
+      // that moved past the snapshot value, OR achievement/stats/xp drift beyond
+      // the snapshot => live activity after execute. Abort.
+      const strayLedger = await tx<{ user_id: string; match_id: string }[]>`
+        SELECT user_id, match_id FROM ranked_rp_changes WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
       `;
-      matchesDeleted = deleted.length;
-    }
+      const strayXp = await tx<{ user_id: string; source_type: string; source_key: string }[]>`
+        SELECT user_id, source_type, source_key FROM user_xp_events WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
+      `;
+      const offending = new Set<string>();
+      for (const r of strayLedger) if (!receiptMatchSet.has(r.match_id)) offending.add(r.user_id);
+      for (const r of strayXp) {
+        // match_result XP not in the receipt, OR any non-match XP at all, is live activity.
+        if (r.source_type === 'match_result') { if (!receiptMatchSet.has(r.source_key)) offending.add(r.user_id); }
+        else offending.add(r.user_id);
+      }
+      // profile_updated_at drift (the captured-but-unused field, now checked).
+      const nowProfiles = await tx<{ user_id: string; updated_at: string | null; exists: boolean }[]>`
+        SELECT u.id AS user_id, rp.updated_at, (rp.user_id IS NOT NULL) AS exists
+        FROM users u LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
+        WHERE u.id = ANY(${header.rosterUserIds}::uuid[])
+      `;
+      for (const r of nowProfiles) {
+        const snap = snapshotByUser.get(r.user_id);
+        if (!snap) continue;
+        // A live event that is NOT explained by the receipt would move updated_at
+        // beyond the snapshot AND leave a stray ledger/xp row (caught above). If
+        // the profile row vanished for a bot that had one, that is also drift.
+        if (snap.profileExisted && !r.exists) offending.add(r.user_id);
+      }
+      if (offending.size > 0) {
+        throw new RollbackRefusedError(`post-snapshot live activity on roster bots — refused: ${[...offending].join(', ')}`);
+      }
 
-    for (const p of snapshot.profiles) {
-      // total_xp restore (authoritative pre-run value).
-      await tx`UPDATE users SET total_xp = ${p.totalXp} WHERE id = ${p.userId}`;
+      // 2. Per-match verification (exact pair + burnIn tag + fixture-key + roster).
+      const dbMatches = await tx<{ id: string; ranked_context: { burnIn?: unknown; fixtureKey?: unknown } | null }[]>`
+        SELECT id, ranked_context FROM matches WHERE id = ANY(${receiptMatchIds}::uuid[])
+      `;
+      const dbMatchById = new Map(dbMatches.map((m) => [m.id, m]));
+      const dbPlayers = await tx<{ match_id: string; user_id: string; seat: number }[]>`
+        SELECT match_id, user_id, seat FROM match_players WHERE match_id = ANY(${receiptMatchIds}::uuid[])
+      `;
+      const playersByMatch = new Map<string, { user_id: string; seat: number }[]>();
+      for (const p of dbPlayers) {
+        const list = playersByMatch.get(p.match_id) ?? [];
+        list.push(p);
+        playersByMatch.set(p.match_id, list);
+      }
+      const verifiedMatchIds: string[] = [];
+      for (const matchId of receiptMatchIds) {
+        const dbMatch = dbMatchById.get(matchId);
+        if (!dbMatch) continue; // never written / already rolled back — skip, don't refuse
+        const fx = fixtureByMatch.get(matchId)!;
+        const ctx = dbMatch.ranked_context ?? {};
+        if (ctx.burnIn !== true) throw new RollbackRefusedError(`match ${matchId} not tagged burnIn=true — refusing`);
+        if (ctx.fixtureKey !== fx.key) throw new RollbackRefusedError(`match ${matchId} fixtureKey mismatch — refusing`);
+        const players = (playersByMatch.get(matchId) ?? []).sort((a, b) => a.seat - b.seat);
+        const seatA = players.find((p) => p.seat === 1);
+        const seatB = players.find((p) => p.seat === 2);
+        if (seatA?.user_id !== fx.botAUserId || seatB?.user_id !== fx.botBUserId) {
+          throw new RollbackRefusedError(`match ${matchId} participant pair mismatch — refusing`);
+        }
+        if (!rosterSet.has(seatA.user_id) || !rosterSet.has(seatB.user_id)) {
+          throw new RollbackRefusedError(`match ${matchId} has a non-roster participant — refusing`);
+        }
+        verifiedMatchIds.push(matchId);
+      }
 
-      // ranked_profiles: restore if it existed, else delete a burn-in-created one.
-      if (p.profileExisted) {
+      // 3. Delete burn-in matches + their ledger/xp; achievements sourced from
+      // them are cleared by the per-bot achievement restore below.
+      if (verifiedMatchIds.length > 0) {
+        await tx`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${verifiedMatchIds}::uuid[])`;
+        await tx`DELETE FROM user_xp_events WHERE source_type = 'match_result' AND source_key = ANY(${verifiedMatchIds})`;
+        const deleted = await tx<{ id: string }[]>`
+          DELETE FROM matches WHERE id = ANY(${verifiedMatchIds}::uuid[]) RETURNING id
+        `;
+        matchesDeleted = deleted.length;
+      }
+
+      // 4. Restore every captured field for exactly the receipt roster.
+      for (const p of snapshot.profiles) {
+        await tx`UPDATE users SET total_xp = ${p.totalXp} WHERE id = ${p.userId}`;
+
+        if (p.profileExisted) {
+          await tx`
+            UPDATE ranked_profiles SET
+              rp = ${p.rp}, tier = ${p.tier}, placement_status = ${p.placementStatus},
+              placement_played = ${p.placementPlayed}, placement_wins = ${p.placementWins},
+              placement_seed_rp = ${p.placementSeedRp}, placement_perf_sum = ${p.placementPerfSum},
+              placement_points_for_sum = ${p.placementPointsForSum},
+              placement_points_against_sum = ${p.placementPointsAgainstSum},
+              current_win_streak = ${p.currentWinStreak},
+              last_ranked_match_at = ${p.lastRankedMatchAt}, updated_at = NOW()
+            WHERE user_id = ${p.userId}
+          `;
+        } else {
+          await tx`DELETE FROM ranked_profiles WHERE user_id = ${p.userId}`;
+        }
+
+        if (p.rankedStats.existed) {
+          await tx`
+            UPDATE user_mode_match_stats SET
+              games_played = ${p.rankedStats.gamesPlayed},
+              wins = ${p.rankedStats.wins}, losses = ${p.rankedStats.losses}, draws = ${p.rankedStats.draws},
+              last_match_at = ${p.rankedStats.lastMatchAt}, updated_at = NOW()
+            WHERE user_id = ${p.userId} AND mode = 'ranked'
+          `;
+        } else {
+          await tx`DELETE FROM user_mode_match_stats WHERE user_id = ${p.userId} AND mode = 'ranked'`;
+        }
+
+        // user_achievements: delete ONLY burn-in-created rows (those whose
+        // source_match_id is a verified burn-in match, OR any achievement not in
+        // the snapshot set), then restore the snapshot set verbatim. This never
+        // touches a pre-existing achievement that the snapshot already carries.
+        const snapAchIds = new Set(p.achievements.map((a) => a.achievementId));
         await tx`
-          UPDATE ranked_profiles SET
-            rp = ${p.rp}, tier = ${p.tier}, placement_status = ${p.placementStatus},
-            placement_played = ${p.placementPlayed}, placement_wins = ${p.placementWins},
-            placement_seed_rp = ${p.placementSeedRp}, placement_perf_sum = ${p.placementPerfSum},
-            placement_points_for_sum = ${p.placementPointsForSum},
-            placement_points_against_sum = ${p.placementPointsAgainstSum},
-            current_win_streak = ${p.currentWinStreak},
-            last_ranked_match_at = ${p.lastRankedMatchAt},
-            updated_at = NOW()
+          DELETE FROM user_achievements
           WHERE user_id = ${p.userId}
+            AND achievement_id <> ALL(${p.achievements.map((a) => a.achievementId)}::text[])
         `;
-      } else {
-        await tx`DELETE FROM ranked_profiles WHERE user_id = ${p.userId}`;
+        for (const a of p.achievements) {
+          await tx`
+            INSERT INTO user_achievements (user_id, achievement_id, progress, unlocked_at, source_match_id, created_at, updated_at)
+            VALUES (${p.userId}, ${a.achievementId}, ${a.progress}, ${a.unlockedAt}, ${a.sourceMatchId}, ${a.createdAt}, ${a.updatedAt})
+            ON CONFLICT (user_id, achievement_id) DO UPDATE SET
+              progress = EXCLUDED.progress, unlocked_at = EXCLUDED.unlocked_at,
+              source_match_id = EXCLUDED.source_match_id, updated_at = EXCLUDED.updated_at
+          `;
+        }
+        void snapAchIds;
       }
 
-      // user_mode_match_stats(ranked): restore captured aggregate, or delete a
-      // row the burn-in created (finding 2).
-      if (p.rankedStats.existed) {
-        await tx`
-          UPDATE user_mode_match_stats SET
-            games_played = ${p.rankedStats.gamesPlayed},
-            wins = ${p.rankedStats.wins}, losses = ${p.rankedStats.losses}, draws = ${p.rankedStats.draws},
-            last_match_at = ${p.rankedStats.lastMatchAt}, updated_at = NOW()
-          WHERE user_id = ${p.userId} AND mode = 'ranked'
-        `;
-      } else {
-        await tx`DELETE FROM user_mode_match_stats WHERE user_id = ${p.userId} AND mode = 'ranked'`;
-      }
-
-      // user_achievements: delete all, then re-insert the snapshot set (finding 10).
-      await tx`DELETE FROM user_achievements WHERE user_id = ${p.userId}`;
-      for (const a of p.achievements) {
-        await tx`
-          INSERT INTO user_achievements (user_id, achievement_id, progress, unlocked_at, source_match_id, created_at, updated_at)
-          VALUES (${p.userId}, ${a.achievementId}, ${a.progress}, ${a.unlockedAt}, ${a.sourceMatchId}, ${a.createdAt}, ${a.updatedAt})
-        `;
-      }
-    }
-
-    // Clear the one-time marker so the env can be re-run after a full rollback.
-    await tx`DELETE FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE}`;
-  });
+      // Clear the one-time marker so the env can be re-run after a full rollback.
+      await tx`DELETE FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE}`;
+    });
+  } catch (err) {
+    if (err instanceof RollbackRefusedError) throw err;
+    throw err;
+  }
 
   return { matchesDeleted, profilesRestored: snapshot.profiles.length };
 }

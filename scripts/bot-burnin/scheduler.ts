@@ -424,6 +424,9 @@ function planFixture(opts: {
     scoreB: sim.scoreB,
     categoryAId,
     categoryBId,
+    // Overwritten by commitFixture with the true projected post-settlement RP.
+    projectedRpA: 0,
+    projectedRpB: 0,
   };
 }
 
@@ -435,4 +438,9 @@ function commitFixture(fixture: PlannedFixture, byId: Map<string, MutableBot>): 
   const aStronger = a.rp > b.rp;
   applyInMemoryOutcome(a, aWon, fixture.decision, goalMarginA, b.rp > a.rp);
   applyInMemoryOutcome(b, !aWon, fixture.decision, -goalMarginA, aStronger);
+  // Record the exact projected post-settlement RP the real formula will produce
+  // (same computeSeasonRpDelta), so the writer can assert PRE-COMMIT that no
+  // fixture pushes a bot over the ceiling (finding 6).
+  fixture.projectedRpA = a.rp;
+  fixture.projectedRpB = b.rp;
 }

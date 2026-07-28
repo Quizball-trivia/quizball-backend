@@ -70,6 +70,13 @@ export interface PlannedFixture {
   scoreB: FixtureScore;
   categoryAId: string;
   categoryBId: string;
+  /**
+   * Projected post-settlement RP for each seat (the exact value the real
+   * formula will produce, computed in-memory by the scheduler). The writer
+   * asserts these against the ceiling PRE-COMMIT so a violation never lands.
+   */
+  projectedRpA: number;
+  projectedRpB: number;
 }
 
 export interface FixtureScore {
@@ -129,6 +136,8 @@ export interface BurnInSnapshot {
   humanTop10Rp: number | null;
   marginRp: number;
   profiles: ProfileSnapshotRow[];
+  /** SHA-256 over the snapshot body (all fields except this one). */
+  integrityHash?: string;
 }
 
 /**

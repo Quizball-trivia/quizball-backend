@@ -12,13 +12,11 @@
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
 
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from '../../src/db/index.js';
-import { rollback, RollbackRefusedError } from './snapshot.js';
+import { rollback, RollbackRefusedError, readSnapshot } from './snapshot.js';
 import { parseReceipt, receiptFixtures } from './receipt.js';
 import { assertDbTarget } from './target-guard.js';
-import type { BurnInSnapshot } from './types.js';
 
 function get(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
@@ -36,7 +34,7 @@ async function main(): Promise<void> {
   }
 
   const parsed = parseReceipt(resolve(receiptPath));
-  const snapshot = JSON.parse(readFileSync(resolve(snapshotPath), 'utf8')) as BurnInSnapshot;
+  const snapshot = readSnapshot(resolve(snapshotPath)); // integrity-verified
   const fixtures = receiptFixtures(parsed);
 
   try {

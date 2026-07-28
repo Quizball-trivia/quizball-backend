@@ -12,10 +12,11 @@
  * silently represent a different fixture.
  */
 import { createHash } from 'node:crypto';
-import type { BurnInBot, PlannedFixture } from './types.js';
+import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
+import type { BurnInBot, BotSchedule, PlannedFixture } from './types.js';
 
 export interface RunManifest {
-  version: 1;
+  version: 2;
   seed: number;
   env: string;
   seasonStart: string;
@@ -24,9 +25,10 @@ export interface RunManifest {
   ceilingMarginRp: number;
   ceilingRp: number;
   humanTop10Rp: number | null;
-  paramsGeneratedAt: string;
-  paramsBatchId: string;
-  /** The roster + its loaded starting state, canonicalized + sorted. */
+  // Finding 4/5: hash the FULL calibration params CONTENTS, not just metadata —
+  // a re-fit that keeps generatedAt/batchId but changes the curve MUST change H.
+  params: BotModelParams;
+  /** The roster + its loaded starting state AND schedule, canonicalized + sorted. */
   roster: Array<{
     userId: string;
     baseSkill: number;
@@ -37,6 +39,8 @@ export interface RunManifest {
     placementWins: number;
     placementStatus: string;
     currentWinStreak: number;
+    // Finding 4: schedules drive the plan (which slots pair), so they belong in H.
+    schedule: BotSchedule;
   }>;
   categoryIds: string[];
 }
@@ -58,13 +62,12 @@ export function buildManifest(opts: {
   ceilingMarginRp: number;
   ceilingRp: number;
   humanTop10Rp: number | null;
-  paramsGeneratedAt: string;
-  paramsBatchId: string;
+  params: BotModelParams;
   bots: BurnInBot[];
   categoryIds: string[];
 }): RunManifest {
   return {
-    version: 1,
+    version: 2,
     seed: opts.seed,
     env: opts.env,
     seasonStart: opts.seasonStart.toISOString(),
@@ -73,8 +76,7 @@ export function buildManifest(opts: {
     ceilingMarginRp: opts.ceilingMarginRp,
     ceilingRp: opts.ceilingRp,
     humanTop10Rp: opts.humanTop10Rp,
-    paramsGeneratedAt: opts.paramsGeneratedAt,
-    paramsBatchId: opts.paramsBatchId,
+    params: opts.params,
     roster: [...opts.bots]
       .map((b) => ({
         userId: b.userId,
@@ -86,6 +88,7 @@ export function buildManifest(opts: {
         placementWins: b.placementWins,
         placementStatus: b.placementStatus,
         currentWinStreak: b.currentWinStreak,
+        schedule: b.schedule,
       }))
       .sort((a, b) => (a.userId < b.userId ? -1 : 1)),
     categoryIds: [...opts.categoryIds].sort(),

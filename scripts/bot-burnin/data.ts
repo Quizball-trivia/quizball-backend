@@ -4,6 +4,7 @@
  * burn-in marker guard.
  */
 import { sql } from '../../src/db/index.js';
+import { SEASON_INITIAL_RP } from '../../src/modules/ranked/season-rp-formula.js';
 import type { BurnInBot, BotSchedule } from './types.js';
 
 const BURN_IN_MARKER_NOTE = 'persistent-bot-burnin:complete';
@@ -112,43 +113,93 @@ export async function loadActiveCategoryIds(): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-// Constant advisory-lock key for the one-time burn-in guard. Any process taking
-// pg_advisory_xact_lock(this) around the marker check+insert serializes with
-// every other execute attempt, so two concurrent runs can never both pass.
+// Constant advisory-lock key for the one-time burn-in guard. A SESSION-level
+// pg_advisory_lock(this) is held on a dedicated reserved connection across the
+// ENTIRE run, so two concurrent --execute can never both burn in — the second
+// blocks on the lock, then reads the marker and refuses/resumes.
 const BURN_IN_ADVISORY_LOCK_KEY = 728_150_100; // mirrors the migration date
 
-/** Has the one-time burn-in already run on this env (any generation)? */
-export async function burnInAlreadyRan(): Promise<{ ran: boolean; manifestHash: string | null }> {
-  const rows = await sql<{ params: { manifestHash?: string } }[]>`
-    SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
-  `;
-  return { ran: rows.length > 0, manifestHash: rows[0]?.params?.manifestHash ?? null };
+/** Run-marker record stored in bot_model_params.params for the one-time guard. */
+export interface RunMarker {
+  kind: 'burnin-marker';
+  manifestHash: string;
+  status: 'running' | 'complete';
+  seed: number;
+  fixtureCount?: number;
+  startedAt: string;
+  completedAt?: string;
 }
 
 /**
- * Atomically claim the one-time burn-in marker for THIS run manifest. Takes the
- * xact advisory lock, then refuses if any marker already exists. Returns true
- * on success; throws if another run already burned this env in. Finding 9.
+ * A held session advisory lock on a dedicated reserved connection. Call
+ * release() (which also releases the connection) in a finally after the run.
  */
-export async function claimBurnInMarker(manifestHash: string, seed: number, fixtureCount: number): Promise<void> {
-  await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
-    const existing = await tx<{ params: { manifestHash?: string } }[]>`
-      SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
-    `;
-    if (existing.length > 0) {
-      const prior = existing[0].params?.manifestHash ?? '(unknown)';
-      throw new Error(`burn-in marker already present (manifest ${prior}) — env already burned in`);
-    }
-    await tx`
-      INSERT INTO bot_model_params (params, active, note)
-      VALUES (
-        ${sql.json({ kind: 'burnin-marker', manifestHash, seed, fixtureCount, completedAt: new Date().toISOString() })},
-        false,
-        ${BURN_IN_MARKER_NOTE}
-      )
-    `;
-  });
+export interface RunLock {
+  conn: Awaited<ReturnType<typeof sql.reserve>>;
+  release(): Promise<void>;
+}
+
+/** Acquire the burn-in advisory lock on a dedicated connection (blocks). */
+export async function acquireRunLock(): Promise<RunLock> {
+  const conn = await sql.reserve();
+  await conn`SELECT pg_advisory_lock(${BURN_IN_ADVISORY_LOCK_KEY})`;
+  return {
+    conn,
+    async release() {
+      try {
+        await conn`SELECT pg_advisory_unlock(${BURN_IN_ADVISORY_LOCK_KEY})`;
+      } finally {
+        conn.release();
+      }
+    },
+  };
+}
+
+export type RunDecision =
+  | { kind: 'fresh' }
+  | { kind: 'resume'; marker: RunMarker }
+  | { kind: 'refuse'; reason: string };
+
+/**
+ * Under the held lock, resolve the run against the marker per the decision
+ * table (finding 8 + resume-vs-gate contradiction):
+ *   - no marker                    → fresh
+ *   - marker 'complete'            → refuse (already burned in)
+ *   - marker 'running' + same H    → resume (skip the pristine gate)
+ *   - marker with a different H    → refuse (a different plan can't resume)
+ * Reads through the LOCKED connection so it is serialized with the marker write.
+ */
+export async function resolveRun(lock: RunLock, manifestHash: string): Promise<RunDecision> {
+  const rows = await lock.conn<{ params: RunMarker }[]>`
+    SELECT params FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE} LIMIT 1
+  `;
+  if (rows.length === 0) return { kind: 'fresh' };
+  const marker = rows[0].params;
+  if (marker.manifestHash !== manifestHash) {
+    return { kind: 'refuse', reason: `a DIFFERENT burn-in run (manifest ${marker.manifestHash}, status ${marker.status}) exists — refusing` };
+  }
+  if (marker.status === 'complete') {
+    return { kind: 'refuse', reason: `this run (manifest ${manifestHash}) is already COMPLETE — refusing` };
+  }
+  return { kind: 'resume', marker };
+}
+
+/** Insert the 'running' marker for a fresh run (through the locked connection). */
+export async function insertRunningMarker(lock: RunLock, manifestHash: string, seed: number): Promise<void> {
+  const marker: RunMarker = { kind: 'burnin-marker', manifestHash, status: 'running', seed, startedAt: new Date().toISOString() };
+  await lock.conn`
+    INSERT INTO bot_model_params (params, active, note)
+    VALUES (${sql.json(marker as unknown as Record<string, unknown>)}, false, ${BURN_IN_MARKER_NOTE})
+  `;
+}
+
+/** Flip the marker to 'complete' at the end of a successful run. */
+export async function markRunComplete(lock: RunLock, manifestHash: string, fixtureCount: number): Promise<void> {
+  await lock.conn`
+    UPDATE bot_model_params
+    SET params = params || ${sql.json({ status: 'complete', fixtureCount, completedAt: new Date().toISOString() })}
+    WHERE note = ${BURN_IN_MARKER_NOTE} AND params->>'manifestHash' = ${manifestHash}
+  `;
 }
 
 export interface PristineViolation {
@@ -158,14 +209,19 @@ export interface PristineViolation {
 }
 
 /**
- * Pristine-state execute gate (findings 5/6/1). Burn-in is a pristine-state
- * operation: it runs ONCE, immediately after roster creation, BEFORE selection
- * ever activates. Every roster bot must be exactly: unplaced, RP 450, zero
- * ranked games / XP, no live reservation, no live lobby+match. Returns the list
- * of bots that violate any of these (empty = all pristine).
- *
- * generationCreatedAtFloor gates XP to the roster generation: any user_xp_events
- * row is a violation (a freshly created bot has none).
+ * Pristine-state execute gate (finding 1). Burn-in runs ONCE, immediately after
+ * roster creation, BEFORE selection activates. Every roster bot must be exactly
+ * pristine. A bot is PRISTINE iff ALL hold:
+ *   - a ranked_profiles row EXISTS (a MISSING row FAILS — the loader would coerce
+ *     null→0 and hide it) and is at SEASON_INITIAL_RP, tier-agnostic, unplaced,
+ *     with placement_played/wins/perf/points accumulators and current_win_streak
+ *     all zero and last_ranked_match_at NULL
+ *   - zero ranked ledger rows; zero ranked user_mode_match_stats games
+ *   - zero completed/abandoned match history AND no live/active match
+ *   - zero user_xp_events and users.total_xp = 0
+ *   - zero user_achievements rows
+ *   - no synthetic_bot_reservation; no live (waiting/active) lobby membership
+ * Any violation lists the offending reasons. MUST be called under the run lock.
  */
 export async function findNonPristineBots(userIds: string[]): Promise<PristineViolation[]> {
   if (userIds.length === 0) return [];
@@ -174,14 +230,23 @@ export async function findNonPristineBots(userIds: string[]): Promise<PristineVi
       user_id: string;
       nickname: string;
       total_xp: number;
+      profile_exists: boolean;
       rp: number | null;
       placement_status: string | null;
       placement_played: number | null;
+      placement_wins: number | null;
+      placement_perf_sum: number | null;
+      placement_points_for_sum: number | null;
+      placement_points_against_sum: number | null;
+      current_win_streak: number | null;
+      last_ranked_match_at: string | null;
       games_played: number | null;
       xp_events: number;
+      achievements: number;
       reservations: number;
       live_lobbies: number;
       live_matches: number;
+      finished_matches: number;
       ranked_ledger: number;
     }>
   >`
@@ -189,16 +254,20 @@ export async function findNonPristineBots(userIds: string[]): Promise<PristineVi
       u.id AS user_id,
       u.nickname,
       u.total_xp,
-      rp.rp,
-      rp.placement_status,
-      rp.placement_played,
+      (rp.user_id IS NOT NULL) AS profile_exists,
+      rp.rp, rp.placement_status, rp.placement_played, rp.placement_wins,
+      rp.placement_perf_sum, rp.placement_points_for_sum, rp.placement_points_against_sum,
+      rp.current_win_streak, rp.last_ranked_match_at,
       COALESCE(ums.games_played, 0) AS games_played,
       (SELECT COUNT(*)::int FROM user_xp_events x WHERE x.user_id = u.id) AS xp_events,
+      (SELECT COUNT(*)::int FROM user_achievements a WHERE a.user_id = u.id) AS achievements,
       (SELECT COUNT(*)::int FROM synthetic_bot_reservations r WHERE r.bot_user_id = u.id) AS reservations,
       (SELECT COUNT(*)::int FROM lobby_members lm JOIN lobbies l ON l.id = lm.lobby_id
         WHERE lm.user_id = u.id AND l.status IN ('waiting', 'active')) AS live_lobbies,
       (SELECT COUNT(*)::int FROM match_players mp JOIN matches m ON m.id = mp.match_id
         WHERE mp.user_id = u.id AND m.status = 'active') AS live_matches,
+      (SELECT COUNT(*)::int FROM match_players mp JOIN matches m ON m.id = mp.match_id
+        WHERE mp.user_id = u.id AND m.status IN ('completed', 'abandoned')) AS finished_matches,
       (SELECT COUNT(*)::int FROM ranked_rp_changes c WHERE c.user_id = u.id) AS ranked_ledger
     FROM users u
     LEFT JOIN ranked_profiles rp ON rp.user_id = u.id
@@ -207,19 +276,37 @@ export async function findNonPristineBots(userIds: string[]): Promise<PristineVi
   `;
 
   const violations: PristineViolation[] = [];
+  const seen = new Set<string>();
   for (const r of rows) {
+    seen.add(r.user_id);
     const reasons: string[] = [];
-    if (r.placement_status != null && r.placement_status !== 'unplaced') reasons.push(`placement_status=${r.placement_status}`);
-    if ((r.placement_played ?? 0) !== 0) reasons.push(`placement_played=${r.placement_played}`);
-    if (r.rp != null && r.rp !== 450) reasons.push(`rp=${r.rp}`);
+    // A MISSING profile fails — a fresh roster bot has one at 450/unplaced.
+    if (!r.profile_exists) reasons.push('no ranked_profiles row');
+    else {
+      if (r.rp !== SEASON_INITIAL_RP) reasons.push(`rp=${r.rp}`);
+      if (r.placement_status !== 'unplaced') reasons.push(`placement_status=${r.placement_status}`);
+      if ((r.placement_played ?? 0) !== 0) reasons.push(`placement_played=${r.placement_played}`);
+      if ((r.placement_wins ?? 0) !== 0) reasons.push(`placement_wins=${r.placement_wins}`);
+      if ((r.placement_perf_sum ?? 0) !== 0) reasons.push(`placement_perf_sum=${r.placement_perf_sum}`);
+      if ((r.placement_points_for_sum ?? 0) !== 0) reasons.push(`placement_points_for_sum=${r.placement_points_for_sum}`);
+      if ((r.placement_points_against_sum ?? 0) !== 0) reasons.push(`placement_points_against_sum=${r.placement_points_against_sum}`);
+      if ((r.current_win_streak ?? 0) !== 0) reasons.push(`current_win_streak=${r.current_win_streak}`);
+      if (r.last_ranked_match_at != null) reasons.push(`last_ranked_match_at=${r.last_ranked_match_at}`);
+    }
     if ((r.games_played ?? 0) !== 0) reasons.push(`ranked_games=${r.games_played}`);
+    if (r.ranked_ledger !== 0) reasons.push(`ranked_ledger=${r.ranked_ledger}`);
+    if (r.finished_matches !== 0) reasons.push(`finished_matches=${r.finished_matches}`);
+    if (r.live_matches !== 0) reasons.push(`live_matches=${r.live_matches}`);
     if (Number(r.total_xp) !== 0) reasons.push(`total_xp=${r.total_xp}`);
     if (r.xp_events !== 0) reasons.push(`xp_events=${r.xp_events}`);
+    if (r.achievements !== 0) reasons.push(`achievements=${r.achievements}`);
     if (r.reservations !== 0) reasons.push(`reservations=${r.reservations}`);
     if (r.live_lobbies !== 0) reasons.push(`live_lobbies=${r.live_lobbies}`);
-    if (r.live_matches !== 0) reasons.push(`live_matches=${r.live_matches}`);
-    if (r.ranked_ledger !== 0) reasons.push(`ranked_ledger=${r.ranked_ledger}`);
     if (reasons.length > 0) violations.push({ userId: r.user_id, nickname: r.nickname, reasons });
+  }
+  // A roster id with NO users row at all is also a violation.
+  for (const id of userIds) {
+    if (!seen.has(id)) violations.push({ userId: id, nickname: '(missing user)', reasons: ['user row not found'] });
   }
   return violations;
 }

@@ -205,4 +205,35 @@ describe('rollback', () => {
     await sql`DELETE FROM matches WHERE id = ${foreign.id}`;
     await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
   });
+
+  it('REFUSES + PRESERVES a post-burn-in non-burn-in XP row (daily challenge) (P1)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    await clearMarker();
+    const bots = await Promise.all([seedBot(41, -0.3), seedBot(42, 0.2), seedBot(43, 0.0), seedBot(44, 0.1)]);
+    const { matchIds } = await execute(bots, 100_000);
+
+    // Real post-burn-in progression: a daily-challenge XP event (not a match).
+    const dailyKey = `daily-${Date.now()}`;
+    await sql`
+      INSERT INTO user_xp_events (user_id, source_type, source_key, xp_delta, metadata)
+      VALUES (${bots[0].userId}, 'daily_challenge_completion', ${dailyKey}, 50, '{}'::jsonb)
+    `;
+    await sql`UPDATE users SET total_xp = total_xp + 50 WHERE id = ${bots[0].userId}`;
+
+    // Rollback must REFUSE (would destroy the daily XP), deleting nothing.
+    await expect(rollbackBurnIn(matchIds, bots.map((b) => b.userId))).rejects.toBeInstanceOf(RollbackRefusedError);
+    const [{ c }] = await sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM matches WHERE id = ANY(${matchIds}::uuid[])`;
+    expect(c).toBe(matchIds.length);
+    // The daily XP row survives.
+    const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM user_xp_events WHERE source_key = ${dailyKey}`;
+    expect(n).toBe(1);
+
+    // Remove the daily XP, then rollback cleanly for teardown — total_xp is
+    // DECREMENTED by exactly the burn-in contribution (back to 0), not zeroed.
+    await sql`DELETE FROM user_xp_events WHERE source_key = ${dailyKey}`;
+    await sql`UPDATE users SET total_xp = total_xp - 50 WHERE id = ${bots[0].userId}`;
+    await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
+    const users = await sql<{ total_xp: number }[]>`SELECT total_xp FROM users WHERE id = ANY(${bots.map((b) => b.userId)}::uuid[])`;
+    for (const u of users) expect(Number(u.total_xp)).toBe(0);
+  });
 });

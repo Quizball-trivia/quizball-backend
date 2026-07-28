@@ -240,4 +240,33 @@ describe('writeFixtureInTx — direct transactional write', () => {
     const [pProfX] = await sql`SELECT ${sql.unsafe(profCols)} FROM ranked_profiles WHERE user_id = ${px}`;
     expect(dProfX).toEqual(pProfX);
   });
+
+  it('STREAK achievement sees the SAME-TX just-written fixtures (P2-streak)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    // A bot wins 5 fixtures in ONE transaction. The winning_streak achievement
+    // (target 5) can only unlock if the tx-aware streak helper reads THIS tx's
+    // current_win_streak (updated by the fixtures written moments earlier).
+    const w = await seedBot(`w_streak_${Date.now()}`);
+    const losers = await Promise.all(Array.from({ length: 5 }, (_, i) => seedBot(`w_streak_l${i}_${Date.now()}`)));
+
+    await sql.begin(async (tx) => {
+      for (let i = 0; i < 5; i++) {
+        const f = makeFixture({
+          a: w, b: losers[i], winner: w,
+          startedAt: new Date(`2026-07-26T1${i}:00:00Z`), endedAt: new Date(`2026-07-26T1${i}:05:00Z`),
+          isPlacement: i < 3, // first 3 are placement; still wins
+        });
+        await writeFixtureInTx(tx, f);
+      }
+    });
+
+    const [streak] = await sql<{ progress: number; unlocked_at: string | null }[]>`
+      SELECT progress, unlocked_at FROM user_achievements WHERE user_id = ${w} AND achievement_id = 'winning_streak'
+    `;
+    expect(streak).toBeDefined();
+    expect(streak.progress).toBe(5);
+    expect(streak.unlocked_at).not.toBeNull();
+    const [prof] = await sql<{ current_win_streak: number }[]>`SELECT current_win_streak FROM ranked_profiles WHERE user_id = ${w}`;
+    expect(prof.current_win_streak).toBe(5);
+  });
 });

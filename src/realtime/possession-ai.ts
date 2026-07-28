@@ -6,6 +6,18 @@ import { matchAnswersRepo } from '../modules/matches/match-answers.repo.js';
 import { matchPlayersRepo } from '../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import { usersRepo } from '../modules/users/users.repo.js';
+import { isPersistentBot } from '../modules/users/ai-classification.js';
+import { parseBotModelParams, type BotModelParams } from '../modules/bots/calibration/params-schema.js';
+import { questionStatsRepo, type QuestionModelInputs } from '../modules/bots/question-stats.repo.js';
+import type { PersistentBotModelPin } from '../modules/lobbies/lobbies.types.js';
+import {
+  decideClueRevealIndex,
+  decideCountdownFoundCount,
+  decideMcq,
+  decidePutInOrderCorrectCount,
+  resolveQuestionStats,
+  type PersistentBotSkillInputs,
+} from './persistent-bot-gameplay.js';
 import { acquireLock, releaseLock } from './locks.js';
 import { RANKED_AI_CORRECTNESS, rankedAiMatchKey } from './ai-ranked.constants.js';
 import {
@@ -53,6 +65,43 @@ type AiSettings = {
   aiDelayProfile: AiDelayProfile | null;
 };
 
+/**
+ * The calibrated-model context for a PERSISTENT bot in this match, resolved from
+ * the ranked_context pin + validated params. Null for ephemeral bots or when the
+ * pin is absent (the bot falls back to the bridge path). Skill inputs are frozen
+ * at match creation; params are pinned so a mid-match refresh cannot alter them.
+ */
+type PersistentModelContext = {
+  params: BotModelParams;
+  inputs: PersistentBotSkillInputs;
+  botUserId: string;
+};
+
+function parsePersistentBotModelPin(ctx: unknown): PersistentBotModelPin | null {
+  const record = asRecord(ctx);
+  const pin = record ? asRecord(record.persistentBotModel) : null;
+  if (!pin) return null;
+  if (typeof pin.botUserId !== 'string' || typeof pin.currentRp !== 'number') return null;
+  return pin as unknown as PersistentBotModelPin;
+}
+
+function persistentModelFromPin(pin: PersistentBotModelPin): PersistentModelContext | null {
+  try {
+    const params = parseBotModelParams(pin.params);
+    const inputs: PersistentBotSkillInputs = {
+      currentRp: pin.currentRp,
+      personalOffset: pin.personalOffset,
+      governorAdjustment: pin.governorAdjustment,
+      categoryAffinities: pin.categoryAffinities ?? {},
+      dailyFormSeed: pin.dailyFormSeed,
+    };
+    return { params, inputs, botUserId: pin.botUserId };
+  } catch (error) {
+    logger.warn({ error, botUserId: pin.botUserId }, 'Persistent-bot model pin failed validation; using bridge');
+    return null;
+  }
+}
+
 type QuestionDifficulty = 'easy' | 'medium' | 'hard';
 
 function normalizedDifficulty(difficulty?: string): QuestionDifficulty {
@@ -88,6 +137,21 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+/** Extract an index->count histogram (number values) from a format_stats jsonb. */
+function readHist(
+  formatStats: Record<string, unknown> | null,
+  key: string,
+): Record<string, number> | undefined {
+  const raw = formatStats ? formatStats[key] : undefined;
+  const record = asRecord(raw);
+  if (!record) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function parseAiDelayProfile(value: unknown): AiDelayProfile | null {
@@ -195,6 +259,144 @@ function getAiClueIndex(clueCount: number, aiCorrectness: number): number {
 export function createPossessionAi(resolveRound: ResolveRoundFn) {
   const aiUserIdByMatch = new Map<string, string | null>();
   const aiSettingsForMatch = new Map<string, AiSettings>();
+  // undefined = not yet resolved; null = resolved-and-absent (ephemeral or no pin).
+  const persistentModelByMatch = new Map<string, PersistentModelContext | null>();
+
+  /**
+   * Resolve the calibrated model for this match's AI, if it is a persistent bot
+   * with a pinned model in ranked_context. Cached per match. Returns null for
+   * ephemeral bots or a missing/invalid pin (→ the bridge path is used).
+   */
+  async function resolvePersistentModelForMatch(matchId: string): Promise<PersistentModelContext | null> {
+    const cached = persistentModelByMatch.get(matchId);
+    if (cached !== undefined) return cached;
+
+    const aiUserId = await resolveAiUserIdForMatch(matchId);
+    if (!aiUserId) {
+      persistentModelByMatch.set(matchId, null);
+      return null;
+    }
+    const aiUser = await usersRepo.getById(aiUserId);
+    if (!aiUser || !isPersistentBot(aiUser)) {
+      persistentModelByMatch.set(matchId, null);
+      return null;
+    }
+    const match = await matchesRepo.getMatch(matchId);
+    const pin = parsePersistentBotModelPin(match?.ranked_context);
+    const model = pin ? persistentModelFromPin(pin) : null;
+    persistentModelByMatch.set(matchId, model);
+    return model;
+  }
+
+  /**
+   * Compute the persistent bot's seeded decision for one question. Reads live
+   * question_stats, resolves the backoff chain, and applies the calibrated
+   * model. Deterministic in (botId,matchId,questionId,params) and independent of
+   * the human's answer. Returns a normalized decision; countdown/put-in-order
+   * expose their per-format counts, clue/mcq expose isCorrect (+clue index).
+   */
+  async function computePersistentQuestionDecision(
+    model: PersistentModelContext,
+    matchId: string,
+    questionId: string,
+    questionKind: MatchQuestionKind,
+    clueCount?: number,
+  ): Promise<{
+    isCorrect: boolean;
+    clueIndex: number | null;
+    countdownFoundCount: number | null;
+    putInOrderCorrectCount: number | null;
+    /** Calibrated think-time (ms), already floored by the top-cohort speed floor. */
+    answerTimeMs: number;
+  }> {
+    const keys = { botId: model.botUserId, matchId, questionId };
+    let statsInputs: QuestionModelInputs | null = null;
+    try {
+      statsInputs = await questionStatsRepo.getModelInputsForQuestion(questionId);
+    } catch (error) {
+      logger.warn({ error, matchId, questionId }, 'question_stats read failed; model uses global fallback');
+    }
+
+    const global = statsInputs?.global
+      ?? { answersCount: 0, correctCount: 0, smoothedAccuracy: null, timingSamples: 0, medianTimeMs: null, logTimeSigma: null };
+    const resolved = resolveQuestionStats(
+      statsInputs?.perQuestion ?? null,
+      statsInputs?.categoryType ?? null,
+      statsInputs?.type ?? null,
+      global,
+    );
+    const categorySlug = statsInputs?.categorySlug ?? null;
+    const formatStats = statsInputs?.formatStats ?? null;
+
+    // The mcq decision also yields the calibrated, speed-floor-clamped answer
+    // time, which all formats reuse for their think-time (the timing model is
+    // shared; special formats fall back to the top-cohort median when their
+    // Bernoulli timing stats are absent).
+    const mcq = decideMcq(model.params, model.inputs, resolved, categorySlug, keys);
+
+    if (questionKind === 'countdown') {
+      const dist = readHist(formatStats, 'countdownFoundCountDistribution');
+      // totalGroups unknown here; the model caps by fraction so a large cap is
+      // safe — the commit site re-clamps to the real group count.
+      const count = decideCountdownFoundCount(model.params, model.inputs, dist, Number.MAX_SAFE_INTEGER, keys);
+      return { isCorrect: false, clueIndex: null, countdownFoundCount: count, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+    }
+    if (questionKind === 'putInOrder') {
+      const dist = readHist(formatStats, 'putInOrderCorrectCountDistribution');
+      const count = decidePutInOrderCorrectCount(model.params, model.inputs, dist, Number.MAX_SAFE_INTEGER, keys);
+      return { isCorrect: false, clueIndex: null, countdownFoundCount: null, putInOrderCorrectCount: count, answerTimeMs: mcq.answerTimeMs };
+    }
+    if (questionKind === 'clues') {
+      const dist = readHist(formatStats, 'clueRevealIndexDistribution');
+      const idx = decideClueRevealIndex(model.params, model.inputs, dist, clueCount ?? 1, keys);
+      // Clue "correctness" is whether the bot eventually solves; the mcq draw
+      // governs solve/no-solve, the index governs how deep into the chain.
+      return { isCorrect: mcq.isCorrect, clueIndex: idx, countdownFoundCount: null, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+    }
+    return { isCorrect: mcq.isCorrect, clueIndex: null, countdownFoundCount: null, putInOrderCorrectCount: null, answerTimeMs: mcq.answerTimeMs };
+  }
+
+  /** Commit-time countdown found-count via the calibrated distribution + real total. */
+  async function computePersistentCountdownFoundCount(
+    model: PersistentModelContext,
+    matchId: string,
+    questionId: string,
+    totalGroups: number,
+  ): Promise<number> {
+    let dist: Record<string, number> | undefined;
+    try {
+      const stats = await questionStatsRepo.getModelInputsForQuestion(questionId);
+      dist = readHist(stats?.formatStats ?? null, 'countdownFoundCountDistribution');
+    } catch (error) {
+      logger.warn({ error, questionId }, 'countdown format_stats read failed; model uses skill fallback');
+    }
+    return decideCountdownFoundCount(model.params, model.inputs, dist, totalGroups, {
+      botId: model.botUserId,
+      matchId,
+      questionId,
+    });
+  }
+
+  /** Commit-time put-in-order partial credit via the calibrated distribution + real total. */
+  async function computePersistentPutInOrderCount(
+    model: PersistentModelContext,
+    matchId: string,
+    questionId: string,
+    totalItems: number,
+  ): Promise<number> {
+    let dist: Record<string, number> | undefined;
+    try {
+      const stats = await questionStatsRepo.getModelInputsForQuestion(questionId);
+      dist = readHist(stats?.formatStats ?? null, 'putInOrderCorrectCountDistribution');
+    } catch (error) {
+      logger.warn({ error, questionId }, 'put-in-order format_stats read failed; model uses skill fallback');
+    }
+    return decidePutInOrderCorrectCount(model.params, model.inputs, dist, totalItems, {
+      botId: model.botUserId,
+      matchId,
+      questionId,
+    });
+  }
 
   function fireAndForget(label: string, fn: () => Promise<unknown>): void {
     fn().catch((error) => {
@@ -327,25 +529,53 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const aiSettings = await resolveAiSettingsForMatch(matchId);
     const questionDifficulty = cache.currentQuestion.questionDTO.difficulty;
     const aiCorrectness = difficultyAdjustedCorrectness(aiSettings.aiCorrectness, questionDifficulty);
-    const plannedIsCorrect = options.questionKind === 'countdown'
-      ? false
-      : getRandom() < aiCorrectness;
     const clueCountForDelay = options.questionKind === 'clues' && options.evaluation.kind === 'clues'
       ? options.evaluation.clues.length
       : undefined;
+
+    // PERSISTENT-BOT branch: the calibrated model decides correctness (and clue
+    // reveal index) seeded by (botId,matchId,questionId), reading live
+    // question_stats. Ephemeral bots keep the bridge draw below. Countdown/
+    // put-in-order correctness is not a Bernoulli here either — they resolve at
+    // commit time via their per-format models, so plannedIsCorrect stays false
+    // for countdown exactly as the bridge does.
+    const persistentModel = await resolvePersistentModelForMatch(matchId);
+    const persistentDecision = persistentModel
+      ? await computePersistentQuestionDecision(
+          persistentModel,
+          matchId,
+          cache.currentQuestion.questionId,
+          options.questionKind,
+          clueCountForDelay,
+        )
+      : null;
+
+    const plannedIsCorrect = options.questionKind === 'countdown'
+      ? false
+      : persistentDecision
+        ? persistentDecision.isCorrect
+        : getRandom() < aiCorrectness;
     const plannedClueIndex = typeof clueCountForDelay === 'number'
-      ? getAiClueIndex(clueCountForDelay, aiCorrectness)
+      ? (persistentDecision?.clueIndex ?? getAiClueIndex(clueCountForDelay, aiCorrectness))
       : null;
     const questionTimeMsForDelay = hasAuthoritativeWindow
       ? Math.max(0, (deadlineAtMs as number) - (playableAtMs as number))
       : getQuestionDurationMs(options.questionKind, clueCountForDelay);
-    const aiThinkTimeMs = getAiAnswerDelayMs({
-      questionKind: options.questionKind,
-      difficulty: questionDifficulty,
-      delayProfile: aiSettings.aiDelayProfile,
-      isCorrect: plannedIsCorrect,
-      questionTimeMs: questionTimeMsForDelay,
-    });
+    // Persistent bots take their think-time from the calibrated timing model
+    // (log-normal from question_stats, floored by the top-cohort speed floor).
+    // Countdown is exempt: it is open-ended typing whose pace is driven by the
+    // drip-feed, not a single answer time, so it keeps the existing slow range.
+    // Ephemeral bots keep the bridge delay. The window-clamping machinery below
+    // (authoritative deadline, buffers) is unchanged for both.
+    const aiThinkTimeMs = persistentDecision && options.questionKind !== 'countdown'
+      ? clamp(persistentDecision.answerTimeMs, 0, questionTimeMsForDelay)
+      : getAiAnswerDelayMs({
+          questionKind: options.questionKind,
+          difficulty: questionDifficulty,
+          delayProfile: aiSettings.aiDelayProfile,
+          isCorrect: plannedIsCorrect,
+          questionTimeMs: questionTimeMsForDelay,
+        });
     let plannedAnswerTimeMs = plannedClueIndex !== null && clueCountForDelay && clueCountForDelay > 0
       ? (() => {
           const clueSliceMs = questionTimeMsForDelay / clueCountForDelay;
@@ -496,6 +726,12 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
 
         const baseAiCorrectness = await resolveAiCorrectnessForMatch(matchId);
         const aiCorrectness = difficultyAdjustedCorrectness(baseAiCorrectness, question.questionDTO.difficulty);
+        // Persistent bot: the per-format counts (countdown found / put-in-order
+        // partial credit) come from the calibrated distributions, re-derived
+        // deterministically here with the REAL group/item count. mcq/clue
+        // correctness was already decided by the model at schedule time and is
+        // threaded via plannedIsCorrect / plannedClueIndex.
+        const persistentModel = await resolvePersistentModelForMatch(matchId);
         const clueCountForDuration = question.kind === 'clues' && question.evaluation.kind === 'clues'
           ? question.evaluation.clues.length
           : undefined;
@@ -520,7 +756,9 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
         } else if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
           const totalGroups = question.evaluation.answerGroups.length;
-          foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
+          foundCount = persistentModel
+            ? await computePersistentCountdownFoundCount(persistentModel, matchId, question.questionId, totalGroups)
+            : getAiCountdownFoundCount(totalGroups, aiCorrectness);
           foundAnswerIds = question.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
           selectedIndex = foundCount;
           pointsEarned = calculateCountdownScore(foundCount, totalGroups);
@@ -537,12 +775,15 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           // prefix on a miss — partial credit that feels reasonable
           // without making wrong answers nearly as rewarding as right
           // ones. Mirrors the 0.75 factor used for countdown questions.
-          foundCount = isCorrect
-            ? question.evaluation.items.length
-            : Math.min(
-              question.evaluation.items.length - 1,
-              Math.max(0, Math.round(question.evaluation.items.length * aiCorrectness * 0.55))
-            );
+          const totalItems = question.evaluation.items.length;
+          foundCount = persistentModel
+            ? await computePersistentPutInOrderCount(persistentModel, matchId, question.questionId, totalItems)
+            : isCorrect
+              ? totalItems
+              : Math.min(
+                totalItems - 1,
+                Math.max(0, Math.round(totalItems * aiCorrectness * 0.55))
+              );
           submittedOrderIds = [...correctOrderIds];
           if (!isCorrect && submittedOrderIds.length > 1) {
             const fixedPrefix = submittedOrderIds.slice(0, foundCount);
@@ -751,11 +992,13 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
   function clearAiMaps(matchId: string): void {
     aiUserIdByMatch.delete(matchId);
     aiSettingsForMatch.delete(matchId);
+    persistentModelByMatch.delete(matchId);
   }
 
   function clearAllAiMaps(): void {
     aiUserIdByMatch.clear();
     aiSettingsForMatch.clear();
+    persistentModelByMatch.clear();
   }
 
   return {

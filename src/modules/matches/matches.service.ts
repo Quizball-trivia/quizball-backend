@@ -19,6 +19,7 @@ import { isPersistentBot } from '../users/ai-classification.js';
 import { reservationService } from '../synthetic-bots/reservation.service.js';
 import { syntheticBotsRepo } from '../synthetic-bots/synthetic-bots.repo.js';
 import { syntheticBotSelectionService } from '../synthetic-bots/synthetic-bot-selection.service.js';
+import { buildPersistentBotModelPin } from '../bots/persistent-bot-context.service.js';
 import { logger } from '../../core/index.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { questionPayloadSchema } from '../questions/questions.schemas.js';
@@ -681,6 +682,38 @@ export const matchesService = {
           logger.error(
             { err, humanUserId, fn: 'createMatchFromLobby' },
             'Failed to load ranked profile; proceeding without ranked context'
+          );
+        }
+      }
+
+      // PERSISTENT-BOT gameplay pin (PR8). If the AI opponent is a persistent
+      // roster bot, snapshot the active calibrated model params + the bot's
+      // frozen skill inputs into ranked_context so a mid-match params refresh
+      // cannot alter the live bot (§1.7). Additive to whatever ranked_context
+      // the branch above built; inert for ephemeral / human matches. A missing
+      // calibration falls back to the bridge (returns null) — never fatal.
+      //
+      // PR7 reconciliation: PR7 owns the persistent branch here (no aiAnchorRp +
+      // reservation transfer). At merge, attach this pin inside PR7's
+      // `persistentOpponent` branch using the bot profile it already loads,
+      // instead of re-detecting here.
+      const aiUser = user1?.is_ai ? user1 : user2?.is_ai ? user2 : null;
+      const aiSeatId = user1?.is_ai ? seat1 : user2?.is_ai ? seat2 : null;
+      if (aiUser && aiSeatId && isPersistentBot(aiUser)) {
+        try {
+          const botProfile = await rankedService.ensureProfile(aiSeatId);
+          const pin = await buildPersistentBotModelPin(aiSeatId, botProfile.rp);
+          if (pin) {
+            rankedContext = { ...(rankedContext ?? {}), persistentBotModel: pin };
+            logger.info(
+              { lobbyId: params.lobbyId, botUserId: aiSeatId, paramsVersion: pin.paramsVersion },
+              'Pinned persistent-bot calibrated model into ranked context'
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { err, botUserId: aiSeatId, fn: 'createMatchFromLobby' },
+            'Failed to build persistent-bot model pin; falling back to bridge difficulty'
           );
         }
       }

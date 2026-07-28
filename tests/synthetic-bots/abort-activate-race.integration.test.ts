@@ -107,12 +107,22 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     await acquire(bot, lobby);
 
     // Reserve a dedicated connection to HOLD the advisory lock as "activation".
+    // Production activation flips status='active' then creates the match +
+    // transfers the reservation; we do the equivalent inside the held tx so that,
+    // on commit, the lobby is active WITH a live match (the protected state).
     const holder = await sql.reserve();
     let abortResult: { aborted: boolean; botReleased: string | null } | null = null;
     try {
       await holder.unsafe('BEGIN');
       await holder.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobby]);
       await holder.unsafe(`UPDATE lobbies SET status = 'active' WHERE id = $1`, [lobby]);
+      const [m] = await holder.unsafe<{ id: string }[]>(
+        `INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+         VALUES (gen_random_uuid(), $1, 'ranked', 'active', $2, 10, 0, NOW()) RETURNING id`,
+        [lobby, categoryId],
+      );
+      matchIds.push(m.id);
+      await holder.unsafe(`UPDATE synthetic_bot_reservations SET match_id = $1 WHERE lobby_id = $2 AND match_id IS NULL`, [m.id, lobby]);
 
       // Start the abort on the app repo (separate pool) — it must BLOCK on the lock.
       const abortP = repo.abortRankedAiLobbyLocked(lobby).then((r) => { abortResult = r; });
@@ -126,12 +136,13 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
       await holder.release();
     }
 
-    // The abort acquired the lock AFTER activation committed → saw 'active' → no-op.
+    // The abort acquired the lock AFTER activation committed → saw active + live
+    // match (and the reservation carries match_id) → no-op.
     expect(abortResult).not.toBeNull();
     expect(abortResult!.aborted).toBe(false);
     expect(abortResult!.botReleased).toBeNull();
-    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
-    expect(still).toHaveLength(1); // reservation KEPT (live draft owns it)
+    const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1); // reservation KEPT + transferred (live match owns it)
   });
 
   it('(B) abort-first: the abort frees the bot; a subsequent activation finds no reservation', async () => {

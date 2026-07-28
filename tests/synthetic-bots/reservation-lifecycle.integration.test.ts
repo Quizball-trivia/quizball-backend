@@ -348,7 +348,7 @@ describe('locked abort primitive (P1-2 TOCTOU): abortRankedAiLobbyLocked', () =>
     expect(memberRows).toHaveLength(0);
   });
 
-  it('NO-OPS when a concurrent reconnect advanced the lobby waiting→active (bot kept, lobby untouched)', async () => {
+  it('NO-OPS when the lobby is active AND has a LIVE match (a reconnect started + created it)', async () => {
     if (!dbAvailable) return;
     const bot = await newUser({ persistent: true, nickname: `abort-active-${Date.now()}` });
     const [lobby] = await sql<{ id: string }[]>`
@@ -357,16 +357,42 @@ describe('locked abort primitive (P1-2 TOCTOU): abortRankedAiLobbyLocked', () =>
     createdLobbyIds.push(lobby.id);
     await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${bot}, true)`;
     await acquire(bot, lobby.id, 'holderA', 180);
+    // The live draft created its match — this is the protected case.
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby.id}, 'ranked', 'active', ${categoryId}, 10, 0, NOW()) RETURNING id
+    `;
+    createdMatchIds.push(match.id);
     const result = await repo.abortRankedAiLobbyLocked(lobby.id);
     expect(result.aborted).toBe(false);
     expect(result.botReleased).toBeNull();
-    // Reservation, lobby, and member all preserved for the live draft.
+    // Reservation, lobby, and member all preserved for the live draft/match.
     const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
     const lobbyRows = await sql`SELECT status FROM lobbies WHERE id = ${lobby.id}`;
     expect(lobbyRows).toHaveLength(1);
     const memberRows = await sql`SELECT 1 FROM lobby_members WHERE lobby_id = ${lobby.id}`;
     expect(memberRows).toHaveLength(1);
+  });
+
+  it('ABORTS an active-but-stuck lobby with NO active match (session-guard force-close of a crash)', async () => {
+    if (!dbAvailable) return;
+    // Crash between activation (status='active') and match creation: the session
+    // guard force-closes these. The reservation is still lobby-keyed and must be
+    // freed (no live match owns the bot).
+    const bot = await newUser({ persistent: true, nickname: `abort-stuck-${Date.now()}` });
+    const [lobby] = await sql<{ id: string }[]>`
+      INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${bot}, 'active') RETURNING id
+    `;
+    createdLobbyIds.push(lobby.id);
+    await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${bot}, true)`;
+    await acquire(bot, lobby.id, 'holderA', 180);
+    const result = await repo.abortRankedAiLobbyLocked(lobby.id);
+    expect(result.aborted).toBe(true);
+    expect(result.botReleased).toBe(bot);
+    expect(result.lobbyDeleted).toBe(true);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
   });
 
   it('does NOT free a reservation already transferred onto a match (match_id set)', async () => {

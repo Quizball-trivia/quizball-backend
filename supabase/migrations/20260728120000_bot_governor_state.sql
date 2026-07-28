@@ -57,6 +57,11 @@ FROM public.ranked_rp_changes rc
 JOIN public.users u ON u.id = rc.user_id
 WHERE u.ai_kind = 'persistent'
   AND rc.opponent_is_ai = false
+  -- Bounded window: without this the view aggregates the ENTIRE ledger on every
+  -- read before the caller's LIMIT trims it, and ranked_rp_changes grows without
+  -- bound across seasons. 400 days comfortably covers the "last N days" the
+  -- endpoint offers (max 90) plus a full season of back-comparison.
+  AND rc.created_at >= now() - interval '400 days'
 GROUP BY 1;
 
 COMMENT ON VIEW public.persistent_bot_daily_winrate IS

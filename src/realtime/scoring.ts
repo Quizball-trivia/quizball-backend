@@ -43,11 +43,13 @@ export function calculateCountdownScore(foundCount: number, totalGroups: number)
 
 /**
  * Calculate put-in-order points from positions that match the correct order.
- * Each matched position is worth 20 points, capped at 100.
+ * Points are proportional to the number of available positions, so a perfect
+ * order always earns 100 whether the question contains four or five items.
  */
 export function calculatePutInOrderScore(matchedPositions: number, totalItems: number): number {
   if (totalItems <= 0) return 0;
-  return Math.min(clamp(matchedPositions, 0, totalItems) * 20, 100);
+  const rawScore = (clamp(matchedPositions, 0, totalItems) / totalItems) * 100;
+  return clamp(Math.round(rawScore), 0, 100);
 }
 
 /**

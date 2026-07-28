@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLIENT_TIME_SLACK_MS,
-  REVEAL_ACK_GRACE_MS,
   resolveAnswerElapsedMs,
 } from '../../src/realtime/possession-timing.js';
-import { FRONTEND_REVEAL_MS, QUESTION_TIME_MS } from '../../src/realtime/possession-state.js';
+import { QUESTION_TIME_MS } from '../../src/realtime/possession-state.js';
 
 const T = new Date('2026-07-04T12:00:00.000Z').getTime();
 const shownAt = new Date(T).toISOString();
@@ -27,34 +26,49 @@ describe('resolveAnswerElapsedMs', () => {
     });
   });
 
-  it('clamps a late reveal ack to the grace upper bound', () => {
+  it('scores from the actual server-received reveal when the UI unlocks late', () => {
     const result = resolveAnswerElapsedMs({
       revealAtMs: T + 5000,
       shownAt,
       deadlineAt: null,
-      nowMs: T + 4100,
-      clientTimeMs: 900,
+      nowMs: T + 5700,
+      clientTimeMs: 700,
       questionTimeMs: QUESTION_TIME_MS,
     });
 
     expect(result.source).toBe('reveal_ack');
-    expect(result.effectiveRevealAtMs).toBe(T + REVEAL_ACK_GRACE_MS);
-    expect(result.elapsedMs).toBe(4100 - REVEAL_ACK_GRACE_MS);
+    expect(result.effectiveRevealAtMs).toBe(T + 5000);
+    expect(result.elapsedMs).toBe(700);
   });
 
-  it('clamps an early reveal ack to the pre-reveal lower bound', () => {
+  it('preserves a very late server-received reveal instead of charging delivery delay', () => {
     const result = resolveAnswerElapsedMs({
-      revealAtMs: T - 10_000,
+      revealAtMs: T + 12_000,
       shownAt,
       deadlineAt: null,
-      nowMs: T + 1400,
-      clientTimeMs: 1400,
+      nowMs: T + 12_500,
+      clientTimeMs: 500,
+      questionTimeMs: 30_000,
+    });
+
+    expect(result.source).toBe('reveal_ack');
+    expect(result.effectiveRevealAtMs).toBe(T + 12_000);
+    expect(result.elapsedMs).toBe(500);
+  });
+
+  it('preserves an ack that looks early when the dispatch replica clock is ahead', () => {
+    const result = resolveAnswerElapsedMs({
+      revealAtMs: T - 5_300,
+      shownAt,
+      deadlineAt: null,
+      nowMs: T - 4_600,
+      clientTimeMs: 700,
       questionTimeMs: QUESTION_TIME_MS,
     });
 
     expect(result.source).toBe('reveal_ack');
-    expect(result.effectiveRevealAtMs).toBe(T - FRONTEND_REVEAL_MS);
-    expect(result.elapsedMs).toBe(1400 + FRONTEND_REVEAL_MS);
+    expect(result.effectiveRevealAtMs).toBe(T - 5_300);
+    expect(result.elapsedMs).toBe(700);
   });
 
   it('uses client time when the predicted server elapsed is negative', () => {

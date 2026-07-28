@@ -700,7 +700,7 @@
           "rankedSeasons": {
             "type": "object",
             "properties": {
-              "regular": {
+              "current": {
                 "type": "object",
                 "properties": {
                   "gamesPlayed": {
@@ -733,7 +733,7 @@
                   "winRate"
                 ]
               },
-              "event": {
+              "previous": {
                 "type": "object",
                 "properties": {
                   "gamesPlayed": {
@@ -765,11 +765,22 @@
                   "draws",
                   "winRate"
                 ]
+              },
+              "currentSeasonNumber": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "previousSeasonNumber": {
+                "type": "integer",
+                "minimum": 1,
+                "nullable": true
               }
             },
             "required": [
-              "regular",
-              "event"
+              "current",
+              "previous",
+              "currentSeasonNumber",
+              "previousSeasonNumber"
             ]
           }
         },
@@ -8030,7 +8041,7 @@
                     "rankedSeasons": {
                       "type": "object",
                       "properties": {
-                        "regular": {
+                        "current": {
                           "type": "object",
                           "properties": {
                             "gamesPlayed": {
@@ -8063,7 +8074,7 @@
                             "winRate"
                           ]
                         },
-                        "event": {
+                        "previous": {
                           "type": "object",
                           "properties": {
                             "gamesPlayed": {
@@ -8095,11 +8106,22 @@
                             "draws",
                             "winRate"
                           ]
+                        },
+                        "currentSeasonNumber": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "previousSeasonNumber": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "nullable": true
                         }
                       },
                       "required": [
-                        "regular",
-                        "event"
+                        "current",
+                        "previous",
+                        "currentSeasonNumber",
+                        "previousSeasonNumber"
                       ]
                     }
                   },

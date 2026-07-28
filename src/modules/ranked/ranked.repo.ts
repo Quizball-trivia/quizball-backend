@@ -459,6 +459,23 @@ export const rankedRepo = {
     `;
   },
 
+  async getLatestCompletedSeasonReset(): Promise<{
+    seasonNumber: number;
+    completedAt: string;
+  } | null> {
+    const [row] = await sql<Array<{ seasonNumber: number; completedAt: string }>>`
+      SELECT
+        season_number AS "seasonNumber",
+        completed_at AS "completedAt"
+      FROM ranked_reset_batches
+      WHERE completed_at IS NOT NULL
+        AND season_number IS NOT NULL
+      ORDER BY season_number DESC
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
   async listArchivedLeaderboard(
     batchId: string,
     limit: number,

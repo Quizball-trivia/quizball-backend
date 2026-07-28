@@ -11,7 +11,7 @@ vi.mock('../../src/modules/stats/stats.repo.js', () => ({
 
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
   rankedRepo: {
-    getLatestCompletedSeasonReset: vi.fn(),
+    listRecentCompletedSeasonResets: vi.fn(),
   },
 }));
 
@@ -36,7 +36,7 @@ describe('statsService.getUserStatsSummary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetSeasonBoundaryCacheForTests();
-    (rankedRepo.getLatestCompletedSeasonReset as Mock).mockResolvedValue(null);
+    (rankedRepo.listRecentCompletedSeasonResets as Mock).mockResolvedValue([]);
     (statsRepo.getRankedStatsSplitAtBoundary as Mock).mockResolvedValue(EMPTY_SPLIT);
   });
 
@@ -59,16 +59,16 @@ describe('statsService.getUserStatsSummary', () => {
     expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith(
       'user-1',
       '1970-01-01T00:00:00Z',
+      '1970-01-01T00:00:00Z',
     );
   });
 
   it('splits ranked W/D/L at the latest completed season boundary', async () => {
     const completedAt = '2026-07-21T00:00:00.000Z';
     (statsRepo.getUserModeStats as Mock).mockResolvedValue([]);
-    (rankedRepo.getLatestCompletedSeasonReset as Mock).mockResolvedValue({
-      seasonNumber: 1,
-      completedAt,
-    });
+    (rankedRepo.listRecentCompletedSeasonResets as Mock).mockResolvedValue([
+      { seasonNumber: 1, completedAt },
+    ]);
     (statsRepo.getRankedStatsSplitAtBoundary as Mock).mockResolvedValue({
       previous_wins: 5,
       previous_losses: 3,
@@ -96,7 +96,7 @@ describe('statsService.getUserStatsSummary', () => {
     });
     expect(summary.rankedSeasons.currentSeasonNumber).toBe(2);
     expect(summary.rankedSeasons.previousSeasonNumber).toBe(1);
-    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith('user-1', completedAt);
+    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith('user-1', completedAt, '1970-01-01T00:00:00Z');
   });
 
   it('computes per-mode and overall stats correctly', async () => {

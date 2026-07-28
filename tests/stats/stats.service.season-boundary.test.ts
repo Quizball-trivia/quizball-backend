@@ -9,7 +9,7 @@ vi.mock('../../src/modules/stats/stats.repo.js', () => ({
 
 vi.mock('../../src/modules/ranked/ranked.repo.js', () => ({
   rankedRepo: {
-    getLatestCompletedSeasonReset: vi.fn(),
+    listRecentCompletedSeasonResets: vi.fn(),
   },
 }));
 
@@ -19,6 +19,8 @@ import {
   _resetSeasonBoundaryCacheForTests,
   statsService,
 } from '../../src/modules/stats/stats.service.js';
+
+const EPOCH_ISO = '1970-01-01T00:00:00Z';
 
 const EMPTY_SPLIT = {
   previous_wins: 0,
@@ -39,10 +41,9 @@ describe('statsService ranked season split', () => {
 
   it('uses the latest completed reset and maps current and previous stats', async () => {
     const completedAt = '2026-07-21T12:34:56.000Z';
-    vi.mocked(rankedRepo.getLatestCompletedSeasonReset).mockResolvedValue({
-      seasonNumber: 1,
-      completedAt,
-    });
+    vi.mocked(rankedRepo.listRecentCompletedSeasonResets).mockResolvedValue([
+      { seasonNumber: 1, completedAt },
+    ]);
     vi.mocked(statsRepo.getRankedStatsSplitAtBoundary).mockResolvedValue({
       previous_wins: 2,
       previous_losses: 1,
@@ -54,7 +55,11 @@ describe('statsService ranked season split', () => {
 
     const summary = await statsService.getUserStatsSummary('user-1');
 
-    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith('user-1', completedAt);
+    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith(
+      'user-1',
+      completedAt,
+      EPOCH_ISO,
+    );
     expect(summary.rankedSeasons).toEqual({
       current: {
         gamesPlayed: 6,
@@ -75,28 +80,47 @@ describe('statsService ranked season split', () => {
     });
   });
 
-  it('uses the epoch boundary and season 1 when no reset exists', async () => {
-    vi.mocked(rankedRepo.getLatestCompletedSeasonReset).mockResolvedValue(null);
+  it('bounds the previous bucket at the penultimate reset once two seasons completed', async () => {
+    const season2End = '2026-09-15T00:00:00.000Z';
+    const season1End = '2026-07-21T12:34:56.000Z';
+    vi.mocked(rankedRepo.listRecentCompletedSeasonResets).mockResolvedValue([
+      { seasonNumber: 2, completedAt: season2End },
+      { seasonNumber: 1, completedAt: season1End },
+    ]);
 
     const summary = await statsService.getUserStatsSummary('user-1');
 
     expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith(
       'user-1',
-      '1970-01-01T00:00:00Z',
+      season2End,
+      season1End,
+    );
+    expect(summary.rankedSeasons.currentSeasonNumber).toBe(3);
+    expect(summary.rankedSeasons.previousSeasonNumber).toBe(2);
+  });
+
+  it('uses the epoch boundary and season 1 when no reset exists', async () => {
+    vi.mocked(rankedRepo.listRecentCompletedSeasonResets).mockResolvedValue([]);
+
+    const summary = await statsService.getUserStatsSummary('user-1');
+
+    expect(statsRepo.getRankedStatsSplitAtBoundary).toHaveBeenCalledWith(
+      'user-1',
+      EPOCH_ISO,
+      EPOCH_ISO,
     );
     expect(summary.rankedSeasons.currentSeasonNumber).toBe(1);
     expect(summary.rankedSeasons.previousSeasonNumber).toBeNull();
   });
 
   it('caches the completed reset within the boundary TTL', async () => {
-    vi.mocked(rankedRepo.getLatestCompletedSeasonReset).mockResolvedValue({
-      seasonNumber: 1,
-      completedAt: '2026-07-21T12:34:56.000Z',
-    });
+    vi.mocked(rankedRepo.listRecentCompletedSeasonResets).mockResolvedValue([
+      { seasonNumber: 1, completedAt: '2026-07-21T12:34:56.000Z' },
+    ]);
 
     await statsService.getUserStatsSummary('user-1');
     await statsService.getUserStatsSummary('user-2');
 
-    expect(rankedRepo.getLatestCompletedSeasonReset).toHaveBeenCalledTimes(1);
+    expect(rankedRepo.listRecentCompletedSeasonResets).toHaveBeenCalledTimes(1);
   });
 });

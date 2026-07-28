@@ -87,13 +87,19 @@ export interface UserStatsSummary {
 
 interface SeasonBoundary {
   boundaryIso: string;
+  /** Start of the previous season — the penultimate reset's completion, or the
+   *  epoch when only one season has completed. Bounds the previous bucket from
+   *  below so it never absorbs seasons older than the immediately previous one. */
+  previousStartIso: string;
   currentSeasonNumber: number;
   previousSeasonNumber: number | null;
 }
 
+const EPOCH_ISO = '1970-01-01T00:00:00Z';
 const SEASON_BOUNDARY_CACHE_TTL_MS = 5 * 60 * 1000;
 const FRESH_SEASON_BOUNDARY: SeasonBoundary = {
-  boundaryIso: '1970-01-01T00:00:00Z',
+  boundaryIso: EPOCH_ISO,
+  previousStartIso: EPOCH_ISO,
   currentSeasonNumber: 1,
   previousSeasonNumber: null,
 };
@@ -107,12 +113,14 @@ async function getSeasonBoundary(): Promise<SeasonBoundary> {
     return seasonBoundaryCache.value;
   }
 
-  seasonBoundaryLoad ??= rankedRepo.getLatestCompletedSeasonReset().then((reset) => {
-    const value = reset
+  seasonBoundaryLoad ??= rankedRepo.listRecentCompletedSeasonResets().then((resets) => {
+    const [latest, penultimate] = resets;
+    const value = latest
       ? {
-          boundaryIso: reset.completedAt,
-          currentSeasonNumber: reset.seasonNumber + 1,
-          previousSeasonNumber: reset.seasonNumber,
+          boundaryIso: latest.completedAt,
+          previousStartIso: penultimate?.completedAt ?? EPOCH_ISO,
+          currentSeasonNumber: latest.seasonNumber + 1,
+          previousSeasonNumber: latest.seasonNumber,
         }
       : FRESH_SEASON_BOUNDARY;
     seasonBoundaryCache = {
@@ -252,7 +260,11 @@ export const statsService = {
     const seasonBoundary = await getSeasonBoundary();
     const [rows, split] = await Promise.all([
       statsRepo.getUserModeStats(userId),
-      statsRepo.getRankedStatsSplitAtBoundary(userId, seasonBoundary.boundaryIso),
+      statsRepo.getRankedStatsSplitAtBoundary(
+        userId,
+        seasonBoundary.boundaryIso,
+        seasonBoundary.previousStartIso,
+      ),
     ]);
 
     const ranked = emptyModeStats();

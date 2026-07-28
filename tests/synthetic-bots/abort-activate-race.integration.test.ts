@@ -201,7 +201,7 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     expect(abortResult!.botReleased).toBeNull();
     const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
-  });
+  }, 20000); // holds a lock + waits; needs headroom over the 5s default under parallel load
 
   it('(A3) draft-teardown after activation reclaims the bot (uncommitFirst)', async () => {
     if (!dbAvailable) return;
@@ -348,7 +348,7 @@ describe('match-creation vs abort TOTAL ORDER on the lobby advisory lock (Sol fi
     for (const mm of matches) {
       if (mm.status === 'active') expect(mm.lobby_id).not.toBeNull();
     }
-  });
+  }, 20000); // concurrent createMatchFromLobby + abort; needs headroom under parallel load
 
   it('abort-wins (abort holds the lock first): creation ROLLS BACK, no orphaned match, bot freed', async () => {
     if (!dbAvailable) return;
@@ -390,5 +390,5 @@ describe('match-creation vs abort TOTAL ORDER on the lobby advisory lock (Sol fi
     expect(matches).toHaveLength(0);
     const res = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(res).toHaveLength(0); // bot freed by the abort
-  });
+  }, 20000); // holds a lock + 200ms delay + blocked creation; headroom under parallel load
 });

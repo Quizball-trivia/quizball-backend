@@ -65,18 +65,54 @@ function plan(bots: BurnInBot[], ceilingRp: number) {
   return { manifestHash, schedule, ceilingRp };
 }
 
-/** Run the execute transaction exactly like index.ts. */
-async function execute(bots: BurnInBot[], ceilingRp: number) {
+/**
+ * Run the CHUNKED execute exactly like index.ts (idempotent-resume aware). If
+ * `crashAfterChunk` is set, throw after committing that many chunks (simulating
+ * a mid-run crash) — the completed chunks stay committed.
+ */
+async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: number; crashAfterChunk?: number } = {}) {
   const { manifestHash, schedule } = plan(bots, ceilingRp);
-  await sql.begin(async (tx) => {
-    await data.lockBurnIn(tx);
-    await data.assertNotBurnedIn(tx);
-    const violations = await data.findNonPristineBots(tx, bots.map((b) => b.userId));
-    if (violations.length > 0) throw new Error(`not pristine: ${violations.map((v) => v.nickname).join(',')}`);
-    for (const f of schedule.fixtures) await writeFixtureInTx(tx, f);
-    await data.insertBurnInMarker(tx, manifestHash, 42, schedule.fixtures.length, ceilingRp);
-  });
-  return { manifestHash, matchIds: schedule.fixtures.map((f) => f.matchId) };
+  const rosterIds = bots.map((b) => b.userId);
+  const fixtures = schedule.fixtures;
+  const alreadyWritten = await data.existingMatchIds(fixtures.map((f) => f.matchId));
+  const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
+  const writtenBots = new Set<string>();
+  for (const f of fixtures) if (alreadyWritten.has(f.matchId)) { writtenBots.add(f.botAUserId); writtenBots.add(f.botBUserId); }
+  const untouchedBotIds = rosterIds.filter((id) => !writtenBots.has(id));
+
+  const CHUNK = opts.chunk ?? 250;
+  let gateChecked = false;
+  let committedChunks = 0;
+  for (let i = 0; i < remaining.length; i += CHUNK) {
+    const chunk = remaining.slice(i, i + CHUNK);
+    const isLast = i + CHUNK >= remaining.length;
+    await sql.begin(async (tx) => {
+      await data.lockBurnIn(tx);
+      await data.assertNotBurnedIn(tx);
+      if (!gateChecked) {
+        if (untouchedBotIds.length > 0) {
+          await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${untouchedBotIds}::uuid[]) FOR UPDATE`;
+          const violations = await data.findNonPristineBots(tx, untouchedBotIds);
+          if (violations.length > 0) throw new Error(`not pristine: ${violations.map((v) => v.nickname).join(',')}`);
+        }
+        gateChecked = true;
+      }
+      for (const f of chunk) await writeFixtureInTx(tx, f);
+      if (isLast) await data.insertBurnInMarker(tx, manifestHash, 42, fixtures.length, ceilingRp);
+    });
+    committedChunks++;
+    if (opts.crashAfterChunk != null && committedChunks >= opts.crashAfterChunk && !isLast) {
+      throw new Error('simulated crash between chunks');
+    }
+  }
+  if (remaining.length === 0) {
+    await sql.begin(async (tx) => {
+      await data.lockBurnIn(tx);
+      await data.assertNotBurnedIn(tx);
+      await data.insertBurnInMarker(tx, manifestHash, 42, fixtures.length, ceilingRp);
+    });
+  }
+  return { manifestHash, matchIds: fixtures.map((f) => f.matchId), fixtures };
 }
 
 beforeAll(async () => {
@@ -120,7 +156,41 @@ afterAll(async () => {
   await sql.end();
 });
 
-describe('execute (one transaction)', () => {
+describe('execute (chunked)', () => {
+  it('crash between chunks leaves a committed PREFIX; rerun skips written fixtures + finishes (idempotent)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    await clearMarker();
+    const bots = await Promise.all([seedBot(51, -0.4), seedBot(52, 0.1), seedBot(53, 0.3), seedBot(54, -0.1), seedBot(55, 0.2), seedBot(56, 0.0)]);
+    const matchIds = plan(bots, 100_000).schedule.fixtures.map((f) => f.matchId);
+    expect(matchIds.length).toBeGreaterThan(4); // need multiple small chunks
+
+    // Crash after the first small chunk commits.
+    await expect(execute(bots, 100_000, { chunk: 2, crashAfterChunk: 1 })).rejects.toThrow(/simulated crash/);
+
+    // A committed PREFIX exists (some matches), the run is NOT marked complete.
+    const written1 = await data.existingMatchIds(matchIds);
+    expect(written1.size).toBeGreaterThan(0);
+    expect(written1.size).toBeLessThan(matchIds.length);
+    expect(await data.readBurnInMarker()).toBeNull();
+
+    // RERUN: same plan, skips the written prefix, finishes the rest, marks complete.
+    await execute(bots, 100_000, { chunk: 2 });
+    const written2 = await data.existingMatchIds(matchIds);
+    expect(written2.size).toBe(matchIds.length);
+    expect(await data.readBurnInMarker()).not.toBeNull();
+    // No duplicate ledger rows (idempotent) — exactly one ledger row per (match,user).
+    const [{ dupes }] = await sql<{ dupes: number }[]>`
+      SELECT COUNT(*)::int AS dupes FROM (
+        SELECT match_id, user_id, COUNT(*) AS n FROM ranked_rp_changes
+        WHERE match_id = ANY(${matchIds}::uuid[]) GROUP BY match_id, user_id HAVING COUNT(*) > 1
+      ) d
+    `;
+    expect(dupes).toBe(0);
+
+    // Teardown.
+    await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
+  });
+
   it('writes all fixtures + the complete marker atomically; a second run refuses', async ({ skip }) => {
     if (!dbAvailable) skip();
     await clearMarker();

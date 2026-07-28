@@ -33,6 +33,7 @@ import {
   lockBurnIn,
   assertNotBurnedIn,
   insertBurnInMarker,
+  existingMatchIds,
 } from './data.js';
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
@@ -187,35 +188,81 @@ async function main(): Promise<void> {
     throw new Error('ABORT: PERSISTENT_BOTS flag is ON — burn-in must run before selection activates.');
   }
 
-  // ── EXECUTE: plan-all-then-write in ONE transaction ────────────────────────
-  // Burn-in is NOT resumable. The complete plan (computed above, purely from H's
-  // immutable inputs) is written inside a single transaction that also takes the
-  // xact advisory lock, re-asserts the one-time marker and the pristine gate,
-  // and inserts the 'complete' marker. If ANYTHING throws, the WHOLE transaction
-  // rolls back — every fixture, the marker, all of it — leaving the DB exactly
-  // as it was. Rerun = start over from a clean DB. No snapshot, no receipt, no
-  // resume, no ownership token, no rollback-drift detection.
+  // ── EXECUTE: chronological CHUNK batches ───────────────────────────────────
+  // The plan (deterministic from H's immutable inputs) is written in CHUNKS,
+  // each chunk in its OWN committed transaction, in the scheduler's chronological
+  // order. A crash leaves a committed chronological PREFIX (every bot's history
+  // up to that point is self-consistent) and rolls back only the in-flight chunk
+  // — corruption-free. A rerun re-plans identically and SKIPS already-written
+  // fixtures (idempotent by deterministic match id), so it resumes from the
+  // first unwritten fixture. Each chunk-tx takes the xact advisory lock (serialize
+  // vs concurrent runs) and re-asserts the one-time marker; the marker is only
+  // inserted after the FINAL chunk. The write-time RP-equality belt guarantees
+  // each fixture settles to exactly its projected RP regardless of chunk seams.
   const rosterIds = roster.map((b) => b.userId);
-  await sql.begin(async (tx) => {
-    await lockBurnIn(tx); // serialize vs concurrent runs; auto-released on commit/rollback
-    await assertNotBurnedIn(tx); // one-time guard (throws if a marker exists)
+  const fixtures = schedule.fixtures;
 
-    // Pristine gate INSIDE the tx (serialized vs selection/reservations).
-    const violations = await findNonPristineBots(tx, rosterIds);
-    if (violations.length > 0) {
-      const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
-      throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
-    }
+  // Idempotent resume: skip fixtures already written by a prior (crashed) run.
+  const alreadyWritten = await existingMatchIds(fixtures.map((f) => f.matchId));
+  const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
 
-    for (const fixture of schedule.fixtures) {
-      await writeFixtureInTx(tx, fixture);
-    }
+  // Pristine gate applies ONLY to bots not yet touched by a prior partial run
+  // (a bot with a committed burn-in fixture is legitimately non-pristine now).
+  const writtenBots = new Set<string>();
+  for (const f of fixtures) {
+    if (alreadyWritten.has(f.matchId)) { writtenBots.add(f.botAUserId); writtenBots.add(f.botBUserId); }
+  }
+  const untouchedBotIds = rosterIds.filter((id) => !writtenBots.has(id));
 
-    await insertBurnInMarker(tx, manifestHash, args.seed, schedule.fixtures.length, ceilingRp);
-  });
+  const CHUNK = 250;
+  let written = 0;
+  let gateChecked = false;
+  for (let i = 0; i < remaining.length; i += CHUNK) {
+    const chunk = remaining.slice(i, i + CHUNK);
+    const isLastChunk = i + CHUNK >= remaining.length;
+    await sql.begin(async (tx) => {
+      await lockBurnIn(tx); // serialize vs concurrent runs (released on commit)
+      await assertNotBurnedIn(tx); // one-time guard (marker inserted only at the end)
+
+      // Pristine gate under the row lock (P2-pristine-race), once, in the first
+      // chunk — for the UNTOUCHED bots only.
+      if (!gateChecked) {
+        if (untouchedBotIds.length > 0) {
+          await tx`SELECT user_id FROM ranked_profiles WHERE user_id = ANY(${untouchedBotIds}::uuid[]) FOR UPDATE`;
+          const violations = await findNonPristineBots(tx, untouchedBotIds);
+          if (violations.length > 0) {
+            const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
+            throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
+          }
+        }
+        gateChecked = true;
+      }
+
+      for (const fixture of chunk) {
+        await writeFixtureInTx(tx, fixture);
+      }
+
+      // The completion marker lands in the SAME tx as the last chunk, so a crash
+      // before the final chunk never leaves a 'complete' marker.
+      if (isLastChunk) {
+        await insertBurnInMarker(tx, manifestHash, args.seed, fixtures.length, ceilingRp);
+      }
+    });
+    written += chunk.length;
+    process.stdout.write(`  … ${written}/${remaining.length} fixtures written (chunk committed)\n`);
+  }
+
+  // No remaining fixtures (a fully-resumed run) but no marker yet → finalize.
+  if (remaining.length === 0) {
+    await sql.begin(async (tx) => {
+      await lockBurnIn(tx);
+      await assertNotBurnedIn(tx);
+      await insertBurnInMarker(tx, manifestHash, args.seed, fixtures.length, ceilingRp);
+    });
+  }
 
   process.stdout.write(
-    `\nEXECUTE complete: ${schedule.fixtures.length} fixtures written in one transaction (manifest ${manifestHash}).\n`,
+    `\nEXECUTE complete: ${fixtures.length} fixtures (${written} newly written, ${alreadyWritten.size} pre-existing) for manifest ${manifestHash}.\n`,
   );
   await sql.end();
 }

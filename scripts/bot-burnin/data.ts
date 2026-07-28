@@ -169,6 +169,15 @@ export async function readBurnInMarker(): Promise<RunMarker | null> {
   return rows[0]?.params ?? null;
 }
 
+/** Which of the given plan match-ids are already written (idempotent resume). */
+export async function existingMatchIds(matchIds: string[]): Promise<Set<string>> {
+  if (matchIds.length === 0) return new Set();
+  const rows = await sql<{ id: string }[]>`
+    SELECT id FROM matches WHERE id = ANY(${matchIds}::uuid[])
+  `;
+  return new Set(rows.map((r) => r.id));
+}
+
 export interface PristineViolation {
   userId: string;
   nickname: string;

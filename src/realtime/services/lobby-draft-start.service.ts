@@ -5,6 +5,8 @@ import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
+import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -50,7 +52,12 @@ export async function abortRankedDraftStartForTickets(
   lobby: { id: string; mode: 'friendly' | 'ranked' },
   humanUserIds: string[]
 ): Promise<void> {
-  await lobbiesRepo.deleteLobby(lobby.id);
+  // Ticket failure fires POST-activation (committed_at is set), so it must be
+  // able to reclaim a genuinely-stuck draft → teardown-intent. The AUTHORITATIVE
+  // in-lock live-match check inside the locked abort decides: if a reconnect
+  // activated + created a match first, the abort no-ops (the live match keeps the
+  // bot); if the draft is truly stuck (no match), it reclaims + tears down.
+  await reservationService.abortLobby(lobby.id, 'abort_start_for_tickets', { draftTeardown: true });
   await warmupRealtimeService.cleanupLobby(lobby.id);
   const redis = getRedisClient();
   if (redis) {
@@ -146,7 +153,13 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           categoryId: category.id,
         }))
       );
-      await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+      // Flip to 'active' under the shared per-lobby advisory lock so this
+      // waiting→active transition serializes with any concurrent persistent-bot
+      // reservation ABORT (which takes the same lock). This closes the
+      // abort-vs-activate TOCTOU: an aborter either ran first (freed the bot →
+      // the later reservation transfer finds nothing → match creation rolls back)
+      // or blocks behind us and observes 'active' → no-ops.
+      await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId);
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       let turnUserId = lobby.host_user_id;

@@ -9,6 +9,7 @@ import { matchPlayersRepo } from '../../modules/matches/match-players.repo.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { trackMatchAbandoned } from '../../core/analytics/game-events.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { RANKED_MM_CANCEL_SEARCH_SCRIPT } from '../lua/ranked-matchmaking.scripts.js';
 import type { SessionBlockedPayload, SessionStatePayload } from '../socket.types.js';
 import { withSpan } from '../../core/tracing.js';
@@ -410,20 +411,35 @@ async function removeUserFromLobby(
   userId: string,
   reason: string
 ): Promise<void> {
+  // A ranked-AI lobby is a 2-member (human + bot) pre-match lobby: the human
+  // leaving ENDS it. Tear it down + free any persistent-bot reservation
+  // atomically under the shared per-lobby advisory lock (serialized with draft
+  // activation). The locked abort removes ALL members + deletes the lobby +
+  // releases the reservation, only while still 'waiting'/gone. If a reconnect
+  // concurrently advanced the draft, it no-ops and we leave the live draft alone.
+  if (lobby.mode === 'ranked') {
+    const result = await reservationService.abortLobby(lobby.id, 'remove_user_from_lobby');
+    const redis = getRedisClient();
+    if (redis) await redis.del(rankedAiLobbyKey(lobby.id)).catch(() => undefined);
+    if (result.aborted) {
+      // Detach the removed members' sockets, then emit the closed state.
+      for (const removedId of result.removedMemberIds) {
+        await removeUserFromLobbySockets(io, lobby.id, removedId);
+      }
+      await emitClosedLobbyState(io, lobby.id, lobby.mode);
+      logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard aborted ranked pre-match lobby');
+      return;
+    }
+    // Lobby advanced (live draft) — leave it; just detach this user's socket.
+    await removeUserFromLobbySockets(io, lobby.id, userId);
+    await emitLobbyState(io, lobby.id);
+    logger.info({ lobbyId: lobby.id, userId, reason, status: 'advanced' }, 'Session guard: ranked lobby advanced, left live');
+    return;
+  }
+
+  // Non-ranked (friendly) lobby: the legacy per-member removal + host transfer.
   await lobbiesRepo.removeMember(lobby.id, userId);
   await removeUserFromLobbySockets(io, lobby.id, userId);
-
-  if (lobby.mode === 'ranked') {
-    const redis = getRedisClient();
-    const aiUserId = redis ? await redis.get(rankedAiLobbyKey(lobby.id)) : null;
-    if (aiUserId) {
-      await lobbiesRepo.removeMember(lobby.id, aiUserId);
-      await removeUserFromLobbySockets(io, lobby.id, aiUserId);
-      if (redis) {
-        await redis.del(rankedAiLobbyKey(lobby.id));
-      }
-    }
-  }
 
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
   if (memberCount === 0) {
@@ -448,7 +464,11 @@ async function closeRankedPreMatchLobby(
   reason: string
 ): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobby.id);
-  await lobbiesRepo.deleteLobby(lobby.id);
+  // Force-close of a STUCK active pre-match lobby (activated but no entered match
+  // — the caller already confirmed no live match and abandoned any match row).
+  // This is a genuine draft-teardown, so draftTeardown clears the reservation's
+  // commit flag under the lock and reclaims the bot.
+  await reservationService.abortLobby(lobby.id, 'close_pre_match_lobby', { draftTeardown: true });
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del(rankedAiLobbyKey(lobby.id));

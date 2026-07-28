@@ -195,7 +195,7 @@ export function correctnessFromAnchor(anchorRp: number): number {
   return clamp(0.35 + ((anchorRp - 150) / 2550) * 0.40, 0.35, 0.75);
 }
 
-function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: number } {
+export function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: number } {
   // Higher-anchor AI answers a bit faster.
   const normalized = (anchorRp - MIN_PLACEMENT_ANCHOR_RP) / (MAX_PLACEMENT_ANCHOR_RP - MIN_PLACEMENT_ANCHOR_RP);
   const minMs = Math.round(900 - (normalized * 400));
@@ -208,6 +208,22 @@ function delayProfileFromAnchor(anchorRp: number): { minMs: number; maxMs: numbe
 
 function computeRankedAiAnchor(profile: RankedProfileRow): number {
   return clamp(roundToNearest25(profile.rp), MIN_PLACEMENT_ANCHOR_RP, MAX_PLACEMENT_ANCHOR_RP);
+}
+
+/**
+ * The RP that persistent-bot selection targets for a human opponent — the SAME
+ * anchor the ephemeral path pins into ranked_context, so nearest-RP bot
+ * selection preserves today's balancing exactly:
+ *   - unplaced / in-placement humans → the current placement anchor
+ *     (1900-adaptive per PR2), NOT their hidden 450 RP.
+ *   - placed humans → their nearest current RP (rounded to 25).
+ * The bot's displayed RP/tier is always its own real profile; this target only
+ * drives which bot is a good match.
+ */
+export function selectionTargetRpForHuman(profile: RankedProfileRow): number {
+  return needsPlacement(profile)
+    ? computeNextPlacementAnchor(profile)
+    : computeRankedAiAnchor(profile);
 }
 
 // Reconstruct a settled participant's outcome from its persisted ledger row +
@@ -346,6 +362,30 @@ export const rankedService = {
       aiAnchorRp,
       aiCorrectness: correctnessFromAnchor(aiAnchorRp),
       aiDelayProfile: delayProfileFromAnchor(aiAnchorRp),
+    };
+  },
+
+  /**
+   * Ranked context for a PERSISTENT roster bot match (PR7).
+   *
+   * Deliberately carries NO aiAnchorRp: PR3 made settlement + payloads read the
+   * bot's REAL ranked profile for persistent opponents, so pinning a synthetic
+   * anchor would fight that. Placement is likewise never forced on the persistent
+   * side — the match-wide isPlacement flag is derived from the human at creation
+   * and each side settles from its own profile.
+   *
+   * TEMPORARY difficulty bridge (until PR8 replaces it with the calibrated model
+   * + per-question snapshot): the bot plays with correctness/delay derived from
+   * its OWN current RP via the same correctnessFromAnchor / delayProfileFromAnchor
+   * the ephemeral path uses, so a persistent bot is no easier/harder than an
+   * ephemeral opponent of the same rank today. correctnessFromAnchor already
+   * clamps to ≤0.75.
+   */
+  buildPersistentBotMatchContext(botRp: number): { aiCorrectness: number; aiDelayProfile: { minMs: number; maxMs: number } } {
+    const anchor = clamp(botRp, MIN_PLACEMENT_ANCHOR_RP, MAX_PLACEMENT_ANCHOR_RP);
+    return {
+      aiCorrectness: correctnessFromAnchor(anchor),
+      aiDelayProfile: delayProfileFromAnchor(anchor),
     };
   },
 

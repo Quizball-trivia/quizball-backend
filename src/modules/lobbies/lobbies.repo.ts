@@ -252,6 +252,14 @@ export const lobbiesRepo = {
     return row ?? null;
   },
 
+  async updateRankedContext(lobbyId: string, rankedContext: RankedLobbyContext | null): Promise<void> {
+    await sql`
+      UPDATE lobbies
+      SET ranked_context = ${sql.json((rankedContext ?? null) as Json)}, updated_at = NOW()
+      WHERE id = ${lobbyId}
+    `;
+  },
+
   async setVisibility(lobbyId: string, isPublic: boolean): Promise<void> {
     await sql`
       UPDATE lobbies

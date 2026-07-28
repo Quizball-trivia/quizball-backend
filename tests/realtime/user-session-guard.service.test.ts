@@ -17,6 +17,7 @@ const abandonMatchWithCompleteLockMock = vi.fn();
 const getActiveMatchForLobbyMock = vi.fn();
 const removeMemberMock = vi.fn();
 const deleteLobbyMock = vi.fn();
+const abortLobbyMock = vi.fn();
 const countMembersMock = vi.fn();
 const listMembersWithUserMock = vi.fn();
 const resolveMatchReplayEvidenceMock = vi.fn();
@@ -32,6 +33,16 @@ vi.mock('../../src/core/logger.js', () => ({
 
 vi.mock('../../src/realtime/redis.js', () => ({
   getRedisClient: () => null,
+}));
+
+// Ranked pre-match lobby teardown + reservation release goes through the locked
+// abort primitive.
+vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({
+  reservationService: {
+    abortLobby: (...args: unknown[]) => abortLobbyMock(...args),
+    releaseIfSettled: vi.fn().mockResolvedValue(undefined),
+    releaseByMatch: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
@@ -136,6 +147,7 @@ describe('user-session-guard.service', () => {
     getActiveMatchForLobbyMock.mockResolvedValue(null);
     removeMemberMock.mockResolvedValue(undefined);
     deleteLobbyMock.mockResolvedValue(undefined);
+    abortLobbyMock.mockResolvedValue({ aborted: true, botReleased: null, lobbyDeleted: true, removedMemberIds: [] });
     countMembersMock.mockResolvedValue(0);
     listMembersWithUserMock.mockResolvedValue([
       { user_id: 'u1', is_ai: false },
@@ -500,7 +512,9 @@ describe('user-session-guard.service', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const snapshot = await userSessionGuardService.cleanupRankedQueueArtifacts(io, 'u1');
 
-    expect(deleteLobbyMock).toHaveBeenCalledWith('draft-lobby');
+    // The lobby teardown + reservation release now goes through the locked abort
+    // primitive (which deletes the lobby inside its transaction).
+    expect(abortLobbyMock).toHaveBeenCalledWith('draft-lobby', 'close_pre_match_lobby', { draftTeardown: true });
     expect(lobbySocket.leave).toHaveBeenCalledWith('lobby:draft-lobby');
     expect(abandonMatchWithCompleteLockMock).not.toHaveBeenCalled();
     expect(snapshot.state).toBe('IDLE');

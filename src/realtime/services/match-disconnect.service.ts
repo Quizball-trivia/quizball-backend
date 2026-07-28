@@ -12,6 +12,7 @@ import { parseStoredAvatarCustomization } from '../../modules/users/avatar-custo
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { storeService } from '../../modules/store/store.service.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
+import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
 import { getMatchCache, type MatchCache } from '../match-cache.js';
 import { getCurrentCountriesForUsers } from '../session-country.js';
 import {
@@ -206,6 +207,12 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
 }
 
 async function cleanupPossessionTerminalRedisKeys(matchId: string, roster: PossessionTerminalPlayer[]): Promise<void> {
+  // Terminal release of any persistent-bot reservation for this match. This is
+  // the choke point for the DIRECT-abandon disconnect path (double-drop
+  // no-contest) that does not route through finalizeMatchAsForfeit. The
+  // finalizer paths (single-forfeiter) release at their own choke points; a
+  // second release here is a harmless no-op (row already gone).
+  await reservationService.releaseIfSettled(matchId, 'disconnect_terminal');
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
   await redis.del(possessionTerminalCleanupKeys(matchId, roster));

@@ -14,6 +14,7 @@ import { objectivesService } from '../modules/objectives/index.js';
 import { progressionService } from '../modules/progression/progression.service.js';
 import { rankedService } from '../modules/ranked/ranked.service.js';
 import { rankedAiMatchKey } from './ai-ranked.constants.js';
+import { reservationService } from '../modules/synthetic-bots/reservation.service.js';
 import {
   deleteMatchCache,
   getMatchCacheOrRebuild,
@@ -421,8 +422,18 @@ export async function completePossessionMatch(
             }))
             : [],
         }, 'Ranked settlement result for final_results emit');
+        // Release the persistent-bot reservation ONLY once settlement has
+        // actually COMMITTED (settleCompletedRankedMatch returned without
+        // throwing). If settlement throws, we deliberately do NOT release: the
+        // final-results replay path re-enters completion and re-settles (the
+        // settlement is per-participant idempotent), and only that successful
+        // re-settlement releases the bot. Releasing on a failed/attempted
+        // settlement would free the bot for a second match while its RP is still
+        // unsettled. Runs here (own DB call, outside the Redis block) so a
+        // missing/failing Redis client can never skip it.
+        await reservationService.releaseIfSettled(matchId, 'completion');
       } catch (err) {
-        logger.warn({ err, matchId }, 'Ranked settlement failed — emitting results without rankedOutcome');
+        logger.warn({ err, matchId }, 'Ranked settlement failed — NOT releasing reservation (replay will re-settle then release)');
       }
     }
 

@@ -14,11 +14,9 @@ import {
   matchesService,
   PARTY_QUIZ_TOTAL_QUESTIONS,
 } from '../../modules/matches/matches.service.js';
-import { getRedisClient } from '../redis.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
-import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import {
   FRIENDLY_LOBBY_MAX_MEMBERS,
   attachUserSocketsToLobby,
@@ -39,8 +37,8 @@ import { startRankedAiForUser } from './lobby-ranked-ai.service.js';
 import {
   acquireLobbyLockWithRetry,
   closeLobbyIfEmpty,
-  getRankedAiUserIdForLobby,
   isRankedAiLobby,
+  releaseRankedAiLobbyMemberSafely,
   removeUserFromLobbySockets,
   resolveLobbyId,
   transferHostIfNeeded,
@@ -856,16 +854,14 @@ export async function leaveLobby(
           return;
         }
 
-        await lobbiesRepo.removeMember(lobbyId, userId);
         if (isRankedAiLobby(lobby)) {
-          const aiUserId = await getRankedAiUserIdForLobby(lobbyId);
-          if (aiUserId) {
-            await lobbiesRepo.removeMember(lobbyId, aiUserId);
-          }
-          const redis = getRedisClient();
-          if (redis) {
-            await redis.del(rankedAiLobbyKey(lobbyId));
-          }
+          // Ranked-AI: human removal + bot release + teardown ALL inside the
+          // per-lobby advisory lock (status-gated). If a draft activated first,
+          // this NO-OPS and the human stays — the in-match machinery handles the
+          // drop during an active match (Sol P1).
+          await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
+        } else {
+          await lobbiesRepo.removeMember(lobbyId, userId);
         }
 
         await removeUserFromLobbySockets(io, lobbyId, userId);

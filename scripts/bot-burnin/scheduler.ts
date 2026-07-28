@@ -18,6 +18,7 @@
  */
 import {
   computeSeasonRpDelta,
+  SEASON_INITIAL_RP,
 } from '../../src/modules/ranked/season-rp-formula.js';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, PlannedFixture } from './types.js';
@@ -210,11 +211,24 @@ export function buildSchedule(opts: {
     (runDate.getTime() - seasonStart.getTime()) / (24 * 60 * 60 * 1000),
   );
 
-  // Finding 5: simulate from the ACTUAL loaded profile state (no 450-overwrite).
-  // The pristine-state execute gate guarantees these are unplaced/450/0 at run
-  // time; the report and the writer therefore agree, and the code stops lying.
+  // PLAN PHASE is a PURE function of H's IMMUTABLE inputs. Every bot starts from
+  // the fixed pristine baseline (SEASON_INITIAL_RP / unplaced / 0) — NOT its live
+  // rp/placement/streak — so the plan (and every fixture id) is identical no
+  // matter what the DB currently holds. The pristine execute gate (inside the
+  // one write transaction) guarantees this baseline is the real pre-state.
   const bots: MutableBot[] = opts.bots.map((b) => ({
-    ...b,
+    userId: b.userId,
+    nickname: b.nickname,
+    baseSkill: b.baseSkill,
+    dailyCap: b.dailyCap,
+    schedule: b.schedule,
+    status: b.status,
+    // Pristine baseline — the ONLY starting state the plan ever assumes.
+    rp: SEASON_INITIAL_RP,
+    placementPlayed: 0,
+    placementWins: 0,
+    placementStatus: 'unplaced',
+    currentWinStreak: 0,
     fixturesPlayed: 0,
     recentOpponents: [],
     perDayCount: new Map(),

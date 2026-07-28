@@ -468,6 +468,34 @@ describe('auctionMatchmakingService', () => {
     expect(startMatchMock.startAuctionMatchForHumans).not.toHaveBeenCalled();
   });
 
+  it('rejects cancellation after matchmaking has already seated the user', async () => {
+    const { io } = createIo();
+    const firstSocket = socket('u1', 'One');
+    const matchId = 'claimed-match';
+    redisMock.client!.strings.set(`auction:match:${matchId}`, JSON.stringify({
+      matchId,
+      version: 1,
+      phase: 'bidding',
+      seats: [
+        { seatId: 'seat-human', userId: 'u1', displayName: 'One', isBot: false },
+      ],
+    }));
+    redisMock.client!.strings.set('auction:user:u1:match', matchId);
+
+    await auctionMatchmakingService.handleSearchCancel(io, firstSocket);
+
+    expect(firstSocket.emit).toHaveBeenCalledWith(
+      'auction:error',
+      expect.objectContaining({
+        code: 'auction_search_cancel_rejected',
+      })
+    );
+    expect(firstSocket.emit).not.toHaveBeenCalledWith(
+      'auction:search_cancelled',
+      expect.anything()
+    );
+  });
+
   it('removes a queued search on disconnect when no other user sockets remain', async () => {
     const { io, roomEmit, roomSockets } = createIo();
     const firstSocket = socket('u1', 'One');

@@ -15,10 +15,14 @@ import {
 } from '../../modules/auction/auction-state.store.js';
 import {
   toPublicAuctionMatchState,
+  type AuctionMatchOrigin,
   type PublicAuctionMatchState,
 } from '../../modules/auction/auction-match-state.js';
 import { scheduleAuctionClueRevealTimer } from './auction-clue-timer.service.js';
-import { openAuctionUiReadyGate } from './auction-ui-ready.service.js';
+import {
+  AUCTION_FIRST_ROUND_UI_READY_CEILING_MS,
+  openAuctionUiReadyGate,
+} from './auction-ui-ready.service.js';
 import { requirePublicRound } from './auction-realtime-payloads.js';
 import type { FormationName } from '../../modules/auction/auction.types.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -37,6 +41,11 @@ import {
 } from '../ai-ranked.constants.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
 import { AUCTION_SEAT_COUNT } from '../../modules/auction/auction.constants.js';
+import {
+  armAuctionDisconnectGrace,
+  resumeAuctionUserIfDisconnected,
+} from './auction-disconnect.service.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 export interface AuctionStartAiMatchServiceInput {
   formation?: FormationName;
@@ -57,6 +66,8 @@ export interface StartAuctionMatchForHumansInput {
   humanPlayers: readonly AuctionMatchHumanPlayer[];
   formation?: FormationName;
   locale: AuctionContentLocale;
+  /** Defaults to 'queue'; the lobby path passes 'lobby' so it awards no AP. */
+  origin?: AuctionMatchOrigin;
   sourceSocket?: QuizballSocket;
 }
 
@@ -124,6 +135,7 @@ export async function startAuctionMatchForHumans(
   // Resolve each human's real avatar so opponents render their actual avatar
   // (best-effort: a failed lookup just leaves it null → client falls back).
   const humanPlayers = await resolveHumanAvatars(input.humanPlayers);
+  const context = resolveRealtimeAuctionContext(options);
   const initial = createInitialAuctionMatch({
     humanUserId: primary.userId,
     humanDisplayName: primary.displayName,
@@ -133,7 +145,8 @@ export async function startAuctionMatchForHumans(
     // client-supplied formation so every player in the match gets the same one.
     formation: undefined,
     locale: input.locale,
-    context: options.context,
+    origin: input.origin ?? 'queue',
+    context,
   });
 
   const firstCard = await auctionContentService.getRandomPublishedAuctionCard({
@@ -145,17 +158,22 @@ export async function startAuctionMatchForHumans(
     firstCard.positionGroup,
     firstCard,
     needers,
-    options.context
+    context
   );
 
   const saved = await auctionStateStore.save(withRound, {
-    now: options.context?.now?.(),
+    now: context.now(),
   });
   const publicState = toPublicAuctionMatchState(saved);
 
   for (const player of input.humanPlayers) {
     await attachUserSocketsToAuctionMatch(io, player.userId, saved.matchId, input.sourceSocket);
   }
+  await Promise.all(input.humanPlayers.map((player) => (
+    input.sourceSocket?.data.user?.id === player.userId
+      ? false
+      : armAuctionDisconnectGrace(io, saved, player.userId)
+  )));
 
   const startedPayload: AuctionMatchStartedPayload = {
     matchId: saved.matchId,
@@ -171,12 +189,13 @@ export async function startAuctionMatchForHumans(
     io,
     state: saved,
     phase: 'round',
-    dispatch: () => {
-      void scheduleAuctionClueRevealTimer(saved, {
+    ceilingMs: AUCTION_FIRST_ROUND_UI_READY_CEILING_MS,
+    dispatch: () => (
+      scheduleAuctionClueRevealTimer(saved, {
         now: options.context?.now?.(),
         context: options.context,
-      });
-    },
+      })
+    ),
   });
 
   return saved;
@@ -271,6 +290,7 @@ export async function rejoinAuctionMatch(
   const userId = socket.data.user?.id;
   if (userId) {
     await attachUserSocketsToAuctionMatch(io, userId, matchId, socket);
+    await resumeAuctionUserIfDisconnected(io, socket, state);
   } else {
     socket.data.lobbyId = undefined;
     socket.data.matchId = matchId;

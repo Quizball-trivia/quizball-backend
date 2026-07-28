@@ -138,7 +138,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       auctionClueRevealTimerKey('match-1', 'round-1', 1),
-      new Date('2026-06-20T10:00:01.200Z'),
+      new Date('2026-06-20T10:00:05.000Z'),
       {
         kind: 'auction_clue_reveal',
         matchId: 'match-1',
@@ -183,7 +183,7 @@ describe('auction clue reveal timers', () => {
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_reveal',
       'match-1:round-1:2',
-      new Date('2026-06-20T10:00:01.200Z'),
+      new Date('2026-06-20T10:00:05.000Z'),
       expect.objectContaining({ expectedClueIndex: 2, stateVersion: 1 })
     );
 

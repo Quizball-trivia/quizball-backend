@@ -1,6 +1,7 @@
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import type {
   LobbyCreateResult,
+  LobbyGameMode,
   LobbyJoinByCodeResult,
   LobbyLeaveResult,
 } from '../socket.types.js';
@@ -23,9 +24,13 @@ import {
   emitLobbyState,
   generateInviteCode,
   generateLobbyName,
+  FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS,
+  maxMembersForFriendlyGameMode,
   normalizeFriendlyGameMode,
+  playableMembersForFriendlyGameMode,
   syncFriendlyLobbyModeForMemberCountLocked,
 } from '../lobby-utils.js';
+import { startAuctionMatchFromLobby } from './lobby-auction-start.service.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
@@ -43,6 +48,24 @@ import {
   resolveLobbyId,
   transferHostIfNeeded,
 } from './lobby-lifecycle.helpers.js';
+
+/**
+ * Whether a friendly lobby's member count is a legal host-start shape for the
+ * mode. Auction accepts 1-3 humans because empty seats are backfilled with bots.
+ */
+function isValidFriendlyStartShape(
+  friendlyMode: ReturnType<typeof normalizeFriendlyGameMode>,
+  memberCount: number
+): boolean {
+  if (friendlyMode === 'friendly_possession') return memberCount === 2;
+  if (friendlyMode === 'friendly_party_quiz') {
+    return memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS;
+  }
+  if (friendlyMode === 'auction') {
+    return memberCount >= 1 && memberCount <= FRIENDLY_AUCTION_LOBBY_MAX_MEMBERS;
+  }
+  return false;
+}
 
 const JOIN_BY_CODE_LOCK_WAIT_MS = 3500;
 const SETTINGS_LOCK_WAIT_MS = 3500;
@@ -270,7 +293,10 @@ export async function joinByCode(
 
         const members = await lobbiesRepo.listMembersWithUser(lobby.id);
         const alreadyMember = members.some((member) => member.user_id === userId);
-        if (!alreadyMember && members.length >= FRIENDLY_LOBBY_MAX_MEMBERS) {
+        const capacity = maxMembersForFriendlyGameMode(
+          normalizeFriendlyGameMode(lobby.game_mode)
+        );
+        if (!alreadyMember && members.length >= capacity) {
           logger.warn({ lobbyId: lobby.id }, 'Lobby already full');
           socket.emit('error', { code: 'LOBBY_FULL', message: 'Lobby is already full' });
           result = {
@@ -376,10 +402,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
       const friendlyMode = normalizeFriendlyGameMode(lobby.game_mode);
       const allReady = memberCount > 0 && readyCount === memberCount;
 
-      if (
-        (friendlyMode === 'friendly_possession' && memberCount === 2 && allReady) ||
-        (friendlyMode === 'friendly_party_quiz' && memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS && allReady)
-      ) {
+      if (allReady && isValidFriendlyStartShape(friendlyMode, memberCount)) {
         logger.debug({ lobbyId, gameMode: friendlyMode }, 'Lobby ready -> waiting for host start (friendly)');
         return;
       }
@@ -416,7 +439,7 @@ export async function updateSettings(
   socket: QuizballSocket,
   payload: {
     lobbyId?: string;
-    gameMode: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
+    gameMode: LobbyGameMode;
     friendlyRandom?: boolean;
     friendlyCategoryAId?: string | null;
     friendlyCategoryBId?: string | null;
@@ -491,13 +514,40 @@ export async function updateSettings(
           : currentSettings.friendlyCategoryBId,
     };
 
+    // Capacity is judged on the mode the host ACTUALLY asked for, before the
+    // party-quiz coercion below — otherwise "possession with 3 members" would be
+    // silently reinterpreted as party quiz instead of reported. Leaving auction
+    // while it holds more members than the target allows would strand members,
+    // so reject rather than kick anyone.
+    const requestedCapacity = playableMembersForFriendlyGameMode(nextSettings.gameMode);
+    if (
+      lobby.mode === 'friendly' &&
+      currentSettings.gameMode === 'auction' &&
+      nextSettings.gameMode !== 'auction' &&
+      memberCount > requestedCapacity
+    ) {
+      socket.emit('error', {
+        code: 'LOBBY_MODE_CAPACITY',
+        message: `This mode supports up to ${requestedCapacity} players. Remove a player before switching.`,
+        meta: { memberCount, maxMembers: requestedCapacity, gameMode: nextSettings.gameMode },
+      });
+      return;
+    }
+
     if (lobby.mode === 'friendly') {
-      if (memberCount > 2) {
+      // A >2-member lobby is party quiz UNLESS the host explicitly picked
+      // auction, which seats 3 by design.
+      if (memberCount > 2 && nextSettings.gameMode !== 'auction') {
         nextSettings.gameMode = 'friendly_party_quiz';
       }
     }
 
-    if (nextSettings.gameMode === 'ranked_sim') {
+    if (nextSettings.gameMode === 'auction') {
+      // Auction has no lobby categories of its own.
+      nextSettings.friendlyRandom = true;
+      nextSettings.friendlyCategoryAId = null;
+      nextSettings.friendlyCategoryBId = null;
+    } else if (nextSettings.gameMode === 'ranked_sim') {
       nextSettings.friendlyRandom = true;
       nextSettings.friendlyCategoryAId = null;
       nextSettings.friendlyCategoryBId = null;
@@ -512,7 +562,12 @@ export async function updateSettings(
         });
         return;
       }
-      nextSettings.friendlyCategoryBId = null;
+      // Optional second-half preset. It only survives alongside a first-half
+      // pick and must differ from it; clearing/changing A to match B drops B
+      // rather than starting a half against itself.
+      if (nextSettings.friendlyCategoryBId === nextSettings.friendlyCategoryAId) {
+        nextSettings.friendlyCategoryBId = null;
+      }
     }
 
     const normalizedVisibility = payload.isPublic ?? lobby.is_public;
@@ -533,6 +588,15 @@ export async function updateSettings(
       friendlyCategoryAId: nextSettings.friendlyCategoryAId,
       friendlyCategoryBId: nextSettings.friendlyCategoryBId,
     });
+
+    // Entering auction opens a third seat and changes the game entirely — clear
+    // ready states so nobody is dragged into a mode they never agreed to.
+    if (
+      nextSettings.gameMode === 'auction' &&
+      currentSettings.gameMode !== 'auction'
+    ) {
+      await lobbiesRepo.setAllReady(lobbyId, false);
+    }
 
     if (payload.isPublic !== undefined) {
       await lobbiesRepo.setVisibility(lobbyId, payload.isPublic);
@@ -593,9 +657,7 @@ export async function startFriendlyMatch(
   const memberCount = await lobbiesRepo.countMembers(lobbyId);
   const readyCount = await lobbiesRepo.countReadyMembers(lobbyId);
   const allReady = memberCount > 0 && readyCount === memberCount;
-  const isValidFriendlyStart =
-    (friendlyMode === 'friendly_possession' && memberCount === 2) ||
-    (friendlyMode === 'friendly_party_quiz' && memberCount >= 2 && memberCount <= FRIENDLY_LOBBY_MAX_MEMBERS);
+  const isValidFriendlyStart = isValidFriendlyStartShape(friendlyMode, memberCount);
 
   if (!isValidFriendlyStart || !allReady) {
     socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
@@ -645,12 +707,19 @@ export async function startFriendlyMatch(
     const currentMemberCount = await lobbiesRepo.countMembers(lobbyId);
     const currentReadyCount = await lobbiesRepo.countReadyMembers(lobbyId);
     const currentAllReady = currentMemberCount > 0 && currentReadyCount === currentMemberCount;
-    const currentValidStart =
-      (currentFriendlyMode === 'friendly_possession' && currentMemberCount === 2) ||
-      (currentFriendlyMode === 'friendly_party_quiz' &&
-        currentMemberCount >= 2 && currentMemberCount <= FRIENDLY_LOBBY_MAX_MEMBERS);
+    const currentValidStart = isValidFriendlyStartShape(currentFriendlyMode, currentMemberCount);
     if (!currentValidStart || !currentAllReady) {
       socket.emit('error', { code: 'LOBBY_NOT_READY', message: 'All lobby players must be ready' });
+      return;
+    }
+
+    // Auction runs on the auction state store, not the `matches` engine — it
+    // needs no categories and creates no match row here.
+    if (currentFriendlyMode === 'auction') {
+      await startAuctionMatchFromLobby(io, socket, {
+        lobbyId,
+        hostUserId: currentLobby.host_user_id,
+      });
       return;
     }
 
@@ -687,8 +756,17 @@ export async function startFriendlyMatch(
         return;
       }
 
-      const categories = await categoriesRepo.listByIds([categoryA]);
-      if (categories.length !== 1) {
+      // Party quiz is a single-category mode — a second-half preset is
+      // meaningless there, so only possession carries category B forward.
+      const categoryB = currentFriendlyMode === 'friendly_possession'
+        && currentLobby.friendly_category_b_id
+        && currentLobby.friendly_category_b_id !== categoryA
+        ? currentLobby.friendly_category_b_id
+        : null;
+      const requestedCategoryIds = categoryB ? [categoryA, categoryB] : [categoryA];
+
+      const categories = await categoriesRepo.listByIds(requestedCategoryIds);
+      if (categories.length !== requestedCategoryIds.length) {
         socket.emit('error', {
           code: 'INVALID_SETTINGS',
           message: 'Selected category is invalid',
@@ -696,13 +774,15 @@ export async function startFriendlyMatch(
         return;
       }
 
+      // Category B must clear the same question-count bar as A: it plays a full
+      // half, so an under-stocked preset would starve second-half dispatch.
       const validCategoryIds = await lobbiesRepo.listValidCategoryIds(
-        [categoryA],
+        requestedCategoryIds,
         currentFriendlyMode === 'friendly_party_quiz'
           ? PARTY_QUIZ_TOTAL_QUESTIONS
           : MIN_QUESTIONS_PER_CATEGORY
       );
-      if (validCategoryIds.length !== 1) {
+      if (validCategoryIds.length !== requestedCategoryIds.length) {
         socket.emit('error', {
           code: 'INSUFFICIENT_CATEGORIES',
           message: 'Selected category does not have enough questions',
@@ -713,7 +793,7 @@ export async function startFriendlyMatch(
       }
 
       categoryAId = categoryA;
-      categoryBId = null;
+      categoryBId = categoryB;
     }
 
     let result;

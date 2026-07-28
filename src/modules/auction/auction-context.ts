@@ -1,10 +1,18 @@
 import { randomUUID } from 'crypto';
 import { getRandom } from '../../core/rng.js';
+import {
+  CLUE_STUDY_MS,
+  OPENING_TURN_MS,
+  RAISE_TURN_MS,
+} from './auction.constants.js';
 
 export interface AuctionEngineContext {
   now?: () => Date;
   random?: () => number;
   createId?: (kind: 'match' | 'round' | 'bot-seat') => string;
+  clueStudyMs?: number;
+  openingTurnMs?: number;
+  raiseTurnMs?: number;
 }
 
 export interface AuctionContextOptions {
@@ -17,6 +25,9 @@ export interface ResolvedAuctionEngineContext {
   nowIso: () => string;
   random: () => number;
   createId: (kind: 'match' | 'round' | 'bot-seat') => string;
+  clueStudyMs: number;
+  openingTurnMs: number;
+  raiseTurnMs: number;
 }
 
 export function resolveAuctionContext(
@@ -31,6 +42,9 @@ export function resolveAuctionContext(
     nowIso: () => now().toISOString(),
     random: context?.random ?? getRandom,
     createId: context?.createId ?? (() => randomUUID()),
+    clueStudyMs: context?.clueStudyMs ?? CLUE_STUDY_MS,
+    openingTurnMs: context?.openingTurnMs ?? OPENING_TURN_MS,
+    raiseTurnMs: context?.raiseTurnMs ?? RAISE_TURN_MS,
   };
 }
 

@@ -23,11 +23,12 @@ import {
   fireAndForget,
   resolveAiUserIdForMatch,
   resolvePossessionRound,
+  scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
   schedulePossessionAiAnswer,
   schedulePossessionAiHalftimeBan,
 } from './possession-match-flow.js';
-import { HALFTIME_DURATION_MS } from './possession-halftime.js';
+import { HALFTIME_DURATION_MS, HALFTIME_POST_BAN_REVEAL_MS } from './possession-halftime.js';
 import {
   answerLogFields,
   cacheLogFields,
@@ -729,11 +730,17 @@ export async function sendPossessionMatchQuestion(
     if (state.phase === 'HALFTIME') {
       logger.debug({ matchId, qIndex, half: state.half }, 'Possession question dispatch entered halftime state handling');
       await ensureHalftimeCategories(state, cache.categoryAId, matchId, cache.categoryBId);
-      if (!state.halftime.deadlineAt) {
-        state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+      // Preset second half: no ban window, so no ban deadline and no AI ban —
+      // just the short reveal before half 2.
+      if (state.halftime.purpose === 'second_half_preset') {
+        scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
+      } else {
+        if (!state.halftime.deadlineAt) {
+          state.halftime.deadlineAt = new Date(Date.now() + HALFTIME_DURATION_MS).toISOString();
+        }
+        scheduleHalftimeTimeout(io, matchId);
+        schedulePossessionAiHalftimeBan(io, matchId);
       }
-      scheduleHalftimeTimeout(io, matchId);
-      schedulePossessionAiHalftimeBan(io, matchId);
       bumpStateVersion(state);
       await setMatchCache(cache);
       fireAndForget('setMatchStatePayload(sendQuestion:halftime)', async () => {

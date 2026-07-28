@@ -1,11 +1,8 @@
 import { shuffle } from '../../core/rng.js';
 import {
   AUCTION_SEAT_COUNT,
-  CLUE_STUDY_MS,
   FORMATIONS,
-  OPENING_TURN_MS,
   POSITION_GROUPS,
-  RAISE_TURN_MS,
   STARTING_BUDGET,
 } from './auction.constants.js';
 import {
@@ -26,6 +23,7 @@ import type {
 } from './auction.types.js';
 import type {
   AuctionBidState,
+  AuctionMatchOrigin,
   AuctionMatchState,
   AuctionRoundState,
   AuctionSoloPickOptionState,
@@ -51,6 +49,7 @@ export interface CreateInitialAuctionMatchInput {
   bots?: readonly { displayName: string; avatarUrl?: string | null }[];
   formation?: FormationName;
   locale?: 'en' | 'ka';
+  origin?: AuctionMatchOrigin;
   context?: AuctionEngineContext;
 }
 
@@ -100,6 +99,7 @@ export function createInitialAuctionMatch(input: CreateInitialAuctionMatchInput)
     matchId: input.matchId ?? context.createId('match'),
     version: 0,
     locale: input.locale ?? 'en',
+    origin: input.origin ?? 'queue',
     phase: 'created',
     formation,
     seats,
@@ -266,7 +266,7 @@ export function revealNextClue(
 
 /**
  * Opens the study window that sits between the last clue and the first turn:
- * every clue is on screen and players get {@link CLUE_STUDY_MS} to read them
+ * every clue is on screen and players get the configured study duration to read them
  * before anyone can bid. Stays in `clue_reveal` — only `biddingStartsAt` moves.
  */
 export function beginClueStudy(
@@ -287,7 +287,7 @@ export function beginClueStudy(
     ...state,
     currentRound: {
       ...round,
-      biddingStartsAt: addMs(context.now(), CLUE_STUDY_MS),
+      biddingStartsAt: addMs(context.now(), context.clueStudyMs),
       updatedAt: context.nowIso(),
     },
   }, context);
@@ -322,7 +322,7 @@ export function startBidding(
     currentRound: {
       ...round,
       currentTurnSeatId: firstTurn,
-      turnEndsAt: addMs(context.now(), getTurnMs(round)),
+      turnEndsAt: addMs(context.now(), getTurnMs(round, context)),
       biddingStartsAt: null,
       updatedAt: context.nowIso(),
     },
@@ -432,7 +432,7 @@ export function advanceTurnOrResolveRound(
     currentRound: {
       ...round,
       currentTurnSeatId: nextSeatId,
-      turnEndsAt: addMs(context.now(), getTurnMs(round)),
+      turnEndsAt: addMs(context.now(), getTurnMs(round, context)),
       updatedAt: context.nowIso(),
     },
   }, context);
@@ -715,8 +715,12 @@ function getAvailableFootballers(
   return (cards[position] ?? []).filter((card) => !card.clueCardId || !used.has(card.clueCardId));
 }
 
-export function getTurnMs(round: AuctionRoundState): number {
-  return round.highestBidderSeatId ? RAISE_TURN_MS : OPENING_TURN_MS;
+export function getTurnMs(
+  round: AuctionRoundState,
+  contextInput?: AuctionEngineContext
+): number {
+  const context = resolveAuctionContext(contextInput);
+  return round.highestBidderSeatId ? context.raiseTurnMs : context.openingTurnMs;
 }
 
 function appendUsedClueCardId(

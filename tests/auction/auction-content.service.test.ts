@@ -7,7 +7,10 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getPublishedCardAvailability: vi.fn(),
     getRandomPublishedAuctionCard: vi.fn(),
     getPublishedAuctionCardById: vi.fn(),
+    getRecentlySeenFootballPlayerIds: vi.fn(),
+    recordSeenClueCards: vi.fn(),
   },
+  AUCTION_CARD_HISTORY_WINDOW_DAYS: 14,
 }));
 
 import { auctionContentRepo, type PublishedAuctionCardRow } from '../../src/modules/auction/auction-content.repo.js';
@@ -16,6 +19,7 @@ import { auctionContentService } from '../../src/modules/auction/auction-content
 
 const CLUE_CARD_ID = '11111111-1111-1111-1111-111111111111';
 const PLAYER_ID = '22222222-2222-2222-2222-222222222222';
+const SEEN_PLAYER_ID = '33333333-3333-3333-3333-333333333333';
 
 const basePublishedCard = {
   clue_card_id: CLUE_CARD_ID,
@@ -94,6 +98,19 @@ describe('auctionContentService', () => {
     });
   });
 
+  it('returns null from the match-flow lookup only when the filtered pool is exhausted', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(null);
+
+    await expect(
+      auctionContentService.findRandomPublishedAuctionCard({
+        locale: 'en',
+        positionGroup: 'FWD',
+        excludeClueCardIds: [CLUE_CARD_ID],
+      })
+    ).resolves.toBeNull();
+    expect(auctionContentRepo.getPublishedCardAvailability).not.toHaveBeenCalled();
+  });
+
   it('throws a typed price error when published rows are missing price fields', async () => {
     (auctionContentRepo.getPublishedCardAvailability as Mock).mockResolvedValue({
       base_count: 1,
@@ -148,6 +165,89 @@ describe('auctionContentService', () => {
       positionGroup: 'FWD',
       excludeClueCardIds: [CLUE_CARD_ID],
     });
+  });
+
+  it('excludes cross-match recently-seen footballers when the filtered pool still has content', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    const result = await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+      positionGroup: 'FWD',
+      excludeClueCardIds: [CLUE_CARD_ID],
+      excludeRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
+    });
+
+    expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(1);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        excludeRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
+      })
+    );
+  });
+
+  it('falls back to the least-recently-seen footballer when the fresh pool runs dry', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(basePublishedCard);
+
+    const result = await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+      positionGroup: 'FWD',
+      excludeClueCardIds: [CLUE_CARD_ID],
+      excludeRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
+    });
+
+    // Never fails the round: falls back to a repeat rather than returning null.
+    expect(result).toMatchObject({ clueCardId: CLUE_CARD_ID });
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(2);
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        excludeRecentlySeenFootballPlayerIds: undefined,
+        preferLeastRecentlySeenFootballPlayerIds: [SEEN_PLAYER_ID],
+        // The in-match exclusion is NEVER dropped — only the history one.
+        excludeClueCardIds: [CLUE_CARD_ID],
+      })
+    );
+  });
+
+  it('does not double-query when there is no history to exclude', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(null);
+
+    const result = await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+      positionGroup: 'FWD',
+      excludeClueCardIds: [CLUE_CARD_ID],
+    });
+
+    expect(result).toBeNull();
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the difficulty seam off by default', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+      positionGroup: 'FWD',
+    });
+
+    const [options] = (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mock.calls[0];
+    expect(options.preferredDifficulty).toBeUndefined();
+  });
+
+  it('forwards an explicit preferred difficulty to the repo', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    await auctionContentService.findRandomPublishedAuctionCardExcludingSeen({
+      locale: 'en',
+      positionGroup: 'FWD',
+      preferredDifficulty: 'hard',
+    });
+
+    expect(auctionContentRepo.getRandomPublishedAuctionCard).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredDifficulty: 'hard' })
+    );
   });
 
   it('accepts a value-decorrelated 10M starting price from the content view', async () => {

@@ -7,6 +7,7 @@ import {
   applyFold,
   applyTurnTimeout,
   assignFootballerToSquad,
+  beginClueStudy,
   createInitialAuctionMatch,
   finishMatch,
   pickNextPosition,
@@ -17,6 +18,11 @@ import {
   type AuctionCardPool,
   type AuctionEngineContext,
 } from '../../src/modules/auction/auction-engine.js';
+import {
+  CLUE_STUDY_MS,
+  OPENING_TURN_MS,
+  RAISE_TURN_MS,
+} from '../../src/modules/auction/auction.constants.js';
 import { createEmptyTeam } from '../../src/modules/auction/auction-rules.js';
 import type { AuctionMatchState } from '../../src/modules/auction/auction-match-state.js';
 import type { AuctionFootballer, AuctionPlayer, PositionGroup } from '../../src/modules/auction/auction.types.js';
@@ -179,6 +185,63 @@ describe('auction engine transitions', () => {
     expect(next.phase).toBe('bidding');
     expect(next.currentRound?.currentTurnSeatId).toBe('seat-human');
     expect(next.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:30.000Z');
+  });
+
+  it('defaults deadline durations to production constants', () => {
+    const ctx = context();
+    const initial = createMatch(ctx);
+    let state = startBiddingRound(initial, 'FWD', card('defaults'), initial.seats, ctx);
+    state = revealNextClue(state, ctx);
+    state = revealNextClue(state, ctx);
+    state = revealNextClue(state, ctx);
+
+    const studying = beginClueStudy(state, ctx);
+    expect(studying.currentRound?.biddingStartsAt).toBe(
+      new Date(ctx.now!().getTime() + CLUE_STUDY_MS).toISOString()
+    );
+
+    const bidding = startBidding(studying, ctx);
+    expect(bidding.currentRound?.turnEndsAt).toBe(
+      new Date(ctx.now!().getTime() + OPENING_TURN_MS).toISOString()
+    );
+
+    const raised = applyBid(
+      bidding,
+      bidding.currentRound!.currentTurnSeatId!,
+      bidding.currentRound!.startingPrice,
+      ctx
+    );
+    expect(raised.currentRound?.turnEndsAt).toBe(
+      new Date(ctx.now!().getTime() + RAISE_TURN_MS).toISOString()
+    );
+  });
+
+  it('honors context-provided study, opening-turn, and raise-turn durations', () => {
+    const ctx: AuctionEngineContext = {
+      ...context(),
+      clueStudyMs: 123,
+      openingTurnMs: 456,
+      raiseTurnMs: 789,
+    };
+    const initial = createMatch(ctx);
+    let state = startBiddingRound(initial, 'FWD', card('configured'), initial.seats, ctx);
+    state = revealNextClue(state, ctx);
+    state = revealNextClue(state, ctx);
+    state = revealNextClue(state, ctx);
+
+    const studying = beginClueStudy(state, ctx);
+    expect(studying.currentRound?.biddingStartsAt).toBe('2026-06-20T10:00:00.123Z');
+
+    const bidding = startBidding(studying, ctx);
+    expect(bidding.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:00.456Z');
+
+    const raised = applyBid(
+      bidding,
+      bidding.currentRound!.currentTurnSeatId!,
+      bidding.currentRound!.startingPrice,
+      ctx
+    );
+    expect(raised.currentRound?.turnEndsAt).toBe('2026-06-20T10:00:00.789Z');
   });
 
   it('blocks opener fold and auto-bids the opener on timeout', () => {

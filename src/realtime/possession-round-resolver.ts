@@ -32,9 +32,11 @@ import {
   clearAiAnswerTimer,
   ensureHalftimeCategories,
   fireAndForget,
+  scheduleFinalizeHalftime,
   scheduleHalftimeTimeout,
   schedulePossessionAiHalftimeBan,
 } from './possession-match-flow.js';
+import { HALFTIME_POST_BAN_REVEAL_MS } from './possession-halftime.js';
 import {
   buildPlayersPayloadFromCache,
   getUserIdByCachedSeat,
@@ -748,7 +750,13 @@ export async function resolvePossessionRound(
     }
 
     if (state.phase === 'HALFTIME') {
-      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half }, 'Possession match entered halftime');
+      logger.debug({ eventName: 'match:state', matchId, resolvedQIndex: qIndex, nextIndex, half: state.half, purpose: state.halftime.purpose }, 'Possession match entered halftime');
+      // Host preset the second-half category → no ban window and no AI ban,
+      // just a short reveal before half 2 starts.
+      if (state.halftime.purpose === 'second_half_preset') {
+        scheduleFinalizeHalftime(io, matchId, HALFTIME_POST_BAN_REVEAL_MS);
+        return;
+      }
       scheduleHalftimeTimeout(io, matchId);
       schedulePossessionAiHalftimeBan(io, matchId);
       return;

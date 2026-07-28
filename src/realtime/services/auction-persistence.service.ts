@@ -2,7 +2,10 @@ import { logger } from '../../core/logger.js';
 import { matchesRepo } from '../../modules/matches/matches.repo.js';
 import { matchesService } from '../../modules/matches/matches.service.js';
 import { usersRepo } from '../../modules/users/users.repo.js';
-import type { AuctionMatchState } from '../../modules/auction/auction-match-state.js';
+import {
+  auctionMatchOrigin,
+  type AuctionMatchState,
+} from '../../modules/auction/auction-match-state.js';
 
 // Coin participation rewards, granted once per settled auction match to each
 // real human who reaches the finish (a forfeiter's seat is gone by then, so
@@ -12,6 +15,22 @@ export const AUCTION_FINISH_COINS = 300;
 
 export function auctionCoinsForPlacement(placement: number): number {
   return placement === 1 ? AUCTION_WIN_COINS : AUCTION_FINISH_COINS;
+}
+
+/**
+ * Auction Points by final placement — the auction leaderboard currency. All
+ * positive: AP is never lost, so a bad match costs nothing and only the upside
+ * varies. Any placement past 3rd pays 0 (a 3-seat match has no 4th, but the
+ * lookup stays total rather than assuming seat count).
+ */
+export const AUCTION_POINTS_BY_PLACEMENT: Readonly<Record<number, number>> = {
+  1: 50,
+  2: 30,
+  3: 10,
+};
+
+export function auctionPointsForPlacement(placement: number): number {
+  return AUCTION_POINTS_BY_PLACEMENT[placement] ?? 0;
 }
 
 /**
@@ -27,12 +46,28 @@ export function auctionCoinsForPlacement(placement: number): number {
  * swept by the existing cleanup in matchesService.
  *
  * Idempotent: createAuctionMatch is ON CONFLICT DO NOTHING and gates everything
- * after it (coins included), so a retry / double-finish never double-pays.
+ * after it (coins and AP included), so a retry / double-finish never double-pays.
  */
+export interface AuctionMatchRewards {
+  /** Coins granted per userId (every mode/origin). */
+  coinsByUserId: Record<string, number>;
+  /**
+   * Auction Points per real-human userId — QUEUE matches only. `undefined` means
+   * this match awards no AP at all (friendly/lobby), which the client renders by
+   * hiding AP entirely; that is deliberately distinct from a present map whose
+   * entry is 0 (a forfeiter, who played but earned nothing).
+   */
+  apByUserId?: Record<string, number>;
+}
+
+const NO_REWARDS: AuctionMatchRewards = Object.freeze({
+  coinsByUserId: {},
+});
+
 export async function persistFinishedAuctionMatch(
   state: AuctionMatchState,
-): Promise<Record<string, number>> {
-  if (state.phase !== 'finished' || !state.rankings) return {};
+): Promise<AuctionMatchRewards> {
+  if (state.phase !== 'finished' || !state.rankings) return NO_REWARDS;
 
   try {
     // 1) Create the match row (id = the auction's own match id). The "newly
@@ -41,7 +76,7 @@ export async function persistFinishedAuctionMatch(
     const created = await matchesRepo.createAuctionMatch({ id: state.matchId });
     if (!created) {
       // Already persisted (ON CONFLICT DO NOTHING) — nothing to do.
-      return {};
+      return NO_REWARDS;
     }
 
     // 2) Resolve a DB user id for every seat (synthetic AI user for bots).
@@ -85,26 +120,55 @@ export async function persistFinishedAuctionMatch(
     // player (wins/losses/draws by winnerId), same as every other mode.
     await matchesService.completeMatch(state.matchId, winnerId);
 
-    // 5) Coin rewards — real humans only (bots have synthetic wallets we don't
-    // care about), and never for forfeiters (quit/drop-out = 0 coins). Gated by
-    // the `created` guard above, so paid exactly once.
+    // 5) Rewards — real humans only (bots have synthetic wallets we don't care
+    // about), and never for forfeiters (quit/drop-out = 0). Gated by the
+    // `created` guard above, so paid exactly once.
+    //
+    // Coins are paid in every auction match; Auction Points only in QUEUE
+    // matches, so a friendly lobby can't be used to farm the leaderboard.
+    const awardsAuctionPoints = auctionMatchOrigin(state) === 'queue';
     const coinsByUserId: Record<string, number> = {};
+    // Left undefined for friendly matches so the payload omits AP entirely.
+    const apByUserId: Record<string, number> | undefined = awardsAuctionPoints ? {} : undefined;
+
     for (const row of seatRows) {
-      if (row.isBot || row.forfeited) continue;
+      // Bots have no real user to credit and never appear in either map.
+      if (row.isBot) continue;
+
+      if (row.forfeited) {
+        // A forfeiter earns nothing, but is still reported at 0 so the client
+        // can show "0 AP" rather than falling back to the friendly-match state.
+        if (apByUserId) apByUserId[row.userId] = 0;
+        continue;
+      }
+
       const coins = auctionCoinsForPlacement(row.placement);
       await matchesRepo.addCoins(row.userId, coins);
       coinsByUserId[row.userId] = coins;
+
+      if (!apByUserId) continue;
+      const points = auctionPointsForPlacement(row.placement);
+      apByUserId[row.userId] = points;
+      if (points <= 0) continue;
+      await matchesRepo.addAuctionPoints(row.userId, points);
     }
 
     logger.info(
-      { matchId: state.matchId, winnerId, seats: seatRows.length, coinsByUserId },
+      {
+        matchId: state.matchId,
+        winnerId,
+        seats: seatRows.length,
+        origin: auctionMatchOrigin(state),
+        coinsByUserId,
+        apByUserId,
+      },
       'Persisted finished auction match'
     );
-    return coinsByUserId;
+    return { coinsByUserId, apByUserId };
   } catch (error) {
     // Never let persistence failure break the live match flow — the match is
     // already over for players; log and move on.
     logger.error({ error, matchId: state.matchId }, 'Failed to persist auction match');
-    return {};
+    return NO_REWARDS;
   }
 }

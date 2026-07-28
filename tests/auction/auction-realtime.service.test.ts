@@ -160,6 +160,10 @@ describe('auctionRealtimeService', () => {
         waitingUserIds: ['user-1'],
       })
     );
+    const readyPayload = roomEmit.mock.calls.find(([event]) => event === 'auction:waiting_for_ready')?.[1] as {
+      forceStartsAt: string; serverNow: string;
+    };
+    expect(Date.parse(readyPayload.forceStartsAt) - Date.parse(readyPayload.serverNow)).toBeGreaterThanOrEqual(19_000);
 
     const { acknowledgeAuctionUiReady } = await import('../../src/realtime/services/auction-ui-ready.service.js');
     acknowledgeAuctionUiReady(io, 'user-1', {

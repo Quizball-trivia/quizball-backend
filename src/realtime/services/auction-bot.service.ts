@@ -1,6 +1,5 @@
 import { getRandom } from '../../core/rng.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
-import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
 import {
   MIN_BID_INCREMENT,
 } from '../../modules/auction/auction.constants.js';
@@ -29,6 +28,7 @@ import {
   buildFoldAcceptedPayload,
   buildTurnStartedPayload,
 } from './auction-realtime-payloads.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 // Bots deliberate long enough for the bidding to read as a back-and-forth
 // rather than resolving the instant a turn opens. Kept comfortably under
@@ -67,7 +67,7 @@ export async function scheduleAuctionBotActionTimer(
   const player = state.seats.find((seat) => seat.seatId === round.currentTurnSeatId);
   if (!player?.isBot) return;
 
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   const now = context.now();
   const dueAt = getBotActionDueAt(now, new Date(round.turnEndsAt), context.random);
   const scheduledDueAt = isHarnessFastTimers()
@@ -150,7 +150,7 @@ async function applyAuctionBotAction(
   payload: AuctionBotActionTimerPayload,
   options: AuctionBotTimerOptions
 ): Promise<AuctionBotActionOutcome> {
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateBotPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));

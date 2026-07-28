@@ -1,4 +1,19 @@
 export { auctionController } from './auction.controller.js';
+export { auctionLeaderboardController } from './auction-leaderboard.controller.js';
+export { auctionLeaderboardService } from './auction-leaderboard.service.js';
+export { auctionLeaderboardRepo } from './auction-leaderboard.repo.js';
+export {
+  auctionLeaderboardQuerySchema,
+  auctionLeaderboardResponseSchema,
+  auctionUserRankQuerySchema,
+  auctionUserRankResponseSchema,
+  type AuctionLeaderboardQuery,
+  type AuctionUserRankQuery,
+} from './auction-leaderboard.schemas.js';
+export type {
+  AuctionLeaderboardEntry,
+  AuctionUserRankResult,
+} from './auction-leaderboard.types.js';
 export { auctionContentRepo } from './auction-content.repo.js';
 export { auctionContentService } from './auction-content.service.js';
 export { auctionRepo } from './auction.repo.js';

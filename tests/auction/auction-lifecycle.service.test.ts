@@ -20,6 +20,7 @@ const clueTimerMock = vi.hoisted(() => ({
 
 const turnTimerMock = vi.hoisted(() => ({
   scheduleAuctionTurnTimeoutTimer: vi.fn(),
+  runAuctionTurnTimeoutTimer: vi.fn(),
 }));
 
 const botTimerMock = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ const botTimerMock = vi.hoisted(() => ({
 
 const matchFlowMock = vi.hoisted(() => ({
   advanceAuctionMatchFlowAfterMutation: vi.fn(async (_io: unknown, state: unknown) => state),
+  advanceAuctionMatchFlowFromRevealGate: vi.fn(),
   scheduleAuctionSoloPickTimeoutTimer: vi.fn(),
 }));
 
@@ -50,6 +52,7 @@ vi.mock('../../src/realtime/services/auction-clue-timer.service.js', () => ({
 
 vi.mock('../../src/realtime/services/auction-turn.service.js', () => ({
   scheduleAuctionTurnTimeoutTimer: turnTimerMock.scheduleAuctionTurnTimeoutTimer,
+  runAuctionTurnTimeoutTimer: turnTimerMock.runAuctionTurnTimeoutTimer,
 }));
 
 vi.mock('../../src/realtime/services/auction-bot.service.js', () => ({
@@ -58,6 +61,7 @@ vi.mock('../../src/realtime/services/auction-bot.service.js', () => ({
 
 vi.mock('../../src/realtime/services/auction-match-flow.service.js', () => ({
   advanceAuctionMatchFlowAfterMutation: matchFlowMock.advanceAuctionMatchFlowAfterMutation,
+  advanceAuctionMatchFlowFromRevealGate: matchFlowMock.advanceAuctionMatchFlowFromRevealGate,
   scheduleAuctionSoloPickTimeoutTimer: matchFlowMock.scheduleAuctionSoloPickTimeoutTimer,
 }));
 
@@ -144,7 +148,7 @@ function biddingState(currentTurnSeatId = 'seat-human'): AuctionMatchState {
       ...auctionState().currentRound!,
       clueRevealIndex: 3,
       currentTurnSeatId,
-      turnEndsAt: '2026-06-20T10:00:30.000Z',
+      turnEndsAt: '2099-06-20T10:00:30.000Z',
     },
   });
 }
@@ -284,9 +288,45 @@ describe('auction lifecycle service', () => {
     // ignored. With no in-memory gate, the re-arm re-opens it via the flow.
     const revealState = auctionState({ phase: 'reveal' });
     await expect(ensureAuctionActiveTimers(createIo(), revealState)).resolves.toBe(true);
-    expect(matchFlowMock.advanceAuctionMatchFlowAfterMutation).toHaveBeenCalledWith(
+    expect(matchFlowMock.advanceAuctionMatchFlowFromRevealGate).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ phase: 'reveal', matchId: 'match-1' }),
+      {},
+    );
+  });
+
+  it('executes an expired bidding deadline during boot/reconnect re-arm', async () => {
+    const { ensureAuctionActiveTimers } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    const expired = biddingState('seat-human');
+    expired.currentRound!.turnEndsAt = '2000-01-01T00:00:00.000Z';
+
+    await expect(ensureAuctionActiveTimers(createIo(), expired)).resolves.toBe(true);
+
+    expect(turnTimerMock.runAuctionTurnTimeoutTimer).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'auction_turn_timeout',
+        matchId: 'match-1',
+        roundId: 'round-1',
+        expectedTurnSeatId: 'seat-human',
+        stateVersion: 7,
+        turnEndsAt: '2000-01-01T00:00:00.000Z',
+      }),
+    );
+    expect(turnTimerMock.scheduleAuctionTurnTimeoutTimer).not.toHaveBeenCalled();
+  });
+
+  it('re-drives a recoverable created state after transient content retries were exhausted', async () => {
+    const { ensureAuctionActiveTimers } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    const recoverable = auctionState({
+      phase: 'created',
+      currentRound: null,
+    });
+
+    await expect(ensureAuctionActiveTimers(createIo(), recoverable)).resolves.toBe(true);
+    expect(matchFlowMock.advanceAuctionMatchFlowAfterMutation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ phase: 'created', matchId: 'match-1' }),
     );
   });
 
@@ -312,5 +352,27 @@ describe('auction lifecycle service', () => {
     expect(stateStoreMock.clearIndexes).toHaveBeenCalledWith('missing-match');
     expect(stateStoreMock.clearIndexes).toHaveBeenCalledWith(finished);
     expect(turnTimerMock.scheduleAuctionTurnTimeoutTimer).toHaveBeenCalledTimes(1);
+  });
+
+  it('boot re-arm directly recovers a match stuck at reveal', async () => {
+    const { auctionLifecycleService } = await import('../../src/realtime/services/auction-lifecycle.service.js');
+    const stuckReveal = auctionState({ phase: 'reveal' });
+    stateStoreMock.listActiveMatchIds.mockResolvedValue(['match-1']);
+    stateStoreMock.load.mockResolvedValue(stuckReveal);
+
+    const summary = await auctionLifecycleService.rearmActiveAuctionTimersOnBoot(createIo());
+
+    expect(summary).toEqual({
+      scanned: 1,
+      rearmed: 1,
+      finished: 0,
+      missing: 0,
+      failed: 0,
+    });
+    expect(matchFlowMock.advanceAuctionMatchFlowFromRevealGate).toHaveBeenCalledWith(
+      expect.anything(),
+      stuckReveal,
+      {},
+    );
   });
 });

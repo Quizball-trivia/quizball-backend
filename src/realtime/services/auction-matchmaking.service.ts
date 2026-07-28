@@ -233,13 +233,29 @@ export const auctionMatchmakingService = {
       io,
       socket,
       async () => {
-        await withAuctionMatchmakingLock(async () => {
+        const result = await withAuctionMatchmakingLock(async () => {
+          const activeMatchId = await auctionStateStore
+            .getActiveMatchIdForUser(user.id)
+            .catch(() => null);
+          if (activeMatchId && await isUserInLiveAuctionMatch(activeMatchId, user.id)) {
+            emitAuctionError(socket, {
+              code: 'auction_search_cancel_rejected',
+              message: 'Auction match already started',
+            });
+            return;
+          }
           const removed = await removeQueuedSearchForUser(redis, user.id);
           socket.emit('auction:search_cancelled', {
             searchId: removed?.searchId ?? null,
             reason: 'cancelled',
           } satisfies AuctionSearchCancelledPayload);
         });
+        if (result === null) {
+          emitAuctionError(socket, {
+            code: 'auction_search_cancel_busy',
+            message: 'Auction search is already changing. Please retry.',
+          });
+        }
       },
       {
         code: 'AUCTION_SEARCH_BUSY',

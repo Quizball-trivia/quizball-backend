@@ -89,6 +89,12 @@ export function canPlayerContinue(player: AuctionPlayer): boolean {
   return !shouldEliminateAfterPurchase(player.budget, getEmptySlots(player.team));
 }
 
+export function hasLastPlayerStanding(players: readonly AuctionPlayer[]): boolean {
+  return players.length > 1
+    && players.filter((player) => !player.forfeited).length === 1
+    && players.filter((player) => player.forfeited).length === players.length - 1;
+}
+
 export function rankAuctionPlayers(players: readonly AuctionPlayer[]): AuctionPlayerRanking[] {
   return players
     .map((player, index) => ({

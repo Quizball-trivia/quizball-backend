@@ -1,6 +1,5 @@
 import { logger } from '../../core/logger.js';
 import { harnessDelayMs, isHarnessFastTimers } from '../../core/harness-timing.js';
-import { resolveAuctionContext } from '../../modules/auction/auction-context.js';
 import {
   applyBid,
   applyFold,
@@ -46,8 +45,10 @@ import {
 } from './auction-realtime-payloads.js';
 import {
   buildAuctionPausedStatePayload,
+  getAuctionPause,
   pauseAuctionCurrentTurnIfDisconnected,
 } from './auction-disconnect-state.service.js';
+import { resolveRealtimeAuctionContext } from './auction-engine-context.js';
 
 export type AuctionTurnTimeoutTimerPayload = Extract<RealtimeTimerPayload, { kind: 'auction_turn_timeout' }>;
 
@@ -150,6 +151,21 @@ export async function runAuctionTurnTimeoutTimer(
   payload: AuctionTurnTimeoutTimerPayload,
   options: AuctionTurnTimerOptions = {}
 ): Promise<AuctionTurnActionOutcome> {
+  const pause = await getAuctionPause(payload.matchId);
+  if (pause?.seatId === payload.expectedTurnSeatId) {
+    const pauseUntilMs = Date.parse(pause.pauseUntil);
+    const dueAt = new Date(
+      Math.max(Number.isFinite(pauseUntilMs) ? pauseUntilMs : 0, Date.now())
+      + harnessDelayMs(2_000, 25)
+    );
+    await scheduleRealtimeTimer(
+      'auction_turn_timeout',
+      auctionTurnTimeoutTimerKey(payload.matchId, payload.roundId, payload.expectedTurnSeatId),
+      dueAt,
+      payload
+    );
+    return noop('paused');
+  }
   const outcome = await applyAuctionTurnTimeout(payload, options);
 
   if (outcome.kind === 'noop') {
@@ -245,7 +261,7 @@ async function applyAuctionHumanAction(
     throw new AuctionActionError('auction_match_mismatch', 'Socket is not joined to this auction match');
   }
 
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(input.matchId, (current) => {
     const seat = validateHumanTurnAction(current, userId, kind);
     const nextState = kind === 'bid'
@@ -269,7 +285,7 @@ async function applyAuctionTurnTimeout(
   payload: AuctionTurnTimeoutTimerPayload,
   options: AuctionTurnTimerOptions
 ): Promise<AuctionTurnActionOutcome> {
-  const context = resolveAuctionContext(options);
+  const context = resolveRealtimeAuctionContext(options);
   return auctionStateStore.mutate(payload.matchId, (current) => {
     const validation = validateTimerPayload(current, payload);
     if (validation) return skipAuctionMatchMutation(noop(validation));

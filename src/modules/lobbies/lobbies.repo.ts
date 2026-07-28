@@ -16,7 +16,7 @@ export interface CreateLobbyData {
   mode: 'friendly' | 'ranked';
   hostUserId: string;
   inviteCode: string | null;
-  gameMode?: 'friendly_possession' | 'friendly_party_quiz' | 'ranked_sim';
+  gameMode?: LobbyRow['game_mode'];
   friendlyRandom?: boolean;
   friendlyCategoryAId?: string | null;
   friendlyCategoryBId?: string | null;

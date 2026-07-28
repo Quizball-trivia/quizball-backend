@@ -59,10 +59,20 @@ export interface AuctionSoloPickState {
   startedAt: string;
 }
 
+/**
+ * How the match was created. Only 'queue' matches award Auction Points —
+ * 'lobby' (friendly) matches are for fun and pay nothing, so a private lobby
+ * can't be farmed for leaderboard position. Absent on states persisted before
+ * this field existed, which is why readers must treat undefined as 'queue'
+ * (see `auctionMatchOrigin`).
+ */
+export type AuctionMatchOrigin = 'queue' | 'lobby';
+
 export interface AuctionMatchState {
   matchId: string;
   version: number;
   locale?: 'en' | 'ka';
+  origin?: AuctionMatchOrigin;
   phase: AuctionMatchPhase;
   formation: FormationName;
   seats: AuctionPlayer[];
@@ -117,6 +127,16 @@ export type PublicAuctionMatchState = Omit<
   completedRounds: PublicAuctionRoundState[];
   soloPick: PublicAuctionSoloPickState | null;
 };
+
+/**
+ * Origin of a match, defaulting to 'queue'. In-flight matches created before
+ * the field shipped have no `origin` in their Redis blob; those all came from
+ * the queue (the lobby path sets it explicitly from day one), so 'queue' is the
+ * correct — and reward-preserving — reading for them.
+ */
+export function auctionMatchOrigin(state: AuctionMatchState): AuctionMatchOrigin {
+  return state.origin ?? 'queue';
+}
 
 export function findAuctionSeatBySeatId(
   state: AuctionMatchState,

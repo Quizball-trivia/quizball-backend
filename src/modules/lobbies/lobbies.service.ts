@@ -164,6 +164,30 @@ export const lobbiesService = {
     }));
   },
 
+  /**
+   * Resolve specific categories to draft shape, preserving the requested order.
+   * Reads the same validated-category cache as the random selectors, so a
+   * category that no longer has enough questions simply resolves to nothing.
+   */
+  async getDraftCategoriesByIds(
+    categoryIds: string[],
+    minQuestions = MIN_QUESTIONS_PER_CATEGORY
+  ): Promise<DraftCategory[]> {
+    if (categoryIds.length === 0) return [];
+    const allValid = await getValidCategories(minQuestions);
+    const byId = new Map(allValid.map((row) => [row.id, row]));
+
+    return categoryIds
+      .map((categoryId) => byId.get(categoryId))
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        icon: row.icon ?? null,
+        imageUrl: row.image_url ?? null,
+      }));
+  },
+
   async selectRandomCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
     const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY);
     const excludeSet = new Set(excludeCategoryIds);

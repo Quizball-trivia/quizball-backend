@@ -132,6 +132,21 @@ export const matchesRepo = {
     `;
   },
 
+  /**
+   * Add Auction Points to a user (queue auction placement reward). AP only ever
+   * increases — there is no loss case — and drives the auction leaderboard.
+   * Same guard contract as addCoins: callers must gate on the createAuctionMatch
+   * "newly created" result so a re-finish never double-awards.
+   */
+  async addAuctionPoints(userId: string, points: number): Promise<void> {
+    if (points <= 0) return;
+    await sql`
+      UPDATE users
+      SET auction_points = auction_points + ${points}, updated_at = NOW()
+      WHERE id = ${userId}
+    `;
+  },
+
   async setMatchCurrentIndex(matchId: string, qIndex: number): Promise<void> {
     await sql`
       UPDATE matches

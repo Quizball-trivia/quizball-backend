@@ -9,6 +9,11 @@ import { isRankedSettleEligible } from '../users/ai-classification.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
+import {
+  computeParticipantSettlement,
+  computeSeasonRpDelta,
+  tierFromRp,
+} from './season-rp-formula.js';
 import type {
   RankedAiMatchContext,
   PlacementStatus,
@@ -53,35 +58,26 @@ async function invalidateUserRankCaches(
 // then linearly mapped down to 0–875. A naive clamp at 875 instead would have
 // collapsed nearly every player (even 0-3 runs) onto the cap, since raw
 // scores rarely fall below ~850.
-// Coin participation rewards granted once per settled ranked match.
-const RANKED_WIN_COINS = 300;
-const RANKED_LOSS_COINS = 100;
 const MIN_PLACEMENT_ANCHOR_RP = 150;
 const MAX_PLACEMENT_ANCHOR_RP = 2700;
 // ── Season 2026 RP formula ──────────────────────────────────────────────────
-// Transparent, margin-based scoring (replaces the old Elo-style delta). A win
-// is worth a flat base by how it was decided, plus a goal-margin bonus, plus a
-// small bonus for beating a higher-ranked opponent. Losses subtract.
-const SEASON_REGULAR_WIN_RP = 50;
-const SEASON_PENALTY_WIN_RP = 35;
-const SEASON_REGULAR_LOSS_RP = -25;
-const SEASON_PENALTY_LOSS_RP = -15;
-const SEASON_FORFEIT_LOSS_RP = -50; // you quit
-const SEASON_OPPONENT_FORFEIT_WIN_RP = 50; // opponent quit → you get a regular win
-const SEASON_BEAT_STRONGER_BONUS_RP = 10; // opponent's current RP was higher than yours
-// Goal-margin bonus added to a win (by goal difference). Win by 1 → +0.
-// Signed margin: bonus only when the player was AHEAD (margin > 0). A winner who
-// took the result while behind on goals (e.g. an opponent-forfeit win at 0-2)
-// earns no margin bonus.
-function seasonMarginBonus(signedGoalMargin: number): number {
-  if (signedGoalMargin >= 4) return 40;
-  if (signedGoalMargin === 3) return 30;
-  if (signedGoalMargin === 2) return 15;
-  return 0;
-}
-// Hidden starting rank for a brand-new ranked profile (Youth Prospect band).
-// Mirrors the literal used in ranked.repo.ts ensureProfile().
-export const SEASON_INITIAL_RP = 450;
+// The delta math itself lives in ./season-rp-formula.js so the burn-in dry-run
+// can predict outcomes offline from the SAME source. Re-exported below so
+// existing importers of these symbols from ranked.service are unaffected.
+export {
+  SEASON_INITIAL_RP,
+  SEASON_REGULAR_WIN_RP,
+  SEASON_PENALTY_WIN_RP,
+  SEASON_REGULAR_LOSS_RP,
+  SEASON_PENALTY_LOSS_RP,
+  SEASON_FORFEIT_LOSS_RP,
+  SEASON_OPPONENT_FORFEIT_WIN_RP,
+  SEASON_BEAT_STRONGER_BONUS_RP,
+  seasonMarginBonus,
+  computeSeasonRpDelta,
+  tierFromRp,
+  computeParticipantSettlement,
+} from './season-rp-formula.js';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -127,60 +123,8 @@ function parseWinnerDecisionMethod(raw: unknown): 'goals' | 'penalty_goals' | 't
   return null;
 }
 
-// Season 2 curve — recalibrated from Season 1 prod data (94 GOATs, 49 players
-// past 10k RP): early tiers stay cheap, steps grow toward the top so GOAT is
-// elite again. Keep in sync with web's RANKED_TIER_BANDS (utils/rankedTier.ts).
-export function tierFromRp(rp: number): RankedTier {
-  if (rp >= 9000) return 'GOAT';
-  if (rp >= 6800) return 'Legend';
-  if (rp >= 5200) return 'World-Class';
-  if (rp >= 4000) return 'Captain';
-  if (rp >= 3000) return 'Key Player';
-  if (rp >= 2200) return 'Starting11';
-  if (rp >= 1500) return 'Rotation';
-  if (rp >= 1000) return 'Bench';
-  if (rp >= 600) return 'Reserve';
-  if (rp >= 300) return 'Youth Prospect';
-  return 'Academy';
-}
-
 function needsPlacement(profile: RankedProfileRow): boolean {
   return profile.placement_status !== 'placed' || profile.placement_played < profile.placement_required;
-}
-
-function coinsForRankedResult(result: 'win' | 'loss'): number {
-  return result === 'win' ? RANKED_WIN_COINS : RANKED_LOSS_COINS;
-}
-
-/**
- * Season 2026 RP delta for one player in a settled match.
- * @param isWin            did this player win
- * @param decision         how the winner was decided ('penalty_goals' = shootout,
- *                         'forfeit' = a player quit, else a regular goals result)
- * @param goalMargin       signed myGoals - oppGoals (bonuses a win only when ahead)
- * @param opponentIsStronger  opponent's current RP was strictly higher than mine
- */
-function computeSeasonRpDelta(
-  isWin: boolean,
-  decision: 'goals' | 'penalty_goals' | 'total_points_fallback' | 'forfeit' | null,
-  goalMargin: number,
-  opponentIsStronger: boolean,
-): number {
-  const isPenalty = decision === 'penalty_goals';
-  const isForfeit = decision === 'forfeit';
-
-  if (!isWin) {
-    if (isForfeit) return SEASON_FORFEIT_LOSS_RP; // -50: this player quit
-    return isPenalty ? SEASON_PENALTY_LOSS_RP : SEASON_REGULAR_LOSS_RP; // -15 / -25
-  }
-
-  const regularWinBaseRp = isForfeit ? SEASON_OPPONENT_FORFEIT_WIN_RP : SEASON_REGULAR_WIN_RP;
-  let delta = isPenalty ? SEASON_PENALTY_WIN_RP : regularWinBaseRp; // +35 / +50
-  // Margin bonus only applies to a decisive (goals) win — a shootout is by
-  // definition level on goals, so no margin bonus there.
-  if (!isPenalty) delta += seasonMarginBonus(goalMargin);
-  if (opponentIsStronger) delta += SEASON_BEAT_STRONGER_BONUS_RP; // +10
-  return delta;
 }
 
 function computeNextPlacementAnchor(profile: RankedProfileRow): number {
@@ -403,7 +347,10 @@ export const rankedService = {
     };
   },
 
-  async settleCompletedRankedMatch(matchId: string): Promise<RankedMatchOutcome | null> {
+  async settleCompletedRankedMatch(
+    matchId: string,
+    occurredAt?: Date,
+  ): Promise<RankedMatchOutcome | null> {
     const match = await matchesRepo.getMatch(matchId);
     if (!match || match.mode !== 'ranked' || match.status !== 'completed') {
       logger.debug({ matchId, mode: match?.mode, status: match?.status }, 'Ranked settlement skipped: match not eligible');
@@ -534,114 +481,70 @@ export const rankedService = {
         : null;
 
       const isWin = !bothForfeit && match.winner_user_id === player.user_id;
-      const result: 'win' | 'loss' = isWin ? 'win' : 'loss';
       const oldRp = profile.rp;
-      const oldTier = tierFromRp(oldRp);
-      // Per-participant placement: each side's treatment derives ONLY from its
-      // own profile. The match-wide rankedContext.isPlacement flag (set from the
-      // human at match creation) must not force placement math onto an already-
-      // placed participant — a placed bot vs an unplaced human settle
-      // independently in the same match.
-      const isPlacement = needsPlacement(profile);
-
-      let newRp = oldRp;
-      let deltaRp = 0;
-      let newTier = oldTier;
-      let placementStatus: PlacementStatus = profile.placement_status;
-      let placementPlayed = profile.placement_played;
-      let placementWins = profile.placement_wins;
-      let placementSeedRp = profile.placement_seed_rp;
-      let placementPerfSum = profile.placement_perf_sum;
-      let placementPointsForSum = profile.placement_points_for_sum;
-      let placementPointsAgainstSum = profile.placement_points_against_sum;
-      let currentWinStreak = isWin ? profile.current_win_streak + 1 : 0;
 
       const opponentRp = opponentProfile?.rp ?? rankedContext.aiAnchorRp ?? DEFAULT_PLACEMENT_ANCHOR_RP;
-
-      let placementGameNo: number | null = null;
-      let placementAnchorRp: number | null = null;
-      let placementPerfScore: number | null = null;
-      let calculationMethod: 'placement_seed' | 'ranked_formula' = 'ranked_formula';
-      let formulaDeltaRp: number | null = null;
-
-      // Season 2026: BOTH placement and post-placement games use the same
-      // transparent formula applied to the running RP. Placement no longer
-      // computes a separate perf-based seed — every player starts hidden at
-      // SEASON_INITIAL_RP (450) and the 3 placement games move that rank like
-      // any other game; the rank is simply kept "in_progress" (hidden) until
-      // the 3rd game, then revealed.
       const goalMargin = (player.goals ?? 0) - (opponent?.goals ?? 0);
       const opponentIsStronger = opponentProfile != null && opponentProfile.rp > oldRp;
-      const seasonDeltaRp = computeSeasonRpDelta(isWin, winnerDecisionMethod, goalMargin, opponentIsStronger);
-
-      if (isPlacement) {
-        calculationMethod = 'placement_seed';
-        placementStatus = 'in_progress';
-        placementPlayed = Math.min(DEFAULT_PLACEMENT_MATCHES, profile.placement_played + 1);
-        placementWins = profile.placement_wins + (isWin ? 1 : 0);
-        placementGameNo = placementPlayed;
-        placementAnchorRp = opponentRp;
-
-        // Apply the same formula during placement; just keep the rank hidden
-        // until the player has finished all placement games.
-        formulaDeltaRp = seasonDeltaRp;
-        newRp = Math.max(0, oldRp + seasonDeltaRp);
-        deltaRp = newRp - oldRp;
-        newTier = tierFromRp(newRp);
-
-        if (placementPlayed >= DEFAULT_PLACEMENT_MATCHES) {
-          placementStatus = 'placed';
-          placementSeedRp = newRp; // record where they landed after placement
-          placementPerfSum = 0;
-          placementPointsForSum = 0;
-          placementPointsAgainstSum = 0;
-        }
-        // Note: placement games 1–2 keep status 'in_progress' (rank hidden) but
-        // DO apply the RP delta above — the running rank is revealed at game 3.
-      } else {
-        calculationMethod = 'ranked_formula';
-        formulaDeltaRp = seasonDeltaRp;
-        newRp = Math.max(0, oldRp + seasonDeltaRp);
-        deltaRp = newRp - oldRp;
-        newTier = tierFromRp(newRp);
-      }
+      const settlement = computeParticipantSettlement({
+        oldRp,
+        placementStatus: profile.placement_status,
+        placementPlayed: profile.placement_played,
+        placementWins: profile.placement_wins,
+        placementSeedRp: profile.placement_seed_rp,
+        placementPerfSum: profile.placement_perf_sum,
+        placementPointsForSum: profile.placement_points_for_sum,
+        placementPointsAgainstSum: profile.placement_points_against_sum,
+        currentWinStreak: profile.current_win_streak,
+        placementRequired: profile.placement_required,
+        isWin,
+        decision: winnerDecisionMethod,
+        goalMargin,
+        opponentRp,
+        opponentIsStronger,
+        isHumanForCoins: playerIsHuman,
+      });
+      const formulaDeltaRp = computeSeasonRpDelta(
+        isWin,
+        winnerDecisionMethod,
+        goalMargin,
+        opponentIsStronger,
+      );
 
       logger.info({
         matchId,
         userId: player.user_id,
         opponentUserId: opponent?.user_id ?? null,
-        result,
+        result: settlement.result,
         winnerDecisionMethod,
-        isPlacement,
-        calculationMethod,
+        isPlacement: settlement.isPlacement,
+        calculationMethod: settlement.calculationMethod,
         oldRp,
         formulaDeltaRp,
-        appliedDeltaRp: deltaRp,
-        newRp,
-        clampedByFloor: formulaDeltaRp !== null && formulaDeltaRp !== deltaRp,
-        oldTier,
-        newTier,
-        placementStatus,
-        placementPlayed,
+        appliedDeltaRp: settlement.deltaRp,
+        newRp: settlement.newRp,
+        clampedByFloor: formulaDeltaRp !== settlement.deltaRp,
+        oldTier: settlement.oldTier,
+        newTier: settlement.newTier,
+        placementStatus: settlement.placementStatus,
+        placementPlayed: settlement.placementPlayed,
         placementRequired: profile.placement_required,
       }, 'Ranked settlement computed player outcome');
-
-      const coinsAwarded = playerIsHuman ? coinsForRankedResult(result) : 0;
 
       settlementEntries.push({
         profile: {
           userId: player.user_id,
           country: profile.country,
-          rp: newRp,
-          tier: newTier,
-          placementStatus,
-          placementPlayed,
-          placementWins,
-          placementSeedRp,
-          placementPerfSum,
-          placementPointsForSum,
-          placementPointsAgainstSum,
-          currentWinStreak,
+          rp: settlement.newRp,
+          tier: settlement.newTier,
+          placementStatus: settlement.placementStatus,
+          placementPlayed: settlement.placementPlayed,
+          placementWins: settlement.placementWins,
+          placementSeedRp: settlement.placementSeedRp,
+          placementPerfSum: settlement.placementPerfSum,
+          placementPointsForSum: settlement.placementPointsForSum,
+          placementPointsAgainstSum: settlement.placementPointsAgainstSum,
+          currentWinStreak: settlement.currentWinStreak,
         },
         change: {
           matchId,
@@ -649,28 +552,28 @@ export const rankedService = {
           opponentUserId: opponent?.user_id ?? null,
           opponentIsAi: Boolean(opponentUser?.is_ai ?? false),
           oldRp,
-          deltaRp,
-          newRp,
-          result,
-          isPlacement,
-          placementGameNo,
-          placementAnchorRp,
-          placementPerfScore,
-          calculationMethod,
+          deltaRp: settlement.deltaRp,
+          newRp: settlement.newRp,
+          result: settlement.result,
+          isPlacement: settlement.isPlacement,
+          placementGameNo: settlement.placementGameNo,
+          placementAnchorRp: settlement.placementAnchorRp,
+          placementPerfScore: settlement.placementPerfScore,
+          calculationMethod: settlement.calculationMethod,
         },
-        coinsAwarded,
+        coinsAwarded: settlement.coinsAwarded,
         outcome: {
           userId: player.user_id,
           oldRp,
-          newRp,
-          deltaRp,
-          coinsAwarded,
-          oldTier,
-          newTier,
-          placementStatus,
-          placementPlayed,
+          newRp: settlement.newRp,
+          deltaRp: settlement.deltaRp,
+          coinsAwarded: settlement.coinsAwarded,
+          oldTier: settlement.oldTier,
+          newTier: settlement.newTier,
+          placementStatus: settlement.placementStatus,
+          placementPlayed: settlement.placementPlayed,
           placementRequired: profile.placement_required,
-          isPlacement,
+          isPlacement: settlement.isPlacement,
         },
       });
     }
@@ -684,7 +587,7 @@ export const rankedService = {
       profile: entry.profile,
       change: entry.change,
       coinsAwarded: entry.coinsAwarded,
-    })));
+    })), occurredAt);
     await invalidateUserRankCaches(settlementEntries.map((entry) => ({
       userId: entry.outcome.userId,
       country: entry.profile.country,

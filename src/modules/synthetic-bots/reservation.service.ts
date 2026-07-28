@@ -112,15 +112,20 @@ export const reservationService = {
   // space) — see releaseIfSettled / releaseByMatch below.
 
   /**
-   * The ONE AND ONLY lobby-phase reservation-release path. Closes the abort
-   * TOCTOU by delegating to abortRankedAiLobbyLocked, which takes the SHARED
-   * per-lobby advisory lock (the same lock draft activation takes), re-reads the
-   * lobby status under it, and — only if still 'waiting'/gone — atomically frees
-   * the (lobby-keyed) reservation, removes EVERY member, and deletes the lobby.
-   * If a concurrent reconnect advanced the lobby waiting→active, this no-ops
-   * entirely (no release, no teardown) so the live draft keeps the bot. There is
-   * deliberately NO "release the bot but keep the lobby" variant — that would
-   * leave a waiting lobby a reconnect could activate with an already-freed bot.
+   * The ONE AND ONLY lobby-phase reservation-release path. Delegates to
+   * abortRankedAiLobbyLocked, which takes the SHARED per-lobby advisory lock (the
+   * same lock draft activation takes) and, based on the reservation's COMMIT state
+   * (committed_at), either no-ops (a draft is live for the bot — hands off) or
+   * atomically frees the (lobby-keyed, uncommitted) reservation + removes EVERY
+   * member + deletes the lobby. There is deliberately NO "release the bot but keep
+   * the lobby" variant.
+   *
+   * `draftTeardown`: pass true from a GENUINE draft-teardown path (draft abort,
+   * ticket failure, pre-match abandon) that is tearing down a draft which may have
+   * been ACTIVATED (committed_at set). It clears committed_at first — under the
+   * same lock — so the abort then reclaims the bot. Pre-activation callers (plain
+   * lobby leave / cancel) leave it false: their reservation was never committed,
+   * and they must NOT reclaim a bot another live draft committed.
    *
    * Returns { aborted, botReleased, lobbyDeleted, removedMemberIds } so the caller
    * can do the remaining idempotent Redis/socket cleanup outside the transaction.
@@ -128,9 +133,14 @@ export const reservationService = {
   async abortLobby(
     lobbyId: string,
     path: ReservationReleasePath,
+    opts?: { draftTeardown?: boolean },
   ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     try {
-      const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId);
+      // draftTeardown: this flow owns the draft it is tearing down → clear the
+      // commit flag in the SAME locked tx as the abort (atomic, no two-tx gap).
+      const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId, {
+        uncommitFirst: opts?.draftTeardown === true,
+      });
       if (result.botReleased) {
         appMetrics.persistentBotReservationReleases.add(1, { path });
         logger.info({ botUserId: result.botReleased, lobbyId, path, mode: 'abort_locked' }, 'persistent-bot reservation released (lobby abort, locked)');

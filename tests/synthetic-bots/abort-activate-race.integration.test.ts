@@ -100,49 +100,83 @@ afterAll(async () => {
 });
 
 describe('abort vs activate advisory-lock serialization (P1-2)', () => {
-  it('(A) activation-first: a concurrent abort BLOCKS then no-ops (sees active, reservation kept)', async () => {
+  it('(A) activate → (GAP, no match yet) → abort must NO-OP (committed_at set, production timing)', async () => {
     if (!dbAvailable) return;
+    // The exact scenario Sol flagged: PRODUCTION activation flips status='active'
+    // AND sets committed_at, then COMMITS and RELEASES the lock — match creation
+    // is a SEPARATE, much later transaction. An abort taking the lock during that
+    // gap (no match row exists yet, reservation still match_id IS NULL) must still
+    // no-op, because committed_at says "a draft has started — hands off".
     const bot = await newBot(`race-a-${Date.now()}`);
     const lobby = await newWaitingLobby(bot);
     await acquire(bot, lobby);
 
-    // Reserve a dedicated connection to HOLD the advisory lock as "activation".
-    // Production activation flips status='active' then creates the match +
-    // transfers the reservation; we do the equivalent inside the held tx so that,
-    // on commit, the lobby is active WITH a live match (the protected state).
+    // Production activation (its own committed tx, lock released after).
+    const activated = await repo.activateLobbyForDraftLocked(lobby);
+    expect(activated).toBe(true);
+    // committed_at is now set; NO match created yet (the gap).
+    const [afterActivate] = await sql<{ committed_at: string | null; match_id: string | null }[]>`
+      SELECT committed_at, match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(afterActivate.committed_at).not.toBeNull();
+    expect(afterActivate.match_id).toBeNull();
+
+    // Abort during the gap — a separate call, lock already free → runs immediately.
+    const abortResult = await repo.abortRankedAiLobbyLocked(lobby);
+    expect(abortResult.aborted).toBe(false);
+    expect(abortResult.botReleased).toBeNull();
+    // Reservation KEPT for the live draft (no match yet, but committed).
+    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
+    const lobbyStill = await sql`SELECT 1 FROM lobbies WHERE id = ${lobby}`;
+    expect(lobbyStill).toHaveLength(1);
+  });
+
+  it('(A2) activation holds the lock: a concurrent abort BLOCKS then no-ops on committed_at', async () => {
+    if (!dbAvailable) return;
+    const bot = await newBot(`race-a2-${Date.now()}`);
+    const lobby = await newWaitingLobby(bot);
+    await acquire(bot, lobby);
+
+    // Hold the lock as activation (status + committed_at), start a concurrent
+    // abort that must BLOCK, then commit → the abort proceeds and no-ops.
     const holder = await sql.reserve();
     let abortResult: { aborted: boolean; botReleased: string | null } | null = null;
     try {
       await holder.unsafe('BEGIN');
       await holder.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobby]);
       await holder.unsafe(`UPDATE lobbies SET status = 'active' WHERE id = $1`, [lobby]);
-      const [m] = await holder.unsafe<{ id: string }[]>(
-        `INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
-         VALUES (gen_random_uuid(), $1, 'ranked', 'active', $2, 10, 0, NOW()) RETURNING id`,
-        [lobby, categoryId],
-      );
-      matchIds.push(m.id);
-      await holder.unsafe(`UPDATE synthetic_bot_reservations SET match_id = $1 WHERE lobby_id = $2 AND match_id IS NULL`, [m.id, lobby]);
+      await holder.unsafe(`UPDATE synthetic_bot_reservations SET committed_at = now() WHERE lobby_id = $1 AND match_id IS NULL`, [lobby]);
 
-      // Start the abort on the app repo (separate pool) — it must BLOCK on the lock.
       const abortP = repo.abortRankedAiLobbyLocked(lobby).then((r) => { abortResult = r; });
       await delay(200);
-      expect(abortResult).toBeNull(); // still blocked behind the held lock
+      expect(abortResult).toBeNull(); // blocked behind the held lock
 
-      // Commit activation → releases the lock; the abort now proceeds.
       await holder.unsafe('COMMIT');
       await abortP;
     } finally {
       await holder.release();
     }
 
-    // The abort acquired the lock AFTER activation committed → saw active + live
-    // match (and the reservation carries match_id) → no-op.
     expect(abortResult).not.toBeNull();
     expect(abortResult!.aborted).toBe(false);
     expect(abortResult!.botReleased).toBeNull();
-    const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
-    expect(still).toHaveLength(1); // reservation KEPT + transferred (live match owns it)
+    const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
+  });
+
+  it('(A3) draft-teardown after activation reclaims the bot (uncommitFirst)', async () => {
+    if (!dbAvailable) return;
+    // A genuine draft-teardown (draft abort / ticket failure / pre-match abandon)
+    // runs after activation and must reclaim the bot via uncommitFirst.
+    const bot = await newBot(`race-a3-${Date.now()}`);
+    const lobby = await newWaitingLobby(bot);
+    await acquire(bot, lobby);
+    await repo.activateLobbyForDraftLocked(lobby); // committed_at set
+    const result = await repo.abortRankedAiLobbyLocked(lobby, { uncommitFirst: true });
+    expect(result.aborted).toBe(true);
+    expect(result.botReleased).toBe(bot);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
   });
 
   it('(B) abort-first: the abort frees the bot; a subsequent activation finds no reservation', async () => {

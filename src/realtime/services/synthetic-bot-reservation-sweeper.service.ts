@@ -123,14 +123,13 @@ async function reconcileOne(reservation: {
     return;
   }
 
-  // Lobby gone / empty / wedged AND no active match — genuinely stranded. Route
-  // through the SAME locked abort primitive every lobby-phase release uses: it
-  // re-reads status under the shared advisory lock, so if the wedged-but-still-
-  // 'waiting' lobby is being concurrently activated, this no-ops (never frees a
-  // bot from a lobby that is at that instant transitioning to a live draft);
-  // otherwise it frees the reservation AND ends the lobby (removes members +
-  // deletes it) so no later activation can draft the stranded bot.
-  const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId);
+  // Lobby gone / empty / wedged AND no active match — genuinely stranded. We
+  // have already ruled out a live match (returned above) and a live lobby
+  // (returned above), so if this reservation is COMMITTED it is a draft that
+  // CRASHED after activation (Sol point 4): uncommitFirst clears the commit flag
+  // in the SAME locked tx as the abort so the bot is reclaimed atomically. The
+  // advisory lock still serializes with any concurrent activation.
+  const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId, { uncommitFirst: true });
   appMetrics.persistentBotSweeperActions.add(1, { action: result.aborted ? 'release' : 'skipped_live' });
   logger.info(
     { botUserId, lobbyId, ageMs, aborted: result.aborted, released: result.botReleased != null, lobbyDeleted: result.lobbyDeleted },

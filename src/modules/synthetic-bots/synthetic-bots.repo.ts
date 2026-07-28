@@ -30,6 +30,7 @@ export interface SyntheticBotReservationRow {
   acquired_at: string;
   expires_at: string;
   heartbeat_at: string;
+  committed_at: string | null;
 }
 
 export interface SyntheticPlayerProfileRow {
@@ -120,14 +121,19 @@ export const syntheticBotsRepo = {
   // race `setLobbyStatus(...,'active')` under READ COMMITTED (Sol P1-2).
 
   /**
-   * Take the per-lobby advisory lock and flip the lobby to 'active' for draft
-   * start, atomically. This is the ACTIVATION half of the abort/activate lock
-   * ordering: it holds `pg_advisory_xact_lock(hashtext('ranked_ai_lobby:'||id))`
-   * while it commits status='active', so any concurrent aborter that also takes
-   * the lock either (a) ran first and already freed the reservation — then the
-   * later reservation transfer finds nothing and match creation rolls back, or
-   * (b) blocks behind us and, on acquiring the lock, re-reads 'active' and
-   * no-ops. Returns whether the row was flipped (false if the lobby was gone).
+   * ACTIVATION half of the abort/activate ordering. Under the per-lobby advisory
+   * lock, in ONE transaction: flip the lobby to 'active' AND mark any persistent-
+   * bot reservation for this lobby as COMMITTED (committed_at = now()).
+   *
+   * committed_at is the durable "a draft has started for this bot — hands off"
+   * fact ON THE RESERVATION. It survives past commit (the lock is released here,
+   * but match creation is a much later, separate transaction), so an abort that
+   * takes the lock during the activate → draft → transfer gap sees committed_at
+   * set and no-ops — WITHOUT relying on lobby status or the match row existing yet
+   * (the true root cause of the earlier race). A genuine draft-teardown clears it
+   * again (abortRankedAiLobbyLocked with uncommitFirst) as part of its abort.
+   *
+   * Returns whether the lobby row was flipped (false if the lobby was gone).
    */
   async activateLobbyForDraftLocked(lobbyId: string): Promise<boolean> {
     return sql.begin(async (tx) => {
@@ -136,57 +142,79 @@ export const syntheticBotsRepo = {
         `UPDATE lobbies SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING id`,
         [lobbyId],
       );
+      // Commit any lobby-keyed reservation to THIS draft. No-op if none (ephemeral
+      // opponent) or already transferred.
+      await tx.unsafe(
+        `UPDATE synthetic_bot_reservations
+            SET committed_at = now()
+          WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NULL`,
+        [lobbyId],
+      );
       return rows.length > 0;
     });
   },
 
   /**
    * ABORT half of the lock ordering, and the ONLY lobby-phase reservation-release
-   * path. Under the SAME per-lobby advisory lock as draft activation, re-read the
-   * lobby status (now authoritatively serialized with activation) and — only if
-   * the lobby is still 'waiting' or already gone — atomically, in ONE locked
-   * transaction:
-   *   1. free the (still lobby-keyed, match_id IS NULL) reservation,
-   *   2. delete EVERY lobby_members row for the lobby, and
-   *   3. delete the lobby row itself.
+   * path. Under the SAME per-lobby advisory lock as draft activation, decide via
+   * the reservation's COMMIT STATE (not lobby status / match existence — the true
+   * root-cause fix) whether the bot is committed to a live draft:
    *
-   * The abort ALWAYS ENDS the lobby — there is no "release the bot but keep the
-   * lobby" mode: that would leave a waiting lobby a reconnect could activate with
-   * a bot already freed (and re-reservable elsewhere). Ending the lobby + emptying
-   * its members guarantees no subsequent activation can draft this bot.
+   *   - A persistent reservation exists for this lobby AND committed_at IS NOT
+   *     NULL → a draft has started for this bot (activation set it; it stays set
+   *     across the whole activate → draft → transfer window, even before the
+   *     match row exists). HANDS OFF: no release, no teardown. The genuine
+   *     draft-teardown paths clear committed_at first, so this only protects a
+   *     LIVE draft.
+   *   - Otherwise (no reservation, or committed_at IS NULL) → abort: free the
+   *     (still lobby-keyed) reservation AND end the lobby (remove all members +
+   *     delete it), all in this one locked tx.
    *
-   * If a concurrent draft activation committed first, we observe 'active' under
-   * the lock and no-op entirely (no release, no teardown) so the live draft keeps
-   * the bot. Redis/socket cleanup is left to the caller (idempotent, outside the
-   * tx). Returns what happened, incl. the member ids removed so the caller can
-   * detach their sockets.
+   * A transferred reservation (match_id set) is never freed here (the match_id IS
+   * NULL guard); its terminal fate is the settlement-gated by-match path.
+   *
+   * The abort ALWAYS ENDS the lobby when it proceeds — no "release the bot but
+   * keep the lobby" mode. Redis/socket cleanup is left to the caller (idempotent,
+   * outside the tx). Returns what happened, incl. the removed member ids.
    */
   async abortRankedAiLobbyLocked(
     lobbyId: string,
+    opts?: { uncommitFirst?: boolean },
   ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
-      const [lobby] = await tx.unsafe<{ status: string; has_active_match: boolean }[]>(
-        `SELECT l.status AS status,
-                EXISTS (SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active') AS has_active_match
-           FROM lobbies l WHERE l.id = $1`,
+      // uncommitFirst: the caller owns the draft it is tearing down (or the
+      // sweeper proved the draft crashed) → clear committed_at IN THIS SAME tx,
+      // atomically, so the predicate below reclaims the bot without a two-tx gap.
+      if (opts?.uncommitFirst) {
+        await tx.unsafe(
+          `UPDATE synthetic_bot_reservations SET committed_at = NULL
+            WHERE lobby_id = $1 AND match_id IS NULL`,
+          [lobbyId],
+        );
+      }
+      // A COMMITTED, still-lobby-keyed reservation means a draft is live for this
+      // bot → hands off entirely (no release, no teardown). committed_at is the
+      // durable signal that survives past activation's commit and covers the gap
+      // until match transfer, without any reliance on lobby status / match row.
+      const committed = await tx.unsafe<{ bot_user_id: string }[]>(
+        `SELECT bot_user_id FROM synthetic_bot_reservations
+          WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NOT NULL`,
         [lobbyId],
       );
-      // Refuse to abort ONLY when there is a genuinely LIVE draft/match that owns
-      // the bot: the lobby is 'active' AND an active match exists for it (a
-      // reconnect started + created the match). A 'waiting' lobby, a gone lobby,
-      // or an 'active'-but-stuck lobby with NO active match (crash between
-      // activation and match creation — the session guard force-closes these) is
-      // ours to abort. The match_id IS NULL guard on the reservation delete below
-      // additionally ensures an already-transferred reservation is never freed
-      // here even in the stuck-active case.
-      if (lobby && lobby.status === 'active' && lobby.has_active_match) {
+      if (committed.length > 0) {
         return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
       }
-      // Free the reservation only while still lobby-keyed (match_id IS NULL). If it
-      // was already transferred onto a match, this deletes nothing.
+      const [lobby] = await tx.unsafe<{ id: string }[]>(
+        `SELECT id FROM lobbies WHERE id = $1`,
+        [lobbyId],
+      );
+      // Free the reservation only while still lobby-keyed AND uncommitted. A
+      // transferred (match_id set) or committed reservation is left untouched.
       const [freed] = await tx.unsafe<{ bot_user_id: string }[]>(
-        `DELETE FROM synthetic_bot_reservations WHERE lobby_id = $1 AND match_id IS NULL RETURNING bot_user_id`,
+        `DELETE FROM synthetic_bot_reservations
+          WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NULL
+          RETURNING bot_user_id`,
         [lobbyId],
       );
       // End the lobby: remove all members (so the bot is definitively no longer a

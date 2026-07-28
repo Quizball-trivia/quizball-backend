@@ -66,7 +66,7 @@ describe('flag-off: only ACQUISITION is gated; cleanup still runs (kill-switch s
   it('releases STILL run with the flag off so leases created while on are cleaned up', async () => {
     await reservationService.abortLobby('l', 'auto_leave_lobby');
     await reservationService.releaseByMatch('m', 'completion');
-    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('l');
+    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('l', { uncommitFirst: false });
     expect(repo.releaseReservationByMatch).toHaveBeenCalledWith('m');
   });
 });
@@ -79,7 +79,7 @@ describe('flag-on dispatch', () => {
 
   it('abortLobby is the sole lobby-phase release; delegates to the locked primitive', async () => {
     const result = await reservationService.abortLobby('lob', 'close_pre_match_lobby');
-    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('lob');
+    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('lob', { uncommitFirst: false });
     expect(result).toEqual({ aborted: true, botReleased: 'bot', lobbyDeleted: true, removedMemberIds: ['human', 'bot'] });
   });
 

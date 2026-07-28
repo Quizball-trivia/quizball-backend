@@ -120,20 +120,22 @@ type RankedAiOpponentGeo = {
  * AND free its persistent-bot reservation — as ONE atomic, advisory-lock-guarded
  * operation (reservationService.abortLobby). The lock is the same one the draft
  * activation (startDraft → activateLobbyForDraftLocked) takes, so this whole
- * abort serializes with activation: if a concurrent reconnect advanced the lobby
- * waiting→active, abortLobby observes 'active' under the lock and no-ops entirely
- * (no reservation release, no member/lobby delete) — the live draft keeps the
- * bot. The remaining Redis/socket cleanup is idempotent and safe outside the tx.
+ * abort serializes with activation. Whether the bot is reclaimed is decided by
+ * the reservation's committed_at, not lobby status: a committed reservation (a
+ * draft has started) is left alone unless `draftTeardown` is set (this flow owns
+ * the draft it is tearing down → clears the commit flag first). Redis/socket
+ * cleanup is idempotent and safe outside the tx.
  */
 async function compensateAbortLobby(
   io: QuizballServer,
   lobbyId: string,
   path: 'match_found_cancel' | 'cleanup_superseded_lobby' | 'draft_start_cancel' | 'draft_start_error' = 'match_found_cancel',
+  opts?: { draftTeardown?: boolean },
 ): Promise<void> {
   try {
-    const result = await reservationService.abortLobby(lobbyId, path);
+    const result = await reservationService.abortLobby(lobbyId, path, opts);
     if (!result.aborted) {
-      logger.info({ lobbyId }, 'compensateAbortLobby: lobby advanced elsewhere — not tearing down');
+      logger.info({ lobbyId }, 'compensateAbortLobby: draft committed elsewhere — not tearing down');
       // Do NOT touch Redis/sockets of a live lobby.
       return;
     }
@@ -492,7 +494,12 @@ async function startRankedAiDraft(params: {
   // Redis-key-only cleanup (no reservation exists; other paths reap the lobby).
   const releasePreMatch = async (path: 'draft_start_cancel' | 'draft_start_error'): Promise<void> => {
     if (persistentBotReservation) {
-      await compensateAbortLobby(io, lobbyId, path);
+      // draft_start_error fires AFTER startDraft (which activated the lobby →
+      // committed_at set), so it's a genuine draft-teardown and must un-commit
+      // first. draft_start_cancel fires BEFORE startDraft (pre-activation,
+      // committed_at NULL) and must NOT un-commit — the lobby may have been
+      // concurrently activated by a reconnect whose commit we must not clear.
+      await compensateAbortLobby(io, lobbyId, path, { draftTeardown: path === 'draft_start_error' });
       return;
     }
     const redis = getRedisClient();

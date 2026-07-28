@@ -15,9 +15,14 @@
  */
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import postgres from 'postgres';
+import '../setup.js';
 
+// Use the SAME DB the app repo singleton uses (DATABASE_URL, set by tests/setup
+// to test:test@localhost:5432/test) so this test's own seed client and any app
+// repo method it calls hit one database. Override with PERSISTENT_BOT_TEST_DB_URL.
 const DB_URL = process.env.PERSISTENT_BOT_TEST_DB_URL
-  ?? 'postgresql://postgres:postgres@localhost:54322/postgres';
+  ?? process.env.DATABASE_URL
+  ?? 'postgresql://test:test@localhost:5432/test';
 
 let sql: postgres.Sql;
 let dbAvailable = false;
@@ -348,25 +353,24 @@ describe('locked abort primitive (P1-2 TOCTOU): abortRankedAiLobbyLocked', () =>
     expect(memberRows).toHaveLength(0);
   });
 
-  it('NO-OPS when the lobby is active AND has a LIVE match (a reconnect started + created it)', async () => {
+  it('NO-OPS when the reservation is COMMITTED to a live draft (committed_at set) — regardless of match existence', async () => {
     if (!dbAvailable) return;
-    const bot = await newUser({ persistent: true, nickname: `abort-active-${Date.now()}` });
+    // The true P1-2 fix: the guard is committed_at, NOT lobby status or match
+    // existence. A committed reservation with NO match row yet (the activate→
+    // transfer gap) must still be protected.
+    const bot = await newUser({ persistent: true, nickname: `abort-committed-${Date.now()}` });
     const [lobby] = await sql<{ id: string }[]>`
       INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${bot}, 'active') RETURNING id
     `;
     createdLobbyIds.push(lobby.id);
     await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${bot}, true)`;
     await acquire(bot, lobby.id, 'holderA', 180);
-    // The live draft created its match — this is the protected case.
-    const [match] = await sql<{ id: string }[]>`
-      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
-      VALUES (gen_random_uuid(), ${lobby.id}, 'ranked', 'active', ${categoryId}, 10, 0, NOW()) RETURNING id
-    `;
-    createdMatchIds.push(match.id);
+    // Activation committed the reservation to this draft — NO match row exists yet.
+    await sql`UPDATE synthetic_bot_reservations SET committed_at = now() WHERE bot_user_id = ${bot}`;
     const result = await repo.abortRankedAiLobbyLocked(lobby.id);
     expect(result.aborted).toBe(false);
     expect(result.botReleased).toBeNull();
-    // Reservation, lobby, and member all preserved for the live draft/match.
+    // Reservation, lobby, and member all preserved for the live draft.
     const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
     const lobbyRows = await sql`SELECT status FROM lobbies WHERE id = ${lobby.id}`;
@@ -375,22 +379,43 @@ describe('locked abort primitive (P1-2 TOCTOU): abortRankedAiLobbyLocked', () =>
     expect(memberRows).toHaveLength(1);
   });
 
-  it('ABORTS an active-but-stuck lobby with NO active match (session-guard force-close of a crash)', async () => {
+  it('ABORTS an UNCOMMITTED reservation even on an active lobby (no draft committed to this bot)', async () => {
     if (!dbAvailable) return;
-    // Crash between activation (status='active') and match creation: the session
-    // guard force-closes these. The reservation is still lobby-keyed and must be
-    // freed (no live match owns the bot).
-    const bot = await newUser({ persistent: true, nickname: `abort-stuck-${Date.now()}` });
+    // An 'active' lobby whose reservation was never committed (committed_at NULL)
+    // is not protecting a live draft for THIS bot → abortable.
+    const bot = await newUser({ persistent: true, nickname: `abort-uncommitted-${Date.now()}` });
     const [lobby] = await sql<{ id: string }[]>`
       INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${bot}, 'active') RETURNING id
     `;
     createdLobbyIds.push(lobby.id);
     await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${bot}, true)`;
-    await acquire(bot, lobby.id, 'holderA', 180);
+    await acquire(bot, lobby.id, 'holderA', 180); // committed_at stays NULL
     const result = await repo.abortRankedAiLobbyLocked(lobby.id);
     expect(result.aborted).toBe(true);
     expect(result.botReleased).toBe(bot);
     expect(result.lobbyDeleted).toBe(true);
+    const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(gone).toHaveLength(0);
+  });
+
+  it('draft-teardown (uncommitFirst) reclaims a COMMITTED reservation', async () => {
+    if (!dbAvailable) return;
+    // A genuine draft-teardown clears committed_at in the same locked tx, so the
+    // abort then frees the bot.
+    const bot = await newUser({ persistent: true, nickname: `abort-teardown-${Date.now()}` });
+    const lobby = await newLobby(bot);
+    await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby}, ${bot}, true)`;
+    await acquire(bot, lobby, 'holderA', 180);
+    await sql`UPDATE synthetic_bot_reservations SET committed_at = now() WHERE bot_user_id = ${bot}`;
+    // Without uncommitFirst → no-op (committed).
+    const noop = await repo.abortRankedAiLobbyLocked(lobby);
+    expect(noop.aborted).toBe(false);
+    const stillThere = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(stillThere).toHaveLength(1);
+    // With uncommitFirst → reclaims.
+    const result = await repo.abortRankedAiLobbyLocked(lobby, { uncommitFirst: true });
+    expect(result.aborted).toBe(true);
+    expect(result.botReleased).toBe(bot);
     const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(gone).toHaveLength(0);
   });

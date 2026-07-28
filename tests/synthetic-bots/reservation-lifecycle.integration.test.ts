@@ -88,6 +88,7 @@ afterEach(async () => {
     await sql`DELETE FROM synthetic_bot_reservations WHERE bot_user_id = ANY(${createdUserIds}::uuid[])`;
   }
   if (createdMatchIds.length > 0) {
+    await sql`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${createdMatchIds}::uuid[])`;
     await sql`DELETE FROM match_players WHERE match_id = ANY(${createdMatchIds}::uuid[])`;
     await sql`DELETE FROM matches WHERE id = ANY(${createdMatchIds}::uuid[])`;
     createdMatchIds.length = 0;
@@ -183,6 +184,104 @@ describe('transfer + Georgia-day bump', () => {
       RETURNING matches_today, matches_day
     `;
     expect(bumped.matches_today).toBe(1);
+  });
+});
+
+describe('match_id-qualified releases (P1-B): a transferred reservation survives a lobby-phase release', () => {
+  it('owner release and by-lobby release both no-op once match_id is set', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `xfer-${Date.now()}` });
+    const lobby = await newLobby(bot);
+    const res = await acquire(bot, lobby, 'holderA', 180);
+    const fence = Number(res!.fence);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'active', ${categoryId}, 10, 0, NOW())
+      RETURNING id
+    `;
+    createdMatchIds.push(match.id);
+    // Transfer onto the match.
+    await sql`UPDATE synthetic_bot_reservations SET match_id = ${match.id} WHERE bot_user_id = ${bot} AND lobby_id = ${lobby} AND match_id IS NULL`;
+
+    // A concurrent lobby-phase OWNER release (holder+fence) must NOT delete it.
+    const ownerDel = await sql`
+      DELETE FROM synthetic_bot_reservations
+      WHERE bot_user_id = ${bot} AND holder = 'holderA' AND fence = ${fence} AND match_id IS NULL
+      RETURNING bot_user_id
+    `;
+    expect(ownerDel).toHaveLength(0);
+    // A lobby-keyed release must NOT delete it either.
+    const lobbyDel = await sql`
+      DELETE FROM synthetic_bot_reservations WHERE lobby_id = ${lobby} AND match_id IS NULL RETURNING bot_user_id
+    `;
+    expect(lobbyDel).toHaveLength(0);
+    // Still present, now match-keyed — only a by-match terminal release frees it.
+    const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(still).toHaveLength(1);
+    const byMatch = await sql`DELETE FROM synthetic_bot_reservations WHERE match_id = ${match.id} RETURNING bot_user_id`;
+    expect(byMatch).toHaveLength(1);
+  });
+});
+
+describe('sweeper settlement-safety (P1-A): release only when settlement is provably committed', () => {
+  async function safeToRelease(matchId: string): Promise<boolean> {
+    const [row] = await sql<{ status: string | null; settled: boolean; no_contest: boolean }[]>`
+      SELECT m.status AS status,
+             EXISTS (SELECT 1 FROM ranked_rp_changes rc WHERE rc.match_id = m.id) AS settled,
+             COALESCE((m.state_payload ->> 'cancelledNoContest')::boolean, false) AS no_contest
+      FROM matches m WHERE m.id = ${matchId}
+    `;
+    if (!row) return true;
+    if (row.status === 'active') return false;
+    if (row.settled) return true;
+    if (row.status === 'abandoned') return true;
+    return false; // completed but no ledger row yet
+  }
+
+  it('a completed match with NO ranked ledger row is NOT safe to release (settlement in flight)', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `settle-${Date.now()}` });
+    const lobby = await newLobby(bot);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'completed', ${categoryId}, 10, 0, NOW())
+      RETURNING id
+    `;
+    createdMatchIds.push(match.id);
+    expect(await safeToRelease(match.id)).toBe(false);
+  });
+
+  it('becomes safe once a ranked_rp_changes ledger row exists (settlement committed)', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `settle2-${Date.now()}` });
+    const human = await newUser({ nickname: `settle2-h-${Date.now()}` });
+    await newProfile(bot, 1200);
+    const lobby = await newLobby(bot);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'completed', ${categoryId}, 10, 0, NOW())
+      RETURNING id
+    `;
+    createdMatchIds.push(match.id);
+    expect(await safeToRelease(match.id)).toBe(false);
+    await sql`
+      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
+      VALUES (${match.id}, ${bot}, ${human}, false, 1200, 50, 1250, 'win', false, 'ranked_formula', 0)
+    `;
+    expect(await safeToRelease(match.id)).toBe(true);
+  });
+
+  it('a no-contest abandon is safe (no RP settles)', async () => {
+    if (!dbAvailable) return;
+    const bot = await newUser({ persistent: true, nickname: `nc-${Date.now()}` });
+    const lobby = await newLobby(bot);
+    const [match] = await sql<{ id: string }[]>`
+      INSERT INTO matches (id, lobby_id, mode, status, category_a_id, total_questions, current_q_index, started_at, state_payload)
+      VALUES (gen_random_uuid(), ${lobby}, 'ranked', 'abandoned', ${categoryId}, 10, 0, NOW(), ${sql.json({ cancelledNoContest: true })})
+      RETURNING id
+    `;
+    createdMatchIds.push(match.id);
+    expect(await safeToRelease(match.id)).toBe(true);
   });
 });
 

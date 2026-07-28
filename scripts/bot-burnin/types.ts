@@ -91,7 +91,7 @@ export interface DistributionReport {
   fixtureCount: number;
   matchesPerBot: { min: number; median: number; max: number; mean: number };
   ladders: Array<{
-    name: 'UNCAPPED' | 'CAPPED';
+    name: 'UNCAPPED' | 'CAPPED' | 'FINAL';
     ceilingRp: number;
     tierHistogram: Array<{ tier: string; bots: number; s2Humans: number }>;
     quantiles: Record<'p5' | 'p20' | 'p50' | 'p80' | 'p95' | 'p99' | 'max', number>;
@@ -100,6 +100,8 @@ export interface DistributionReport {
   ceilingRp: number;
   humanTop10Rp: number | null;
   maxBotRp: number;
+  /** Fixed-point seed solver: iterations run and the worst |final - target| RP. */
+  seedSolver: { iterations: number; maxResidual: number; converged: boolean };
   ceilingRespected: boolean;
   sampleTimelines: Array<{
     nickname: string;

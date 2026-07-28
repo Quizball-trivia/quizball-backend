@@ -34,7 +34,7 @@ function quantile(sorted: number[], percentile: number): number {
 }
 
 function buildLadder(
-  name: 'UNCAPPED' | 'CAPPED',
+  name: 'UNCAPPED' | 'CAPPED' | 'FINAL',
   seededBots: SeededBot[],
   ceilingRp: number,
 ): DistributionReport['ladders'][number] {
@@ -87,8 +87,10 @@ export function buildReport(opts: {
   fixtures: PlannedFixture[];
   ceilingRp: number;
   humanTop10Rp: number | null;
+  seededBots: SeededBot[];
+  seedSolver: { iterations: number; maxResidual: number; converged: boolean };
 }): DistributionReport {
-  const { bots, seed, finalBots, fixtures, ceilingRp, humanTop10Rp } = opts;
+  const { bots, seed, finalBots, fixtures, ceilingRp, humanTop10Rp, seededBots, seedSolver } = opts;
 
   const fixtureCountByBot = new Map<string, number>();
   const winsByBot = new Map<string, number>();
@@ -106,9 +108,18 @@ export function buildReport(opts: {
     mean: counts.length ? counts.reduce((sum, count) => sum + count, 0) / counts.length : 0,
   };
 
+  const bandByUserId = new Map(seededBots.map((bot) => [bot.userId, bot.band]));
+  const finalAsSeeded: SeededBot[] = finalBots.map((bot) => ({
+    userId: bot.userId,
+    band: bandByUserId.get(bot.userId) ?? (0 as SkillBand),
+    skillRankInBand: 0,
+    bandSize: 1,
+    seededRp: bot.rp,
+  }));
+
   const cappedSeeds = seedRosterBots(bots, seed, ceilingRp);
   const uncappedSeeds = seedRosterBots(bots, seed, Number.POSITIVE_INFINITY);
-  const cappedById = new Map(cappedSeeds.map((bot) => [bot.userId, bot.seededRp]));
+  const cappedById = new Map(seededBots.map((bot) => [bot.userId, bot.seededRp]));
   const maxBotRp = finalBots.reduce((max, bot) => Math.max(max, bot.rp), 0);
 
   const byRp = [...finalBots].sort((a, b) => b.rp - a.rp);
@@ -141,11 +152,13 @@ export function buildReport(opts: {
     ladders: [
       buildLadder('UNCAPPED', uncappedSeeds, Number.POSITIVE_INFINITY),
       buildLadder('CAPPED', cappedSeeds, ceilingRp),
+      buildLadder('FINAL', finalAsSeeded, ceilingRp),
     ],
     ceilingRp,
     humanTop10Rp,
     maxBotRp,
     ceilingRespected: maxBotRp <= ceilingRp,
+    seedSolver,
     sampleTimelines,
   };
 }
@@ -169,10 +182,19 @@ export function formatReport(report: DistributionReport): string {
   lines.push(`  ceiling RP:       ${report.ceilingRp}`);
   lines.push(`  max final bot RP: ${report.maxBotRp}`);
   lines.push(`  respected:        ${report.ceilingRespected ? 'YES ✓' : 'NO ✗ — ABORT'}`);
+  lines.push('');
+  lines.push('Seed solver (pre-compensation)');
+  lines.push('──────────────────────────────');
+  lines.push(`  iterations:       ${report.seedSolver.iterations}`);
+  lines.push(`  max |final-target|: ${report.seedSolver.maxResidual} RP`);
+  lines.push(`  converged:        ${report.seedSolver.converged ? 'YES ✓' : 'NO ✗'}`);
 
   for (const ladder of report.ladders) {
     lines.push('');
-    lines.push(`${ladder.name} SEEDED LADDER${ladder.name === 'UNCAPPED' ? ' — nearly identical because the S2 target barely exceeds the cap' : ''}`);
+    const heading = ladder.name === 'FINAL'
+      ? 'FINAL LADDER (post Stage-B — what players actually see)'
+      : `${ladder.name} SEEDED LADDER${ladder.name === 'UNCAPPED' ? ' — nearly identical because the S2 target barely exceeds the cap' : ''}`;
+    lines.push(heading);
     lines.push('──────────────────────────────────────────────────────────────');
     lines.push(`  ceiling: ${Number.isFinite(ladder.ceilingRp) ? ladder.ceilingRp : 'Infinity'}`);
     lines.push(

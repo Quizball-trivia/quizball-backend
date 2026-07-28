@@ -22,7 +22,7 @@ import type { BurnInBot, PlannedFixture } from './types.js';
 import { makeRng, deriveSeed, type Rng } from './rng.js';
 import { simulateFixture, winProbability } from './simulator.js';
 import { fixtureContentDigest, fixtureMatchIdFromDigest } from './manifest.js';
-import { placementWinsForBand, seedRosterBots } from './s2-distribution.js';
+import { placementWinsForBand, seedRosterBots, type SeededBot } from './s2-distribution.js';
 
 const PLACEMENT_MATCHES = 3;
 const WINDOW_START_HOUR = 7; // 07:00 Tbilisi
@@ -188,6 +188,8 @@ export interface ScheduleResult {
   fixtures: PlannedFixture[];
   /** Final in-memory bot state (RP/placement/streak) for the report. */
   finalBots: BurnInBot[];
+  /** The Stage-A seeds this plan was projected from (solver output when overridden). */
+  seededBots: SeededBot[];
 }
 
 export function buildSchedule(opts: {
@@ -201,8 +203,15 @@ export function buildSchedule(opts: {
   categoryIds: string[];
   /** Run manifest hash — folded into every fixture's canonical content key. */
   manifestHash: string;
+  /**
+   * Pre-compensated starting RP per bot, from the seed solver. The plan is
+   * deterministic, so the solver back-solves the seeds whose Stage-B trajectory
+   * LANDS on the S2 target; without it the seeds are the target itself and the
+   * net-positive RP formula inflates every bot off-shape.
+   */
+  seedOverrides?: ReadonlyMap<string, number>;
 }): ScheduleResult {
-  const { params, seed, seasonStart, runDate, targetMatches, ceilingRp, categoryIds, manifestHash } = opts;
+  const { params, seed, seasonStart, runDate, targetMatches, ceilingRp, categoryIds, manifestHash, seedOverrides } = opts;
   const rng = makeRng(seed);
   const daysSinceReset = Math.max(
     1,
@@ -220,7 +229,7 @@ export function buildSchedule(opts: {
     dailyCap: b.dailyCap,
     schedule: b.schedule,
     status: b.status,
-    rp: seededById.get(b.userId)!.seededRp,
+    rp: seedOverrides?.get(b.userId) ?? seededById.get(b.userId)!.seededRp,
     placementPlayed: PLACEMENT_MATCHES,
     placementWins: placementWinsForBand(seededById.get(b.userId)!.band),
     placementStatus: 'placed',
@@ -338,6 +347,11 @@ export function buildSchedule(opts: {
       placementStatus: b.placementStatus,
       currentWinStreak: b.currentWinStreak,
     })),
+    seededBots: opts.bots.map((b) => {
+      const base = seededById.get(b.userId)!;
+      const override = seedOverrides?.get(b.userId);
+      return override == null ? base : { ...base, seededRp: override };
+    }),
   };
 }
 

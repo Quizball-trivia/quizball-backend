@@ -39,7 +39,7 @@ import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
 import { writeFixtureInTx, writeSeededProfilesInTx } from './writer.js';
 import { assertDbTarget } from './target-guard.js';
-import { seedRosterBots } from './s2-distribution.js';
+import { solveSeeds } from './seed-solver.js';
 
 const DEFAULT_SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
@@ -166,19 +166,31 @@ async function main(): Promise<void> {
   });
   const manifestHash = computeManifestHash(manifest);
 
-  const schedule = buildSchedule({
+  const planWith = (seedOverrides?: ReadonlyMap<string, number>) =>
+    buildSchedule({
+      bots: roster,
+      params,
+      seed: args.seed,
+      seasonStart: args.seasonStart,
+      // The scheduler's timeline horizon is the season window END (explicit for
+      // --execute), so the plan — and thus every fixture key — is resume-stable.
+      runDate: args.seasonEnd,
+      targetMatches: args.recentMatches,
+      ceilingRp,
+      categoryIds,
+      manifestHash,
+      seedOverrides,
+    });
+
+  const solved = solveSeeds({
     bots: roster,
-    params,
-    seed: args.seed,
-    seasonStart: args.seasonStart,
-    // The scheduler's timeline horizon is the season window END (explicit for
-    // --execute), so the plan — and thus every fixture key — is resume-stable.
-    runDate: args.seasonEnd,
-    targetMatches: args.recentMatches,
     ceilingRp,
-    categoryIds,
-    manifestHash,
+    seed: args.seed,
+    planFinalRp: (seedByUserId) =>
+      new Map(planWith(seedByUserId).finalBots.map((bot) => [bot.userId, bot.rp])),
   });
+
+  const schedule = planWith(solved.seedByUserId);
 
   const report = buildReport({
     bots: roster,
@@ -187,6 +199,12 @@ async function main(): Promise<void> {
     fixtures: schedule.fixtures,
     ceilingRp,
     humanTop10Rp,
+    seededBots: schedule.seededBots,
+    seedSolver: {
+      iterations: solved.iterations,
+      maxResidual: solved.maxResidual,
+      converged: solved.converged,
+    },
   });
   process.stdout.write(formatReport(report));
   process.stdout.write(`\nRun manifest hash: ${manifestHash}\n`);
@@ -224,7 +242,10 @@ async function main(): Promise<void> {
   // Idempotent resume: skip fixtures already written by a prior (crashed) run.
   const alreadyWritten = await validatedExistingMatchIds(fixtures);
   const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
-  const seededBots = seedRosterBots(roster, args.seed, ceilingRp);
+  // The Stage-A write MUST use the SOLVED seeds the plan was projected from —
+  // re-deriving the raw S2 seeds here would desync the profile from the
+  // scheduler's projection and trip the writer's settled-equals-projected belt.
+  const seededBots = schedule.seededBots;
 
   const CHUNK = 250;
   let written = 0;

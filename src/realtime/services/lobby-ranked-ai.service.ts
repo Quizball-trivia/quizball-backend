@@ -128,13 +128,10 @@ type RankedAiOpponentGeo = {
 async function compensateAbortLobby(
   io: QuizballServer,
   lobbyId: string,
-  userId: string,
-  aiUserId: string | null,
-  path: 'match_found_cancel' | 'cleanup_superseded_lobby' = 'match_found_cancel',
+  path: 'match_found_cancel' | 'cleanup_superseded_lobby' | 'draft_start_cancel' | 'draft_start_error' = 'match_found_cancel',
 ): Promise<void> {
   try {
-    const removeUserIds = aiUserId ? [userId, aiUserId] : [userId];
-    const result = await reservationService.abortLobby(lobbyId, removeUserIds, path);
+    const result = await reservationService.abortLobby(lobbyId, path);
     if (!result.aborted) {
       logger.info({ lobbyId }, 'compensateAbortLobby: lobby advanced elsewhere — not tearing down');
       // Do NOT touch Redis/sockets of a live lobby.
@@ -243,12 +240,12 @@ export async function startRankedAiForUser(
           await userSessionGuardService.emitState(io, userId);
         } catch (err) {
           logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: aiUser!.id }, 'persistent-bot lobby build failed; compensating (locked release + teardown)');
-          await compensateAbortLobby(io, probeLobby.id, userId, aiUser!.id);
+          await compensateAbortLobby(io, probeLobby.id);
           return;
         }
       } else {
         // No bot reserved — discard the probe lobby and use the ephemeral path.
-        await compensateAbortLobby(io, probeLobby.id, userId, null);
+        await compensateAbortLobby(io, probeLobby.id);
       }
     }
 
@@ -332,7 +329,7 @@ export async function startRankedAiForUser(
     } catch (err) {
       if (persistentBotReservation) {
         logger.warn({ err, userId, lobbyId: lobby.id, botUserId: aiUser!.id }, 'persistent-bot search scheduling failed; compensating (locked release + teardown)');
-        await compensateAbortLobby(io, lobby.id, userId, aiUser!.id);
+        await compensateAbortLobby(io, lobby.id);
         return;
       }
       throw err;
@@ -364,7 +361,7 @@ async function handleRankedAiMatchFound(params: {
   // draft activation). If a concurrent reconnect advanced the lobby, the whole
   // abort no-ops — the live draft keeps the bot.
   const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
-    await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
+    await compensateAbortLobby(io, lobbyId);
   };
 
   try {
@@ -408,7 +405,7 @@ async function handleRankedAiMatchFound(params: {
       );
       if (persistentBotReservation) {
         // Locked release + teardown (serialized with draft activation).
-        await compensateAbortLobby(io, lobbyId, userId, aiUser.id, 'cleanup_superseded_lobby');
+        await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
       } else {
         await cleanupSupersededRankedAiLobby({
           lobbiesRepoRef: lobbiesRepo,
@@ -470,7 +467,7 @@ async function handleRankedAiMatchFound(params: {
     // shared lock and no-ops entirely (no release, no teardown) — the live draft
     // keeps the bot. No separate status pre-check needed (that would be a TOCTOU).
     logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
-    await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
+    await compensateAbortLobby(io, lobbyId);
   }
 }
 
@@ -486,14 +483,17 @@ async function startRankedAiDraft(params: {
 }): Promise<void> {
   const { io, lobbyId, userId, aiUserId, persistentBotReservation, lobbiesRepo, logger, startDraft } = params;
 
-  // Release-only under the SHARED per-lobby advisory lock (empty removeUserIds →
-  // no lobby teardown; draft-start cancel leaves the lobby for other cleanup).
-  // Serialized with draft activation: if a concurrent reconnect advanced the
-  // lobby waiting→active, abortLobby observes 'active' under the lock and no-ops,
-  // so the live draft keeps the bot.
+  // Draft-start cancel/error ENDS this flow. For a PERSISTENT bot, tear the lobby
+  // down entirely under the shared advisory lock (compensateAbortLobby →
+  // abortLobby): there is no "release the bot but keep the lobby" path — a waiting
+  // lobby with a freed bot could be activated by a reconnect and re-reserve the
+  // bot elsewhere. If a concurrent reconnect already advanced the draft, the
+  // locked abort observes 'active' and no-ops. Ephemeral keeps its legacy
+  // Redis-key-only cleanup (no reservation exists; other paths reap the lobby).
   const releasePreMatch = async (path: 'draft_start_cancel' | 'draft_start_error'): Promise<void> => {
     if (persistentBotReservation) {
-      await reservationService.abortLobby(lobbyId, [], path);
+      await compensateAbortLobby(io, lobbyId, path);
+      return;
     }
     const redis = getRedisClient();
     if (redis?.isOpen) {
@@ -529,7 +529,7 @@ async function startRankedAiDraft(params: {
       );
       if (persistentBotReservation) {
         // Locked release + teardown (serialized with draft activation).
-        await compensateAbortLobby(io, lobbyId, userId, aiUserId, 'cleanup_superseded_lobby');
+        await compensateAbortLobby(io, lobbyId, 'cleanup_superseded_lobby');
       } else {
         await cleanupSupersededRankedAiLobby({
           lobbiesRepoRef: lobbiesRepo,

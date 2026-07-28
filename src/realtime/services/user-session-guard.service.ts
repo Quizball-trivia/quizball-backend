@@ -411,21 +411,35 @@ async function removeUserFromLobby(
   userId: string,
   reason: string
 ): Promise<void> {
+  // A ranked-AI lobby is a 2-member (human + bot) pre-match lobby: the human
+  // leaving ENDS it. Tear it down + free any persistent-bot reservation
+  // atomically under the shared per-lobby advisory lock (serialized with draft
+  // activation). The locked abort removes ALL members + deletes the lobby +
+  // releases the reservation, only while still 'waiting'/gone. If a reconnect
+  // concurrently advanced the draft, it no-ops and we leave the live draft alone.
+  if (lobby.mode === 'ranked') {
+    const result = await reservationService.abortLobby(lobby.id, 'remove_user_from_lobby');
+    const redis = getRedisClient();
+    if (redis) await redis.del(rankedAiLobbyKey(lobby.id)).catch(() => undefined);
+    if (result.aborted) {
+      // Detach the removed members' sockets, then emit the closed state.
+      for (const removedId of result.removedMemberIds) {
+        await removeUserFromLobbySockets(io, lobby.id, removedId);
+      }
+      await emitClosedLobbyState(io, lobby.id, lobby.mode);
+      logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard aborted ranked pre-match lobby');
+      return;
+    }
+    // Lobby advanced (live draft) — leave it; just detach this user's socket.
+    await removeUserFromLobbySockets(io, lobby.id, userId);
+    await emitLobbyState(io, lobby.id);
+    logger.info({ lobbyId: lobby.id, userId, reason, status: 'advanced' }, 'Session guard: ranked lobby advanced, left live');
+    return;
+  }
+
+  // Non-ranked (friendly) lobby: the legacy per-member removal + host transfer.
   await lobbiesRepo.removeMember(lobby.id, userId);
   await removeUserFromLobbySockets(io, lobby.id, userId);
-
-  if (lobby.mode === 'ranked') {
-    const redis = getRedisClient();
-    const aiUserId = redis ? await redis.get(rankedAiLobbyKey(lobby.id)) : null;
-    if (aiUserId) {
-      await lobbiesRepo.removeMember(lobby.id, aiUserId);
-      await removeUserFromLobbySockets(io, lobby.id, aiUserId);
-      await reservationService.releaseByLobby(lobby.id, 'remove_user_from_lobby');
-      if (redis) {
-        await redis.del(rankedAiLobbyKey(lobby.id));
-      }
-    }
-  }
 
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
   if (memberCount === 0) {
@@ -450,8 +464,10 @@ async function closeRankedPreMatchLobby(
   reason: string
 ): Promise<void> {
   const members = await lobbiesRepo.listMembersWithUser(lobby.id);
-  await lobbiesRepo.deleteLobby(lobby.id);
-  await reservationService.releaseByLobby(lobby.id, 'close_pre_match_lobby');
+  // End the lobby + free any persistent-bot reservation atomically under the
+  // shared per-lobby advisory lock (serialized with draft activation). Deletes
+  // the lobby + all members + reservation only while still 'waiting'/gone.
+  await reservationService.abortLobby(lobby.id, 'close_pre_match_lobby');
   const redis = getRedisClient();
   if (redis?.isOpen) {
     await redis.del(rankedAiLobbyKey(lobby.id));

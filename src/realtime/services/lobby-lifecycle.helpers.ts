@@ -35,18 +35,6 @@ export async function getRankedAiUserIdForLobby(lobbyId: string): Promise<string
 }
 
 /**
- * Resolve the AI member of a lobby from the DB (source of truth), NOT Redis.
- * Reads lobby_members joined to users and returns the is_ai member's id. Used by
- * teardown paths that must free a persistent-bot reservation even when Redis is
- * unavailable — the Redis key is only a cache and can be missing during an
- * outage, which would otherwise orphan the bot in the lobby.
- */
-export async function resolveLobbyAiMemberFromDb(lobbyId: string): Promise<string | null> {
-  const members = await lobbiesRepo.listMembersWithUser(lobbyId);
-  return members.find((m) => m.is_ai === true)?.user_id ?? null;
-}
-
-/**
  * Safely tear down the AI side of a ranked lobby on a pre-match leave/disconnect,
  * WITHOUT relying on Redis: resolve the bot from the DB, remove it from the
  * lobby, confirm the removal, and only THEN release its persistent reservation.
@@ -55,36 +43,17 @@ export async function resolveLobbyAiMemberFromDb(lobbyId: string): Promise<strin
  * (it could be acquired elsewhere while still sitting in the old lobby).
  */
 export async function releaseRankedAiLobbyMemberSafely(lobbyId: string): Promise<void> {
-  const redis = getRedisClient();
-
-  // Resolve the bot member from the DB (source of truth), Redis only as a
-  // secondary hint — so the bot is resolvable even during a Redis outage.
-  let aiUserId: string | null = null;
-  try {
-    aiUserId = await resolveLobbyAiMemberFromDb(lobbyId);
-  } catch (err) {
-    logger.warn({ err, lobbyId }, 'Failed to resolve lobby AI member from DB');
-  }
-  if (!aiUserId && redis?.isOpen) {
-    aiUserId = await redis.get(rankedAiLobbyKey(lobbyId)).catch(() => null);
-  }
-
   // Atomic, advisory-lock-guarded abort: under the SAME lock the draft activation
-  // takes, re-read status and — only if still 'waiting'/gone — remove the bot
-  // member AND free the (lobby-keyed) reservation in one transaction. If a
+  // takes, re-read status and — only if still 'waiting'/gone — remove ALL members
+  // (incl. the bot, resolved DB-side inside the tx — no Redis dependency) AND free
+  // the (lobby-keyed) reservation AND delete the lobby, in ONE transaction. If a
   // concurrent reconnect advanced the lobby waiting→active, this no-ops entirely
-  // (the bot is never removed from a LIVE draft and the reservation is kept). If
-  // the reservation couldn't be freed but the abort ran, the bot member removal
-  // is still consistent (removed while waiting) — never orphaned as a member with
-  // a live reservation.
-  const result = await reservationService.abortLobby(
-    lobbyId,
-    aiUserId ? [aiUserId] : [],
-    'auto_leave_lobby',
-  );
+  // (the bot is never removed from a LIVE draft and the reservation is kept).
+  const result = await reservationService.abortLobby(lobbyId, 'auto_leave_lobby');
   if (!result.aborted) {
     logger.info({ lobbyId }, 'releaseRankedAiLobbyMemberSafely: lobby advanced elsewhere — leaving it live');
   }
+  const redis = getRedisClient();
   if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
 }
 

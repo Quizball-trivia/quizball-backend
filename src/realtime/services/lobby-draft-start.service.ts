@@ -52,9 +52,13 @@ export async function abortRankedDraftStartForTickets(
   lobby: { id: string; mode: 'friendly' | 'ranked' },
   humanUserIds: string[]
 ): Promise<void> {
-  await lobbiesRepo.deleteLobby(lobby.id);
+  // End the lobby + free any persistent-bot reservation atomically under the
+  // shared per-lobby advisory lock (serialized with draft activation). The locked
+  // abort deletes the lobby + all members + reservation only while still
+  // 'waiting'/gone; if a reconnect concurrently advanced the draft, it no-ops
+  // (but the ticket abort only fires pre-activation, so it aborts here).
+  await reservationService.abortLobby(lobby.id, 'abort_start_for_tickets');
   await warmupRealtimeService.cleanupLobby(lobby.id);
-  await reservationService.releaseByLobby(lobby.id, 'abort_start_for_tickets');
   const redis = getRedisClient();
   if (redis) {
     await redis.del(rankedAiLobbyKey(lobby.id));

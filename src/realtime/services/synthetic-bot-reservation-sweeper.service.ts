@@ -123,11 +123,19 @@ async function reconcileOne(reservation: {
     return;
   }
 
-  // Lobby gone / empty / wedged AND no active match — genuinely stranded,
-  // release (fenced so a stale snapshot can't delete a newer reservation).
-  const released = await syntheticBotsRepo.releaseReservationByLobbyFenced(lobbyId, fence);
-  appMetrics.persistentBotSweeperActions.add(1, { action: 'release' });
-  logger.info({ botUserId, lobbyId, ageMs, released: released != null }, 'reservation sweeper released stranded lobby reservation');
+  // Lobby gone / empty / wedged AND no active match — genuinely stranded. Route
+  // through the SAME locked abort primitive every lobby-phase release uses: it
+  // re-reads status under the shared advisory lock, so if the wedged-but-still-
+  // 'waiting' lobby is being concurrently activated, this no-ops (never frees a
+  // bot from a lobby that is at that instant transitioning to a live draft);
+  // otherwise it frees the reservation AND ends the lobby (removes members +
+  // deletes it) so no later activation can draft the stranded bot.
+  const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId);
+  appMetrics.persistentBotSweeperActions.add(1, { action: result.aborted ? 'release' : 'skipped_live' });
+  logger.info(
+    { botUserId, lobbyId, ageMs, aborted: result.aborted, released: result.botReleased != null, lobbyDeleted: result.lobbyDeleted },
+    'reservation sweeper resolved stranded lobby reservation via locked abort',
+  );
 }
 
 export async function runReservationSweep(): Promise<void> {

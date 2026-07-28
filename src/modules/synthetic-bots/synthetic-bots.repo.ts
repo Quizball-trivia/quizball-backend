@@ -113,71 +113,11 @@ export const syntheticBotsRepo = {
     return rows[0] ?? null;
   },
 
-  /**
-   * Owner-qualified release: delete only if the caller still holds the exact
-   * reservation it acquired (holder + fence). Used by the pre-match-lobby
-   * teardown sites that own the acquiring holder token.
-   */
-  async releaseReservationOwned(params: {
-    botUserId: string;
-    holder: string;
-    fence: number;
-  }): Promise<boolean> {
-    // `AND match_id IS NULL`: an owner (lobby-phase) release must NEVER delete a
-    // reservation that has already been transferred onto a match — a concurrently
-    // activated draft may have created the match under the same holder+fence, and
-    // its bot is now LIVE. Once match_id is set, only a terminal by-match release
-    // (after settlement) may free it.
-    const rows = await sql<{ bot_user_id: string }[]>`
-      DELETE FROM synthetic_bot_reservations
-      WHERE bot_user_id = ${params.botUserId}
-        AND holder = ${params.holder}
-        AND fence = ${params.fence}
-        AND match_id IS NULL
-      RETURNING bot_user_id
-    `;
-    return rows.length > 0;
-  },
-
-  /**
-   * Terminal release keyed by lobby, ONLY while the reservation is still lobby-
-   * keyed (match_id IS NULL). The lobby is being torn down before a match ever
-   * existed; whoever holds it, it must go — UNLESS it has already been
-   * transferred onto a live match (then it is not this lobby's to free).
-   * Returns the released bot id (if any) for telemetry.
-   */
-  async releaseReservationByLobby(lobbyId: string): Promise<string | null> {
-    const rows = await sql<{ bot_user_id: string }[]>`
-      DELETE FROM synthetic_bot_reservations
-      WHERE lobby_id = ${lobbyId}
-        AND match_id IS NULL
-      RETURNING bot_user_id
-    `;
-    return rows[0]?.bot_user_id ?? null;
-  },
-
-  /**
-   * ABORT-path release: free the reservation ONLY while its lobby is genuinely
-   * still in a pre-draft state — one atomic guarded DELETE. NOTE: on its own this
-   * DELETE's status subquery runs under READ COMMITTED and does NOT serialize
-   * with a concurrent `setLobbyStatus(..., 'active')`. Callers that can race a
-   * draft activation MUST use `abortRankedAiLobbyLocked` (which holds the shared
-   * per-lobby advisory lock). This bare variant is retained only for contexts
-   * that already hold the lock or cannot race activation.
-   */
-  async releaseReservationByLobbyIfAbortable(lobbyId: string): Promise<string | null> {
-    const rows = await sql<{ bot_user_id: string }[]>`
-      DELETE FROM synthetic_bot_reservations r
-      WHERE r.lobby_id = ${lobbyId}
-        AND r.match_id IS NULL
-        AND (
-          EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id AND l.status = 'waiting')
-          OR NOT EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id)
-        )
-      RETURNING r.bot_user_id
-    `;
-    return rows[0]?.bot_user_id ?? null;
-  },
+  // NOTE: there is deliberately NO unlocked lobby-keyed release method. Every
+  // lobby-phase release (match_id IS NULL, lobby possibly still pre-draft) MUST go
+  // through abortRankedAiLobbyLocked below, which serializes with draft activation
+  // via the shared advisory lock. A bare `DELETE ... WHERE lobby_id = ...` would
+  // race `setLobbyStatus(...,'active')` under READ COMMITTED (Sol P1-2).
 
   /**
    * Take the per-lobby advisory lock and flip the lobby to 'active' for draft
@@ -201,54 +141,60 @@ export const syntheticBotsRepo = {
   },
 
   /**
-   * ABORT half of the lock ordering: under the SAME per-lobby advisory lock,
-   * re-read the lobby status (now authoritatively serialized with activation) and
-   * — only if the lobby is still 'waiting' or already gone — free the (still
-   * lobby-keyed) reservation, remove the given members, and delete the lobby if it
-   * becomes empty, all in ONE locked transaction. If a concurrent draft activation
-   * committed first, we observe 'active' and no-op entirely (no release, no
-   * teardown) so the live draft keeps the bot. Redis/socket cleanup is left to the
-   * caller (idempotent, safe outside the tx). Returns what happened.
+   * ABORT half of the lock ordering, and the ONLY lobby-phase reservation-release
+   * path. Under the SAME per-lobby advisory lock as draft activation, re-read the
+   * lobby status (now authoritatively serialized with activation) and — only if
+   * the lobby is still 'waiting' or already gone — atomically, in ONE locked
+   * transaction:
+   *   1. free the (still lobby-keyed, match_id IS NULL) reservation,
+   *   2. delete EVERY lobby_members row for the lobby, and
+   *   3. delete the lobby row itself.
+   *
+   * The abort ALWAYS ENDS the lobby — there is no "release the bot but keep the
+   * lobby" mode: that would leave a waiting lobby a reconnect could activate with
+   * a bot already freed (and re-reservable elsewhere). Ending the lobby + emptying
+   * its members guarantees no subsequent activation can draft this bot.
+   *
+   * If a concurrent draft activation committed first, we observe 'active' under
+   * the lock and no-op entirely (no release, no teardown) so the live draft keeps
+   * the bot. Redis/socket cleanup is left to the caller (idempotent, outside the
+   * tx). Returns what happened, incl. the member ids removed so the caller can
+   * detach their sockets.
    */
   async abortRankedAiLobbyLocked(
     lobbyId: string,
-    removeUserIds: string[],
-  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean }> {
+  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
       const [lobby] = await tx.unsafe<{ status: string }[]>(
         `SELECT status FROM lobbies WHERE id = $1`,
         [lobbyId],
       );
-      // Lobby advanced (a reconnect started the draft) → NOT ours to abort.
+      // Lobby advanced (a reconnect started the draft) → NOT ours to abort. Never
+      // release, never tear down: the live draft/match owns the bot now.
       if (lobby && lobby.status !== 'waiting') {
-        return { aborted: false, botReleased: null, lobbyDeleted: false };
+        return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
       }
-      // Free the reservation only while still lobby-keyed (match_id IS NULL). If
-      // it was already transferred, this deletes nothing.
+      // Free the reservation only while still lobby-keyed (match_id IS NULL). If it
+      // was already transferred onto a match, this deletes nothing.
       const [freed] = await tx.unsafe<{ bot_user_id: string }[]>(
         `DELETE FROM synthetic_bot_reservations WHERE lobby_id = $1 AND match_id IS NULL RETURNING bot_user_id`,
         [lobbyId],
       );
-      // Teardown only when members were given (a full abort). An empty
-      // removeUserIds means "release the reservation under the lock, no teardown"
-      // — used by the draft-start cancel, which leaves the lobby for other
-      // cleanup.
+      // End the lobby: remove all members (so the bot is definitively no longer a
+      // member of any lobby that could be activated), then delete the lobby row.
+      let removedMemberIds: string[] = [];
       let lobbyDeleted = false;
-      if (lobby && removeUserIds.length > 0) {
-        for (const uid of removeUserIds) {
-          await tx.unsafe(`DELETE FROM lobby_members WHERE lobby_id = $1 AND user_id = $2`, [lobbyId, uid]);
-        }
-        const [{ n }] = await tx.unsafe<{ n: number }[]>(
-          `SELECT COUNT(*)::int AS n FROM lobby_members WHERE lobby_id = $1`,
+      if (lobby) {
+        const removed = await tx.unsafe<{ user_id: string }[]>(
+          `DELETE FROM lobby_members WHERE lobby_id = $1 RETURNING user_id`,
           [lobbyId],
         );
-        if (n === 0) {
-          await tx.unsafe(`DELETE FROM lobbies WHERE id = $1`, [lobbyId]);
-          lobbyDeleted = true;
-        }
+        removedMemberIds = removed.map((r) => r.user_id);
+        await tx.unsafe(`DELETE FROM lobbies WHERE id = $1`, [lobbyId]);
+        lobbyDeleted = true;
       }
-      return { aborted: true, botReleased: freed?.bot_user_id ?? null, lobbyDeleted };
+      return { aborted: true, botReleased: freed?.bot_user_id ?? null, lobbyDeleted, removedMemberIds };
     });
   },
 
@@ -317,21 +263,6 @@ export const syntheticBotsRepo = {
       RETURNING bot_user_id
     `;
     return rows.length > 0;
-  },
-
-  /**
-   * Owner-agnostic release keyed by (lobby, fence) — the sweeper's genuinely
-   * stranded case. Fenced so a stale snapshot cannot delete a newer reservation.
-   */
-  async releaseReservationByLobbyFenced(lobbyId: string, expectedFence: number): Promise<string | null> {
-    // match_id IS NULL: never delete a reservation that has since been
-    // transferred onto a match (the by-match terminal path owns those).
-    const rows = await sql<{ bot_user_id: string }[]>`
-      DELETE FROM synthetic_bot_reservations
-      WHERE lobby_id = ${lobbyId} AND fence = ${expectedFence} AND match_id IS NULL
-      RETURNING bot_user_id
-    `;
-    return rows[0]?.bot_user_id ?? null;
   },
 
   /** Whether a lobby is still live enough to keep a pre-match reservation alive. */

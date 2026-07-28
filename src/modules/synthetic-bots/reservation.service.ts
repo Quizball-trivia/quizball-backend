@@ -104,64 +104,33 @@ export const reservationService = {
   // Releases are NEVER flag-gated (kill-switch safety): they operate on existing
   // reservation rows unconditionally and no-op when none exists, so reservations
   // created while the flag was on are still cleaned up after it is turned off.
-
-  /** Owner-qualified release (holder + fence) — the pre-match-lobby teardown sites. */
-  async releaseOwned(
-    params: { botUserId: string; fence: number },
-    path: ReservationReleasePath,
-  ): Promise<void> {
-    try {
-      const released = await syntheticBotsRepo.releaseReservationOwned({
-        botUserId: params.botUserId,
-        holder: HOLDER_ID,
-        fence: params.fence,
-      });
-      if (released) {
-        appMetrics.persistentBotReservationReleases.add(1, { path });
-        logger.info({ botUserId: params.botUserId, path, mode: 'owned' }, 'persistent-bot reservation released');
-      }
-    } catch (err) {
-      logger.warn({ err, ...params, path }, 'persistent-bot reservation owned-release failed');
-    }
-  },
+  //
+  // There is deliberately NO owner-qualified lobby-phase release (holder+fence):
+  // it would race draft activation like any other lobby-keyed release. Every
+  // lobby-phase release goes through abortLobby (advisory-lock serialized). Only
+  // by-MATCH releases (post-transfer, match_id set) are unlocked (different key
+  // space) — see releaseIfSettled / releaseByMatch below.
 
   /**
-   * Terminal release keyed by lobby (any holder). The lobby is torn down before
-   * a match ever existed. No-op if the lobby has no reservation (ephemeral) or if
-   * it has already been transferred onto a match (match_id IS NULL guard).
-   */
-  async releaseByLobby(lobbyId: string, path: ReservationReleasePath): Promise<void> {
-    try {
-      const botUserId = await syntheticBotsRepo.releaseReservationByLobby(lobbyId);
-      if (botUserId) {
-        appMetrics.persistentBotReservationReleases.add(1, { path });
-        logger.info({ botUserId, lobbyId, path, mode: 'by_lobby' }, 'persistent-bot reservation released');
-      }
-    } catch (err) {
-      logger.warn({ err, lobbyId, path }, 'persistent-bot reservation lobby-release failed');
-    }
-  },
-
-  /**
-   * ABORT-path release keyed by lobby — closes the abort TOCTOU by taking the
-   * SHARED per-lobby advisory lock (the same lock the draft activation takes),
-   * re-reading the lobby status under it, and — only if still 'waiting'/gone —
-   * freeing the (still lobby-keyed) reservation AND removing the given members +
-   * deleting the emptied lobby, all in ONE locked transaction. If a concurrent
-   * reconnect advanced the lobby waiting→active, we serialize behind (or ahead
-   * of) it and observe the true status: on 'active' we no-op entirely (no
-   * release, no teardown), so the live draft keeps the bot.
+   * The ONE AND ONLY lobby-phase reservation-release path. Closes the abort
+   * TOCTOU by delegating to abortRankedAiLobbyLocked, which takes the SHARED
+   * per-lobby advisory lock (the same lock draft activation takes), re-reads the
+   * lobby status under it, and — only if still 'waiting'/gone — atomically frees
+   * the (lobby-keyed) reservation, removes EVERY member, and deletes the lobby.
+   * If a concurrent reconnect advanced the lobby waiting→active, this no-ops
+   * entirely (no release, no teardown) so the live draft keeps the bot. There is
+   * deliberately NO "release the bot but keep the lobby" variant — that would
+   * leave a waiting lobby a reconnect could activate with an already-freed bot.
    *
-   * Returns { botReleased, lobbyDeleted, aborted } so the caller can do the
-   * remaining idempotent Redis/socket cleanup outside the transaction.
+   * Returns { aborted, botReleased, lobbyDeleted, removedMemberIds } so the caller
+   * can do the remaining idempotent Redis/socket cleanup outside the transaction.
    */
   async abortLobby(
     lobbyId: string,
-    removeUserIds: string[],
     path: ReservationReleasePath,
-  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean }> {
+  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     try {
-      const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId, removeUserIds);
+      const result = await syntheticBotsRepo.abortRankedAiLobbyLocked(lobbyId);
       if (result.botReleased) {
         appMetrics.persistentBotReservationReleases.add(1, { path });
         logger.info({ botUserId: result.botReleased, lobbyId, path, mode: 'abort_locked' }, 'persistent-bot reservation released (lobby abort, locked)');
@@ -169,24 +138,7 @@ export const reservationService = {
       return result;
     } catch (err) {
       logger.warn({ err, lobbyId, path }, 'persistent-bot locked lobby-abort failed');
-      return { aborted: false, botReleased: null, lobbyDeleted: false };
-    }
-  },
-
-  /**
-   * Bare abortable release (no advisory lock, no teardown). Retained only for
-   * contexts that already hold the per-lobby lock or provably cannot race a draft
-   * activation. Prefer `abortLobby` at every real abort site.
-   */
-  async releaseIfLobbyAbortable(lobbyId: string, path: ReservationReleasePath): Promise<void> {
-    try {
-      const botUserId = await syntheticBotsRepo.releaseReservationByLobbyIfAbortable(lobbyId);
-      if (botUserId) {
-        appMetrics.persistentBotReservationReleases.add(1, { path });
-        logger.info({ botUserId, lobbyId, path, mode: 'if_abortable' }, 'persistent-bot reservation released (lobby abortable)');
-      }
-    } catch (err) {
-      logger.warn({ err, lobbyId, path }, 'persistent-bot reservation abortable-release failed');
+      return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
     }
   },
 

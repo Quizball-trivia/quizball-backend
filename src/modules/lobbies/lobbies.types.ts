@@ -10,6 +10,44 @@ export interface RankedLobbyContext {
     minMs: number;
     maxMs: number;
   };
+  /**
+   * Persistent-bot calibrated-model pin (PR8). Present ONLY for a persistent
+   * roster bot opponent; absent for ephemeral / placement / human matches. The
+   * gameplay model reads THIS at question-show so a params refresh mid-match
+   * cannot change a live bot (§1.7). PR7 owns the surrounding persistent branch
+   * in matches.service; PR8 adds this field + its population.
+   */
+  persistentBotModel?: PersistentBotModelPin;
+}
+
+/**
+ * Everything the calibrated gameplay model needs to reproduce a persistent bot's
+ * decisions, snapshotted at match creation. The model PARAMS are pinned by
+ * version + a full copy (question_stats stays unversioned, so the params — which
+ * carry the difficulty link + clamps — are the immutability anchor). Per-question
+ * stats are read live at show time (questions are drafted per-round in ranked
+ * possession, not at creation), keyed by this pinned params version.
+ */
+export interface PersistentBotModelPin {
+  /** bot_model_params.version that was active at match creation (audit + pin). */
+  paramsVersion: number | null;
+  /** Full frozen params copy (immutable for the life of the match). */
+  params: unknown;
+  /** The bot's user id (redundant with match_players but explicit for the model). */
+  botUserId: string;
+  /** Skill inputs, frozen at creation. */
+  currentRp: number;
+  personalOffset: number;
+  governorAdjustment: number;
+  categoryAffinities: Record<string, number>;
+  /** Georgia-day string used to seed the bounded daily-form swing. */
+  dailyFormSeed: string;
+  /**
+   * Ceiling-derived theta bound, solved at creation over the frozen difficulty
+   * distribution so a bot's expected aggregate accuracy cannot exceed the frozen
+   * ceiling. Effective theta is capped pointwise at this. Frozen per match.
+   */
+  thetaCeilingBound: number;
 }
 
 export interface LobbyRow {

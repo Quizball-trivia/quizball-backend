@@ -60,7 +60,20 @@ export type RealtimeTimerPayload =
   | { kind: 'match_resume_countdown'; matchId: string; pauseStartedAtMs: number | null }
   | { kind: 'party_question'; matchId: string; qIndex: number }
   | { kind: 'party_round_transition'; matchId: string; resolvedQIndex: number; nextQIndex: number }
-  | { kind: 'possession_ai_answer'; matchId: string; qIndex: number; plannedAnswerTimeMs: number; plannedClueIndex: number | null; plannedIsCorrect?: boolean }
+  | {
+      kind: 'possession_ai_answer';
+      matchId: string;
+      qIndex: number;
+      plannedAnswerTimeMs: number;
+      plannedClueIndex: number | null;
+      plannedIsCorrect?: boolean;
+      // Persistent-bot per-format outcomes PINNED at schedule time and carried
+      // durably through the timer store (Redis) so commit reads them instead of
+      // recomputing from live question_stats (replica/restart/refresh-safe).
+      plannedFoundCount?: number | null;
+      plannedPutInOrderCount?: number | null;
+      plannedClueSolved?: boolean | null;
+    }
   | { kind: 'possession_halftime'; matchId: string }
   | { kind: 'possession_question'; matchId: string; qIndex: number }
   | { kind: 'ranked_draft_start'; lobbyId: string; userAId: string; userBId: string };

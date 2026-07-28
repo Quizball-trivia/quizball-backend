@@ -7904,6 +7904,13 @@
                 "text": {
                   "type": "string"
                 },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "append",
+                    "replace"
+                  ]
+                },
                 "updated_at": {
                   "type": "string"
                 },
@@ -7915,6 +7922,7 @@
               "required": [
                 "key",
                 "text",
+                "mode",
                 "updated_at",
                 "updated_by"
               ]
@@ -7931,6 +7939,13 @@
                 "text": {
                   "type": "string"
                 },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "append",
+                    "replace"
+                  ]
+                },
                 "updated_at": {
                   "type": "string"
                 },
@@ -7942,6 +7957,7 @@
               "required": [
                 "key",
                 "text",
+                "mode",
                 "updated_at",
                 "updated_by"
               ]
@@ -7962,6 +7978,13 @@
           "text": {
             "type": "string"
           },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "append",
+              "replace"
+            ]
+          },
           "updated_at": {
             "type": "string"
           },
@@ -7973,6 +7996,7 @@
         "required": [
           "key",
           "text",
+          "mode",
           "updated_at",
           "updated_by"
         ]
@@ -7986,6 +8010,17 @@
         },
         "required": [
           "requeued"
+        ]
+      },
+      "AuctionPipelinePromptResetResponse": {
+        "type": "object",
+        "properties": {
+          "reset": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reset"
         ]
       }
     },
@@ -20108,6 +20143,14 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 8000
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "replace"
+                    ],
+                    "default": "append"
                   }
                 },
                 "required": [
@@ -20150,6 +20193,76 @@
           },
           "422": {
             "description": "Invalid prompt key or text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Reset a prompt override so the built-in rules apply again",
+        "tags": [
+          "Auction"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "generator_rules",
+                "verifier_rules",
+                "judge_rules",
+                "variant_medium",
+                "variant_hard"
+              ]
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether an override was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionPipelinePromptResetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid prompt key",
             "content": {
               "application/json": {
                 "schema": {

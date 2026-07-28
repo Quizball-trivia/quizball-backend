@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS public.pipeline_prompts (
     )
   ),
   text text NOT NULL,
+  -- 'append' adds the operator text after the built-in rules; 'replace' uses it
+  -- instead of them. The deterministic gates (JSON parsing, word cap, movement
+  -- regex, evidence and source-URL checks) run against the model response and
+  -- are unaffected by either mode.
+  mode text NOT NULL DEFAULT 'append' CHECK (mode IN ('append', 'replace')),
   updated_at timestamptz NOT NULL DEFAULT now(),
   updated_by text
 );

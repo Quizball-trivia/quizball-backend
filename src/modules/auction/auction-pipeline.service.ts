@@ -3,6 +3,7 @@ import { logAudit } from '../activity/audit.js';
 import type {
   AuctionPipelinePrompt,
   AuctionPipelinePromptKey,
+  AuctionPipelinePromptMode,
   AuctionPipelineStageCount,
   AuctionPipelineStats,
   AuctionPipelineWorker,
@@ -126,19 +127,36 @@ export const auctionPipelineService = {
   async savePrompt(
     key: AuctionPipelinePromptKey,
     text: string,
+    mode: AuctionPipelinePromptMode,
     userId: string
   ): Promise<AuctionPipelinePrompt> {
-    const prompt = await auctionPipelineRepo.upsertPrompt(key, text, userId);
+    const prompt = await auctionPipelineRepo.upsertPrompt(key, text, mode, userId);
 
     logAudit({
       userId,
       action: 'update',
       entityType: 'auction_pipeline_prompt',
       entityId: key,
-      metadata: { chars: text.length },
+      metadata: { chars: text.length, mode },
     });
 
     return prompt;
+  },
+
+  /** Remove an override so the built-in rules apply again. */
+  async resetPrompt(key: AuctionPipelinePromptKey, userId: string): Promise<{ reset: boolean }> {
+    const reset = await auctionPipelineRepo.deletePrompt(key);
+
+    if (reset) {
+      logAudit({
+        userId,
+        action: 'reset',
+        entityType: 'auction_pipeline_prompt',
+        entityId: key,
+      });
+    }
+
+    return { reset };
   },
 
   async requeueTasks(

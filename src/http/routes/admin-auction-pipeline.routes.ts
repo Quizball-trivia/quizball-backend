@@ -28,6 +28,12 @@ router.put(
   auctionPipelineController.savePrompt
 );
 
+router.delete(
+  '/prompts/:key',
+  validate({ params: auctionPipelinePromptKeyParamSchema }),
+  auctionPipelineController.resetPrompt
+);
+
 router.post(
   '/requeue',
   validate({ body: auctionPipelineRequeueSchema }),

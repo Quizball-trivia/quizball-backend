@@ -14,6 +14,7 @@ vi.mock('../../src/modules/auction/auction-pipeline.service.js', () => ({
     listWorkers: vi.fn(),
     listPrompts: vi.fn(),
     savePrompt: vi.fn(),
+    resetPrompt: vi.fn(),
     requeueTasks: vi.fn(),
   },
 }));
@@ -146,6 +147,7 @@ describe('Admin Auction Pipeline Routes', () => {
           {
             key: 'generator_rules',
             text: 'Be terse.',
+            mode: 'append',
             updated_at: '2026-07-28T00:00:00.000Z',
             updated_by: 'admin',
           },
@@ -154,6 +156,7 @@ describe('Admin Auction Pipeline Routes', () => {
           generator_rules: {
             key: 'generator_rules:effective',
             text: '1. Return strict JSON only.',
+            mode: 'append',
             updated_at: '2026-07-28T00:00:00.000Z',
             updated_by: 'runner',
           },
@@ -174,6 +177,7 @@ describe('Admin Auction Pipeline Routes', () => {
       (auctionPipelineService.savePrompt as Mock).mockResolvedValue({
         key: 'judge_rules',
         text: 'Be strict.',
+        mode: 'append',
         updated_at: '2026-07-28T00:00:00.000Z',
         updated_by: ADMIN_USER_ID,
       });
@@ -186,8 +190,49 @@ describe('Admin Auction Pipeline Routes', () => {
       expect(auctionPipelineService.savePrompt).toHaveBeenCalledWith(
         'judge_rules',
         'Be strict.',
+        'append',
         ADMIN_USER_ID
       );
+    });
+
+    it('defaults mode to append when omitted', async () => {
+      (auctionPipelineService.savePrompt as Mock).mockResolvedValue({});
+
+      await request(app)
+        .put('/api/v1/admin/auction-pipeline/prompts/judge_rules')
+        .send({ text: 'x' });
+
+      expect(auctionPipelineService.savePrompt).toHaveBeenCalledWith(
+        'judge_rules',
+        'x',
+        'append',
+        ADMIN_USER_ID
+      );
+    });
+
+    it('accepts replace mode', async () => {
+      (auctionPipelineService.savePrompt as Mock).mockResolvedValue({});
+
+      const response = await request(app)
+        .put('/api/v1/admin/auction-pipeline/prompts/generator_rules')
+        .send({ text: 'Only this rule.', mode: 'replace' });
+
+      expect(response.status).toBe(200);
+      expect(auctionPipelineService.savePrompt).toHaveBeenCalledWith(
+        'generator_rules',
+        'Only this rule.',
+        'replace',
+        ADMIN_USER_ID
+      );
+    });
+
+    it('rejects an unknown mode', async () => {
+      const response = await request(app)
+        .put('/api/v1/admin/auction-pipeline/prompts/judge_rules')
+        .send({ text: 'x', mode: 'destroy' });
+
+      expect(response.status).toBe(422);
+      expect(auctionPipelineService.savePrompt).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown prompt key', async () => {
@@ -216,6 +261,32 @@ describe('Admin Auction Pipeline Routes', () => {
 
       expect(response.status).toBe(422);
       expect(auctionPipelineService.savePrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/v1/admin/auction-pipeline/prompts/:key', () => {
+    it('resets an override', async () => {
+      (auctionPipelineService.resetPrompt as Mock).mockResolvedValue({ reset: true });
+
+      const response = await request(app).delete(
+        '/api/v1/admin/auction-pipeline/prompts/generator_rules'
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ reset: true });
+      expect(auctionPipelineService.resetPrompt).toHaveBeenCalledWith(
+        'generator_rules',
+        ADMIN_USER_ID
+      );
+    });
+
+    it('rejects an unknown key', async () => {
+      const response = await request(app).delete(
+        '/api/v1/admin/auction-pipeline/prompts/not_a_key'
+      );
+
+      expect(response.status).toBe(422);
+      expect(auctionPipelineService.resetPrompt).not.toHaveBeenCalled();
     });
   });
 

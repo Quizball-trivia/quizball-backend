@@ -15,6 +15,7 @@ vi.mock('../../src/modules/auction/auction-pipeline.repo.js', () => ({
     listPrompts: vi.fn(),
     getRecentOutcomes: vi.fn(),
     upsertPrompt: vi.fn(),
+    deletePrompt: vi.fn(),
     requeueTasks: vi.fn(),
   },
 }));
@@ -150,9 +151,9 @@ describe('auctionPipelineService.listPrompts', () => {
 
   it('splits editable overrides from runner-published effective text', async () => {
     (auctionPipelineRepo.listPrompts as Mock).mockResolvedValue([
-      { key: 'generator_rules', text: 'extra', updated_at: 'x', updated_by: 'admin' },
-      { key: 'generator_rules:effective', text: 'full', updated_at: 'x', updated_by: 'runner' },
-      { key: 'judge_rules:effective', text: 'judge', updated_at: 'x', updated_by: 'runner' },
+      { key: 'generator_rules', text: 'extra', mode: 'append', updated_at: 'x', updated_by: 'a' },
+      { key: 'generator_rules:effective', text: 'full', mode: 'append', updated_at: 'x', updated_by: 'r' },
+      { key: 'judge_rules:effective', text: 'judge', mode: 'append', updated_at: 'x', updated_by: 'r' },
     ]);
 
     const result = await auctionPipelineService.listPrompts();
@@ -205,11 +206,12 @@ describe('auctionPipelineService.savePrompt', () => {
       updated_by: ADMIN_USER_ID,
     });
 
-    await auctionPipelineService.savePrompt('judge_rules', 'Be strict.', ADMIN_USER_ID);
+    await auctionPipelineService.savePrompt('judge_rules', 'Be strict.', 'append', ADMIN_USER_ID);
 
     expect(auctionPipelineRepo.upsertPrompt).toHaveBeenCalledWith(
       'judge_rules',
       'Be strict.',
+      'append',
       ADMIN_USER_ID
     );
     expect(logAudit).toHaveBeenCalledWith(
@@ -218,8 +220,47 @@ describe('auctionPipelineService.savePrompt', () => {
         action: 'update',
         entityType: 'auction_pipeline_prompt',
         entityId: 'judge_rules',
+        metadata: expect.objectContaining({ mode: 'append' }),
       })
     );
+  });
+
+  it('records replace mode in the audit entry', async () => {
+    (auctionPipelineRepo.upsertPrompt as Mock).mockResolvedValue({});
+
+    await auctionPipelineService.savePrompt('generator_rules', 'Only.', 'replace', ADMIN_USER_ID);
+
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ mode: 'replace' }),
+      })
+    );
+  });
+});
+
+describe('auctionPipelineService.resetPrompt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('audits a reset that removed an override', async () => {
+    (auctionPipelineRepo.deletePrompt as Mock).mockResolvedValue(true);
+
+    const result = await auctionPipelineService.resetPrompt('generator_rules', ADMIN_USER_ID);
+
+    expect(result).toEqual({ reset: true });
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'reset', entityId: 'generator_rules' })
+    );
+  });
+
+  it('does not audit a no-op reset', async () => {
+    (auctionPipelineRepo.deletePrompt as Mock).mockResolvedValue(false);
+
+    const result = await auctionPipelineService.resetPrompt('generator_rules', ADMIN_USER_ID);
+
+    expect(result).toEqual({ reset: false });
+    expect(logAudit).not.toHaveBeenCalled();
   });
 });
 

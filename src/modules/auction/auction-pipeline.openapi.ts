@@ -9,6 +9,7 @@ import {
   auctionPipelinePromptsResponseSchema,
   auctionPipelineRequeueResponseSchema,
   auctionPipelineRequeueSchema,
+  auctionPipelinePromptResetResponseSchema,
   auctionPipelineStatsResponseSchema,
   auctionPipelineWorkersResponseSchema,
 } from './auction-pipeline.schemas.js';
@@ -25,12 +26,16 @@ export function registerAuctionPipelineOpenApi(registry: OpenAPIRegistry): void 
   const requeueResponse = auctionPipelineRequeueResponseSchema.openapi(
     'AuctionPipelineRequeueResponse'
   );
+  const promptResetResponse = auctionPipelinePromptResetResponseSchema.openapi(
+    'AuctionPipelinePromptResetResponse'
+  );
 
   registry.register('AuctionPipelineStatsResponse', statsResponse);
   registry.register('AuctionPipelineWorkersResponse', workersResponse);
   registry.register('AuctionPipelinePromptsResponse', promptsResponse);
   registry.register('AuctionPipelinePrompt', promptDetail);
   registry.register('AuctionPipelineRequeueResponse', requeueResponse);
+  registry.register('AuctionPipelinePromptResetResponse', promptResetResponse);
 
   registerEndpoint(registry, {
     method: 'get',
@@ -84,6 +89,21 @@ export function registerAuctionPipelineOpenApi(registry: OpenAPIRegistry): void 
       401: { description: 'Not authenticated', schema: errorResponseSchema },
       403: { description: 'Not an admin', schema: errorResponseSchema },
       422: { description: 'Invalid prompt key or text', schema: errorResponseSchema },
+    },
+  });
+
+  registerEndpoint(registry, {
+    method: 'delete',
+    path: '/api/v1/admin/auction-pipeline/prompts/{key}',
+    summary: 'Reset a prompt override so the built-in rules apply again',
+    tags: ['Auction'],
+    security: [{ bearerAuth: [] }],
+    pathParams: auctionPipelinePromptKeyParamSchema,
+    responses: {
+      200: { description: 'Whether an override was removed', schema: promptResetResponse },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Not an admin', schema: errorResponseSchema },
+      422: { description: 'Invalid prompt key', schema: errorResponseSchema },
     },
   });
 

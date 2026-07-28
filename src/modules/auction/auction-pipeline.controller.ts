@@ -24,8 +24,14 @@ export const auctionPipelineController = {
 
   async savePrompt(req: Request, res: Response): Promise<void> {
     const { key } = req.validated.params as AuctionPipelinePromptKeyParam;
-    const { text } = req.validated.body as AuctionPipelinePromptUpdate;
-    const result = await auctionPipelineService.savePrompt(key, text, req.user!.id);
+    const { text, mode } = req.validated.body as AuctionPipelinePromptUpdate;
+    const result = await auctionPipelineService.savePrompt(key, text, mode, req.user!.id);
+    res.json(result);
+  },
+
+  async resetPrompt(req: Request, res: Response): Promise<void> {
+    const { key } = req.validated.params as AuctionPipelinePromptKeyParam;
+    const result = await auctionPipelineService.resetPrompt(key, req.user!.id);
     res.json(result);
   },
 

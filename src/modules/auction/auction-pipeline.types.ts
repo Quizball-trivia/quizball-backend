@@ -101,9 +101,12 @@ export interface AuctionPipelineWorker {
   is_stale: boolean;
 }
 
+export type AuctionPipelinePromptMode = 'append' | 'replace';
+
 export interface AuctionPipelinePrompt {
   key: string;
   text: string;
+  mode: AuctionPipelinePromptMode;
   updated_at: string;
   updated_by: string | null;
 }

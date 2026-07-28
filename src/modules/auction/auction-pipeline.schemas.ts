@@ -109,9 +109,12 @@ export const auctionPipelineWorkersResponseSchema = z.object({
   stale: z.number().int(),
 });
 
+export const auctionPipelinePromptModeEnum = z.enum(['append', 'replace']);
+
 export const auctionPipelinePromptSchema = z.object({
   key: z.string(),
   text: z.string(),
+  mode: auctionPipelinePromptModeEnum,
   updated_at: z.string(),
   updated_by: z.string().nullable(),
 });
@@ -128,6 +131,7 @@ export const auctionPipelinePromptKeyParamSchema = z.object({
 
 export const auctionPipelinePromptUpdateSchema = z.object({
   text: z.string().trim().min(1).max(8000),
+  mode: auctionPipelinePromptModeEnum.default('append'),
 });
 
 /**
@@ -143,6 +147,10 @@ export const auctionPipelineRequeueSchema = z
     (value) => (value.taskIds === undefined) !== (value.filter === undefined),
     { message: 'Provide exactly one of taskIds or filter' }
   );
+
+export const auctionPipelinePromptResetResponseSchema = z.object({
+  reset: z.boolean(),
+});
 
 export const auctionPipelineRequeueResponseSchema = z.object({
   requeued: z.number().int(),

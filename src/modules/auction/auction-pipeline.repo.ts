@@ -6,6 +6,7 @@ import type {
   AuctionPipelinePoolCounts,
   AuctionPipelinePrompt,
   AuctionPipelinePromptKey,
+  AuctionPipelinePromptMode,
   AuctionPipelineSnapshot,
   AuctionPipelineStageCount,
   AuctionPipelineVariantCount,
@@ -311,10 +312,11 @@ export const auctionPipelineRepo = {
     const rows = await sql<{
       key: string;
       text: string;
+      mode: string;
       updated_at: Date;
       updated_by: string | null;
     }[]>`
-      SELECT key, text, updated_at, updated_by
+      SELECT key, text, mode, updated_at, updated_by
       FROM pipeline_prompts
       ORDER BY key
     `;
@@ -322,6 +324,7 @@ export const auctionPipelineRepo = {
     return rows.map((row) => ({
       key: row.key,
       text: row.text,
+      mode: row.mode === 'replace' ? 'replace' : 'append',
       updated_at: row.updated_at.toISOString(),
       updated_by: row.updated_by,
     }));
@@ -330,29 +333,45 @@ export const auctionPipelineRepo = {
   async upsertPrompt(
     key: AuctionPipelinePromptKey,
     text: string,
+    mode: AuctionPipelinePromptMode,
     updatedBy: string
   ): Promise<AuctionPipelinePrompt> {
     const [row] = await sql<{
       key: string;
       text: string;
+      mode: string;
       updated_at: Date;
       updated_by: string | null;
     }[]>`
-      INSERT INTO pipeline_prompts (key, text, updated_by, updated_at)
-      VALUES (${key}, ${text}, ${updatedBy}, now())
+      INSERT INTO pipeline_prompts (key, text, mode, updated_by, updated_at)
+      VALUES (${key}, ${text}, ${mode}, ${updatedBy}, now())
       ON CONFLICT (key) DO UPDATE SET
         text = EXCLUDED.text,
+        mode = EXCLUDED.mode,
         updated_by = EXCLUDED.updated_by,
         updated_at = now()
-      RETURNING key, text, updated_at, updated_by
+      RETURNING key, text, mode, updated_at, updated_by
     `;
 
     return {
       key: row.key,
       text: row.text,
+      mode: row.mode === 'replace' ? 'replace' : 'append',
       updated_at: row.updated_at.toISOString(),
       updated_by: row.updated_by,
     };
+  },
+
+  /**
+   * Drop an override so the runner falls back to its built-in rules. Only the
+   * editable row is removed; the runner-published ':effective' row is left
+   * alone and refreshes on the next batch.
+   */
+  async deletePrompt(key: AuctionPipelinePromptKey): Promise<boolean> {
+    const rows = await sql<{ key: string }[]>`
+      DELETE FROM pipeline_prompts WHERE key = ${key} RETURNING key
+    `;
+    return rows.length > 0;
   },
 
   /**

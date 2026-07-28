@@ -70,6 +70,7 @@ export {
   auctionPipelinePromptUpdateSchema,
   auctionPipelineRequeueSchema,
   auctionPipelineRequeueResponseSchema,
+  auctionPipelinePromptResetResponseSchema,
 } from './auction-pipeline.schemas.js';
 export type * from './auction-pipeline.types.js';
 

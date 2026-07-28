@@ -62,12 +62,11 @@ export async function writeFixtureInTx(
       fixture.endedAt,
       fixture.categoryAId,
       fixture.categoryBId,
-      JSON.stringify({ winnerDecisionMethod: fixture.decision }),
-      JSON.stringify({
-        isPlacement: fixture.isPlacementContext,
-        burnIn: true,
-        fixtureKey: fixture.key,
-      }),
+      // postgres.js binds a JS object to a jsonb OBJECT; a JSON.stringify'd
+      // string would be stored as a jsonb STRING (double-encoded) and read back
+      // as a string, not an object.
+      { winnerDecisionMethod: fixture.decision },
+      { isPlacement: fixture.isPlacementContext, burnIn: true, fixtureKey: fixture.key },
     ],
   );
 

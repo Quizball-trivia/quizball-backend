@@ -1,54 +1,27 @@
 /**
- * Integration tests for the burn-in writer + rollback against the real test DB.
- * Seeds its OWN persistent bots (users + ranked_profiles +
- * synthetic_player_profiles) — does NOT depend on PR5 roster tooling.
+ * Integration tests for the direct transactional burn-in writer.
  *
- * Proven end-to-end:
- *   - writeFixture lands a completed ranked match with BACKDATED
- *     started_at/ended_at, both seats, W/L stats, a backdated ledger row +
- *     moved profiles, backdated XP, and backdated achievements — with ZERO
- *     coins for the bots (economy stays AI)
- *   - the ceiling belt aborts a fixture that would settle a bot over the ceiling
- *   - resume: re-writing an identical fixture creates no duplicates; a DRIFTED
- *     row is rejected (field-by-field verification)
- *   - rollback restores profiles/XP/stats/achievements, refuses on a
- *     non-roster participant AND on post-snapshot live activity, atomically
+ * writeFixtureInTx(tx, fixture) writes one fixture's COMPLETE row-set (match +
+ * match_players + settlement ledger/profile + stats + XP + achievements) inside
+ * a caller-provided transaction, driving no live multi-tx services.
  *
- * Run with:
- *   npm run docker:start
- *   npx vitest run tests/bot-burnin/writer.integration.test.ts
+ * Proven:
+ *   - all rows land, BACKDATED; bots earn ZERO coins; XP + achievements accrue
+ *   - the settlement matches the PRODUCTION path (parity vs settleCompletedRankedMatch)
+ *   - CRASH ATOMICITY: a throw inside the tx commits NOTHING
+ *
+ * Run: npm run docker:start && npx vitest run tests/bot-burnin/writer.integration.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import '../setup.js';
-import type { PlannedFixture, BurnInBot, BurnInSnapshot, ReceiptHeaderLine, ReceiptFixtureLine } from '../../scripts/bot-burnin/types.js';
+import type { PlannedFixture } from '../../scripts/bot-burnin/types.js';
 import { fixtureContentDigest, fixtureMatchIdFromDigest } from '../../scripts/bot-burnin/manifest.js';
 
-const MANIFEST = 'test-manifest-hash-writer';
+const MANIFEST = 'test-manifest-writer';
 
 let sql: typeof import('../../src/db/index.js').sql;
-let writeFixtureRaw: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
-let CeilingExceededError: typeof import('../../scripts/bot-burnin/writer.js').CeilingExceededError;
-let FixtureVerificationError: typeof import('../../scripts/bot-burnin/writer.js').FixtureVerificationError;
-let snapshotProfiles: typeof import('../../scripts/bot-burnin/snapshot.js').snapshotProfiles;
-let rollback: typeof import('../../scripts/bot-burnin/snapshot.js').rollback;
-let RollbackRefusedError: typeof import('../../scripts/bot-burnin/snapshot.js').RollbackRefusedError;
-let owner: { manifestHash: string; ownerToken: string };
+let writeFixtureInTx: typeof import('../../scripts/bot-burnin/writer.js').writeFixtureInTx;
 let dbAvailable = false;
-
-// All fixture writes go through the owned run so the writer's fail-closed lock
-// check passes. Rollback tests delete the marker, so re-claim it if absent.
-async function ensureOwner(): Promise<void> {
-  const rows = await sql<{ note: string }[]>`SELECT note FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete' LIMIT 1`;
-  if (rows.length === 0) {
-    const { claimRun } = await import('../../scripts/bot-burnin/data.js');
-    const d = await claimRun(MANIFEST, 1);
-    owner = { manifestHash: MANIFEST, ownerToken: (d as { ownerToken: string }).ownerToken };
-  }
-}
-async function writeFixture(fixture: Parameters<typeof writeFixtureRaw>[0], ceiling?: number) {
-  await ensureOwner();
-  return writeFixtureRaw(fixture, owner, ceiling);
-}
 
 const testUserIds: string[] = [];
 const testMatchIds: string[] = [];
@@ -57,16 +30,11 @@ let categoryId: string;
 async function seedBot(nickname: string): Promise<string> {
   const [u] = await sql<{ id: string }[]>`
     INSERT INTO users (nickname, is_ai, ai_kind, is_seed, coins, onboarding_complete)
-    VALUES (${nickname}, true, 'persistent', false, 0, true)
-    RETURNING id
+    VALUES (${nickname}, true, 'persistent', false, 0, true) RETURNING id
   `;
   testUserIds.push(u.id);
   await sql`
-    INSERT INTO ranked_profiles (
-      user_id, rp, tier, placement_status, placement_required, placement_played,
-      placement_wins, placement_seed_rp, placement_perf_sum, placement_points_for_sum,
-      placement_points_against_sum, current_win_streak
-    )
+    INSERT INTO ranked_profiles (user_id, rp, tier, placement_status, placement_required, placement_played, placement_wins, placement_seed_rp, placement_perf_sum, placement_points_for_sum, placement_points_against_sum, current_win_streak)
     VALUES (${u.id}, 450, 'Youth Prospect', 'unplaced', 3, 0, 0, NULL, 0, 0, 0, 0)
   `;
   await sql`
@@ -78,69 +46,23 @@ async function seedBot(nickname: string): Promise<string> {
 
 let ordinalCounter = 0;
 function makeFixture(opts: {
-  a: string;
-  b: string;
-  winner: string;
-  startedAt: Date;
-  endedAt: Date;
-  isPlacement: boolean;
-  scoreA?: PlannedFixture['scoreA'];
-  scoreB?: PlannedFixture['scoreB'];
-  decision?: 'goals' | 'penalty_goals';
+  a: string; b: string; winner: string; startedAt: Date; endedAt: Date; isPlacement: boolean;
+  scoreA?: PlannedFixture['scoreA']; scoreB?: PlannedFixture['scoreB']; decision?: 'goals' | 'penalty_goals';
 }): PlannedFixture {
   const scoreA = opts.scoreA ?? { goals: 3, penaltyGoals: 0, totalPoints: 900, correctAnswers: 8 };
   const scoreB = opts.scoreB ?? { goals: 1, penaltyGoals: 0, totalPoints: 400, correctAnswers: 4 };
   const decision = opts.decision ?? 'goals';
   const key = fixtureContentDigest(MANIFEST, {
-    botAUserId: opts.a,
-    botBUserId: opts.b,
-    startedAt: opts.startedAt,
-    endedAt: opts.endedAt,
-    winnerUserId: opts.winner,
-    decision,
-    scoreA,
-    scoreB,
+    botAUserId: opts.a, botBUserId: opts.b, startedAt: opts.startedAt, endedAt: opts.endedAt,
+    winnerUserId: opts.winner, decision, scoreA, scoreB,
   });
   const matchId = fixtureMatchIdFromDigest(key);
   testMatchIds.push(matchId);
   return {
-    key,
-    matchId,
-    ordinal: ordinalCounter++,
-    botAUserId: opts.a,
-    botBUserId: opts.b,
-    startedAt: opts.startedAt,
-    endedAt: opts.endedAt,
-    winnerUserId: opts.winner,
-    decision,
-    isPlacementContext: opts.isPlacement,
-    scoreA,
-    scoreB,
-    categoryAId: categoryId,
-    categoryBId: categoryId,
-    // The writer computes the ceiling from live DB RP; these are informational.
-    projectedRpA: 0,
-    projectedRpB: 0,
-  };
-}
-
-function bot(id: string): BurnInBot {
-  return {
-    userId: id, nickname: 'x', baseSkill: 0.1, dailyCap: 6,
-    schedule: { activeHours: [], sessionMax: 4, intraSessionGapMin: 20 },
-    status: 'active', rp: 450, placementPlayed: 0, placementWins: 0,
-    placementStatus: 'unplaced', currentWinStreak: 0,
-  };
-}
-
-function header(roster: string[]): ReceiptHeaderLine {
-  return { kind: 'header', createdAt: new Date().toISOString(), manifestHash: MANIFEST, seed: 1, env: 'test', rosterUserIds: roster };
-}
-function receiptLine(f: PlannedFixture): ReceiptFixtureLine {
-  return {
-    kind: 'written', ordinal: f.ordinal, key: f.key, matchId: f.matchId,
-    botAUserId: f.botAUserId, botBUserId: f.botBUserId, winnerUserId: f.winnerUserId,
-    startedAt: f.startedAt.toISOString(), endedAt: f.endedAt.toISOString(),
+    key, matchId, ordinal: ordinalCounter++, botAUserId: opts.a, botBUserId: opts.b,
+    startedAt: opts.startedAt, endedAt: opts.endedAt, winnerUserId: opts.winner, decision,
+    isPlacementContext: opts.isPlacement, scoreA, scoreB, categoryAId: categoryId, categoryBId: categoryId,
+    projectedRpA: 0, projectedRpB: 0,
   };
 }
 
@@ -150,28 +72,17 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    ({ writeFixture: writeFixtureRaw, CeilingExceededError, FixtureVerificationError } = await import('../../scripts/bot-burnin/writer.js'));
-    ({ snapshotProfiles, rollback, RollbackRefusedError } = await import('../../scripts/bot-burnin/snapshot.js'));
-    const { claimRun } = await import('../../scripts/bot-burnin/data.js');
-    // Claim a 'running' marker so the writer's fail-closed ownership check passes.
-    await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
-    const decision = await claimRun(MANIFEST, 1);
-    if (decision.kind === 'refuse') throw new Error(`test owner claim refused: ${decision.reason}`);
-    owner = { manifestHash: MANIFEST, ownerToken: (decision as { ownerToken: string }).ownerToken };
+    ({ writeFixtureInTx } = await import('../../scripts/bot-burnin/writer.js'));
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
     categoryId = cat?.id
-      ?? (await sql<{ id: string }[]>`
-        INSERT INTO categories (slug, name, is_active)
-        VALUES (${`burnin_test_${Date.now()}`}, 'Burn-in Test', true) RETURNING id
-      `)[0].id;
+      ?? (await sql<{ id: string }[]>`INSERT INTO categories (slug, name, is_active) VALUES (${`burnin_w_${Date.now()}`}, 'W', true) RETURNING id`)[0].id;
   } catch {
-    console.warn('\n⚠️  Skipping burn-in writer integration tests: DB unavailable. Run `npm run docker:start`.\n');
+    console.warn('\n⚠️  Skipping burn-in writer tests: DB unavailable. Run `npm run docker:start`.\n');
   }
 });
 
 afterAll(async () => {
   if (!dbAvailable) return;
-  await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
   if (testMatchIds.length > 0) {
     await sql`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${testMatchIds}::uuid[])`;
     await sql`DELETE FROM user_xp_events WHERE source_key = ANY(${testMatchIds})`;
@@ -187,19 +98,17 @@ afterAll(async () => {
   await sql.end();
 });
 
-describe('writeFixture — backdated bot-vs-bot fixture', () => {
-  it('lands match+players+stats+ledger+XP+achievements backdated, bots earn zero coins', async ({ skip }) => {
+describe('writeFixtureInTx — direct transactional write', () => {
+  it('lands match+players+stats+ledger+XP+achievements backdated; bots earn zero coins', async ({ skip }) => {
     if (!dbAvailable) skip();
-
-    const a = await seedBot(`bi_a_${Date.now()}`);
-    const b = await seedBot(`bi_b_${Date.now()}`);
+    const a = await seedBot(`w_a_${Date.now()}`);
+    const b = await seedBot(`w_b_${Date.now()}`);
     const startedAt = new Date('2026-07-22T10:00:00Z');
     const endedAt = new Date('2026-07-22T10:05:00Z');
+    // A wins by 2 goals (3-1) — production formula: +50 base + 15 margin = +65.
     const fixture = makeFixture({ a, b, winner: a, startedAt, endedAt, isPlacement: true });
 
-    const res = await writeFixture(fixture, 100_000);
-    expect(res.created).toBe(true);
-    expect(res.matchId).toBe(fixture.matchId);
+    await sql.begin(async (tx) => { await writeFixtureInTx(tx, fixture); });
 
     const [match] = await sql<{ status: string; is_dev: boolean; started_at: string; ended_at: string; winner_user_id: string; ranked_context: { burnIn?: boolean; fixtureKey?: string } }[]>`
       SELECT status, is_dev, started_at, ended_at, winner_user_id, ranked_context FROM matches WHERE id = ${fixture.matchId}
@@ -212,18 +121,23 @@ describe('writeFixture — backdated bot-vs-bot fixture', () => {
     expect(new Date(match.ended_at).toISOString()).toBe(endedAt.toISOString());
     expect(match.winner_user_id).toBe(a);
 
-    const [winnerLedger] = await sql<{ result: string; delta_rp: number; coins_awarded: number; created_at: string }[]>`
-      SELECT result, delta_rp, coins_awarded, created_at FROM ranked_rp_changes WHERE match_id = ${fixture.matchId} AND user_id = ${a}
+    const [winnerLedger] = await sql<{ result: string; delta_rp: number; coins_awarded: number; created_at: string; calculation_method: string; placement_game_no: number | null }[]>`
+      SELECT result, delta_rp, coins_awarded, created_at, calculation_method, placement_game_no
+      FROM ranked_rp_changes WHERE match_id = ${fixture.matchId} AND user_id = ${a}
     `;
     expect(winnerLedger.result).toBe('win');
     expect(winnerLedger.delta_rp).toBe(65);
     expect(winnerLedger.coins_awarded).toBe(0);
+    expect(winnerLedger.calculation_method).toBe('placement_seed'); // placement game
+    expect(winnerLedger.placement_game_no).toBe(1);
     expect(new Date(winnerLedger.created_at).toISOString()).toBe(endedAt.toISOString());
 
-    const [winnerProfile] = await sql<{ rp: number; last_ranked_match_at: string }[]>`
-      SELECT rp, last_ranked_match_at FROM ranked_profiles WHERE user_id = ${a}
+    const [winnerProfile] = await sql<{ rp: number; placement_status: string; placement_played: number; last_ranked_match_at: string }[]>`
+      SELECT rp, placement_status, placement_played, last_ranked_match_at FROM ranked_profiles WHERE user_id = ${a}
     `;
     expect(winnerProfile.rp).toBe(515);
+    expect(winnerProfile.placement_status).toBe('in_progress');
+    expect(winnerProfile.placement_played).toBe(1);
     expect(new Date(winnerProfile.last_ranked_match_at).toISOString()).toBe(endedAt.toISOString());
 
     const [winStats] = await sql<{ wins: number; losses: number }[]>`
@@ -238,11 +152,9 @@ describe('writeFixture — backdated bot-vs-bot fixture', () => {
     expect(xp.count).toBe(2);
     expect(new Date(xp.created_at!).toISOString()).toBe(endedAt.toISOString());
 
-    // Achievements evaluated + backdated (finding 10). debut_match unlocks on a
-    // first completed match; its unlocked_at is the backdated fixture time.
-    const debut = await sql<{ unlocked_at: string | null; source_match_id: string | null; created_at: string }[]>`
-      SELECT unlocked_at, source_match_id, created_at FROM user_achievements
-      WHERE user_id = ${a} AND achievement_id = 'debut_match'
+    // debut_match unlocks on the first completed match, backdated + bot-sourced.
+    const debut = await sql<{ unlocked_at: string | null; source_match_id: string | null }[]>`
+      SELECT unlocked_at, source_match_id FROM user_achievements WHERE user_id = ${a} AND achievement_id = 'debut_match'
     `;
     expect(debut.length).toBe(1);
     expect(debut[0].unlocked_at).not.toBeNull();
@@ -254,197 +166,78 @@ describe('writeFixture — backdated bot-vs-bot fixture', () => {
     expect(Number(aUser.total_xp)).toBeGreaterThan(0);
   });
 
-  it('ceiling is asserted PRE-COMMIT: an over-ceiling fixture aborts before ANY write (finding 6)', async ({ skip }) => {
+  it('CRASH ATOMICITY: a throw inside the tx commits NOTHING (finding: not resumable)', async ({ skip }) => {
     if (!dbAvailable) skip();
-    const a = await seedBot(`bi_ceil_a_${Date.now()}`);
-    const b = await seedBot(`bi_ceil_b_${Date.now()}`);
-    // Winner would settle to 515; a ceiling of 500 must abort BEFORE writing.
+    const a = await seedBot(`w_atomic_a_${Date.now()}`);
+    const b = await seedBot(`w_atomic_b_${Date.now()}`);
     const fixture = makeFixture({
       a, b, winner: a,
-      startedAt: new Date('2026-07-22T11:00:00Z'), endedAt: new Date('2026-07-22T11:05:00Z'),
+      startedAt: new Date('2026-07-22T12:00:00Z'), endedAt: new Date('2026-07-22T12:05:00Z'),
       isPlacement: false,
     });
-    await expect(writeFixture(fixture, 500)).rejects.toBeInstanceOf(CeilingExceededError);
-    // Pre-commit: NO match row, NO ledger, NO profile movement landed.
+
+    await expect(
+      sql.begin(async (tx) => {
+        await writeFixtureInTx(tx, fixture);
+        // Simulate a mid-run crash AFTER this fixture's writes.
+        throw new Error('simulated crash');
+      })
+    ).rejects.toThrow(/simulated crash/);
+
+    // NOTHING committed: no match, no ledger, no xp, no stats, profile pristine.
     expect(await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).toEqual([]);
     expect(await sql<{ match_id: string }[]>`SELECT match_id FROM ranked_rp_changes WHERE match_id = ${fixture.matchId}`).toEqual([]);
-    const [pa] = await sql<{ rp: number }[]>`SELECT rp FROM ranked_profiles WHERE user_id = ${a}`;
-    expect(pa.rp).toBe(450); // unchanged
+    expect(await sql<{ user_id: string }[]>`SELECT user_id FROM user_xp_events WHERE source_key = ${fixture.matchId}`).toEqual([]);
+    expect(await sql<{ user_id: string }[]>`SELECT user_id FROM user_mode_match_stats WHERE user_id = ${a} AND mode = 'ranked'`).toEqual([]);
+    const [pa] = await sql<{ rp: number; total_xp: number }[]>`SELECT rp, (SELECT total_xp FROM users WHERE id = ${a}) AS total_xp FROM ranked_profiles WHERE user_id = ${a}`;
+    expect(pa.rp).toBe(450);
+    expect(Number(pa.total_xp)).toBe(0);
   });
 
-  it('resume: re-writing the identical fixture creates no duplicates', async ({ skip }) => {
+  it('PARITY: direct settlement equals the production settleCompletedRankedMatch', async ({ skip }) => {
     if (!dbAvailable) skip();
-    const a = await seedBot(`bi_r_a_${Date.now()}`);
-    const b = await seedBot(`bi_r_b_${Date.now()}`);
-    const fixture = makeFixture({
-      a, b, winner: b,
-      startedAt: new Date('2026-07-23T09:00:00Z'), endedAt: new Date('2026-07-23T09:05:00Z'),
-      isPlacement: false,
-    });
-    const first = await writeFixture(fixture, 100_000);
-    expect(first.created).toBe(true);
-    const second = await writeFixture(fixture, 100_000);
-    expect(second.created).toBe(false);
+    const { rankedService } = await import('../../src/modules/ranked/ranked.service.js');
+    const { matchesService } = await import('../../src/modules/matches/matches.service.js');
 
-    const [ledgerCount] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM ranked_rp_changes WHERE match_id = ${fixture.matchId}`;
-    expect(ledgerCount.count).toBe(2);
-    const [xpCount] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM user_xp_events WHERE source_key = ${fixture.matchId}`;
-    expect(xpCount.count).toBe(2);
-    const [statB] = await sql<{ games_played: number }[]>`SELECT games_played FROM user_mode_match_stats WHERE user_id = ${b} AND mode = 'ranked'`;
-    expect(statB.games_played).toBe(1);
-  });
-
-  it('resume: a DRIFTED existing row (foreign participant) is rejected (finding 4)', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_drift_a_${Date.now()}`);
-    const b = await seedBot(`bi_drift_b_${Date.now()}`);
+    // Direct-write path: bot X beats bot Y by 2 in a placement game.
+    const dx = await seedBot(`w_par_dx_${Date.now()}`);
+    const dy = await seedBot(`w_par_dy_${Date.now()}`);
     const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-23T12:00:00Z'), endedAt: new Date('2026-07-23T12:05:00Z'),
-      isPlacement: false,
+      a: dx, b: dy, winner: dx,
+      startedAt: new Date('2026-07-25T10:00:00Z'), endedAt: new Date('2026-07-25T10:05:00Z'),
+      isPlacement: true, scoreA: { goals: 3, penaltyGoals: 0, totalPoints: 900, correctAnswers: 8 },
+      scoreB: { goals: 1, penaltyGoals: 0, totalPoints: 400, correctAnswers: 4 },
     });
-    // Pre-create a row at the SAME id with a different (non-burn-in) shape.
-    await sql`
-      INSERT INTO matches (id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, state_payload, ranked_context, is_dev, started_at)
-      VALUES (${fixture.matchId}, 'ranked', 'active', ${categoryId}, ${categoryId}, 12, 12, ${sql.json({ winnerDecisionMethod: 'goals' })}, ${sql.json({ isPlacement: false })}, false, ${fixture.startedAt})
+    await sql.begin(async (tx) => { await writeFixtureInTx(tx, fixture); });
+
+    // Production path: seed an equivalent active match + drive completeMatch + settle.
+    const px = await seedBot(`w_par_px_${Date.now()}`);
+    const py = await seedBot(`w_par_py_${Date.now()}`);
+    const [pm] = await sql<{ id: string }[]>`
+      INSERT INTO matches (mode, status, current_q_index, total_questions, state_payload, ranked_context, started_at)
+      VALUES ('ranked', 'active', 12, 12, ${sql.json({ winnerDecisionMethod: 'goals' })}, ${sql.json({ isPlacement: true })}, NOW())
+      RETURNING id
     `;
+    testMatchIds.push(pm.id);
     await sql`
       INSERT INTO match_players (match_id, user_id, seat, total_points, correct_answers, goals, penalty_goals)
-      VALUES (${fixture.matchId}, ${a}, 1, 100, 1, 1, 0), (${fixture.matchId}, ${b}, 2, 100, 1, 1, 0)
+      VALUES (${pm.id}, ${px}, 1, 900, 8, 3, 0), (${pm.id}, ${py}, 2, 400, 4, 1, 0)
     `;
-    await expect(writeFixture(fixture, 100_000)).rejects.toBeInstanceOf(FixtureVerificationError);
-  });
-});
+    await matchesService.completeMatch(pm.id, px);
+    await rankedService.settleCompletedRankedMatch(pm.id);
 
-describe('rollback', () => {
-  it('restores profiles/XP/stats/achievements and deletes the burn-in match', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_rb_a_${Date.now()}`);
-    const b = await seedBot(`bi_rb_b_${Date.now()}`);
-    const snapshot = await snapshotProfiles([bot(a), bot(b)], {
-      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
-    });
-    const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-24T09:00:00Z'), endedAt: new Date('2026-07-24T09:05:00Z'),
-      isPlacement: false,
-    });
-    await writeFixture(fixture, 100_000);
+    // Compare the ledger + profile fields for the winners (and losers).
+    const cols = `result, delta_rp, new_rp, old_rp, is_placement, placement_game_no, placement_anchor_rp, calculation_method, coins_awarded`;
+    const [dLedgerX] = await sql`SELECT ${sql.unsafe(cols)} FROM ranked_rp_changes WHERE match_id = ${fixture.matchId} AND user_id = ${dx}`;
+    const [pLedgerX] = await sql`SELECT ${sql.unsafe(cols)} FROM ranked_rp_changes WHERE match_id = ${pm.id} AND user_id = ${px}`;
+    expect(dLedgerX).toEqual(pLedgerX);
+    const [dLedgerY] = await sql`SELECT ${sql.unsafe(cols)} FROM ranked_rp_changes WHERE match_id = ${fixture.matchId} AND user_id = ${dy}`;
+    const [pLedgerY] = await sql`SELECT ${sql.unsafe(cols)} FROM ranked_rp_changes WHERE match_id = ${pm.id} AND user_id = ${py}`;
+    expect(dLedgerY).toEqual(pLedgerY);
 
-    const [before] = await sql<{ rp: number }[]>`SELECT rp FROM ranked_profiles WHERE user_id = ${a}`;
-    expect(before.rp).toBeGreaterThan(450);
-
-    const result = await rollback(header([a, b]), [receiptLine(fixture)], snapshot);
-    expect(result.matchesDeleted).toBe(1);
-
-    const [after] = await sql<{ rp: number }[]>`SELECT rp FROM ranked_profiles WHERE user_id = ${a}`;
-    expect(after.rp).toBe(450);
-    expect(await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).toEqual([]);
-    expect(await sql<{ match_id: string }[]>`SELECT match_id FROM ranked_rp_changes WHERE match_id = ${fixture.matchId}`).toEqual([]);
-    // Stats + achievements returned to pristine (row deleted — none pre-existed).
-    expect(await sql<{ user_id: string }[]>`SELECT user_id FROM user_mode_match_stats WHERE user_id = ${a} AND mode = 'ranked'`).toEqual([]);
-    expect(await sql<{ user_id: string }[]>`SELECT user_id FROM user_achievements WHERE user_id = ${a}`).toEqual([]);
-  });
-
-  it('REFUSES atomically on a manifest mismatch (nothing deleted)', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_mm_a_${Date.now()}`);
-    const b = await seedBot(`bi_mm_b_${Date.now()}`);
-    const snapshot = await snapshotProfiles([bot(a), bot(b)], {
-      manifestHash: 'DIFFERENT', seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
-    });
-    const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-24T13:00:00Z'), endedAt: new Date('2026-07-24T13:05:00Z'),
-      isPlacement: false,
-    });
-    await writeFixture(fixture, 100_000);
-    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
-    // Match still present (nothing deleted).
-    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
-  });
-
-  it('REFUSES on post-snapshot live activity on a roster bot (finding 1)', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_live_a_${Date.now()}`);
-    const b = await seedBot(`bi_live_b_${Date.now()}`);
-    const snapshot = await snapshotProfiles([bot(a), bot(b)], {
-      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
-    });
-    const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-24T15:00:00Z'), endedAt: new Date('2026-07-24T15:05:00Z'),
-      isPlacement: false,
-    });
-    await writeFixture(fixture, 100_000);
-
-    // Simulate a LIVE match ledger row (not in the receipt) after the snapshot.
-    const strayMatchId = fixtureMatchIdFromDigest(fixtureContentDigest(MANIFEST, {
-      botAUserId: a, botBUserId: b, startedAt: new Date('2026-07-26T09:00:00Z'),
-      endedAt: new Date('2026-07-26T09:05:00Z'), winnerUserId: a, decision: 'goals',
-      scoreA: { goals: 1, penaltyGoals: 0, totalPoints: 1, correctAnswers: 1 },
-      scoreB: { goals: 0, penaltyGoals: 0, totalPoints: 0, correctAnswers: 0 },
-    }));
-    testMatchIds.push(strayMatchId);
-    await sql`
-      INSERT INTO matches (id, mode, status, category_a_id, category_b_id, current_q_index, total_questions, is_dev, started_at)
-      VALUES (${strayMatchId}, 'ranked', 'completed', ${categoryId}, ${categoryId}, 12, 12, false, NOW())
-    `;
-    await sql`
-      INSERT INTO ranked_rp_changes (match_id, user_id, opponent_user_id, opponent_is_ai, old_rp, delta_rp, new_rp, result, is_placement, calculation_method, coins_awarded)
-      VALUES (${strayMatchId}, ${a}, ${b}, true, 515, 50, 565, 'win', false, 'ranked_formula', 0)
-    `;
-
-    // Rollback must refuse (the receipt only lists `fixture`, not the stray).
-    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
-    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
-
-    // Cleanup the stray ledger row (afterAll deletes the match).
-    await sql`DELETE FROM ranked_rp_changes WHERE match_id = ${strayMatchId}`;
-  });
-
-  it('REFUSES on a post-snapshot NON-MATCH xp event (finding 2 false-negative closed)', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_nmxp_a_${Date.now()}`);
-    const b = await seedBot(`bi_nmxp_b_${Date.now()}`);
-    const snapshot = await snapshotProfiles([bot(a), bot(b)], {
-      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
-    });
-    const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-24T17:00:00Z'), endedAt: new Date('2026-07-24T17:05:00Z'),
-      isPlacement: false,
-    });
-    await writeFixture(fixture, 100_000);
-
-    // A NON-match XP event (e.g. a daily challenge) after the snapshot — the old
-    // rollback only inspected match_result XP and would have missed this.
-    await sql`
-      INSERT INTO user_xp_events (user_id, source_type, source_key, xp_delta, metadata)
-      VALUES (${a}, 'daily_challenge_completion', ${`nmxp-${Date.now()}`}, 25, '{}'::jsonb)
-    `;
-    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
-    // Nothing deleted; the burn-in match still present.
-    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
-    await sql`DELETE FROM user_xp_events WHERE user_id = ${a} AND source_type = 'daily_challenge_completion'`;
-  });
-
-  it('REFUSES when the snapshot carries a user beyond the receipt roster', async ({ skip }) => {
-    if (!dbAvailable) skip();
-    const a = await seedBot(`bi_extra_a_${Date.now()}`);
-    const b = await seedBot(`bi_extra_b_${Date.now()}`);
-    const extra = await seedBot(`bi_extra_c_${Date.now()}`);
-    // Snapshot 3 bots but the receipt roster only lists 2.
-    const snapshot = await snapshotProfiles([bot(a), bot(b), bot(extra)], {
-      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
-    });
-    const fixture = makeFixture({
-      a, b, winner: a,
-      startedAt: new Date('2026-07-24T19:00:00Z'), endedAt: new Date('2026-07-24T19:05:00Z'),
-      isPlacement: false,
-    });
-    await writeFixture(fixture, 100_000);
-    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
-    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
+    const profCols = `rp, tier, placement_status, placement_played, placement_wins, placement_seed_rp, current_win_streak`;
+    const [dProfX] = await sql`SELECT ${sql.unsafe(profCols)} FROM ranked_profiles WHERE user_id = ${dx}`;
+    const [pProfX] = await sql`SELECT ${sql.unsafe(profCols)} FROM ranked_profiles WHERE user_id = ${px}`;
+    expect(dProfX).toEqual(pProfX);
   });
 });

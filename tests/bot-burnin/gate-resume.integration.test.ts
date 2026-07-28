@@ -22,7 +22,10 @@ const MANIFEST = 'test-manifest-gate-resume';
 
 let sql: typeof import('../../src/db/index.js').sql;
 let findNonPristineBots: typeof import('../../scripts/bot-burnin/data.js').findNonPristineBots;
-let claimBurnInMarker: typeof import('../../scripts/bot-burnin/data.js').claimBurnInMarker;
+let acquireRunLock: typeof import('../../scripts/bot-burnin/data.js').acquireRunLock;
+let resolveRun: typeof import('../../scripts/bot-burnin/data.js').resolveRun;
+let insertRunningMarker: typeof import('../../scripts/bot-burnin/data.js').insertRunningMarker;
+let markRunComplete: typeof import('../../scripts/bot-burnin/data.js').markRunComplete;
 let writeFixture: typeof import('../../scripts/bot-burnin/writer.js').writeFixture;
 let dbAvailable = false;
 
@@ -63,7 +66,7 @@ beforeAll(async () => {
     sql = dbModule.sql;
     await sql`SELECT 1`;
     dbAvailable = true;
-    ({ findNonPristineBots, claimBurnInMarker } = await import('../../scripts/bot-burnin/data.js'));
+    ({ findNonPristineBots, acquireRunLock, resolveRun, insertRunningMarker, markRunComplete } = await import('../../scripts/bot-burnin/data.js'));
     ({ writeFixture } = await import('../../scripts/bot-burnin/writer.js'));
     const [cat] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
     categoryId = cat?.id ?? (await sql<{ id: string }[]>`INSERT INTO categories (slug, name, is_active) VALUES (${`gr_${Date.now()}`}, 'GR', true) RETURNING id`)[0].id;
@@ -98,19 +101,57 @@ describe('pristine gate', () => {
     const clean = await seedBot(`gr_clean_${Date.now()}`);
     const dirty = await seedBot(`gr_dirty_${Date.now()}`);
 
-    // A fresh roster is pristine.
     expect(await findNonPristineBots([clean, dirty])).toEqual([]);
 
-    // Dirty one bot: give it a completed ranked game + ledger row via a real
-    // burn-in write (RP moves to 515, games=1, ledger=1).
     const fixture = makeFixture(dirty, clean, dirty, new Date('2026-07-22T10:00:00Z'), new Date('2026-07-22T10:05:00Z'));
     await writeFixture(fixture, 100_000);
 
     const violations = await findNonPristineBots([clean, dirty]);
     const dirtyV = violations.find((v) => v.userId === dirty);
     expect(dirtyV).toBeDefined();
-    // Its reasons include a non-450 RP and non-zero games/ledger.
     expect(dirtyV!.reasons.some((r) => r.startsWith('rp=') || r.startsWith('ranked_games=') || r.startsWith('ranked_ledger='))).toBe(true);
+  });
+
+  it('ESCAPE: a MISSING ranked_profiles row FAILS (finding 1 — null must not pass)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const [u] = await sql<{ id: string }[]>`
+      INSERT INTO users (nickname, is_ai, ai_kind, is_seed, coins, onboarding_complete)
+      VALUES (${`gr_noprofile_${Date.now()}`}, true, 'persistent', false, 0, true) RETURNING id
+    `;
+    testUserIds.push(u.id);
+    const violations = await findNonPristineBots([u.id]);
+    expect(violations.length).toBe(1);
+    expect(violations[0].reasons).toContain('no ranked_profiles row');
+  });
+
+  it('ESCAPE: an existing user_achievements row FAILS', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const u = await seedBot(`gr_ach_${Date.now()}`);
+    await sql`INSERT INTO user_achievements (user_id, achievement_id, progress) VALUES (${u}, 'debut_match', 1)`;
+    const violations = await findNonPristineBots([u]);
+    expect(violations[0]?.reasons.some((r) => r.startsWith('achievements='))).toBe(true);
+    await sql`DELETE FROM user_achievements WHERE user_id = ${u}`;
+  });
+
+  it('ESCAPE: prior placement_wins / streak / finished-match history FAILS', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const u = await seedBot(`gr_hist_${Date.now()}`);
+    // Dirty the profile accumulators without touching RP.
+    await sql`UPDATE ranked_profiles SET placement_wins = 1, current_win_streak = 2 WHERE user_id = ${u}`;
+    // Give it a completed (finished) match with a real opponent.
+    const opp = await seedBot(`gr_hist_opp_${Date.now()}`);
+    const [m] = await sql<{ id: string }[]>`
+      INSERT INTO matches (mode, status, category_a_id, category_b_id, current_q_index, total_questions, is_dev, started_at, ended_at)
+      VALUES ('ranked', 'completed', ${categoryId}, ${categoryId}, 12, 12, false, NOW(), NOW()) RETURNING id
+    `;
+    testMatchIds.push(m.id);
+    await sql`INSERT INTO match_players (match_id, user_id, seat) VALUES (${m.id}, ${u}, 1), (${m.id}, ${opp}, 2)`;
+
+    const violations = await findNonPristineBots([u]);
+    const reasons = violations.find((v) => v.userId === u)?.reasons ?? [];
+    expect(reasons.some((r) => r.startsWith('placement_wins='))).toBe(true);
+    expect(reasons.some((r) => r.startsWith('current_win_streak='))).toBe(true);
+    expect(reasons.some((r) => r.startsWith('finished_matches='))).toBe(true);
   });
 });
 
@@ -154,15 +195,50 @@ describe('crash-boundary resume', () => {
   });
 });
 
-describe('one-time marker', () => {
-  it('claimBurnInMarker is atomic: a second claim for the env throws', async ({ skip }) => {
+describe('run-identity decision table (fresh / resume / refuse)', () => {
+  it('resolveRun: no marker -> fresh; running+sameH -> resume; complete -> refuse; differentH -> refuse', async ({ skip }) => {
     if (!dbAvailable) skip();
-    // The marker guard is note-based (global). Clear any leftover so the first
-    // claim in THIS test succeeds; the second claim then proves the guard.
+    // Clear any leftover marker so this test starts from a known state.
     await sql`DELETE FROM bot_model_params WHERE note = 'persistent-bot-burnin:complete'`;
-    const hash = `gr-marker-${Date.now()}`;
-    markerHashes.push(hash);
-    await claimBurnInMarker(hash, 1, 10);
-    await expect(claimBurnInMarker(`${hash}-other`, 2, 20)).rejects.toThrow(/already/i);
+    const H = `gr-run-${Date.now()}`;
+    markerHashes.push(H, `${H}-x`);
+
+    const lock = await acquireRunLock();
+    try {
+      // 1. No marker -> fresh.
+      expect((await resolveRun(lock, H)).kind).toBe('fresh');
+
+      // Insert the 'running' marker for H.
+      await insertRunningMarker(lock, H, 1);
+
+      // 2. running + same H -> resume (this is what unblocks crash-resume).
+      const resume = await resolveRun(lock, H);
+      expect(resume.kind).toBe('resume');
+
+      // 3. running + a DIFFERENT H -> refuse.
+      expect((await resolveRun(lock, `${H}-x`)).kind).toBe('refuse');
+
+      // 4. complete -> refuse.
+      await markRunComplete(lock, H, 5);
+      const done = await resolveRun(lock, H);
+      expect(done.kind).toBe('refuse');
+      if (done.kind === 'refuse') expect(done.reason).toMatch(/complete/i);
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it('the advisory lock serializes concurrent runs (second acquire blocks until release)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const first = await acquireRunLock();
+    let secondAcquired = false;
+    const secondPromise = acquireRunLock().then((l) => { secondAcquired = true; return l; });
+    // While first holds the lock, the second must NOT have acquired yet.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(secondAcquired).toBe(false);
+    await first.release();
+    const second = await secondPromise;
+    expect(secondAcquired).toBe(true);
+    await second.release();
   });
 });

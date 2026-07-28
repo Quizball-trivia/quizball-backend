@@ -102,6 +102,9 @@ function makeFixture(opts: {
     scoreB,
     categoryAId: categoryId,
     categoryBId: categoryId,
+    // The writer computes the ceiling from live DB RP; these are informational.
+    projectedRpA: 0,
+    projectedRpB: 0,
   };
 }
 
@@ -228,17 +231,22 @@ describe('writeFixture — backdated bot-vs-bot fixture', () => {
     expect(Number(aUser.total_xp)).toBeGreaterThan(0);
   });
 
-  it('ceiling belt aborts a fixture that would settle a bot over the ceiling (finding 5)', async ({ skip }) => {
+  it('ceiling is asserted PRE-COMMIT: an over-ceiling fixture aborts before ANY write (finding 6)', async ({ skip }) => {
     if (!dbAvailable) skip();
     const a = await seedBot(`bi_ceil_a_${Date.now()}`);
     const b = await seedBot(`bi_ceil_b_${Date.now()}`);
-    // Winner would settle to 515; a ceiling of 500 must abort.
+    // Winner would settle to 515; a ceiling of 500 must abort BEFORE writing.
     const fixture = makeFixture({
       a, b, winner: a,
       startedAt: new Date('2026-07-22T11:00:00Z'), endedAt: new Date('2026-07-22T11:05:00Z'),
       isPlacement: false,
     });
     await expect(writeFixture(fixture, 500)).rejects.toBeInstanceOf(CeilingExceededError);
+    // Pre-commit: NO match row, NO ledger, NO profile movement landed.
+    expect(await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).toEqual([]);
+    expect(await sql<{ match_id: string }[]>`SELECT match_id FROM ranked_rp_changes WHERE match_id = ${fixture.matchId}`).toEqual([]);
+    const [pa] = await sql<{ rp: number }[]>`SELECT rp FROM ranked_profiles WHERE user_id = ${a}`;
+    expect(pa.rp).toBe(450); // unchanged
   });
 
   it('resume: re-writing the identical fixture creates no duplicates', async ({ skip }) => {
@@ -370,5 +378,50 @@ describe('rollback', () => {
 
     // Cleanup the stray ledger row (afterAll deletes the match).
     await sql`DELETE FROM ranked_rp_changes WHERE match_id = ${strayMatchId}`;
+  });
+
+  it('REFUSES on a post-snapshot NON-MATCH xp event (finding 2 false-negative closed)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const a = await seedBot(`bi_nmxp_a_${Date.now()}`);
+    const b = await seedBot(`bi_nmxp_b_${Date.now()}`);
+    const snapshot = await snapshotProfiles([bot(a), bot(b)], {
+      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
+    });
+    const fixture = makeFixture({
+      a, b, winner: a,
+      startedAt: new Date('2026-07-24T17:00:00Z'), endedAt: new Date('2026-07-24T17:05:00Z'),
+      isPlacement: false,
+    });
+    await writeFixture(fixture, 100_000);
+
+    // A NON-match XP event (e.g. a daily challenge) after the snapshot — the old
+    // rollback only inspected match_result XP and would have missed this.
+    await sql`
+      INSERT INTO user_xp_events (user_id, source_type, source_key, xp_delta, metadata)
+      VALUES (${a}, 'daily_challenge_completion', ${`nmxp-${Date.now()}`}, 25, '{}'::jsonb)
+    `;
+    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
+    // Nothing deleted; the burn-in match still present.
+    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
+    await sql`DELETE FROM user_xp_events WHERE user_id = ${a} AND source_type = 'daily_challenge_completion'`;
+  });
+
+  it('REFUSES when the snapshot carries a user beyond the receipt roster', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    const a = await seedBot(`bi_extra_a_${Date.now()}`);
+    const b = await seedBot(`bi_extra_b_${Date.now()}`);
+    const extra = await seedBot(`bi_extra_c_${Date.now()}`);
+    // Snapshot 3 bots but the receipt roster only lists 2.
+    const snapshot = await snapshotProfiles([bot(a), bot(b), bot(extra)], {
+      manifestHash: MANIFEST, seed: 1, env: 'test', ceilingRp: 100_000, humanTop10Rp: 1200, marginRp: 200,
+    });
+    const fixture = makeFixture({
+      a, b, winner: a,
+      startedAt: new Date('2026-07-24T19:00:00Z'), endedAt: new Date('2026-07-24T19:05:00Z'),
+      isPlacement: false,
+    });
+    await writeFixture(fixture, 100_000);
+    await expect(rollback(header([a, b]), [receiptLine(fixture)], snapshot)).rejects.toBeInstanceOf(RollbackRefusedError);
+    expect((await sql<{ id: string }[]>`SELECT id FROM matches WHERE id = ${fixture.matchId}`).length).toBe(1);
   });
 });

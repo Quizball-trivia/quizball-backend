@@ -57,22 +57,23 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
       const s = foreignXp.slice(0, 8).map((x) => `${x.user_id}:${x.source_type}`).join(', ');
       throw new RollbackRefusedError(`refusing: ${foreignXp.length} non-burn-in XP event(s) on roster bots (would be destroyed): ${s}`);
     }
-    // 3. Any achievement sourced from a NON-plan match is a real, non-burn-in
-    // unlock. A NULL-source achievement is NOT foreign: the foreign-match guard
-    // above already proved the bot has ZERO non-plan matches, so — since a
-    // pristine bot starts with no achievements — every achievement present came
-    // from a burn-in fixture (some burn-in unlocks legitimately carry a null
-    // source_match_id, e.g. a progress-then-unlock upsert). Only a source that
-    // points at a match OUTSIDE the plan indicates post-burn-in play.
+    // 3. An UNLOCKED achievement must be attributable to the match that earned
+    // it. A burn-in unlock's source_match_id is IN the plan; anything else — an
+    // unlocked achievement whose source is NULL or points OUTSIDE the plan — is
+    // NOT provably ours, so REFUSE rather than delete it (fail closed). (A row
+    // that is NOT unlocked — unlocked_at IS NULL — is a mere progress tracker
+    // with an inherently-null source; given the foreign-match guard proved zero
+    // non-plan matches and a pristine bot has no achievement rows, such progress
+    // rows are burn-in-created and safe to remove below.)
     const foreignAch = await tx<{ user_id: string; achievement_id: string; source_match_id: string | null }[]>`
       SELECT user_id, achievement_id, source_match_id FROM user_achievements
       WHERE user_id = ANY(${rosterUserIds}::uuid[])
-        AND source_match_id IS NOT NULL
-        AND source_match_id <> ALL(${planMatchIds}::uuid[])
+        AND unlocked_at IS NOT NULL
+        AND (source_match_id IS NULL OR source_match_id <> ALL(${planMatchIds}::uuid[]))
     `;
     if (foreignAch.length > 0) {
-      const s = foreignAch.slice(0, 8).map((a) => `${a.user_id}:${a.achievement_id}`).join(', ');
-      throw new RollbackRefusedError(`refusing: ${foreignAch.length} non-burn-in achievement(s) on roster bots (would be destroyed): ${s}`);
+      const s = foreignAch.slice(0, 8).map((a) => `${a.user_id}:${a.achievement_id}(src=${a.source_match_id ?? 'null'})`).join(', ');
+      throw new RollbackRefusedError(`refusing: ${foreignAch.length} unlocked achievement(s) on roster bots not provably burn-in (null or non-plan source) — would be destroyed: ${s}`);
     }
 
     // ── All roster progression is burn-in-created → safe to reverse to pristine ─
@@ -100,10 +101,15 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
       `;
       matchesDeleted = deleted.length;
     }
-    // Delete ALL roster achievements: the refusal checks above proved none are
-    // sourced from a non-plan match, and a pristine bot had none — so every one
-    // present is a burn-in unlock (plan-sourced or null-sourced).
-    await tx`DELETE FROM user_achievements WHERE user_id = ANY(${rosterUserIds}::uuid[])`;
+    // Delete burn-in achievement rows: UNLOCKED rows sourced from a plan match,
+    // plus not-yet-unlocked progress rows (null source, burn-in-created given the
+    // guards). The refusal above guarantees no unlocked row is foreign/null-src,
+    // so this can never touch a real, non-burn-in achievement.
+    await tx`
+      DELETE FROM user_achievements
+      WHERE user_id = ANY(${rosterUserIds}::uuid[])
+        AND (source_match_id = ANY(${planMatchIds}::uuid[]) OR unlocked_at IS NULL)
+    `;
 
     // Decrement total_xp by exactly the burn-in contribution (never below 0).
     for (const row of xpByUser) {

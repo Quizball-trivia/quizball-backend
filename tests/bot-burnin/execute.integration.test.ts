@@ -306,4 +306,32 @@ describe('rollback', () => {
     const users = await sql<{ total_xp: number }[]>`SELECT total_xp FROM users WHERE id = ANY(${bots.map((b) => b.userId)}::uuid[])`;
     for (const u of users) expect(Number(u.total_xp)).toBe(0);
   });
+
+  it('REFUSES + PRESERVES a null-sourced UNLOCKED non-burn-in achievement (P1)', async ({ skip }) => {
+    if (!dbAvailable) skip();
+    await clearMarker();
+    const bots = await Promise.all([seedBot(61, -0.3), seedBot(62, 0.2), seedBot(63, 0.0), seedBot(64, 0.1)]);
+    const { matchIds } = await execute(bots, 100_000);
+
+    // A real, non-burn-in UNLOCKED achievement with a NULL source (the exact
+    // case Sol flagged — must NOT be silently deleted).
+    await sql`
+      INSERT INTO user_achievements (user_id, achievement_id, progress, unlocked_at, source_match_id)
+      VALUES (${bots[0].userId}, 'quiz_legend_placeholder', 1, NOW(), NULL)
+      ON CONFLICT (user_id, achievement_id) DO NOTHING
+    `;
+
+    // Rollback must REFUSE (would destroy the null-sourced unlocked achievement).
+    await expect(rollbackBurnIn(matchIds, bots.map((b) => b.userId))).rejects.toBeInstanceOf(RollbackRefusedError);
+    const survived = await sql<{ achievement_id: string }[]>`
+      SELECT achievement_id FROM user_achievements WHERE user_id = ${bots[0].userId} AND achievement_id = 'quiz_legend_placeholder'
+    `;
+    expect(survived.length).toBe(1); // preserved, not deleted
+    const [{ c }] = await sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM matches WHERE id = ANY(${matchIds}::uuid[])`;
+    expect(c).toBe(matchIds.length); // nothing deleted
+
+    // Remove the injected achievement, then rollback cleanly for teardown.
+    await sql`DELETE FROM user_achievements WHERE user_id = ${bots[0].userId} AND achievement_id = 'quiz_legend_placeholder'`;
+    await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
+  });
 });

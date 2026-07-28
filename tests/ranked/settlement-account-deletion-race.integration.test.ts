@@ -230,14 +230,24 @@ describe('ranked settlement vs account-deletion finalization', () => {
       SELECT rp, tier FROM ranked_profiles WHERE user_id = ${winner}
     `;
 
-    // Finalization always wins the race in the end-state sense: once the account
-    // is finalized its ranked standing must be zero, never resurrected RP.
-    if (winnerUser?.is_deleted) {
-      expect(winnerProfile?.rp).toBe(0);
-      expect(winnerProfile?.tier).toBe('Academy');
-    }
+    // Eligibility for finalization depends only on the time columns, so the
+    // account is deterministically finalized once both promises resolve.
+    // Asserted unconditionally — a conditional would silently pass if the
+    // premise ever broke.
+    expect(winnerUser?.is_deleted).toBe(true);
+    expect(winnerProfile?.rp).toBe(0);
+    expect(winnerProfile?.tier).toBe('Academy');
 
-    // The live opponent settles regardless of how the race resolved.
+    // Either order is legitimate — settlement may commit while the account is
+    // still active and finalization then zeroes it, or finalization may win and
+    // settlement skips the participant. What must NEVER happen is a duplicate
+    // ledger row, or (asserted above) surviving RP on the finalized account.
+    const winnerLedger = await sql<{ user_id: string }[]>`
+      SELECT user_id FROM ranked_rp_changes WHERE match_id = ${matchId} AND user_id = ${winner}
+    `;
+    expect(winnerLedger.length).toBeLessThanOrEqual(1);
+
+    // The live opponent settles exactly once regardless of how the race resolved.
     const loserLedger = await sql<{ user_id: string }[]>`
       SELECT user_id FROM ranked_rp_changes WHERE match_id = ${matchId} AND user_id = ${loser}
     `;

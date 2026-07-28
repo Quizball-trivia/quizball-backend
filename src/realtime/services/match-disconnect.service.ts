@@ -991,8 +991,11 @@ export async function resumePausedMatch(
   const otherDisconnected = disconnectedBeforeResume.filter((disconnectedUserId) => disconnectedUserId !== userId);
   if (otherDisconnected.length > 0) {
     if (userWasDisconnected) {
-      await redis.del(matchDisconnectKey(matchId, userId));
+      // Fence BEFORE clearing the marker: between the two there is a window
+      // where a late disconnect for the just-cleared episode would see no fence
+      // and count as fresh — the very bug this fences against.
       await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
+      await redis.del(matchDisconnectKey(matchId, userId));
     }
     const disconnectedOpponentId = otherDisconnected[0];
     if (!disconnectedOpponentId) return;
@@ -1038,8 +1041,11 @@ export async function resumePausedMatch(
     await cancelRealtimeTimer('match_disconnect_forfeit', matchId);
     await redis.del(matchGraceKey(matchId));
     if (disconnectedBeforeResume.includes(userId)) {
-      await redis.del(matchDisconnectKey(matchId, userId));
+      // Fence BEFORE clearing the marker: between the two there is a window
+      // where a late disconnect for the just-cleared episode would see no fence
+      // and count as fresh — the very bug this fences against.
       await fenceDisconnectCountOnResume(matchId, userId, resumedSocketId);
+      await redis.del(matchDisconnectKey(matchId, userId));
     }
     for (const exitPendingUserId of exitPendingUserIds) {
       await redis.del(matchExitPendingKey(matchId, exitPendingUserId));
@@ -1111,8 +1117,8 @@ export async function resumePausedMatch(
         );
       if (blockingDisconnectedUserIds.length > 0) {
         for (const recoveredUserId of reconnectingDisconnectedUserIds) {
-          await redis.del(matchDisconnectKey(matchId, recoveredUserId));
           await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
+          await redis.del(matchDisconnectKey(matchId, recoveredUserId));
         }
         const blockingDisconnectedUserId = blockingDisconnectedUserIds[0]!;
         const blockingMarkerRaw = await redis.get(
@@ -1141,8 +1147,8 @@ export async function resumePausedMatch(
       }
 
       for (const recoveredUserId of reconnectingDisconnectedUserIds) {
-        await redis.del(matchDisconnectKey(matchId, recoveredUserId));
         await fenceDisconnectCountOnResume(matchId, recoveredUserId, recoveredUserId === userId ? resumedSocketId : undefined);
+        await redis.del(matchDisconnectKey(matchId, recoveredUserId));
       }
       await redis.del(matchGraceKey(matchId));
       await redis.del(matchGraceExtendedKey(matchId));

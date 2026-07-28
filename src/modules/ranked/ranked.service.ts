@@ -5,7 +5,8 @@ import { trackRankPointsChanged } from '../../core/analytics/game-events.js';
 import { matchesRepo } from '../matches/matches.repo.js';
 import { matchPlayersRepo } from '../matches/match-players.repo.js';
 import { usersRepo } from '../users/users.repo.js';
-import { isRankedSettleEligible } from '../users/ai-classification.js';
+import { isPersistentBot, isRankedSettleEligible } from '../users/ai-classification.js';
+import { governorService } from '../bots/governor/governor.service.js';
 import { storeRepo } from '../store/store.repo.js';
 import type { Json } from '../../db/types.js';
 import { rankedRepo } from './ranked.repo.js';
@@ -628,6 +629,29 @@ export const rankedService = {
       if (settledUser && settledUser.is_ai) continue;
       const o = entry.outcome;
       trackRankPointsChanged(o.userId, o.oldRp, o.newRp, o.isPlacement ? 'placement' : 'ranked_match');
+    }
+
+    // Rubber-band governor (PR9): fold this result into each PERSISTENT BOT's
+    // win-rate EMA and re-evaluate its effective-skill offset. Only FRESHLY
+    // settled entries (a replay must not double-count a sample) and only
+    // matches against a HUMAN opponent — the 40-45%/45-55% targets are defined
+    // against humans, and a bot-vs-bot result would be a self-referential
+    // signal. Awaited so the write lands before the reservation is released
+    // (possession-completion releases only after settlement returns), but the
+    // service swallows its own errors so a governor fault can never fail
+    // settlement or strand a reservation.
+    for (const entry of settlementEntries) {
+      const settledUser = byUserId.get(entry.outcome.userId);
+      if (!settledUser || !isPersistentBot(settledUser)) continue;
+      const opponentUserId = entry.change.opponentUserId;
+      const opponentUser = opponentUserId ? byUserId.get(opponentUserId) : null;
+      if (!opponentUser || opponentUser.is_ai) continue;
+      await governorService.recordSettledMatch({
+        botUserId: entry.outcome.userId,
+        botRp: entry.outcome.newRp,
+        won: entry.change.result === 'win',
+        matchId,
+      });
     }
 
     return outcome;

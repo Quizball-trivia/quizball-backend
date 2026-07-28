@@ -145,9 +145,16 @@ export const rankedRepo = {
    *   created_at and the profile's last_ranked_match_at/updated_at. Defaults to
    *   NOW() so the LIVE settlement path is byte-identical. ONLY the one-time
    *   persistent-bot burn-in writer passes an explicit historical value.
+   *
+   * @returns the user_ids whose ledger row THIS call actually inserted. A caller
+   *   racing another settlement of the same match loses the ON CONFLICT and gets
+   *   those users back OMITTED, so post-write side effects (analytics, governor)
+   *   fire exactly once per settled participant instead of once per replica.
+   *   Participants skipped as finalized accounts are omitted too.
    */
-  async applySettlement(entries: RankedSettlementEntry[], occurredAt?: Date): Promise<void> {
-    if (entries.length === 0) return;
+  async applySettlement(entries: RankedSettlementEntry[], occurredAt?: Date): Promise<Set<string>> {
+    const appliedUserIds = new Set<string>();
+    if (entries.length === 0) return appliedUserIds;
 
     try {
       logger.info({
@@ -157,8 +164,41 @@ export const rankedRepo = {
       }, 'Ranked settlement DB transaction starting');
 
       await sql.begin(async (tx) => {
+        // Serialize against finalize_pending_account_deletions(), which holds
+        // `SELECT ... FOR UPDATE` on public.users while it anonymizes the account
+        // and zeroes its ranked_profiles row. Locking the same rows here means the
+        // two can only run one after the other, so the recheck below sees a
+        // settled truth rather than a torn one.
+        //
+        // Ordered by user_id (and locked in ONE statement) so two concurrent
+        // settlements touching the same pair of users always take the locks in the
+        // same order and cannot deadlock.
+        const lockedUserIds = [...new Set(entries.map((entry) => entry.change.userId))].sort();
+        // postgres.js types TransactionSql via Omit<Sql, …>, which drops the
+        // tagged-template call signatures; the runtime object still supports them.
+        const txSql = tx as unknown as typeof sql;
+        const activeRows = await txSql<{ id: string }[]>`
+          SELECT id FROM users
+          WHERE id = ANY(${sql.array(lockedUserIds)}::uuid[])
+            AND is_deleted = false
+            AND deleted_at IS NULL
+          ORDER BY id
+          FOR UPDATE
+        `;
+        const activeUserIds = new Set(activeRows.map((row) => row.id));
+
         for (const entry of entries) {
-          await tx.unsafe(
+          // The account was finalized between the eligibility read and this
+          // transaction. Skip ONLY this participant — the opponent's settlement is
+          // independent and must still land.
+          if (!activeUserIds.has(entry.change.userId)) {
+            logger.warn({
+              matchId: entry.change.matchId,
+              userId: entry.change.userId,
+            }, 'Ranked settlement skipped participant: account finalized before the write');
+            continue;
+          }
+          const appliedRows = await tx.unsafe<{ applied: boolean }[]>(
             `
             WITH inserted AS (
               INSERT INTO ranked_rp_changes (
@@ -203,16 +243,22 @@ export const rankedRepo = {
               WHERE user_id = $24
                 AND EXISTS (SELECT 1 FROM inserted)
               RETURNING 1
-            )
+            ),
             -- Coin participation reward (win/loss). Gated on the rp-change
             -- insert so the idempotent re-settlement path never double-pays.
-            UPDATE users
-            SET
-              coins = coins + $25,
-              updated_at = COALESCE($26::timestamptz, NOW())
-            WHERE id = $24
-              AND $25 > 0
-              AND EXISTS (SELECT 1 FROM inserted)
+            coins_awarded AS (
+              UPDATE users
+              SET
+                coins = coins + $25,
+                updated_at = COALESCE($26::timestamptz, NOW())
+              WHERE id = $24
+                AND $25 > 0
+                AND EXISTS (SELECT 1 FROM inserted)
+              RETURNING 1
+            )
+            -- Did THIS statement insert the ledger row? Lets the caller fire the
+            -- post-write side effects exactly once per settled participant.
+            SELECT EXISTS (SELECT 1 FROM inserted) AS applied
             `,
             [
               entry.change.matchId,
@@ -243,6 +289,9 @@ export const rankedRepo = {
               occurredAt ?? null,
             ]
           );
+          if (appliedRows[0]?.applied === true) {
+            appliedUserIds.add(entry.change.userId);
+          }
         }
       });
 
@@ -250,6 +299,7 @@ export const rankedRepo = {
         entryCount: entries.length,
         matchIds: [...new Set(entries.map((entry) => entry.change.matchId))],
         userIds: entries.map((entry) => entry.change.userId),
+        appliedUserIds: [...appliedUserIds],
       }, 'Ranked settlement DB transaction committed');
     } catch (error) {
       logger.error({
@@ -269,6 +319,8 @@ export const rankedRepo = {
       }, 'Ranked settlement DB transaction failed');
       throw error;
     }
+
+    return appliedUserIds;
   },
 
   /**

@@ -17,6 +17,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import { buildStandings, bumpStateVersion } from '../match-utils.js';
@@ -206,6 +207,7 @@ async function completePartyQuizDropoutMatch(params: {
         matchDisconnectKey(match.id, player.user_id),
         matchPresenceKey(match.id, player.user_id),
         matchReconnectCountKey(match.id, player.user_id),
+        matchReconnectFenceKey(match.id, player.user_id),
         matchPartyDropoutPendingUserKey(player.user_id),
       ]),
     ]);

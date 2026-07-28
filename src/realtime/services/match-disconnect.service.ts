@@ -28,6 +28,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import {
@@ -202,6 +203,7 @@ function possessionTerminalCleanupKeys(matchId: string, roster: PossessionTermin
       matchExitPendingKey(matchId, player.user_id),
       matchPresenceKey(matchId, player.user_id),
       matchReconnectCountKey(matchId, player.user_id),
+      matchReconnectFenceKey(matchId, player.user_id),
     ]),
   ];
 }
@@ -455,11 +457,51 @@ export async function getDisconnectCount(matchId: string, userId: string): Promi
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/**
+ * Stamp the reconnect fence at a COMPLETED rejoin. Clearing the disconnect
+ * episode marker alone is not enough: the marker is the only thing that stops a
+ * duplicate handler double-counting, and once resume deletes it a still-in-flight
+ * disconnect for the OLD connection looks like a brand-new episode. That is how a
+ * reconnected player accrued extra disconnects and eventually tripped the
+ * reconnect-limit fast path, which forfeits with `definiteForfeiterUserId` and so
+ * bypasses every presence guard.
+ *
+ * Deliberately a fence, not a reset: the budget still shrinks across genuinely new
+ * disconnects, so a player cannot drop forever by rejoining in between.
+ */
+export async function fenceDisconnectCountOnResume(matchId: string, userId: string): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  await redis.set(matchReconnectFenceKey(matchId, userId), String(Date.now()), { EX: FORFEIT_TTL_SEC });
+}
+
+/**
+ * True when this disconnect belongs to a connection the player has already
+ * recovered from (it connected at or before the last completed rejoin).
+ * Fails SAFE: an unknown connection age still counts, so the excused-exit call
+ * site that passes no timestamp keeps its current behaviour.
+ */
+async function isFencedStaleDisconnect(
+  matchId: string,
+  userId: string,
+  disconnectedConnectedAt: number | undefined
+): Promise<boolean> {
+  if (typeof disconnectedConnectedAt !== 'number') return false;
+  const redis = getRedisClient();
+  if (!redis) return false;
+  const raw = await redis.get(matchReconnectFenceKey(matchId, userId));
+  const fencedAtMs = Number(raw);
+  if (!Number.isFinite(fencedAtMs) || fencedAtMs <= 0) return false;
+  return disconnectedConnectedAt <= fencedAtMs;
+}
+
 async function incrementDisconnectCount(matchId: string, userId: string): Promise<number> {
   const redis = getRedisClient();
   if (!redis) return 0;
-  const nextCount = (await getDisconnectCount(matchId, userId)) + 1;
-  await redis.set(matchReconnectCountKey(matchId, userId), String(nextCount), { EX: FORFEIT_TTL_SEC });
+  // Atomic INCR: the previous read-modify-write let two concurrent pauses both
+  // read N and both write N+1, losing a count.
+  const nextCount = await redis.incr(matchReconnectCountKey(matchId, userId));
+  await redis.expire(matchReconnectCountKey(matchId, userId), FORFEIT_TTL_SEC);
   return nextCount;
 }
 
@@ -929,6 +971,7 @@ export async function resumePausedMatch(
   if (otherDisconnected.length > 0) {
     if (userWasDisconnected) {
       await redis.del(matchDisconnectKey(matchId, userId));
+      await fenceDisconnectCountOnResume(matchId, userId);
     }
     const disconnectedOpponentId = otherDisconnected[0];
     if (!disconnectedOpponentId) return;
@@ -975,6 +1018,7 @@ export async function resumePausedMatch(
     await redis.del(matchGraceKey(matchId));
     if (disconnectedBeforeResume.includes(userId)) {
       await redis.del(matchDisconnectKey(matchId, userId));
+      await fenceDisconnectCountOnResume(matchId, userId);
     }
     for (const exitPendingUserId of exitPendingUserIds) {
       await redis.del(matchExitPendingKey(matchId, exitPendingUserId));
@@ -1047,6 +1091,7 @@ export async function resumePausedMatch(
       if (blockingDisconnectedUserIds.length > 0) {
         for (const recoveredUserId of reconnectingDisconnectedUserIds) {
           await redis.del(matchDisconnectKey(matchId, recoveredUserId));
+          await fenceDisconnectCountOnResume(matchId, recoveredUserId);
         }
         const blockingDisconnectedUserId = blockingDisconnectedUserIds[0]!;
         const blockingMarkerRaw = await redis.get(
@@ -1076,6 +1121,7 @@ export async function resumePausedMatch(
 
       for (const recoveredUserId of reconnectingDisconnectedUserIds) {
         await redis.del(matchDisconnectKey(matchId, recoveredUserId));
+        await fenceDisconnectCountOnResume(matchId, recoveredUserId);
       }
       await redis.del(matchGraceKey(matchId));
       await redis.del(matchGraceExtendedKey(matchId));
@@ -1358,8 +1404,43 @@ export async function pauseMatchForDisconnectedPlayer(
   //      that is not the user's only active match UI. A bare user/site socket is
   //      not enough: it can be on the menu while the player is absent from the
   //      actual match UI; or
+  //  (c) the disconnecting connection predates the last COMPLETED rejoin
+  //      (fencedStaleDisconnect). Resume deletes the marker, so without this a
+  //      late-landing disconnect for the pre-rejoin socket would look like a new
+  //      episode and eat another reconnect.
   // The marker is cleared on resume, so a genuinely new disconnect counts again.
-  const alreadyDisconnected = (await redis.exists(matchDisconnectKey(matchId, userId))) === 1;
+  //
+  // The fence is checked BEFORE the marker is claimed: a disconnect for a
+  // connection the player already recovered from must not re-open a disconnect
+  // episode at all (it would re-pause a healthy match and re-arm the forfeit
+  // timer), not merely be excluded from the count.
+  const fencedStaleDisconnect = await isFencedStaleDisconnect(
+    matchId,
+    userId,
+    options.disconnectedConnectedAt
+  );
+  if (fencedStaleDisconnect) {
+    logger.info(
+      { matchId, userId, variant, disconnectedConnectedAt: options.disconnectedConnectedAt },
+      'Match disconnect pause skipped: connection predates the last completed rejoin'
+    );
+    return {
+      graceMs: MATCH_DISCONNECT_GRACE_MS,
+      remainingReconnects: toRemainingReconnects(await getDisconnectCount(matchId, userId)),
+      finalized: false,
+    };
+  }
+
+  // The marker is CLAIMED atomically (SET NX) rather than read here and written
+  // further down: two handlers for the same episode could both observe "no
+  // marker" in that gap and both charge a reconnect. The claim is the episode
+  // admission ticket — exactly one caller can win it.
+  const claimedEpisode = await redis.set(
+    matchDisconnectKey(matchId, userId),
+    String(disconnectedAtMs),
+    { NX: true, EX: DISCONNECT_TTL_SEC }
+  );
+  const alreadyDisconnected = claimedEpisode === null;
   const skipCount = alreadyDisconnected || matchUiReplacementSocketPresent;
   const disconnectCount = skipCount
     ? await getDisconnectCount(matchId, userId)
@@ -1388,7 +1469,10 @@ export async function pauseMatchForDisconnectedPlayer(
     },
     'Match disconnect pause requested'
   );
-  await redis.set(matchDisconnectKey(matchId, userId), String(disconnectedAtMs), { EX: DISCONNECT_TTL_SEC });
+  // The marker was already claimed above (SET NX). Only refresh its TTL, so a
+  // duplicate handler for the same episode cannot slide the recorded
+  // disconnected-at forward and silently extend the grace window.
+  await redis.expire(matchDisconnectKey(matchId, userId), DISCONNECT_TTL_SEC);
   if (variant === 'friendly_party_quiz') {
     await redis.set(matchPauseKey(matchId), String(disconnectedAtMs), { NX: true, EX: PRESENCE_TTL_SEC });
   } else {

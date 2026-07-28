@@ -22,6 +22,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
 } from '../match-keys.js';
 import { rankedAiMatchKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
@@ -590,6 +591,7 @@ export async function handleMatchForfeit(
           matchExitPendingKey(activeMatch.id, player.user_id),
           matchPresenceKey(activeMatch.id, player.user_id),
           matchReconnectCountKey(activeMatch.id, player.user_id),
+          matchReconnectFenceKey(activeMatch.id, player.user_id),
         ]),
         rankedAiMatchKey(activeMatch.id),
       ];

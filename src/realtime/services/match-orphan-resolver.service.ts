@@ -14,6 +14,7 @@ import {
   matchPauseKey,
   matchPresenceKey,
   matchReconnectCountKey,
+  matchReconnectFenceKey,
   matchResumeCountdownKey,
 } from '../match-keys.js';
 import {
@@ -45,6 +46,7 @@ export function orphanMatchCleanupKeys(matchId: string, userIds: string[]): stri
       matchDisconnectKey(matchId, userId),
       matchPresenceKey(matchId, userId),
       matchReconnectCountKey(matchId, userId),
+      matchReconnectFenceKey(matchId, userId),
     ]),
   ];
 }

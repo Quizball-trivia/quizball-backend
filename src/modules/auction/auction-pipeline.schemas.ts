@@ -47,6 +47,14 @@ export const auctionPipelineStatsResponseSchema = z.object({
     rejected_families: z.number().int(),
     failed_families: z.number().int(),
     pass_rate: z.number().nullable(),
+    recent_pass_rates: z.array(
+      z.object({
+        hours: z.number().int(),
+        published: z.number().int(),
+        terminal: z.number().int(),
+        pass_rate: z.number().nullable(),
+      })
+    ),
     eligible_players: z.number().int(),
     players_done: z.number().int(),
     players_remaining: z.number().int(),
@@ -110,6 +118,8 @@ export const auctionPipelinePromptSchema = z.object({
 
 export const auctionPipelinePromptsResponseSchema = z.object({
   items: z.array(auctionPipelinePromptSchema),
+  /** Read-only assembled prompt text published by the runner, keyed by prompt key. */
+  effective: z.record(z.string(), auctionPipelinePromptSchema),
 });
 
 export const auctionPipelinePromptKeyParamSchema = z.object({

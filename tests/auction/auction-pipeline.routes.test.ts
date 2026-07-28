@@ -46,6 +46,10 @@ const STATS_FIXTURE = {
     rejected_families: 153,
     failed_families: 35,
     pass_rate: 0.442,
+    recent_pass_rates: [
+      { hours: 2, published: 24, terminal: 47, pass_rate: 0.511 },
+      { hours: 24, published: 97, terminal: 308, pass_rate: 0.315 },
+    ],
     eligible_players: 1979,
     players_done: 153,
     players_remaining: 1826,
@@ -137,20 +141,31 @@ describe('Admin Auction Pipeline Routes', () => {
 
   describe('GET /api/v1/admin/auction-pipeline/prompts', () => {
     it('wraps prompts in an items envelope', async () => {
-      (auctionPipelineService.listPrompts as Mock).mockResolvedValue([
-        {
-          key: 'generator_rules',
-          text: 'Be terse.',
-          updated_at: '2026-07-28T00:00:00.000Z',
-          updated_by: 'admin',
+      (auctionPipelineService.listPrompts as Mock).mockResolvedValue({
+        items: [
+          {
+            key: 'generator_rules',
+            text: 'Be terse.',
+            updated_at: '2026-07-28T00:00:00.000Z',
+            updated_by: 'admin',
+          },
+        ],
+        effective: {
+          generator_rules: {
+            key: 'generator_rules:effective',
+            text: '1. Return strict JSON only.',
+            updated_at: '2026-07-28T00:00:00.000Z',
+            updated_by: 'runner',
+          },
         },
-      ]);
+      });
 
       const response = await request(app).get('/api/v1/admin/auction-pipeline/prompts');
 
       expect(response.status).toBe(200);
       expect(response.body.items).toHaveLength(1);
       expect(response.body.items[0].key).toBe('generator_rules');
+      expect(response.body.effective.generator_rules.text).toContain('strict JSON');
     });
   });
 
@@ -182,6 +197,15 @@ describe('Admin Auction Pipeline Routes', () => {
 
       expect(response.status).toBe(422);
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(auctionPipelineService.savePrompt).not.toHaveBeenCalled();
+    });
+
+    it('rejects an :effective key as not editable', async () => {
+      const response = await request(app)
+        .put('/api/v1/admin/auction-pipeline/prompts/generator_rules:effective')
+        .send({ text: 'x' });
+
+      expect(response.status).toBe(422);
       expect(auctionPipelineService.savePrompt).not.toHaveBeenCalled();
     });
 

@@ -28,10 +28,15 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_workers_updated
   ON public.pipeline_workers (updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS public.pipeline_prompts (
+  -- Editable override rows use the bare key; the runner also publishes the
+  -- assembled read-only text it will actually send under '<key>:effective'.
   key text PRIMARY KEY CHECK (
     key IN (
       'generator_rules', 'verifier_rules', 'judge_rules',
-      'variant_medium', 'variant_hard'
+      'variant_medium', 'variant_hard',
+      'generator_rules:effective', 'verifier_rules:effective',
+      'judge_rules:effective', 'variant_medium:effective',
+      'variant_hard:effective'
     )
   ),
   text text NOT NULL,

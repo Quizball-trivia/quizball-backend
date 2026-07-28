@@ -48,6 +48,13 @@ export interface AuctionPipelinePoolCounts {
   players_with_published_card: number;
 }
 
+export interface AuctionPipelineWindowRate {
+  hours: number;
+  published: number;
+  terminal: number;
+  pass_rate: number | null;
+}
+
 export interface AuctionPipelineTotals {
   total_tasks: number;
   terminal_families: number;
@@ -55,6 +62,8 @@ export interface AuctionPipelineTotals {
   rejected_families: number;
   failed_families: number;
   pass_rate: number | null;
+  /** Recent windows, newest first (2h then 24h). */
+  recent_pass_rates: AuctionPipelineWindowRate[];
   eligible_players: number;
   players_done: number;
   players_remaining: number;

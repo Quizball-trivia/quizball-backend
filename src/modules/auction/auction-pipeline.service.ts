@@ -10,6 +10,9 @@ import type {
 
 const TERMINAL_STAGES = ['published', 'rejected', 'failed'] as const;
 
+/** Suffix the runner uses for the read-only assembled prompt text. */
+const EFFECTIVE_SUFFIX = ':effective';
+
 function stageCount(stages: AuctionPipelineStageCount[], stage: string): number {
   return stages.find((entry) => entry.stage === stage)?.count ?? 0;
 }
@@ -30,6 +33,8 @@ export const auctionPipelineService = {
       recentFailures,
       latestSnapshot,
       pool,
+      recent2h,
+      recent24h,
     ] = await Promise.all([
       auctionPipelineRepo.getTaskStageCounts(),
       auctionPipelineRepo.getTaskVariantCounts(),
@@ -39,6 +44,8 @@ export const auctionPipelineService = {
       auctionPipelineRepo.getRecentFailures(),
       auctionPipelineRepo.getLatestSnapshot(),
       auctionPipelineRepo.getPoolCounts(),
+      auctionPipelineRepo.getRecentOutcomes(2),
+      auctionPipelineRepo.getRecentOutcomes(24),
     ]);
 
     const totalTasks = stages.reduce((sum, entry) => sum + entry.count, 0);
@@ -62,6 +69,10 @@ export const auctionPipelineService = {
         rejected_families: rejectedFamilies,
         failed_families: failedFamilies,
         pass_rate: ratio(publishedFamilies, terminalFamilies),
+        recent_pass_rates: [
+          { hours: 2, ...recent2h, pass_rate: ratio(recent2h.published, recent2h.terminal) },
+          { hours: 24, ...recent24h, pass_rate: ratio(recent24h.published, recent24h.terminal) },
+        ],
         eligible_players: pool.eligible_players,
         players_done: playersDone,
         players_remaining: playersRemaining,
@@ -89,8 +100,27 @@ export const auctionPipelineService = {
     return { workers, live: workers.length - stale, stale };
   },
 
-  async listPrompts(): Promise<AuctionPipelinePrompt[]> {
-    return auctionPipelineRepo.listPrompts();
+  /**
+   * Splits the table into operator-editable overrides and the runner-published
+   * read-only text, so the CMS never renders an ':effective' row as editable.
+   */
+  async listPrompts(): Promise<{
+    items: AuctionPipelinePrompt[];
+    effective: Record<string, AuctionPipelinePrompt>;
+  }> {
+    const rows = await auctionPipelineRepo.listPrompts();
+    const items: AuctionPipelinePrompt[] = [];
+    const effective: Record<string, AuctionPipelinePrompt> = {};
+
+    for (const row of rows) {
+      if (row.key.endsWith(EFFECTIVE_SUFFIX)) {
+        effective[row.key.slice(0, -EFFECTIVE_SUFFIX.length)] = row;
+      } else {
+        items.push(row);
+      }
+    }
+
+    return { items, effective };
   },
 
   async savePrompt(

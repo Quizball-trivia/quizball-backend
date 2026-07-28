@@ -7558,6 +7558,33 @@
                 "type": "number",
                 "nullable": true
               },
+              "recent_pass_rates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "hours": {
+                      "type": "integer"
+                    },
+                    "published": {
+                      "type": "integer"
+                    },
+                    "terminal": {
+                      "type": "integer"
+                    },
+                    "pass_rate": {
+                      "type": "number",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "hours",
+                    "published",
+                    "terminal",
+                    "pass_rate"
+                  ]
+                }
+              },
               "eligible_players": {
                 "type": "integer"
               },
@@ -7579,6 +7606,7 @@
               "rejected_families",
               "failed_families",
               "pass_rate",
+              "recent_pass_rates",
               "eligible_players",
               "players_done",
               "players_remaining",
@@ -7891,10 +7919,38 @@
                 "updated_by"
               ]
             }
+          },
+          "effective": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "updated_by": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "key",
+                "text",
+                "updated_at",
+                "updated_by"
+              ]
+            }
           }
         },
         "required": [
-          "items"
+          "items",
+          "effective"
         ]
       },
       "AuctionPipelinePrompt": {

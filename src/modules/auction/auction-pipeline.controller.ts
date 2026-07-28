@@ -18,8 +18,8 @@ export const auctionPipelineController = {
   },
 
   async listPrompts(_req: Request, res: Response): Promise<void> {
-    const items = await auctionPipelineService.listPrompts();
-    res.json({ items });
+    const result = await auctionPipelineService.listPrompts();
+    res.json(result);
   },
 
   async savePrompt(req: Request, res: Response): Promise<void> {

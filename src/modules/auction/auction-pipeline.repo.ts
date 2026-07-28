@@ -48,6 +48,25 @@ export const auctionPipelineRepo = {
     return rows.map((row) => ({ stage: row.stage, count: parseCount(row.count) }));
   },
 
+  /**
+   * Terminal outcomes within a recent window, keyed off completed_at. The
+   * all-time pass rate is dominated by early fix-era failures, so the CMS
+   * needs a rate that reflects how the pipeline is behaving now.
+   */
+  async getRecentOutcomes(hours: number): Promise<{ published: number; terminal: number }> {
+    const [row] = await sql<{ published: string | number; terminal: string | number }[]>`
+      SELECT
+        COUNT(*) FILTER (WHERE stage = 'published')::text AS published,
+        COUNT(*)::text AS terminal
+      FROM card_generation_tasks
+      WHERE stage IN ('published', 'rejected', 'failed')
+        AND completed_at IS NOT NULL
+        AND completed_at >= now() - make_interval(hours => ${hours})
+    `;
+
+    return { published: parseCount(row?.published), terminal: parseCount(row?.terminal) };
+  },
+
   async getTaskVariantCounts(): Promise<AuctionPipelineVariantCount[]> {
     const rows = await sql<{
       variant_key: string;

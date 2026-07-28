@@ -24,6 +24,8 @@ let buildSchedule: typeof import('../../scripts/bot-burnin/scheduler.js').buildS
 let buildManifest: typeof import('../../scripts/bot-burnin/manifest.js').buildManifest;
 let manifestHashFn: typeof import('../../scripts/bot-burnin/manifest.js').manifestHash;
 let writeFixtureInTx: typeof import('../../scripts/bot-burnin/writer.js').writeFixtureInTx;
+let writeSeededProfilesInTx: typeof import('../../scripts/bot-burnin/writer.js').writeSeededProfilesInTx;
+let seedRosterBots: typeof import('../../scripts/bot-burnin/s2-distribution.js').seedRosterBots;
 let rollbackBurnIn: typeof import('../../scripts/bot-burnin/rollback-core.js').rollbackBurnIn;
 let RollbackRefusedError: typeof import('../../scripts/bot-burnin/rollback-core.js').RollbackRefusedError;
 let params: import('../../src/modules/bots/calibration/params-schema.js').BotModelParams;
@@ -59,7 +61,7 @@ async function clearMarker() {
 
 /** Plan for a roster + return {manifestHash, matchIds, fixtures}. */
 function plan(bots: BurnInBot[], ceilingRp: number) {
-  const manifest = buildManifest({ seed: 42, seasonStart: SEASON_START, seasonEnd: SEASON_END, targetMatches: 6, ceilingMarginRp: 200, params, bots, categoryIds });
+  const manifest = buildManifest({ seed: 42, seasonStart: SEASON_START, seasonEnd: SEASON_END, targetMatches: 6, ceilingMarginRp: 50, params, bots, categoryIds });
   const manifestHash = manifestHashFn(manifest);
   const schedule = buildSchedule({ bots, params, seed: 42, seasonStart: SEASON_START, runDate: SEASON_END, targetMatches: 6, ceilingRp, categoryIds, manifestHash });
   return { manifestHash, schedule, ceilingRp };
@@ -76,9 +78,7 @@ async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: num
   const fixtures = schedule.fixtures;
   const alreadyWritten = await data.validatedExistingMatchIds(fixtures);
   const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
-  const writtenBots = new Set<string>();
-  for (const f of fixtures) if (alreadyWritten.has(f.matchId)) { writtenBots.add(f.botAUserId); writtenBots.add(f.botBUserId); }
-  const untouchedBotIds = rosterIds.filter((id) => !writtenBots.has(id));
+  const seededBots = seedRosterBots(bots, 42, ceilingRp);
 
   const CHUNK = opts.chunk ?? 250;
   const chunkArr: (typeof remaining)[] = [];
@@ -95,10 +95,11 @@ async function execute(bots: BurnInBot[], ceilingRp: number, opts: { chunk?: num
       await data.lockBurnIn(tx);
       if (isFirst) {
         runId = await data.claimRunning(tx, manifestHash, 42, ceilingRp);
-        if (untouchedBotIds.length > 0) {
-          await data.lockRosterGateRows(tx, untouchedBotIds);
-          const violations = await data.findNonPristineBots(tx, untouchedBotIds);
+        if (alreadyWritten.size === 0) {
+          await data.lockRosterGateRows(tx, rosterIds);
+          const violations = await data.findNonPristineBots(tx, rosterIds);
           if (violations.length > 0) throw new Error(`not pristine: ${violations.map((v) => v.nickname).join(',')}`);
+          await writeSeededProfilesInTx(tx, seededBots);
         }
       } else {
         await data.assertRunClaim(tx, manifestHash, runId!);
@@ -122,7 +123,8 @@ beforeAll(async () => {
     data = await import('../../scripts/bot-burnin/data.js');
     ({ buildSchedule } = await import('../../scripts/bot-burnin/scheduler.js'));
     ({ buildManifest, manifestHash: manifestHashFn } = await import('../../scripts/bot-burnin/manifest.js'));
-    ({ writeFixtureInTx } = await import('../../scripts/bot-burnin/writer.js'));
+    ({ writeFixtureInTx, writeSeededProfilesInTx } = await import('../../scripts/bot-burnin/writer.js'));
+    ({ seedRosterBots } = await import('../../scripts/bot-burnin/s2-distribution.js'));
     ({ rollbackBurnIn, RollbackRefusedError } = await import('../../scripts/bot-burnin/rollback-core.js'));
     params = (await import('../../src/modules/bots/calibration/params-schema.js')).parseBotModelParams(
       JSON.parse(readFileSync(resolve(__dirname, 'fixtures/params.json'), 'utf8')),
@@ -273,6 +275,35 @@ describe('execute (chunked)', () => {
     const marker = await data.readBurnInMarker();
     expect(marker?.manifestHash).toBe(manifestHash);
     expect(marker?.status).toBe('complete');
+    const seeds = new Map(seedRosterBots(bots, 42, 100_000).map((bot) => [bot.userId, bot.seededRp]));
+    const profiles = await sql<{
+      user_id: string;
+      placement_status: string;
+      placement_played: number;
+      placement_seed_rp: number | null;
+      placement_perf_sum: number;
+      placement_points_for_sum: number;
+      placement_points_against_sum: number;
+    }[]>`
+      SELECT user_id, placement_status, placement_played, placement_seed_rp,
+             placement_perf_sum, placement_points_for_sum, placement_points_against_sum
+      FROM ranked_profiles
+      WHERE user_id = ANY(${bots.map((bot) => bot.userId)}::uuid[])
+    `;
+    for (const profile of profiles) {
+      expect(profile.placement_status).toBe('placed');
+      expect(profile.placement_played).toBe(3);
+      expect(profile.placement_seed_rp).toBe(seeds.get(profile.user_id));
+      expect(profile.placement_perf_sum).toBe(0);
+      expect(profile.placement_points_for_sum).toBe(0);
+      expect(profile.placement_points_against_sum).toBe(0);
+    }
+    const ledger = await sql<{ calculation_method: string; is_placement: boolean }[]>`
+      SELECT calculation_method, is_placement
+      FROM ranked_rp_changes
+      WHERE match_id = ANY(${matchIds}::uuid[])
+    `;
+    expect(ledger.every((row) => row.calculation_method === 'ranked_formula' && row.is_placement === false)).toBe(true);
 
     // A second run (same plan) refuses via the one-time marker.
     await expect(execute(bots, 100_000)).rejects.toThrow(/already burned in/i);
@@ -351,10 +382,15 @@ describe('rollback', () => {
     // Matches gone; bots pristine again; marker cleared.
     const [{ c }] = await sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM matches WHERE id = ANY(${matchIds}::uuid[])`;
     expect(c).toBe(0);
-    const profiles = await sql<{ rp: number; placement_status: string; current_win_streak: number }[]>`
-      SELECT rp, placement_status, current_win_streak FROM ranked_profiles WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[])
+    const profiles = await sql<{ rp: number; placement_status: string; placement_seed_rp: number | null; current_win_streak: number }[]>`
+      SELECT rp, placement_status, placement_seed_rp, current_win_streak FROM ranked_profiles WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[])
     `;
-    for (const p of profiles) { expect(p.rp).toBe(450); expect(p.placement_status).toBe('unplaced'); expect(p.current_win_streak).toBe(0); }
+    for (const p of profiles) {
+      expect(p.rp).toBe(450);
+      expect(p.placement_status).toBe('unplaced');
+      expect(p.placement_seed_rp).toBeNull();
+      expect(p.current_win_streak).toBe(0);
+    }
     const users = await sql<{ total_xp: number }[]>`SELECT total_xp FROM users WHERE id = ANY(${bots.map((b) => b.userId)}::uuid[])`;
     for (const u of users) expect(Number(u.total_xp)).toBe(0);
     expect(await data.readBurnInMarker()).toBeNull();

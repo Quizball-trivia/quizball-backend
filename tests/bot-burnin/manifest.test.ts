@@ -64,6 +64,13 @@ describe('manifest hashes the plan INTENT only (P1-1)', () => {
     expect(h2).not.toBe(h1);
   });
 
+  it('changes when a bot hidden skill band changes', () => {
+    const h1 = manifestHash(buildManifest(base));
+    const b0 = { ...bot(0), skillBand: 4 as const };
+    const h2 = manifestHash(buildManifest({ ...base, bots: [b0, bot(1)] }));
+    expect(h2).not.toBe(h1);
+  });
+
   it('changes when seed / target / season window change', () => {
     const h1 = manifestHash(buildManifest(base));
     expect(manifestHash(buildManifest({ ...base, seed: 2 }))).not.toBe(h1);

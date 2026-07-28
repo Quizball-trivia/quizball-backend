@@ -12,7 +12,7 @@ const PARAMS = resolve(__dirname, 'fixtures/params.json');
 
 function runCli(args: string[]): { code: number; stderr: string } {
   try {
-    execFileSync('npx', ['tsx', CLI, ...args], { encoding: 'utf8', stdio: 'pipe' });
+    execFileSync(process.execPath, ['--import', 'tsx', CLI, ...args], { encoding: 'utf8', stdio: 'pipe' });
     return { code: 0, stderr: '' };
   } catch (err) {
     const e = err as { status?: number; stderr?: string };

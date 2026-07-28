@@ -1,16 +1,14 @@
 # Persistent-bot burn-in engine (PR6)
 
-One-time, per-environment engine that gives every persistent roster bot a
-plausible season-to-date: placement matches + backdated ranked bot-vs-bot
-fixtures, settled through the REAL Season-2026 RP formula, with every bot's
-final RP hard-capped below the live human top-10. Run staging first.
+One-time, per-environment engine that seeds every persistent roster bot from
+the Season-2 placed-human ladder shape, then adds a short backdated ranked
+bot-vs-bot history settled through the real Season-2026 RP formula.
 
 ## Prerequisites
 
 - Persistent roster rows must already exist: `users` (`is_ai=true`,
   `ai_kind='persistent'`), `synthetic_player_profiles` (base_skill, daily_cap,
-  schedule, status), and optionally `ranked_profiles` (missing rows are
-  treated as season-fresh).
+  schedule, status), plus pristine `ranked_profiles` rows at 450/unplaced.
 - A zod-validated calibration params file (`--params`), parsed by
   `parseBotModelParams` from `src/modules/bots/calibration/params-schema.ts`.
 - `DATABASE_URL` available via `.env.local` or `.env` (both are loaded, with
@@ -24,11 +22,10 @@ final RP hard-capped below the live human top-10. Run staging first.
 
 **PLAN** is a pure function of immutable inputs: seed, the explicit season
 window (start + end), roster membership + each bot's fixed hidden ability
-(base_skill/dailyCap/schedule/status), the target fixture count, the ceiling
+(base_skill/dailyCap/schedule/status), the recent fixture count, the ceiling
 margin, the calibration params, and the active category set. Every bot is
-simulated from the pristine baseline (450 RP, unplaced, 0 games) and the
-live-derived ceiling (human top-10 RP − margin) is enforced during pairing, so
-the plan can never produce a fixture that would push a bot over it.
+simulated as placed from its deterministic S2 seed, and the ceiling (human
+top-10 RP − margin) is enforced during pairing.
 
 **EXECUTE** writes the plan in chronological CHUNKS (default 250 fixtures),
 each chunk in its own committed transaction, in the scheduler's chronological
@@ -49,18 +46,19 @@ still no snapshot, no receipt, no ownership token.
 ### Dry-run (default — no writes)
 
 ```bash
-npm run bot:burnin -- --params <path> [--limit N] [--seed N] [--target N] [--margin-rp N] [--season-start ISO] [--season-end ISO]
+npm run bot:burnin -- --params <path> [--limit N] [--seed N] [--recent-matches N] [--margin-rp N] [--human-top10-rp N] [--season-start ISO] [--season-end ISO]
 ```
 
 Simulates the full fixture plan in memory and prints the distribution report
-(bots, planned fixtures, matches/bot, hard-ceiling check, band targets vs.
-actual, sample bot timelines). Zero writes. `--season-end` defaults to now();
+(bots, planned fixtures, matches/bot, hard-ceiling check, capped and uncapped
+seeded ladders, tier histograms, and sample timelines). Zero writes.
+`--season-end` defaults to now();
 `--limit` caps roster size loaded (highest base_skill first).
 
 ### Execute (writes — chronological chunk batches, resumable)
 
 ```bash
-npm run bot:burnin -- --params <path> --execute --season-end <ISO> [--season-start ISO] [--seed N] [--target N] [--margin-rp N]
+npm run bot:burnin -- --params <path> --execute --season-end <ISO> [--season-start ISO] [--seed N] [--recent-matches N] [--margin-rp N] [--human-top10-rp N]
 ```
 
 `--execute` REQUIRES an explicit `--season-end` (no wall-clock default, so the
@@ -72,7 +70,7 @@ snapshotted.
 ### Rollback
 
 ```bash
-npm run bot:burnin:rollback -- --params <path> --season-end <ISO> [--season-start ISO] [--seed N] [--target N] [--margin-rp N]
+npm run bot:burnin:rollback -- --params <path> --season-end <ISO> [--season-start ISO] [--seed N] [--recent-matches N] [--margin-rp N]
 ```
 
 Recomputes the plan from the SAME inputs the run used, reads the ceiling from
@@ -88,19 +86,18 @@ burn-in's to touch.
 | --- | --- | --- |
 | `--params <file>` | — (required) | zod-validated calibration params JSON |
 | `--seed N` | `20260721` | RNG seed; also derives per-bot RNG streams and fixture keys |
-| `--target N` | `22` | per-bot fixture-count target (population median inside the 15-40 band) |
-| `--margin-rp N` | `200` | RP margin subtracted from human top-10 to get the hard ceiling |
+| `--recent-matches N` | `12` | per-bot recent-history fixture target |
+| `--human-top10-rp N` | `2615` | human-frontier reference used to derive the bot ceiling |
+| `--margin-rp N` | `50` | RP margin subtracted from human top-10 to get the hard ceiling |
 | `--season-start ISO` | `2026-07-21T00:00:00Z` | start of the backfill window |
 | `--season-end ISO` | now() (dry-run) / required (`--execute`) | end of the backfill window — the scheduler's timeline horizon |
 | `--limit N` | none (all) | cap on roster size loaded (highest base_skill first); dry-run only |
 | `--execute` | off (dry-run) | perform the real writes, in chronological chunk transactions (resumable) |
 | `--allow-remote` | off | required (with matching `BURNIN_CONFIRM_ENV`) to target a non-localhost DB |
 
-The ceiling itself: `humanTop10Rp - marginRp` when at least 10 placed human
-profiles exist (falls back to the lowest available placed human RP if fewer
-than 10 exist, or a conservative `1500 - marginRp` if none exist). The
-concrete ceiling is derived live and is NOT part of the plan identity — it's
-enforced per-fixture during pairing instead.
+The ceiling is `humanTop10Rp - marginRp`; the human-frontier flag defaults to
+the production #10 value. The concrete ceiling is not part of the plan identity
+and is stored in the durable marker for exact rollback recomputation.
 
 ## Safety model
 
@@ -149,6 +146,5 @@ It does **not** write coins, tickets, notifications, or analytics events.
 
 - **Dry-run report** (`report.ts`, printed to stdout): roster bot count,
   planned fixture count, matches/bot (min/median/mean/max), hard-ceiling
-  check (human #10 RP, ceiling RP, max bot RP, respected Y/N), ladder band
-  target vs. actual counts, and sample timelines for the 3 strongest, 3
-  weakest, and 2 median bots (nickname, skill, final RP, tier, W-L record).
+  check, capped and uncapped seeded-ladder quantiles, tier histograms with S2
+  human counts, per-band seed ranges, and sample seed-to-final timelines.

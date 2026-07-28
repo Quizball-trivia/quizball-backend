@@ -6,6 +6,7 @@
 import { sql, type TransactionSql } from '../../src/db/index.js';
 import { SEASON_INITIAL_RP } from '../../src/modules/ranked/season-rp-formula.js';
 import type { BurnInBot, BotSchedule } from './types.js';
+import type { SkillBand } from './s2-distribution.js';
 
 const BURN_IN_MARKER_NOTE = 'persistent-bot-burnin:complete';
 
@@ -13,6 +14,7 @@ interface RawScheduleJson {
   activeHours?: unknown;
   sessionMax?: unknown;
   intraSessionGapMin?: unknown;
+  band?: unknown;
 }
 
 function parseSchedule(raw: unknown): BotSchedule {
@@ -26,6 +28,13 @@ function parseSchedule(raw: unknown): BotSchedule {
       ? Math.floor(obj.intraSessionGapMin)
       : 20;
   return { activeHours, sessionMax, intraSessionGapMin };
+}
+
+function parseSkillBand(raw: unknown): SkillBand | undefined {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as RawScheduleJson;
+  return Number.isInteger(obj.band) && Number(obj.band) >= 0 && Number(obj.band) <= 4
+    ? Number(obj.band) as SkillBand
+    : undefined;
 }
 
 /** Load the persistent roster joined with its ranked profile + synthetic row. */
@@ -74,6 +83,7 @@ export async function loadRoster(limit: number | null): Promise<BurnInBot[]> {
     dailyCap: Number(r.daily_cap),
     schedule: parseSchedule(r.schedule),
     status: (r.status === 'resting' || r.status === 'retired' ? r.status : 'active') as BurnInBot['status'],
+    skillBand: parseSkillBand(r.schedule),
     rp: r.rp ?? 0,
     placementPlayed: r.placement_played ?? 0,
     placementWins: r.placement_wins ?? 0,

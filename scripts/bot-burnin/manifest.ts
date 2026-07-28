@@ -14,6 +14,7 @@
 import { createHash } from 'node:crypto';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, BotSchedule, PlannedFixture } from './types.js';
+import { skillBandFromBaseSkill, type SkillBand } from './s2-distribution.js';
 
 /**
  * The manifest identifies the PLAN INTENT, never the mutable world state or the
@@ -28,7 +29,7 @@ import type { BurnInBot, BotSchedule, PlannedFixture } from './types.js';
  * partial run moves it) and the wall-clock run date.
  */
 export interface RunManifest {
-  version: 3;
+  version: 4;
   seed: number;
   seasonStart: string;
   seasonEnd: string;
@@ -43,6 +44,7 @@ export interface RunManifest {
   roster: Array<{
     userId: string;
     baseSkill: number;
+    skillBand: SkillBand;
     dailyCap: number;
     status: string;
     schedule: BotSchedule;
@@ -69,7 +71,7 @@ export function buildManifest(opts: {
   categoryIds: string[];
 }): RunManifest {
   return {
-    version: 3,
+    version: 4,
     seed: opts.seed,
     seasonStart: opts.seasonStart.toISOString(),
     seasonEnd: opts.seasonEnd.toISOString(),
@@ -80,6 +82,7 @@ export function buildManifest(opts: {
       .map((b) => ({
         userId: b.userId,
         baseSkill: b.baseSkill,
+        skillBand: b.skillBand ?? skillBandFromBaseSkill(b.baseSkill),
         dailyCap: b.dailyCap,
         status: b.status,
         schedule: b.schedule,

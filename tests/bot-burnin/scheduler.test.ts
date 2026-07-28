@@ -60,6 +60,25 @@ function tbHour(d: Date): number {
   return new Date(d.getTime() + TBILISI_OFFSET_MS).getUTCHours();
 }
 
+describe('buildSchedule is a PURE function of immutable inputs', () => {
+  it('produces an IDENTICAL plan even when bots carry DIFFERENT live mutable state', () => {
+    // The plan simulates from the fixed pristine baseline, so live
+    // rp/placement/streak must NOT affect it (the root-cause of the resume
+    // instability class). Same manifest inputs → identical fixtures + match ids.
+    const pristine = makeBots(16);
+    const dirtied = makeBots(16).map((b, i) => ({
+      ...b,
+      rp: 900 + i * 10, placementStatus: 'placed' as const, placementPlayed: 3,
+      placementWins: 2, currentWinStreak: 5,
+    }));
+    const a = buildSchedule({ ...baseOpts, bots: pristine });
+    const b = buildSchedule({ ...baseOpts, bots: dirtied });
+    expect(a.fixtures.map((f) => f.matchId)).toEqual(b.fixtures.map((f) => f.matchId));
+    expect(a.fixtures.map((f) => f.winnerUserId)).toEqual(b.fixtures.map((f) => f.winnerUserId));
+    expect(a.finalBots.map((x) => x.rp)).toEqual(b.finalBots.map((x) => x.rp));
+  });
+});
+
 describe('buildSchedule determinism', () => {
   it('produces an identical plan for the same seed + manifest', () => {
     const a = buildSchedule({ ...baseOpts, bots: makeBots(20) });

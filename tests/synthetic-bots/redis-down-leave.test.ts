@@ -1,9 +1,10 @@
 /**
- * P1-C: waiting-lobby leave/disconnect must free the bot WITHOUT Redis, and must
- * NEVER release the reservation while the bot is still a lobby member.
- * releaseRankedAiLobbyMemberSafely resolves the bot from the DB (lobby_members ⨝
- * users.is_ai), removes it, confirms removal, then releases; if removal can't be
- * confirmed it leaves the reservation for the sweeper.
+ * P1-C + P1-2: waiting-lobby leave/disconnect must free the bot WITHOUT Redis and
+ * WITHOUT racing a concurrent draft activation. releaseRankedAiLobbyMemberSafely
+ * resolves the bot from the DB (lobby_members ⨝ users.is_ai), then delegates the
+ * member-removal + reservation-release to reservationService.abortLobby, which
+ * performs them atomically under the shared per-lobby advisory lock (re-reads
+ * status, no-ops if the draft advanced).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '../setup.js';
@@ -13,7 +14,9 @@ const lobbiesRepo = {
   removeMember: vi.fn().mockResolvedValue(undefined),
   getById: vi.fn(),
 };
-const reservationService = { releaseIfLobbyAbortable: vi.fn().mockResolvedValue(undefined) };
+const reservationService = {
+  abortLobby: vi.fn().mockResolvedValue({ aborted: true, botReleased: 'persistent-bot', lobbyDeleted: false }),
+};
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({ lobbiesRepo }));
 vi.mock('../../src/modules/synthetic-bots/reservation.service.js', () => ({ reservationService }));
@@ -29,54 +32,40 @@ const BOT = { user_id: 'persistent-bot', is_ai: true };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Lobby is still 'waiting' (abortable) unless a test overrides it.
-  lobbiesRepo.getById.mockResolvedValue({ id: 'lobby-1', status: 'waiting', mode: 'ranked' });
+  reservationService.abortLobby.mockResolvedValue({ aborted: true, botReleased: 'persistent-bot', lobbyDeleted: false });
 });
 
 describe('releaseRankedAiLobbyMemberSafely (Redis down)', () => {
-  it('resolves the bot from the DB, removes it, confirms removal, THEN releases', async () => {
-    // First listing (resolve) has the bot; second listing (confirm) does not.
-    lobbiesRepo.listMembersWithUser
-      .mockResolvedValueOnce([HUMAN, BOT]) // resolve
-      .mockResolvedValueOnce([]); // confirm: bot gone
-    await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('lobby-1', 'persistent-bot');
-    expect(reservationService.releaseIfLobbyAbortable).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
-    // removeMember happened before release.
-    const removeOrder = lobbiesRepo.removeMember.mock.invocationCallOrder[0];
-    const releaseOrder = reservationService.releaseIfLobbyAbortable.mock.invocationCallOrder[0];
-    expect(removeOrder).toBeLessThan(releaseOrder);
-  });
-
-  it('does NOT release when the bot is still a lobby member after removal (leaves it for the sweeper)', async () => {
-    // Confirm listing STILL shows the bot → removal not confirmed → no release.
-    lobbiesRepo.listMembersWithUser
-      .mockResolvedValueOnce([HUMAN, BOT]) // resolve
-      .mockResolvedValueOnce([BOT]); // confirm: bot STILL present
-    await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('lobby-1', 'persistent-bot');
-    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
-  });
-
-  it('does NOT release when removeMember throws (leaves it for the sweeper)', async () => {
+  it('resolves the bot from the DB and delegates the atomic locked abort (member removal + release)', async () => {
     lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN, BOT]);
-    lobbiesRepo.removeMember.mockRejectedValueOnce(new Error('db down'));
     await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
+    // The bot id came from the DB, and the removal+release happens atomically in
+    // abortLobby (which holds the advisory lock) — never a separate unlocked
+    // removeMember here.
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', ['persistent-bot'], 'auto_leave_lobby');
+    expect(lobbiesRepo.removeMember).not.toHaveBeenCalled();
   });
 
-  it('releases directly when there is no bot member (human-only leftover)', async () => {
+  it('passes no member ids when there is no bot member (human-only leftover)', async () => {
     lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN]);
     await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(lobbiesRepo.removeMember).not.toHaveBeenCalled();
-    expect(reservationService.releaseIfLobbyAbortable).toHaveBeenCalledWith('lobby-1', 'auto_leave_lobby');
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', [], 'auto_leave_lobby');
   });
 
-  it('does NOT remove the bot or release when the lobby advanced to active (P1-2 TOCTOU)', async () => {
-    // A concurrent reconnect advanced the draft → status active → leave it live.
-    lobbiesRepo.getById.mockResolvedValueOnce({ id: 'lobby-1', status: 'active', mode: 'ranked' });
+  it('resolves the bot even from a Redis-down state (DB is the source of truth)', async () => {
+    // getRedisClient is mocked to null; resolution still succeeds via the DB.
+    lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN, BOT]);
     await releaseRankedAiLobbyMemberSafely('lobby-1');
-    expect(lobbiesRepo.removeMember).not.toHaveBeenCalled();
-    expect(reservationService.releaseIfLobbyAbortable).not.toHaveBeenCalled();
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', ['persistent-bot'], 'auto_leave_lobby');
+  });
+
+  it('no-ops (abortLobby returns aborted:false) when the lobby advanced to active — bot kept', async () => {
+    // Simulate the locked abort observing an advanced lobby.
+    reservationService.abortLobby.mockResolvedValueOnce({ aborted: false, botReleased: null, lobbyDeleted: false });
+    lobbiesRepo.listMembersWithUser.mockResolvedValueOnce([HUMAN, BOT]);
+    await releaseRankedAiLobbyMemberSafely('lobby-1');
+    // We still called abortLobby (it is the authority), but it reported no abort,
+    // so nothing was torn down here and the reservation was kept.
+    expect(reservationService.abortLobby).toHaveBeenCalledWith('lobby-1', ['persistent-bot'], 'auto_leave_lobby');
   });
 });

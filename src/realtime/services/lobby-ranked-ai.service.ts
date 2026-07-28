@@ -116,32 +116,30 @@ type RankedAiOpponentGeo = {
 };
 
 /**
- * Tear down a lobby we created but failed to fully wire (compensation). Removes
- * both members, deletes the lobby, and clears the legacy Redis key — leaving no
- * orphan lobby behind. Best-effort; every step is guarded.
- *
- * ONLY tears down a lobby that is still 'waiting' (or already gone): a concurrent
- * reconnect could have advanced this lobby's draft to 'active' between our abort
- * decision and here, in which case the draft is LIVE and NOT ours to delete —
- * we leave it untouched. This mirrors the abort-release SQL guard, so the whole
- * abort path (release + teardown) no-ops atomically once the draft advanced.
+ * Abort a ranked-AI lobby we created but failed to fully wire (compensation),
+ * AND free its persistent-bot reservation — as ONE atomic, advisory-lock-guarded
+ * operation (reservationService.abortLobby). The lock is the same one the draft
+ * activation (startDraft → activateLobbyForDraftLocked) takes, so this whole
+ * abort serializes with activation: if a concurrent reconnect advanced the lobby
+ * waiting→active, abortLobby observes 'active' under the lock and no-ops entirely
+ * (no reservation release, no member/lobby delete) — the live draft keeps the
+ * bot. The remaining Redis/socket cleanup is idempotent and safe outside the tx.
  */
 async function compensateAbortLobby(
   io: QuizballServer,
   lobbyId: string,
   userId: string,
   aiUserId: string | null,
+  path: 'match_found_cancel' | 'cleanup_superseded_lobby' = 'match_found_cancel',
 ): Promise<void> {
   try {
-    const latest = await lobbiesRepo.getById(lobbyId).catch(() => null);
-    if (latest && latest.status !== 'waiting') {
-      // A reconnect advanced this lobby — leave the live draft/match alone.
-      logger.info({ lobbyId, status: latest.status }, 'compensateAbortLobby: lobby advanced elsewhere — not tearing down');
+    const removeUserIds = aiUserId ? [userId, aiUserId] : [userId];
+    const result = await reservationService.abortLobby(lobbyId, removeUserIds, path);
+    if (!result.aborted) {
+      logger.info({ lobbyId }, 'compensateAbortLobby: lobby advanced elsewhere — not tearing down');
+      // Do NOT touch Redis/sockets of a live lobby.
       return;
     }
-    await lobbiesRepo.removeMember(lobbyId, userId).catch(() => undefined);
-    if (aiUserId) await lobbiesRepo.removeMember(lobbyId, aiUserId).catch(() => undefined);
-    await lobbiesRepo.deleteLobby(lobbyId).catch(() => undefined);
     const redis = getRedisClient();
     if (redis?.isOpen) await redis.del(rankedAiLobbyKey(lobbyId)).catch(() => undefined);
     await detachAllSocketsFromLobby(io, lobbyId).catch(() => undefined);
@@ -244,8 +242,7 @@ export async function startRankedAiForUser(
           await emitLobbyState(io, probeLobby.id);
           await userSessionGuardService.emitState(io, userId);
         } catch (err) {
-          logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: aiUser!.id }, 'persistent-bot lobby build failed; compensating (release + teardown)');
-          await reservationService.releaseOwned(persistentBotReservation, 'match_found_cancel');
+          logger.warn({ err, userId, lobbyId: probeLobby.id, botUserId: aiUser!.id }, 'persistent-bot lobby build failed; compensating (locked release + teardown)');
           await compensateAbortLobby(io, probeLobby.id, userId, aiUser!.id);
           return;
         }
@@ -334,8 +331,7 @@ export async function startRankedAiForUser(
       );
     } catch (err) {
       if (persistentBotReservation) {
-        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: aiUser!.id }, 'persistent-bot search scheduling failed; compensating (release + teardown)');
-        await reservationService.releaseOwned(persistentBotReservation, 'match_found_cancel');
+        logger.warn({ err, userId, lobbyId: lobby.id, botUserId: aiUser!.id }, 'persistent-bot search scheduling failed; compensating (locked release + teardown)');
         await compensateAbortLobby(io, lobby.id, userId, aiUser!.id);
         return;
       }
@@ -363,17 +359,11 @@ async function handleRankedAiMatchFound(params: {
   const { io, lobbyId, userId, aiUser, aiProfile, aiGeo, opponentRp, favoriteClub, persistentBotReservation, lobbiesRepo, logger, foundModalMs, startDraft } =
     params;
 
-  // Abort owned by THIS flow → release the reservation ONLY if the lobby is still
-  // abortable (waiting/gone), then tear the lobby down. releaseIfLobbyAbortable is
-  // an atomic SQL guard (match_id IS NULL AND lobby waiting-or-gone): if a
-  // concurrent reconnect advanced this lobby's draft, both the release AND the
-  // teardown (compensateAbortLobby's own status guard) no-op — the live draft
-  // keeps the bot. Release BEFORE teardown so the guard sees the still-waiting
-  // lobby.
+  // Abort owned by THIS flow → compensateAbortLobby does the atomic,
+  // advisory-lock-guarded release + teardown in one transaction (serialized with
+  // draft activation). If a concurrent reconnect advanced the lobby, the whole
+  // abort no-ops — the live draft keeps the bot.
   const releasePreMatch = async (_path: 'match_found_cancel'): Promise<void> => {
-    if (persistentBotReservation) {
-      await reservationService.releaseIfLobbyAbortable(lobbyId, 'match_found_cancel');
-    }
     await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
   };
 
@@ -417,15 +407,17 @@ async function handleRankedAiMatchFound(params: {
         'Ranked AI match_found skipped because user session moved elsewhere'
       );
       if (persistentBotReservation) {
-        await reservationService.releaseOwned(persistentBotReservation, 'cleanup_superseded_lobby');
+        // Locked release + teardown (serialized with draft activation).
+        await compensateAbortLobby(io, lobbyId, userId, aiUser.id, 'cleanup_superseded_lobby');
+      } else {
+        await cleanupSupersededRankedAiLobby({
+          lobbiesRepoRef: lobbiesRepo,
+          lobbyId,
+          userId,
+          aiUserId: aiUser.id,
+          reason: 'match_found_superseded',
+        });
       }
-      await cleanupSupersededRankedAiLobby({
-        lobbiesRepoRef: lobbiesRepo,
-        lobbyId,
-        userId,
-        aiUserId: aiUser.id,
-        reason: 'match_found_superseded',
-      });
       return;
     }
 
@@ -473,25 +465,11 @@ async function handleRankedAiMatchFound(params: {
     );
   } catch (error) {
     // A throw here left the lobby wired but no draft scheduled by THIS flow.
-    // Only release + tear down if the lobby is NOT live/recoverable — a reconnect
-    // could have independently activated the draft, in which case it is LIVE and
-    // owns the reservation now. releaseOwned is also match_id-qualified, so a
-    // transferred reservation is never freed here regardless.
+    // compensateAbortLobby does the atomic, lock-guarded release + teardown: if a
+    // reconnect independently activated the draft, it observes 'active' under the
+    // shared lock and no-ops entirely (no release, no teardown) — the live draft
+    // keeps the bot. No separate status pre-check needed (that would be a TOCTOU).
     logger.warn({ error, lobbyId }, 'Failed during ranked AI search completion');
-    let lobbyLive = false;
-    try {
-      const latest = await lobbiesRepo.getById(lobbyId);
-      lobbyLive = latest != null && latest.status !== 'waiting' && latest.mode === 'ranked';
-    } catch {
-      lobbyLive = false;
-    }
-    if (lobbyLive) {
-      logger.info({ lobbyId }, 'Ranked AI match_found catch: lobby advanced elsewhere — leaving it live');
-      return;
-    }
-    if (persistentBotReservation) {
-      await reservationService.releaseIfLobbyAbortable(lobbyId, 'match_found_cancel');
-    }
     await compensateAbortLobby(io, lobbyId, userId, aiUser.id);
   }
 }
@@ -508,13 +486,14 @@ async function startRankedAiDraft(params: {
 }): Promise<void> {
   const { io, lobbyId, userId, aiUserId, persistentBotReservation, lobbiesRepo, logger, startDraft } = params;
 
-  // NEW hooks (Appendix A leak paths): the plain-cancel return and the catch
-  // below previously wedged the lobby / left the reservation to TTL-expire.
-  // releaseIfLobbyAbortable atomically no-ops if a concurrent reconnect advanced
-  // this lobby's draft (closes the abort TOCTOU).
+  // Release-only under the SHARED per-lobby advisory lock (empty removeUserIds →
+  // no lobby teardown; draft-start cancel leaves the lobby for other cleanup).
+  // Serialized with draft activation: if a concurrent reconnect advanced the
+  // lobby waiting→active, abortLobby observes 'active' under the lock and no-ops,
+  // so the live draft keeps the bot.
   const releasePreMatch = async (path: 'draft_start_cancel' | 'draft_start_error'): Promise<void> => {
     if (persistentBotReservation) {
-      await reservationService.releaseIfLobbyAbortable(lobbyId, path);
+      await reservationService.abortLobby(lobbyId, [], path);
     }
     const redis = getRedisClient();
     if (redis?.isOpen) {
@@ -549,26 +528,27 @@ async function startRankedAiDraft(params: {
         'Ranked AI draft start skipped because user session moved elsewhere'
       );
       if (persistentBotReservation) {
-        await reservationService.releaseOwned(persistentBotReservation, 'cleanup_superseded_lobby');
+        // Locked release + teardown (serialized with draft activation).
+        await compensateAbortLobby(io, lobbyId, userId, aiUserId, 'cleanup_superseded_lobby');
+      } else {
+        await cleanupSupersededRankedAiLobby({
+          lobbiesRepoRef: lobbiesRepo,
+          lobbyId,
+          userId,
+          aiUserId,
+          reason: 'draft_start_superseded',
+        });
       }
-      await cleanupSupersededRankedAiLobby({
-        lobbiesRepoRef: lobbiesRepo,
-        lobbyId,
-        userId,
-        aiUserId,
-        reason: 'draft_start_superseded',
-      });
       return;
     }
     await startDraft(io, lobbyId);
   } catch (error) {
     logger.warn({ error, lobbyId }, 'Failed to start ranked AI draft');
-    // startDraft sets the lobby ACTIVE before it can throw. releaseIfLobbyAbortable
-    // is a single atomic SQL guard (match_id IS NULL AND lobby waiting-or-gone):
-    // if the draft advanced the lobby to 'active' (a recoverable draft still
-    // holds the bot — the draft-grace/abort path owns release), this no-ops and
-    // the bot is kept. No separate status check needed (which would itself be a
-    // TOCTOU); the guard is race-free.
+    // startDraft sets the lobby ACTIVE (under the advisory lock) before it can
+    // throw. releasePreMatch's locked abort (abortLobby) re-reads status under the
+    // SAME lock: if the draft advanced to 'active' (a recoverable draft holds the
+    // bot — the draft-grace/abort path owns release), it no-ops and the bot is
+    // kept. Race-free with activation; no separate TOCTOU status check.
     await releasePreMatch('draft_start_error');
     io.to(`lobby:${lobbyId}`).emit('error', {
       code: 'MATCH_PREPARATION_FAILED',

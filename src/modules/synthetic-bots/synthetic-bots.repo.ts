@@ -158,13 +158,12 @@ export const syntheticBotsRepo = {
 
   /**
    * ABORT-path release: free the reservation ONLY while its lobby is genuinely
-   * still in a pre-draft state — one atomic guarded DELETE that closes the abort
-   * TOCTOU. `startDraft` advances waiting→active (then transfers match_id) under a
-   * lobby lock; by requiring BOTH the reservation is still lobby-keyed
-   * (match_id IS NULL) AND the lobby is still 'waiting', a concurrent reconnect
-   * that advanced the lobby makes this release a no-op — the live draft/match
-   * keeps the bot. If the reservation already transferred OR the lobby advanced,
-   * nothing is deleted. Returns the freed bot id (if any).
+   * still in a pre-draft state — one atomic guarded DELETE. NOTE: on its own this
+   * DELETE's status subquery runs under READ COMMITTED and does NOT serialize
+   * with a concurrent `setLobbyStatus(..., 'active')`. Callers that can race a
+   * draft activation MUST use `abortRankedAiLobbyLocked` (which holds the shared
+   * per-lobby advisory lock). This bare variant is retained only for contexts
+   * that already hold the lock or cannot race activation.
    */
   async releaseReservationByLobbyIfAbortable(lobbyId: string): Promise<string | null> {
     const rows = await sql<{ bot_user_id: string }[]>`
@@ -172,14 +171,85 @@ export const syntheticBotsRepo = {
       WHERE r.lobby_id = ${lobbyId}
         AND r.match_id IS NULL
         AND (
-          -- lobby still pre-draft (mine to abort) ...
           EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id AND l.status = 'waiting')
-          -- ... or already fully torn down (no lobby → no draft can be running).
           OR NOT EXISTS (SELECT 1 FROM lobbies l WHERE l.id = r.lobby_id)
         )
       RETURNING r.bot_user_id
     `;
     return rows[0]?.bot_user_id ?? null;
+  },
+
+  /**
+   * Take the per-lobby advisory lock and flip the lobby to 'active' for draft
+   * start, atomically. This is the ACTIVATION half of the abort/activate lock
+   * ordering: it holds `pg_advisory_xact_lock(hashtext('ranked_ai_lobby:'||id))`
+   * while it commits status='active', so any concurrent aborter that also takes
+   * the lock either (a) ran first and already freed the reservation — then the
+   * later reservation transfer finds nothing and match creation rolls back, or
+   * (b) blocks behind us and, on acquiring the lock, re-reads 'active' and
+   * no-ops. Returns whether the row was flipped (false if the lobby was gone).
+   */
+  async activateLobbyForDraftLocked(lobbyId: string): Promise<boolean> {
+    return sql.begin(async (tx) => {
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
+      const rows = await tx.unsafe<{ id: string }[]>(
+        `UPDATE lobbies SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING id`,
+        [lobbyId],
+      );
+      return rows.length > 0;
+    });
+  },
+
+  /**
+   * ABORT half of the lock ordering: under the SAME per-lobby advisory lock,
+   * re-read the lobby status (now authoritatively serialized with activation) and
+   * — only if the lobby is still 'waiting' or already gone — free the (still
+   * lobby-keyed) reservation, remove the given members, and delete the lobby if it
+   * becomes empty, all in ONE locked transaction. If a concurrent draft activation
+   * committed first, we observe 'active' and no-op entirely (no release, no
+   * teardown) so the live draft keeps the bot. Redis/socket cleanup is left to the
+   * caller (idempotent, safe outside the tx). Returns what happened.
+   */
+  async abortRankedAiLobbyLocked(
+    lobbyId: string,
+    removeUserIds: string[],
+  ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean }> {
+    return sql.begin(async (tx) => {
+      await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
+      const [lobby] = await tx.unsafe<{ status: string }[]>(
+        `SELECT status FROM lobbies WHERE id = $1`,
+        [lobbyId],
+      );
+      // Lobby advanced (a reconnect started the draft) → NOT ours to abort.
+      if (lobby && lobby.status !== 'waiting') {
+        return { aborted: false, botReleased: null, lobbyDeleted: false };
+      }
+      // Free the reservation only while still lobby-keyed (match_id IS NULL). If
+      // it was already transferred, this deletes nothing.
+      const [freed] = await tx.unsafe<{ bot_user_id: string }[]>(
+        `DELETE FROM synthetic_bot_reservations WHERE lobby_id = $1 AND match_id IS NULL RETURNING bot_user_id`,
+        [lobbyId],
+      );
+      // Teardown only when members were given (a full abort). An empty
+      // removeUserIds means "release the reservation under the lock, no teardown"
+      // — used by the draft-start cancel, which leaves the lobby for other
+      // cleanup.
+      let lobbyDeleted = false;
+      if (lobby && removeUserIds.length > 0) {
+        for (const uid of removeUserIds) {
+          await tx.unsafe(`DELETE FROM lobby_members WHERE lobby_id = $1 AND user_id = $2`, [lobbyId, uid]);
+        }
+        const [{ n }] = await tx.unsafe<{ n: number }[]>(
+          `SELECT COUNT(*)::int AS n FROM lobby_members WHERE lobby_id = $1`,
+          [lobbyId],
+        );
+        if (n === 0) {
+          await tx.unsafe(`DELETE FROM lobbies WHERE id = $1`, [lobbyId]);
+          lobbyDeleted = true;
+        }
+      }
+      return { aborted: true, botReleased: freed?.bot_user_id ?? null, lobbyDeleted };
+    });
   },
 
   /**

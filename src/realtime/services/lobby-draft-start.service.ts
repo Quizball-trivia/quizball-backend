@@ -6,6 +6,7 @@ import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
 import { rankedAiLobbyKey } from '../ai-ranked.constants.js';
 import { reservationService } from '../../modules/synthetic-bots/reservation.service.js';
+import { syntheticBotsRepo } from '../../modules/synthetic-bots/synthetic-bots.repo.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
@@ -148,7 +149,13 @@ export async function startDraft(io: QuizballServer, lobbyId: string): Promise<v
           categoryId: category.id,
         }))
       );
-      await lobbiesRepo.setLobbyStatus(lobbyId, 'active');
+      // Flip to 'active' under the shared per-lobby advisory lock so this
+      // waiting→active transition serializes with any concurrent persistent-bot
+      // reservation ABORT (which takes the same lock). This closes the
+      // abort-vs-activate TOCTOU: an aborter either ran first (freed the bot →
+      // the later reservation transfer finds nothing → match creation rolls back)
+      // or blocks behind us and observes 'active' → no-ops.
+      await syntheticBotsRepo.activateLobbyForDraftLocked(lobbyId);
       await warmupRealtimeService.cleanupLobby(lobbyId);
 
       let turnUserId = lobby.host_user_id;

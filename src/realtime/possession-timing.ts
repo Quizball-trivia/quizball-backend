@@ -2,7 +2,6 @@ import type { PossessionStatePayload } from '../modules/matches/matches.service.
 import { clamp } from './scoring.js';
 import {
   buildPlayableQuestionTiming,
-  FRONTEND_REVEAL_MS,
   PENALTY_INTRO_DELAY_MS,
   QUESTION_TIME_MS,
   ROUND_RESULT_DELAY_MS,
@@ -11,7 +10,6 @@ import {
 } from './possession-state.js';
 import type { MatchQuestionKind } from './socket.types.js';
 
-export const REVEAL_ACK_GRACE_MS = 1500;
 export const CLIENT_TIME_SLACK_MS = 1500;
 
 export type AnswerElapsedSource =
@@ -105,15 +103,17 @@ function parseTimestampMs(value: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function clampRevealAckMs(revealAtMs: number, shownAt: string | null): number {
+export function clampRevealAckMs(revealAtMs: number, _shownAt: string | null): number {
   if (!Number.isFinite(revealAtMs)) return Date.now();
-  const shownAtMs = parseTimestampMs(shownAt);
-  if (shownAtMs === null) return Math.round(revealAtMs);
-  return clamp(
-    Math.round(revealAtMs),
-    shownAtMs - FRONTEND_REVEAL_MS,
-    shownAtMs + REVEAL_ACK_GRACE_MS
-  );
+  // The acknowledgement is timestamped by the server when it arrives, so it
+  // cannot claim a future or client-forged timestamp. Do not compare it with
+  // shownAt: shownAt can be generated on a different realtime replica. A
+  // production incident showed the two replica clocks ~5.5s apart, making
+  // legitimate acknowledgements look either early or late and turning fast
+  // answers into 60-point answers (or free 100s in the opposite direction).
+  // Reveal-to-answer elapsed time stays on the player's socket replica, so
+  // preserving that replica-local server timestamp is the reliable measure.
+  return Math.round(revealAtMs);
 }
 
 function computePredictedElapsedMs(params: {

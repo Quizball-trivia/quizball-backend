@@ -115,6 +115,39 @@ describe('handlePossessionQuestionRevealed', () => {
     expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 500);
   });
 
+  it('preserves a legitimate reveal that arrives well after the predicted playable time', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    vi.setSystemTime(new Date(SHOWN_AT_MS + 5_700));
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 5_700 });
+    expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 5_700);
+  });
+
+  it('preserves a very late server-received ack instead of charging delivery delay', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    vi.setSystemTime(new Date(SHOWN_AT_MS + 12_000));
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS + 12_000 });
+    expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS + 12_000);
+  });
+
+  it('preserves an ack that looks early when the dispatch replica clock is ahead', async () => {
+    const cache = makeCache();
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    vi.setSystemTime(new Date(SHOWN_AT_MS - 5_300));
+
+    await handlePossessionQuestionRevealed(createSocket('u1'), { matchId: MATCH_ID, qIndex: 2 });
+
+    expect(cache.revealAcks?.u1).toEqual({ qIndex: 2, revealAtMs: SHOWN_AT_MS - 5_300 });
+    expect(commitCachedRevealAckMock).toHaveBeenCalledWith(cache, 'u1', SHOWN_AT_MS - 5_300);
+  });
+
   it('is idempotent and ignores later acks from the same player', async () => {
     const cache = makeCache();
     getMatchCacheOrRebuildMock.mockResolvedValue(cache);

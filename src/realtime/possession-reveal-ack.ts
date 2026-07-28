@@ -5,7 +5,7 @@ import {
   getMatchCacheOrRebuild,
   type MatchCache,
 } from './match-cache.js';
-import { clampRevealAckMs, REVEAL_ACK_GRACE_MS } from './possession-timing.js';
+import { clampRevealAckMs } from './possession-timing.js';
 import {
   cacheLogFields,
   questionLogFields,
@@ -95,7 +95,9 @@ export async function handlePossessionQuestionRevealed(
       userId,
       receivedAtMs,
       revealAtMs,
-      revealAckGraceMs: REVEAL_ACK_GRACE_MS,
+      revealDelayFromPredictionMs: cache.currentQuestion.shownAt
+        ? revealAtMs - new Date(cache.currentQuestion.shownAt).getTime()
+        : null,
       ...questionLogFields(cache.currentQuestion),
     },
     'Possession question reveal ack recorded'

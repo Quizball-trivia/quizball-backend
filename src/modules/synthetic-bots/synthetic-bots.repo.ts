@@ -121,6 +121,20 @@ export const syntheticBotsRepo = {
   // race `setLobbyStatus(...,'active')` under READ COMMITTED (Sol P1-2).
 
   /**
+   * Take the per-lobby advisory xact lock inside a CALLER-OWNED transaction. Used
+   * by the persistent-bot match-creation tx (matchesService.createMatchFromLobby)
+   * as its FIRST statement, so match creation + reservation transfer share the
+   * TOTAL ORDER with the draft activation and the reservation abort — all of which
+   * take `pg_advisory_xact_lock(hashtext('ranked_ai_lobby:'||lobbyId))` first,
+   * before any row lock. Consistent lock ordering → no deadlock; the abort's
+   * in-lock EXISTS(active match) check and this tx's match insert can never
+   * interleave into a split state (match created + lobby torn down).
+   */
+  async takeLobbyAdvisoryLockTx(tx: TransactionSql, lobbyId: string): Promise<void> {
+    await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
+  },
+
+  /**
    * ACTIVATION half of the abort/activate ordering. Under the per-lobby advisory
    * lock, in ONE transaction: flip the lobby to 'active' AND mark any persistent-
    * bot reservation for this lobby as COMMITTED (committed_at = now()).

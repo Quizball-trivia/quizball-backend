@@ -689,6 +689,15 @@ export const matchesService = {
     // or no reservation exists, so this branch is byte-equivalent then).
     const match = persistentBotUserId
       ? await sql.begin(async (tx) => {
+          // Take the SAME per-lobby advisory lock the draft activation + abort
+          // take, as the FIRST statement — so match creation and a concurrent
+          // reservation abort have a TOTAL ORDER on the lobby. This closes the
+          // interleaving where an abort's EXISTS(active match) sees none, this tx
+          // then commits the match + transfer, and the abort still tears down the
+          // just-created live match's lobby/members (nulling matches.lobby_id).
+          // With both paths taking the lobby advisory lock FIRST (before any row
+          // lock), the ordering is consistent → no split state and no deadlock.
+          await syntheticBotsRepo.takeLobbyAdvisoryLockTx(tx, params.lobbyId);
           const created = await matchesRepo.createMatch({
             lobbyId: params.lobbyId,
             mode: params.mode,

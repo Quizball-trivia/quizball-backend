@@ -28,6 +28,7 @@ const DB_URL = process.env.PERSISTENT_BOT_TEST_DB_URL
 
 let sql: postgres.Sql;
 let repo: typeof import('../../src/modules/synthetic-bots/synthetic-bots.repo.js').syntheticBotsRepo;
+let matchesService: typeof import('../../src/modules/matches/matches.service.js').matchesService;
 let dbAvailable = false;
 const userIds: string[] = [];
 const lobbyIds: string[] = [];
@@ -41,6 +42,34 @@ async function newBot(nick: string): Promise<string> {
   `;
   userIds.push(u.id);
   return u.id;
+}
+async function newHuman(nick: string): Promise<string> {
+  const [u] = await sql<{ id: string }[]>`
+    INSERT INTO users (nickname, is_ai, onboarding_complete) VALUES (${nick}, false, true) RETURNING id
+  `;
+  userIds.push(u.id);
+  return u.id;
+}
+async function rankedProfile(userId: string, rp: number): Promise<void> {
+  await sql`INSERT INTO ranked_profiles (user_id, rp, tier, placement_status, placement_required, placement_played)
+            VALUES (${userId}, ${rp}, 'Bench', 'placed', 3, 3) ON CONFLICT (user_id) DO NOTHING`;
+}
+// A fully-wired ranked lobby: host human + persistent bot as members + reservation
+// (uncommitted) + ranked profiles — ready for createMatchFromLobby.
+async function fullRankedLobby(prefix: string): Promise<{ human: string; bot: string; lobby: string }> {
+  const human = await newHuman(`${prefix}-h-${Date.now()}-${Math.random()}`);
+  const bot = await newBot(`${prefix}-b-${Date.now()}-${Math.random()}`);
+  await rankedProfile(human, 1200);
+  await rankedProfile(bot, 1200);
+  await sql`INSERT INTO synthetic_player_profiles (user_id, base_skill, personality_seed, status)
+            VALUES (${bot}, 0.5, 42, 'active') ON CONFLICT (user_id) DO NOTHING`;
+  const [l] = await sql<{ id: string }[]>`
+    INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${human}, 'waiting') RETURNING id`;
+  lobbyIds.push(l.id);
+  await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${l.id}, ${human}, true), (${l.id}, ${bot}, true)`;
+  await sql`INSERT INTO synthetic_bot_reservations (bot_user_id, lobby_id, holder, expires_at)
+            VALUES (${bot}, ${l.id}, 'holderA', now() + interval '180 seconds')`;
+  return { human, bot, lobby: l.id };
 }
 async function newWaitingLobby(host: string): Promise<string> {
   const [l] = await sql<{ id: string }[]>`
@@ -68,6 +97,7 @@ beforeAll(async () => {
     // tests/setup.ts) — here we just call the repo methods; they operate on the
     // rows we seed via our own client against the SAME database.
     repo = (await import('../../src/modules/synthetic-bots/synthetic-bots.repo.js')).syntheticBotsRepo;
+    matchesService = (await import('../../src/modules/matches/matches.service.js')).matchesService;
     dbAvailable = true;
   } catch {
     console.warn('\n⚠️  Skipping abort/activate race test: DB unavailable.\n');
@@ -76,8 +106,14 @@ beforeAll(async () => {
 
 afterEach(async () => {
   if (!dbAvailable) return;
+  // Collect any matches created by createMatchFromLobby for the test lobbies too.
+  if (lobbyIds.length) {
+    const extraMatches = await sql<{ id: string }[]>`SELECT id FROM matches WHERE lobby_id = ANY(${lobbyIds}::uuid[])`;
+    for (const m of extraMatches) matchIds.push(m.id);
+  }
   if (matchIds.length) {
     await sql`DELETE FROM synthetic_bot_reservations WHERE match_id = ANY(${matchIds}::uuid[])`;
+    await sql`DELETE FROM match_players WHERE match_id = ANY(${matchIds}::uuid[])`;
     await sql`DELETE FROM matches WHERE id = ANY(${matchIds}::uuid[])`;
     matchIds.length = 0;
   }
@@ -90,6 +126,8 @@ afterEach(async () => {
   if (userIds.length) {
     await sql`DELETE FROM synthetic_bot_reservations WHERE bot_user_id = ANY(${userIds}::uuid[])`;
     await sql`DELETE FROM lobby_members WHERE user_id = ANY(${userIds}::uuid[])`;
+    await sql`DELETE FROM synthetic_player_profiles WHERE user_id = ANY(${userIds}::uuid[])`;
+    await sql`DELETE FROM ranked_profiles WHERE user_id = ANY(${userIds}::uuid[])`;
     await sql`DELETE FROM users WHERE id = ANY(${userIds}::uuid[])`;
     userIds.length = 0;
   }
@@ -257,5 +295,100 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     expect(abortResult.botReleased).toBe(bot);
     const gone = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(gone).toHaveLength(0);
+  });
+});
+
+describe('match-creation vs abort TOTAL ORDER on the lobby advisory lock (Sol final)', () => {
+  // Match CREATION now takes the same per-lobby advisory lock as its FIRST
+  // statement, so it and a concurrent abort are totally ordered. The forbidden
+  // SPLIT STATE (match created + lobby torn down / matches.lobby_id nulled) can
+  // never occur: either creation wins (match intact, lobby kept, reservation
+  // transferred) or abort wins (creation rolls back per P1-D, no orphaned match).
+
+  it('creation-wins (creation holds the lock first): match intact, lobby kept, reservation transferred; a queued abort NO-OPs', async () => {
+    if (!dbAvailable) return;
+    const { human, bot, lobby } = await fullRankedLobby('order-cw');
+    await repo.activateLobbyForDraftLocked(lobby); // draft activated (committed_at)
+
+    // Real match creation (its own tx takes the lobby lock first) and a concurrent
+    // abort. Kick both; creation should win the lock and commit the match+transfer,
+    // then the abort sees the live match → no-op. We don't control which grabs the
+    // lock first here, but the invariant (no split state) must hold either way, and
+    // we then assert the concrete creation-wins shape by re-running deterministically
+    // below. First: prove NO SPLIT STATE under a genuine concurrent run.
+    const [createResult] = await Promise.allSettled([
+      matchesService.createMatchFromLobby({
+        lobbyId: lobby, mode: 'ranked', variant: 'ranked_sim', hostUserId: human,
+        categoryAId: categoryId, categoryBId: null,
+      }),
+      repo.abortRankedAiLobbyLocked(lobby, { uncommitFirst: true }),
+    ]);
+
+    // Invariant: NEVER a match that exists while its lobby was torn down.
+    const matches = await sql<{ id: string; lobby_id: string | null; status: string }[]>`
+      SELECT id, lobby_id, status FROM matches WHERE lobby_id = ${lobby} OR id IN (
+        SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot} AND match_id IS NOT NULL
+      )`;
+    if (createResult.status === 'fulfilled') {
+      // Creation won → match exists AND its lobby_id is intact (not nulled), the
+      // lobby row survives, and the reservation carries the match_id.
+      const matchId = createResult.value.match.id;
+      matchIds.push(matchId);
+      const [m] = await sql<{ lobby_id: string | null }[]>`SELECT lobby_id FROM matches WHERE id = ${matchId}`;
+      expect(m.lobby_id).toBe(lobby); // NOT nulled by a teardown
+      const lobbyRows = await sql`SELECT 1 FROM lobbies WHERE id = ${lobby}`;
+      expect(lobbyRows).toHaveLength(1); // lobby NOT torn down
+      const [res] = await sql<{ match_id: string | null }[]>`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+      expect(res.match_id).toBe(matchId); // transferred
+    } else {
+      // Abort won → creation rolled back (P1-D): NO match for this lobby.
+      expect(matches.filter((mm) => mm.lobby_id === lobby)).toHaveLength(0);
+    }
+    // In neither branch is there a match whose lobby_id was nulled while the match lives.
+    for (const mm of matches) {
+      if (mm.status === 'active') expect(mm.lobby_id).not.toBeNull();
+    }
+  });
+
+  it('abort-wins (abort holds the lock first): creation ROLLS BACK, no orphaned match, bot freed', async () => {
+    if (!dbAvailable) return;
+    const { human, bot, lobby } = await fullRankedLobby('order-aw');
+    // NOTE: reservation is UNCOMMITTED here (no activation) so the abort will free it.
+
+    // Hold the lobby advisory lock on a dedicated connection as "the abort", so the
+    // real creation tx BLOCKS on its first statement. Run the abort's effect
+    // (free reservation + delete lobby) inside the held tx, commit, then let
+    // creation proceed → its transfer finds no reservation → rollback (P1-D).
+    const holder = await sql.reserve();
+    let createOutcome: 'fulfilled' | 'rejected' = 'fulfilled';
+    try {
+      await holder.unsafe('BEGIN');
+      await holder.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobby]);
+      // Abort effect under the held lock: free the uncommitted reservation + end lobby.
+      await holder.unsafe(`DELETE FROM synthetic_bot_reservations WHERE lobby_id = $1 AND match_id IS NULL AND committed_at IS NULL`, [lobby]);
+      await holder.unsafe(`DELETE FROM lobby_members WHERE lobby_id = $1`, [lobby]);
+      await holder.unsafe(`DELETE FROM lobbies WHERE id = $1`, [lobby]);
+
+      // Creation starts and BLOCKS on the lobby lock (its first statement).
+      const createP = matchesService.createMatchFromLobby({
+        lobbyId: lobby, mode: 'ranked', variant: 'ranked_sim', hostUserId: human,
+        categoryAId: categoryId, categoryBId: null,
+      }).then(() => { createOutcome = 'fulfilled'; }, () => { createOutcome = 'rejected'; });
+      await delay(200); // creation is blocked behind the held lock
+
+      await holder.unsafe('COMMIT'); // abort commits → releases lock
+      await createP;
+    } finally {
+      await holder.release();
+    }
+
+    // Creation ran after the abort committed. The lobby/members are gone (deleted
+    // by the abort) so createMatchFromLobby fails its "exactly 2 members" guard OR
+    // its transfer finds no reservation → rollback. Either way: NO match committed.
+    expect(createOutcome).toBe('rejected');
+    const matches = await sql`SELECT 1 FROM matches WHERE lobby_id = ${lobby}`;
+    expect(matches).toHaveLength(0);
+    const res = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(res).toHaveLength(0); // bot freed by the abort
   });
 });

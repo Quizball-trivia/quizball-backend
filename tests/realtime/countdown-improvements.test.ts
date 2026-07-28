@@ -314,6 +314,9 @@ describe('calculatePutInOrderScore', () => {
     expect(calculatePutInOrderScore(0, 5)).toBe(0);
     expect(calculatePutInOrderScore(3, 5)).toBe(60);
     expect(calculatePutInOrderScore(5, 5)).toBe(100);
+    expect(calculatePutInOrderScore(1, 4)).toBe(25);
+    expect(calculatePutInOrderScore(3, 4)).toBe(75);
+    expect(calculatePutInOrderScore(4, 4)).toBe(100);
   });
 
   it('caps scores to the available item count', () => {

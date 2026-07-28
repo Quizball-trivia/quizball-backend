@@ -10,6 +10,7 @@
  */
 
 import { logger } from '../../core/logger.js';
+import { config } from '../../core/config.js';
 import type { PersistentBotModelPin } from '../lobbies/lobbies.types.js';
 import { botModelParamsRepo } from './bot-model-params.repo.js';
 import { syntheticProfileRepo } from './synthetic-profile.repo.js';
@@ -51,13 +52,20 @@ export async function buildPersistentBotModelPin(
 
   const thetaCeilingBound = solveCeilingBound(active.params, accuracies);
 
+  // Kill switch (PR9): with the governor OFF the pin carries a ZERO offset, so
+  // bots immediately fall back to base calibrated skill. Zeroing here rather
+  // than relying on the settlement-time write matters — a stored offset would
+  // otherwise keep being applied to every match of a bot that has not settled
+  // since the switch was flipped, which is not a kill switch.
+  const governorAdjustment = config.BOT_GOVERNOR_ENABLED ? skill.governorAdjustment : 0;
+
   return {
     paramsVersion: active.version,
     params: active.params,
     botUserId,
     currentRp,
     personalOffset: skill.baseSkill,
-    governorAdjustment: skill.governorAdjustment,
+    governorAdjustment,
     categoryAffinities: skill.categoryAffinities,
     dailyFormSeed: georgiaDaySeed(now),
     thetaCeilingBound,

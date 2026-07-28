@@ -90,6 +90,21 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  // Rubber-band governor kill switch (PR9). Ships ENABLED, unlike the flags
+  // above, because it is a SAFETY loop, not a feature: it is what keeps roster
+  // bots from climbing into the human top 10 and what steers win rate into the
+  // 40-45% / 45-55% bands. It is inert while PERSISTENT_BOTS_ENABLED is off
+  // (no persistent bot settles a match, so the governor is never invoked), so
+  // defaulting ON adds no behavior until the roster actually ships.
+  //
+  // Turning it OFF drives every bot's stored offset to 0 on its next settlement
+  // — bots fall back to their base calibrated skill (PR8), which is still bound
+  // by the Layer-1 hard clamps. The offsets are NOT wiped instantly; a bot that
+  // never plays again keeps its last stored offset, which the pin then applies.
+  BOT_GOVERNOR_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val !== "false" && val !== "0"),
 
   // Supabase
   SUPABASE_URL: z.string().url().optional(),

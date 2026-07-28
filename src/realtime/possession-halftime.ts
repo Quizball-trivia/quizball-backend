@@ -118,12 +118,56 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     return unique;
   }
 
+  /**
+   * True when this halftime should skip the ban entirely because the lobby host
+   * already picked the second-half category. Penalty bans never qualify — they
+   * pick a fresh category regardless of what half 2 played.
+   */
+  function isPresetSecondHalf(
+    state: PossessionStatePayload,
+    categoryBId: string | null | undefined
+  ): boolean {
+    return state.halftime.purpose !== 'penalty' && Boolean(categoryBId);
+  }
+
+  /**
+   * Preset second half: there is nothing to ban, so `categoryOptions` carries
+   * the single preset category purely as the reveal payload and the ban/
+   * ui_ready machinery is bypassed.
+   */
+  async function applyPresetHalftimeCategory(
+    state: PossessionStatePayload,
+    categoryBId: string,
+    matchId: string
+  ): Promise<void> {
+    state.halftime.purpose = 'second_half_preset';
+    state.halftime.firstBanSeat = null;
+    state.halftime.bans = { seat1: null, seat2: null };
+    state.halftime.deadlineAt = null;
+    state.halftime.uiReadyAt = null;
+    state.halftime.readyDeferCount = 0;
+
+    if (state.halftime.categoryOptions.some((category) => category.id === categoryBId)) return;
+
+    try {
+      state.halftime.categoryOptions = await lobbiesService.getDraftCategoriesByIds([categoryBId]);
+    } catch (error) {
+      logger.error({ error, matchId, categoryBId }, 'Failed to load preset second-half category');
+      state.halftime.categoryOptions = [];
+    }
+  }
+
   async function ensureHalftimeCategories(
     state: PossessionStatePayload,
     categoryAId: string,
     matchId: string,
     categoryBId?: string | null
   ): Promise<void> {
+    // Host preset the second half → reveal it instead of opening a ban.
+    if (isPresetSecondHalf(state, categoryBId)) {
+      await applyPresetHalftimeCategory(state, categoryBId as string, matchId);
+      return;
+    }
     if (state.halftime.categoryOptions.length >= 3) return;
     try {
       const match = await matchesRepo.getMatch(matchId);
@@ -269,6 +313,57 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
     };
   }
 
+  /**
+   * Second-half entry for a host-preset category: the mirror of the ban path's
+   * second-half branch, minus everything ban-related. `cache.categoryBId` is
+   * already the category to play, so nothing is chosen or persisted here.
+   */
+  async function startPresetSecondHalf(
+    io: QuizballServer,
+    matchId: string,
+    cache: import('./match-cache.js').MatchCache,
+    state: PossessionStatePayload
+  ): Promise<void> {
+    const presetCategoryId = cache.categoryBId;
+
+    state.halftime.deadlineAt = null;
+    state.halftime.uiReadyAt = null;
+    state.halftime.readyDeferCount = 0;
+    state.halftime.firstBanSeat = null;
+    state.halftime.bans = { seat1: null, seat2: null };
+    state.halftime.purpose = 'second_half';
+
+    state.half = 2;
+    state.phase = 'NORMAL_PLAY';
+    state.possessionDiff = 0;
+    state.kickOffSeat = nextSeat(state.kickOffSeat);
+    state.lastAttack.attackerSeat = null;
+    state.currentQuestion = null;
+    state.normalQuestionsAnsweredInHalf = 0;
+    bumpStateVersion(state);
+
+    cache.currentQuestion = null;
+    cache.answers = {};
+    cache.revealAcks = {};
+    await setMatchCache(cache);
+    fireAndForget('setMatchStatePayload(finalizeHalftime:preset)', async () => {
+      await matchesRepo.setMatchStatePayload(matchId, state, cache.currentQIndex);
+    });
+    await emitMatchState(io, matchId, state);
+    logger.info(
+      {
+        eventName: 'match:halftime_finalize',
+        matchId,
+        half: state.half,
+        purpose: 'second_half_preset',
+        chosenCategoryId: presetCategoryId,
+      },
+      'Possession halftime finalized with preset second-half category'
+    );
+
+    await deps.sendQuestion(io, matchId, cache.currentQIndex, { cache });
+  }
+
   async function finalizeHalftime(io: QuizballServer, matchId: string): Promise<void> {
     const lockKey = `lock:match:${matchId}:halftime`;
     const lock = await acquireLock(lockKey, 5000);
@@ -292,6 +387,13 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
           },
           'Possession halftime finalize skipped: match paused'
         );
+        return;
+      }
+
+      // Preset second half: no bans were ever offered, so every ban/ui_ready
+      // path below is inapplicable. Go straight to half 2 with the host's pick.
+      if (state.halftime.purpose === 'second_half_preset') {
+        await startPresetSecondHalf(io, matchId, cache, state);
         return;
       }
 
@@ -809,6 +911,18 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       if (!cache || cache.status !== 'active') return false;
       const state = cache.statePayload;
       if (state.phase !== 'HALFTIME') return false;
+
+      // Preset second half has no ban deadline to rebase and no AI ban to
+      // re-arm. Rebasing here would arm a timer nobody consumes and strand the
+      // match in HALFTIME, so finish the transition instead.
+      if (state.halftime.purpose === 'second_half_preset') {
+        logger.info(
+          { eventName: 'match:halftime_resume', matchId, half: state.half, purpose: state.halftime.purpose },
+          'Possession preset halftime resumed: starting second half directly'
+        );
+        await startPresetSecondHalf(io, matchId, cache, state);
+        return true;
+      }
 
       const previousDeadlineAt = state.halftime.deadlineAt;
       const previousDeadlineMs = previousDeadlineAt ? new Date(previousDeadlineAt).getTime() : Number.NaN;

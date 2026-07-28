@@ -44,13 +44,19 @@ vi.mock('../../src/modules/matches/matches.repo.js', () => ({
   },
 }));
 
+const getDraftCategoriesByIdsMock = vi.fn();
+const getLobbyCategoriesMock = vi.fn();
+const selectRandomCategoriesExcludingMock = vi.fn();
+
 vi.mock('../../src/modules/lobbies/lobbies.service.js', () => ({
   lobbiesService: {
-    getLobbyCategories: vi.fn(),
+    getLobbyCategories: (...args: unknown[]) => getLobbyCategoriesMock(...args),
+    getDraftCategoriesByIds: (...args: unknown[]) => getDraftCategoriesByIdsMock(...args),
     selectRandomCategories: vi.fn(),
-    selectRandomCategoriesExcluding: vi.fn(),
+    selectRandomCategoriesExcluding: (...args: unknown[]) => selectRandomCategoriesExcludingMock(...args),
     selectRandomRankedCategories: vi.fn(),
     selectRandomRankedCategoriesExcluding: vi.fn(),
+    selectRankedCategoriesForDraft: vi.fn(),
   },
 }));
 
@@ -473,5 +479,139 @@ describe('possession halftime finalize', () => {
       halftime.clearHalftimeAiBanTimer('match-1');
       vi.useRealTimers();
     }
+  });
+});
+
+describe('possession halftime with a preset second-half category', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    acquireLockMock.mockResolvedValue({ acquired: true, token: 'lock-token' });
+    releaseLockMock.mockResolvedValue(true);
+    cancelRealtimeTimerMock.mockResolvedValue(1);
+    scheduleRealtimeTimerMock.mockResolvedValue(undefined);
+    getRedisClientMock.mockReturnValue(null);
+    setMatchCacheMock.mockResolvedValue(undefined);
+    setMatchCategoryBMock.mockResolvedValue(undefined);
+    setMatchStatePayloadMock.mockResolvedValue(undefined);
+    getDraftCategoriesByIdsMock.mockResolvedValue([
+      { id: 'cat-preset', name: { en: 'Preset' }, icon: null, imageUrl: null },
+    ]);
+  });
+
+  function createPresetCache(): MatchCache {
+    const cache = createHalftimeCache();
+    cache.categoryBId = 'cat-preset';
+    cache.statePayload.halftime.categoryOptions = [];
+    cache.statePayload.halftime.deadlineAt = null;
+    return cache;
+  }
+
+  it('marks the halftime as preset and offers only the preset category (no ban)', async () => {
+    const cache = createPresetCache();
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    expect(cache.statePayload.halftime.purpose).toBe('second_half_preset');
+    expect(cache.statePayload.halftime.categoryOptions).toHaveLength(1);
+    expect(cache.statePayload.halftime.categoryOptions[0]?.id).toBe('cat-preset');
+    // No ban window is opened for a preset.
+    expect(cache.statePayload.halftime.deadlineAt).toBeNull();
+    expect(cache.statePayload.halftime.firstBanSeat).toBeNull();
+    expect(selectRandomCategoriesExcludingMock).not.toHaveBeenCalled();
+  });
+
+  it('starts the second half directly, skipping the ban and the ui_ready defer', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'second_half_preset';
+    cache.statePayload.halftime.categoryOptions = [
+      { id: 'cat-preset', name: { en: 'Preset' }, icon: null, imageUrl: null },
+    ];
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    // An AI opponent exists — the ban path would defer on missing ui_ready.
+    const resolveAiUserId = vi.fn(async () => 'user-2');
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({ sendQuestion, resolveAiUserId });
+    const kickOffBefore = cache.statePayload.kickOffSeat;
+
+    await halftime.finalizeHalftime(createIo(), 'match-1');
+
+    expect(cache.statePayload.half).toBe(2);
+    expect(cache.statePayload.phase).toBe('NORMAL_PLAY');
+    expect(cache.statePayload.kickOffSeat).not.toBe(kickOffBefore);
+    expect(cache.statePayload.normalQuestionsAnsweredInHalf).toBe(0);
+    // The preset category is already recorded; finalize must not re-pick it.
+    expect(cache.categoryBId).toBe('cat-preset');
+    expect(setMatchCategoryBMock).not.toHaveBeenCalled();
+    expect(cache.statePayload.halftime.bans).toEqual({ seat1: null, seat2: null });
+    // purpose resets so a later penalty ban is unaffected.
+    expect(cache.statePayload.halftime.purpose).toBe('second_half');
+    expect(sendQuestion).toHaveBeenCalledWith(expect.anything(), 'match-1', 6, { cache });
+  });
+
+  it('finishes the transition on resume instead of rebasing a ban deadline', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'second_half_preset';
+    cache.statePayload.halftime.categoryOptions = [
+      { id: 'cat-preset', name: { en: 'Preset' }, icon: null, imageUrl: null },
+    ];
+    getMatchCacheOrRebuildMock.mockResolvedValue(cache);
+    const sendQuestion = vi.fn(async () => ({ correctIndex: 1 }));
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion,
+      resolveAiUserId: vi.fn(async () => 'user-2'),
+    });
+
+    const resumed = await halftime.resumePossessionHalftimeAfterPause(
+      createIo(),
+      'match-1',
+      Date.now() - 5000
+    );
+
+    expect(resumed).toBe(true);
+    // A rebased deadline would strand the match in HALFTIME forever.
+    expect(cache.statePayload.halftime.deadlineAt).toBeNull();
+    expect(cache.statePayload.phase).toBe('NORMAL_PLAY');
+    expect(cache.statePayload.half).toBe(2);
+    expect(sendQuestion).toHaveBeenCalled();
+  });
+
+  it('leaves the pre-penalty ban flow untouched when a preset category exists', async () => {
+    const cache = createPresetCache();
+    cache.statePayload.halftime.purpose = 'penalty';
+    selectRandomCategoriesExcludingMock.mockResolvedValue([
+      { id: 'cat-x', name: { en: 'X' }, icon: null, imageUrl: null },
+      { id: 'cat-y', name: { en: 'Y' }, icon: null, imageUrl: null },
+      { id: 'cat-z', name: { en: 'Z' }, icon: null, imageUrl: null },
+    ]);
+    getLobbyCategoriesMock.mockResolvedValue([]);
+    const { createPossessionHalftime } = await import('../../src/realtime/possession-halftime.js');
+    const halftime = createPossessionHalftime({
+      sendQuestion: vi.fn(),
+      resolveAiUserId: vi.fn(async () => null),
+    });
+
+    await halftime.ensureHalftimeCategories(
+      cache.statePayload,
+      cache.categoryAId,
+      'match-1',
+      cache.categoryBId
+    );
+
+    // Penalty still bans between 3 options; the preset never short-circuits it.
+    expect(cache.statePayload.halftime.purpose).toBe('penalty');
+    expect(cache.statePayload.halftime.categoryOptions).toHaveLength(3);
+    expect(getDraftCategoriesByIdsMock).not.toHaveBeenCalled();
   });
 });

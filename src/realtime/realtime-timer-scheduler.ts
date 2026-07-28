@@ -20,9 +20,11 @@ const TIMER_BATCH_SIZE = 100;
 const TIMER_HANDLER_CONCURRENCY = config.REALTIME_TIMER_HANDLER_CONCURRENCY;
 
 export type RealtimeTimerKind =
+  | 'auction_advance_retry'
   | 'auction_bot_action'
   | 'auction_clue_reveal'
   | 'auction_clue_study'
+  | 'auction_disconnect_debounce'
   | 'auction_disconnect_grace'
   | 'auction_matchmaking_fill'
   | 'auction_resume_countdown'
@@ -41,9 +43,11 @@ export type RealtimeTimerKind =
   | 'ranked_draft_start';
 
 export type RealtimeTimerPayload =
+  | { kind: 'auction_advance_retry'; matchId: string; phaseHint: 'round' | 'bidding' | 'reveal' }
   | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
   | { kind: 'auction_clue_study'; matchId: string; roundId: string; stateVersion: number }
+  | { kind: 'auction_disconnect_debounce'; matchId: string; userId: string; seatId: string; disconnectedAt: string }
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
   | { kind: 'auction_matchmaking_fill'; searchId: string }
   | { kind: 'auction_resume_countdown'; matchId: string; userId: string }
@@ -93,9 +97,11 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   const key = member.slice(separator + 1);
   if (!key) return null;
   if (
-    kind !== 'auction_bot_action'
+    kind !== 'auction_advance_retry'
+    && kind !== 'auction_bot_action'
     && kind !== 'auction_clue_reveal'
     && kind !== 'auction_clue_study'
+    && kind !== 'auction_disconnect_debounce'
     && kind !== 'auction_disconnect_grace'
     && kind !== 'auction_matchmaking_fill'
     && kind !== 'auction_resume_countdown'

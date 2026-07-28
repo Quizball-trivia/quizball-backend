@@ -91,6 +91,20 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
     `;
     const deletableIds = present.map((m) => m.id);
 
+    // Delete burn-in achievement rows FIRST, while source_match_id still points
+    // at the plan matches: the FK is ON DELETE SET NULL, so deleting the matches
+    // first would null source_match_id and orphan these unlocked rows past the
+    // predicate. UNLOCKED rows sourced from a plan match, plus not-yet-unlocked
+    // progress rows (null source, burn-in-created given the guards). The refusal
+    // above guarantees no unlocked row is foreign/null-src, so this can never
+    // touch a real, non-burn-in achievement. Match against deletableIds (the
+    // present burn-in-tagged plan matches) for exactness.
+    await tx`
+      DELETE FROM user_achievements
+      WHERE user_id = ANY(${rosterUserIds}::uuid[])
+        AND (source_match_id = ANY(${deletableIds}::uuid[]) OR unlocked_at IS NULL)
+    `;
+
     let matchesDeleted = 0;
     if (deletableIds.length > 0) {
       await tx`DELETE FROM ranked_rp_changes WHERE match_id = ANY(${deletableIds}::uuid[])`;
@@ -101,15 +115,6 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
       `;
       matchesDeleted = deleted.length;
     }
-    // Delete burn-in achievement rows: UNLOCKED rows sourced from a plan match,
-    // plus not-yet-unlocked progress rows (null source, burn-in-created given the
-    // guards). The refusal above guarantees no unlocked row is foreign/null-src,
-    // so this can never touch a real, non-burn-in achievement.
-    await tx`
-      DELETE FROM user_achievements
-      WHERE user_id = ANY(${rosterUserIds}::uuid[])
-        AND (source_match_id = ANY(${planMatchIds}::uuid[]) OR unlocked_at IS NULL)
-    `;
 
     // Decrement total_xp by exactly the burn-in contribution (never below 0).
     for (const row of xpByUser) {

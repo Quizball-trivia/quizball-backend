@@ -296,8 +296,23 @@ describe('rollback', () => {
     const rpBefore = await sql<{ rp: number }[]>`SELECT rp FROM ranked_profiles WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[])`;
     expect(rpBefore.some((r) => r.rp !== 450)).toBe(true);
 
+    // Any burn-in-earned UNLOCKED achievements exist before rollback.
+    const achBefore = await sql<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM user_achievements
+      WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[]) AND unlocked_at IS NOT NULL
+    `;
+
     const result = await rollbackBurnIn(matchIds, bots.map((b) => b.userId));
     expect(result.matchesDeleted).toBe(matchIds.length);
+
+    // Burn-in achievements are gone — deleted BEFORE the matches so the
+    // ON DELETE SET NULL FK can't orphan the plan-sourced rows past the predicate.
+    const [{ c: achAfter }] = await sql<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM user_achievements
+      WHERE user_id = ANY(${bots.map((b) => b.userId)}::uuid[])
+    `;
+    expect(achAfter).toBe(0);
+    void achBefore;
 
     // Matches gone; bots pristine again; marker cleared.
     const [{ c }] = await sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM matches WHERE id = ANY(${matchIds}::uuid[])`;

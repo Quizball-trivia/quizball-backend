@@ -2,7 +2,7 @@
  * Deterministic fixture scheduler + pairing for the burn-in engine.
  *
  * Builds the entire season-to-date fixture plan from a seed BEFORE any write:
- *   - Placement first: each bot's first 3 fixtures carry placement semantics.
+ *   - Every bot starts placed at its deterministic Season-2 target seed.
  *   - Pairing: RP-neighbor preference with ±150 widening; one match per bot per
  *     timestamp; no repeat within a bot's last 5 opponents; both bots must be
  *     schedule/cap/session-eligible at the fixture time.
@@ -11,20 +11,18 @@
  *     forcing the win assignment (a capped bot at/over the ceiling is made to
  *     lose against an equal-or-stronger neighbor) — never by RP fudging.
  *
- * RP is advanced in-memory through the REAL formula (computeSeasonRpDelta + the
- * placement running-rank semantics copied from ranked.service) so the dry-run
- * report's final distribution equals what the writer will settle. The writer
- * re-derives nothing about RP; it drives the real settlement path per fixture.
+ * RP is advanced in-memory through the placed ranked-formula branch so the
+ * dry-run report's final distribution equals what the writer will settle.
  */
 import {
   computeSeasonRpDelta,
-  SEASON_INITIAL_RP,
 } from '../../src/modules/ranked/season-rp-formula.js';
 import type { BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, PlannedFixture } from './types.js';
 import { makeRng, deriveSeed, type Rng } from './rng.js';
 import { simulateFixture, winProbability } from './simulator.js';
 import { fixtureContentDigest, fixtureMatchIdFromDigest } from './manifest.js';
+import { placementWinsForBand, seedRosterBots } from './s2-distribution.js';
 
 const PLACEMENT_MATCHES = 3;
 const WINDOW_START_HOUR = 7; // 07:00 Tbilisi
@@ -39,7 +37,7 @@ const TBILISI_OFFSET_MS = 4 * 60 * 60 * 1000; // UTC+4, no DST in Georgia
 // Largest possible single-fixture RP gain: +50 regular win, +40 win-by-4+
 // margin, +10 for beating a stronger opponent. The ceiling guard reserves this
 // much headroom so a win can never cross the ceiling.
-const MAX_WIN_DELTA = 100;
+export const MAX_WIN_DELTA = 100;
 // Longest a burn-in fixture can occupy (matches planFixture's max duration) —
 // used to guarantee the fixture ENDS by the 01:23 boundary.
 const MAX_FIXTURE_DURATION_MS = 7 * 60 * 1000;
@@ -211,11 +209,10 @@ export function buildSchedule(opts: {
     (runDate.getTime() - seasonStart.getTime()) / (24 * 60 * 60 * 1000),
   );
 
-  // PLAN PHASE is a PURE function of H's IMMUTABLE inputs. Every bot starts from
-  // the fixed pristine baseline (SEASON_INITIAL_RP / unplaced / 0) — NOT its live
-  // rp/placement/streak — so the plan (and every fixture id) is identical no
-  // matter what the DB currently holds. The pristine execute gate (inside the
-  // one write transaction) guarantees this baseline is the real pre-state.
+  const seededById = new Map(
+    seedRosterBots(opts.bots, seed, ceilingRp).map((seededBot) => [seededBot.userId, seededBot]),
+  );
+
   const bots: MutableBot[] = opts.bots.map((b) => ({
     userId: b.userId,
     nickname: b.nickname,
@@ -223,11 +220,10 @@ export function buildSchedule(opts: {
     dailyCap: b.dailyCap,
     schedule: b.schedule,
     status: b.status,
-    // Pristine baseline — the ONLY starting state the plan ever assumes.
-    rp: SEASON_INITIAL_RP,
-    placementPlayed: 0,
-    placementWins: 0,
-    placementStatus: 'unplaced',
+    rp: seededById.get(b.userId)!.seededRp,
+    placementPlayed: PLACEMENT_MATCHES,
+    placementWins: placementWinsForBand(seededById.get(b.userId)!.band),
+    placementStatus: 'placed',
     currentWinStreak: 0,
     fixturesPlayed: 0,
     recentOpponents: [],
@@ -243,8 +239,7 @@ export function buildSchedule(opts: {
   for (const b of bots) remainingByBot.set(b.userId, feasibleDepth(b, targetMatches, daysSinceReset));
 
   // Total fixtures across the run: half the sum of per-bot depths (each fixture
-  // consumes two bots). Iterate in RP order so placement/low bots get matched
-  // early and the ladder spreads before neighbors climb away.
+  // consumes two bots).
   const fixtures: PlannedFixture[] = [];
   let ordinal = 0;
 
@@ -420,7 +415,7 @@ function planFixture(opts: {
   const startedAt = new Date(atMs);
   const endedAt = new Date(atMs + durationMs);
   const winnerUserId = sim.winnerIsA ? a.userId : b.userId;
-  const isPlacementContext = a.placementStatus !== 'placed' || b.placementStatus !== 'placed';
+  const isPlacementContext = false;
   const categoryAId = rng.pick(categoryIds);
   const categoryBId = rng.pick(categoryIds);
 
@@ -457,6 +452,7 @@ function planFixture(opts: {
     // Overwritten by commitFixture with the true projected post-settlement RP.
     projectedRpA: 0,
     projectedRpB: 0,
+    projectionChecked: true,
   };
 }
 

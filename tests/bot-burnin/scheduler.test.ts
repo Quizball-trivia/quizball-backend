@@ -9,6 +9,8 @@ import { resolve } from 'node:path';
 import { buildSchedule } from '../../scripts/bot-burnin/scheduler.js';
 import { parseBotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import type { BurnInBot, BotSchedule } from '../../scripts/bot-burnin/types.js';
+import { computeParticipantSettlement } from '../../src/modules/ranked/season-rp-formula.js';
+import { seedRosterBots } from '../../scripts/bot-burnin/s2-distribution.js';
 
 const params = parseBotModelParams(
   JSON.parse(readFileSync(resolve(__dirname, 'fixtures/params.json'), 'utf8')),
@@ -21,7 +23,11 @@ const TBILISI_OFFSET_MS = 4 * 60 * 60 * 1000;
 function makeBots(n: number, schedule?: Partial<BotSchedule>): BurnInBot[] {
   const bots: BurnInBot[] = [];
   for (let i = 0; i < n; i++) {
-    const baseSkill = -0.9 + (i / (n - 1)) * 2.0;
+    const fraction = (i + 0.5) / n;
+    const skillBand = fraction < 0.2 ? 0 : fraction < 0.5 ? 1 : fraction < 0.8 ? 2 : fraction < 0.95 ? 3 : 4;
+    const ranges = [[0.05, 0.25], [0.25, 0.45], [0.45, 0.6], [0.6, 0.75], [0.75, 0.9]] as const;
+    const [lo, hi] = ranges[skillBand];
+    const baseSkill = lo + ((i * 0.61803398875) % 1) * (hi - lo);
     bots.push({
       userId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
       nickname: `bot_${i}`,
@@ -29,6 +35,7 @@ function makeBots(n: number, schedule?: Partial<BotSchedule>): BurnInBot[] {
       dailyCap: 6,
       schedule: { activeHours: [], sessionMax: 4, intraSessionGapMin: 20, ...schedule },
       status: 'active',
+      skillBand,
       // Pristine starting state (the execute gate guarantees this at run time).
       rp: 450,
       placementPlayed: 0,
@@ -45,8 +52,8 @@ const baseOpts = {
   seed: 20260721,
   seasonStart: SEASON_START,
   runDate: RUN_DATE,
-  targetMatches: 22,
-  ceilingRp: 1300,
+  targetMatches: 12,
+  ceilingRp: 2565,
   categoryIds: ['cat-1', 'cat-2', 'cat-3'],
   manifestHash: 'test-manifest-hash',
 };
@@ -108,7 +115,7 @@ describe('buildSchedule determinism', () => {
 
 describe('hard ceiling', () => {
   it('no bot ends above the ceiling RP', () => {
-    const ceilingRp = 900;
+    const ceilingRp = 2565;
     const { finalBots } = buildSchedule({ ...baseOpts, bots: makeBots(24), ceilingRp });
     const maxRp = Math.max(...finalBots.map((b) => b.rp));
     expect(maxRp).toBeLessThanOrEqual(ceilingRp);
@@ -127,8 +134,9 @@ describe('chronological ordering (order-consistency fix)', () => {
     const { fixtures } = buildSchedule({ ...baseOpts, bots: makeBots(24) });
     expect(fixtures.length).toBeGreaterThan(0);
     for (const f of fixtures) {
-      expect(f.projectedRpA).toBeGreaterThan(0);
-      expect(f.projectedRpB).toBeGreaterThan(0);
+      expect(f.projectionChecked).toBe(true);
+      expect(f.projectedRpA).toBeGreaterThanOrEqual(0);
+      expect(f.projectedRpB).toBeGreaterThanOrEqual(0);
     }
   });
 });
@@ -143,18 +151,80 @@ describe('per-bot feasibility', () => {
     const count = (id: string) =>
       fixtures.filter((f) => f.botAUserId === id || f.botBUserId === id).length;
     expect(count(bots[0].userId)).toBe(0);
-    expect(count(bots[1].userId)).toBeLessThan(count(bots[2].userId));
+    expect(count(bots[1].userId)).toBeLessThanOrEqual(7);
+    expect(count(bots[2].userId)).toBeGreaterThanOrEqual(count(bots[1].userId));
   });
 
-  it('placement-first: a bot’s first three fixtures carry placement context', () => {
+  it('all recent-history fixtures use the placed ranked-formula context', () => {
     const { fixtures } = buildSchedule({ ...baseOpts, bots: makeBots(16) });
-    const target = fixtures[0]?.botAUserId;
-    expect(target).toBeDefined();
-    const forBot = fixtures
-      .filter((f) => f.botAUserId === target || f.botBUserId === target)
-      .slice(0, 3);
-    expect(forBot.length).toBeGreaterThan(0);
-    for (const f of forBot) expect(f.isPlacementContext).toBe(true);
+    expect(fixtures.length).toBeGreaterThan(0);
+    for (const fixture of fixtures) expect(fixture.isPlacementContext).toBe(false);
+  });
+});
+
+describe('Stage B seeded placed projection', () => {
+  it('matches computeParticipantSettlement for every fixture', () => {
+    const bots = makeBots(24);
+    const { fixtures } = buildSchedule({ ...baseOpts, bots });
+    const state = new Map(
+      seedRosterBots(bots, baseOpts.seed, baseOpts.ceilingRp).map((bot) => [
+        bot.userId,
+        { rp: bot.seededRp, streak: 0 },
+      ]),
+    );
+
+    for (const fixture of fixtures) {
+      const a = state.get(fixture.botAUserId)!;
+      const b = state.get(fixture.botBUserId)!;
+      const settle = (
+        mine: { rp: number; streak: number },
+        opponent: { rp: number; streak: number },
+        isWin: boolean,
+        goalMargin: number,
+      ) => computeParticipantSettlement({
+        oldRp: mine.rp,
+        placementStatus: 'placed',
+        placementPlayed: 3,
+        placementWins: 1,
+        placementSeedRp: mine.rp,
+        placementPerfSum: 0,
+        placementPointsForSum: 0,
+        placementPointsAgainstSum: 0,
+        currentWinStreak: mine.streak,
+        placementRequired: 3,
+        isWin,
+        decision: fixture.decision,
+        goalMargin,
+        opponentRp: opponent.rp,
+        opponentIsStronger: opponent.rp > mine.rp,
+        isHumanForCoins: false,
+      });
+      const aWon = fixture.winnerUserId === fixture.botAUserId;
+      const marginA = fixture.scoreA.goals - fixture.scoreB.goals;
+      const settledA = settle(a, b, aWon, marginA);
+      const settledB = settle(b, a, !aWon, -marginA);
+      expect(settledA.calculationMethod).toBe('ranked_formula');
+      expect(settledB.calculationMethod).toBe('ranked_formula');
+      expect(settledA.newRp).toBe(fixture.projectedRpA);
+      expect(settledB.newRp).toBe(fixture.projectedRpB);
+      state.set(fixture.botAUserId, { rp: settledA.newRp, streak: settledA.currentWinStreak });
+      state.set(fixture.botBUserId, { rp: settledB.newRp, streak: settledB.currentWinStreak });
+    }
+  });
+
+  it('builds recent form around each seed with self-consistent streaks', () => {
+    const bots = makeBots(40);
+    const { fixtures, finalBots } = buildSchedule({ ...baseOpts, bots });
+    const seeds = new Map(seedRosterBots(bots, baseOpts.seed, baseOpts.ceilingRp).map((bot) => [bot.userId, bot.seededRp]));
+    const streaks = new Map<string, number>();
+    for (const fixture of fixtures) {
+      for (const id of [fixture.botAUserId, fixture.botBUserId]) {
+        streaks.set(id, fixture.winnerUserId === id ? (streaks.get(id) ?? 0) + 1 : 0);
+      }
+    }
+    expect(finalBots.some((bot) => bot.rp !== seeds.get(bot.userId))).toBe(true);
+    expect(finalBots.filter((bot) => (seeds.get(bot.userId) ?? 0) > 1000).every((bot) => bot.rp > 600)).toBe(true);
+    for (const bot of finalBots) expect(bot.currentWinStreak).toBe(streaks.get(bot.userId) ?? 0);
   });
 });
 

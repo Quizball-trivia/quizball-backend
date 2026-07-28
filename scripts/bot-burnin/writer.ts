@@ -7,10 +7,11 @@
  */
 import type { TransactionSql } from '../../src/db/index.js';
 import { getMatchXpReward } from '../../src/modules/progression/progression.logic.js';
-import { computeParticipantSettlement } from '../../src/modules/ranked/season-rp-formula.js';
+import { computeParticipantSettlement, tierFromRp } from '../../src/modules/ranked/season-rp-formula.js';
 import { achievementsService } from '../../src/modules/achievements/index.js';
 import type { PlacementStatus } from '../../src/modules/ranked/ranked.types.js';
 import type { PlannedFixture } from './types.js';
+import { placementWinsForBand, type SeededBot } from './s2-distribution.js';
 
 interface LockedRankedProfile {
   user_id: string;
@@ -24,6 +25,43 @@ interface LockedRankedProfile {
   placement_points_for_sum: number;
   placement_points_against_sum: number;
   current_win_streak: number;
+}
+
+export async function writeSeededProfilesInTx(
+  tx: TransactionSql,
+  seededBots: readonly SeededBot[],
+): Promise<void> {
+  if (seededBots.length === 0) return;
+  const userIds = seededBots.map((bot) => bot.userId);
+  const seededRps = seededBots.map((bot) => bot.seededRp);
+  const tiers = seededBots.map((bot) => tierFromRp(bot.seededRp));
+  const placementWins = seededBots.map((bot) => placementWinsForBand(bot.band));
+  const updated = await tx.unsafe<{ user_id: string }[]>(
+    `
+    UPDATE ranked_profiles AS profile
+    SET
+      placement_status = 'placed',
+      tier = seed.tier,
+      rp = seed.rp,
+      placement_played = 3,
+      placement_wins = seed.placement_wins,
+      placement_seed_rp = seed.rp,
+      placement_perf_sum = 0,
+      placement_points_for_sum = 0,
+      placement_points_against_sum = 0,
+      current_win_streak = 0,
+      last_ranked_match_at = NULL,
+      updated_at = NOW()
+    FROM UNNEST($1::uuid[], $2::integer[], $3::text[], $4::integer[])
+      AS seed(user_id, rp, tier, placement_wins)
+    WHERE profile.user_id = seed.user_id
+    RETURNING profile.user_id
+    `,
+    [userIds, seededRps, tiers, placementWins],
+  );
+  if (updated.length !== seededBots.length) {
+    throw new Error(`Stage A seeded ${updated.length}/${seededBots.length} ranked profiles`);
+  }
 }
 
 export async function writeFixtureInTx(
@@ -176,7 +214,7 @@ export async function writeFixtureInTx(
   // the real scheduler always sets a positive projected RP. Skip the check then.
   const expectedA = fixture.projectedRpA;
   const expectedB = fixture.projectedRpB;
-  if (expectedA > 0 && expectedB > 0) {
+  if (fixture.projectionChecked || (expectedA > 0 && expectedB > 0)) {
     for (const participant of participants) {
       const expected = participant.userId === fixture.botAUserId ? expectedA : expectedB;
       if (participant.settlement.newRp !== expected) {

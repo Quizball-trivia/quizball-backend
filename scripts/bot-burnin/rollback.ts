@@ -10,7 +10,7 @@
  * receipt is needed: the plan + the pristine baseline are pure functions of the
  * inputs.
  *
- *   npm run bot:burnin:rollback -- --params <p> --season-start <ISO> --season-end <ISO> [--seed N] [--target N] [--margin-rp N]
+ *   npm run bot:burnin:rollback -- --params <p> --season-start <ISO> --season-end <ISO> [--seed N] [--recent-matches N] [--margin-rp N]
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
@@ -27,8 +27,8 @@ import { assertDbTarget } from './target-guard.js';
 
 const DEFAULT_SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
-const DEFAULT_TARGET = 22;
-const DEFAULT_MARGIN = 200;
+export const RECENT_MATCHES = 12;
+export const DEFAULT_MARGIN = 50;
 
 function get(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
@@ -57,14 +57,14 @@ async function main(): Promise<void> {
   if (!seasonEnd) throw new Error('--season-end <ISO date> is required (to recompute the exact plan).');
   const seasonStart = date(get(argv, '--season-start')) ?? DEFAULT_SEASON_START;
   const seed = num(get(argv, '--seed')) ?? DEFAULT_SEED;
-  const target = num(get(argv, '--target')) ?? DEFAULT_TARGET;
+  const recentMatches = num(get(argv, '--recent-matches')) ?? RECENT_MATCHES;
   const marginRp = num(get(argv, '--margin-rp')) ?? DEFAULT_MARGIN;
 
   const params = parseBotModelParams(JSON.parse(readFileSync(resolve(paramsPath), 'utf8')));
   const [roster, categoryIds] = await Promise.all([loadRoster(null), loadActiveCategoryIds()]);
   if (roster.length < 2) throw new Error(`Roster too small (${roster.length}).`);
 
-  const manifest = buildManifest({ seed, seasonStart, seasonEnd, targetMatches: target, ceilingMarginRp: marginRp, params, bots: roster, categoryIds });
+  const manifest = buildManifest({ seed, seasonStart, seasonEnd, targetMatches: recentMatches, ceilingMarginRp: marginRp, params, bots: roster, categoryIds });
   const manifestHash = computeManifestHash(manifest);
 
   // The run's ceiling is derived from LIVE human RP (which drifts) and pairing
@@ -74,10 +74,10 @@ async function main(): Promise<void> {
   const marker = await readBurnInMarker();
   if (!marker) throw new Error('No burn-in marker present — nothing to roll back.');
   if (marker.manifestHash !== manifestHash) {
-    throw new Error(`Recomputed manifest ${manifestHash} != marker ${marker.manifestHash}. Pass the SAME --params/--seed/--season-*/--target/--margin-rp the run used.`);
+    throw new Error(`Recomputed manifest ${manifestHash} != marker ${marker.manifestHash}. Pass the SAME --params/--seed/--season-*/--recent-matches/--margin-rp the run used.`);
   }
 
-  const schedule = buildSchedule({ bots: roster, params, seed, seasonStart, runDate: seasonEnd, targetMatches: target, ceilingRp: marker.ceilingRp, categoryIds, manifestHash });
+  const schedule = buildSchedule({ bots: roster, params, seed, seasonStart, runDate: seasonEnd, targetMatches: recentMatches, ceilingRp: marker.ceilingRp, categoryIds, manifestHash });
   const planMatchIds = schedule.fixtures.map((f) => f.matchId);
   const rosterUserIds = roster.map((b) => b.userId);
 

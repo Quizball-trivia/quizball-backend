@@ -2,21 +2,18 @@
 /**
  * One-time persistent-bot burn-in engine (PR6).
  *
- * Gives each persistent roster bot a plausible season-to-date (3 placements +
- * backdated ranked bot-vs-bot fixtures) using the REAL Season-2026 RP formula,
- * capped below the live human top-10.
+ * Seeds each persistent roster bot from the Season-2 human ladder shape, then
+ * adds a short backdated ranked bot-vs-bot history using the real RP formula.
  *
  * DRY-RUN IS THE DEFAULT — simulates the full plan, prints the distribution
- * report, ZERO writes. --execute performs the backdated writes and REQUIRES
- * --snapshot-out <file> (write-once pre-run snapshot for rollback) + an
- * append-only JSONL receipt.
+ * report, and performs zero writes. --execute performs the backdated writes.
  *
  * Burn-in is a PRISTINE-STATE operation: it runs ONCE, immediately after roster
  * creation, BEFORE selection ever activates. --execute refuses unless every
  * roster bot is exactly pristine and the PERSISTENT_BOTS flag is OFF.
  *
  *   npm run bot:burnin -- --params /abs/params.json --limit 20
- *   npm run bot:burnin -- --params <p> --execute --snapshot-out snap.json --receipt-out run.jsonl
+ *   npm run bot:burnin -- --params <p> --execute --season-end 2026-07-28
  */
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local' });
@@ -40,19 +37,22 @@ import {
 import { buildManifest, manifestHash as computeManifestHash } from './manifest.js';
 import { buildSchedule } from './scheduler.js';
 import { buildReport, formatReport } from './report.js';
-import { writeFixtureInTx } from './writer.js';
+import { writeFixtureInTx, writeSeededProfilesInTx } from './writer.js';
 import { assertDbTarget } from './target-guard.js';
+import { seedRosterBots } from './s2-distribution.js';
 
 const DEFAULT_SEASON_START = new Date('2026-07-21T00:00:00Z');
 const DEFAULT_SEED = 20260721;
-const DEFAULT_TARGET = 22; // population median inside the 15-40 band
-const DEFAULT_MARGIN = 200;
+export const RECENT_MATCHES = 12;
+export const DEFAULT_MARGIN = 50;
+export const DEFAULT_HUMAN_TOP10 = 2615;
 
 interface Args {
   paramsPath: string;
   seed: number;
-  target: number;
+  recentMatches: number;
   marginRp: number;
+  humanTop10RpOverride: number | null;
   execute: boolean;
   limit: number | null;
   seasonStart: Date;
@@ -105,8 +105,9 @@ function parseArgs(argv: string[]): Args {
   return {
     paramsPath,
     seed: num(get('--seed')) ?? DEFAULT_SEED,
-    target: num(get('--target')) ?? DEFAULT_TARGET,
+    recentMatches: num(get('--recent-matches')) ?? RECENT_MATCHES,
     marginRp: num(get('--margin-rp')) ?? DEFAULT_MARGIN,
+    humanTop10RpOverride: num(get('--human-top10-rp')) ?? DEFAULT_HUMAN_TOP10,
     execute,
     limit: num(get('--limit')) ?? null,
     seasonStart: parseDate(get('--season-start'), '--season-start') ?? DEFAULT_SEASON_START,
@@ -134,11 +135,16 @@ async function main(): Promise<void> {
 
   const params = parseBotModelParams(JSON.parse(readFileSync(resolve(args.paramsPath), 'utf8')));
 
-  const [roster, humanTop10Rp, categoryIds] = await Promise.all([
+  // --human-top10-rp lets a staging burn-in use the PROD human frontier for the
+  // ceiling (staging has almost no ranked humans, which would compress every bot
+  // into the bottom tier). The bots still WRITE to the connected DB; only the
+  // ceiling reference comes from the override.
+  const [roster, liveHumanTop10Rp, categoryIds] = await Promise.all([
     loadRoster(args.limit),
-    loadHumanTop10Rp(),
+    args.humanTop10RpOverride != null ? Promise.resolve<number | null>(args.humanTop10RpOverride) : loadHumanTop10Rp(),
     loadActiveCategoryIds(),
   ]);
+  const humanTop10Rp = liveHumanTop10Rp;
 
   if (roster.length < 2) throw new Error(`Roster too small to pair (${roster.length} bots).`);
   if (categoryIds.length === 0) throw new Error('No active categories to draw from.');
@@ -148,13 +154,11 @@ async function main(): Promise<void> {
   // concrete ceilingRp is derived live and is NOT part of H (it drifts); it is
   // enforced per-fixture pre-commit instead.
   const ceilingRp = humanTop10Rp != null ? Math.max(0, humanTop10Rp - args.marginRp) : 1500 - args.marginRp;
-  const env = (process.env.NODE_ENV ?? 'unknown').toString();
-
   const manifest = buildManifest({
     seed: args.seed,
     seasonStart: args.seasonStart,
     seasonEnd: args.seasonEnd,
-    targetMatches: args.target,
+    targetMatches: args.recentMatches,
     ceilingMarginRp: args.marginRp,
     params,
     bots: roster,
@@ -170,13 +174,15 @@ async function main(): Promise<void> {
     // The scheduler's timeline horizon is the season window END (explicit for
     // --execute), so the plan — and thus every fixture key — is resume-stable.
     runDate: args.seasonEnd,
-    targetMatches: args.target,
+    targetMatches: args.recentMatches,
     ceilingRp,
     categoryIds,
     manifestHash,
   });
 
   const report = buildReport({
+    bots: roster,
+    seed: args.seed,
     finalBots: schedule.finalBots,
     fixtures: schedule.fixtures,
     ceilingRp,
@@ -186,7 +192,7 @@ async function main(): Promise<void> {
   process.stdout.write(`\nRun manifest hash: ${manifestHash}\n`);
 
   if (!args.execute) {
-    process.stdout.write('\nDRY-RUN — no writes performed. Re-run with --execute --snapshot-out <file>.\n');
+    process.stdout.write('\nDRY-RUN — no writes performed. Re-run with --execute --season-end <ISO>.\n');
     await sql.end();
     return;
   }
@@ -218,14 +224,7 @@ async function main(): Promise<void> {
   // Idempotent resume: skip fixtures already written by a prior (crashed) run.
   const alreadyWritten = await validatedExistingMatchIds(fixtures);
   const remaining = fixtures.filter((f) => !alreadyWritten.has(f.matchId));
-
-  // Pristine gate applies ONLY to bots not yet touched by a prior partial run
-  // (a bot with a committed burn-in fixture is legitimately non-pristine now).
-  const writtenBots = new Set<string>();
-  for (const f of fixtures) {
-    if (alreadyWritten.has(f.matchId)) { writtenBots.add(f.botAUserId); writtenBots.add(f.botBUserId); }
-  }
-  const untouchedBotIds = rosterIds.filter((id) => !writtenBots.has(id));
+  const seededBots = seedRosterBots(roster, args.seed, ceilingRp);
 
   const CHUNK = 250;
   let written = 0;
@@ -252,15 +251,14 @@ async function main(): Promise<void> {
         // Claim the run (insert/takeover 'running') — refuses on a concurrent
         // live run or a completed run.
         runId = await claimRunning(tx, manifestHash, args.seed, ceilingRp);
-        // Pristine gate under FOR UPDATE row locks across EVERY table the gate
-        // reads (P2/P3), for the UNTOUCHED bots only.
-        if (untouchedBotIds.length > 0) {
-          await lockRosterGateRows(tx, untouchedBotIds);
-          const violations = await findNonPristineBots(tx, untouchedBotIds);
+        if (alreadyWritten.size === 0) {
+          await lockRosterGateRows(tx, rosterIds);
+          const violations = await findNonPristineBots(tx, rosterIds);
           if (violations.length > 0) {
             const detail = violations.slice(0, 12).map((v) => `  ${v.nickname} (${v.userId}): ${v.reasons.join(', ')}`).join('\n');
             throw new Error(`ABORT: ${violations.length} roster bot(s) are not pristine:\n${detail}`);
           }
+          await writeSeededProfilesInTx(tx, seededBots);
         }
       } else {
         // Every later chunk re-asserts our claim fail-closed (a takeover aborts).

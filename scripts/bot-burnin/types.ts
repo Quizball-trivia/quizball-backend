@@ -1,11 +1,10 @@
 /**
  * Shared types for the one-time persistent-bot burn-in engine (PR6).
  *
- * The engine gives each persistent roster bot a plausible season-to-date:
- * 3 placement fixtures + ranked bot-vs-bot fixtures, backdated from the season
- * start to the run date, honoring each bot's schedule/caps/sessions, scored
- * through the REAL Season-2026 RP formula, capped below the live human top-10.
+ * The engine gives each persistent roster bot a plausible recent ranked history,
+ * backdated over the season window and capped below the live human top-10.
  */
+import type { SkillBand } from './s2-distribution.js';
 
 /** A roster bot as the engine needs it (users + ranked_profiles + synthetic). */
 export interface BurnInBot {
@@ -17,6 +16,7 @@ export interface BurnInBot {
   /** Activity archetype: preferred hours + session shape (Asia/Tbilisi). */
   schedule: BotSchedule;
   status: 'active' | 'resting' | 'retired';
+  skillBand?: SkillBand;
   /** Live ranked profile at run start (mutated in-memory during simulation). */
   rp: number;
   placementPlayed: number;
@@ -75,6 +75,7 @@ export interface PlannedFixture {
    */
   projectedRpA: number;
   projectedRpB: number;
+  projectionChecked?: boolean;
 }
 
 export interface FixtureScore {
@@ -89,8 +90,13 @@ export interface DistributionReport {
   botCount: number;
   fixtureCount: number;
   matchesPerBot: { min: number; median: number; max: number; mean: number };
-  bandTargets: Record<string, number>;
-  bandActual: Record<string, number>;
+  ladders: Array<{
+    name: 'UNCAPPED' | 'CAPPED';
+    ceilingRp: number;
+    tierHistogram: Array<{ tier: string; bots: number; s2Humans: number }>;
+    quantiles: Record<'p5' | 'p20' | 'p50' | 'p80' | 'p95' | 'p99' | 'max', number>;
+    bands: Array<{ band: SkillBand; min: number; median: number; max: number }>;
+  }>;
   ceilingRp: number;
   humanTop10Rp: number | null;
   maxBotRp: number;
@@ -98,6 +104,7 @@ export interface DistributionReport {
   sampleTimelines: Array<{
     nickname: string;
     baseSkill: number;
+    seedRp: number;
     finalRp: number;
     tier: string;
     fixtures: number;
@@ -105,12 +112,3 @@ export interface DistributionReport {
     losses: number;
   }>;
 }
-
-/** Ladder band definitions (share of roster) — §1.2 hidden-ability 20/30/30/15/5. */
-export const BAND_TARGETS: ReadonlyArray<{ name: string; share: number; minRp: number }> = [
-  { name: 'elite', share: 0.05, minRp: 3000 },
-  { name: 'high', share: 0.15, minRp: 1500 },
-  { name: 'mid', share: 0.3, minRp: 800 },
-  { name: 'low', share: 0.3, minRp: 400 },
-  { name: 'entry', share: 0.2, minRp: 0 },
-];

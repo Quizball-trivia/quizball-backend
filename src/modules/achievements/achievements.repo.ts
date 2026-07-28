@@ -128,10 +128,21 @@ export const achievementsRepo = {
       FROM user_matches
     `;
 
-    const [bestWinStreak, currentWinStreak] = await Promise.all([
-      this.getBestWinStreak(userId),
-      this.getCurrentWinStreak(userId),
-    ]);
+    // When running inside a caller-provided transaction, the streak helpers MUST
+    // use the SAME executor (so they see this tx's uncommitted fixtures) AND run
+    // sequentially (a single postgres.js tx connection can't run parallel queries).
+    const usingTx = executor !== sql;
+    let bestWinStreak: number;
+    let currentWinStreak: number;
+    if (usingTx) {
+      bestWinStreak = await this.getBestWinStreak(userId, executor);
+      currentWinStreak = await this.getCurrentWinStreak(userId, executor);
+    } else {
+      [bestWinStreak, currentWinStreak] = await Promise.all([
+        this.getBestWinStreak(userId, executor),
+        this.getCurrentWinStreak(userId, executor),
+      ]);
+    }
 
     return {
       completedMatches: row?.completed_matches ?? 0,
@@ -145,8 +156,8 @@ export const achievementsRepo = {
     };
   },
 
-  async getCurrentWinStreak(userId: string): Promise<number> {
-    const [row] = await sql<{ current_win_streak: number | null }[]>`
+  async getCurrentWinStreak(userId: string, executor: typeof sql = sql): Promise<number> {
+    const [row] = await executor<{ current_win_streak: number | null }[]>`
       SELECT current_win_streak
       FROM ranked_profiles
       WHERE user_id = ${userId}
@@ -154,8 +165,8 @@ export const achievementsRepo = {
     return Math.max(0, Number(row?.current_win_streak ?? 0));
   },
 
-  async getBestWinStreak(userId: string): Promise<number> {
-    const [row] = await sql<{ best_win_streak: number }[]>`
+  async getBestWinStreak(userId: string, executor: typeof sql = sql): Promise<number> {
+    const [row] = await executor<{ best_win_streak: number }[]>`
       SELECT COALESCE(MAX(streak_len), 0)::int AS best_win_streak
       FROM (
         SELECT COUNT(*) AS streak_len

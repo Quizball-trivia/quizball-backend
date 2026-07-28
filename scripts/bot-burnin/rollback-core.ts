@@ -1,16 +1,19 @@
 /**
- * Trivial rollback for the plan-all-then-execute-in-one-transaction burn-in.
+ * Rollback for the plan-then-execute burn-in.
  *
  * A completed run committed EXACTLY the plan (a pure function of H). Rollback
- * therefore needs no snapshot and no receipt: it recomputes the plan's match
- * ids from the same immutable inputs, deletes exactly those matches (+ their
- * ledger/xp/achievements), and resets every roster bot to the known pristine
- * baseline (SEASON_INITIAL_RP / unplaced / 0 — constant by the pristine gate),
- * all inside ONE transaction under the xact advisory lock.
+ * recomputes the plan's match ids and deletes ONLY the burn-in-created rows —
+ * matches in the plan, their ledger/xp/achievements — and resets each roster
+ * bot to the known pristine baseline (SEASON_INITIAL_RP / unplaced / 0), all in
+ * ONE transaction under the xact advisory lock.
  *
- * The ONLY drift case is a real match a bot played AFTER burn-in (e.g. once the
- * flag flipped). Guard: refuse if any roster bot has a match_players row whose
- * match_id is NOT in the plan.
+ * FAIL CLOSED (P1): rollback must NEVER destroy non-burn-in progression. It
+ * refuses (deleting nothing) for the WHOLE run if any roster bot has ANY of:
+ *   - a match_players row for a match NOT in the plan (real post-burn-in match)
+ *   - a user_xp_events row NOT sourced from a plan match (daily/objective XP)
+ *   - a user_achievements row NOT sourced from a plan match (a real unlock)
+ * i.e. anything rollback can't cleanly reverse to pristine without touching
+ * non-plan data. total_xp is DECREMENTED by exactly the burn-in XP (not zeroed).
  */
 import { sql } from '../../src/db/index.js';
 import { SEASON_INITIAL_RP, tierFromRp } from '../../src/modules/ranked/season-rp-formula.js';
@@ -25,40 +28,67 @@ export interface RollbackResult {
   botsReset: number;
 }
 
-/**
- * @param planMatchIds  the deterministic match ids of the recomputed plan
- * @param rosterUserIds the roster bot ids (must equal the plan participants)
- */
 export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: string[]): Promise<RollbackResult> {
-  const planMatchSet = new Set(planMatchIds);
-
   return (await sql.begin(async (tx) => {
     await lockBurnIn(tx); // serialize vs any concurrent execute
 
     // Lock the roster rows so nothing races the reset.
     await tx`SELECT id FROM users WHERE id = ANY(${rosterUserIds}::uuid[]) FOR UPDATE`;
 
-    // Drift guard: any match a roster bot participated in that is NOT in the plan
-    // is real post-burn-in activity — refuse rather than delete/reset over it.
-    const foreign = await tx<{ match_id: string; user_id: string }[]>`
+    // ── Fail-closed refusal checks (any non-burn-in data → refuse the whole run) ─
+    // 1. Any match a roster bot played that is NOT in the plan.
+    const foreignMatches = await tx<{ match_id: string; user_id: string }[]>`
       SELECT DISTINCT mp.match_id, mp.user_id
       FROM match_players mp
       WHERE mp.user_id = ANY(${rosterUserIds}::uuid[])
         AND mp.match_id <> ALL(${planMatchIds}::uuid[])
     `;
-    if (foreign.length > 0) {
-      const sample = foreign.slice(0, 8).map((f) => `${f.user_id}@${f.match_id}`).join(', ');
-      throw new RollbackRefusedError(
-        `refusing rollback: ${foreign.length} non-plan match(es) on roster bots (post-burn-in activity): ${sample}`,
-      );
+    if (foreignMatches.length > 0) {
+      const s = foreignMatches.slice(0, 8).map((f) => `${f.user_id}@${f.match_id}`).join(', ');
+      throw new RollbackRefusedError(`refusing: ${foreignMatches.length} non-plan match(es) on roster bots (post-burn-in activity): ${s}`);
+    }
+    // 2. Any XP event NOT sourced from a plan match (e.g. daily-challenge XP).
+    const foreignXp = await tx<{ user_id: string; source_type: string; source_key: string }[]>`
+      SELECT user_id, source_type, source_key FROM user_xp_events
+      WHERE user_id = ANY(${rosterUserIds}::uuid[])
+        AND NOT (source_type = 'match_result' AND source_key = ANY(${planMatchIds}))
+    `;
+    if (foreignXp.length > 0) {
+      const s = foreignXp.slice(0, 8).map((x) => `${x.user_id}:${x.source_type}`).join(', ');
+      throw new RollbackRefusedError(`refusing: ${foreignXp.length} non-burn-in XP event(s) on roster bots (would be destroyed): ${s}`);
+    }
+    // 3. Any achievement sourced from a NON-plan match is a real, non-burn-in
+    // unlock. A NULL-source achievement is NOT foreign: the foreign-match guard
+    // above already proved the bot has ZERO non-plan matches, so — since a
+    // pristine bot starts with no achievements — every achievement present came
+    // from a burn-in fixture (some burn-in unlocks legitimately carry a null
+    // source_match_id, e.g. a progress-then-unlock upsert). Only a source that
+    // points at a match OUTSIDE the plan indicates post-burn-in play.
+    const foreignAch = await tx<{ user_id: string; achievement_id: string; source_match_id: string | null }[]>`
+      SELECT user_id, achievement_id, source_match_id FROM user_achievements
+      WHERE user_id = ANY(${rosterUserIds}::uuid[])
+        AND source_match_id IS NOT NULL
+        AND source_match_id <> ALL(${planMatchIds}::uuid[])
+    `;
+    if (foreignAch.length > 0) {
+      const s = foreignAch.slice(0, 8).map((a) => `${a.user_id}:${a.achievement_id}`).join(', ');
+      throw new RollbackRefusedError(`refusing: ${foreignAch.length} non-burn-in achievement(s) on roster bots (would be destroyed): ${s}`);
     }
 
-    // Delete the plan's matches + their derived rows. Only matches that both are
-    // in the plan AND are tagged burnIn (belt-and-braces).
+    // ── All roster progression is burn-in-created → safe to reverse to pristine ─
+    // Sum the burn-in XP per user BEFORE deleting (to decrement total_xp exactly).
+    const xpByUser = await tx<{ user_id: string; total: number }[]>`
+      SELECT user_id, COALESCE(SUM(xp_delta), 0)::int AS total FROM user_xp_events
+      WHERE user_id = ANY(${rosterUserIds}::uuid[])
+        AND source_type = 'match_result' AND source_key = ANY(${planMatchIds})
+      GROUP BY user_id
+    `;
+
+    // Delete the plan's matches + their derived rows (only rows tagged burnIn).
     const present = await tx<{ id: string }[]>`
       SELECT id FROM matches WHERE id = ANY(${planMatchIds}::uuid[]) AND ranked_context->>'burnIn' = 'true'
     `;
-    const deletableIds = present.map((m) => m.id).filter((id) => planMatchSet.has(id));
+    const deletableIds = present.map((m) => m.id);
 
     let matchesDeleted = 0;
     if (deletableIds.length > 0) {
@@ -70,10 +100,18 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
       `;
       matchesDeleted = deleted.length;
     }
+    // Delete ALL roster achievements: the refusal checks above proved none are
+    // sourced from a non-plan match, and a pristine bot had none — so every one
+    // present is a burn-in unlock (plan-sourced or null-sourced).
+    await tx`DELETE FROM user_achievements WHERE user_id = ANY(${rosterUserIds}::uuid[])`;
 
-    // Reset every roster bot to the pristine baseline (the known pre-state).
-    // users.total_xp and any achievements the burn-in granted are also cleared:
-    // a pristine bot has total_xp=0 and no achievements/xp events.
+    // Decrement total_xp by exactly the burn-in contribution (never below 0).
+    for (const row of xpByUser) {
+      await tx`UPDATE users SET total_xp = GREATEST(0, total_xp - ${row.total}) WHERE id = ${row.user_id}`;
+    }
+
+    // Reset ranked_profiles + ranked stats to pristine (safe: no non-plan ranked
+    // matches, guaranteed by the foreign-match refusal above).
     await tx`
       UPDATE ranked_profiles SET
         rp = ${SEASON_INITIAL_RP}, tier = ${tierFromRp(SEASON_INITIAL_RP)},
@@ -83,11 +121,7 @@ export async function rollbackBurnIn(planMatchIds: string[], rosterUserIds: stri
         current_win_streak = 0, last_ranked_match_at = NULL, updated_at = NOW()
       WHERE user_id = ANY(${rosterUserIds}::uuid[])
     `;
-    await tx`UPDATE users SET total_xp = 0 WHERE id = ANY(${rosterUserIds}::uuid[])`;
     await tx`DELETE FROM user_mode_match_stats WHERE user_id = ANY(${rosterUserIds}::uuid[]) AND mode = 'ranked'`;
-    await tx`DELETE FROM user_achievements WHERE user_id = ANY(${rosterUserIds}::uuid[])`;
-    // Any stray non-match xp events on these fresh bots are burn-in artifacts too.
-    await tx`DELETE FROM user_xp_events WHERE user_id = ANY(${rosterUserIds}::uuid[])`;
 
     // Clear the one-time marker so the env can be re-burned after a full rollback.
     await tx`DELETE FROM bot_model_params WHERE note = ${BURN_IN_MARKER_NOTE}`;

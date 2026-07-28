@@ -95,10 +95,12 @@ afterEach(async () => {
   }
   if (createdLobbyIds.length > 0) {
     await sql`DELETE FROM synthetic_bot_reservations WHERE lobby_id = ANY(${createdLobbyIds}::uuid[])`;
+    await sql`DELETE FROM lobby_members WHERE lobby_id = ANY(${createdLobbyIds}::uuid[])`;
     await sql`DELETE FROM lobbies WHERE id = ANY(${createdLobbyIds}::uuid[])`;
     createdLobbyIds.length = 0;
   }
   if (createdUserIds.length > 0) {
+    await sql`DELETE FROM lobby_members WHERE user_id = ANY(${createdUserIds}::uuid[])`;
     await sql`DELETE FROM synthetic_player_profiles WHERE user_id = ANY(${createdUserIds}::uuid[])`;
     await sql`DELETE FROM ranked_profiles WHERE user_id = ANY(${createdUserIds}::uuid[])`;
     await sql`DELETE FROM users WHERE id = ANY(${createdUserIds}::uuid[])`;
@@ -320,38 +322,54 @@ describe('listEligibleBots HARD filters', () => {
   });
 });
 
-describe('abort-path release (P1-2 TOCTOU): releaseReservationByLobbyIfAbortable', () => {
+describe('locked abort primitive (P1-2 TOCTOU): abortRankedAiLobbyLocked', () => {
   let repo: typeof import('../../src/modules/synthetic-bots/synthetic-bots.repo.js').syntheticBotsRepo;
   beforeAll(async () => {
     if (!dbAvailable) return;
     repo = (await import('../../src/modules/synthetic-bots/synthetic-bots.repo.js')).syntheticBotsRepo;
   });
 
-  it('frees the bot while the lobby is still waiting', async () => {
+  it('frees the bot AND ends the lobby (removes all members + deletes it) while still waiting', async () => {
     if (!dbAvailable) return;
     const bot = await newUser({ persistent: true, nickname: `abort-wait-${Date.now()}` });
-    const lobby = await newLobby(bot); // status defaults to 'waiting'
+    const human = await newUser({ nickname: `abort-wait-h-${Date.now()}` });
+    const lobby = await newLobby(human); // status defaults to 'waiting'
+    await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby}, ${human}, true), (${lobby}, ${bot}, true)`;
     await acquire(bot, lobby, 'holderA', 180);
-    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby);
-    expect(freed).toBe(bot);
+    const result = await repo.abortRankedAiLobbyLocked(lobby);
+    expect(result.aborted).toBe(true);
+    expect(result.botReleased).toBe(bot);
+    expect(result.lobbyDeleted).toBe(true);
+    expect(new Set(result.removedMemberIds)).toEqual(new Set([human, bot]));
+    // Lobby and its members are GONE → no activation can draft this bot.
+    const lobbyRows = await sql`SELECT 1 FROM lobbies WHERE id = ${lobby}`;
+    expect(lobbyRows).toHaveLength(0);
+    const memberRows = await sql`SELECT 1 FROM lobby_members WHERE lobby_id = ${lobby}`;
+    expect(memberRows).toHaveLength(0);
   });
 
-  it('NO-OPS when a concurrent reconnect advanced the lobby waiting→active (bot kept for the live draft)', async () => {
+  it('NO-OPS when a concurrent reconnect advanced the lobby waiting→active (bot kept, lobby untouched)', async () => {
     if (!dbAvailable) return;
     const bot = await newUser({ persistent: true, nickname: `abort-active-${Date.now()}` });
     const [lobby] = await sql<{ id: string }[]>`
       INSERT INTO lobbies (mode, host_user_id, status) VALUES ('ranked', ${bot}, 'active') RETURNING id
     `;
     createdLobbyIds.push(lobby.id);
+    await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby.id}, ${bot}, true)`;
     await acquire(bot, lobby.id, 'holderA', 180);
-    // Lobby is 'active' (draft advanced) → abort release must no-op.
-    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby.id);
-    expect(freed).toBeNull();
+    const result = await repo.abortRankedAiLobbyLocked(lobby.id);
+    expect(result.aborted).toBe(false);
+    expect(result.botReleased).toBeNull();
+    // Reservation, lobby, and member all preserved for the live draft.
     const still = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
+    const lobbyRows = await sql`SELECT status FROM lobbies WHERE id = ${lobby.id}`;
+    expect(lobbyRows).toHaveLength(1);
+    const memberRows = await sql`SELECT 1 FROM lobby_members WHERE lobby_id = ${lobby.id}`;
+    expect(memberRows).toHaveLength(1);
   });
 
-  it('NO-OPS once the reservation has been transferred onto a match (match_id set)', async () => {
+  it('does NOT free a reservation already transferred onto a match (match_id set)', async () => {
     if (!dbAvailable) return;
     const bot = await newUser({ persistent: true, nickname: `abort-xfer-${Date.now()}` });
     const lobby = await newLobby(bot);
@@ -362,10 +380,32 @@ describe('abort-path release (P1-2 TOCTOU): releaseReservationByLobbyIfAbortable
     `;
     createdMatchIds.push(match.id);
     await sql`UPDATE synthetic_bot_reservations SET match_id = ${match.id} WHERE bot_user_id = ${bot}`;
-    const freed = await repo.releaseReservationByLobbyIfAbortable(lobby);
-    expect(freed).toBeNull();
+    // Lobby still 'waiting' in this contrived setup, but the reservation is
+    // transferred (match_id set) → the abort's match_id IS NULL guard keeps it.
+    const result = await repo.abortRankedAiLobbyLocked(lobby);
+    expect(result.botReleased).toBeNull();
     const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);
+  });
+
+  it('abort-first empty-list hole is closed: after a waiting abort, the lobby cannot be activated with that bot', async () => {
+    if (!dbAvailable) return;
+    // Regression for Sol's release-only hole: an abort while 'waiting' must ALSO
+    // remove the bot from the lobby / delete the lobby, so a subsequent
+    // activation cannot draft the freed bot.
+    const bot = await newUser({ persistent: true, nickname: `hole-${Date.now()}` });
+    const human = await newUser({ nickname: `hole-h-${Date.now()}` });
+    const lobby = await newLobby(human);
+    await sql`INSERT INTO lobby_members (lobby_id, user_id, is_ready) VALUES (${lobby}, ${human}, true), (${lobby}, ${bot}, true)`;
+    await acquire(bot, lobby, 'holderA', 180);
+    const result = await repo.abortRankedAiLobbyLocked(lobby);
+    expect(result.aborted).toBe(true);
+    // The bot is no longer a member of ANY lobby (its lobby is gone).
+    const botMemberships = await sql`SELECT 1 FROM lobby_members WHERE user_id = ${bot}`;
+    expect(botMemberships).toHaveLength(0);
+    // And it holds no reservation.
+    const res = await sql`SELECT 1 FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
+    expect(res).toHaveLength(0);
   });
 });
 

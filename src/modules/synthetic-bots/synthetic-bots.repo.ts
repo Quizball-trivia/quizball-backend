@@ -166,13 +166,21 @@ export const syntheticBotsRepo = {
   ): Promise<{ aborted: boolean; botReleased: string | null; lobbyDeleted: boolean; removedMemberIds: string[] }> {
     return sql.begin(async (tx) => {
       await tx.unsafe(`SELECT pg_advisory_xact_lock(hashtext('ranked_ai_lobby:' || $1))`, [lobbyId]);
-      const [lobby] = await tx.unsafe<{ status: string }[]>(
-        `SELECT status FROM lobbies WHERE id = $1`,
+      const [lobby] = await tx.unsafe<{ status: string; has_active_match: boolean }[]>(
+        `SELECT l.status AS status,
+                EXISTS (SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active') AS has_active_match
+           FROM lobbies l WHERE l.id = $1`,
         [lobbyId],
       );
-      // Lobby advanced (a reconnect started the draft) → NOT ours to abort. Never
-      // release, never tear down: the live draft/match owns the bot now.
-      if (lobby && lobby.status !== 'waiting') {
+      // Refuse to abort ONLY when there is a genuinely LIVE draft/match that owns
+      // the bot: the lobby is 'active' AND an active match exists for it (a
+      // reconnect started + created the match). A 'waiting' lobby, a gone lobby,
+      // or an 'active'-but-stuck lobby with NO active match (crash between
+      // activation and match creation — the session guard force-closes these) is
+      // ours to abort. The match_id IS NULL guard on the reservation delete below
+      // additionally ensures an already-transferred reservation is never freed
+      // here even in the stuck-active case.
+      if (lobby && lobby.status === 'active' && lobby.has_active_match) {
         return { aborted: false, botReleased: null, lobbyDeleted: false, removedMemberIds: [] };
       }
       // Free the reservation only while still lobby-keyed (match_id IS NULL). If it

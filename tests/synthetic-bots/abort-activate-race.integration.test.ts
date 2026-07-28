@@ -83,11 +83,13 @@ afterEach(async () => {
   }
   if (lobbyIds.length) {
     await sql`DELETE FROM synthetic_bot_reservations WHERE lobby_id = ANY(${lobbyIds}::uuid[])`;
+    await sql`DELETE FROM lobby_members WHERE lobby_id = ANY(${lobbyIds}::uuid[])`;
     await sql`DELETE FROM lobbies WHERE id = ANY(${lobbyIds}::uuid[])`;
     lobbyIds.length = 0;
   }
   if (userIds.length) {
     await sql`DELETE FROM synthetic_bot_reservations WHERE bot_user_id = ANY(${userIds}::uuid[])`;
+    await sql`DELETE FROM lobby_members WHERE user_id = ANY(${userIds}::uuid[])`;
     await sql`DELETE FROM users WHERE id = ANY(${userIds}::uuid[])`;
     userIds.length = 0;
   }
@@ -113,7 +115,7 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
       await holder.unsafe(`UPDATE lobbies SET status = 'active' WHERE id = $1`, [lobby]);
 
       // Start the abort on the app repo (separate pool) — it must BLOCK on the lock.
-      const abortP = repo.abortRankedAiLobbyLocked(lobby, [bot]).then((r) => { abortResult = r; });
+      const abortP = repo.abortRankedAiLobbyLocked(lobby).then((r) => { abortResult = r; });
       await delay(200);
       expect(abortResult).toBeNull(); // still blocked behind the held lock
 
@@ -139,7 +141,7 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     await acquire(bot, lobby);
 
     // Abort runs while the lobby is 'waiting' → frees the reservation.
-    const abortResult = await repo.abortRankedAiLobbyLocked(lobby, [bot]);
+    const abortResult = await repo.abortRankedAiLobbyLocked(lobby);
     expect(abortResult.aborted).toBe(true);
     expect(abortResult.botReleased).toBe(bot);
 
@@ -163,7 +165,7 @@ describe('abort vs activate advisory-lock serialization (P1-2)', () => {
     await sql`UPDATE synthetic_bot_reservations SET match_id = ${match.id} WHERE bot_user_id = ${bot}`;
     // Lobby is still 'waiting' in this contrived setup, but the reservation is
     // transferred (match_id set) → the abort must NOT free it.
-    const abortResult = await repo.abortRankedAiLobbyLocked(lobby, [bot]);
+    const abortResult = await repo.abortRankedAiLobbyLocked(lobby);
     expect(abortResult.botReleased).toBeNull();
     const still = await sql`SELECT match_id FROM synthetic_bot_reservations WHERE bot_user_id = ${bot}`;
     expect(still).toHaveLength(1);

@@ -11,11 +11,9 @@ import '../setup.js';
 const repo = {
   acquireReservation: vi.fn(),
   transferReservationToMatch: vi.fn(),
-  releaseReservationOwned: vi.fn(),
-  releaseReservationByLobby: vi.fn(),
   releaseReservationByMatch: vi.fn(),
   releaseReservationByMatchIfSettled: vi.fn(),
-  releaseReservationByLobbyIfAbortable: vi.fn(),
+  abortRankedAiLobbyLocked: vi.fn(),
 };
 
 vi.mock('../../src/modules/synthetic-bots/synthetic-bots.repo.js', () => ({
@@ -32,11 +30,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   configObj.PERSISTENT_BOTS_ENABLED = true;
   repo.acquireReservation.mockResolvedValue({ bot_user_id: 'bot', lobby_id: 'lobby', fence: 7 });
-  repo.releaseReservationOwned.mockResolvedValue(true);
-  repo.releaseReservationByLobby.mockResolvedValue('bot');
   repo.releaseReservationByMatch.mockResolvedValue('bot');
   repo.releaseReservationByMatchIfSettled.mockResolvedValue('bot');
-  repo.releaseReservationByLobbyIfAbortable.mockResolvedValue('bot');
+  repo.abortRankedAiLobbyLocked.mockResolvedValue({ aborted: true, botReleased: 'bot', lobbyDeleted: true, removedMemberIds: ['human', 'bot'] });
   repo.transferReservationToMatch.mockResolvedValue({ bot_user_id: 'bot' });
 });
 
@@ -68,14 +64,10 @@ describe('flag-off: only ACQUISITION is gated; cleanup still runs (kill-switch s
     expect(repo.acquireReservation).not.toHaveBeenCalled();
   });
   it('releases STILL run with the flag off so leases created while on are cleaned up', async () => {
-    await reservationService.releaseByLobby('l', 'auto_leave_lobby');
+    await reservationService.abortLobby('l', 'auto_leave_lobby');
     await reservationService.releaseByMatch('m', 'completion');
-    await reservationService.releaseOwned({ botUserId: 'bot', fence: 1 }, 'match_found_cancel');
-    expect(repo.releaseReservationByLobby).toHaveBeenCalledWith('l');
+    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('l');
     expect(repo.releaseReservationByMatch).toHaveBeenCalledWith('m');
-    expect(repo.releaseReservationOwned).toHaveBeenCalledWith(
-      expect.objectContaining({ botUserId: 'bot', fence: 1 }),
-    );
   });
 });
 
@@ -85,17 +77,14 @@ describe('flag-on dispatch', () => {
     expect(r).toEqual({ botUserId: 'bot', lobbyId: 'lobby', fence: 7 });
   });
 
-  it('releaseOwned passes the per-process holder + fence', async () => {
-    await reservationService.releaseOwned({ botUserId: 'bot', fence: 42 }, 'draft_start_cancel');
-    expect(repo.releaseReservationOwned).toHaveBeenCalledWith(
-      expect.objectContaining({ botUserId: 'bot', fence: 42, holder: reservationService.holderId }),
-    );
+  it('abortLobby is the sole lobby-phase release; delegates to the locked primitive', async () => {
+    const result = await reservationService.abortLobby('lob', 'close_pre_match_lobby');
+    expect(repo.abortRankedAiLobbyLocked).toHaveBeenCalledWith('lob');
+    expect(result).toEqual({ aborted: true, botReleased: 'bot', lobbyDeleted: true, removedMemberIds: ['human', 'bot'] });
   });
 
-  it('releaseByLobby / releaseByMatch dispatch to their repo methods', async () => {
-    await reservationService.releaseByLobby('lob', 'close_pre_match_lobby');
+  it('releaseByMatch dispatches to the by-match repo method (unlocked, different key space)', async () => {
     await reservationService.releaseByMatch('mat', 'self_forfeit');
-    expect(repo.releaseReservationByLobby).toHaveBeenCalledWith('lob');
     expect(repo.releaseReservationByMatch).toHaveBeenCalledWith('mat');
   });
 

@@ -69,18 +69,30 @@ describe('botModelParams schema', () => {
     expect(() => parseBotModelParams(positive)).toThrow();
   });
 
-  it('rejects clamps that try to LOOSEN the immutable code backstops', () => {
-    const probe = validParams();
-    probe.clamps.finalProbCap = 0.95; // > HARD 0.93
-    expect(() => parseBotModelParams(probe)).toThrow();
+  it('rejects clamps that try to LOOSEN the HARD-bounded backstops', () => {
     const skill = validParams();
     skill.clamps.skillCap = 5; // > HARD 4
     expect(() => parseBotModelParams(skill)).toThrow();
     const time = validParams();
     time.clamps.minAnswerTimeMs = 100; // < HARD 600
     expect(() => parseBotModelParams(time)).toThrow();
-    const ceil = validParams();
-    ceil.ceiling.ceilingAccuracy = 0.95; // > HARD 0.8631
-    expect(() => parseBotModelParams(ceil)).toThrow();
+  });
+
+  it('accepts finalProbCap up to 1 (advisory; runtime tightens to HARD_PROB_CAP)', () => {
+    // finalProbCap is no longer schema-bounded by HARD_PROB_CAP — the SAFETY
+    // guarantee is the runtime min(paramsCap, HARD_PROB_CAP). Any value in [0,1]
+    // loads; only >1 or <0 is rejected.
+    const p = validParams();
+    p.clamps.finalProbCap = 0.99;
+    expect(() => parseBotModelParams(p)).not.toThrow();
+  });
+
+  it('rejects a ceilingAccuracy below the inversion-guard floor', () => {
+    const low = validParams();
+    low.ceiling.ceilingAccuracy = 0.3; // < MIN_CEILING_ACCURACY (0.5)
+    expect(() => parseBotModelParams(low)).toThrow();
+    const ok = validParams();
+    ok.ceiling.ceilingAccuracy = 0.86; // within [0.5, 1]
+    expect(() => parseBotModelParams(ok)).not.toThrow();
   });
 });

@@ -12,7 +12,7 @@ import { HARD_THETA_CEILING_FALLBACK } from '../modules/bots/calibration/hard-cl
 import { questionStatsRepo, type QuestionModelInputs } from '../modules/bots/question-stats.repo.js';
 import type { PersistentBotModelPin } from '../modules/lobbies/lobbies.types.js';
 import {
-  decideClueRevealIndex,
+  decideClue,
   decideCountdownFoundCount,
   decideMcq,
   decidePutInOrderCorrectCount,
@@ -433,12 +433,13 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       return { isCorrect: false, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
     }
     if (questionKind === 'clues') {
-      // The reveal-index distribution IS the performance metric (NOT a Bernoulli
-      // gate). The bot solves at the sampled index; correctness is handled at
-      // commit (always solved, score steps down with the index).
+      // The calibrated reveal-index distribution IS the performance metric (NOT a
+      // Bernoulli gate). decideClue returns whether the bot solves at all (a
+      // coarse 1-clue question can score 100, so it must sometimes NOT solve to
+      // respect the ceiling) and the reveal index it solves at.
       const dist = readHist(formatStats, 'clueRevealIndexDistribution');
-      const idx = decideClueRevealIndex(model.params, model.inputs, dist, clueCount ?? 1, keys);
-      return { isCorrect: true, clueIndex: idx, answerTimeMs: mcq.answerTimeMs };
+      const clue = decideClue(model.params, model.inputs, dist, clueCount ?? 1, keys);
+      return { isCorrect: clue.solved, clueIndex: clue.index, answerTimeMs: mcq.answerTimeMs };
     }
     return { isCorrect: mcq.isCorrect, clueIndex: null, answerTimeMs: mcq.answerTimeMs };
   }
@@ -469,6 +470,22 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     const stats = await pinnedQuestionStats(matchId, questionId);
     const dist = readHist(stats?.formatStats ?? null, 'putInOrderCorrectCountDistribution');
     return decidePutInOrderCorrectCount(model.params, model.inputs, dist, totalItems, {
+      botId: model.botUserId,
+      matchId,
+      questionId,
+    });
+  }
+
+  /** Commit-time clue decision (solve + reveal index) via the calibrated distribution + real clue count. */
+  async function computePersistentClue(
+    model: PersistentModelContext,
+    matchId: string,
+    questionId: string,
+    clueCount: number,
+  ): Promise<{ solved: boolean; index: number }> {
+    const stats = await pinnedQuestionStats(matchId, questionId);
+    const dist = readHist(stats?.formatStats ?? null, 'clueRevealIndexDistribution');
+    return decideClue(model.params, model.inputs, dist, clueCount, {
       botId: model.botUserId,
       matchId,
       questionId,
@@ -627,6 +644,31 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         )
       : null;
 
+    // Persistent bots: PIN the per-format outcomes NOW, using the REAL group/
+    // item/clue counts available in options.evaluation, and carry them through
+    // the durable timer payload so commit reads them instead of recomputing from
+    // (possibly refreshed) live stats. Replica/restart/refresh-safe (Sol High).
+    let plannedFoundCount: number | null = null;
+    let plannedPutInOrderCount: number | null = null;
+    let plannedClueSolved: boolean | null = null;
+    const questionId = cache.currentQuestion.questionId;
+    if (persistentModel) {
+      if (options.questionKind === 'countdown' && options.evaluation.kind === 'countdown') {
+        plannedFoundCount = await computePersistentCountdownFoundCount(
+          persistentModel, matchId, questionId, options.evaluation.answerGroups.length,
+        );
+      } else if (options.questionKind === 'putInOrder' && options.evaluation.kind === 'putInOrder') {
+        plannedPutInOrderCount = await computePersistentPutInOrderCount(
+          persistentModel, matchId, questionId, options.evaluation.items.length,
+        );
+      } else if (options.questionKind === 'clues' && options.evaluation.kind === 'clues') {
+        const clue = await computePersistentClue(
+          persistentModel, matchId, questionId, options.evaluation.clues.length,
+        );
+        plannedClueSolved = clue.solved;
+      }
+    }
+
     const plannedIsCorrect = options.questionKind === 'countdown'
       ? false
       : persistentDecision
@@ -678,6 +720,9 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
       plannedAnswerTimeMs,
       plannedClueIndex,
       plannedIsCorrect,
+      plannedFoundCount,
+      plannedPutInOrderCount,
+      plannedClueSolved,
     });
     logger.info(
       {
@@ -712,7 +757,10 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
     qIndex: number,
     plannedAnswerTimeMs: number,
     plannedClueIndex: number | null,
-    plannedIsCorrect?: boolean
+    plannedIsCorrect?: boolean,
+    plannedFoundCount?: number | null,
+    plannedPutInOrderCount?: number | null,
+    plannedClueSolved?: boolean | null,
   ): Promise<void> {
     try {
       const aiUserId = await resolveAiUserIdForMatch(matchId);
@@ -842,9 +890,13 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
           pointsEarned = calculatePoints(isCorrect, answerTimeMs, questionTimeMs);
         } else if (question.kind === 'countdown' && question.evaluation.kind === 'countdown') {
           const totalGroups = question.evaluation.answerGroups.length;
-          foundCount = persistentModel
-            ? await computePersistentCountdownFoundCount(persistentModel, matchId, question.questionId, totalGroups)
-            : getAiCountdownFoundCount(totalGroups, aiCorrectness);
+          if (persistentModel) {
+            // Prefer the value PINNED at schedule time (durable timer payload);
+            // recompute only if this timer predates the pin (in-flight upgrade).
+            foundCount = plannedFoundCount ?? await computePersistentCountdownFoundCount(persistentModel, matchId, question.questionId, totalGroups);
+          } else {
+            foundCount = getAiCountdownFoundCount(totalGroups, aiCorrectness);
+          }
           foundAnswerIds = question.evaluation.answerGroups.slice(0, foundCount).map((group) => group.id);
           selectedIndex = foundCount;
           pointsEarned = calculateCountdownScore(foundCount, totalGroups);
@@ -861,7 +913,7 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
             // items placed = correct), and the submitted order always reflects
             // the ceiling-capped prefix — so a "correct" Bernoulli draw can never
             // slip the full correct order past the score cap (Sol HIGH).
-            foundCount = await computePersistentPutInOrderCount(persistentModel, matchId, question.questionId, totalItems);
+            foundCount = plannedPutInOrderCount ?? await computePersistentPutInOrderCount(persistentModel, matchId, question.questionId, totalItems);
             isCorrect = foundCount >= totalItems;
             submittedOrderIds = [...correctOrderIds];
             if (submittedOrderIds.length > 1 && foundCount < submittedOrderIds.length) {
@@ -894,12 +946,25 @@ export function createPossessionAi(resolveRound: ResolveRoundFn) {
         } else if (question.kind === 'clues' && question.evaluation.kind === 'clues') {
           selectedIndex = null;
           if (persistentModel) {
-            // PERSISTENT: the calibrated reveal-index IS the performance metric.
-            // The bot solves at that index (correctness is not a separate
-            // Bernoulli gate); the score steps down with the index, floored so it
-            // respects the ceiling (minClueIndexForCeiling in the model).
-            clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);
-            isCorrect = true;
+            // PERSISTENT: the calibrated clue decision (solve + reveal index) was
+            // PINNED at schedule time. decideClue can decide NOT to solve — a
+            // coarse (e.g. single-clue) question must sometimes fail so its SCORE
+            // distribution respects the ceiling, never a deterministic 100. Prefer
+            // the pinned solved flag + reveal index; recompute only for a pre-pin
+            // in-flight timer.
+            if (plannedClueSolved != null && plannedClueIndex != null) {
+              isCorrect = plannedClueSolved;
+              clueIndex = plannedClueIndex;
+            } else {
+              const clue = await computePersistentClue(
+                persistentModel,
+                matchId,
+                question.questionId,
+                question.evaluation.clues.length,
+              );
+              isCorrect = clue.solved;
+              clueIndex = clue.index;
+            }
           } else {
             isCorrect = plannedIsCorrect ?? (getRandom() < aiCorrectness);
             clueIndex = plannedClueIndex ?? getAiClueIndex(question.evaluation.clues.length, aiCorrectness);

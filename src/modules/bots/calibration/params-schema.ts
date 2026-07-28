@@ -16,10 +16,9 @@
 
 import { z } from 'zod';
 import {
-  HARD_CEILING_ACCURACY,
   HARD_MIN_ANSWER_TIME_MS,
-  HARD_PROB_CAP,
   HARD_SKILL_CAP,
+  MIN_CEILING_ACCURACY,
 } from './hard-clamps.js';
 
 export const CALIBRATION_SCHEMA_VERSION = 1;
@@ -48,13 +47,14 @@ export const difficultyLinkSchema = z.object({
   nQuestions: z.number().int().nonnegative(),
 });
 
-// Clamps can only be as strict as, or stricter than, the immutable code
-// backstops (hard-clamps.ts). A row that tries to LOOSEN any backstop
-// (finalProbCap > 0.93, skillCap > 4, minAnswerTimeMs < 600) is rejected at
-// load so it can never be stored/activated. The gameplay model re-applies the
-// min/max at runtime too (defence in depth).
+// Clamps. skillCap and minAnswerTimeMs are hard-bounded by the code backstops at
+// load (they cannot LOOSEN). finalProbCap is advisory: the SAFETY guarantee is
+// the code constant HARD_PROB_CAP (= the ceiling), and the model always applies
+// min(paramsCap, HARD_PROB_CAP) at runtime — so finalProbCap may be any value in
+// [0,1] but can never loosen the real cap. (The frozen S1 artifact carries 0.93;
+// the runtime min tightens it to the ceiling.)
 export const clampsSchema = z.object({
-  finalProbCap: z.number().min(0).max(HARD_PROB_CAP),
+  finalProbCap: z.number().min(0).max(1),
   skillCap: z.number().positive().max(HARD_SKILL_CAP),
   minAnswerTimeMs: z.number().min(HARD_MIN_ANSWER_TIME_MS),
 });
@@ -66,9 +66,11 @@ export const ceilingSchema = z.object({
   // In-sample number retained for reference/comparison only.
   topAggregateAccuracyInSample: z.number().min(0).max(1).nullable(),
   marginPp: z.number().nonnegative(),
-  // The ceiling can only be as low as, or lower than, the frozen code ceiling —
-  // a row cannot RAISE the ceiling to license a stronger bot.
-  ceilingAccuracy: z.number().min(0).max(HARD_CEILING_ACCURACY),
+  // Floored at MIN_CEILING_ACCURACY: a pathologically small ceiling would drive
+  // the theta-ceiling solver to a large-negative bound and risk inverting the
+  // skill cap. Rejected below the floor at load; the effective-cap helper also
+  // guards against inversion at runtime.
+  ceilingAccuracy: z.number().min(MIN_CEILING_ACCURACY).max(1),
   speedFloor: z.array(speedFloorSchema),
   topMedianTimeMs: z.number().nullable(),
   topLogTimeSigma: z.number().nullable(),

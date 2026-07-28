@@ -39,6 +39,7 @@ import { buildFCurve, percentile, rocAuc, calibrationCurve, logNormalTimeStats, 
 import { aggregateQuestionStats } from '../../src/modules/bots/calibration/aggregate.js';
 import { botModelParamsSchema, CALIBRATION_SCHEMA_VERSION, type BotModelParams } from '../../src/modules/bots/calibration/params-schema.js';
 import { TIMING_CLEAN_WINDOW_START, PARAMS_FINAL_PROB_CAP, PARAMS_SKILL_CAP, PARAMS_MIN_ANSWER_TIME_MS } from '../../src/modules/bots/calibration/constants.js';
+import { MIN_CEILING_ACCURACY } from '../../src/modules/bots/calibration/hard-clamps.js';
 import { writeReport } from './report.js';
 
 interface Args {
@@ -161,7 +162,11 @@ async function main(): Promise<void> {
     if (topAggregateAccuracyHoldout == null) {
       console.warn('WARNING: ceiling measured IN-SAMPLE (no holdout rows for the top cohort) - treat as optimistic');
     }
-    const ceilingAccuracy = Math.max(0, ceilingBase - args.marginPp / 100);
+    // Floor at the schema's MIN_CEILING_ACCURACY (0.5): a sparse/degenerate run
+    // must never emit a ceiling the gameplay-model schema would reject at load
+    // (which would also risk the theta-bound inversion the model guards against).
+    // Real S1 data yields 0.8631; the floor only bites on pathological inputs.
+    const ceilingAccuracy = Math.min(1, Math.max(MIN_CEILING_ACCURACY, ceilingBase - args.marginPp / 100));
 
     // Speed floor from top-cohort clean-window times.
     const topTimes = await withBatchRetry(() => fetchS1CleanTimesForPlayers(db.query, {
@@ -240,6 +245,15 @@ async function main(): Promise<void> {
         holdoutRmse: holdoutUsable ? Math.sqrt(se / testPts.length) : null,
         nQuestions: linkPoints.length,
       };
+    }
+    // The gameplay-model schema REQUIRES a strictly negative slope (higher human
+    // accuracy => easier => lower beta). A sparse/degenerate fit could produce a
+    // non-negative slope; refuse to emit an artifact that would be rejected at
+    // load (and would invert difficulty). Real S1 data fits ≈ -1.48.
+    if (!(difficultyLink.slope < 0)) {
+      throw new Error(
+        `Difficulty-link slope must be negative to emit params (got ${difficultyLink.slope} from ${linkPoints.length} points); refusing to emit.`,
+      );
     }
 
     const params: BotModelParams = {

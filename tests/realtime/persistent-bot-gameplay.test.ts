@@ -14,7 +14,7 @@ import {
 import {
   aggregateCeiling,
   boundedCategoryTilt,
-  decideClueRevealIndex,
+  decideClue,
   decideCountdownFoundCount,
   decideMcq,
   decidePutInOrderCorrectCount,
@@ -69,8 +69,9 @@ const keys = { botId: 'bot-1', matchId: 'match-1', questionId: 'q-1' };
 
 describe('params fixture + hard code constants', () => {
   it('loads the frozen S1 params and the hard constants line up', () => {
-    expect(params.clamps.finalProbCap).toBe(0.93);
-    expect(HARD_PROB_CAP).toBe(0.93);
+    expect(params.clamps.finalProbCap).toBe(0.93); // artifact value; runtime tightens
+    expect(HARD_PROB_CAP).toBe(0.8631); // == the ceiling (distribution-independent guarantee)
+    expect(HARD_PROB_CAP).toBe(HARD_CEILING_ACCURACY);
     expect(HARD_SKILL_CAP).toBe(4);
     expect(HARD_MIN_ANSWER_TIME_MS).toBe(600);
     expect(HARD_CEILING_ACCURACY).toBe(0.8631);
@@ -79,49 +80,50 @@ describe('params fixture + hard code constants', () => {
   });
 });
 
-describe('CRITICAL-1 — aggregate ceiling is a HARD runtime bound', () => {
-  it('the pinned theta bound keeps expected aggregate over the real mix <= ceiling', () => {
-    const cap = effectiveSkillCap(params, THETA_CEILING);
-    const agg = expectedAggregateAccuracy(cap, REAL_BETAS, effectiveProbCap(params));
-    expect(agg).toBeLessThanOrEqual(params.ceiling.ceilingAccuracy + 1e-6);
+describe('CRITICAL-1 — the per-question cap is the DISTRIBUTION-INDEPENDENT ceiling guarantee', () => {
+  it('every pCorrect <= effectiveProbCap = ceiling, on ANY question difficulty', () => {
+    // The ONLY distribution-independent bound: since P ≤ cap for every question,
+    // the aggregate over ANY mix ≤ cap = ceiling.
+    for (const acc of [0.999, 0.99, 0.95, 0.9, 0.8, 0.5, 0.2, 0.05]) {
+      const godlike = inputs({ currentRp: 100000, personalOffset: 100, governorAdjustment: 100, categoryAffinities: { football: 100 } });
+      const d = decideMcq(params, godlike, statsFromAccuracy(acc), 'football', { ...keys, questionId: `c1-${acc}` });
+      expect(d.pCorrect).toBeLessThanOrEqual(effectiveProbCap(params) + 1e-9);
+    }
+    expect(effectiveProbCap(params)).toBeCloseTo(HARD_CEILING_ACCURACY, 6);
   });
 
-  it('worst reachable bot (max RP+offset+tilt+form+noise) aggregates <= ceiling AND below real top cohort', () => {
-    // Every skill term maxed; noise favorable. theta_eff is capped POINTWISE at
-    // the bound, so the realized aggregate cannot exceed the bound's aggregate.
-    const godlike = inputs({
-      currentRp: 100000,
-      personalOffset: 100,
-      governorAdjustment: 100,
-      categoryAffinities: { football: 100 },
-    });
+  it('worst reachable aggregate on an ALL-EASY draft = cap <= ceiling AND <= top cohort', () => {
+    // The adversarial case Sol flagged: a maxed bot on an all-easy draft. With the
+    // cap = ceiling, the aggregate approaches the cap (86.31%) but never exceeds
+    // it, and stays below the real top cohort (90.31%).
+    const godlike = inputs({ currentRp: 100000, personalOffset: 100, governorAdjustment: 100 });
     let correct = 0;
-    const n = REAL_BETAS.length * 40;
+    const n = 8000;
     for (let i = 0; i < n; i += 1) {
-      const acc = REAL_ACCS[i % REAL_ACCS.length];
-      const d = decideMcq(params, godlike, statsFromAccuracy(acc), 'football', { ...keys, questionId: `wq-${i}` });
+      const d = decideMcq(params, godlike, statsFromAccuracy(0.97), null, { ...keys, questionId: `easy-${i}` });
       correct += d.isCorrect ? 1 : 0;
     }
     const aggregate = correct / n;
-    expect(aggregate).toBeLessThanOrEqual(params.ceiling.ceilingAccuracy + 0.01); // sampling slack
-    expect(aggregate).toBeLessThan(S1_TOP_COHORT_ACCURACY_HOLDOUT);
+    expect(aggregate).toBeLessThanOrEqual(effectiveProbCap(params) + 0.01); // sampling slack
+    expect(effectiveProbCap(params)).toBeLessThanOrEqual(HARD_CEILING_ACCURACY + 1e-9);
+    expect(effectiveProbCap(params)).toBeLessThan(S1_TOP_COHORT_ACCURACY_HOLDOUT);
   });
 
-  it('solveThetaCeilingBound is monotone and returns the fallback for an empty distribution', () => {
-    expect(expectedAggregateAccuracy(1, REAL_BETAS, 0.93))
-      .toBeLessThan(expectedAggregateAccuracy(2, REAL_BETAS, 0.93));
-    const fallback = solveThetaCeilingBound([], params.ceiling.ceilingAccuracy, 0.93);
+  it('solveThetaCeilingBound (the EXPECTED-aggregate nicety) is monotone + has a fallback', () => {
+    expect(expectedAggregateAccuracy(1, REAL_BETAS, effectiveProbCap(params)))
+      .toBeLessThan(expectedAggregateAccuracy(2, REAL_BETAS, effectiveProbCap(params)));
+    const fallback = solveThetaCeilingBound([], params.ceiling.ceilingAccuracy, effectiveProbCap(params));
     expect(fallback).toBeGreaterThan(0);
     expect(fallback).toBeLessThanOrEqual(HARD_SKILL_CAP);
+    // The θ bound only tightens the EXPECTED aggregate over the real mix; keep it valid.
+    const cap = effectiveSkillCap(params, THETA_CEILING);
+    expect(expectedAggregateAccuracy(cap, REAL_BETAS, effectiveProbCap(params)))
+      .toBeLessThanOrEqual(params.ceiling.ceilingAccuracy + 1e-6);
   });
 });
 
-describe('CRITICAL-2 — clamps are immutable code constants applied last', () => {
-  it('a params row that tries to LOOSEN a clamp is REJECTED at load', () => {
-    const bad = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
-    bad.clamps.finalProbCap = 1; // > HARD_PROB_CAP
-    expect(() => parseBotModelParams(bad)).toThrow();
-
+describe('CRITICAL-2 — immutable clamps applied last + no inversion', () => {
+  it('rejects params that loosen the HARD-bounded clamps or use a bad slope', () => {
     const bad2 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
     bad2.clamps.skillCap = 99; // > HARD_SKILL_CAP
     expect(() => parseBotModelParams(bad2)).toThrow();
@@ -131,7 +133,7 @@ describe('CRITICAL-2 — clamps are immutable code constants applied last', () =
     expect(() => parseBotModelParams(bad3)).toThrow();
 
     const bad4 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
-    bad4.ceiling.ceilingAccuracy = 0.99; // > HARD_CEILING_ACCURACY
+    bad4.ceiling.ceilingAccuracy = 0.3; // < MIN_CEILING_ACCURACY (inversion guard)
     expect(() => parseBotModelParams(bad4)).toThrow();
 
     const bad5 = JSON.parse(readFileSync(PARAMS_PATH, 'utf8'));
@@ -139,9 +141,9 @@ describe('CRITICAL-2 — clamps are immutable code constants applied last', () =
     expect(() => parseBotModelParams(bad5)).toThrow();
   });
 
-  it('runtime clamps take the STRICTER of params vs code (defence in depth)', () => {
-    // Even a hand-built params object with looser clamps (bypassing the schema)
-    // cannot loosen the effective caps at runtime.
+  it('finalProbCap is advisory: the runtime always tightens to HARD_PROB_CAP', () => {
+    // The frozen artifact carries 0.93; the runtime min tightens it to the ceiling.
+    expect(effectiveProbCap(params)).toBe(HARD_PROB_CAP);
     const loose = { ...params, clamps: { finalProbCap: 1, skillCap: 100, minAnswerTimeMs: 0 } } as BotModelParams;
     expect(effectiveProbCap(loose)).toBe(HARD_PROB_CAP);
     expect(effectiveSkillCap(loose, HARD_SKILL_CAP)).toBe(HARD_SKILL_CAP);
@@ -151,9 +153,18 @@ describe('CRITICAL-2 — clamps are immutable code constants applied last', () =
 
   it('the skill cap is applied AFTER tilt/form/noise (nothing escapes it)', () => {
     const cap = 1.0;
-    // base already at cap, plus large positive tilt+form+noise → still clamped to cap.
     expect(effectiveSkillTheta(1.0, 0.6, 0.25, 5.0, cap)).toBe(cap);
     expect(effectiveSkillTheta(-1.0, -0.6, -0.25, -5.0, cap)).toBe(-cap);
+  });
+
+  it('a stricter (small) ceiling can NEVER invert the skill cap upward', () => {
+    // A large-negative thetaCeilingBound (what a tiny ceiling would produce) must
+    // floor the effective cap at 0, forcing theta to 0 (chance level), never +4.
+    expect(effectiveSkillCap(params, -4)).toBe(0);
+    expect(effectiveSkillCap(params, -100)).toBe(0);
+    // With a 0 cap, theta is pinned to 0 regardless of the additive terms.
+    expect(effectiveSkillTheta(3, 0.6, 0.25, 2, 0)).toBe(0);
+    expect(effectiveSkillTheta(3, 0.6, 0.25, 2, -5)).toBe(0); // negative cap → floored to 0
   });
 });
 
@@ -253,17 +264,56 @@ describe('HIGH — per-format models bypass Bernoulli AND respect the SCORE ceil
     }
   });
 
-  it('clue reveal-index floor keeps the SCORE at/under the ceiling (no instant-solve 100)', () => {
+  it('clue reveal-index floor keeps a solved SCORE at/under the ceiling (multi-clue)', () => {
     const minIdx = minClueIndexForCeiling(params);
     expect(calculateCluesScore(true, minIdx)).toBeLessThanOrEqual(ceilScore + 1e-9);
-    const idx = decideClueRevealIndex(params, inputs(), { '0': 10, '1': 5 }, 5, keys);
-    expect(idx).toBeGreaterThanOrEqual(minIdx);
-    expect(calculateCluesScore(true, idx)).toBeLessThanOrEqual(ceilScore + 1e-9);
+    const clue = decideClue(params, inputs(), { '0': 10, '1': 5 }, 5, keys);
+    expect(clue.solved).toBe(true);
+    expect(clue.index).toBeGreaterThanOrEqual(minIdx);
+    expect(calculateCluesScore(clue.solved, clue.index)).toBeLessThanOrEqual(ceilScore + 1e-9);
+  });
+
+  it('COARSE 1-clue question: bot sometimes does NOT solve so E[score] <= ceiling (no forced 100)', () => {
+    // A single-clue question can only score 0 or 100. To respect the ceiling the
+    // bot must fail some of the time; expected score ≈ ceiling*100, not 100.
+    let solvedCount = 0;
+    const n = 4000;
+    for (let i = 0; i < n; i += 1) {
+      const clue = decideClue(params, inputs(), undefined, 1, { ...keys, questionId: `clue1-${i}` });
+      // Only index 0 exists; score is 0 (miss) or 100 (solve).
+      expect(clue.index).toBe(0);
+      if (clue.solved) solvedCount += 1;
+    }
+    const expectedScore = (solvedCount / n) * 100;
+    expect(expectedScore).toBeLessThanOrEqual(ceilScore + 1.5); // sampling slack
+    expect(solvedCount).toBeGreaterThan(0); // and not deterministically zero
+  });
+
+  it('COARSE 1-group countdown: found is 0 or 1 with P(found) <= ceiling (no forced 100)', () => {
+    let foundCount = 0;
+    const n = 4000;
+    for (let i = 0; i < n; i += 1) {
+      const f = decideCountdownFoundCount(params, inputs(), undefined, 1, { ...keys, questionId: `cd1-${i}` });
+      expect(f === 0 || f === 1).toBe(true);
+      if (f === 1) foundCount += 1;
+    }
+    const expectedScore = (foundCount / n) * 100; // score(1,1)=100, score(0,1)=0
+    expect(expectedScore).toBeLessThanOrEqual(ceilScore + 1.5);
+    expect(foundCount).toBeGreaterThan(0); // not deterministically zeroed (the CodeRabbit bug)
+  });
+
+  it('1-item put-in-order allows full credit (score 20 <= ceiling, never zeroed)', () => {
+    expect(maxPutInOrderMatchedForCeiling(params, 1)).toBe(1);
+    const c = decidePutInOrderCorrectCount(params, inputs(), { '1': 10 }, 1, keys);
+    expect(c).toBe(1);
+    expect(calculatePutInOrderScore(c, 1)).toBe(20);
   });
 
   it('per-format decisions are deterministic', () => {
     expect(decidePutInOrderCorrectCount(params, inputs(), { '2': 4, '4': 12 }, 6, keys))
       .toBe(decidePutInOrderCorrectCount(params, inputs(), { '2': 4, '4': 12 }, 6, keys));
+    expect(decideClue(params, inputs(), undefined, 1, keys))
+      .toEqual(decideClue(params, inputs(), undefined, 1, keys));
   });
 
   it('sampleHistogram is a proper weighted draw', () => {

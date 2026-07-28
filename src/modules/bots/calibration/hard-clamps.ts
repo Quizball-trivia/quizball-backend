@@ -8,18 +8,43 @@
  *   - minimum answer time            : max(paramsFloor, HARD_MIN_ANSWER_TIME_MS)
  *   - speed floor                    : max(measured floor, HARD_MIN_ANSWER_TIME_MS)
  *
- * The params-schema (params-schema.ts) additionally REJECTS at load any row that
- * tries to exceed these — so a bad row can never even be stored/activated — and
- * the gameplay model re-applies the min/max at runtime as defence in depth
- * (a row written before a schema tightening still can't breach the code cap).
+ * THE AGGREGATE-CEILING GUARANTEE (redesigned after Sol's ceiling-math pass).
+ * The ONLY distribution-independent bound on a bot's aggregate accuracy is the
+ * per-question probability cap: over ANY question mix, aggregate accuracy ≤ the
+ * per-question cap. Solving E_D[sigmoid(θ−β)] = ceiling for the FULL-POOL
+ * distribution D does NOT bound accuracy on an easy-only draft (a reachable mix
+ * when the possession gap is small), so the θ-ceiling solver is a nicety for the
+ * expected aggregate — NOT the safety guarantee.
+ *
+ * Therefore HARD_PROB_CAP is set to the frozen ceiling accuracy itself, so the
+ * worst reachable aggregate over ANY mix = HARD_PROB_CAP = the ceiling
+ * (86.31%) ≤ the real top cohort (90.31%, the §1.5 4pp downward δ). The win-rate
+ * GOVERNOR (PR9) is the closed loop that steers actual win-rate into the 40-45%
+ * band; this model only guarantees the bot can never STRUCTURALLY exceed the
+ * per-question ceiling.
  *
  * Values frozen from the Season-1 calibration report (calibration-s1final/REPORT.md).
- * They are the be#175 insurance: even if every tunable is maxed, the bot cannot
- * exceed these.
  */
 
-/** Final per-question P(correct) can never exceed this, after every term. */
-export const HARD_PROB_CAP = 0.93;
+/** The real top-cohort holdout aggregate accuracy (10 players) and the margin. */
+export const S1_TOP_COHORT_ACCURACY_HOLDOUT = 0.9031;
+export const S1_CEILING_MARGIN = 0.04;
+
+/**
+ * Frozen aggregate accuracy ceiling = top-cohort holdout − 4pp margin. This is
+ * both the aggregate target AND the per-question hard cap (see HARD_PROB_CAP).
+ */
+export const HARD_CEILING_ACCURACY = 0.8631;
+
+/**
+ * Final per-question P(correct) can never exceed this, after EVERY term. Set to
+ * the frozen ceiling so that the worst reachable aggregate on ANY question mix
+ * (including an all-easy draft) equals the ceiling — the only
+ * distribution-independent guarantee. Below the real top cohort by the 4pp δ, so
+ * even on easy questions a bot stays at/under top humans per-question and hence
+ * in aggregate. (Was 0.93, which allowed +6.69pp over the ceiling on easy mixes.)
+ */
+export const HARD_PROB_CAP = HARD_CEILING_ACCURACY;
 
 /** Effective skill theta (post tilt/form/noise) is bounded to +/- this. */
 export const HARD_SKILL_CAP = 4;
@@ -28,21 +53,17 @@ export const HARD_SKILL_CAP = 4;
 export const HARD_MIN_ANSWER_TIME_MS = 600;
 
 /**
- * Frozen aggregate accuracy ceiling and the real top-cohort accuracy it derives
- * from (holdout − margin). The model's effective theta is additionally bounded
- * so the EXPECTED aggregate over the real difficulty mix cannot exceed this — a
- * hard runtime constraint, not merely telemetry.
+ * Minimum allowed ceilingAccuracy in params. A pathologically small ceiling
+ * (e.g. 0) would make the θ-ceiling solver return a large-negative bound and, if
+ * mis-clamped, could INVERT the skill cap. The schema floors ceilingAccuracy here
+ * and the effective-cap helper additionally guards against inversion.
  */
-export const HARD_CEILING_ACCURACY = 0.8631;
-export const S1_TOP_COHORT_ACCURACY_HOLDOUT = 0.9031;
+export const MIN_CEILING_ACCURACY = 0.5;
 
 /**
  * Conservative frozen fallback for the ceiling-derived theta bound, used when the
  * live question_stats table is empty (a fresh DB) so the pin-time solver has no
- * empirical beta distribution. Derived so that, over a symmetric mean-0 beta
- * spread, the expected aggregate stays at/under HARD_CEILING_ACCURACY AND a
- * top-of-curve bot lands strictly below the real top cohort (the §1.5 downward
- * delta). Deliberately conservative: a real (non-empty) DB computes a tighter,
- * data-derived bound at pin time.
+ * empirical beta distribution. The θ bound is only an EXPECTED-aggregate nicety
+ * now (the per-question cap is the safety guarantee), so a modest value is fine.
  */
 export const HARD_THETA_CEILING_FALLBACK = 1.6;

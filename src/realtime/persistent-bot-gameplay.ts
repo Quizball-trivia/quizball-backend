@@ -15,11 +15,19 @@
  * replica, independent of how many other RNG draws happened in the match and
  * WITHOUT ever reading the human's submitted answer.
  *
- * Hard clamps (params.clamps + params.ceiling): the final per-question
- * probability can never exceed finalProbCap; effective skill (theta) is bounded
- * by skillCap; sampled answer times are floored by minAnswerTimeMs and the
- * top-cohort speed floor. These are enforced here from the params — a CMS
- * override that widens a tilt/form/governor input can never breach them.
+ * AGGREGATE-CEILING GUARANTEE (redesigned per Sol's ceiling-math pass): the ONLY
+ * distribution-independent bound on aggregate accuracy is the per-question
+ * probability cap. So the hard cap (HARD_PROB_CAP) is set to the frozen ceiling
+ * itself — the worst reachable aggregate over ANY mix (incl. an all-easy draft)
+ * equals the ceiling (86.31%), below the real top cohort (90.31%). The
+ * theta-ceiling solver is an ADDITIONAL tightening for the EXPECTED aggregate
+ * over the real mix (a nicety), NOT the safety guarantee. The win-rate governor
+ * (PR9) is the closed loop that steers actual win-rate into the 40-45% band.
+ *
+ * Hard clamps (code constants, params can only tighten): final per-question
+ * probability ≤ HARD_PROB_CAP; effective skill (theta) bounded by the
+ * inversion-guarded effective cap; answer times floored by HARD_MIN_ANSWER_TIME_MS
+ * and the top-cohort speed floor.
  */
 
 import type { BotModelParams } from '../modules/bots/calibration/params-schema.js';
@@ -148,25 +156,26 @@ export function baseSkillTheta(params: BotModelParams, inputs: PersistentBotSkil
 
 /**
  * The immutable upper bound on effective theta. It is the MOST RESTRICTIVE of:
- *   - HARD_SKILL_CAP (code constant, be#175 insurance),
+ *   - HARD_SKILL_CAP (code constant),
  *   - params.clamps.skillCap (can only be stricter — schema-bounded ≤ HARD),
  *   - the ceiling-derived theta bound pinned at match creation (thetaCeilingBound):
- *     the max theta whose EXPECTED aggregate over the real difficulty mix stays
- *     at/under the ceiling. Pinned per match; falls back to the frozen constant
- *     when the stats table was empty at creation.
- * A CMS/DB row can never loosen any of these.
+ *     a tightening for the EXPECTED aggregate over the real mix (NOT the safety
+ *     guarantee — that is the per-question cap; §1.5 / hard-clamps.ts).
+ *
+ * INVERSION GUARD (Sol Critical-2): the result is floored at 0. A pathologically
+ * small ceiling drives the solver to a large-NEGATIVE thetaCeilingBound; without
+ * the max(0, …) the cap would go negative and clamp(theta, -cap, cap) would swap
+ * its bounds and RAISE skill. With the floor, a stricter ceiling can only pin the
+ * cap DOWN to 0 (theta forced to 0 → chance-level), never invert it upward.
  */
 export function effectiveSkillCap(params: BotModelParams, thetaCeilingBound: number): number {
-  return Math.min(HARD_SKILL_CAP, params.clamps.skillCap, thetaCeilingBound);
+  return Math.max(0, Math.min(HARD_SKILL_CAP, params.clamps.skillCap, thetaCeilingBound));
 }
 
 /**
  * Final effective theta for ONE decision: base + bounded category tilt + daily
- * form + per-question noise, then clamped ONCE to +/- effectiveSkillCap. Because
- * the realized theta is capped at thetaCeilingBound POINTWISE (every decision),
- * the aggregate over any question mix is <= E_beta[cappedSigmoid(bound - beta)]
- * <= the ceiling — a distribution-independent hard guarantee (noise can only
- * pull an individual theta below the bound, never above).
+ * form + per-question noise, then clamped ONCE to +/- effectiveSkillCap. `cap` is
+ * always ≥ 0 (effectiveSkillCap floors it), so the clamp bounds never invert.
  */
 export function effectiveSkillTheta(
   base: number,
@@ -175,8 +184,9 @@ export function effectiveSkillTheta(
   matchNoise: number,
   cap: number,
 ): number {
+  const safeCap = Math.max(0, cap); // defence in depth: bounds can never invert
   const theta = base + tilt + dailyForm + matchNoise;
-  return clamp(theta, -cap, cap);
+  return clamp(theta, -safeCap, safeCap);
 }
 
 /** The effective per-question probability cap: params can only make it stricter. */
@@ -251,10 +261,11 @@ export function solveThetaCeilingBound(
  * Decide a Bernoulli (multiple-choice) question outcome for a persistent bot.
  * P(correct) = min(sigmoid(theta_eff - beta_q), effectiveProbCap). theta_eff =
  * base + boundedCategoryTilt + dailyForm + matchNoise, then clamped ONCE to
- * +/- effectiveSkillCap (= min(HARD_SKILL_CAP, paramsSkillCap, thetaCeilingBound))
- * — the cap is applied AFTER every term so nothing escapes it. Because theta_eff
- * is bounded pointwise at thetaCeilingBound, the aggregate accuracy over any
- * question mix is provably ≤ the frozen ceiling.
+ * +/- effectiveSkillCap — the cap is applied AFTER every term so nothing escapes
+ * it. The DISTRIBUTION-INDEPENDENT aggregate guarantee is effectiveProbCap
+ * (= the frozen ceiling): since every P(correct) ≤ effectiveProbCap, the
+ * aggregate over ANY question mix ≤ effectiveProbCap = ceiling. The theta bound
+ * only further tightens the EXPECTED aggregate over the real mix.
  *
  * Monotonicity: the EXPECTED (over noise) pCorrect is non-increasing in beta_q
  * for fixed affinity — the direct −beta_q term dominates the tilt's bounded,
@@ -393,9 +404,38 @@ export function sampleHistogram(hist: Record<string, number>, next: () => number
 }
 
 /**
- * Countdown: pick a found-count from the question's found-count distribution,
- * scaled by the bot's skill (a stronger bot samples toward the upper tail) and
- * capped so its normalized found-fraction can't exceed the top-cohort cap.
+ * Countdown SCORE (5-pt buckets) for a found-count, mirroring
+ * calculateCountdownScore without importing it (keeps this module IO/dep-free).
+ */
+function countdownScore(found: number, total: number): number {
+  if (total <= 0) return 0;
+  const raw = (clamp(found, 0, total) / total) * 100;
+  return clamp(Math.round(raw / 5) * 5, 0, 100);
+}
+
+/**
+ * A seeded Bernoulli success gate at probability p, keyed independently so it is
+ * reproducible per (bot,match,question,subkey). Used by the coarse all-or-nothing
+ * format cases: when even the SMALLEST nonzero score already exceeds the ceiling
+ * (1-group countdown → 100, 1-clue → 100), the bot must sometimes FAIL so the
+ * expected SCORE distribution stays ≤ the ceiling — never a deterministic 100.
+ */
+function ceilingSuccessGate(
+  params: BotModelParams,
+  keys: { botId: string; matchId: string; questionId: string },
+  subkey: string,
+): boolean {
+  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:${subkey}:gate:${params.source.batchId}`);
+  return next() < ceilingScoreFraction(params);
+}
+
+/**
+ * Countdown: pick a found-count from the calibrated distribution (or a
+ * skill-scaled fallback), then bound it so the resulting SCORE respects the
+ * ceiling. When the question is so coarse that ANY found group already scores
+ * above the ceiling (e.g. a single group → 100 pts), the bot succeeds only with
+ * probability = the ceiling fraction (else finds 0) — so its expected score
+ * equals the ceiling instead of a guaranteed 100.
  */
 export function decideCountdownFoundCount(
   params: BotModelParams,
@@ -404,42 +444,35 @@ export function decideCountdownFoundCount(
   totalGroups: number,
   keys: { botId: string; matchId: string; questionId: string },
 ): number {
+  const total = Math.max(1, totalGroups);
+  const maxFound = maxCountdownFoundForCeiling(params, totalGroups);
+  if (maxFound === 0) {
+    // Coarse all-or-nothing: even 1 found exceeds the ceiling. Gate success.
+    return ceilingSuccessGate(params, keys, 'countdown') ? total : 0;
+  }
   const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:countdown:${params.source.batchId}`);
-  const capped = Math.max(1, totalGroups);
   let found: number;
   if (foundCountDistribution && Object.keys(foundCountDistribution).length > 0) {
     found = sampleHistogram(foundCountDistribution, next) ?? 0;
   } else {
-    found = Math.round(capped * cappedSkillFraction(params, inputs));
+    found = Math.round(total * cappedSkillFraction(params, inputs));
   }
-  return clamp(found, 0, maxCountdownFoundForCeiling(params, totalGroups));
+  return clamp(found, 0, maxFound);
 }
 
 /**
- * The largest countdown found-count whose resulting SCORE (5-pt buckets via
- * calculateCountdownScore) stays at/under the ceiling. Searched, not derived by
- * a raw fraction, so the 5-pt rounding (13/14 → 95) can't defeat the cap.
+ * The largest countdown found-count whose SCORE stays at/under the ceiling.
+ * Returns 0 when even one found group exceeds the ceiling (coarse case) — the
+ * caller then applies the success gate rather than zeroing deterministically.
  */
 export function maxCountdownFoundForCeiling(params: BotModelParams, totalGroups: number): number {
   const maxScore = ceilingScoreFraction(params) * 100;
   const total = Math.max(1, totalGroups);
   let best = 0;
   for (let f = 0; f <= total; f += 1) {
-    // Mirror calculateCountdownScore's bucketing without importing it here.
-    const raw = (f / total) * 100;
-    const score = Math.min(Math.round(raw / 5) * 5, 100);
-    if (score <= maxScore + 1e-9) best = f;
+    if (countdownScore(f, total) <= maxScore + 1e-9) best = f;
     else break;
   }
-  // Coarse-granularity guard: when even ONE found group already scores above the
-  // ceiling (small totals, e.g. 1 group → 100 pts), the question is effectively
-  // all-or-nothing — there is no intermediate value to cap to. Forcing 0 would
-  // make the bot deterministically miss it (worse-than-human + detectable). Treat
-  // it like a Bernoulli: allow the full total (the aggregate ceiling is enforced
-  // for such all-or-nothing outcomes by the theta bound governing how OFTEN the
-  // distribution/skill lands the group). The cap only bites when a genuine
-  // intermediate found-count exists below the ceiling.
-  if (best === 0 && total >= 1) return total;
   return best;
 }
 
@@ -478,31 +511,45 @@ export function maxPutInOrderMatchedForCeiling(params: BotModelParams, totalItem
     if (score <= maxScore + 1e-9) best = m;
     else break;
   }
-  // Coarse-granularity guard (see maxCountdownFoundForCeiling): if even one
-  // matched position already exceeds the ceiling score, allow the full total
-  // rather than deterministically zeroing an all-or-nothing question. With the
-  // 20-pt/position step and an 86.3% ceiling this never fires for totalItems ≥ 1
-  // (m=1 → 20 pts), but the guard keeps the two formats consistent and safe if
-  // the scoring granularity ever changes.
-  if (best === 0 && total >= 1) return total;
+  // With the 20-pt/position step and a ≥50% ceiling, m=1 (→20 pts) always passes
+  // for totalItems ≥ 1, so `best` is never a false 0 here; full credit is
+  // reachable on a 1-item question (score 20 ≤ ceiling). No coarse gate needed.
   return best;
 }
 
+/** Clue SCORE mirror of calculateCluesScore (max(20, 100 − index*20), 0 if wrong). */
+function clueScore(solved: boolean, index: number): number {
+  if (!solved) return 0;
+  return Math.max(20, 100 - Math.max(0, Math.floor(index)) * 20);
+}
+
 /**
- * Clue chain: pick a reveal index (0-based; lower = solved from fewer clues =
- * better) from the distribution. A stronger bot skews toward lower indices. No
- * upper cap needed (0 is already the best possible), but a floor keeps the bot
- * from always solving instantly regardless of the human distribution.
+ * Clue chain decision: whether the bot solves, and at which reveal index (0-based;
+ * lower = solved from fewer clues = better). Sampled from the calibrated reveal
+ * distribution (or a skill-scaled fallback), then bounded so the SCORE respects
+ * the ceiling. When even the DEEPEST reveal index still scores above the ceiling
+ * (e.g. a single-clue question: only index 0 exists → 100 pts), the bot solves
+ * only with probability = the ceiling fraction (else it does not solve, score 0)
+ * — so a 1-clue question can never deterministically score 100.
  */
-export function decideClueRevealIndex(
+export function decideClue(
   params: BotModelParams,
   inputs: PersistentBotSkillInputs,
   clueRevealIndexDistribution: Record<string, number> | undefined,
   clueCount: number,
   keys: { botId: string; matchId: string; questionId: string },
-): number {
-  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:clue:${params.source.batchId}`);
+): { solved: boolean; index: number } {
   const maxIndex = Math.max(0, clueCount - 1);
+  const ceilScore = ceilingScoreFraction(params) * 100;
+
+  // If even the deepest reveal (maxIndex) scores above the ceiling, no reveal
+  // index is safe — gate the solve so E[score] ≤ ceiling.
+  if (clueScore(true, maxIndex) > ceilScore + 1e-9) {
+    const solved = ceilingSuccessGate(params, keys, 'clue');
+    return { solved, index: maxIndex };
+  }
+
+  const next = seededStream(`${keys.botId}:${keys.matchId}:${keys.questionId}:clue:${params.source.batchId}`);
   let index: number;
   if (clueRevealIndexDistribution && Object.keys(clueRevealIndexDistribution).length > 0) {
     index = sampleHistogram(clueRevealIndexDistribution, next) ?? maxIndex;
@@ -510,11 +557,10 @@ export function decideClueRevealIndex(
     const frac = clamp(1 - cappedSkillFraction(params, inputs), 0, 1);
     index = Math.round(maxIndex * frac);
   }
-  // Floor the reveal index so the resulting SCORE (100 − index*20, floor 20)
-  // stays at/under the ceiling: index 0 → 100 pts would defeat the cap, so a bot
-  // must reveal at least enough clues that its best score respects the ceiling.
-  const minIndex = minClueIndexForCeiling(params);
-  return clamp(index, Math.min(minIndex, maxIndex), maxIndex);
+  // Floor the reveal index so the resulting SCORE stays at/under the ceiling
+  // (index 0 → 100 pts would defeat the cap when 100 > ceiling).
+  const minIndex = Math.min(minClueIndexForCeiling(params), maxIndex);
+  return { solved: true, index: clamp(index, minIndex, maxIndex) };
 }
 
 /**

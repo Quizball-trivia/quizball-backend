@@ -270,16 +270,22 @@ export async function rollback(
         if (movedPastSnapshot && !hasReceiptLedger) flag(r.user_id, `profile updated_at advanced with no burn-in ledger`);
       }
 
-      // Achievement drift: any achievement NOT in the snapshot set whose source
-      // is NOT a receipt burn-in match is a live unlock → abort.
+      // Achievement drift: an achievement whose source_match_id points to a
+      // match OUTSIDE the receipt is a live unlock → abort. (A burn-in fixture
+      // unlock has source in the receipt, or a NULL source when the row was a
+      // progress-then-unlock update — either way the ledger/xp checks above
+      // already flag any accompanying live match, so a NULL source that is not
+      // in the snapshot is safely burn-in-created and removed in restore.)
       const nowAch = await tx<{ user_id: string; achievement_id: string; source_match_id: string | null }[]>`
         SELECT user_id, achievement_id, source_match_id FROM user_achievements WHERE user_id = ANY(${header.rosterUserIds}::uuid[])
       `;
       for (const a of nowAch) {
         const snap = snapshotByUser.get(a.user_id);
         const inSnapshot = snap?.achievements.some((s) => s.achievementId === a.achievement_id) ?? false;
-        const burnInSourced = a.source_match_id != null && receiptMatchSet.has(a.source_match_id);
-        if (!inSnapshot && !burnInSourced) flag(a.user_id, `live achievement ${a.achievement_id}`);
+        if (inSnapshot) continue;
+        if (a.source_match_id != null && !receiptMatchSet.has(a.source_match_id)) {
+          flag(a.user_id, `achievement ${a.achievement_id} sourced from non-receipt match ${a.source_match_id}`);
+        }
       }
 
       if (offending.size > 0) {
